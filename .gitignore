@@ -1,0 +1,21 @@
+# Crystal build artifacts
+/bin/
+*.dwarf
+
+# Dependencies
+/lib/
+/.shards/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Metal compiled shaders
+*.metallib
+*.air
