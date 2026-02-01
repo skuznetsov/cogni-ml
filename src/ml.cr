@@ -3,7 +3,7 @@
 # Provides:
 # - Autograd engine (automatic differentiation)
 # - Tensor operations with Metal GPU support
-# - Neural network layers (Linear, LayerNorm, Attention)
+# - Neural network layers (Linear, LayerNorm, Attention, ViT)
 # - Optimizers (Adam, SGD) with LR scheduling
 #
 # Unified ML shard extracted from 3d_scanner and folding projects.
@@ -22,6 +22,7 @@ require "./ml/nn/gpu_ops"
 require "./ml/nn/linear"
 require "./ml/nn/layernorm"
 require "./ml/nn/attention"
+require "./ml/nn/vit"
 
 # Optimizers
 require "./ml/optim/adam"
