@@ -27,7 +27,7 @@ module ML
         @num_heads : Int32,
         @dropout : Float32 = 0.0_f32,
         bias : Bool = true,
-        device : Tensor::Device = Tensor::Device::GPU
+        device : Tensor::Device = Tensor.default_device
       )
         raise ArgumentError.new("embed_dim must be divisible by num_heads") unless @embed_dim % @num_heads == 0
 
@@ -105,7 +105,43 @@ module ML
           flat = Tensor.new(batch_size * @num_heads, seq_len, @head_dim, device: Tensor::Device::GPU)
           GPUOps.reshape_for_heads(x.data, flat, batch_size, seq_len, @num_heads, @head_dim)
           reshaped = flat.reshape(batch_size, @num_heads, seq_len, @head_dim)
-          return Autograd::Variable.new(reshaped, x.requires_grad?)
+          result_var = Autograd::Variable.new(reshaped, x.requires_grad?)
+
+          if result_var.requires_grad?
+            result_var.is_leaf = false
+            batch_cap = batch_size
+            seq_len_cap = seq_len
+            num_heads_cap = @num_heads
+            head_dim_cap = @head_dim
+            embed_dim_cap = @embed_dim
+            x_on_gpu = x.data.on_gpu?
+
+            grad_fn = Autograd::CustomBackward.new("ReshapeForHeadsBackward", ->(g : Tensor) {
+              g_cpu = g.on_cpu? ? g : g.to_cpu
+              g_d = g_cpu.cpu_data.not_nil!
+
+              grad_x = Tensor.zeros(batch_cap, seq_len_cap, embed_dim_cap, device: Tensor::Device::CPU)
+              gx_d = grad_x.cpu_data.not_nil!
+
+              batch_cap.times do |b|
+                seq_len_cap.times do |s|
+                  num_heads_cap.times do |h|
+                    head_dim_cap.times do |d|
+                      src_idx = b * num_heads_cap * seq_len_cap * head_dim_cap + h * seq_len_cap * head_dim_cap + s * head_dim_cap + d
+                      dst_idx = b * seq_len_cap * embed_dim_cap + s * embed_dim_cap + h * head_dim_cap + d
+                      gx_d[dst_idx] = g_d[src_idx]
+                    end
+                  end
+                end
+              end
+
+              [x_on_gpu ? grad_x.to_gpu : grad_x] of Tensor?
+            })
+            grad_fn.inputs = [x]
+            result_var.grad_fn = grad_fn
+          end
+
+          return result_var
         end
 
         x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
@@ -128,7 +164,43 @@ module ML
         end
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad?)
+        result_var = Autograd::Variable.new(result, x.requires_grad?)
+
+        if result_var.requires_grad?
+          result_var.is_leaf = false
+          batch_cap = batch_size
+          seq_len_cap = seq_len
+          num_heads_cap = @num_heads
+          head_dim_cap = @head_dim
+          embed_dim_cap = @embed_dim
+          x_on_gpu = x.data.on_gpu?
+
+          grad_fn = Autograd::CustomBackward.new("ReshapeForHeadsBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_d = g_cpu.cpu_data.not_nil!
+
+            grad_x = Tensor.zeros(batch_cap, seq_len_cap, embed_dim_cap, device: Tensor::Device::CPU)
+            gx_d = grad_x.cpu_data.not_nil!
+
+            batch_cap.times do |b|
+              seq_len_cap.times do |s|
+                num_heads_cap.times do |h|
+                  head_dim_cap.times do |d|
+                    src_idx = b * num_heads_cap * seq_len_cap * head_dim_cap + h * seq_len_cap * head_dim_cap + s * head_dim_cap + d
+                    dst_idx = b * seq_len_cap * embed_dim_cap + s * embed_dim_cap + h * head_dim_cap + d
+                    gx_d[dst_idx] = g_d[src_idx]
+                  end
+                end
+              end
+            end
+
+            [x_on_gpu ? grad_x.to_gpu : grad_x] of Tensor?
+          })
+          grad_fn.inputs = [x]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
 
       # Reshape from [batch, num_heads, seq_len, head_dim] to [batch, seq_len, embed_dim]
@@ -137,7 +209,43 @@ module ML
           flat = x.data.reshape(batch_size * @num_heads, seq_len, @head_dim)
           result = Tensor.new(batch_size, seq_len, @embed_dim, device: Tensor::Device::GPU)
           GPUOps.reshape_from_heads(flat, result, batch_size, seq_len, @num_heads, @head_dim)
-          return Autograd::Variable.new(result, x.requires_grad?)
+          result_var = Autograd::Variable.new(result, x.requires_grad?)
+
+          if result_var.requires_grad?
+            result_var.is_leaf = false
+            batch_cap = batch_size
+            seq_len_cap = seq_len
+            num_heads_cap = @num_heads
+            head_dim_cap = @head_dim
+            embed_dim_cap = @embed_dim
+            x_on_gpu = x.data.on_gpu?
+
+            grad_fn = Autograd::CustomBackward.new("ReshapeFromHeadsBackward", ->(g : Tensor) {
+              g_cpu = g.on_cpu? ? g : g.to_cpu
+              g_d = g_cpu.cpu_data.not_nil!
+
+              grad_x = Tensor.zeros(batch_cap, num_heads_cap, seq_len_cap, head_dim_cap, device: Tensor::Device::CPU)
+              gx_d = grad_x.cpu_data.not_nil!
+
+              batch_cap.times do |b|
+                seq_len_cap.times do |s|
+                  num_heads_cap.times do |h|
+                    head_dim_cap.times do |d|
+                      dst_idx = b * seq_len_cap * embed_dim_cap + s * embed_dim_cap + h * head_dim_cap + d
+                      src_idx = b * num_heads_cap * seq_len_cap * head_dim_cap + h * seq_len_cap * head_dim_cap + s * head_dim_cap + d
+                      gx_d[src_idx] = g_d[dst_idx]
+                    end
+                  end
+                end
+              end
+
+              [x_on_gpu ? grad_x.to_gpu : grad_x] of Tensor?
+            })
+            grad_fn.inputs = [x]
+            result_var.grad_fn = grad_fn
+          end
+
+          return result_var
         end
 
         x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
@@ -160,7 +268,43 @@ module ML
         end
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad?)
+        result_var = Autograd::Variable.new(result, x.requires_grad?)
+
+        if result_var.requires_grad?
+          result_var.is_leaf = false
+          batch_cap = batch_size
+          seq_len_cap = seq_len
+          num_heads_cap = @num_heads
+          head_dim_cap = @head_dim
+          embed_dim_cap = @embed_dim
+          x_on_gpu = x.data.on_gpu?
+
+          grad_fn = Autograd::CustomBackward.new("ReshapeFromHeadsBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_d = g_cpu.cpu_data.not_nil!
+
+            grad_x = Tensor.zeros(batch_cap, num_heads_cap, seq_len_cap, head_dim_cap, device: Tensor::Device::CPU)
+            gx_d = grad_x.cpu_data.not_nil!
+
+            batch_cap.times do |b|
+              seq_len_cap.times do |s|
+                num_heads_cap.times do |h|
+                  head_dim_cap.times do |d|
+                    dst_idx = b * seq_len_cap * embed_dim_cap + s * embed_dim_cap + h * head_dim_cap + d
+                    src_idx = b * num_heads_cap * seq_len_cap * head_dim_cap + h * seq_len_cap * head_dim_cap + s * head_dim_cap + d
+                    gx_d[src_idx] = g_d[dst_idx]
+                  end
+                end
+              end
+            end
+
+            [x_on_gpu ? grad_x.to_gpu : grad_x] of Tensor?
+          })
+          grad_fn.inputs = [x]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
 
       # Scaled dot-product attention
@@ -172,14 +316,16 @@ module ML
         scale : Float32,
         mask : Tensor?
       ) : Autograd::Variable
+        needs_grad = q.requires_grad? || k.requires_grad? || v.requires_grad?
+
         # Try GPU path if tensors are on GPU and mask is not provided
         # (GPU kernel doesn't support masking yet)
-        if q.data.on_gpu? && k.data.on_gpu? && v.data.on_gpu? && mask.nil? && GPUOps.available?
+        if !needs_grad && q.data.on_gpu? && k.data.on_gpu? && v.data.on_gpu? && mask.nil? && GPUOps.available?
           return scaled_dot_product_attention_gpu(q, k, v, scale)
         end
 
-        # CPU fallback path
-        scaled_dot_product_attention_cpu(q, k, v, scale, mask)
+        # CPU path (with autograd if needed)
+        scaled_dot_product_attention_cpu(q, k, v, scale, mask, needs_grad)
       end
 
       # GPU implementation using fused attention kernel
@@ -231,7 +377,8 @@ module ML
         k : Autograd::Variable,
         v : Autograd::Variable,
         scale : Float32,
-        mask : Tensor?
+        mask : Tensor?,
+        needs_grad : Bool
       ) : Autograd::Variable
         q_data = q.data.on_cpu? ? q.data : q.data.to_cpu
         k_data = k.data.on_cpu? ? k.data : k.data.to_cpu
@@ -335,7 +482,102 @@ module ML
         end
 
         output = output.to_gpu if q.data.on_gpu?
-        Autograd::Variable.new(output, q.requires_grad? || k.requires_grad? || v.requires_grad?)
+        result_var = Autograd::Variable.new(output, needs_grad)
+
+        if needs_grad
+          result_var.is_leaf = false
+
+          q_cpu = q_data
+          k_cpu = k_data
+          v_cpu = v_data
+          s_cpu = scores
+
+          q_on_gpu = q.data.on_gpu?
+          k_on_gpu = k.data.on_gpu?
+          v_on_gpu = v.data.on_gpu?
+
+          scale_cap = scale
+
+          grad_fn = Autograd::CustomBackward.new("AttentionBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+
+            g_d = g_cpu.cpu_data.not_nil!
+            q_d = q_cpu.cpu_data.not_nil!
+            k_d = k_cpu.cpu_data.not_nil!
+            v_d = v_cpu.cpu_data.not_nil!
+            s_d_bw = s_cpu.cpu_data.not_nil!
+
+            grad_q = Tensor.new(q_cpu.shape, q_cpu.dtype, Tensor::Device::CPU)
+            grad_k = Tensor.new(k_cpu.shape, k_cpu.dtype, Tensor::Device::CPU)
+            grad_v = Tensor.new(v_cpu.shape, v_cpu.dtype, Tensor::Device::CPU)
+
+            gq_d = grad_q.cpu_data.not_nil!
+            gk_d = grad_k.cpu_data.not_nil!
+            gv_d = grad_v.cpu_data.not_nil!
+
+            batch.times do |b|
+              heads.times do |h|
+                q_base = (b * heads + h) * tgt_len * head_dim
+                k_base = (b * heads + h) * src_len * head_dim
+                v_base = (b * heads + h) * src_len * head_dim
+                s_base = (b * heads + h) * tgt_len * src_len
+
+                tgt_len.times do |i|
+                  g_offset = q_base + i * head_dim
+                  s_row_base = s_base + i * src_len
+
+                  dS = Array(Float32).new(src_len, 0.0_f32)
+
+                  # dS = dO @ V^T
+                  src_len.times do |j|
+                    sum = 0.0_f32
+                    v_offset = v_base + j * head_dim
+                    head_dim.times do |d|
+                      sum += g_d[g_offset + d] * v_d[v_offset + d]
+                    end
+                    dS[j] = sum
+                  end
+
+                  # softmax backward: dScores = (dS - sum(dS * S)) * S
+                  dot = 0.0_f32
+                  src_len.times do |j|
+                    dot += dS[j] * s_d_bw[s_row_base + j]
+                  end
+
+                  src_len.times do |j|
+                    ds = (dS[j] - dot) * s_d_bw[s_row_base + j]
+                    k_offset = k_base + j * head_dim
+
+                    head_dim.times do |d|
+                      gq_d[g_offset + d] += ds * k_d[k_offset + d] * scale_cap
+                      gk_d[k_offset + d] += ds * q_d[g_offset + d] * scale_cap
+                    end
+                  end
+
+                  # dV = S^T @ dO
+                  src_len.times do |j|
+                    s_val = s_d_bw[s_row_base + j]
+                    v_offset = v_base + j * head_dim
+                    head_dim.times do |d|
+                      gv_d[v_offset + d] += s_val * g_d[g_offset + d]
+                    end
+                  end
+                end
+              end
+            end
+
+            [
+              q_on_gpu ? grad_q.to_gpu : grad_q,
+              k_on_gpu ? grad_k.to_gpu : grad_k,
+              v_on_gpu ? grad_v.to_gpu : grad_v,
+            ] of Tensor?
+          })
+
+          grad_fn.inputs = [q, k, v]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
     end
 

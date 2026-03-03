@@ -26,7 +26,7 @@ module ML
         @patch_size : Int32 = 16,
         @in_channels : Int32 = 3,
         @embed_dim : Int32 = 768,
-        device : Tensor::Device = Tensor::Device::GPU
+        device : Tensor::Device = Tensor.default_device
       )
         raise ArgumentError.new("Image size must be divisible by patch size") unless img_size % @patch_size == 0
 
@@ -114,6 +114,52 @@ module ML
         patches = patches.to_gpu if x.data.on_gpu?
         patches_var = Autograd::Variable.new(patches, x.requires_grad?)
 
+        if x.requires_grad?
+          patches_var.is_leaf = false
+          patch_size = @patch_size
+          channels_cap = channels
+          height_cap = height
+          width_cap = width
+          patches_h_cap = patches_h
+          patches_w_cap = patches_w
+          num_patches_cap = num_patches
+          patch_dim_cap = patch_dim
+          input_on_gpu = x.data.on_gpu?
+          grad_fn = Autograd::CustomBackward.new("PatchEmbedBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_d = g_cpu.cpu_data.not_nil!
+
+            grad_input = Tensor.zeros(batch, channels_cap, height_cap, width_cap, device: Tensor::Device::CPU)
+            gi_d = grad_input.cpu_data.not_nil!
+
+            batch.times do |b|
+              patches_h_cap.times do |ph|
+                patches_w_cap.times do |pw|
+                  patch_idx = ph * patches_w_cap + pw
+
+                  channels_cap.times do |c|
+                    patch_size.times do |i|
+                      patch_size.times do |j|
+                        src_h = ph * patch_size + i
+                        src_w = pw * patch_size + j
+
+                        dst_idx = b * channels_cap * height_cap * width_cap + c * height_cap * width_cap + src_h * width_cap + src_w
+                        src_idx = b * num_patches_cap * patch_dim_cap + patch_idx * patch_dim_cap + c * patch_size * patch_size + i * patch_size + j
+
+                        gi_d[dst_idx] += g_d[src_idx]
+                      end
+                    end
+                  end
+                end
+              end
+            end
+
+            [input_on_gpu ? grad_input.to_gpu : grad_input] of Tensor?
+          })
+          grad_fn.inputs = [x]
+          patches_var.grad_fn = grad_fn
+        end
+
         # Project patches to embedding dimension
         @proj.forward(patches_var)
       end
@@ -138,7 +184,7 @@ module ML
         hidden_features : Int32? = nil,
         out_features : Int32? = nil,
         @dropout : Float32 = 0.0_f32,
-        device : Tensor::Device = Tensor::Device::GPU
+        device : Tensor::Device = Tensor.default_device
       )
         hidden_dim = hidden_features || in_features * 4
         out_dim = out_features || in_features
@@ -208,7 +254,39 @@ module ML
         end
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad?)
+        result_var = Autograd::Variable.new(result, x.requires_grad?)
+
+        if result_var.requires_grad?
+          result_var.is_leaf = false
+          x_clone = x.data.clone
+          grad_fn = Autograd::CustomBackward.new("GeluBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            x_cpu = x_clone.on_cpu? ? x_clone : x_clone.to_cpu
+
+            g_d = g_cpu.cpu_data.not_nil!
+            x_d_bw = x_cpu.cpu_data.not_nil!
+
+            grad_x = Tensor.new(g.shape, g.dtype, Tensor::Device::CPU)
+            gx_d = grad_x.cpu_data.not_nil!
+
+            sqrt_2_pi_bw = Math.sqrt(2.0 / Math::PI).to_f32
+
+            g.numel.times do |i|
+              v = x_d_bw[i]
+              u = sqrt_2_pi_bw * (v + 0.044715_f32 * v * v * v)
+              t = Math.tanh(u)
+              du = sqrt_2_pi_bw * (1.0_f32 + 3.0_f32 * 0.044715_f32 * v * v)
+              gelu_prime = 0.5_f32 * (1.0_f32 + t) + 0.5_f32 * v * (1.0_f32 - t * t) * du
+              gx_d[i] = g_d[i] * gelu_prime
+            end
+
+            [g.on_gpu? ? grad_x.to_gpu : grad_x] of Tensor?
+          })
+          grad_fn.inputs = [x]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
     end
 
@@ -226,7 +304,7 @@ module ML
         num_heads : Int32,
         mlp_ratio : Float32 = 4.0_f32,
         @dropout : Float32 = 0.0_f32,
-        device : Tensor::Device = Tensor::Device::GPU
+        device : Tensor::Device = Tensor.default_device
       )
         @attention = MultiHeadAttention.new(embed_dim, num_heads, dropout: @dropout, device: device)
         @mlp = MLP.new(embed_dim, (embed_dim * mlp_ratio).to_i32, embed_dim, @dropout, device)
@@ -316,7 +394,7 @@ module ML
         num_heads : Int32 = 12,
         mlp_ratio : Float32 = 4.0_f32,
         dropout : Float32 = 0.0_f32,
-        device : Tensor::Device = Tensor::Device::GPU
+        device : Tensor::Device = Tensor.default_device
       )
         @patch_embed = PatchEmbedding.new(img_size, patch_size, in_channels, embed_dim, device)
 
@@ -417,7 +495,50 @@ module ML
         end
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad?)
+        needs_grad = x.requires_grad? || @cls_token.requires_grad?
+        result_var = Autograd::Variable.new(result, needs_grad)
+
+        if needs_grad
+          result_var.is_leaf = false
+          batch_cap = batch
+          num_patches_cap = num_patches
+          embed_dim_cap = embed_dim
+          x_on_gpu = x.data.on_gpu?
+          cls_on_gpu = @cls_token.data.on_gpu?
+
+          grad_fn = Autograd::CustomBackward.new("PrependClsBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_d = g_cpu.cpu_data.not_nil!
+
+            grad_x = Tensor.zeros(batch_cap, num_patches_cap, embed_dim_cap, device: Tensor::Device::CPU)
+            gx_d = grad_x.cpu_data.not_nil!
+
+            grad_cls = Tensor.zeros(1, 1, embed_dim_cap, device: Tensor::Device::CPU)
+            gc_d = grad_cls.cpu_data.not_nil!
+
+            batch_cap.times do |b|
+              # CLS token gradient (first position)
+              embed_dim_cap.times do |e|
+                gc_d[e] += g_d[b * (num_patches_cap + 1) * embed_dim_cap + e]
+              end
+
+              # Patch gradients
+              num_patches_cap.times do |p|
+                embed_dim_cap.times do |e|
+                  src_idx = b * (num_patches_cap + 1) * embed_dim_cap + (p + 1) * embed_dim_cap + e
+                  dst_idx = b * num_patches_cap * embed_dim_cap + p * embed_dim_cap + e
+                  gx_d[dst_idx] = g_d[src_idx]
+                end
+              end
+            end
+
+            [x_on_gpu ? grad_x.to_gpu : grad_x, cls_on_gpu ? grad_cls.to_gpu : grad_cls] of Tensor?
+          })
+          grad_fn.inputs = [x, @cls_token]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
 
       private def add_position_embedding(x : Autograd::Variable) : Autograd::Variable
@@ -445,7 +566,44 @@ module ML
         end
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad? || @pos_embed.requires_grad?)
+        needs_grad = x.requires_grad? || @pos_embed.requires_grad?
+        result_var = Autograd::Variable.new(result, needs_grad)
+
+        if needs_grad
+          result_var.is_leaf = false
+          batch_cap = batch
+          seq_len_cap = seq_len
+          embed_dim_cap = embed_dim
+          x_on_gpu = x.data.on_gpu?
+          pos_on_gpu = @pos_embed.data.on_gpu?
+
+          grad_fn = Autograd::CustomBackward.new("PosEmbedAddBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_d = g_cpu.cpu_data.not_nil!
+
+            grad_x = Tensor.new(g.shape, g.dtype, Tensor::Device::CPU)
+            gx_d = grad_x.cpu_data.not_nil!
+            g.numel.times { |i| gx_d[i] = g_d[i] }
+
+            grad_pos = Tensor.zeros(1, seq_len_cap, embed_dim_cap, device: Tensor::Device::CPU)
+            gp_d = grad_pos.cpu_data.not_nil!
+
+            batch_cap.times do |b|
+              seq_len_cap.times do |s|
+                embed_dim_cap.times do |e|
+                  idx = b * seq_len_cap * embed_dim_cap + s * embed_dim_cap + e
+                  gp_d[s * embed_dim_cap + e] += g_d[idx]
+                end
+              end
+            end
+
+            [x_on_gpu ? grad_x.to_gpu : grad_x, pos_on_gpu ? grad_pos.to_gpu : grad_pos] of Tensor?
+          })
+          grad_fn.inputs = [x, @pos_embed]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
 
       private def extract_cls_token(x : Autograd::Variable) : Autograd::Variable
@@ -465,7 +623,35 @@ module ML
         end
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad?)
+        result_var = Autograd::Variable.new(result, x.requires_grad?)
+
+        if result_var.requires_grad?
+          result_var.is_leaf = false
+          batch_cap = batch
+          embed_dim_cap = embed_dim
+          seq_len_cap = x_data.shape[1]
+          x_on_gpu = x.data.on_gpu?
+
+          grad_fn = Autograd::CustomBackward.new("ExtractClsBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_d = g_cpu.cpu_data.not_nil!
+
+            grad_x = Tensor.zeros(batch_cap, seq_len_cap, embed_dim_cap, device: Tensor::Device::CPU)
+            gx_d = grad_x.cpu_data.not_nil!
+
+            batch_cap.times do |b|
+              embed_dim_cap.times do |e|
+                gx_d[b * seq_len_cap * embed_dim_cap + e] = g_d[b * embed_dim_cap + e]
+              end
+            end
+
+            [x_on_gpu ? grad_x.to_gpu : grad_x] of Tensor?
+          })
+          grad_fn.inputs = [x]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
     end
   end

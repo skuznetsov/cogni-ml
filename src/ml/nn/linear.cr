@@ -14,7 +14,7 @@ module ML
       getter in_features : Int32
       getter out_features : Int32
 
-      def initialize(@in_features : Int32, @out_features : Int32, bias : Bool = true, device : Tensor::Device = Tensor::Device::GPU)
+      def initialize(@in_features : Int32, @out_features : Int32, bias : Bool = true, device : Tensor::Device = Tensor.default_device)
         # Initialize weight with Kaiming/He initialization
         # std = sqrt(2 / in_features) for ReLU
         std = Math.sqrt(2.0 / @in_features).to_f32
@@ -87,7 +87,19 @@ module ML
 
         if x.data.on_gpu?
           reshaped = x.data.reshape(batch, features)
-          return Autograd::Variable.new(reshaped, x.requires_grad?)
+          result_var = Autograd::Variable.new(reshaped, x.requires_grad?)
+
+          if result_var.requires_grad?
+            result_var.is_leaf = false
+            orig_shape = x.data.shape
+            grad_fn = Autograd::CustomBackward.new("ReshapeForLinearBackward", ->(g : Tensor) {
+              [g.reshape(orig_shape)] of Tensor?
+            })
+            grad_fn.inputs = [x]
+            result_var.grad_fn = grad_fn
+          end
+
+          return result_var
         end
 
         x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
@@ -98,7 +110,19 @@ module ML
         (batch * features).times { |i| r_d[i] = x_d[i] }
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad?)
+        result_var = Autograd::Variable.new(result, x.requires_grad?)
+
+        if result_var.requires_grad?
+          result_var.is_leaf = false
+          orig_shape = x.data.shape
+          grad_fn = Autograd::CustomBackward.new("ReshapeForLinearBackward", ->(g : Tensor) {
+            [g.reshape(orig_shape)] of Tensor?
+          })
+          grad_fn.inputs = [x]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
 
       private def reshape_from_linear(x : Autograd::Variable, shape : Array(Int32)) : Autograd::Variable
@@ -106,7 +130,19 @@ module ML
 
         if x.data.on_gpu?
           reshaped = x.data.reshape(Shape.new(shape))
-          return Autograd::Variable.new(reshaped, x.requires_grad?)
+          result_var = Autograd::Variable.new(reshaped, x.requires_grad?)
+
+          if result_var.requires_grad?
+            result_var.is_leaf = false
+            orig_shape = x.data.shape
+            grad_fn = Autograd::CustomBackward.new("ReshapeFromLinearBackward", ->(g : Tensor) {
+              [g.reshape(orig_shape)] of Tensor?
+            })
+            grad_fn.inputs = [x]
+            result_var.grad_fn = grad_fn
+          end
+
+          return result_var
         end
 
         x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
@@ -117,7 +153,19 @@ module ML
         x_data.numel.times { |i| r_d[i] = x_d[i] }
 
         result = result.to_gpu if x.data.on_gpu?
-        Autograd::Variable.new(result, x.requires_grad?)
+        result_var = Autograd::Variable.new(result, x.requires_grad?)
+
+        if result_var.requires_grad?
+          result_var.is_leaf = false
+          orig_shape = x.data.shape
+          grad_fn = Autograd::CustomBackward.new("ReshapeFromLinearBackward", ->(g : Tensor) {
+            [g.reshape(orig_shape)] of Tensor?
+          })
+          grad_fn.inputs = [x]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
 
       def call(x : Autograd::Variable) : Autograd::Variable

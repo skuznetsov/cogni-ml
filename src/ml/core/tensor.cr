@@ -41,6 +41,15 @@ module ML
 
     getter device : Device
 
+    # Default device (compile-time selectable)
+    def self.default_device : Device
+      {% if flag?(:cpu_only) %}
+        Device::CPU
+      {% else %}
+        Device::GPU
+      {% end %}
+    end
+
     # Internal constructor for views (doesn't allocate)
     protected def initialize(
       @shape : Shape,
@@ -53,7 +62,8 @@ module ML
     end
 
     # Create empty tensor on GPU
-    def initialize(@shape : Shape, @dtype : DType = DType::F32, @device : Device = Device::GPU)
+    def initialize(@shape : Shape, @dtype : DType = DType::F32, @device : Device = Tensor.default_device)
+      raise ArgumentError.new("Only F32 dtype is supported for now") unless @dtype.f32?
       @strides = Strides.new(@shape)
 
       case @device
@@ -68,7 +78,7 @@ module ML
     end
 
     # Create from shape tuple
-    def self.new(*dims : Int32, dtype : DType = DType::F32, device : Device = Device::GPU) : Tensor
+    def self.new(*dims : Int32, dtype : DType = DType::F32, device : Device = Tensor.default_device) : Tensor
       new(Shape.new(dims.to_a), dtype, device)
     end
 
@@ -95,31 +105,31 @@ module ML
     end
 
     # Factory methods
-    def self.zeros(*dims : Int32, device : Device = Device::GPU) : Tensor
+    def self.zeros(*dims : Int32, device : Device = Tensor.default_device) : Tensor
       tensor = new(*dims, device: device)
       tensor.fill!(0.0_f32)
       tensor
     end
 
-    def self.ones(*dims : Int32, device : Device = Device::GPU) : Tensor
+    def self.ones(*dims : Int32, device : Device = Tensor.default_device) : Tensor
       tensor = new(*dims, device: device)
       tensor.fill!(1.0_f32)
       tensor
     end
 
-    def self.full(*dims : Int32, value : Float32, device : Device = Device::GPU) : Tensor
+    def self.full(*dims : Int32, value : Float32, device : Device = Tensor.default_device) : Tensor
       tensor = new(*dims, device: device)
       tensor.fill!(value)
       tensor
     end
 
-    def self.rand(*dims : Int32, device : Device = Device::GPU) : Tensor
+    def self.rand(*dims : Int32, device : Device = Tensor.default_device) : Tensor
       tensor = new(*dims, device: Device::CPU)
       tensor.cpu_data.not_nil!.map_with_index! { |_, _| Random.rand.to_f32 }
       device.gpu? ? tensor.to_gpu : tensor
     end
 
-    def self.randn(*dims : Int32, device : Device = Device::GPU) : Tensor
+    def self.randn(*dims : Int32, device : Device = Tensor.default_device) : Tensor
       # Box-Muller transform for normal distribution
       tensor = new(*dims, device: Device::CPU)
       data = tensor.cpu_data.not_nil!
@@ -139,7 +149,7 @@ module ML
     end
 
     # Identity matrix
-    def self.eye(n : Int32, device : Device = Device::GPU) : Tensor
+    def self.eye(n : Int32, device : Device = Tensor.default_device) : Tensor
       tensor = zeros(n, n, device: Device::CPU)
       data = tensor.cpu_data.not_nil!
       n.times { |i| data[i * n + i] = 1.0_f32 }
@@ -147,7 +157,7 @@ module ML
     end
 
     # Arange
-    def self.arange(start : Float32, stop : Float32, step : Float32 = 1.0_f32, device : Device = Device::GPU) : Tensor
+    def self.arange(start : Float32, stop : Float32, step : Float32 = 1.0_f32, device : Device = Tensor.default_device) : Tensor
       count = ((stop - start) / step).ceil.to_i32
       tensor = new(count, device: Device::CPU)
       data = tensor.cpu_data.not_nil!
@@ -156,7 +166,7 @@ module ML
     end
 
     # Linspace
-    def self.linspace(start : Float32, stop : Float32, count : Int32, device : Device = Device::GPU) : Tensor
+    def self.linspace(start : Float32, stop : Float32, count : Int32, device : Device = Tensor.default_device) : Tensor
       tensor = new(count, device: Device::CPU)
       data = tensor.cpu_data.not_nil!
       step = (stop - start) / (count - 1).to_f32

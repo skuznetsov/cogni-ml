@@ -41,19 +41,19 @@ module ML
       end
 
       # Factory methods that mirror Tensor
-      def self.zeros(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor::Device::GPU) : Variable
+      def self.zeros(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor.default_device) : Variable
         new(Tensor.zeros(*dims, device: device), requires_grad)
       end
 
-      def self.ones(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor::Device::GPU) : Variable
+      def self.ones(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor.default_device) : Variable
         new(Tensor.ones(*dims, device: device), requires_grad)
       end
 
-      def self.rand(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor::Device::GPU) : Variable
+      def self.rand(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor.default_device) : Variable
         new(Tensor.rand(*dims, device: device), requires_grad)
       end
 
-      def self.randn(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor::Device::GPU) : Variable
+      def self.randn(*dims : Int32, requires_grad : Bool = false, device : Tensor::Device = Tensor.default_device) : Variable
         new(Tensor.randn(*dims, device: device), requires_grad)
       end
 

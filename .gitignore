@@ -1,6 +1,7 @@
 # Crystal build artifacts
 /bin/
 *.dwarf
+build/
 
 # Dependencies
 /lib/
@@ -19,3 +20,6 @@ Thumbs.db
 # Metal compiled shaders
 *.metallib
 *.air
+
+# Local Codex agent state
+.agents/

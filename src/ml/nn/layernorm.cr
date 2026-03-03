@@ -14,7 +14,7 @@ module ML
       getter bias : Autograd::Variable    # beta
       getter eps : Float32
 
-      def initialize(normalized_shape : Array(Int32) | Int32, @eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor::Device::GPU)
+      def initialize(normalized_shape : Array(Int32) | Int32, @eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor.default_device)
         @normalized_shape = normalized_shape.is_a?(Int32) ? [normalized_shape] : normalized_shape
 
         # Number of elements in normalized dimensions
@@ -30,7 +30,7 @@ module ML
       end
 
       # Convenience constructor for single dimension
-      def self.new(dim : Int32, eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor::Device::GPU)
+      def self.new(dim : Int32, eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor.default_device)
         new([dim], eps, device)
       end
 
@@ -252,7 +252,7 @@ module ML
       getter weight : Autograd::Variable
       getter eps : Float32
 
-      def initialize(@dim : Int32, @eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor::Device::GPU)
+      def initialize(@dim : Int32, @eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor.default_device)
         weight_data = Tensor.ones(@dim, device: device)
         @weight = Autograd::Variable.new(weight_data, requires_grad: true)
       end
@@ -262,6 +262,8 @@ module ML
         total = x.data.numel
         batch_size = total // @dim
 
+        needs_grad = x.requires_grad? || @weight.requires_grad?
+
         # Try GPU path
         if x.data.on_gpu? && @weight.data.on_gpu? && GPUOps.available?
           result = forward_gpu(x.data, batch_size)
@@ -269,7 +271,62 @@ module ML
           result = forward_cpu(x.data, batch_size)
         end
 
-        Autograd::Variable.new(result, x.requires_grad?)
+        result_var = Autograd::Variable.new(result, needs_grad)
+
+        if needs_grad
+          result_var.is_leaf = false
+          x_clone = x.data.clone
+          w_clone = @weight.data.clone
+          dim_cap = @dim
+          eps_cap = @eps
+          x_on_gpu = x.data.on_gpu?
+          w_on_gpu = @weight.data.on_gpu?
+
+          grad_fn = Autograd::CustomBackward.new("RMSNormBackward", ->(g : Tensor) {
+            g_cpu = g.on_cpu? ? g : g.to_cpu
+            x_cpu = x_clone.on_cpu? ? x_clone : x_clone.to_cpu
+            w_cpu = w_clone.on_cpu? ? w_clone : w_clone.to_cpu
+
+            g_d = g_cpu.cpu_data.not_nil!
+            x_d = x_cpu.cpu_data.not_nil!
+            w_d = w_cpu.cpu_data.not_nil!
+
+            grad_x = Tensor.new(x_clone.shape, x_clone.dtype, Tensor::Device::CPU)
+            grad_w = Tensor.zeros(dim_cap, device: Tensor::Device::CPU)
+            gx_d = grad_x.cpu_data.not_nil!
+            gw_d = grad_w.cpu_data.not_nil!
+
+            batch = x_clone.numel // dim_cap
+            dim_f = dim_cap.to_f32
+
+            batch.times do |b|
+              offset = b * dim_cap
+              sum_sq = 0.0_f32
+              dim_cap.times { |i| sum_sq += x_d[offset + i] * x_d[offset + i] }
+              inv_r = 1.0_f32 / Math.sqrt(sum_sq / dim_f + eps_cap)
+              inv_r3 = inv_r * inv_r * inv_r
+
+              dot = 0.0_f32
+              dim_cap.times do |i|
+                dot += g_d[offset + i] * w_d[i] * x_d[offset + i]
+              end
+
+              scale = inv_r3 / dim_f
+
+              dim_cap.times do |i|
+                gx_d[offset + i] = inv_r * w_d[i] * g_d[offset + i] - x_d[offset + i] * dot * scale
+                gw_d[i] += g_d[offset + i] * x_d[offset + i] * inv_r
+              end
+            end
+
+            [x_on_gpu ? grad_x.to_gpu : grad_x, w_on_gpu ? grad_w.to_gpu : grad_w] of Tensor?
+          })
+
+          grad_fn.inputs = [x, @weight]
+          result_var.grad_fn = grad_fn
+        end
+
+        result_var
       end
 
       private def forward_gpu(x : Tensor, batch_size : Int32) : Tensor

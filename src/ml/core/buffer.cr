@@ -1,3 +1,119 @@
+{% if flag?(:cpu_only) %}
+# CPU-only stubs (Metal disabled)
+module ML
+  enum StorageMode
+    Shared
+    Private
+    Managed
+  end
+
+  enum PurgeableState
+    NonVolatile
+    Volatile
+    Empty
+  end
+
+  class MetalBuffer
+    getter size : Int64
+    getter storage_mode : StorageMode
+    getter? valid : Bool
+
+    def initialize(@size : Int64, @storage_mode : StorageMode = StorageMode::Shared)
+      @valid = false
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def self.from_array(data : Array(Float32), mode : StorageMode = StorageMode::Shared) : MetalBuffer
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def self.from_slice(data : Slice(Float32), mode : StorageMode = StorageMode::Shared) : MetalBuffer
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def write(data : Array(Float32)) : Nil
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def write_slice(data : Slice(Float32)) : Nil
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def read(count : Int32) : Array(Float32)
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def read_to_slice(dest : Slice(Float32)) : Nil
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def write_bytes(ptr : Pointer(UInt8), byte_size : Int) : Nil
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def read_bytes(ptr : Pointer(UInt8), byte_size : Int) : Nil
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def contents : Pointer(Void)
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def handle : Pointer(Void)
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def element_count : Int32
+      0
+    end
+
+    def copy_from(src : MetalBuffer, byte_size : Int64) : Nil
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def sync : Nil
+    end
+
+    def set_purgeable(state : PurgeableState) : Nil
+    end
+
+    def finalize
+    end
+
+    def release : Nil
+    end
+
+    def self.stats : NamedTuple(live_buffers: Int32, live_bytes: Int64, peak_bytes: Int64)
+      {live_buffers: 0, live_bytes: 0_i64, peak_bytes: 0_i64}
+    end
+  end
+
+  class BufferPool
+    def initialize(@max_cached : Int32 = 0, @max_buffer_bytes : Int64 = 0, @max_cached_bytes : Int64 = 0)
+    end
+
+    def acquire(size : Int64, mode : StorageMode = StorageMode::Shared) : MetalBuffer
+      raise "Metal disabled (cpu_only)"
+    end
+
+    def release(buffer : MetalBuffer) : Nil
+    end
+
+    def clear : Nil
+    end
+
+    def stats : NamedTuple(cached_buffers: Int32, cached_bytes: Int64)
+      {cached_buffers: 0, cached_bytes: 0_i64}
+    end
+
+    def self.env_i64(name : String, default : Int64) : Int64
+      default
+    end
+  end
+
+  class_getter buffer_pool : BufferPool = BufferPool.new
+end
+{% else %}
 # Metal Buffer wrapper with RAII semantics
 # Manages GPU memory lifecycle, supports zero-copy on Apple Silicon
 
@@ -307,6 +423,7 @@ module ML
     max_cached_bytes: BufferPool.env_i64("GS_BUFFER_POOL_MAX_BYTES", BufferPool::DEFAULT_MAX_CACHED_BYTES)
   )
 end
+{% end %}
 
 # Metal FFI declarations (implemented in metal_bridge.mm)
 {% if flag?(:darwin) %}

@@ -29,10 +29,12 @@ module ML
       result
     end
 
-    # Access dimension by index
+    # Access dimension by index (supports negative indices)
     def [](index : Int32) : Int32
-      raise IndexError.new("Dimension index #{index} out of range for #{@ndim}D tensor") if index < 0 || index >= @ndim
-      @dims[index]
+      idx = index
+      idx += @ndim if idx < 0
+      raise IndexError.new("Dimension index #{index} out of range for #{@ndim}D tensor") if idx < 0 || idx >= @ndim
+      @dims[idx]
     end
 
     # Iterate over dimensions
@@ -129,8 +131,10 @@ module ML
     end
 
     def [](index : Int32) : Int32
-      raise IndexError.new("Stride index #{index} out of range") if index < 0 || index >= @ndim
-      @strides[index]
+      idx = index
+      idx += @ndim if idx < 0
+      raise IndexError.new("Stride index #{index} out of range") if idx < 0 || idx >= @ndim
+      @strides[idx]
     end
 
     # Check if memory is contiguous (row-major)

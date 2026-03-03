@@ -259,6 +259,9 @@ module ML
             # if nesterov: param = param - lr * (grad + momentum * v)
             # else: param = param - lr * v
 
+            v_was_gpu = v.on_gpu?
+            param_was_gpu = param_data.on_gpu?
+
             v_cpu = v.on_cpu? ? v : v.to_cpu
             grad_cpu = grad.on_cpu? ? grad : grad.to_cpu
             param_cpu = param_data.on_cpu? ? param_data : param_data.to_cpu
@@ -276,7 +279,12 @@ module ML
               end
             end
 
-            # TODO: sync back to GPU if needed
+            if v_was_gpu
+              v.buffer.not_nil!.write(v_data)
+            end
+            if param_was_gpu
+              param_data.buffer.not_nil!.write(p_data)
+            end
           else
             # Simple SGD: param = param - lr * grad
             grad_cpu = grad.on_cpu? ? grad : grad.to_cpu
