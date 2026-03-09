@@ -341,9 +341,10 @@ module ML
         Slice.new(ptr, @model.n_embd)
       end
 
-      # Reset KV cache
+      # Reset KV cache + recurrent state (Mamba SSM) + sampler
       def reset
         @pos = 0
+        LlamaFFI.llama_memory_clear(@handle) unless @freed
         if sampler = @sampler
           LlamaFFI.llama_sampler_reset(sampler)
         end

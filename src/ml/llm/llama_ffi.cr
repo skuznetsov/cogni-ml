@@ -160,6 +160,9 @@ module ML
       fun llama_init_from_model(model : LlamaModel, params : LlamaContextParams) : LlamaContext
       fun llama_free(ctx : LlamaContext) : Void
 
+      # Memory management (KV cache + recurrent state)
+      fun llama_memory_clear(ctx : LlamaContext) : Void
+
       # Model info
       fun llama_model_n_ctx_train(model : LlamaModel) : Int32
       fun llama_model_n_embd(model : LlamaModel) : Int32
