@@ -38,6 +38,7 @@ module ML
 
       @handle : LlamaFFI::LlamaModel
       @vocab : LlamaFFI::LlamaVocab
+      @freed : Bool = false
 
       def initialize(@path : String, n_gpu_layers : Int32 = 99)
         params = LlamaFFI.llama_model_default_params
@@ -62,7 +63,14 @@ module ML
       end
 
       def finalize
-        LlamaFFI.llama_model_free(@handle) unless @handle.null?
+        free
+      end
+
+      def free : Nil
+        unless @handle.null? || @freed
+          LlamaFFI.llama_model_free(@handle)
+          @freed = true
+        end
       end
 
       # Vocab accessors
@@ -341,13 +349,17 @@ module ML
         Slice.new(ptr, @model.n_embd)
       end
 
-      # Reset KV cache + recurrent state (Mamba SSM) + sampler
+      # Reset position + sampler (safe for all context types including BERT)
       def reset
         @pos = 0
-        LlamaFFI.llama_memory_clear(@handle) unless @freed
         if sampler = @sampler
           LlamaFFI.llama_sampler_reset(sampler)
         end
+      end
+
+      # Clear KV cache + recurrent state (decoder/hybrid models only, NOT BERT)
+      def clear_memory
+        LlamaFFI.llama_memory_clear(@handle) unless @freed
       end
 
       # Current position in context
