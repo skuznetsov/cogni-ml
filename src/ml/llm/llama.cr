@@ -431,12 +431,9 @@ module ML
         @prompt_mode : PromptMode = PromptMode::Raw,
         sampler_seed : UInt32? = nil,
       )
+        @seed = sampler_seed || LlamaFFI::LLAMA_DEFAULT_SEED
         @context = @model.create_context(n_ctx: n_ctx, n_batch: n_batch, n_ubatch: n_ubatch, n_threads: n_threads, flash_attn: flash_attn)
-        if seed = sampler_seed
-          @context.setup_sampler(seed: seed)
-        else
-          @context.setup_sampler
-        end
+        @context.setup_sampler(seed: @seed)
       end
 
       # Format prompt based on current mode
@@ -511,7 +508,7 @@ module ML
         temperature : Float32 = 0.7_f32
       ) : String
         @context.reset
-        @context.setup_sampler(temperature: temperature)
+        @context.setup_sampler(temperature: temperature, seed: @seed)
         prompt = format_prompt(question, system)
 
         # Use stop strings for gpt-oss modes
@@ -555,7 +552,7 @@ module ML
         &block : String ->
       ) : Int32
         @context.reset
-        @context.setup_sampler(temperature: temperature)
+        @context.setup_sampler(temperature: temperature, seed: @seed)
         prompt = format_prompt(question, system)
 
         # Use stop strings for gpt-oss modes
@@ -604,7 +601,7 @@ module ML
         &block : String ->
       ) : Int32
         @context.reset
-        @context.setup_sampler(temperature: temperature)
+        @context.setup_sampler(temperature: temperature, seed: @seed)
         prompt = format_prompt(question, system)
         stream(prompt, max_tokens: max_tokens, &block)
       end
@@ -621,7 +618,7 @@ module ML
       ) : String
         @context.reset
         @token_logprobs.clear
-        @context.setup_sampler(temperature: temperature, top_k: top_k, top_p: top_p)
+        @context.setup_sampler(temperature: temperature, top_k: top_k, top_p: top_p, seed: @seed)
 
         tokens = @model.tokenize(prompt)
         return "" unless @context.eval(tokens)
