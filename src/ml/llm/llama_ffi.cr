@@ -1,6 +1,6 @@
 # Crystal FFI bindings for llama.cpp
-# Version: 7340 (Dec 2024)
-# API docs: https://github.com/ggerganov/llama.cpp/blob/master/include/llama.h
+# Version: 8200 (Mar 2026)
+# API docs: https://github.com/ggml-org/llama.cpp/blob/master/include/llama.h
 
 module ML
   module LLM
@@ -82,10 +82,12 @@ module ML
         kv_overrides : Void*
         vocab_only : Bool
         use_mmap : Bool
+        use_direct_io : Bool
         use_mlock : Bool
         check_tensors : Bool
         use_extra_bufts : Bool
         no_host : Bool
+        no_alloc : Bool
       end
 
       # Context parameters
@@ -120,6 +122,9 @@ module ML
         op_offload : Bool
         swa_full : Bool
         kv_unified : Bool
+        # Experimental: backend sampler chain configuration (b8200+)
+        samplers : Void*  # llama_sampler_seq_config*
+        n_samplers : LibC::SizeT
       end
 
       # Sampler chain parameters
@@ -224,6 +229,7 @@ module ML
       fun llama_get_logits_ith(ctx : LlamaContext, i : Int32) : Float32*
       fun llama_get_embeddings(ctx : LlamaContext) : Float32*
       fun llama_get_embeddings_ith(ctx : LlamaContext, i : Int32) : Float32*
+      fun llama_get_embeddings_seq(ctx : LlamaContext, seq_id : Int32) : Float32*
 
       # Sampler chain
       fun llama_sampler_chain_init(params : LlamaSamplerChainParams) : LlamaSampler

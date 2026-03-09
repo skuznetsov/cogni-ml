@@ -184,6 +184,7 @@ module ML
       @handle : LlamaFFI::LlamaContext
       @sampler : LlamaFFI::LlamaSampler?
       @pos : Int32 = 0
+      @freed : Bool = false
 
       def initialize(
         @model : Model,
@@ -212,10 +213,18 @@ module ML
       end
 
       def finalize
+        free
+      end
+
+      def free : Nil
         if sampler = @sampler
           LlamaFFI.llama_sampler_free(sampler)
+          @sampler = nil
         end
-        LlamaFFI.llama_free(@handle) unless @handle.null?
+        unless @handle.null? || @freed
+          LlamaFFI.llama_free(@handle)
+          @freed = true
+        end
       end
 
       # Setup sampler chain with default parameters
@@ -277,6 +286,37 @@ module ML
         end
 
         true
+      end
+
+      # Encode tokens for BERT/encoder models (uses llama_encode instead of llama_decode)
+      def encode(tokens : Array(Int32)) : Bool
+        return true if tokens.empty?
+
+        remaining = tokens.size
+        offset = 0
+
+        while remaining > 0
+          n = Math.min(remaining, @n_batch.to_i32)
+          batch_tokens = tokens[offset, n]
+
+          batch = LlamaFFI.llama_batch_get_one(batch_tokens.to_unsafe, n)
+          result = LlamaFFI.llama_encode(@handle, batch)
+
+          return false if result != 0
+
+          @pos += n
+          offset += n
+          remaining -= n
+        end
+
+        true
+      end
+
+      # Get sequence embeddings (for BERT/encoder models with pooling)
+      def get_seq_embeddings(seq_id : Int32) : Slice(Float32)
+        ptr = LlamaFFI.llama_get_embeddings_seq(@handle, seq_id)
+        raise "Failed to get sequence embeddings" if ptr.null?
+        Slice.new(ptr, @model.n_embd)
       end
 
       # Sample next token
@@ -356,6 +396,18 @@ module ML
       getter context : Context
       property prompt_mode : PromptMode
 
+      # Per-token log-probabilities from last generation (log-softmax of sampled token)
+      getter token_logprobs : Array(Float32) = [] of Float32
+
+      def mean_logprob : Float32
+        return 0.0_f32 if @token_logprobs.empty?
+        @token_logprobs.sum / @token_logprobs.size
+      end
+
+      def min_logprob : Float32
+        @token_logprobs.min? || 0.0_f32
+      end
+
       def initialize(
         @model : Model,
         n_ctx : Int32 = 0,
@@ -363,10 +415,15 @@ module ML
         n_ubatch : Int32 = 0,
         n_threads : Int32 = 0,
         flash_attn : Bool = true,
-        @prompt_mode : PromptMode = PromptMode::Raw
+        @prompt_mode : PromptMode = PromptMode::Raw,
+        sampler_seed : UInt32? = nil,
       )
         @context = @model.create_context(n_ctx: n_ctx, n_batch: n_batch, n_ubatch: n_ubatch, n_threads: n_threads, flash_attn: flash_attn)
-        @context.setup_sampler
+        if seed = sampler_seed
+          @context.setup_sampler(seed: seed)
+        else
+          @context.setup_sampler
+        end
       end
 
       # Format prompt based on current mode
@@ -550,6 +607,7 @@ module ML
         top_p : Float32 = 0.95_f32
       ) : String
         @context.reset
+        @token_logprobs.clear
         @context.setup_sampler(temperature: temperature, top_k: top_k, top_p: top_p)
 
         tokens = @model.tokenize(prompt)
@@ -561,6 +619,9 @@ module ML
 
         while generated < max_tokens
           token = @context.sample
+
+          # Collect logprob for sampled token (logits valid between sample and next eval)
+          @token_logprobs << token_log_softmax(token)
 
           # Check for end of generation
           break if stop_on_eos && @model.is_eog?(token)
@@ -604,6 +665,7 @@ module ML
       ) : Int32
         @context.reset
         @context.reset_perf
+        @token_logprobs.clear
 
         tokens = @model.tokenize(prompt)
         return 0 unless @context.eval(tokens)
@@ -613,6 +675,10 @@ module ML
 
         while generated < max_tokens
           token = @context.sample
+
+          # Collect logprob for sampled token (logits valid between sample and next eval)
+          @token_logprobs << token_log_softmax(token)
+
           break if stop_on_eos && @model.is_eog?(token)
 
           piece = @model.token_to_piece(token)
@@ -649,6 +715,18 @@ module ML
       def calculate_tps(tokens : Int32, elapsed : Time::Span) : Float64
         return 0.0 if tokens == 0 || elapsed.total_milliseconds <= 0
         (tokens * 1000.0) / elapsed.total_milliseconds
+      end
+
+      # Numerically stable log-softmax for a single token
+      # Returns log P(token) = logit[token] - log(Σ exp(logit - max))
+      private def token_log_softmax(token_id : Int32) : Float32
+        logits = @context.get_logits
+        max_logit = logits[0]
+        logits.each { |l| max_logit = l if l > max_logit }
+        sum_exp = 0.0_f64
+        logits.each { |l| sum_exp += Math.exp((l - max_logit).to_f64) }
+        log_sum_exp = max_logit.to_f64 + Math.log(sum_exp)
+        (logits[token_id].to_f64 - log_sum_exp).to_f32
       end
     end
   end
