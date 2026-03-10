@@ -5,13 +5,41 @@ require "./llama_ffi"
 
 module ML
   module LLM
+    @@backend_mutex = Mutex.new
+    @@backend_initialized = false
+    @@models = [] of Model
+    @@contexts = [] of Context
+
     # Initialize llama backend (call once at program start)
     def self.init
-      LlamaFFI.llama_backend_init
+      @@backend_mutex.synchronize do
+        next if @@backend_initialized
+        LlamaFFI.llama_backend_init
+        @@backend_initialized = true
+      end
     end
 
     # Cleanup llama backend (call at program end)
     def self.cleanup
+      contexts = [] of Context
+      models = [] of Model
+      should_cleanup = false
+
+      @@backend_mutex.synchronize do
+        if @@backend_initialized
+          should_cleanup = true
+          contexts = @@contexts.reverse_each.to_a
+          models = @@models.reverse_each.to_a
+          @@contexts.clear
+          @@models.clear
+          @@backend_initialized = false
+        end
+      end
+
+      return unless should_cleanup
+
+      contexts.each(&.free)
+      models.each(&.free)
       LlamaFFI.llama_backend_free
     end
 
@@ -23,6 +51,22 @@ module ML
     # Get system info string
     def self.system_info : String
       String.new(LlamaFFI.llama_print_system_info)
+    end
+
+    def self.register_model(model : Model) : Nil
+      @@backend_mutex.synchronize { @@models << model }
+    end
+
+    def self.unregister_model(model : Model) : Nil
+      @@backend_mutex.synchronize { @@models.reject!(&.same?(model)) }
+    end
+
+    def self.register_context(context : Context) : Nil
+      @@backend_mutex.synchronize { @@contexts << context }
+    end
+
+    def self.unregister_context(context : Context) : Nil
+      @@backend_mutex.synchronize { @@contexts.reject!(&.same?(context)) }
     end
 
     # LLM Model - loads and manages a GGUF model file
@@ -60,6 +104,7 @@ module ML
         buf = Bytes.new(256)
         len = LlamaFFI.llama_model_desc(@handle, buf.to_unsafe.as(LibC::Char*), buf.size)
         @description = len > 0 ? String.new(buf[0, len]) : "unknown"
+        ML::LLM.register_model(self)
       end
 
       def finalize
@@ -70,6 +115,7 @@ module ML
         unless @handle.null? || @freed
           LlamaFFI.llama_model_free(@handle)
           @freed = true
+          ML::LLM.unregister_model(self)
         end
       end
 
@@ -218,6 +264,7 @@ module ML
 
         @n_ctx = LlamaFFI.llama_n_ctx(@handle)
         @n_batch = LlamaFFI.llama_n_batch(@handle)
+        ML::LLM.register_context(self)
       end
 
       def finalize
@@ -232,6 +279,7 @@ module ML
         unless @handle.null? || @freed
           LlamaFFI.llama_free(@handle)
           @freed = true
+          ML::LLM.unregister_context(self)
         end
       end
 
@@ -494,7 +542,11 @@ module ML
       end
 
       def finalize
-        # Context cleanup handled by its own finalizer
+        free
+      end
+
+      def free : Nil
+        @context.free
       end
 
       # Default stop strings for gpt-oss models

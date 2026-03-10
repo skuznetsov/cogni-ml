@@ -105,12 +105,17 @@ eval "$(make llama_env)"
 require "ml/llm/llama"
 
 ML::LLM.init
-model = ML::LLM::Model.new("/path/to/model.gguf")
-ctx = model.create_context
-ctx.setup_greedy_sampler
-ctx.eval(model.tokenize("Hello"))
-puts model.token_to_piece(ctx.sample)
-ML::LLM.cleanup
+begin
+  model = ML::LLM::Model.new("/path/to/model.gguf")
+  ctx = model.create_context
+  ctx.setup_greedy_sampler
+  ctx.eval(model.tokenize("Hello"))
+  puts model.token_to_piece(ctx.sample)
+ensure
+  ctx.try(&.free)
+  model.try(&.free)
+  ML::LLM.cleanup
+end
 ```
 
 See also `docs/LLM.md` and `examples/llm_inference.cr`.

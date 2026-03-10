@@ -18,5 +18,7 @@ begin
   puts "---"
   puts generator.ask(prompt, max_tokens: 128)
 ensure
+  generator.try(&.free)
+  model.try(&.free)
   ML::LLM.cleanup
 end
