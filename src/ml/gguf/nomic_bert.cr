@@ -381,17 +381,19 @@ module ML::GGUF
       end
     end
 
-    # Apply RoPE rotation to a head vector at position pos
+    # Apply NeoX RoPE rotation to a head vector at position pos.
+    # NeoX pairs: (dim[i], dim[i + head_dim/2]) for i in 0..head_dim/2
+    # NOT (dim[2i], dim[2i+1]) which is "normal" RoPE!
     private def apply_rope!(vec : Array(Float32), offset : Int32, pos : Int32)
       half = @head_dim // 2
       rope_off = pos * half
       half.times do |i|
         cos = @rope_cos[rope_off + i]
         sin = @rope_sin[rope_off + i]
-        v0 = vec[offset + 2 * i]
-        v1 = vec[offset + 2 * i + 1]
-        vec[offset + 2 * i]     = v0 * cos - v1 * sin
-        vec[offset + 2 * i + 1] = v0 * sin + v1 * cos
+        v0 = vec[offset + i]
+        v1 = vec[offset + i + half]
+        vec[offset + i]        = v0 * cos - v1 * sin
+        vec[offset + i + half] = v0 * sin + v1 * cos
       end
     end
 
