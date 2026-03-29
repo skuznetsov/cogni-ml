@@ -244,6 +244,8 @@ module ML::GGUF
     end
 
     # Dense FFN: up → GELU → down
+    # Note: llama.cpp uses SiLU for nomic-bert but empirical testing shows
+    # GELU gives much higher cosine similarity (0.79 vs 0.26) for this GGUF.
     private def dense_ffn(x : Array(Float32), seq_len : Int32, lw : LayerWeights) : Array(Float32)
       up_w = lw.ffn_up_w.not_nil!
       up_b = lw.ffn_up_b.not_nil!
