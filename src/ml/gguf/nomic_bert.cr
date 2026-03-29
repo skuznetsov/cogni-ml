@@ -12,6 +12,7 @@
 
 require "./reader"
 require "./tokenizer"
+require "./quant_matmul"
 
 module ML::GGUF
   class NomicBertMoE
@@ -41,24 +42,35 @@ module ML::GGUF
     @rope_cos = [] of Float32
     @rope_sin = [] of Float32
 
+    # Quantized weight: raw bytes + type for on-the-fly dequant during matmul
+    struct QuantWeight
+      getter raw : Bytes
+      getter type : TensorType
+      getter out_dim : Int32
+      getter in_dim : Int32
+
+      def initialize(@raw, @type, @out_dim, @in_dim)
+      end
+    end
+
     struct LayerWeights
-      getter attn_qkv_w : Array(Float32)     # [3*dim, dim]
+      getter attn_qkv_w : QuantWeight       # [3*dim, dim]
       getter attn_qkv_b : Array(Float32)     # [3*dim]
-      getter attn_out_w : Array(Float32)      # [dim, dim]
-      getter attn_out_b : Array(Float32)      # [dim]
+      getter attn_out_w : QuantWeight        # [dim, dim]
+      getter attn_out_b : Array(Float32)     # [dim]
       getter norm1_w : Array(Float32)         # [dim]
       getter norm1_b : Array(Float32)         # [dim]
       getter norm2_w : Array(Float32)         # [dim]
       getter norm2_b : Array(Float32)         # [dim]
       # Dense FFN (non-MoE layers)
-      getter ffn_up_w : Array(Float32)?       # [ffn_dim, dim]
+      getter ffn_up_w : QuantWeight?         # [ffn_dim, dim]
       getter ffn_up_b : Array(Float32)?       # [ffn_dim]
-      getter ffn_down_w : Array(Float32)?     # [dim, ffn_dim]
+      getter ffn_down_w : QuantWeight?       # [dim, ffn_dim]
       getter ffn_down_b : Array(Float32)?     # [dim]
       # MoE FFN (MoE layers)
-      getter gate_w : Array(Float32)?         # [n_experts, dim]
-      getter expert_up_w : Array(Float32)?    # [n_experts, ffn_dim, dim]
-      getter expert_down_w : Array(Float32)?  # [n_experts, dim, ffn_dim]
+      getter gate_w : Array(Float32)?         # [n_experts, dim] — small, kept as F32
+      getter expert_up_w : QuantWeight?      # [n_experts * ffn_dim, dim]
+      getter expert_down_w : QuantWeight?    # [n_experts * dim, ffn_dim]
 
       def initialize(@attn_qkv_w, @attn_qkv_b, @attn_out_w, @attn_out_b,
                      @norm1_w, @norm1_b, @norm2_w, @norm2_b,
@@ -176,10 +188,15 @@ module ML::GGUF
       result
     end
 
+    # Fused quantized matmul: reads raw quantized bytes, dequants per-block during dot product
+    private def q_matmul_add(x : Array(Float32), rows : Int32, qw : QuantWeight, bias : Array(Float32)) : Array(Float32)
+      QuantMatmul.matmul_add(x, rows, qw.in_dim, qw.raw, qw.type, qw.out_dim, bias)
+    end
+
     # Self-attention with RoPE
     private def self_attention(x : Array(Float32), seq_len : Int32, lw : LayerWeights) : Array(Float32)
       # QKV projection: [seq_len, dim] × [3*dim, dim]^T → [seq_len, 3*dim]
-      qkv = matmul_add(x, seq_len, @dim, lw.attn_qkv_w, 3 * @dim, lw.attn_qkv_b)
+      qkv = q_matmul_add(x, seq_len, lw.attn_qkv_w, lw.attn_qkv_b)
 
       # Split into Q, K, V and reshape to [n_heads, seq_len, head_dim]
       # Then apply RoPE to Q and K
@@ -240,7 +257,7 @@ module ML::GGUF
       end
 
       # Output projection
-      matmul_add(attn_out, seq_len, @dim, lw.attn_out_w, @dim, lw.attn_out_b)
+      q_matmul_add(attn_out, seq_len, lw.attn_out_w, lw.attn_out_b)
     end
 
     # Dense FFN: up → GELU → down
@@ -253,27 +270,39 @@ module ML::GGUF
       down_b = lw.ffn_down_b.not_nil!
 
       # Up: [seq, dim] → [seq, ffn_dim]
-      h = matmul_add(x, seq_len, @dim, up_w, @ffn_dim, up_b)
+      h = q_matmul_add(x, seq_len, up_w, up_b)
       # GELU activation
       h.map! { |v| gelu(v) }
       # Down: [seq, ffn_dim] → [seq, dim]
-      matmul_add(h, seq_len, @ffn_dim, down_w, @dim, down_b)
+      q_matmul_add(h, seq_len, down_w, down_b)
     end
 
     # MoE FFN: gate → top-2 routing → expert FFNs → weighted sum
+    # Expert matmuls use fused dequant for each expert slice.
     private def moe_ffn(x : Array(Float32), seq_len : Int32, lw : LayerWeights) : Array(Float32)
-      gate_w = lw.gate_w.not_nil!          # [n_experts, dim]
-      exp_up = lw.expert_up_w.not_nil!     # [n_experts * ffn_dim * dim]
-      exp_down = lw.expert_down_w.not_nil! # [n_experts * dim * ffn_dim]
+      gate_w = lw.gate_w.not_nil!          # [n_experts, dim] F32
+      exp_up_qw = lw.expert_up_w.not_nil!   # QuantWeight for all experts
+      exp_down_qw = lw.expert_down_w.not_nil!
 
       result = Array(Float32).new(seq_len * @dim, 0.0_f32)
-      expert_dim = @ffn_dim * @dim
+
+      # Precompute per-expert byte offsets
+      # Expert weights are [ffn_dim, dim] per expert, stored sequentially
+      up_expert_rows = @ffn_dim
+      down_expert_rows = @dim
+      up_row_bytes = expert_row_bytes(exp_up_qw.type, @dim)
+      down_row_bytes = expert_row_bytes(exp_down_qw.type, @ffn_dim)
+      up_expert_bytes = up_expert_rows * up_row_bytes
+      down_expert_bytes = down_expert_rows * down_row_bytes
+
+      zero_bias_ffn = Array(Float32).new(@ffn_dim, 0.0_f32)
+      zero_bias_dim = Array(Float32).new(@dim, 0.0_f32)
 
       seq_len.times do |pos|
         x_off = pos * @dim
+        x_pos = x[x_off, @dim]
 
-        # Compute gate logits: x @ gate_w^T → [n_experts]
-        # gate_w dims=[dim, n_experts] but stored as [n_experts, dim] row-major
+        # Gate logits
         gate_logits = Array(Float32).new(@n_experts, 0.0_f32)
         @n_experts.times do |e|
           dot = 0.0_f32
@@ -281,43 +310,45 @@ module ML::GGUF
           gate_logits[e] = dot
         end
 
-        # Top-2 experts
+        # Top-2
         top2 = gate_logits.each_with_index.to_a.sort_by { |v, _| -v }.first(@n_experts_used)
-
-        # Softmax over top-2 gate values
         max_g = top2.max_of(&.[0])
         exps = top2.map { |v, i| {Math.exp(v - max_g), i} }
         sum_exp = exps.sum(&.[0])
 
-        top2_weights = exps.map { |e, i| {(e / sum_exp).to_f32, i} }
+        top2.size.times do |ti|
+          weight = (exps[ti][0] / sum_exp).to_f32
+          expert_idx = exps[ti][1]
 
-        # Run each expert FFN and accumulate weighted output
-        top2_weights.each do |weight, expert_idx|
-          # Expert weights: [in, out, n_experts] dims but [out, in] per expert in memory
-          # exp_up dims=[dim, ffn_dim, 8] → per expert: [ffn_dim, dim], stride = ffn_dim*dim
-          # exp_down dims=[ffn_dim, dim, 8] → per expert: [dim, ffn_dim], stride = dim*ffn_dim
+          # Per-expert sliced QuantWeight for up and down
+          up_slice = Bytes.new(exp_up_qw.raw.to_unsafe + expert_idx * up_expert_bytes, up_expert_bytes, read_only: true)
+          up_qw_e = QuantWeight.new(up_slice, exp_up_qw.type, @ffn_dim, @dim)
 
-          # Up: x @ exp_up[e]^T → [ffn_dim]
-          up_off = expert_idx * expert_dim
-          h = Array(Float32).new(@ffn_dim, 0.0_f32)
-          @ffn_dim.times do |f|
-            dot = 0.0_f32
-            @dim.times { |j| dot += x[x_off + j] * exp_up[up_off + f * @dim + j] }
-            h[f] = gelu(dot)
-          end
+          # Up + GELU
+          h = QuantMatmul.matmul_add(x_pos, 1, @dim, up_qw_e.raw, up_qw_e.type, @ffn_dim, zero_bias_ffn)
+          h.map! { |v| gelu(v) }
 
-          # Down: h @ exp_down[e]^T → [dim]
-          down_off = expert_idx * expert_dim
+          # Down
+          down_slice = Bytes.new(exp_down_qw.raw.to_unsafe + expert_idx * down_expert_bytes, down_expert_bytes, read_only: true)
+          down_qw_e = QuantWeight.new(down_slice, exp_down_qw.type, @dim, @ffn_dim)
+
+          d = QuantMatmul.matmul_add(h, 1, @ffn_dim, down_qw_e.raw, down_qw_e.type, @dim, zero_bias_dim)
+
           r_off = pos * @dim
-          @dim.times do |j|
-            dot = 0.0_f32
-            @ffn_dim.times { |f| dot += h[f] * exp_down[down_off + j * @ffn_dim + f] }
-            result[r_off + j] += weight * dot
-          end
+          @dim.times { |j| result[r_off + j] += weight * d[j] }
         end
       end
 
       result
+    end
+
+    # Bytes per row of a quantized matrix (one row = in_dim elements)
+    private def expert_row_bytes(type : TensorType, in_dim : Int32) : Int32
+      if type.f32? || type.f16?
+        in_dim * type.block_bytes
+      else
+        (in_dim // type.block_elements) * type.block_bytes
+      end
     end
 
     # Apply RoPE rotation to a head vector at position pos
@@ -332,24 +363,6 @@ module ML::GGUF
         vec[offset + 2 * i]     = v0 * cos - v1 * sin
         vec[offset + 2 * i + 1] = v0 * sin + v1 * cos
       end
-    end
-
-    # Matrix multiply + bias: x[rows, in_dim] × w[out_dim, in_dim]^T + bias → [rows, out_dim]
-    # GGUF dim[0]=in_dim, dim[1]=out_dim, but stored row-major as [out_dim, in_dim].
-    private def matmul_add(x : Array(Float32), rows : Int32, in_dim : Int32,
-                           w : Array(Float32), out_dim : Int32, bias : Array(Float32)) : Array(Float32)
-      result = Array(Float32).new(rows * out_dim, 0.0_f32)
-      rows.times do |r|
-        x_off = r * in_dim
-        r_off = r * out_dim
-        out_dim.times do |o|
-          dot = bias[o]
-          w_off = o * in_dim
-          in_dim.times { |j| dot += x[x_off + j] * w[w_off + j] }
-          result[r_off + o] = dot
-        end
-      end
-      result
     end
 
     # In-place layer norm: x[pos, dim] for all positions
@@ -411,52 +424,71 @@ module ML::GGUF
 
     # Load all weights from GGUF
     private def load_weights(gguf : GGUFFile)
-      @token_embd = read_weight(gguf, "token_embd.weight")
-      @token_types = read_weight(gguf, "token_types.weight")
-      @embd_norm_w = read_weight(gguf, "token_embd_norm.weight")
-      @embd_norm_b = read_weight(gguf, "token_embd_norm.bias")
+      @token_embd = read_f32(gguf, "token_embd.weight")  # Large but needed for lookup
+      @token_types = read_f32(gguf, "token_types.weight")
+      @embd_norm_w = read_f32(gguf, "token_embd_norm.weight")
+      @embd_norm_b = read_f32(gguf, "token_embd_norm.bias")
 
       @layers = Array(LayerWeights).new(@n_layers) do |i|
         p = "blk.#{i}"
         is_moe = (i % @moe_every_n == 1) && @n_experts > 0
 
         if is_moe
+          # Expert weights stored as [in, out, n_experts] — read as one big quant block
+          up_info = gguf.tensor("#{p}.ffn_up_exps.weight").not_nil!
+          down_info = gguf.tensor("#{p}.ffn_down_exps.weight").not_nil!
+          up_raw = gguf.read_tensor_raw(up_info).dup
+          down_raw = gguf.read_tensor_raw(down_info).dup
+
           LayerWeights.new(
-            attn_qkv_w: read_weight(gguf, "#{p}.attn_qkv.weight"),
-            attn_qkv_b: read_weight(gguf, "#{p}.attn_qkv.bias"),
-            attn_out_w: read_weight(gguf, "#{p}.attn_output.weight"),
-            attn_out_b: read_weight(gguf, "#{p}.attn_output.bias"),
-            norm1_w: read_weight(gguf, "#{p}.attn_output_norm.weight"),
-            norm1_b: read_weight(gguf, "#{p}.attn_output_norm.bias"),
-            norm2_w: read_weight(gguf, "#{p}.layer_output_norm.weight"),
-            norm2_b: read_weight(gguf, "#{p}.layer_output_norm.bias"),
-            gate_w: read_weight(gguf, "#{p}.ffn_gate_inp.weight"),
-            expert_up_w: read_weight(gguf, "#{p}.ffn_up_exps.weight"),
-            expert_down_w: read_weight(gguf, "#{p}.ffn_down_exps.weight"),
+            attn_qkv_w: read_quant(gguf, "#{p}.attn_qkv.weight"),
+            attn_qkv_b: read_f32(gguf, "#{p}.attn_qkv.bias"),
+            attn_out_w: read_quant(gguf, "#{p}.attn_output.weight"),
+            attn_out_b: read_f32(gguf, "#{p}.attn_output.bias"),
+            norm1_w: read_f32(gguf, "#{p}.attn_output_norm.weight"),
+            norm1_b: read_f32(gguf, "#{p}.attn_output_norm.bias"),
+            norm2_w: read_f32(gguf, "#{p}.layer_output_norm.weight"),
+            norm2_b: read_f32(gguf, "#{p}.layer_output_norm.bias"),
+            gate_w: read_f32(gguf, "#{p}.ffn_gate_inp.weight"),
+            expert_up_w: QuantWeight.new(up_raw, up_info.type, @n_experts * @ffn_dim, @dim),
+            expert_down_w: QuantWeight.new(down_raw, down_info.type, @n_experts * @dim, @ffn_dim),
           )
         else
           LayerWeights.new(
-            attn_qkv_w: read_weight(gguf, "#{p}.attn_qkv.weight"),
-            attn_qkv_b: read_weight(gguf, "#{p}.attn_qkv.bias"),
-            attn_out_w: read_weight(gguf, "#{p}.attn_output.weight"),
-            attn_out_b: read_weight(gguf, "#{p}.attn_output.bias"),
-            norm1_w: read_weight(gguf, "#{p}.attn_output_norm.weight"),
-            norm1_b: read_weight(gguf, "#{p}.attn_output_norm.bias"),
-            norm2_w: read_weight(gguf, "#{p}.layer_output_norm.weight"),
-            norm2_b: read_weight(gguf, "#{p}.layer_output_norm.bias"),
-            ffn_up_w: read_weight(gguf, "#{p}.ffn_up.weight"),
-            ffn_up_b: read_weight(gguf, "#{p}.ffn_up.bias"),
-            ffn_down_w: read_weight(gguf, "#{p}.ffn_down.weight"),
-            ffn_down_b: read_weight(gguf, "#{p}.ffn_down.bias"),
+            attn_qkv_w: read_quant(gguf, "#{p}.attn_qkv.weight"),
+            attn_qkv_b: read_f32(gguf, "#{p}.attn_qkv.bias"),
+            attn_out_w: read_quant(gguf, "#{p}.attn_output.weight"),
+            attn_out_b: read_f32(gguf, "#{p}.attn_output.bias"),
+            norm1_w: read_f32(gguf, "#{p}.attn_output_norm.weight"),
+            norm1_b: read_f32(gguf, "#{p}.attn_output_norm.bias"),
+            norm2_w: read_f32(gguf, "#{p}.layer_output_norm.weight"),
+            norm2_b: read_f32(gguf, "#{p}.layer_output_norm.bias"),
+            ffn_up_w: read_quant(gguf, "#{p}.ffn_up.weight"),
+            ffn_up_b: read_f32(gguf, "#{p}.ffn_up.bias"),
+            ffn_down_w: read_quant(gguf, "#{p}.ffn_down.weight"),
+            ffn_down_b: read_f32(gguf, "#{p}.ffn_down.bias"),
           )
         end
       end
     end
 
-    private def read_weight(gguf : GGUFFile, name : String) : Array(Float32)
+    # Read as dequantized F32 (for small tensors: bias, norm, gate, embedding)
+    private def read_f32(gguf : GGUFFile, name : String) : Array(Float32)
       info = gguf.tensor(name)
       raise "Missing tensor: #{name}" unless info
       gguf.read_tensor_f32(info)
+    end
+
+    # Read as raw quantized bytes (for large weight matrices — used with fused matmul)
+    private def read_quant(gguf : GGUFFile, name : String) : QuantWeight
+      info = gguf.tensor(name)
+      raise "Missing tensor: #{name}" unless info
+      raw = gguf.read_tensor_raw(info).dup  # dup to own the bytes (mmap may unmap)
+      # GGUF dims: [ne0, ne1] where ne0=in_dim, ne1=out_dim
+      # But stored row-major as [out_dim rows, in_dim cols]
+      in_dim = info.dims[0].to_i32
+      out_dim = info.dims.size > 1 ? info.dims[1].to_i32 : 1
+      QuantWeight.new(raw, info.type, out_dim, in_dim)
     end
   end
 end

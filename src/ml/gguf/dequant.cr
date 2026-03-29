@@ -134,7 +134,7 @@ module ML::GGUF::Dequant
 
   # Extract 6-bit scale and min from packed scales array (K_SCALE_SIZE=12 bytes)
   # Ported from get_scale_min_k4() in ggml-quants.c
-  private def self.get_scale_min_k4(j : Int32, scales : Pointer(UInt8)) : {Float32, Float32}
+  def self.get_scale_min_k4(j : Int32, scales : Pointer(UInt8)) : {Float32, Float32}
     if j < 4
       sc = (scales[j] & 63).to_f32
       m = (scales[j + 4] & 63).to_f32
