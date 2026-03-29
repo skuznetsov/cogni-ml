@@ -167,10 +167,11 @@ kernel void rope_neox_inplace(
     uint tid [[thread_position_in_grid]])
 {
     if (tid >= seq_len * n_heads) return;
-    const uint pos = tid / n_heads;
-    const uint h = tid % n_heads;
+    const uint h = tid / seq_len;
+    const uint pos = tid % seq_len;
     const uint hd2 = head_dim / 2;
-    const uint base = pos * (n_heads * head_dim) + h * head_dim;
+    // Q/K layout: [n_heads, seq_len, head_dim]
+    const uint base = h * (seq_len * head_dim) + pos * head_dim;
     const uint rope_off = pos * hd2;
 
     for (uint i = 0; i < hd2; i++) {

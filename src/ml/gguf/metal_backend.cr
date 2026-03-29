@@ -135,8 +135,18 @@ module ML::GGUF
       # ONE command buffer for entire forward pass
       cmd = ML::Metal::CommandBuffer.new
 
+      # Pre-upload all norm weights to GPU (small, F32)
+      norm_bufs = layers.map do |lw|
+        n1w = ML::MetalBuffer.new(dim.to_i64 * 4); n1w.write(lw.norm1_w)
+        n1b = ML::MetalBuffer.new(dim.to_i64 * 4); n1b.write(lw.norm1_b)
+        n2w = ML::MetalBuffer.new(dim.to_i64 * 4); n2w.write(lw.norm2_w)
+        n2b = ML::MetalBuffer.new(dim.to_i64 * 4); n2b.write(lw.norm2_b)
+        {n1w, n1b, n2w, n2b}
+      end
+
       layers.each_with_index do |lw, layer_idx|
         is_moe = (layer_idx % moe_every_n == 1) && n_experts > 0
+        n1w_buf, n1b_buf, n2w_buf, n2b_buf = norm_bufs[layer_idx]
 
         # --- Attention ---
 
@@ -235,28 +245,82 @@ module ML::GGUF
         # 7. LayerNorm (attn_output_norm)
         enc = ML::Metal::ComputeEncoder.new(cmd)
         enc.set_pipeline(pipe("layernorm_inplace"))
-        # Need norm weights on GPU
-        norm1_w_buf = ML::MetalBuffer.new(dim.to_i64 * 4); norm1_w_buf.write(lw.norm1_w)
-        norm1_b_buf = ML::MetalBuffer.new(dim.to_i64 * 4); norm1_b_buf.write(lw.norm1_b)
         enc.set_buffer(ws.hidden, 0)
-        enc.set_buffer(norm1_w_buf, 1)
-        enc.set_buffer(norm1_b_buf, 2)
+        enc.set_buffer(n1w_buf, 1)
+        enc.set_buffer(n1b_buf, 2)
         enc.set_value(dim_u, 3)
         enc.dispatch_1d(seq_len, 1)  # One thread per position
         enc.end_encoding
 
         # --- FFN ---
         if is_moe
-          # MoE: fall back to CPU for now (complex routing)
-          # TODO: GPU MoE kernel
+          # MoE: fall back to CPU (complex top-k routing)
+          # Commit pending GPU work, read hidden, run MoE on CPU, write back
           cmd.commit_and_wait
-          # Read hidden from GPU
+
           hp = ws.hidden.contents.as(Pointer(Float32))
           h_arr = Array(Float32).new(seq_len * dim) { |i| hp[i] }
-          # CPU MoE
-          ffn_result = F32Backend.new.matmul(h_arr, 0, QuantWeight.new(Bytes.empty, TensorType::F32, 0, 0), [] of Float32)
-          # Actually we can't call moe_ffn from here... skip for now
-          # Just pass through (no FFN for MoE layers in GPU path)
+          nan_count = h_arr.count(&.nan?)
+          STDERR.puts "DEBUG: MoE layer #{layer_idx} input nan=#{nan_count}/#{h_arr.size}" if nan_count > 0
+
+          # Run MoE FFN on CPU
+          gate_w = lw.gate_w.not_nil!
+          exp_up_qw = lw.expert_up_w.not_nil!
+          exp_down_qw = lw.expert_down_w.not_nil!
+          moe_result = Array(Float32).new(seq_len * dim, 0.0_f32)
+          zero_bias_ffn = Array(Float32).new(ffn_dim, 0.0_f32)
+          zero_bias_dim = Array(Float32).new(dim, 0.0_f32)
+          # Expert up: [ffn_dim, dim] per expert → ffn_dim rows, each (dim/256) blocks
+          up_row_bytes = (dim // 256) * exp_up_qw.type.block_bytes
+          up_expert_bytes = ffn_dim * up_row_bytes
+          # Expert down: [dim, ffn_dim] per expert → dim rows, each (ffn_dim/256) blocks
+          down_row_bytes = (ffn_dim // 256) * exp_down_qw.type.block_bytes
+          down_expert_bytes = dim * down_row_bytes
+
+          seq_len.times do |pos|
+            x_off = pos * dim
+            x_pos = h_arr[x_off, dim]
+
+            gate_logits = Array(Float32).new(n_experts, 0.0_f32)
+            n_experts.times do |e|
+              dot = 0.0_f32
+              dim.times { |j| dot += h_arr[x_off + j] * gate_w[e * dim + j] }
+              gate_logits[e] = dot
+            end
+
+            max_g = gate_logits.max
+            probs = gate_logits.map { |v| Math.exp(v - max_g).to_f32 }
+            sum_p = probs.sum
+            probs.map! { |v| v / sum_p }
+
+            top_indices = probs.each_with_index.to_a.sort_by { |v, _| -v }.first(n_experts_used)
+
+            top_indices.each do |prob, expert_idx|
+              up_slice = Bytes.new(exp_up_qw.raw.to_unsafe + expert_idx * up_expert_bytes, up_expert_bytes, read_only: true)
+              up_qw_e = QuantWeight.new(up_slice, exp_up_qw.type, ffn_dim, dim)
+              h = QuantMatmul.matmul_add(x_pos, 1, dim, up_qw_e.raw, up_qw_e.type, ffn_dim, zero_bias_ffn)
+              h.map! { |v| 0.5_f32 * v * (1.0_f32 + Math.tanh(0.7978845608_f32 * (v + 0.044715_f32 * v * v * v))) }
+
+              down_slice = Bytes.new(exp_down_qw.raw.to_unsafe + expert_idx * down_expert_bytes, down_expert_bytes, read_only: true)
+              down_qw_e = QuantWeight.new(down_slice, exp_down_qw.type, dim, ffn_dim)
+              d = QuantMatmul.matmul_add(h, 1, ffn_dim, down_qw_e.raw, down_qw_e.type, dim, zero_bias_dim)
+
+              dim.times { |j| moe_result[pos * dim + j] += prob * d[j] }
+            end
+          end
+
+          # Residual + norm on CPU
+          (seq_len * dim).times { |i| h_arr[i] += moe_result[i] }
+          F32Backend.new.layer_norm!(h_arr, seq_len, dim, lw.norm2_w, lw.norm2_b)
+
+          # Write back to GPU shared buffer
+          (seq_len * dim).times { |i| hp[i] = h_arr[i] }
+
+          # Verify write-back
+          wb_nan = (0...seq_len * dim).count { |i| hp[i].nan? }
+          STDERR.puts "DEBUG: MoE layer #{layer_idx} write-back nan=#{wb_nan}" if wb_nan > 0
+          STDERR.puts "DEBUG: MoE layer #{layer_idx} write-back first 5=#{Array(Float32).new(5) { |i| hp[i] }.map(&.round(4))}"
+
           cmd = ML::Metal::CommandBuffer.new
         else
           # Dense FFN: up + GELU + down
@@ -300,16 +364,62 @@ module ML::GGUF
           enc.dispatch_1d(seq_len * dim, 256)
           enc.end_encoding
 
-          norm2_w_buf = ML::MetalBuffer.new(dim.to_i64 * 4); norm2_w_buf.write(lw.norm2_w)
-          norm2_b_buf = ML::MetalBuffer.new(dim.to_i64 * 4); norm2_b_buf.write(lw.norm2_b)
           enc = ML::Metal::ComputeEncoder.new(cmd)
           enc.set_pipeline(pipe("layernorm_inplace"))
           enc.set_buffer(ws.hidden, 0)
-          enc.set_buffer(norm2_w_buf, 1)
-          enc.set_buffer(norm2_b_buf, 2)
+          enc.set_buffer(n2w_buf, 1)
+          enc.set_buffer(n2b_buf, 2)
           enc.set_value(dim_u, 3)
           enc.dispatch_1d(seq_len, 1)
           enc.end_encoding
+
+          # Sync after each FFN up+gelu to check
+          cmd.commit_and_wait
+
+          # Check FFN mid for NaN
+          mid_ptr = ws.ffn_mid.contents.as(Pointer(Float32))
+          mid_nan = (0...seq_len * ffn_dim).count { |i| mid_ptr[i].nan? }
+          STDERR.puts "DEBUG: layer #{layer_idx} ffn_mid nan=#{mid_nan}" if mid_nan > 0
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          # Re-dispatch FFN down + residual + norm with fresh cmd
+          down_gw2 = gw(lw.ffn_down_w.not_nil!, lw.ffn_down_b.not_nil!)
+          kernel2 = down_gw2.type.q5_k? ? "fused_q5k_matmul_gelu" : "fused_q6k_matmul_gelu"
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(pipe(kernel2))
+          enc.set_buffer(down_gw2.buffer, 0)
+          enc.set_buffer(ws.ffn_mid, 1)
+          enc.set_buffer(down_gw2.bias_buffer, 2)
+          enc.set_buffer(ws.ffn_out, 3)
+          enc.set_value(ffn_dim_u, 4)
+          enc.set_value(dim_u, 5)
+          enc.set_value(batch, 6)
+          enc.set_value(no_gelu, 7)
+          enc.dispatch({dim.to_i32, seq_len, 1}, {Math.min(256, dim), 1, 1})
+          enc.end_encoding
+
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(pipe("residual_add"))
+          enc.set_buffer(ws.hidden, 0)
+          enc.set_buffer(ws.ffn_out, 1)
+          enc.dispatch_1d(seq_len * dim, 256)
+          enc.end_encoding
+
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(pipe("layernorm_inplace"))
+          enc.set_buffer(ws.hidden, 0)
+          enc.set_buffer(n2w_buf, 1)
+          enc.set_buffer(n2b_buf, 2)
+          enc.set_value(dim_u, 3)
+          enc.dispatch_1d(seq_len, 1)
+          enc.end_encoding
+
+          cmd.commit_and_wait
+          dbg_ptr = ws.hidden.contents.as(Pointer(Float32))
+          dbg_nan = (0...seq_len * dim).count { |i| dbg_ptr[i].nan? }
+          STDERR.puts "DEBUG: after dense layer #{layer_idx}: nan=#{dbg_nan}" if dbg_nan > 0
+          cmd = ML::Metal::CommandBuffer.new
         end
       end
 
