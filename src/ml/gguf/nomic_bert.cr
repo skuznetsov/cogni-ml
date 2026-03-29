@@ -110,6 +110,37 @@ module ML::GGUF
       load_weights(gguf)
     end
 
+    # Run forward pass and return per-token hidden states (pre-pooling)
+    # For debugging/comparison with reference implementations.
+    def forward_hidden(text : String) : Array(Float32)
+      tokens = tokenize(text)
+      seq_len = tokens.size
+
+      hidden = Array(Float32).new(seq_len * @dim, 0.0_f32)
+      seq_len.times do |pos|
+        tid = tokens[pos].clamp(0, @vocab_size - 1)
+        @dim.times { |j| hidden[pos * @dim + j] = @token_embd[tid * @dim + j] + @token_types[j] }
+      end
+      layer_norm!(hidden, seq_len, @embd_norm_w, @embd_norm_b)
+
+      @n_layers.times do |layer_idx|
+        lw = @layers[layer_idx]
+        attn_out = self_attention(hidden, seq_len, lw)
+        hidden.size.times { |i| hidden[i] += attn_out[i] }
+        layer_norm!(hidden, seq_len, lw.norm1_w, lw.norm1_b)
+
+        ffn_out = if lw.moe?
+                    moe_ffn(hidden, seq_len, lw)
+                  else
+                    dense_ffn(hidden, seq_len, lw)
+                  end
+        hidden.size.times { |i| hidden[i] += ffn_out[i] }
+        layer_norm!(hidden, seq_len, lw.norm2_w, lw.norm2_b)
+      end
+
+      hidden
+    end
+
     # Embed a single text → Float32 array (dim=768)
     def embed(text : String) : Array(Float32)
       tokens = tokenize(text)
@@ -301,15 +332,23 @@ module ML::GGUF
           gate_logits[e] = dot
         end
 
-        # Top-2
-        top2 = gate_logits.each_with_index.to_a.sort_by { |v, _| -v }.first(@n_experts_used)
-        max_g = top2.max_of(&.[0])
-        exps = top2.map { |v, i| {Math.exp(v - max_g), i} }
-        sum_exp = exps.sum(&.[0])
+        # Softmax over ALL experts first, then select top-k
+        # (llama.cpp: softmax → top-k, not top-k → softmax)
+        max_g = gate_logits.max
+        probs = gate_logits.map { |v| Math.exp(v - max_g).to_f32 }
+        sum_p = probs.sum
+        probs.map! { |v| v / sum_p }
 
-        top2.size.times do |ti|
-          weight = (exps[ti][0] / sum_exp).to_f32
-          expert_idx = exps[ti][1]
+        # Top-k by probability
+        top_indices = probs.each_with_index.to_a
+          .sort_by { |v, _| -v }
+          .first(@n_experts_used)
+
+        # Renormalize top-k weights
+        top_sum = top_indices.sum(&.[0])
+
+        top_indices.each do |prob, expert_idx|
+          weight = (prob / top_sum).to_f32
 
           # Per-expert sliced QuantWeight for up and down
           up_slice = Bytes.new(exp_up_qw.raw.to_unsafe + expert_idx * up_expert_bytes, up_expert_bytes, read_only: true)
