@@ -14,6 +14,7 @@ module ML
     def self.init
       @@backend_mutex.synchronize do
         next if @@backend_initialized
+        LlamaFFI.ggml_backend_load_all  # Load Metal/CUDA/etc backends (required since b8200)
         LlamaFFI.llama_backend_init
         @@backend_initialized = true
       end
