@@ -11,6 +11,7 @@
 #   embedding = model.embed("hello world")  # => Array(Float32) dim=768
 
 require "./reader"
+require "./tokenizer"
 
 module ML::GGUF
   class NomicBertMoE
@@ -34,9 +35,7 @@ module ML::GGUF
     @layers = [] of LayerWeights
 
     # Tokenizer
-    @vocab = [] of String
-    @token_to_id = {} of String => Int32
-    @scores = [] of Float32
+    @tokenizer : UnigramTokenizer?
 
     # Precomputed RoPE cos/sin tables [max_seq_len, head_dim/2]
     @rope_cos = [] of Float32
@@ -95,7 +94,8 @@ module ML::GGUF
       @vocab_size = 0
 
       # Load tokenizer
-      load_tokenizer(gguf)
+      @tokenizer = UnigramTokenizer.new(gguf)
+      @vocab_size = @tokenizer.not_nil!.vocab_size
 
       # Precompute RoPE tables
       @rope_cos, @rope_sin = build_rope_tables
@@ -115,50 +115,9 @@ module ML::GGUF
       texts.map { |t| embed(t) }
     end
 
-    # Tokenize text → token IDs
+    # Tokenize text → token IDs (delegates to SentencePiece unigram tokenizer)
     def tokenize(text : String) : Array(Int32)
-      # Simple whitespace + BPE-like tokenization
-      # Prepend [CLS]=0, append [SEP]=2
-      ids = [0_i32]  # BOS/CLS
-
-      # Split into words, look up each
-      words = text.split(/\s+/).reject(&.empty?)
-      words.each do |word|
-        # Try full word first
-        if id = @token_to_id[word]?
-          ids << id
-        else
-          # Character-level fallback with prefix matching
-          remaining = word
-          while !remaining.empty?
-            found = false
-            # Try longest prefix match
-            (Math.min(remaining.size, 20)).downto(1) do |len|
-              piece = remaining[0, len]
-              if id = @token_to_id[piece]?
-                ids << id
-                remaining = remaining[len..]
-                found = true
-                break
-              end
-              # Try with ▁ prefix (SentencePiece style)
-              if id = @token_to_id["▁#{piece}"]?
-                ids << id
-                remaining = remaining[len..]
-                found = true
-                break
-              end
-            end
-            unless found
-              # Single char or UNK
-              ids << (@token_to_id[remaining[0].to_s]? || 3_i32)  # UNK=3
-              remaining = remaining[1..]
-            end
-          end
-        end
-      end
-
-      ids << 2_i32  # EOS/SEP
+      ids = @tokenizer.not_nil!.encode(text)
       # Truncate to max_seq_len
       ids.size > @max_seq_len ? ids[0, @max_seq_len] : ids
     end
@@ -177,16 +136,18 @@ module ML::GGUF
       end
       layer_norm!(hidden, seq_len, @embd_norm_w, @embd_norm_b)
 
-      # 2. Transformer blocks (post-norm BERT: residual + norm after each sub-layer)
+      # 2. Transformer blocks
+      # nomic-bert uses post-norm: output = norm(x + sublayer(x))
+      # The norm names (attn_output_norm, layer_output_norm) confirm post-norm.
       @n_layers.times do |layer_idx|
         lw = @layers[layer_idx]
 
-        # Attention + residual + norm
+        # Attention sublayer + residual + norm
         attn_out = self_attention(hidden, seq_len, lw)
         hidden.size.times { |i| hidden[i] += attn_out[i] }
         layer_norm!(hidden, seq_len, lw.norm1_w, lw.norm1_b)
 
-        # FFN + residual + norm
+        # FFN sublayer + residual + norm
         ffn_out = if lw.moe?
                     moe_ffn(hidden, seq_len, lw)
                   else
@@ -310,6 +271,7 @@ module ML::GGUF
         x_off = pos * @dim
 
         # Compute gate logits: x @ gate_w^T → [n_experts]
+        # gate_w dims=[dim, n_experts] but stored as [n_experts, dim] row-major
         gate_logits = Array(Float32).new(@n_experts, 0.0_f32)
         @n_experts.times do |e|
           dot = 0.0_f32
@@ -329,7 +291,11 @@ module ML::GGUF
 
         # Run each expert FFN and accumulate weighted output
         top2_weights.each do |weight, expert_idx|
-          # Up: x @ expert_up_w[e]^T → [ffn_dim]
+          # Expert weights: [in, out, n_experts] dims but [out, in] per expert in memory
+          # exp_up dims=[dim, ffn_dim, 8] → per expert: [ffn_dim, dim], stride = ffn_dim*dim
+          # exp_down dims=[ffn_dim, dim, 8] → per expert: [dim, ffn_dim], stride = dim*ffn_dim
+
+          # Up: x @ exp_up[e]^T → [ffn_dim]
           up_off = expert_idx * expert_dim
           h = Array(Float32).new(@ffn_dim, 0.0_f32)
           @ffn_dim.times do |f|
@@ -338,7 +304,7 @@ module ML::GGUF
             h[f] = gelu(dot)
           end
 
-          # Down: h @ expert_down_w[e]^T → [dim]
+          # Down: h @ exp_down[e]^T → [dim]
           down_off = expert_idx * expert_dim
           r_off = pos * @dim
           @dim.times do |j|
@@ -366,7 +332,8 @@ module ML::GGUF
       end
     end
 
-    # Matrix multiply + bias: [rows, in_dim] × [out_dim, in_dim]^T + bias → [rows, out_dim]
+    # Matrix multiply + bias: x[rows, in_dim] × w[out_dim, in_dim]^T + bias → [rows, out_dim]
+    # GGUF dim[0]=in_dim, dim[1]=out_dim, but stored row-major as [out_dim, in_dim].
     private def matmul_add(x : Array(Float32), rows : Int32, in_dim : Int32,
                            w : Array(Float32), out_dim : Int32, bias : Array(Float32)) : Array(Float32)
       result = Array(Float32).new(rows * out_dim, 0.0_f32)
@@ -417,7 +384,7 @@ module ML::GGUF
       len.times { |i| scores[offset + i] *= inv_sum }
     end
 
-    # GELU activation
+    # GELU activation (tanh approximation)
     private def gelu(x : Float32) : Float32
       0.5_f32 * x * (1.0_f32 + Math.tanh(0.7978845608_f32 * (x + 0.044715_f32 * x * x * x)))
     end
@@ -438,32 +405,6 @@ module ML::GGUF
       end
 
       {cos_table, sin_table}
-    end
-
-    # Load tokenizer from GGUF metadata
-    private def load_tokenizer(gguf : GGUFFile)
-      tokens_val = gguf.metadata["tokenizer.ggml.tokens"]?
-      scores_val = gguf.metadata["tokenizer.ggml.scores"]?
-
-      @vocab = [] of String
-      @scores = [] of Float32
-      @token_to_id = {} of String => Int32
-
-      if arr = tokens_val.as?(Array(Value))
-        arr.each_with_index do |v, i|
-          token = v.as?(String) || ""
-          @vocab << token
-          @token_to_id[token] = i.to_i32
-        end
-      end
-
-      if arr = scores_val.as?(Array(Value))
-        arr.each do |v|
-          @scores << (v.as?(Float32) || 0.0_f32)
-        end
-      end
-
-      @vocab_size = @vocab.size
     end
 
     # Load all weights from GGUF
