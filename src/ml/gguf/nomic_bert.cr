@@ -339,16 +339,13 @@ module ML::GGUF
         sum_p = probs.sum
         probs.map! { |v| v / sum_p }
 
-        # Top-k by probability
+        # Top-k by probability (NO renormalization — matches llama.cpp norm_w=false)
         top_indices = probs.each_with_index.to_a
           .sort_by { |v, _| -v }
           .first(@n_experts_used)
 
-        # Renormalize top-k weights
-        top_sum = top_indices.sum(&.[0])
-
         top_indices.each do |prob, expert_idx|
-          weight = (prob / top_sum).to_f32
+          weight = prob  # Raw softmax probability, not renormalized
 
           # Per-expert sliced QuantWeight for up and down
           up_slice = Bytes.new(exp_up_qw.raw.to_unsafe + expert_idx * up_expert_bytes, up_expert_bytes, read_only: true)
