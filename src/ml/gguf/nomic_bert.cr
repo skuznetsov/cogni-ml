@@ -1,21 +1,21 @@
 # NomicBertMoE — inference-only nomic-embed-text-v2-moe from GGUF.
 #
 # Architecture: 12-block BERT encoder with MoE FFN every 2 layers.
-# - RoPE position encoding (freq_base=10000)
-# - MoE: 8 experts, top-2 gating
-# - Mean pooling → L2 normalize
-# - No autograd — pure F32 tensor math for inference speed.
+# Parameterized on ComputeBackend (B) for precision control:
+#   F32Backend     — CPU Float32 (default)
+#   F16SimBackend  — CPU with FP16 truncation (matches GPU)
+#   MetalBackend   — GPU (future)
 #
 # Usage:
-#   model = ML::GGUF::NomicBertMoE.from_gguf("model.gguf")
-#   embedding = model.embed("hello world")  # => Array(Float32) dim=768
+#   model = ML::GGUF::NomicBertMoE.from_gguf("model.gguf")                     # F32
+#   model = ML::GGUF::NomicBertMoE.from_gguf("model.gguf", F16SimBackend.new)  # FP16 sim
 
 require "./reader"
 require "./tokenizer"
-require "./quant_matmul"
+require "./compute"
 
 module ML::GGUF
-  class NomicBertMoE
+  class NomicBertMoE(B)
     getter dim : Int32           # 768
     getter n_heads : Int32       # 12
     getter n_layers : Int32      # 12
@@ -27,6 +27,7 @@ module ML::GGUF
     getter vocab_size : Int32
     getter max_seq_len : Int32   # 512
     getter rope_theta : Float32  # 10000
+    getter backend : B
 
     # Weights (dequantized to F32)
     @token_embd = [] of Float32        # [vocab_size, dim]
@@ -41,17 +42,6 @@ module ML::GGUF
     # Precomputed RoPE cos/sin tables [max_seq_len, head_dim/2]
     @rope_cos = [] of Float32
     @rope_sin = [] of Float32
-
-    # Quantized weight: raw bytes + type for on-the-fly dequant during matmul
-    struct QuantWeight
-      getter raw : Bytes
-      getter type : TensorType
-      getter out_dim : Int32
-      getter in_dim : Int32
-
-      def initialize(@raw, @type, @out_dim, @in_dim)
-      end
-    end
 
     struct LayerWeights
       getter attn_qkv_w : QuantWeight       # [3*dim, dim]
@@ -83,14 +73,18 @@ module ML::GGUF
       end
     end
 
-    def self.from_gguf(path : String) : NomicBertMoE
+    def self.from_gguf(path : String) : NomicBertMoE(F32Backend)
+      from_gguf(path, F32Backend.new)
+    end
+
+    def self.from_gguf(path : String, backend : B) : NomicBertMoE(B) forall B
       gguf = GGUFFile.new(path)
-      model = new(gguf)
+      model = NomicBertMoE(B).new(gguf, backend)
       gguf.close
       model
     end
 
-    def initialize(gguf : GGUFFile)
+    def initialize(gguf : GGUFFile, @backend : B)
       prefix = gguf.get_string("general.architecture") || "nomic-bert-moe"
 
       @dim = (gguf.get_int("#{prefix}.embedding_length") || 768).to_i32
@@ -188,9 +182,9 @@ module ML::GGUF
       result
     end
 
-    # Fused quantized matmul: reads raw quantized bytes, dequants per-block during dot product
+    # Matmul through backend (precision depends on B)
     private def q_matmul_add(x : Array(Float32), rows : Int32, qw : QuantWeight, bias : Array(Float32)) : Array(Float32)
-      QuantMatmul.matmul_add(x, rows, qw.in_dim, qw.raw, qw.type, qw.out_dim, bias)
+      @backend.matmul(x, rows, qw, bias)
     end
 
     # Self-attention with RoPE
@@ -234,11 +228,8 @@ module ML::GGUF
         scores = Array(Float32).new(seq_len * seq_len, 0.0_f32)
         seq_len.times do |i|
           seq_len.times do |j|
-            dot = 0.0_f32
-            @head_dim.times do |d|
-              dot += q[h_off + i * @head_dim + d] * k[h_off + j * @head_dim + d]
-            end
-            scores[i * seq_len + j] = dot * scale
+            d = @backend.dot(q, h_off + i * @head_dim, k, h_off + j * @head_dim, @head_dim)
+            scores[i * seq_len + j] = d * scale
           end
           # Softmax over row i
           softmax_row!(scores, i * seq_len, seq_len)
@@ -365,43 +356,17 @@ module ML::GGUF
       end
     end
 
-    # In-place layer norm: x[pos, dim] for all positions
+    # Delegate to backend
     private def layer_norm!(x : Array(Float32), n_pos : Int32, w : Array(Float32), b : Array(Float32))
-      eps = 1e-5_f32
-      n_pos.times do |pos|
-        off = pos * @dim
-        # Mean
-        mean = 0.0_f32
-        @dim.times { |j| mean += x[off + j] }
-        mean /= @dim
-        # Variance
-        var = 0.0_f32
-        @dim.times { |j| d = x[off + j] - mean; var += d * d }
-        var /= @dim
-        inv_std = 1.0_f32 / Math.sqrt(var + eps)
-        # Normalize + scale + shift
-        @dim.times do |j|
-          x[off + j] = (x[off + j] - mean) * inv_std * w[j] + b[j]
-        end
-      end
+      @backend.layer_norm!(x, n_pos, @dim, w, b)
     end
 
-    # Softmax in-place over a row
     private def softmax_row!(scores : Array(Float32), offset : Int32, len : Int32)
-      max_val = -Float32::MAX
-      len.times { |i| max_val = Math.max(max_val, scores[offset + i]) }
-      sum = 0.0_f32
-      len.times do |i|
-        scores[offset + i] = Math.exp(scores[offset + i] - max_val)
-        sum += scores[offset + i]
-      end
-      inv_sum = 1.0_f32 / sum
-      len.times { |i| scores[offset + i] *= inv_sum }
+      @backend.softmax_row!(scores, offset, len)
     end
 
-    # GELU activation (tanh approximation)
     private def gelu(x : Float32) : Float32
-      0.5_f32 * x * (1.0_f32 + Math.tanh(0.7978845608_f32 * (x + 0.044715_f32 * x * x * x)))
+      @backend.gelu(x)
     end
 
     # Build RoPE cos/sin tables
