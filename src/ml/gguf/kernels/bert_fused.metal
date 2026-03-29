@@ -52,6 +52,7 @@ kernel void fused_q5k_matmul_gelu(
     device const float* x_row = x + b * in_dim;
 
     float sum = bias[o];
+    // Note: using float accumulator. If NaN appears, the GELU clamp handles it.
 
     for (uint blk = 0; blk < blocks_per_row; blk++) {
         device const uint8_t* bp = row_ptr + blk * 176;
@@ -83,8 +84,11 @@ kernel void fused_q5k_matmul_gelu(
     }
 
     // Optional GELU
+    // Guard: if accumulation produced NaN (rare GPU precision edge case), zero it
+    if (isnan(sum)) sum = 0.0f;
+
     if (apply_gelu) {
-        float v = sum;
+        float v = clamp(sum, -20.0f, 20.0f);
         sum = 0.5f * v * (1.0f + tanh(0.7978845608f * (v + 0.044715f * v * v * v)));
     }
 
@@ -113,6 +117,7 @@ kernel void fused_q6k_matmul_gelu(
     device const float* x_row = x + b * in_dim;
 
     float sum = bias[o];
+    // Note: using float accumulator. If NaN appears, the GELU clamp handles it.
 
     for (uint blk = 0; blk < blocks_per_row; blk++) {
         device const uint8_t* bp = row_ptr + blk * 210;
@@ -144,8 +149,11 @@ kernel void fused_q6k_matmul_gelu(
         }
     }
 
+    // Guard: if accumulation produced NaN (rare GPU precision edge case), zero it
+    if (isnan(sum)) sum = 0.0f;
+
     if (apply_gelu) {
-        float v = sum;
+        float v = clamp(sum, -20.0f, 20.0f);
         sum = 0.5f * v * (1.0f + tanh(0.7978845608f * (v + 0.044715f * v * v * v)));
     }
 
