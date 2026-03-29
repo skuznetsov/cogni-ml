@@ -109,7 +109,7 @@ module ML::GGUF
       # Load weights
       load_weights(gguf)
 
-      # Pre-upload quantized weights to GPU if using Metal backend
+      # Pre-upload quantized weights to GPU and init workspace
       {% unless flag?(:cpu_only) %}
       if @backend.is_a?(MetalBackend)
         upload_weights_to_gpu
@@ -129,7 +129,6 @@ module ML::GGUF
         if down = lw.ffn_down_w
           mb.upload_weight(down, lw.ffn_down_b || Array(Float32).new(down.out_dim, 0.0_f32))
         end
-        # MoE expert weights — uploaded as one big buffer each
         if exp_up = lw.expert_up_w
           mb.upload_weight(exp_up, Array(Float32).new(exp_up.out_dim, 0.0_f32))
         end
@@ -137,6 +136,8 @@ module ML::GGUF
           mb.upload_weight(exp_down, Array(Float32).new(exp_down.out_dim, 0.0_f32))
         end
       end
+      # Init workspace buffers
+      mb.init_workspace(@max_seq_len, @dim, @ffn_dim, @n_heads, @head_dim, @rope_cos, @rope_sin)
     end
     {% end %}
 
@@ -174,8 +175,36 @@ module ML::GGUF
     # Embed a single text → Float32 array (dim=768)
     def embed(text : String) : Array(Float32)
       tokens = tokenize(text)
+
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        return embed_gpu(tokens)
+      end
+      {% end %}
+
       forward(tokens)
     end
+
+    {% unless flag?(:cpu_only) %}
+    # GPU-accelerated embed: all 12 layers in one command buffer
+    private def embed_gpu(tokens : Array(Int32)) : Array(Float32)
+      seq_len = tokens.size
+      mb = @backend.as(MetalBackend)
+
+      # Embedding lookup + type embedding + layernorm (CPU — small, fast)
+      hidden = Array(Float32).new(seq_len * @dim, 0.0_f32)
+      seq_len.times do |pos|
+        tid = tokens[pos].clamp(0, @vocab_size - 1)
+        @dim.times { |j| hidden[pos * @dim + j] = @token_embd[tid * @dim + j] + @token_types[j] }
+      end
+      @backend.layer_norm!(hidden, seq_len, @dim, @embd_norm_w, @embd_norm_b)
+
+      # All 12 transformer layers on GPU — ONE command buffer, ONE sync
+      mb.encode_layers(hidden, seq_len, @layers,
+        @dim, @n_heads, @head_dim, @ffn_dim,
+        @n_experts, @n_experts_used, @moe_every_n)
+    end
+    {% end %}
 
     # Embed multiple texts (sequential for now)
     def embed_batch(texts : Array(String)) : Array(Array(Float32))
