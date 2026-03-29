@@ -108,7 +108,37 @@ module ML::GGUF
 
       # Load weights
       load_weights(gguf)
+
+      # Pre-upload quantized weights to GPU if using Metal backend
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        upload_weights_to_gpu
+      end
+      {% end %}
     end
+
+    {% unless flag?(:cpu_only) %}
+    private def upload_weights_to_gpu
+      mb = @backend.as(MetalBackend)
+      @layers.each do |lw|
+        mb.upload_weight(lw.attn_qkv_w, lw.attn_qkv_b)
+        mb.upload_weight(lw.attn_out_w, lw.attn_out_b)
+        if up = lw.ffn_up_w
+          mb.upload_weight(up, lw.ffn_up_b || Array(Float32).new(up.out_dim, 0.0_f32))
+        end
+        if down = lw.ffn_down_w
+          mb.upload_weight(down, lw.ffn_down_b || Array(Float32).new(down.out_dim, 0.0_f32))
+        end
+        # MoE expert weights — uploaded as one big buffer each
+        if exp_up = lw.expert_up_w
+          mb.upload_weight(exp_up, Array(Float32).new(exp_up.out_dim, 0.0_f32))
+        end
+        if exp_down = lw.expert_down_w
+          mb.upload_weight(exp_down, Array(Float32).new(exp_down.out_dim, 0.0_f32))
+        end
+      end
+    end
+    {% end %}
 
     # Run forward pass and return per-token hidden states (pre-pooling)
     # For debugging/comparison with reference implementations.
