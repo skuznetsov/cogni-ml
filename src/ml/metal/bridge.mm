@@ -261,13 +261,13 @@ extern "C" void* create_pipeline_impl(const char* source, const char* function_n
 
     NSError* error = nil;
     MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
-    // Use mathMode (macOS 14+) instead of deprecated fastMathEnabled
+    // Use safe math mode to prevent NaN from fast-math optimizations
     if (@available(macOS 14.0, *)) {
-        options.mathMode = MTLMathModeFast;
+        options.mathMode = MTLMathModeSafe;
     } else {
         #pragma clang diagnostic push
         #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        options.fastMathEnabled = YES;
+        options.fastMathEnabled = NO;
         #pragma clang diagnostic pop
     }
 

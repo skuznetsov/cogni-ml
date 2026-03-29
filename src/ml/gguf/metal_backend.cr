@@ -262,7 +262,10 @@ module ML::GGUF
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(n2w_buf, 1); enc.set_buffer(n2b_buf, 2)
           enc.set_value(dim_u, 3); enc.dispatch_1d(seq_len, 1); enc.end_encoding
 
-          # Don't commit yet — let next layer's attention chain into this cmd
+          # Must commit and wait BEFORE buffers go out of scope (GC safety)
+          cmd.commit_and_wait
+          # Now safe to let tok_bufs, exp_out_bufs, exp_mid_bufs be collected
+          cmd = ML::Metal::CommandBuffer.new
         else
           # Dense FFN
           up_gw = gw(lw.ffn_up_w.not_nil!, lw.ffn_up_b.not_nil!)
@@ -290,6 +293,10 @@ module ML::GGUF
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("layernorm_inplace"))
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(n2w_buf, 1); enc.set_buffer(n2b_buf, 2)
           enc.set_value(dim_u, 3); enc.dispatch_1d(seq_len, 1); enc.end_encoding
+
+          # Per-layer commit for dense too (correctness first, speed later)
+          cmd.commit_and_wait
+          cmd = ML::Metal::CommandBuffer.new
         end
       end
 

@@ -51,9 +51,7 @@ kernel void fused_q5k_matmul_gelu(
     device const uint8_t* row_ptr = w_raw + o * row_bytes;
     device const float* x_row = x + b * in_dim;
 
-    // Kahan compensated summation for near-double precision
     float sum = bias[o];
-    float comp = 0.0f;  // compensation for lost low-order bits
 
     for (uint blk = 0; blk < blocks_per_row; blk++) {
         device const uint8_t* bp = row_ptr + blk * 176;
@@ -74,23 +72,22 @@ kernel void fused_q5k_matmul_gelu(
 
             for (uint l = 0; l < 32; l++) {
                 uint j = base_j + (is / 2) * 64 + l;
-                float term = x_row[j] * (d1 * float((ql[ql_off + l] & 0x0F) + ((qh[l] & u1) ? 16 : 0)) - m1);
-                float y = term - comp; float t = sum + y; comp = (t - sum) - y; sum = t;
+                sum += x_row[j] * (d1 * float((ql[ql_off + l] & 0x0F) + ((qh[l] & u1) ? 16 : 0)) - m1);
             }
             for (uint l = 0; l < 32; l++) {
                 uint j = base_j + (is / 2) * 64 + 32 + l;
-                float term = x_row[j] * (d2 * float(((ql[ql_off + l] >> 4) & 0x0F) + ((qh[l] & u2) ? 16 : 0)) - m2);
-                float y = term - comp; float t = sum + y; comp = (t - sum) - y; sum = t;
+                sum += x_row[j] * (d2 * float(((ql[ql_off + l] >> 4) & 0x0F) + ((qh[l] & u2) ? 16 : 0)) - m2);
             }
             ql_off += 32; is += 2; u1 <<= 2; u2 <<= 2;
         }
     }
 
     // Optional GELU
-    // Guard: if accumulation produced NaN (rare GPU precision edge case), zero it
-    if (isnan(sum)) sum = 0.0f;
+    // Replace NaN with 0 and write diagnostic to output if NaN detected
+    bool had_nan = isnan(sum);
+    if (had_nan) sum = 0.0f;
 
-    if (apply_gelu) {
+    if (apply_gelu && !had_nan) {
         float v = clamp(sum, -20.0f, 20.0f);
         sum = 0.5f * v * (1.0f + tanh(0.7978845608f * (v + 0.044715f * v * v * v)));
     }
@@ -120,7 +117,6 @@ kernel void fused_q6k_matmul_gelu(
     device const float* x_row = x + b * in_dim;
 
     float sum = bias[o];
-    float comp = 0.0f;
 
     for (uint blk = 0; blk < blocks_per_row; blk++) {
         device const uint8_t* bp = row_ptr + blk * 210;
@@ -143,19 +139,19 @@ kernel void fused_q6k_matmul_gelu(
                 float s4 = float(sc[sc_off + is + 4]);
                 float s6 = float(sc[sc_off + is + 6]);
                 uint j_base = base_j + n_iter * 128;
-                { float term = x_row[j_base + l]      * (d * s0 * float(q1)); float y = term - comp; float t = sum + y; comp = (t - sum) - y; sum = t; }
-                { float term = x_row[j_base + l + 32] * (d * s2 * float(q2)); float y = term - comp; float t = sum + y; comp = (t - sum) - y; sum = t; }
-                { float term = x_row[j_base + l + 64] * (d * s4 * float(q3)); float y = term - comp; float t = sum + y; comp = (t - sum) - y; sum = t; }
-                { float term = x_row[j_base + l + 96] * (d * s6 * float(q4)); float y = term - comp; float t = sum + y; comp = (t - sum) - y; sum = t; }
+                sum += x_row[j_base + l]      * (d * s0 * float(q1));
+                sum += x_row[j_base + l + 32] * (d * s2 * float(q2));
+                sum += x_row[j_base + l + 64] * (d * s4 * float(q3));
+                sum += x_row[j_base + l + 96] * (d * s6 * float(q4));
             }
             ql_off += 64; qh_off += 32; sc_off += 8;
         }
     }
 
-    // Guard: if accumulation produced NaN (rare GPU precision edge case), zero it
-    if (isnan(sum)) sum = 0.0f;
+    bool had_nan = isnan(sum);
+    if (had_nan) sum = 0.0f;
 
-    if (apply_gelu) {
+    if (apply_gelu && !had_nan) {
         float v = clamp(sum, -20.0f, 20.0f);
         sum = 0.5f * v * (1.0f + tanh(0.7978845608f * (v + 0.044715f * v * v * v)));
     }
