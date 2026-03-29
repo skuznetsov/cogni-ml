@@ -181,6 +181,9 @@ module ML::GGUF
           cmd.commit_and_wait
           hp = ws.hidden.contents.as(Pointer(Float32))
 
+          # Debug: dump hidden at pos=0 before gating
+          STDERR.puts "DEBUG MoE L#{layer_idx}: hidden[0][0..4]=#{Array(Float32).new(5) { |i| hp[i] }.map(&.round(4))}"
+
           # CPU gating: ~5μs (768×8 matmul + softmax + top-2, per token)
           gate_w = lw.gate_w.not_nil!
           exp_up_qw = lw.expert_up_w.not_nil!
@@ -197,7 +200,19 @@ module ML::GGUF
             max_g = gate_logits.max
             probs = gate_logits.map { |v| Math.exp(v - max_g).to_f32 }; sum_p = probs.sum; probs.map! { |v| v / sum_p }
             top = probs.each_with_index.to_a.sort_by { |v, _| -v }.first(n_experts_used)
+            if pos == 0
+              STDERR.puts "DEBUG MoE L#{layer_idx} pos=0: top=#{top.map { |p, e| {e, p.round(4)} }}"
+            end
             top.each { |prob, ei| routing << {pos, ei, prob} }
+          end
+
+          # Debug: CPU expert 0 up for pos=0 comparison
+          if layer_idx == 1
+            pos0_input = Array(Float32).new(dim) { |j| hp[j] }
+            up_slice = Bytes.new(exp_up_qw.raw.to_unsafe, ffn_dim * ((dim // 256) * exp_up_qw.type.block_bytes), read_only: true)
+            zero_b = Array(Float32).new(ffn_dim, 0.0_f32)
+            cpu_up0 = QuantMatmul.matmul_add(pos0_input, 1, dim, up_slice, exp_up_qw.type, ffn_dim, zero_b)
+            STDERR.puts "DEBUG CPU expert0 up pos=0: first 5=#{cpu_up0[0, 5].map(&.round(4))}"
           end
 
           # GPU expert matmuls — all in one cmd, no intermediate sync
@@ -264,7 +279,33 @@ module ML::GGUF
 
           # Must commit and wait BEFORE buffers go out of scope (GC safety)
           cmd.commit_and_wait
-          # Now safe to let tok_bufs, exp_out_bufs, exp_mid_bufs be collected
+
+          # Debug: check GPU expert outputs match CPU (with GELU)
+          if layer_idx == 1
+            tb0 = tok_bufs[0].contents.as(Pointer(Float32))
+            tok_arr = Array(Float32).new(dim) { |j| tb0[j] }
+            up_slice = Bytes.new(exp_up_qw.raw.to_unsafe, ffn_dim * ((dim // 256) * exp_up_qw.type.block_bytes), read_only: true)
+            cpu_up0 = QuantMatmul.matmul_add(tok_arr, 1, dim, up_slice, exp_up_qw.type, ffn_dim, Array(Float32).new(ffn_dim, 0.0_f32))
+            cpu_up0.map! { |v| 0.5_f32 * v * (1.0_f32 + Math.tanh(0.7978845608_f32 * (v + 0.044715_f32 * v * v * v))) }
+            # CPU expert 0 down
+            dn_slice = Bytes.new(exp_down_qw.raw.to_unsafe, dim * ((ffn_dim // 256) * exp_down_qw.type.block_bytes), read_only: true)
+            cpu_dn0 = QuantMatmul.matmul_add(cpu_up0, 1, ffn_dim, dn_slice, exp_down_qw.type, dim, Array(Float32).new(dim, 0.0_f32))
+            STDERR.puts "DEBUG CPU expert0 down (with GELU): [0..4]=#{cpu_dn0[0, 5].map(&.round(4))}"
+            STDERR.puts "DEBUG CPU expert0 up+GELU: [0..4]=#{cpu_up0[0, 5].map(&.round(6))}"
+          end
+
+          # Debug: check GPU expert 0 up output for pos=0
+          if layer_idx == 1
+            mid0 = exp_mid_bufs[0].contents.as(Pointer(Float32))
+            STDERR.puts "DEBUG GPU expert0 up pos=0: first 5=#{Array(Float32).new(5) { |i| mid0[i] }.map(&.round(4))}"
+            out0 = exp_out_bufs[0].contents.as(Pointer(Float32))
+            STDERR.puts "DEBUG GPU expert0 down pos=0: first 5=#{Array(Float32).new(5) { |i| out0[i] }.map(&.round(4))}"
+
+            # Check ffn_out accumulation
+            fo = ws.ffn_out.contents.as(Pointer(Float32))
+            STDERR.puts "DEBUG GPU ffn_out pos=0 [0..4]: #{Array(Float32).new(5) { |i| fo[i] }.map(&.round(4))}"
+          end
+
           cmd = ML::Metal::CommandBuffer.new
         else
           # Dense FFN
