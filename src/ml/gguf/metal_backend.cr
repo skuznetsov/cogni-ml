@@ -116,12 +116,13 @@ module ML::GGUF
         {n1w, n1b, n2w, n2b}
       end
 
+      cmd = ML::Metal::CommandBuffer.new
+
       layers.each_with_index do |lw, layer_idx|
         is_moe = (layer_idx % moe_every_n == 1) && n_experts > 0
         n1w_buf, n1b_buf, n2w_buf, n2b_buf = norm_bufs[layer_idx]
 
         # === Attention (GPU) ===
-        cmd = ML::Metal::CommandBuffer.new
 
         qkv_gw = gw(lw.attn_qkv_w, lw.attn_qkv_b)
         kernel = qkv_gw.type.q5_k? ? "fused_q5k_matmul_gelu" : "fused_q6k_matmul_gelu"
@@ -233,6 +234,7 @@ module ML::GGUF
           (seq_len * dim).times { |i| h_arr[i] += moe_result[i] }
           F32Backend.new.layer_norm!(h_arr, seq_len, dim, lw.norm2_w, lw.norm2_b)
           ws.hidden.write(h_arr)
+          cmd = ML::Metal::CommandBuffer.new  # Fresh cmd after CPU MoE
         else
           up_gw = gw(lw.ffn_up_w.not_nil!, lw.ffn_up_b.not_nil!)
           kernel = up_gw.type.q5_k? ? "fused_q5k_matmul_gelu" : "fused_q6k_matmul_gelu"
@@ -269,12 +271,10 @@ module ML::GGUF
           enc.dispatch_1d(seq_len, 1)
           enc.end_encoding
 
-          cmd.commit_and_wait
         end
       end
 
       # Mean pool + normalize
-      cmd = ML::Metal::CommandBuffer.new
       enc = ML::Metal::ComputeEncoder.new(cmd)
       enc.set_pipeline(pipe("mean_pool_l2"))
       enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.output, 1)
