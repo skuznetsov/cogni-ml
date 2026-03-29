@@ -319,6 +319,159 @@ kernel void qkv_split(
 }
 
 // ============================================================================
+// Fused MoE FFN: gate → softmax → top-2 → expert up+GELU → expert down → accumulate
+// One thread per (position, output_dim) — each computes one output element.
+// Grid: [dim, seq_len]
+// ============================================================================
+
+kernel void moe_ffn_fused(
+    device const float*   hidden     [[buffer(0)]],   // [seq, dim] input
+    device       float*   output     [[buffer(1)]],   // [seq, dim] output (additive: += result)
+    device const float*   gate_w     [[buffer(2)]],   // [n_experts, dim] F32
+    device const uint8_t* up_exps    [[buffer(3)]],   // All expert up weights (quantized)
+    device const uint8_t* down_exps  [[buffer(4)]],   // All expert down weights (quantized)
+    constant     uint&    dim        [[buffer(5)]],
+    constant     uint&    ffn_dim    [[buffer(6)]],
+    constant     uint&    n_experts  [[buffer(7)]],
+    constant     uint&    n_used     [[buffer(8)]],   // top-k (=2)
+    constant     uint&    up_expert_bytes  [[buffer(9)]],
+    constant     uint&    down_expert_bytes [[buffer(10)]],
+    constant     uint&    up_type    [[buffer(11)]],  // 0=Q5_K, 1=Q6_K
+    constant     uint&    seq_len    [[buffer(12)]],
+    uint2 gid [[thread_position_in_grid]])             // x=dim_idx, y=pos
+{
+    const uint d_out = gid.x;  // which output dimension
+    const uint pos = gid.y;    // which token position
+    if (d_out >= dim || pos >= seq_len) return;
+
+    device const float* x = hidden + pos * dim;
+
+    // Step 1: Gate logits (x @ gate_w^T) — computed per-thread for ALL experts
+    float gate_logits[8];  // max 8 experts
+    for (uint e = 0; e < n_experts; e++) {
+        float dot = 0.0f;
+        for (uint j = 0; j < dim; j++) {
+            dot += x[j] * gate_w[e * dim + j];
+        }
+        gate_logits[e] = dot;
+    }
+
+    // Step 2: Softmax
+    float max_g = gate_logits[0];
+    for (uint e = 1; e < n_experts; e++) max_g = max(max_g, gate_logits[e]);
+    float sum_exp = 0.0f;
+    for (uint e = 0; e < n_experts; e++) {
+        gate_logits[e] = exp(gate_logits[e] - max_g);
+        sum_exp += gate_logits[e];
+    }
+    for (uint e = 0; e < n_experts; e++) gate_logits[e] /= sum_exp;
+
+    // Step 3: Top-2 selection
+    int top_idx[2] = {0, 1};
+    float top_prob[2] = {gate_logits[0], gate_logits[1]};
+    if (top_prob[1] > top_prob[0]) {
+        int ti = top_idx[0]; top_idx[0] = top_idx[1]; top_idx[1] = ti;
+        float tp = top_prob[0]; top_prob[0] = top_prob[1]; top_prob[1] = tp;
+    }
+    for (uint e = 2; e < n_experts; e++) {
+        if (gate_logits[e] > top_prob[1]) {
+            top_prob[1] = gate_logits[e];
+            top_idx[1] = e;
+            if (top_prob[1] > top_prob[0]) {
+                int ti = top_idx[0]; top_idx[0] = top_idx[1]; top_idx[1] = ti;
+                float tp = top_prob[0]; top_prob[0] = top_prob[1]; top_prob[1] = tp;
+            }
+        }
+    }
+
+    // Step 4: For each selected expert, compute up+GELU → down for output dim d_out
+    float result = 0.0f;
+
+    for (uint t = 0; t < n_used; t++) {
+        int ei = top_idx[t];
+        float w = top_prob[t];
+
+        // Expert down: need full ffn_dim intermediate, but we compute one output dim
+        // down[d_out] = Σ_f h[f] * down_w[d_out, f]
+        // where h[f] = GELU(Σ_j x[j] * up_w[f, j])
+
+        // This requires computing ALL ffn_dim values of h first (up+GELU),
+        // then dot with down_w row d_out.
+        // For ffn_dim=3072, this is expensive per thread but correct.
+
+        // Expert up: compute h[f] = GELU(x @ up_w[ei][f, :]) for all f
+        device const uint8_t* up_base = up_exps + ei * up_expert_bytes;
+        device const uint8_t* dn_base = down_exps + ei * down_expert_bytes;
+
+        // Down matmul: for output d_out, dot with h
+        // down_w[ei] is [dim, ffn_dim] stored as [dim rows, ffn_dim cols] quantized
+        // Row d_out covers ffn_dim input elements
+
+        // Since computing ALL h[f] per thread is expensive (3072 dot products of 768),
+        // we instead compute: out[d_out] = Σ_f GELU(up_dot_f) * down_w[d_out, f]
+        // = fused up-GELU-down for one output element
+
+        float acc = 0.0f;
+
+        // For Q5_K: each block is 176 bytes, 256 elements
+        // up_w[ei] is [ffn_dim, dim] = ffn_dim rows of dim elements
+        // We need h[f] for all f, then dot with down row
+
+        // This is O(ffn_dim * dim) per thread — too expensive.
+        // With dim=768, ffn_dim=3072: 2.4M ops per thread per expert.
+        // With 768 threads (one per d_out): total 1.8B ops per expert.
+        // That's way too much redundant work.
+
+        // Better approach: two-phase
+        // Phase 1: compute h[f] = GELU(up[f] dot x) for all f (one thread per f)
+        // Phase 2: compute out[d] = Σ_f h[f] * down[d,f] (one thread per d)
+        // But this requires two dispatches and shared memory between them.
+
+        // For a FUSED single-kernel approach: use threadgroup shared memory
+        // Phase 1: all threads in threadgroup compute h[f] cooperatively
+        // Phase 2: each thread computes its output dim from shared h
+
+        // But this is complex. For now, let's do the two-phase approach
+        // with separate dispatches per expert (still in same command buffer).
+
+        // Actually, skip fused for now — just use separate up/down dispatches
+        // with the weighted_add pattern. Same cmd, no sync.
+        break;  // Can't do fully fused without shared memory
+    }
+
+    // Placeholder — this kernel is incomplete. Use dispatch-per-expert approach instead.
+    // output[pos * dim + d_out] += result;
+}
+
+// ============================================================================
+// Weighted add: dst[offset + i] += weight * src[i]
+// Grid: [count]
+// ============================================================================
+
+kernel void weighted_add(
+    device       float* dst    [[buffer(0)]],
+    device const float* src    [[buffer(1)]],
+    constant     uint&  offset [[buffer(2)]],
+    constant     float& weight [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    dst[offset + tid] += weight * src[tid];
+}
+
+// ============================================================================
+// Zero buffer region: dst[offset..offset+count] = 0
+// Grid: [count]
+// ============================================================================
+
+kernel void zero_region(
+    device float* dst      [[buffer(0)]],
+    constant uint& offset  [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    dst[offset + tid] = 0.0f;
+}
+
+// ============================================================================
 // Mean pool + L2 normalize: hidden[seq, dim] → output[dim]
 // Single-thread kernel (fast enough for dim=768)
 // ============================================================================
