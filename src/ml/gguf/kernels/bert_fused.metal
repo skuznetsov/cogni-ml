@@ -195,87 +195,82 @@ kernel void rope_neox_inplace(
 }
 
 // ============================================================================
-// SIMD Attention: 32 threads per (head, query_pos)
-// Each SIMD group computes one output vector.
-// Lanes split key positions: lane l handles keys l, l+32, l+64, ...
+// SIMD Attention with shared memory for scores
+// Phase 1: Lanes split key positions for Q·K + softmax → shared scores[512]
+// Phase 2: Lanes split head_dim for V accumulation (read shared scores)
 //
-// Dispatch: threadgroups = [n_heads, ceil(seq_len / N_ATTN_ROWS)]
-//           threads_per_threadgroup = [32, N_ATTN_ROWS]
+// Dispatch: threadgroups = [n_heads, seq_len]
+//           threads_per_threadgroup = [32]
+//           shared memory = seq_len * sizeof(float) per simdgroup
 // ============================================================================
 
-constant uint N_ATTN_ROWS = 2;  // simdgroups per threadgroup
-
 kernel void attention_forward(
-    device const float* Q       [[buffer(0)]],  // [n_heads, seq_len, head_dim]
+    device const float* Q       [[buffer(0)]],
     device const float* K       [[buffer(1)]],
     device const float* V       [[buffer(2)]],
-    device       float* output  [[buffer(3)]],  // [seq_len, n_heads * head_dim]
+    device       float* output  [[buffer(3)]],
     constant     uint&  seq_len [[buffer(4)]],
     constant     uint&  n_heads [[buffer(5)]],
     constant     uint&  head_dim [[buffer(6)]],
     constant     float& scale   [[buffer(7)]],
     uint3  tgpig [[threadgroup_position_in_grid]],
     ushort tiisg [[thread_index_in_simdgroup]],
-    ushort sgitg [[simdgroup_index_in_threadgroup]])
+    threadgroup float* shared   [[threadgroup(0)]])
 {
-    const uint h = tgpig.x;                          // head
-    const uint i = tgpig.y * N_ATTN_ROWS + sgitg;   // query position
+    const uint h = tgpig.x;  // head
+    const uint i = tgpig.y;  // query position
     if (h >= n_heads || i >= seq_len) return;
 
     const uint h_off = h * seq_len * head_dim;
-    const uint lane = tiisg;  // 0..31
+    const uint lane = tiisg;
 
-    // Each lane handles keys at positions: lane, lane+32, lane+64, ...
-    // Max per lane: ceil(512/32) = 16
-    float local_scores[16];
+    // === Phase 1: Compute attention scores (lanes split over keys) ===
     float local_max = -1e30f;
-    uint n_local = 0;
-
     for (uint j = lane; j < seq_len; j += 32) {
         float dot = 0.0f;
         for (uint d = 0; d < head_dim; d++) {
             dot += Q[h_off + i * head_dim + d] * K[h_off + j * head_dim + d];
         }
         float s = dot * scale;
-        local_scores[n_local] = s;
+        shared[j] = s;
         local_max = max(local_max, s);
-        n_local++;
     }
 
-    // SIMD max reduction → global max across all lanes
+    // Softmax: reduce max
     float global_max = simd_max(local_max);
 
-    // Local exp + sum
+    // Exp + local sum
     float local_sum = 0.0f;
-    for (uint k = 0; k < n_local; k++) {
-        local_scores[k] = exp(local_scores[k] - global_max);
-        local_sum += local_scores[k];
+    for (uint j = lane; j < seq_len; j += 32) {
+        float e = exp(shared[j] - global_max);
+        shared[j] = e;
+        local_sum += e;
     }
     float inv_sum = 1.0f / simd_sum(local_sum);
 
-    // Normalize local scores
-    for (uint k = 0; k < n_local; k++) {
-        local_scores[k] *= inv_sum;
+    // Normalize
+    for (uint j = lane; j < seq_len; j += 32) {
+        shared[j] *= inv_sum;
     }
 
-    // Weighted V accumulation: each lane accumulates its keys' contribution
-    for (uint d = 0; d < head_dim; d++) {
+    // Barrier: all lanes must see final scores before V accumulation
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+
+    // === Phase 2: V accumulation (lanes split over head_dim) ===
+    // Each lane handles dims: lane, lane+32 (for head_dim=64: 2 dims per lane)
+    for (uint d = lane; d < head_dim; d += 32) {
         float val = 0.0f;
-        uint ki = 0;
-        for (uint j = lane; j < seq_len; j += 32) {
-            val += local_scores[ki] * V[h_off + j * head_dim + d];
-            ki++;
+        for (uint j = 0; j < seq_len; j++) {
+            val += shared[j] * V[h_off + j * head_dim + d];
         }
-        float result = simd_sum(val);
-        if (lane == 0) {
-            output[i * (n_heads * head_dim) + h * head_dim + d] = result;
-        }
+        output[i * (n_heads * head_dim) + h * head_dim + d] = val;
     }
 }
 
 // ============================================================================
-// LayerNorm in-place: x = (x - mean) / sqrt(var + eps) * w + b
-// Grid: [n_positions]
+// SIMD LayerNorm in-place: 32 threads per position
+// x = (x - mean) / sqrt(var + eps) * w + b
+// Dispatch: threadgroups = [n_positions], threads = [32]
 // ============================================================================
 
 kernel void layernorm_inplace(
@@ -283,17 +278,25 @@ kernel void layernorm_inplace(
     device const float* w    [[buffer(1)]],
     device const float* b    [[buffer(2)]],
     constant uint& dim       [[buffer(3)]],
-    uint tid [[thread_position_in_grid]])
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
 {
-    device float* row = x + tid * dim;
-    float mean = 0.0f;
-    for (uint j = 0; j < dim; j++) mean += row[j];
-    mean /= float(dim);
-    float var = 0.0f;
-    for (uint j = 0; j < dim; j++) { float d = row[j] - mean; var += d * d; }
-    var /= float(dim);
-    float inv_std = rsqrt(var + 1e-5f);
-    for (uint j = 0; j < dim; j++) {
+    const uint pos = tgpig.x;
+    const uint lane = tiisg;
+    device float* row = x + pos * dim;
+
+    // Mean: each lane sums dim/32 elements
+    float local_sum = 0.0f;
+    for (uint j = lane; j < dim; j += 32) local_sum += row[j];
+    float mean = simd_sum(local_sum) / float(dim);
+
+    // Variance
+    float local_var = 0.0f;
+    for (uint j = lane; j < dim; j += 32) { float d = row[j] - mean; local_var += d * d; }
+    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+
+    // Normalize + scale + bias
+    for (uint j = lane; j < dim; j += 32) {
         row[j] = (row[j] - mean) * inv_std * w[j] + b[j];
     }
 }
