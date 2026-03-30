@@ -211,12 +211,13 @@ module ML::GGUF
           enc.dispatch_1d(seq_len * n_heads, 256); enc.end_encoding
         end
 
+        n_qr = 8  # must match N_QR in bert_fused.metal
         enc = ML::Metal::ComputeEncoder.new(cmd)
         enc.set_pipeline(pipe("attention_forward"))
         enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
         enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
-        enc.set_threadgroup_memory(seq_len * 4, 0)  # shared scores[seq_len]
-        enc.dispatch_threadgroups({n_heads, seq_len, 1}, {32, 1, 1}); enc.end_encoding
+        enc.set_threadgroup_memory(n_qr * seq_len * 4, 0)  # shared scores[N_QR][seq_len]
+        enc.dispatch_threadgroups({n_heads, (seq_len + n_qr - 1) // n_qr, 1}, {32, n_qr, 1}); enc.end_encoding
 
         out_gw = gw(lw.attn_out_w, lw.attn_out_b)
         enc = ML::Metal::ComputeEncoder.new(cmd)

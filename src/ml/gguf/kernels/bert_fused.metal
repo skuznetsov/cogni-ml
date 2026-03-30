@@ -196,13 +196,14 @@ kernel void rope_neox_inplace(
 
 // ============================================================================
 // SIMD Attention with shared memory for scores
-// Phase 1: Lanes split key positions for Q·K + softmax → shared scores[512]
-// Phase 2: Lanes split head_dim for V accumulation (read shared scores)
+// Multiple query positions per threadgroup (N_QR simdgroups)
 //
-// Dispatch: threadgroups = [n_heads, seq_len]
-//           threads_per_threadgroup = [32]
-//           shared memory = seq_len * sizeof(float) per simdgroup
+// Dispatch: threadgroups = [n_heads, ceil(seq_len / N_QR)]
+//           threads_per_threadgroup = [32, N_QR]
+//           shared memory = N_QR * seq_len * sizeof(float)
 // ============================================================================
+
+constant uint N_QR = 8;  // query rows per threadgroup (simdgroups)
 
 kernel void attention_forward(
     device const float* Q       [[buffer(0)]],
@@ -215,31 +216,37 @@ kernel void attention_forward(
     constant     float& scale   [[buffer(7)]],
     uint3  tgpig [[threadgroup_position_in_grid]],
     ushort tiisg [[thread_index_in_simdgroup]],
-    threadgroup float* shared   [[threadgroup(0)]])
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    threadgroup float* shared_base [[threadgroup(0)]])
 {
     const uint h = tgpig.x;  // head
-    const uint i = tgpig.y;  // query position
+    const uint i = tgpig.y * N_QR + sgitg;  // query position
     if (h >= n_heads || i >= seq_len) return;
 
     const uint h_off = h * seq_len * head_dim;
     const uint lane = tiisg;
+    threadgroup float* shared = shared_base + sgitg * seq_len;
 
-    // === Phase 1: Compute attention scores (lanes split over keys) ===
+    // === Phase 1: Q·K dot products using float4 loads ===
+    device const float4* qi4 = (device const float4*)(Q + h_off + i * head_dim);
+    const uint hd4 = head_dim / 4;  // 64/4 = 16
+
     float local_max = -1e30f;
     for (uint j = lane; j < seq_len; j += 32) {
+        device const float4* kj4 = (device const float4*)(K + h_off + j * head_dim);
         float dot = 0.0f;
-        for (uint d = 0; d < head_dim; d++) {
-            dot += Q[h_off + i * head_dim + d] * K[h_off + j * head_dim + d];
+        for (uint d = 0; d < hd4; d++) {
+            float4 q4 = qi4[d];
+            float4 k4 = kj4[d];
+            dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
         }
         float s = dot * scale;
         shared[j] = s;
         local_max = max(local_max, s);
     }
 
-    // Softmax: reduce max
+    // Softmax
     float global_max = simd_max(local_max);
-
-    // Exp + local sum
     float local_sum = 0.0f;
     for (uint j = lane; j < seq_len; j += 32) {
         float e = exp(shared[j] - global_max);
@@ -247,23 +254,23 @@ kernel void attention_forward(
         local_sum += e;
     }
     float inv_sum = 1.0f / simd_sum(local_sum);
-
-    // Normalize
     for (uint j = lane; j < seq_len; j += 32) {
         shared[j] *= inv_sum;
     }
-
-    // Barrier: all lanes must see final scores before V accumulation
     simdgroup_barrier(mem_flags::mem_threadgroup);
 
-    // === Phase 2: V accumulation (lanes split over head_dim) ===
-    // Each lane handles dims: lane, lane+32 (for head_dim=64: 2 dims per lane)
-    for (uint d = lane; d < head_dim; d += 32) {
-        float val = 0.0f;
+    // === Phase 2: V accumulation (lanes split over head_dim/4, using float4) ===
+    // Each lane handles 4 consecutive dims (lane*2 to lane*2+1 → two float4 groups)
+    // For head_dim=64, hd4=16: lane 0..15 each handle one float4 of output
+    for (uint d4 = lane; d4 < hd4; d4 += 32) {
+        float4 val = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint j = 0; j < seq_len; j++) {
-            val += shared[j] * V[h_off + j * head_dim + d];
+            float s = shared[j];
+            device const float4* vj4 = (device const float4*)(V + h_off + j * head_dim);
+            val += s * vj4[d4];
         }
-        output[i * (n_heads * head_dim) + h * head_dim + d] = val;
+        device float4* out4 = (device float4*)(output + i * (n_heads * head_dim) + h * head_dim);
+        out4[d4] = val;
     }
 }
 
