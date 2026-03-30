@@ -38,10 +38,13 @@ module ML::GGUF
     getter cos_cache : ML::MetalBuffer
     getter sin_cache : ML::MetalBuffer
     # Pre-allocated MoE batched buffers (contiguous)
-    getter moe_input : ML::MetalBuffer   # [max_routing, dim]
-    getter moe_mid : ML::MetalBuffer     # [max_routing, ffn_dim]
-    getter moe_output : ML::MetalBuffer  # [max_routing, dim]
-    getter gate_logits : ML::MetalBuffer
+    getter moe_input : ML::MetalBuffer    # [max_routing, dim]
+    getter moe_mid : ML::MetalBuffer      # [max_routing, ffn_dim]
+    getter moe_output : ML::MetalBuffer   # [max_routing, dim]
+    getter gate_logits : ML::MetalBuffer  # [max_seq, 8]
+    getter routing_ids : ML::MetalBuffer  # [max_seq, k] int32
+    getter routing_wts : ML::MetalBuffer  # [max_seq, k] float32
+    getter gather_map : ML::MetalBuffer   # [max_routing] int32
 
     def initialize(max_seq : Int32, dim : Int32, ffn_dim : Int32, n_heads : Int32, head_dim : Int32,
                    n_experts_used : Int32, rope_cos : Array(Float32), rope_sin : Array(Float32))
@@ -62,8 +65,11 @@ module ML::GGUF
       @moe_input  = ML::MetalBuffer.new(max_routing.to_i64 * dim * 4)      # [max_routing, dim]
       @moe_mid    = ML::MetalBuffer.new(max_routing.to_i64 * ffn_dim * 4)  # [max_routing, ffn_dim]
       @moe_output = ML::MetalBuffer.new(max_routing.to_i64 * dim * 4)      # [max_routing, dim]
-      # Gate logits buffer: [max_seq, 8] (max 8 experts)
+      # Gate + routing buffers
       @gate_logits = ML::MetalBuffer.new(max_seq.to_i64 * 8 * 4)
+      @routing_ids = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # int32
+      @routing_wts = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # float32
+      @gather_map  = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # int32
     end
   end
 
@@ -83,7 +89,7 @@ module ML::GGUF
       %w[fused_q5k_matmul_gelu fused_q6k_matmul_gelu
          qkv_split rope_neox_inplace attention_forward
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
-         gelu_inplace gate_matmul].each do |name|
+         gelu_inplace gate_matmul softmax_topk moe_gather].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
         }
@@ -229,50 +235,57 @@ module ML::GGUF
           down_row_bytes = (ffn_dim // 256) * exp_down_qw.type.block_bytes
           down_expert_bytes = dim * down_row_bytes
 
-          # GPU gate matmul: hidden @ gate_w^T → gate_logits [seq, n_experts]
+          # GPU gate matmul + softmax + top-k — all on GPU
           gate_w_buf = upload_f32(gate_w_arr)
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("gate_matmul"))
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(gate_w_buf, 1); enc.set_buffer(ws.gate_logits, 2)
           enc.set_value(dim_u, 3); enc.set_value(n_experts.to_u32, 4)
           enc.dispatch({n_experts, seq_len, 1}, {n_experts, 1, 1}); enc.end_encoding
 
-          # Sync to read gate logits (tiny: seq_len × 8 floats)
+          # GPU softmax + top-k → routing_ids, routing_wts
+          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("softmax_topk"))
+          enc.set_buffer(ws.gate_logits, 0); enc.set_buffer(ws.routing_ids, 1); enc.set_buffer(ws.routing_wts, 2)
+          enc.set_value(n_experts.to_u32, 3); enc.set_value(n_experts_used.to_u32, 4)
+          enc.dispatch_1d(seq_len, 1); enc.end_encoding
+
+          # Sync: read routing table (tiny: seq_len * k * 8 bytes)
           cmd.commit_and_wait
-          gp = ws.gate_logits.contents.as(Pointer(Float32))
+          rids = ws.routing_ids.contents.as(Pointer(Int32))
+          rwts = ws.routing_wts.contents.as(Pointer(Float32))
           hp = ws.hidden.contents.as(Pointer(Float32))
 
-          # CPU softmax + top-k routing (fast — just 8 floats per token)
-          routing = [] of {Int32, Int32, Float32}
+          # CPU: parse routing, group by expert, build gather_map
+          routing = [] of {Int32, Int32, Float32}  # {pos, expert_id, weight}
           seq_len.times do |pos|
-            base = pos * n_experts
-            max_g = gp[base]
-            n_experts.times { |e| max_g = gp[base + e] if gp[base + e] > max_g }
-            probs = Array(Float32).new(n_experts) { |e| Math.exp(gp[base + e] - max_g).to_f32 }
-            sum_p = probs.sum; probs.map! { |v| v / sum_p }
-            top = probs.each_with_index.to_a.sort_by { |v, _| -v }.first(n_experts_used)
-            top.each { |prob, ei| routing << {pos, ei, prob} }
+            n_experts_used.times do |ki|
+              idx = pos * n_experts_used + ki
+              routing << {pos, rids[idx], rwts[idx]}
+            end
           end
 
-          # Group routing by expert for batched dispatch
-          expert_groups = Hash(Int32, Array({Int32, Float32})).new  # ei → [{pos, weight}]
+          expert_groups = Hash(Int32, Array({Int32, Float32})).new
           routing.each do |(pos, ei, weight)|
             (expert_groups[ei] ||= [] of {Int32, Float32}) << {pos, weight}
           end
 
-          # Pack all routed tokens into contiguous moe_input buffer, grouped by expert
-          inp = ws.moe_input.contents.as(Pointer(Float32))
+          # Build gather_map: for each routing entry (grouped by expert), store pos
+          gmap = ws.gather_map.contents.as(Pointer(Int32))
+          total_routing = routing.size
           ri_base = 0
           expert_groups.each do |_, entries|
             entries.each_with_index do |(pos, _), local_i|
-              src = hp + pos * dim
-              dst = inp + (ri_base + local_i).to_i64 * dim
-              dim.times { |j| dst[j] = src[j] }
+              gmap[ri_base + local_i] = pos
             end
             ri_base += entries.size
           end
 
-          # GPU expert matmuls — ONE dispatch per expert (batched)
+          # GPU gather: hidden[pos] → moe_input[ri] (contiguous, grouped by expert)
           cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("moe_gather"))
+          enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.moe_input, 1); enc.set_buffer(ws.gather_map, 2)
+          enc.set_value(dim_u, 3)
+          enc.dispatch_1d(total_routing * dim, 256); enc.end_encoding
+
           up_gw_full = gw(exp_up_qw, Array(Float32).new(ffn_dim, 0.0_f32))
           down_gw_full = gw(exp_down_qw, Array(Float32).new(dim, 0.0_f32))
 

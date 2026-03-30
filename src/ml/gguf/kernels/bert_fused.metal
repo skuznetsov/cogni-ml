@@ -323,6 +323,68 @@ kernel void gate_matmul(
 }
 
 // ============================================================================
+// Softmax + Top-K routing for MoE gating
+// One thread per position. Reads gate_logits [seq, n_experts], writes:
+//   routing_ids [seq, k] — int32 expert indices
+//   routing_weights [seq, k] — float32 weights (raw softmax probs)
+// Grid: [seq_len]
+// ============================================================================
+
+kernel void softmax_topk(
+    device const float* gate_logits  [[buffer(0)]],  // [seq, n_experts]
+    device       int*   routing_ids  [[buffer(1)]],   // [seq, k]
+    device       float* routing_wts  [[buffer(2)]],   // [seq, k]
+    constant     uint&  n_experts    [[buffer(3)]],
+    constant     uint&  k            [[buffer(4)]],   // top-k (=2)
+    uint tid [[thread_position_in_grid]])
+{
+    device const float* row = gate_logits + tid * n_experts;
+
+    // Softmax
+    float max_g = row[0];
+    for (uint e = 1; e < n_experts; e++) max_g = max(max_g, row[e]);
+    float sum_exp = 0.0f;
+    float probs[8];  // max 8 experts
+    for (uint e = 0; e < n_experts; e++) {
+        probs[e] = exp(row[e] - max_g);
+        sum_exp += probs[e];
+    }
+    float inv_sum = 1.0f / sum_exp;
+    for (uint e = 0; e < n_experts; e++) probs[e] *= inv_sum;
+
+    // Top-k selection
+    uint out_base = tid * k;
+    for (uint i = 0; i < k; i++) {
+        float best_p = -1.0f;
+        int best_e = 0;
+        for (uint e = 0; e < n_experts; e++) {
+            if (probs[e] > best_p) { best_p = probs[e]; best_e = (int)e; }
+        }
+        routing_ids[out_base + i] = best_e;
+        routing_wts[out_base + i] = best_p;
+        probs[best_e] = -1.0f;  // exclude from next iteration
+    }
+}
+
+// ============================================================================
+// MoE gather: copy hidden[pos] → moe_input[ri] for each routing entry
+// Grid: [total_routing_entries * dim]
+// ============================================================================
+
+kernel void moe_gather(
+    device const float* hidden     [[buffer(0)]],  // [seq, dim]
+    device       float* moe_input  [[buffer(1)]],  // [total, dim] — output
+    device const int*   gather_map [[buffer(2)]],   // [total] — pos index for each entry
+    constant     uint&  dim        [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint ri = tid / dim;    // routing entry index
+    const uint j  = tid % dim;    // dim index
+    const uint pos = (uint)gather_map[ri];
+    moe_input[ri * dim + j] = hidden[pos * dim + j];
+}
+
+// ============================================================================
 // Residual add: x += y (in-place)
 // Grid: [n_elements]
 // ============================================================================
