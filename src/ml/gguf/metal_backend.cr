@@ -205,11 +205,13 @@ module ML::GGUF
           enc.dispatch_1d(seq_len * n_heads, 256); enc.end_encoding
         end
 
+        n_attn_rows = 2  # must match N_ATTN_ROWS in bert_fused.metal
         enc = ML::Metal::ComputeEncoder.new(cmd)
         enc.set_pipeline(pipe("attention_forward"))
         enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
         enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
-        enc.dispatch_1d(n_heads * seq_len, 1); enc.end_encoding
+        attn_tg_count = {n_heads, (seq_len + n_attn_rows - 1) // n_attn_rows, 1}
+        enc.dispatch_threadgroups(attn_tg_count, {32, n_attn_rows, 1}); enc.end_encoding
 
         out_gw = gw(lw.attn_out_w, lw.attn_out_b)
         enc = ML::Metal::ComputeEncoder.new(cmd)

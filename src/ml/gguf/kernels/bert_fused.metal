@@ -195,60 +195,81 @@ kernel void rope_neox_inplace(
 }
 
 // ============================================================================
-// Batched attention: scores = Q @ K^T * scale, softmax, output = scores @ V
-// One thread per (head, query_pos) pair
-// Grid: [n_heads * seq_len]
+// SIMD Attention: 32 threads per (head, query_pos)
+// Each SIMD group computes one output vector.
+// Lanes split key positions: lane l handles keys l, l+32, l+64, ...
+//
+// Dispatch: threadgroups = [n_heads, ceil(seq_len / N_ATTN_ROWS)]
+//           threads_per_threadgroup = [32, N_ATTN_ROWS]
 // ============================================================================
+
+constant uint N_ATTN_ROWS = 2;  // simdgroups per threadgroup
 
 kernel void attention_forward(
     device const float* Q       [[buffer(0)]],  // [n_heads, seq_len, head_dim]
-    device const float* K       [[buffer(1)]],  // [n_heads, seq_len, head_dim]
-    device const float* V       [[buffer(2)]],  // [n_heads, seq_len, head_dim]
+    device const float* K       [[buffer(1)]],
+    device const float* V       [[buffer(2)]],
     device       float* output  [[buffer(3)]],  // [seq_len, n_heads * head_dim]
     constant     uint&  seq_len [[buffer(4)]],
     constant     uint&  n_heads [[buffer(5)]],
     constant     uint&  head_dim [[buffer(6)]],
     constant     float& scale   [[buffer(7)]],
-    uint tid [[thread_position_in_grid]])
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
 {
-    if (tid >= n_heads * seq_len) return;
+    const uint h = tgpig.x;                          // head
+    const uint i = tgpig.y * N_ATTN_ROWS + sgitg;   // query position
+    if (h >= n_heads || i >= seq_len) return;
 
-    const uint h = tid / seq_len;
-    const uint i = tid % seq_len;  // query position
     const uint h_off = h * seq_len * head_dim;
+    const uint lane = tiisg;  // 0..31
 
-    // Compute attention scores for this (head, query_pos)
-    // scores[j] = Q[h,i] · K[h,j] * scale
-    float max_score = -1e30f;
+    // Each lane handles keys at positions: lane, lane+32, lane+64, ...
+    // Max per lane: ceil(512/32) = 16
+    float local_scores[16];
+    float local_max = -1e30f;
+    uint n_local = 0;
 
-    // Use threadgroup memory would be better, but for short seqs this works
-    // Stack allocation for scores (seq_len ≤ 512)
-    float scores[512];
-
-    for (uint j = 0; j < seq_len; j++) {
+    for (uint j = lane; j < seq_len; j += 32) {
         float dot = 0.0f;
         for (uint d = 0; d < head_dim; d++) {
             dot += Q[h_off + i * head_dim + d] * K[h_off + j * head_dim + d];
         }
-        scores[j] = dot * scale;
-        max_score = max(max_score, scores[j]);
+        float s = dot * scale;
+        local_scores[n_local] = s;
+        local_max = max(local_max, s);
+        n_local++;
     }
 
-    // Softmax
-    float sum_exp = 0.0f;
-    for (uint j = 0; j < seq_len; j++) {
-        scores[j] = exp(scores[j] - max_score);
-        sum_exp += scores[j];
-    }
-    float inv_sum = 1.0f / sum_exp;
+    // SIMD max reduction → global max across all lanes
+    float global_max = simd_max(local_max);
 
-    // Weighted sum of V → output[i, h*head_dim : (h+1)*head_dim]
+    // Local exp + sum
+    float local_sum = 0.0f;
+    for (uint k = 0; k < n_local; k++) {
+        local_scores[k] = exp(local_scores[k] - global_max);
+        local_sum += local_scores[k];
+    }
+    float inv_sum = 1.0f / simd_sum(local_sum);
+
+    // Normalize local scores
+    for (uint k = 0; k < n_local; k++) {
+        local_scores[k] *= inv_sum;
+    }
+
+    // Weighted V accumulation: each lane accumulates its keys' contribution
     for (uint d = 0; d < head_dim; d++) {
         float val = 0.0f;
-        for (uint j = 0; j < seq_len; j++) {
-            val += scores[j] * inv_sum * V[h_off + j * head_dim + d];
+        uint ki = 0;
+        for (uint j = lane; j < seq_len; j += 32) {
+            val += local_scores[ki] * V[h_off + j * head_dim + d];
+            ki++;
         }
-        output[i * (n_heads * head_dim) + h * head_dim + d] = val;
+        float result = simd_sum(val);
+        if (lane == 0) {
+            output[i * (n_heads * head_dim) + h * head_dim + d] = result;
+        }
     }
 }
 
