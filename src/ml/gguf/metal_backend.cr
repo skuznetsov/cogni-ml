@@ -98,7 +98,7 @@ module ML::GGUF
          qkv_split rope_neox_inplace attention_forward
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
          gelu_inplace gate_matmul softmax_topk moe_gather scatter_weighted_add
-         moe_weighted_scatter].each do |name|
+         moe_weighted_scatter residual_layernorm].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
         }
@@ -232,13 +232,10 @@ module ML::GGUF
         enc.set_value(dim_u, 4); enc.set_value(dim_u, 5); enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
         grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
-        enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_add"))
+        enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_layernorm"))
         enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
-        enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
-
-        enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("layernorm_inplace"))
-        enc.set_buffer(ws.hidden, 0); enc.set_buffer(n1w_buf, 1); enc.set_buffer(n1b_buf, 2)
-        enc.set_value(dim_u, 3); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
+        enc.set_buffer(n1w_buf, 2); enc.set_buffer(n1b_buf, 3)
+        enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
 
         # === FFN ===
         if is_moe
@@ -374,14 +371,11 @@ module ML::GGUF
             end
           end
 
-          # Residual + norm2
-          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_add"))
+          # Fused residual + norm2
+          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_layernorm"))
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
-          enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
-
-          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("layernorm_inplace"))
-          enc.set_buffer(ws.hidden, 0); enc.set_buffer(n2w_buf, 1); enc.set_buffer(n2b_buf, 2)
-          enc.set_value(dim_u, 3); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
+          enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
+          enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
         else
           # Dense FFN
           up_gw = gw(lw.ffn_up_w.not_nil!, lw.ffn_up_b.not_nil!)
@@ -402,13 +396,10 @@ module ML::GGUF
           enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
           grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
-          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_add"))
+          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_layernorm"))
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
-          enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
-
-          enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("layernorm_inplace"))
-          enc.set_buffer(ws.hidden, 0); enc.set_buffer(n2w_buf, 1); enc.set_buffer(n2b_buf, 2)
-          enc.set_value(dim_u, 3); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
+          enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
+          enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
           # No commit — dense layers continue in same cmd buffer
         end
 

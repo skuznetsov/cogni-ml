@@ -277,6 +277,44 @@ kernel void attention_forward(
 }
 
 // ============================================================================
+// Fused residual add + SIMD LayerNorm: x += y, then layernorm x
+// Dispatch: threadgroups = [n_positions], threads = [32]
+// ============================================================================
+
+kernel void residual_layernorm(
+    device float* x          [[buffer(0)]],
+    device const float* y    [[buffer(1)]],
+    device const float* w    [[buffer(2)]],
+    device const float* b    [[buffer(3)]],
+    constant uint& dim       [[buffer(4)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint pos = tgpig.x;
+    const uint lane = tiisg;
+    device float* row = x + pos * dim;
+    device const float* y_row = y + pos * dim;
+
+    // Residual add + mean
+    float local_sum = 0.0f;
+    for (uint j = lane; j < dim; j += 32) {
+        row[j] += y_row[j];
+        local_sum += row[j];
+    }
+    float mean = simd_sum(local_sum) / float(dim);
+
+    // Variance
+    float local_var = 0.0f;
+    for (uint j = lane; j < dim; j += 32) { float d = row[j] - mean; local_var += d * d; }
+    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+
+    // Normalize + scale + bias
+    for (uint j = lane; j < dim; j += 32) {
+        row[j] = (row[j] - mean) * inv_std * w[j] + b[j];
+    }
+}
+
+// ============================================================================
 // SIMD LayerNorm in-place: 32 threads per position
 // x = (x - mean) / sqrt(var + eps) * w + b
 // Dispatch: threadgroups = [n_positions], threads = [32]
