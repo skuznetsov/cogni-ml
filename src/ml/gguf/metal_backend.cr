@@ -7,6 +7,8 @@ require "./compute"
 
 module ML::GGUF
   BERT_FUSED_SOURCE = {{ read_file("#{__DIR__}/kernels/bert_fused.metal") }}
+  GEMM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q5k.metal") }}
+  SIMD_GEMM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_simd.metal") }}
 
   class GPUWeight
     getter buffer : ML::MetalBuffer
@@ -70,9 +72,22 @@ module ML::GGUF
       @pipelines = {} of String => ML::Metal::ComputePipeline
       %w[fused_q5k_matmul_gelu fused_q6k_matmul_gelu
          qkv_split rope_neox_inplace attention_forward
-         layernorm_inplace residual_add weighted_add zero_region mean_pool_l2].each do |name|
+         layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
+         gelu_inplace].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
+        }
+      end
+      # Tiled GEMM kernels (fallback)
+      %w[gemm_q5k gemm_q6k].each do |name|
+        @pipelines[name] = ML::Metal::PipelineCache.get(name) {
+          ML::Metal::ComputePipeline.new(name, GEMM_SOURCE)
+        }
+      end
+      # SIMD GEMM kernels (primary — better precision via simd_sum)
+      %w[simd_gemm_q5k simd_gemm_q6k].each do |name|
+        @pipelines[name] = ML::Metal::PipelineCache.get(name) {
+          ML::Metal::ComputePipeline.new(name, SIMD_GEMM_SOURCE)
         }
       end
     end
@@ -96,8 +111,17 @@ module ML::GGUF
       @pipelines[name]
     end
 
+    SIMD_N_ROWS = 2  # Must match N_ROWS in gemm_simd.metal
+
     private def matmul_kernel(type : TensorType) : String
-      type.q5_k? ? "fused_q5k_matmul_gelu" : "fused_q6k_matmul_gelu"
+      type.q5_k? ? "simd_gemm_q5k" : "simd_gemm_q6k"
+    end
+
+    # Returns {threadgroup_count, threadgroup_size} for dispatchThreadgroups
+    private def matmul_dispatch_tg(out_dim : Int32, batch : Int32) : { {Int32, Int32, Int32}, {Int32, Int32, Int32} }
+      tg_count = {(out_dim + SIMD_N_ROWS - 1) // SIMD_N_ROWS, {batch, 1}.max, 1}
+      tg_size = {32, SIMD_N_ROWS, 1}
+      {tg_count, tg_size}
     end
 
     def encode_layers(
@@ -105,6 +129,7 @@ module ML::GGUF
       layers : Array(NomicBertMoE::LayerWeights),
       dim : Int32, n_heads : Int32, head_dim : Int32, ffn_dim : Int32,
       n_experts : Int32, n_experts_used : Int32, moe_every_n : Int32,
+      cpu_ref_per_layer : Array(Array(Float32))? = nil,  # per-layer comparison
     ) : Array(Float32)
       ws = @workspace.not_nil!
       h_ptr = ws.hidden.contents.as(Pointer(Float32))
@@ -137,7 +162,7 @@ module ML::GGUF
         enc.set_buffer(qkv_gw.bias_buffer, 2); enc.set_buffer(ws.qkv, 3)
         enc.set_value(dim_u, 4); enc.set_value(3_u32 * dim_u, 5)
         enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
-        enc.dispatch({3 * dim, seq_len, 1}, {Math.min(256, 3 * dim), 1, 1}); enc.end_encoding
+        grid, tg = matmul_dispatch_tg(3 * dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
         enc = ML::Metal::ComputeEncoder.new(cmd)
         enc.set_pipeline(pipe("qkv_split"))
@@ -165,7 +190,7 @@ module ML::GGUF
         enc.set_buffer(out_gw.buffer, 0); enc.set_buffer(ws.attn_out, 1)
         enc.set_buffer(out_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_out, 3)
         enc.set_value(dim_u, 4); enc.set_value(dim_u, 5); enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
-        enc.dispatch({dim.to_i32, seq_len, 1}, {Math.min(256, dim), 1, 1}); enc.end_encoding
+        grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
         enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_add"))
         enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
@@ -181,10 +206,6 @@ module ML::GGUF
           cmd.commit_and_wait
           hp = ws.hidden.contents.as(Pointer(Float32))
 
-          # Debug: dump hidden at pos=0 before gating
-          STDERR.puts "DEBUG MoE L#{layer_idx}: hidden[0][0..4]=#{Array(Float32).new(5) { |i| hp[i] }.map(&.round(4))}"
-
-          # CPU gating: ~5μs (768×8 matmul + softmax + top-2, per token)
           gate_w = lw.gate_w.not_nil!
           exp_up_qw = lw.expert_up_w.not_nil!
           exp_down_qw = lw.expert_down_w.not_nil!
@@ -200,32 +221,19 @@ module ML::GGUF
             max_g = gate_logits.max
             probs = gate_logits.map { |v| Math.exp(v - max_g).to_f32 }; sum_p = probs.sum; probs.map! { |v| v / sum_p }
             top = probs.each_with_index.to_a.sort_by { |v, _| -v }.first(n_experts_used)
-            if pos == 0
-              STDERR.puts "DEBUG MoE L#{layer_idx} pos=0: top=#{top.map { |p, e| {e, p.round(4)} }}"
-            end
             top.each { |prob, ei| routing << {pos, ei, prob} }
           end
 
-          # Debug: CPU expert 0 up for pos=0 comparison
-          if layer_idx == 1
-            pos0_input = Array(Float32).new(dim) { |j| hp[j] }
-            up_slice = Bytes.new(exp_up_qw.raw.to_unsafe, ffn_dim * ((dim // 256) * exp_up_qw.type.block_bytes), read_only: true)
-            zero_b = Array(Float32).new(ffn_dim, 0.0_f32)
-            cpu_up0 = QuantMatmul.matmul_add(pos0_input, 1, dim, up_slice, exp_up_qw.type, ffn_dim, zero_b)
-            STDERR.puts "DEBUG CPU expert0 up pos=0: first 5=#{cpu_up0[0, 5].map(&.round(4))}"
-          end
-
-          # GPU expert matmuls — all in one cmd, no intermediate sync
+          # GPU expert matmuls
           cmd = ML::Metal::CommandBuffer.new
           up_gw_full = gw(exp_up_qw, Array(Float32).new(ffn_dim, 0.0_f32))
           down_gw_full = gw(exp_down_qw, Array(Float32).new(dim, 0.0_f32))
 
-          # Zero ffn_out (accumulator for weighted expert outputs)
+          # Zero ffn_out
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("zero_region"))
           enc.set_buffer(ws.ffn_out, 0); enc.set_value(0_u32, 1)
           enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
 
-          # Pre-allocate per-routing-entry input buffers (can't share — GPU dispatches are batched)
           tok_bufs = routing.map do |pos, _, _|
             b = ML::MetalBuffer.new(dim.to_i64 * 4)
             bp = b.contents.as(Pointer(Float32))
@@ -236,7 +244,7 @@ module ML::GGUF
           exp_mid_bufs = routing.map { ML::MetalBuffer.new(ffn_dim.to_i64 * 4) }
 
           routing.each_with_index do |(pos, ei, weight), ri|
-            # Expert up + GELU
+            # Expert up + fused GELU
             up_offset = ei.to_i64 * up_expert_bytes
             enc = ML::Metal::ComputeEncoder.new(cmd)
             enc.set_pipeline(pipe(matmul_kernel(exp_up_qw.type)))
@@ -246,7 +254,7 @@ module ML::GGUF
             enc.set_buffer(exp_mid_bufs[ri], 3)
             enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
             enc.set_value(1_u32, 6); enc.set_value(yes_gelu, 7)
-            enc.dispatch({ffn_dim, 1, 1}, {Math.min(256, ffn_dim), 1, 1}); enc.end_encoding
+            grid, tg = matmul_dispatch_tg(ffn_dim, 1); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
             # Expert down
             down_offset = ei.to_i64 * down_expert_bytes
@@ -258,9 +266,9 @@ module ML::GGUF
             enc.set_buffer(exp_out_bufs[ri], 3)
             enc.set_value(ffn_dim_u, 4); enc.set_value(dim_u, 5)
             enc.set_value(1_u32, 6); enc.set_value(no_gelu, 7)
-            enc.dispatch({dim.to_i32, 1, 1}, {Math.min(256, dim), 1, 1}); enc.end_encoding
+            grid, tg = matmul_dispatch_tg(dim, 1); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
-            # Weighted accumulate: ffn_out[pos*dim..] += weight * exp_out
+            # Weighted accumulate
             pos_offset = (pos * dim).to_u32
             enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("weighted_add"))
             enc.set_buffer(ws.ffn_out, 0); enc.set_buffer(exp_out_bufs[ri], 1)
@@ -277,35 +285,7 @@ module ML::GGUF
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(n2w_buf, 1); enc.set_buffer(n2b_buf, 2)
           enc.set_value(dim_u, 3); enc.dispatch_1d(seq_len, 1); enc.end_encoding
 
-          # Must commit and wait BEFORE buffers go out of scope (GC safety)
           cmd.commit_and_wait
-
-          # Debug: check GPU expert outputs match CPU (with GELU)
-          if layer_idx == 1
-            tb0 = tok_bufs[0].contents.as(Pointer(Float32))
-            tok_arr = Array(Float32).new(dim) { |j| tb0[j] }
-            up_slice = Bytes.new(exp_up_qw.raw.to_unsafe, ffn_dim * ((dim // 256) * exp_up_qw.type.block_bytes), read_only: true)
-            cpu_up0 = QuantMatmul.matmul_add(tok_arr, 1, dim, up_slice, exp_up_qw.type, ffn_dim, Array(Float32).new(ffn_dim, 0.0_f32))
-            cpu_up0.map! { |v| 0.5_f32 * v * (1.0_f32 + Math.tanh(0.7978845608_f32 * (v + 0.044715_f32 * v * v * v))) }
-            # CPU expert 0 down
-            dn_slice = Bytes.new(exp_down_qw.raw.to_unsafe, dim * ((ffn_dim // 256) * exp_down_qw.type.block_bytes), read_only: true)
-            cpu_dn0 = QuantMatmul.matmul_add(cpu_up0, 1, ffn_dim, dn_slice, exp_down_qw.type, dim, Array(Float32).new(dim, 0.0_f32))
-            STDERR.puts "DEBUG CPU expert0 down (with GELU): [0..4]=#{cpu_dn0[0, 5].map(&.round(4))}"
-            STDERR.puts "DEBUG CPU expert0 up+GELU: [0..4]=#{cpu_up0[0, 5].map(&.round(6))}"
-          end
-
-          # Debug: check GPU expert 0 up output for pos=0
-          if layer_idx == 1
-            mid0 = exp_mid_bufs[0].contents.as(Pointer(Float32))
-            STDERR.puts "DEBUG GPU expert0 up pos=0: first 5=#{Array(Float32).new(5) { |i| mid0[i] }.map(&.round(4))}"
-            out0 = exp_out_bufs[0].contents.as(Pointer(Float32))
-            STDERR.puts "DEBUG GPU expert0 down pos=0: first 5=#{Array(Float32).new(5) { |i| out0[i] }.map(&.round(4))}"
-
-            # Check ffn_out accumulation
-            fo = ws.ffn_out.contents.as(Pointer(Float32))
-            STDERR.puts "DEBUG GPU ffn_out pos=0 [0..4]: #{Array(Float32).new(5) { |i| fo[i] }.map(&.round(4))}"
-          end
-
           cmd = ML::Metal::CommandBuffer.new
         else
           # Dense FFN
@@ -316,7 +296,7 @@ module ML::GGUF
           enc.set_buffer(up_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_mid, 3)
           enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
           enc.set_value(batch, 6); enc.set_value(yes_gelu, 7)
-          enc.dispatch({ffn_dim, seq_len, 1}, {Math.min(256, ffn_dim), 1, 1}); enc.end_encoding
+          grid, tg = matmul_dispatch_tg(ffn_dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
           down_gw = gw(lw.ffn_down_w.not_nil!, lw.ffn_down_b.not_nil!)
           enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -325,7 +305,7 @@ module ML::GGUF
           enc.set_buffer(down_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_out, 3)
           enc.set_value(ffn_dim_u, 4); enc.set_value(dim_u, 5)
           enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
-          enc.dispatch({dim.to_i32, seq_len, 1}, {Math.min(256, dim), 1, 1}); enc.end_encoding
+          grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_add"))
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
@@ -334,10 +314,24 @@ module ML::GGUF
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("layernorm_inplace"))
           enc.set_buffer(ws.hidden, 0); enc.set_buffer(n2w_buf, 1); enc.set_buffer(n2b_buf, 2)
           enc.set_value(dim_u, 3); enc.dispatch_1d(seq_len, 1); enc.end_encoding
+          # No commit — dense layers continue in same cmd buffer
+        end
 
-          # Per-layer commit for dense too (correctness first, speed later)
-          cmd.commit_and_wait
-          cmd = ML::Metal::CommandBuffer.new
+        # Per-layer comparison with CPU reference (if provided)
+        if (refs = cpu_ref_per_layer) && layer_idx < refs.size
+          cr = refs[layer_idx]
+          hp = ws.hidden.contents.as(Pointer(Float32))
+          n = seq_len * dim
+          dot = 0.0_f64; ng = 0.0_f64; nc = 0.0_f64
+          max_err = 0.0_f64
+          n.times do |i|
+            g = hp[i].to_f64; c = cr[i].to_f64
+            dot += g * c; ng += g * g; nc += c * c
+            e = (g - c).abs; max_err = e if e > max_err
+          end
+          cos = dot / (Math.sqrt(ng) * Math.sqrt(nc))
+          moe = (layer_idx % moe_every_n == 1) ? " (MoE)" : " (dense)"
+          STDERR.puts "L#{layer_idx}#{moe} cos=#{cos.round(6)} max_err=#{max_err.round(6)}"
         end
       end
 

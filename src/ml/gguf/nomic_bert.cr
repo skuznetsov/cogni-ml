@@ -141,6 +141,34 @@ module ML::GGUF
     end
     {% end %}
 
+    # Return hidden states after each layer (for debugging precision)
+    def forward_hidden_per_layer(text : String) : Array(Array(Float32))
+      tokens = tokenize(text)
+      seq_len = tokens.size
+      hidden = Array(Float32).new(seq_len * @dim, 0.0_f32)
+      seq_len.times do |pos|
+        tid = tokens[pos].clamp(0, @vocab_size - 1)
+        @dim.times { |j| hidden[pos * @dim + j] = @token_embd[tid * @dim + j] + @token_types[j] }
+      end
+      layer_norm!(hidden, seq_len, @embd_norm_w, @embd_norm_b)
+      result = [] of Array(Float32)
+      @n_layers.times do |layer_idx|
+        lw = @layers[layer_idx]
+        attn_out = self_attention(hidden, seq_len, lw)
+        hidden.size.times { |i| hidden[i] += attn_out[i] }
+        layer_norm!(hidden, seq_len, lw.norm1_w, lw.norm1_b)
+        ffn_out = if lw.moe?
+                    moe_ffn(hidden, seq_len, lw)
+                  else
+                    dense_ffn(hidden, seq_len, lw)
+                  end
+        hidden.size.times { |i| hidden[i] += ffn_out[i] }
+        layer_norm!(hidden, seq_len, lw.norm2_w, lw.norm2_b)
+        result << hidden.dup
+      end
+      result
+    end
+
     # Run forward pass and return per-token hidden states (pre-pooling)
     # For debugging/comparison with reference implementations.
     def forward_hidden(text : String) : Array(Float32)
@@ -187,7 +215,7 @@ module ML::GGUF
 
     {% unless flag?(:cpu_only) %}
     # GPU-accelerated embed: all 12 layers in one command buffer
-    private def embed_gpu(tokens : Array(Int32)) : Array(Float32)
+    private def embed_gpu(tokens : Array(Int32), cpu_ref_per_layer : Array(Array(Float32))? = nil) : Array(Float32)
       seq_len = tokens.size
       mb = @backend.as(MetalBackend)
 
@@ -202,7 +230,13 @@ module ML::GGUF
       # All 12 transformer layers on GPU — ONE command buffer, ONE sync
       mb.encode_layers(hidden, seq_len, @layers,
         @dim, @n_heads, @head_dim, @ffn_dim,
-        @n_experts, @n_experts_used, @moe_every_n)
+        @n_experts, @n_experts_used, @moe_every_n,
+        cpu_ref_per_layer: cpu_ref_per_layer)
+    end
+    # Debug: embed with per-layer GPU vs CPU comparison
+    def embed_debug(text : String, cpu_ref : Array(Array(Float32))) : Array(Float32)
+      tokens = tokenize(text)
+      embed_gpu(tokens, cpu_ref_per_layer: cpu_ref)
     end
     {% end %}
 

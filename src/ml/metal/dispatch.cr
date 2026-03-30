@@ -226,11 +226,21 @@ module ML
         set_bytes(ptr, sizeof(Float32) * 4, index)
       end
 
-      # Dispatch with explicit grid/threadgroup sizes
+      # Dispatch with explicit grid/threadgroup sizes (total threads)
       def dispatch(grid_size : {Int32, Int32, Int32}, threadgroup_size : {Int32, Int32, Int32}) : self
         MetalDispatchFFI.encoder_dispatch_threads(
           @encoder,
           grid_size[0], grid_size[1], grid_size[2],
+          threadgroup_size[0], threadgroup_size[1], threadgroup_size[2]
+        )
+        self
+      end
+
+      # Dispatch with threadgroup count (not total threads)
+      def dispatch_threadgroups(threadgroup_count : {Int32, Int32, Int32}, threadgroup_size : {Int32, Int32, Int32}) : self
+        MetalDispatchFFI.encoder_dispatch_threadgroups(
+          @encoder,
+          threadgroup_count[0], threadgroup_count[1], threadgroup_count[2],
           threadgroup_size[0], threadgroup_size[1], threadgroup_size[2]
         )
         self
@@ -447,6 +457,11 @@ lib MetalDispatchFFI
     grid_x : Int32, grid_y : Int32, grid_z : Int32,
     tg_x : Int32, tg_y : Int32, tg_z : Int32
   ) : Void
+  fun encoder_dispatch_threadgroups = gs_encoder_dispatch_threadgroups(
+    encoder : Pointer(Void),
+    tg_count_x : Int32, tg_count_y : Int32, tg_count_z : Int32,
+    tg_x : Int32, tg_y : Int32, tg_z : Int32
+  ) : Void
   fun encoder_end_encoding = gs_encoder_end_encoding(encoder : Pointer(Void)) : Void
   fun encoder_set_threadgroup_memory = gs_encoder_set_threadgroup_memory(encoder : Pointer(Void), length : Int32, index : Int32) : Void
 
@@ -465,6 +480,11 @@ lib MetalDispatchFFI
   fun encoder_dispatch_threads = gs_encoder_dispatch_threads(
     encoder : Pointer(Void),
     grid_x : Int32, grid_y : Int32, grid_z : Int32,
+    tg_x : Int32, tg_y : Int32, tg_z : Int32
+  ) : Void
+  fun encoder_dispatch_threadgroups = gs_encoder_dispatch_threadgroups(
+    encoder : Pointer(Void),
+    tg_count_x : Int32, tg_count_y : Int32, tg_count_z : Int32,
     tg_x : Int32, tg_y : Int32, tg_z : Int32
   ) : Void
   fun encoder_end_encoding = gs_encoder_end_encoding(encoder : Pointer(Void)) : Void

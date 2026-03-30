@@ -545,6 +545,18 @@ extern "C" void gs_encoder_dispatch_threads(
     encoder_dispatch_threads_impl(encoder, grid_x, grid_y, grid_z, tg_x, tg_y, tg_z);
 }
 
+extern "C" void gs_encoder_dispatch_threadgroups(
+    void* encoder,
+    int32_t tg_count_x, int32_t tg_count_y, int32_t tg_count_z,
+    int32_t tg_x, int32_t tg_y, int32_t tg_z
+) {
+    if (encoder == nullptr) return;
+    id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)encoder;
+    MTLSize gridSize = MTLSizeMake((NSUInteger)tg_count_x, (NSUInteger)tg_count_y, (NSUInteger)tg_count_z);
+    MTLSize tgSize = MTLSizeMake((NSUInteger)tg_x, (NSUInteger)tg_y, (NSUInteger)tg_z);
+    [enc dispatchThreadgroups:gridSize threadsPerThreadgroup:tgSize];
+}
+
 extern "C" void gs_encoder_end_encoding(void* encoder) {
     encoder_end_encoding_impl(encoder);
 }

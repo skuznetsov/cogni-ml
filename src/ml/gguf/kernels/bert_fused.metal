@@ -55,8 +55,10 @@ kernel void fused_q5k_matmul_gelu(
 
     for (uint blk = 0; blk < blocks_per_row; blk++) {
         device const uint8_t* bp = row_ptr + blk * 176;
-        const float d    = float(as_type<half>(*(device const ushort*)(bp)));
-        const float dmin = float(as_type<half>(*(device const ushort*)(bp + 2)));
+        float d    = float(as_type<half>(*(device const ushort*)(bp)));
+        float dmin = float(as_type<half>(*(device const ushort*)(bp + 2)));
+        if (isnan(d) || isinf(d)) d = 0.0f;
+        if (isnan(dmin) || isinf(dmin)) dmin = 0.0f;
         device const uint8_t* scales = bp + 4;
         device const uint8_t* qh = bp + 16;
         device const uint8_t* ql = bp + 48;
@@ -123,7 +125,8 @@ kernel void fused_q6k_matmul_gelu(
         device const uint8_t* ql = bp;
         device const uint8_t* qh = bp + 128;
         device const int8_t*  sc = (device const int8_t*)(bp + 192);
-        const float d = float(as_type<half>(*(device const ushort*)(bp + 208)));
+        float d = float(as_type<half>(*(device const ushort*)(bp + 208)));
+        if (isnan(d) || isinf(d)) d = 0.0f;
         const uint base_j = blk * QK_K;
         uint ql_off = 0, qh_off = 0, sc_off = 0;
 
@@ -272,6 +275,29 @@ kernel void layernorm_inplace(
     for (uint j = 0; j < dim; j++) {
         row[j] = (row[j] - mean) * inv_std * w[j] + b[j];
     }
+}
+
+// ============================================================================
+// GELU activation in-place
+// Grid: [n_elements]
+// ============================================================================
+
+kernel void gelu_inplace(
+    device float* x [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= count) return;
+    float v = x[tid];
+    if (isnan(v) || isinf(v)) { x[tid] = 0.0f; return; }
+    // For large |v|, GELU ≈ v (positive) or 0 (negative)
+    if (v > 10.0f) { x[tid] = v; return; }
+    if (v < -10.0f) { x[tid] = 0.0f; return; }
+    float t = 0.7978845608f * (v + 0.044715f * v * v * v);
+    float th = tanh(t);
+    float result = 0.5f * v * (1.0f + th);
+    if (isnan(result) || isinf(result)) result = (v > 0.0f) ? v : 0.0f;
+    x[tid] = result;
 }
 
 // ============================================================================
