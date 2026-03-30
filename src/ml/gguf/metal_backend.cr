@@ -6,7 +6,7 @@
 require "./compute"
 
 module ML::GGUF
-  BERT_FUSED_SOURCE = {{ read_file("#{__DIR__}/kernels/bert_fused.metal") }}
+  BERT_FUSED_SOURCE = {{ read_file("#{__DIR__}/kernels/bert_fp16.metal") }}
   GEMM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q5k.metal") }}
   SIMD_GEMM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_simd.metal") }}
   FLASH_ATTN_SOURCE = {{ read_file("#{__DIR__}/kernels/attention_flash.metal") }}
@@ -52,32 +52,48 @@ module ML::GGUF
 
     def initialize(max_seq : Int32, dim : Int32, ffn_dim : Int32, n_heads : Int32, head_dim : Int32,
                    n_experts_used : Int32, rope_cos : Array(Float32), rope_sin : Array(Float32))
-      @hidden   = ML::MetalBuffer.new(max_seq.to_i64 * dim * 4)
-      @qkv      = ML::MetalBuffer.new(max_seq.to_i64 * 3 * dim * 4)
-      @q        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 4)
-      @k        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 4)
-      @v        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 4)
-      @attn_out = ML::MetalBuffer.new(max_seq.to_i64 * dim * 4)
-      @ffn_mid  = ML::MetalBuffer.new(max_seq.to_i64 * ffn_dim * 4)
-      @ffn_out  = ML::MetalBuffer.new(max_seq.to_i64 * dim * 4)
-      @output   = ML::MetalBuffer.new(dim.to_i64 * 4)
+      # FP16 intermediate buffers (2 bytes per element)
+      @hidden   = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
+      @qkv      = ML::MetalBuffer.new(max_seq.to_i64 * 3 * dim * 2)
+      @q        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
+      @k        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
+      @v        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
+      @attn_out = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
+      @ffn_mid  = ML::MetalBuffer.new(max_seq.to_i64 * ffn_dim * 2)
+      @ffn_out  = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
+      @output   = ML::MetalBuffer.new(dim.to_i64 * 4)  # final output stays F32
       @cos_cache = ML::MetalBuffer.new(rope_cos.size.to_i64 * 4); @cos_cache.write(rope_cos)
       @sin_cache = ML::MetalBuffer.new(rope_sin.size.to_i64 * 4); @sin_cache.write(rope_sin)
       # Pre-allocated MoE batched buffers: one contiguous buffer per data type
       # Max tokens routed = max_seq * n_experts_used (each token → n_experts_used experts)
       max_routing = max_seq * n_experts_used
-      @moe_input  = ML::MetalBuffer.new(max_routing.to_i64 * dim * 4)      # [max_routing, dim]
-      @moe_mid    = ML::MetalBuffer.new(max_routing.to_i64 * ffn_dim * 4)  # [max_routing, ffn_dim]
-      @moe_output = ML::MetalBuffer.new(max_routing.to_i64 * dim * 4)      # [max_routing, dim]
+      @moe_input  = ML::MetalBuffer.new(max_routing.to_i64 * dim * 2)      # FP16
+      @moe_mid    = ML::MetalBuffer.new(max_routing.to_i64 * ffn_dim * 2)  # FP16
+      @moe_output = ML::MetalBuffer.new(max_routing.to_i64 * dim * 2)      # FP16
       # Gate + routing buffers
       @gate_logits = ML::MetalBuffer.new(max_seq.to_i64 * 8 * 4)
       @routing_ids = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # int32
       @routing_wts = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # float32
       @gather_map  = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # int32
       @scatter_wts = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # float32
-      # All-experts buffers: [8, max_seq, dim/ffn_dim] for sync-free MoE
-      @expert_mid  = ML::MetalBuffer.new(8_i64 * max_seq * ffn_dim * 4)
-      @expert_out  = ML::MetalBuffer.new(8_i64 * max_seq * dim * 4)
+      # All-experts buffers FP16
+      @expert_mid  = ML::MetalBuffer.new(8_i64 * max_seq * ffn_dim * 2)
+      @expert_out  = ML::MetalBuffer.new(8_i64 * max_seq * dim * 2)
+    end
+  end
+
+  # F32 → F16 conversion (IEEE 754 half-precision)
+  def self.f32_to_f16(f : Float32) : UInt16
+    bits = f.unsafe_as(UInt32)
+    sign = (bits >> 16) & 0x8000_u32
+    exp = ((bits >> 23) & 0xFF).to_i32 - 127 + 15
+    mant = (bits >> 13) & 0x03FF_u32
+    if exp <= 0
+      (sign).to_u16
+    elsif exp >= 31
+      (sign | 0x7C00_u32).to_u16  # Inf
+    else
+      (sign | (exp.to_u32 << 10) | mant).to_u16
     end
   end
 
@@ -94,8 +110,7 @@ module ML::GGUF
       @gpu_weights = {} of UInt64 => GPUWeight
       @gpu_f32_bufs = {} of UInt64 => ML::MetalBuffer
       @pipelines = {} of String => ML::Metal::ComputePipeline
-      %w[fused_q5k_matmul_gelu fused_q6k_matmul_gelu
-         qkv_split rope_neox_inplace attention_forward
+      %w[qkv_split rope_neox_inplace attention_forward
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
          gelu_inplace gate_matmul softmax_topk moe_gather scatter_weighted_add
          moe_weighted_scatter residual_layernorm].each do |name|
@@ -175,8 +190,9 @@ module ML::GGUF
       cpu_ref_per_layer : Array(Array(Float32))? = nil,  # per-layer comparison
     ) : Array(Float32)
       ws = @workspace.not_nil!
-      h_ptr = ws.hidden.contents.as(Pointer(Float32))
-      (seq_len * dim).times { |i| h_ptr[i] = hidden_data[i] }
+      # Write hidden data as FP16
+      h_ptr = ws.hidden.contents.as(Pointer(UInt16))
+      (seq_len * dim).times { |i| h_ptr[i] = ML::GGUF.f32_to_f16(hidden_data[i]) }
 
       scale = 1.0_f32 / Math.sqrt(head_dim.to_f32)
       batch = seq_len.to_u32; dim_u = dim.to_u32
@@ -268,8 +284,8 @@ module ML::GGUF
 
           if seq_len <= 64
             # === SYNC-FREE PATH: all experts × all tokens ===
-            expert_stride_mid = seq_len.to_i64 * ffn_dim * 4
-            expert_stride_out = seq_len.to_i64 * dim * 4
+            expert_stride_mid = seq_len.to_i64 * ffn_dim * 2  # FP16
+            expert_stride_out = seq_len.to_i64 * dim * 2      # FP16
             n_experts.times do |ei|
               up_offset = ei.to_i64 * up_expert_bytes
               enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -305,7 +321,6 @@ module ML::GGUF
             cmd.commit_and_wait
             rids = ws.routing_ids.contents.as(Pointer(Int32))
             rwts = ws.routing_wts.contents.as(Pointer(Float32))
-            hp = ws.hidden.contents.as(Pointer(Float32))
 
             expert_groups = Hash(Int32, Array({Int32, Float32})).new
             seq_len.times do |pos|
@@ -341,8 +356,8 @@ module ML::GGUF
             expert_groups.each do |ei, entries|
               eb = entries.size
               up_offset = ei.to_i64 * up_expert_bytes
-              input_off = ri_base.to_i64 * dim * 4
-              mid_off = ri_base.to_i64 * ffn_dim * 4
+              input_off = ri_base.to_i64 * dim * 2      # FP16
+              mid_off = ri_base.to_i64 * ffn_dim * 2    # FP16
               enc = ML::Metal::ComputeEncoder.new(cmd)
               enc.set_pipeline(pipe(matmul_kernel(exp_up_qw.type)))
               enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
@@ -354,7 +369,7 @@ module ML::GGUF
               grid, tg = matmul_dispatch_tg(ffn_dim, eb); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
               down_offset = ei.to_i64 * down_expert_bytes
-              out_off = ri_base.to_i64 * dim * 4
+              out_off = ri_base.to_i64 * dim * 2
               enc = ML::Metal::ComputeEncoder.new(cmd)
               enc.set_pipeline(pipe(matmul_kernel(exp_down_qw.type)))
               enc.set_buffer(down_gw_full.buffer, 0, offset: down_offset)
@@ -367,7 +382,7 @@ module ML::GGUF
 
               enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("scatter_weighted_add"))
               enc.set_buffer(ws.ffn_out, 0)
-              enc.set_buffer(ws.moe_output, 1, offset: ri_base.to_i64 * dim * 4)
+              enc.set_buffer(ws.moe_output, 1, offset: ri_base.to_i64 * dim * 2)
               enc.set_buffer(ws.gather_map, 2, offset: ri_base.to_i64 * 4)
               enc.set_buffer(ws.scatter_wts, 3, offset: ri_base.to_i64 * 4)
               enc.set_value(dim_u, 4)
@@ -411,15 +426,17 @@ module ML::GGUF
         # Per-layer comparison with CPU reference (if provided)
         if (refs = cpu_ref_per_layer) && layer_idx < refs.size
           cr = refs[layer_idx]
-          hp = ws.hidden.contents.as(Pointer(Float32))
+          cmd.commit_and_wait
+          hp16 = ws.hidden.contents.as(Pointer(UInt16))
           n = seq_len * dim
           dot = 0.0_f64; ng = 0.0_f64; nc = 0.0_f64
           max_err = 0.0_f64
           n.times do |i|
-            g = hp[i].to_f64; c = cr[i].to_f64
+            g = Dequant.fp16_to_f32(hp16[i]).to_f64; c = cr[i].to_f64
             dot += g * c; ng += g * g; nc += c * c
             e = (g - c).abs; max_err = e if e > max_err
           end
+          cmd = ML::Metal::CommandBuffer.new
           cos = dot / (Math.sqrt(ng) * Math.sqrt(nc))
           moe = (layer_idx % moe_every_n == 1) ? " (MoE)" : " (dense)"
           STDERR.puts "L#{layer_idx}#{moe} cos=#{cos.round(6)} max_err=#{max_err.round(6)}"

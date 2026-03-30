@@ -1,0 +1,380 @@
+// FP16 intermediate kernels for BERT transformer
+// All intermediate buffers (hidden, QKV, attn, FFN) use half precision.
+// Accumulation in F32, final conversion to half on output.
+
+#include <metal_stdlib>
+using namespace metal;
+
+// ============================================================================
+// QKV split: [seq, 3*dim] half → Q, K half [n_heads, seq, head_dim]
+//                                 V_t half [n_heads, head_dim, seq]
+// ============================================================================
+kernel void qkv_split(
+    device const half*  qkv    [[buffer(0)]],
+    device       half*  Q      [[buffer(1)]],
+    device       half*  K      [[buffer(2)]],
+    device       half*  V_t    [[buffer(3)]],
+    constant     uint&  seq_len  [[buffer(4)]],
+    constant     uint&  dim      [[buffer(5)]],
+    constant     uint&  n_heads  [[buffer(6)]],
+    constant     uint&  head_dim [[buffer(7)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= seq_len * dim) return;
+    const uint pos = tid / dim;
+    const uint d = tid % dim;
+    const uint h = d / head_dim;
+    const uint hd = d % head_dim;
+    const uint src = pos * 3 * dim;
+    const uint qk = h * seq_len * head_dim + pos * head_dim + hd;
+    const uint vt = h * head_dim * seq_len + hd * seq_len + pos;
+    Q[qk]  = qkv[src + d];
+    K[qk]  = qkv[src + dim + d];
+    V_t[vt] = qkv[src + 2 * dim + d];
+}
+
+// ============================================================================
+// RoPE NeoX in-place on half Q/K
+// ============================================================================
+kernel void rope_neox_inplace(
+    device half*       qk      [[buffer(0)]],
+    device const float* cos_t  [[buffer(1)]],
+    device const float* sin_t  [[buffer(2)]],
+    constant uint& seq_len     [[buffer(3)]],
+    constant uint& n_heads     [[buffer(4)]],
+    constant uint& head_dim    [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= seq_len * n_heads) return;
+    const uint h = tid / seq_len;
+    const uint pos = tid % seq_len;
+    const uint hd2 = head_dim / 2;
+    const uint base = h * (seq_len * head_dim) + pos * head_dim;
+    const uint rope_off = pos * hd2;
+    for (uint i = 0; i < hd2; i++) {
+        float c = cos_t[rope_off + i];
+        float s = sin_t[rope_off + i];
+        float v0 = float(qk[base + i]);
+        float v1 = float(qk[base + i + hd2]);
+        qk[base + i]       = half(v0 * c - v1 * s);
+        qk[base + i + hd2] = half(v0 * s + v1 * c);
+    }
+}
+
+// ============================================================================
+// Attention: shared scores + V_t float4, FP16 I/O
+// ============================================================================
+constant uint N_QR = 8;
+
+kernel void attention_forward(
+    device const half*  Q       [[buffer(0)]],
+    device const half*  K       [[buffer(1)]],
+    device const half*  V_t     [[buffer(2)]],  // [n_heads, head_dim, seq] transposed
+    device       half*  output  [[buffer(3)]],
+    constant     uint&  seq_len [[buffer(4)]],
+    constant     uint&  n_heads [[buffer(5)]],
+    constant     uint&  head_dim [[buffer(6)]],
+    constant     float& scale   [[buffer(7)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    threadgroup float* shared_base [[threadgroup(0)]])
+{
+    const uint h = tgpig.x;
+    const uint i = tgpig.y * N_QR + sgitg;
+    if (h >= n_heads || i >= seq_len) return;
+
+    const uint h_off = h * seq_len * head_dim;
+    const uint lane = tiisg;
+    const uint hd4 = head_dim / 4;
+    threadgroup float* shared = shared_base + sgitg * seq_len;
+
+    // Cache Q in registers as float (promote from half)
+    device const half* qi = Q + h_off + i * head_dim;
+    float qr[64]; // max head_dim
+    for (uint d = 0; d < head_dim; d++) qr[d] = float(qi[d]);
+
+    // Q·K dot products (half4 K reads)
+    float local_max = -1e30f;
+    for (uint j = lane; j < seq_len; j += 32) {
+        device const half4* kj4 = (device const half4*)(K + h_off + j * head_dim);
+        float dot = 0.0f;
+        for (uint d4 = 0; d4 < hd4; d4++) {
+            half4 k4 = kj4[d4];
+            dot += qr[d4*4]*float(k4.x) + qr[d4*4+1]*float(k4.y) + qr[d4*4+2]*float(k4.z) + qr[d4*4+3]*float(k4.w);
+        }
+        float s = dot * scale;
+        shared[j] = s;
+        local_max = max(local_max, s);
+    }
+
+    float global_max = simd_max(local_max);
+    float local_sum = 0.0f;
+    for (uint j = lane; j < seq_len; j += 32) {
+        float e = exp(shared[j] - global_max);
+        shared[j] = e;
+        local_sum += e;
+    }
+    float inv_sum = 1.0f / simd_sum(local_sum);
+    for (uint j = lane; j < seq_len; j += 32) shared[j] *= inv_sum;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+
+    // V accumulation from V_t (half4 reads for bandwidth, F32 accumulate)
+    const uint vt_h_off = h * head_dim * seq_len;
+    for (uint d = lane; d < head_dim; d += 32) {
+        device const half* vt_row = V_t + vt_h_off + d * seq_len;
+        float val = 0.0f;
+        uint j = 0;
+        for (; j + 3 < seq_len; j += 4) {
+            half4 v4 = *(device const half4*)(vt_row + j);
+            val += shared[j]*float(v4.x) + shared[j+1]*float(v4.y) + shared[j+2]*float(v4.z) + shared[j+3]*float(v4.w);
+        }
+        for (; j < seq_len; j++) val += shared[j] * float(vt_row[j]);
+        output[i * (n_heads * head_dim) + h * head_dim + d] = half(val);
+    }
+}
+
+// ============================================================================
+// Fused residual + layernorm (half I/O, F32 compute)
+// ============================================================================
+kernel void residual_layernorm(
+    device half*       x    [[buffer(0)]],
+    device const half* y    [[buffer(1)]],
+    device const float* w   [[buffer(2)]],
+    device const float* b   [[buffer(3)]],
+    constant uint& dim      [[buffer(4)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint pos = tgpig.x;
+    const uint lane = tiisg;
+    device half* row = x + pos * dim;
+    device const half* y_row = y + pos * dim;
+
+    float local_sum = 0.0f;
+    for (uint j = lane; j < dim; j += 32) {
+        float v = float(row[j]) + float(y_row[j]);
+        row[j] = half(v);
+        local_sum += v;
+    }
+    float mean = simd_sum(local_sum) / float(dim);
+
+    float local_var = 0.0f;
+    for (uint j = lane; j < dim; j += 32) { float d = float(row[j]) - mean; local_var += d * d; }
+    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+
+    for (uint j = lane; j < dim; j += 32) {
+        row[j] = half((float(row[j]) - mean) * inv_std * w[j] + b[j]);
+    }
+}
+
+// ============================================================================
+// GELU in-place (half)
+// ============================================================================
+kernel void gelu_inplace(
+    device half* x      [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= count) return;
+    float v = float(x[tid]);
+    if (v > 10.0f) { x[tid] = half(v); return; }
+    if (v < -10.0f) { x[tid] = half(0); return; }
+    float t = 0.7978845608f * (v + 0.044715f * v * v * v);
+    x[tid] = half(0.5f * v * (1.0f + tanh(t)));
+}
+
+// ============================================================================
+// Gate matmul: hidden(half) @ gate_w(F32) → logits(F32)
+// ============================================================================
+kernel void gate_matmul(
+    device const half*  hidden   [[buffer(0)]],
+    device const float* gate_w   [[buffer(1)]],
+    device       float* output   [[buffer(2)]],
+    constant     uint&  dim      [[buffer(3)]],
+    constant     uint&  n_experts [[buffer(4)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    const uint e = gid.x;
+    const uint pos = gid.y;
+    float sum = 0.0f;
+    for (uint j = 0; j < dim; j++) {
+        sum += float(hidden[pos * dim + j]) * gate_w[e * dim + j];
+    }
+    output[pos * n_experts + e] = sum;
+}
+
+// ============================================================================
+// Softmax + Top-K (same as before — operates on F32 logits)
+// ============================================================================
+kernel void softmax_topk(
+    device const float* gate_logits  [[buffer(0)]],
+    device       int*   routing_ids  [[buffer(1)]],
+    device       float* routing_wts  [[buffer(2)]],
+    constant     uint&  n_experts    [[buffer(3)]],
+    constant     uint&  k            [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    device const float* row = gate_logits + tid * n_experts;
+    float max_g = row[0];
+    for (uint e = 1; e < n_experts; e++) max_g = max(max_g, row[e]);
+    float sum_exp = 0.0f;
+    float probs[8];
+    for (uint e = 0; e < n_experts; e++) { probs[e] = exp(row[e] - max_g); sum_exp += probs[e]; }
+    float inv_sum = 1.0f / sum_exp;
+    for (uint e = 0; e < n_experts; e++) probs[e] *= inv_sum;
+    uint out_base = tid * k;
+    for (uint i = 0; i < k; i++) {
+        float best_p = -1.0f; int best_e = 0;
+        for (uint e = 0; e < n_experts; e++) {
+            if (probs[e] > best_p) { best_p = probs[e]; best_e = (int)e; }
+        }
+        routing_ids[out_base + i] = best_e;
+        routing_wts[out_base + i] = best_p;
+        probs[best_e] = -1.0f;
+    }
+}
+
+// ============================================================================
+// MoE gather: hidden(half) → moe_input(half)
+// ============================================================================
+kernel void moe_gather(
+    device const half*  hidden     [[buffer(0)]],
+    device       half*  moe_input  [[buffer(1)]],
+    device const int*   gather_map [[buffer(2)]],
+    constant     uint&  dim        [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint ri = tid / dim;
+    const uint j  = tid % dim;
+    const uint pos = (uint)gather_map[ri];
+    moe_input[ri * dim + j] = hidden[pos * dim + j];
+}
+
+// ============================================================================
+// Scatter weighted add (half)
+// ============================================================================
+kernel void scatter_weighted_add(
+    device       half*  ffn_out     [[buffer(0)]],
+    device const half*  expert_out  [[buffer(1)]],
+    device const int*   scatter_map [[buffer(2)]],
+    device const float* weights     [[buffer(3)]],
+    constant     uint&  dim         [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint ri = tid / dim;
+    const uint j  = tid % dim;
+    const uint pos = (uint)scatter_map[ri];
+    ffn_out[pos * dim + j] = half(float(ffn_out[pos * dim + j]) + weights[ri] * float(expert_out[ri * dim + j]));
+}
+
+// ============================================================================
+// MoE weighted scatter (half) — for sync-free path
+// ============================================================================
+kernel void moe_weighted_scatter(
+    device       half*  ffn_out      [[buffer(0)]],
+    device const half*  expert_out   [[buffer(1)]],
+    device const int*   routing_ids  [[buffer(2)]],
+    device const float* routing_wts  [[buffer(3)]],
+    constant     uint&  dim          [[buffer(4)]],
+    constant     uint&  seq_len      [[buffer(5)]],
+    constant     uint&  k            [[buffer(6)]],
+    constant     uint&  n_experts    [[buffer(7)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint pos = tid / dim;
+    const uint j   = tid % dim;
+    if (pos >= seq_len) return;
+    float sum = 0.0f;
+    for (uint ki = 0; ki < k; ki++) {
+        const uint ei = (uint)routing_ids[pos * k + ki];
+        sum += routing_wts[pos * k + ki] * float(expert_out[ei * seq_len * dim + pos * dim + j]);
+    }
+    ffn_out[pos * dim + j] = half(sum);
+}
+
+// ============================================================================
+// Residual add (half)
+// ============================================================================
+kernel void residual_add(
+    device half*       x [[buffer(0)]],
+    device const half* y [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    x[tid] = half(float(x[tid]) + float(y[tid]));
+}
+
+// ============================================================================
+// Zero region (half)
+// ============================================================================
+kernel void zero_region(
+    device half* x     [[buffer(0)]],
+    constant uint& off [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    x[off + tid] = half(0);
+}
+
+// ============================================================================
+// Weighted add (half) — for sync-based MoE path
+// ============================================================================
+kernel void weighted_add(
+    device half*       dst    [[buffer(0)]],
+    device const half* src    [[buffer(1)]],
+    constant uint& pos_offset [[buffer(2)]],
+    constant float& weight   [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    dst[pos_offset + tid] = half(float(dst[pos_offset + tid]) + weight * float(src[tid]));
+}
+
+// ============================================================================
+// Mean pool + L2 normalize (half input → F32 output)
+// ============================================================================
+kernel void mean_pool_l2(
+    device const half*  hidden  [[buffer(0)]],
+    device       float* output  [[buffer(1)]],
+    constant     uint&  seq_len [[buffer(2)]],
+    constant     uint&  dim     [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    // Mean pool
+    for (uint d = 0; d < dim; d++) {
+        float sum = 0.0f;
+        for (uint p = 0; p < seq_len; p++) sum += float(hidden[p * dim + d]);
+        output[d] = sum / float(seq_len);
+    }
+    // L2 normalize
+    float norm = 0.0f;
+    for (uint d = 0; d < dim; d++) norm += output[d] * output[d];
+    norm = rsqrt(norm + 1e-12f);
+    for (uint d = 0; d < dim; d++) output[d] *= norm;
+}
+
+// ============================================================================
+// LayerNorm in-place (half, for embedding norm before layers)
+// ============================================================================
+kernel void layernorm_inplace(
+    device half*        x  [[buffer(0)]],
+    device const float* w  [[buffer(1)]],
+    device const float* b  [[buffer(2)]],
+    constant uint& dim     [[buffer(3)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint pos = tgpig.x;
+    const uint lane = tiisg;
+    device half* row = x + pos * dim;
+
+    float local_sum = 0.0f;
+    for (uint j = lane; j < dim; j += 32) local_sum += float(row[j]);
+    float mean = simd_sum(local_sum) / float(dim);
+
+    float local_var = 0.0f;
+    for (uint j = lane; j < dim; j += 32) { float d = float(row[j]) - mean; local_var += d * d; }
+    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+
+    for (uint j = lane; j < dim; j += 32) {
+        row[j] = half((float(row[j]) - mean) * inv_std * w[j] + b[j]);
+    }
+}

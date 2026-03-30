@@ -17,9 +17,9 @@ constant uint N_ROWS = 2;  // output rows per threadgroup (2 simdgroups)
 // ============================================================================
 kernel void simd_gemm_q5k(
     device const uint8_t* w_raw   [[buffer(0)]],
-    device const float*   x       [[buffer(1)]],
-    device const float*   bias    [[buffer(2)]],
-    device       float*   output  [[buffer(3)]],
+    device const half*    x       [[buffer(1)]],  // FP16 input
+    device const float*   bias    [[buffer(2)]],  // F32 bias
+    device       half*    output  [[buffer(3)]],  // FP16 output
     constant     uint&    in_dim  [[buffer(4)]],
     constant     uint&    out_dim [[buffer(5)]],
     constant     uint&    batch   [[buffer(6)]],
@@ -36,7 +36,7 @@ kernel void simd_gemm_q5k(
     const uint row_bytes = nb * 176;
 
     device const uint8_t* row_ptr = w_raw + m * row_bytes;
-    device const float* y1 = x + n * in_dim;
+    device const half* y1 = x + n * in_dim;
 
     // Thread decomposition within 32-lane SIMD group (matches llama.cpp)
     const short tid = tiisg / 4;    // 0..7
@@ -58,7 +58,7 @@ kernel void simd_gemm_q5k(
     constexpr uint16_t kmask3 = 0xc0c0;
 
     float sumf = 0.0f;
-    device const float * yp = y1 + ix * QK_K + y_offset;
+    device const half * yp = y1 + ix * QK_K + y_offset;
 
     for (uint i = ix; i < nb; i += 4) {
         device const uint8_t* bp = row_ptr + i * 176;
@@ -68,7 +68,7 @@ kernel void simd_gemm_q5k(
         device const uint16_t* a = (device const uint16_t*)(bp + 4) + iq;
 
         device const uint8_t* q2 = q1 + 64;
-        device const float* y2 = yp + 128;
+        device const half* y2 = yp + 128;
 
         // Load 16 src1 floats and accumulate per-quadrant sums
         float yl[16], yh[16];
@@ -130,7 +130,7 @@ kernel void simd_gemm_q5k(
     }
 
     if (tiisg == 0) {
-        output[n * out_dim + m] = sum;
+        output[n * out_dim + m] = half(sum);
     }
 }
 
@@ -140,9 +140,9 @@ kernel void simd_gemm_q5k(
 // ============================================================================
 kernel void simd_gemm_q6k(
     device const uint8_t* w_raw   [[buffer(0)]],
-    device const float*   x       [[buffer(1)]],
-    device const float*   bias    [[buffer(2)]],
-    device       float*   output  [[buffer(3)]],
+    device const half*    x       [[buffer(1)]],  // FP16 input
+    device const float*   bias    [[buffer(2)]],  // F32 bias
+    device       half*    output  [[buffer(3)]],  // FP16 output
     constant     uint&    in_dim  [[buffer(4)]],
     constant     uint&    out_dim [[buffer(5)]],
     constant     uint&    batch   [[buffer(6)]],
@@ -159,7 +159,7 @@ kernel void simd_gemm_q6k(
     const uint row_bytes = nb * 210;
 
     device const uint8_t* row_base = w_raw + m * row_bytes;
-    device const float* yy = x + n * in_dim;
+    device const half* yy = x + n * in_dim;
 
     constexpr uint8_t kmask1 = 0x03;
     constexpr uint8_t kmask2 = 0x0C;
@@ -189,7 +189,7 @@ kernel void simd_gemm_q6k(
         device const int8_t*  sc = (device const int8_t*)(bp + 192) + is;
         device const half*    dh = (device const half*)(bp + 208);
 
-        device const float* y = yy + i * QK_K + y_offset;
+        device const half* y = yy + i * QK_K + y_offset;
 
         // Load 4 elements from each of 4 sub-rows (stride 32)
         for (short l = 0; l < 4; ++l) {
@@ -223,6 +223,6 @@ kernel void simd_gemm_q6k(
     }
 
     if (tiisg == 0) {
-        output[n * out_dim + m] = sum;
+        output[n * out_dim + m] = half(sum);
     }
 }
