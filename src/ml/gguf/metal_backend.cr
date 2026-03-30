@@ -37,10 +37,10 @@ module ML::GGUF
     getter output : ML::MetalBuffer
     getter cos_cache : ML::MetalBuffer
     getter sin_cache : ML::MetalBuffer
-    # Pre-allocated MoE buffers (max_seq * n_experts_used entries)
-    getter moe_tok_bufs : Array(ML::MetalBuffer)
-    getter moe_mid_bufs : Array(ML::MetalBuffer)
-    getter moe_out_bufs : Array(ML::MetalBuffer)
+    # Pre-allocated MoE batched buffers (contiguous)
+    getter moe_input : ML::MetalBuffer   # [max_routing, dim]
+    getter moe_mid : ML::MetalBuffer     # [max_routing, ffn_dim]
+    getter moe_output : ML::MetalBuffer  # [max_routing, dim]
     getter gate_logits : ML::MetalBuffer
 
     def initialize(max_seq : Int32, dim : Int32, ffn_dim : Int32, n_heads : Int32, head_dim : Int32,
@@ -56,11 +56,12 @@ module ML::GGUF
       @output   = ML::MetalBuffer.new(dim.to_i64 * 4)
       @cos_cache = ML::MetalBuffer.new(rope_cos.size.to_i64 * 4); @cos_cache.write(rope_cos)
       @sin_cache = ML::MetalBuffer.new(rope_sin.size.to_i64 * 4); @sin_cache.write(rope_sin)
-      # Pre-allocated MoE buffers: max_routing = max_seq * n_experts_used
+      # Pre-allocated MoE batched buffers: one contiguous buffer per data type
+      # Max tokens routed = max_seq * n_experts_used (each token → n_experts_used experts)
       max_routing = max_seq * n_experts_used
-      @moe_tok_bufs = Array(ML::MetalBuffer).new(max_routing) { ML::MetalBuffer.new(dim.to_i64 * 4) }
-      @moe_mid_bufs = Array(ML::MetalBuffer).new(max_routing) { ML::MetalBuffer.new(ffn_dim.to_i64 * 4) }
-      @moe_out_bufs = Array(ML::MetalBuffer).new(max_routing) { ML::MetalBuffer.new(dim.to_i64 * 4) }
+      @moe_input  = ML::MetalBuffer.new(max_routing.to_i64 * dim * 4)      # [max_routing, dim]
+      @moe_mid    = ML::MetalBuffer.new(max_routing.to_i64 * ffn_dim * 4)  # [max_routing, ffn_dim]
+      @moe_output = ML::MetalBuffer.new(max_routing.to_i64 * dim * 4)      # [max_routing, dim]
       # Gate logits buffer: [max_seq, 8] (max 8 experts)
       @gate_logits = ML::MetalBuffer.new(max_seq.to_i64 * 8 * 4)
     end
@@ -252,13 +253,25 @@ module ML::GGUF
             top.each { |prob, ei| routing << {pos, ei, prob} }
           end
 
-          # Fill pre-allocated token input buffers from hidden (unified memory)
-          routing.each_with_index do |(pos, _, _), ri|
-            bp = ws.moe_tok_bufs[ri].contents.as(Pointer(Float32))
-            dim.times { |j| bp[j] = hp[pos * dim + j] }
+          # Group routing by expert for batched dispatch
+          expert_groups = Hash(Int32, Array({Int32, Float32})).new  # ei → [{pos, weight}]
+          routing.each do |(pos, ei, weight)|
+            (expert_groups[ei] ||= [] of {Int32, Float32}) << {pos, weight}
           end
 
-          # GPU expert matmuls using pre-allocated buffers
+          # Pack all routed tokens into contiguous moe_input buffer, grouped by expert
+          inp = ws.moe_input.contents.as(Pointer(Float32))
+          ri_base = 0
+          expert_groups.each do |_, entries|
+            entries.each_with_index do |(pos, _), local_i|
+              src = hp + pos * dim
+              dst = inp + (ri_base + local_i).to_i64 * dim
+              dim.times { |j| dst[j] = src[j] }
+            end
+            ri_base += entries.size
+          end
+
+          # GPU expert matmuls — ONE dispatch per expert (batched)
           cmd = ML::Metal::CommandBuffer.new
           up_gw_full = gw(exp_up_qw, Array(Float32).new(ffn_dim, 0.0_f32))
           down_gw_full = gw(exp_down_qw, Array(Float32).new(dim, 0.0_f32))
@@ -268,34 +281,49 @@ module ML::GGUF
           enc.set_buffer(ws.ffn_out, 0); enc.set_value(0_u32, 1)
           enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
 
-          routing.each_with_index do |(pos, ei, weight), ri|
+          ri_base = 0
+          expert_groups.each do |ei, entries|
+            eb = entries.size  # batch size for this expert
+
+            # Expert up + GELU: ONE batched dispatch for all tokens → this expert
             up_offset = ei.to_i64 * up_expert_bytes
+            input_offset = ri_base.to_i64 * dim * 4  # byte offset into moe_input
+            mid_offset = ri_base.to_i64 * ffn_dim * 4  # byte offset into moe_mid
             enc = ML::Metal::ComputeEncoder.new(cmd)
             enc.set_pipeline(pipe(matmul_kernel(exp_up_qw.type)))
             enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
-            enc.set_buffer(ws.moe_tok_bufs[ri], 1)
+            enc.set_buffer(ws.moe_input, 1, offset: input_offset)
             enc.set_buffer(up_gw_full.bias_buffer, 2)
-            enc.set_buffer(ws.moe_mid_bufs[ri], 3)
+            enc.set_buffer(ws.moe_mid, 3, offset: mid_offset)
             enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
-            enc.set_value(1_u32, 6); enc.set_value(yes_gelu, 7)
-            grid, tg = matmul_dispatch_tg(ffn_dim, 1); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
+            enc.set_value(eb.to_u32, 6); enc.set_value(yes_gelu, 7)
+            grid, tg = matmul_dispatch_tg(ffn_dim, eb); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
+            # Expert down: ONE batched dispatch
             down_offset = ei.to_i64 * down_expert_bytes
+            out_offset = ri_base.to_i64 * dim * 4  # byte offset into moe_output
             enc = ML::Metal::ComputeEncoder.new(cmd)
             enc.set_pipeline(pipe(matmul_kernel(exp_down_qw.type)))
             enc.set_buffer(down_gw_full.buffer, 0, offset: down_offset)
-            enc.set_buffer(ws.moe_mid_bufs[ri], 1)
+            enc.set_buffer(ws.moe_mid, 1, offset: mid_offset)
             enc.set_buffer(down_gw_full.bias_buffer, 2)
-            enc.set_buffer(ws.moe_out_bufs[ri], 3)
+            enc.set_buffer(ws.moe_output, 3, offset: out_offset)
             enc.set_value(ffn_dim_u, 4); enc.set_value(dim_u, 5)
-            enc.set_value(1_u32, 6); enc.set_value(no_gelu, 7)
-            grid, tg = matmul_dispatch_tg(dim, 1); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
+            enc.set_value(eb.to_u32, 6); enc.set_value(no_gelu, 7)
+            grid, tg = matmul_dispatch_tg(dim, eb); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
-            pos_offset = (pos * dim).to_u32
-            enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("weighted_add"))
-            enc.set_buffer(ws.ffn_out, 0); enc.set_buffer(ws.moe_out_bufs[ri], 1)
-            enc.set_value(pos_offset, 2); enc.set_value(weight, 3)
-            enc.dispatch_1d(dim, 256); enc.end_encoding
+            # Weighted accumulate per token (need different pos offsets)
+            outp = ws.moe_output
+            entries.each_with_index do |(pos, weight), local_i|
+              entry_offset = (ri_base + local_i).to_i64 * dim * 4
+              pos_offset = (pos * dim).to_u32
+              enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("weighted_add"))
+              enc.set_buffer(ws.ffn_out, 0); enc.set_buffer(outp, 1, offset: entry_offset)
+              enc.set_value(pos_offset, 2); enc.set_value(weight, 3)
+              enc.dispatch_1d(dim, 256); enc.end_encoding
+            end
+
+            ri_base += entries.size
           end
 
           # Residual + norm2
