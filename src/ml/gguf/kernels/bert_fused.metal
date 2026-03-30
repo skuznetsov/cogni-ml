@@ -195,7 +195,7 @@ kernel void rope_neox_inplace(
 }
 
 // ============================================================================
-// SIMD Attention with shared memory for scores
+// SIMD Attention with shared scores + transposed V + float4 reads
 // Multiple query positions per threadgroup (N_QR simdgroups)
 //
 // Dispatch: threadgroups = [n_heads, ceil(seq_len / N_QR)]
@@ -203,13 +203,13 @@ kernel void rope_neox_inplace(
 //           shared memory = N_QR * seq_len * sizeof(float)
 // ============================================================================
 
-constant uint N_QR = 8;  // query rows per threadgroup (simdgroups)
+constant uint N_QR = 8;  // query rows per threadgroup
 
 kernel void attention_forward(
-    device const float* Q       [[buffer(0)]],  // [n_heads, seq, head_dim]
-    device const float* K       [[buffer(1)]],  // [n_heads, seq, head_dim]
+    device const float* Q       [[buffer(0)]],
+    device const float* K       [[buffer(1)]],
     device const float* V_t     [[buffer(2)]],  // [n_heads, head_dim, seq] TRANSPOSED
-    device       float* output  [[buffer(3)]],  // [seq, n_heads * head_dim]
+    device       float* output  [[buffer(3)]],
     constant     uint&  seq_len [[buffer(4)]],
     constant     uint&  n_heads [[buffer(5)]],
     constant     uint&  head_dim [[buffer(6)]],
@@ -219,21 +219,21 @@ kernel void attention_forward(
     ushort sgitg [[simdgroup_index_in_threadgroup]],
     threadgroup float* shared_base [[threadgroup(0)]])
 {
-    const uint h = tgpig.x;  // head
-    const uint i = tgpig.y * N_QR + sgitg;  // query position
+    const uint h = tgpig.x;
+    const uint i = tgpig.y * N_QR + sgitg;
     if (h >= n_heads || i >= seq_len) return;
 
     const uint h_off = h * seq_len * head_dim;
     const uint lane = tiisg;
+    const uint hd4 = head_dim / 4;
     threadgroup float* shared = shared_base + sgitg * seq_len;
 
-    // Cache Q vector in registers (64 floats = 16 float4s, read once)
-    const uint hd4 = head_dim / 4;  // 16
+    // Cache Q in registers
     device const float4* qi4 = (device const float4*)(Q + h_off + i * head_dim);
-    float4 qr[16];  // register cache for Q (head_dim/4 = 16)
+    float4 qr[16];
     for (uint d = 0; d < hd4; d++) qr[d] = qi4[d];
 
-    // === Phase 1: Q·K dot products (Q cached in registers) ===
+    // Phase 1: Q·K scores
     float local_max = -1e30f;
     for (uint j = lane; j < seq_len; j += 32) {
         device const float4* kj4 = (device const float4*)(K + h_off + j * head_dim);
@@ -260,24 +260,18 @@ kernel void attention_forward(
     }
     simdgroup_barrier(mem_flags::mem_threadgroup);
 
-    // === Phase 2: V accumulation using TRANSPOSED V_t[h, d, j] ===
-    // V_t layout: [n_heads, head_dim, seq_len] — contiguous over seq_len
-    // Each lane handles 2 dims (64/32), accumulates over all seq positions
-    // Use float4 loads for contiguous V_t reads (4 positions at a time)
+    // Phase 2: V accumulation with float4 on transposed V
     const uint vt_h_off = h * head_dim * seq_len;
     for (uint d = lane; d < head_dim; d += 32) {
         device const float* vt_row = V_t + vt_h_off + d * seq_len;
         float val = 0.0f;
         uint j = 0;
-        // Process 4 positions at a time with float4
         for (; j + 3 < seq_len; j += 4) {
             float4 v4 = *(device const float4*)(vt_row + j);
             val += shared[j]   * v4.x + shared[j+1] * v4.y
                  + shared[j+2] * v4.z + shared[j+3] * v4.w;
         }
-        for (; j < seq_len; j++) {
-            val += shared[j] * vt_row[j];
-        }
+        for (; j < seq_len; j++) val += shared[j] * vt_row[j];
         output[i * (n_heads * head_dim) + h * head_dim + d] = val;
     }
 }
@@ -494,14 +488,14 @@ kernel void residual_add(
 // ============================================================================
 // QKV split: [seq, 3*dim] → Q [n_heads, seq, head_dim]
 //                            K [n_heads, seq, head_dim]
-//                            V_t [n_heads, head_dim, seq] (transposed for attention)
+//                            V_t [n_heads, head_dim, seq] (transposed)
 // Grid: [seq_len * dim]
 // ============================================================================
 
 kernel void qkv_split(
     device const float* qkv   [[buffer(0)]],  // [seq, 3*dim]
     device       float* Q     [[buffer(1)]],   // [n_heads, seq, head_dim]
-    device       float* K     [[buffer(2)]],   // [n_heads, seq, head_dim]
+    device       float* K     [[buffer(2)]],
     device       float* V_t   [[buffer(3)]],   // [n_heads, head_dim, seq] TRANSPOSED
     constant     uint&  seq_len  [[buffer(4)]],
     constant     uint&  dim      [[buffer(5)]],
@@ -517,7 +511,6 @@ kernel void qkv_split(
 
     const uint src_base = pos * 3 * dim;
     const uint qk_dst = h * seq_len * head_dim + pos * head_dim + hd;
-    // V transposed: [h, hd, pos] for contiguous access over pos in attention
     const uint v_dst = h * head_dim * seq_len + hd * seq_len + pos;
 
     Q[qk_dst] = qkv[src_base + d];
