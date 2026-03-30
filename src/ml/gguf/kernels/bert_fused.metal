@@ -432,6 +432,38 @@ kernel void scatter_weighted_add(
 }
 
 // ============================================================================
+// MoE weighted scatter: accumulate expert outputs based on GPU-side routing
+// For each (pos, expert) pair: if expert is in top-k for pos, add weighted output.
+// expert_out[expert * seq_len * dim + pos * dim + j] → ffn_out[pos * dim + j]
+//
+// Grid: [seq_len * dim]
+// ============================================================================
+
+kernel void moe_weighted_scatter(
+    device       float* ffn_out      [[buffer(0)]],  // [seq, dim] — output accumulator
+    device const float* expert_out   [[buffer(1)]],  // [n_experts, seq, dim] — all expert outputs
+    device const int*   routing_ids  [[buffer(2)]],   // [seq, k] — selected expert indices
+    device const float* routing_wts  [[buffer(3)]],   // [seq, k] — weights
+    constant     uint&  dim          [[buffer(4)]],
+    constant     uint&  seq_len      [[buffer(5)]],
+    constant     uint&  k            [[buffer(6)]],   // n_experts_used (=2)
+    constant     uint&  n_experts    [[buffer(7)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint pos = tid / dim;
+    const uint j   = tid % dim;
+    if (pos >= seq_len) return;
+
+    float sum = 0.0f;
+    for (uint ki = 0; ki < k; ki++) {
+        const uint ei = (uint)routing_ids[pos * k + ki];
+        const float w = routing_wts[pos * k + ki];
+        sum += w * expert_out[ei * seq_len * dim + pos * dim + j];
+    }
+    ffn_out[pos * dim + j] = sum;
+}
+
+// ============================================================================
 // Residual add: x += y (in-place)
 // Grid: [n_elements]
 // ============================================================================
