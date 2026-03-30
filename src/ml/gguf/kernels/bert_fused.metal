@@ -301,6 +301,28 @@ kernel void gelu_inplace(
 }
 
 // ============================================================================
+// F32 matmul for gate logits: out[pos, e] = Σ_j hidden[pos, j] * gate_w[e * dim + j]
+// Grid: [n_experts, seq_len]
+// ============================================================================
+
+kernel void gate_matmul(
+    device const float* hidden   [[buffer(0)]],  // [seq_len, dim]
+    device const float* gate_w   [[buffer(1)]],  // [n_experts, dim]
+    device       float* output   [[buffer(2)]],  // [seq_len, n_experts]
+    constant     uint&  dim      [[buffer(3)]],
+    constant     uint&  n_experts [[buffer(4)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    const uint e = gid.x;   // expert index
+    const uint pos = gid.y; // position
+    float sum = 0.0f;
+    for (uint j = 0; j < dim; j++) {
+        sum += hidden[pos * dim + j] * gate_w[e * dim + j];
+    }
+    output[pos * n_experts + e] = sum;
+}
+
+// ============================================================================
 // Residual add: x += y (in-place)
 // Grid: [n_elements]
 // ============================================================================

@@ -135,9 +135,12 @@ module ML::GGUF
         if exp_down = lw.expert_down_w
           mb.upload_weight(exp_down, Array(Float32).new(exp_down.out_dim, 0.0_f32))
         end
+        if gw = lw.gate_w
+          mb.upload_f32(gw)
+        end
       end
       # Init workspace buffers
-      mb.init_workspace(@max_seq_len, @dim, @ffn_dim, @n_heads, @head_dim, @rope_cos, @rope_sin)
+      mb.init_workspace(@max_seq_len, @dim, @ffn_dim, @n_heads, @head_dim, @n_experts_used, @rope_cos, @rope_sin)
     end
     {% end %}
 
