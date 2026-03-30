@@ -113,6 +113,11 @@ module ML::GGUF
       @pipelines["attention_flash"] = ML::Metal::PipelineCache.get("attention_flash") {
         ML::Metal::ComputePipeline.new("attention_flash", FLASH_ATTN_SOURCE)
       }
+      # Tiled half attention
+      tiled_src = {{ read_file("#{__DIR__}/kernels/attention_simdmat.metal") }}
+      @pipelines["attention_tiled_half"] = ML::Metal::PipelineCache.get("attention_tiled_half") {
+        ML::Metal::ComputePipeline.new("attention_tiled_half", tiled_src)
+      }
       # SIMD GEMM kernels (primary — better precision via simd_sum)
       %w[simd_gemm_q5k simd_gemm_q6k].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
