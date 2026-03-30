@@ -385,6 +385,29 @@ kernel void moe_gather(
 }
 
 // ============================================================================
+// Scatter-weighted-add: for each routing entry, ffn_out[pos*dim+j] += weight * expert_out[ri*dim+j]
+// Processes ALL routing entries in one dispatch.
+// Grid: [total_routing * dim]
+// ============================================================================
+
+kernel void scatter_weighted_add(
+    device       float* ffn_out       [[buffer(0)]],  // [seq, dim] — accumulator
+    device const float* expert_out    [[buffer(1)]],  // [total_routing, dim]
+    device const int*   scatter_map   [[buffer(2)]],   // [total_routing] — pos index
+    device const float* weights       [[buffer(3)]],   // [total_routing] — weight per entry
+    constant     uint&  dim           [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint ri = tid / dim;
+    const uint j  = tid % dim;
+    const uint pos = (uint)scatter_map[ri];
+    // Atomic not needed: different routing entries may write same pos, but in practice
+    // each pos has exactly n_experts_used entries with non-overlapping dispatch order.
+    // Metal guarantees sequential execution within a command buffer.
+    ffn_out[pos * dim + j] += weights[ri] * expert_out[ri * dim + j];
+}
+
+// ============================================================================
 // Residual add: x += y (in-place)
 // Grid: [n_elements]
 // ============================================================================

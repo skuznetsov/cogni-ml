@@ -44,7 +44,8 @@ module ML::GGUF
     getter gate_logits : ML::MetalBuffer  # [max_seq, 8]
     getter routing_ids : ML::MetalBuffer  # [max_seq, k] int32
     getter routing_wts : ML::MetalBuffer  # [max_seq, k] float32
-    getter gather_map : ML::MetalBuffer   # [max_routing] int32
+    getter gather_map : ML::MetalBuffer   # [max_routing] int32 (also used as scatter_map)
+    getter scatter_wts : ML::MetalBuffer # [max_routing] float32 — weights for scatter
 
     def initialize(max_seq : Int32, dim : Int32, ffn_dim : Int32, n_heads : Int32, head_dim : Int32,
                    n_experts_used : Int32, rope_cos : Array(Float32), rope_sin : Array(Float32))
@@ -70,6 +71,7 @@ module ML::GGUF
       @routing_ids = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # int32
       @routing_wts = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # float32
       @gather_map  = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # int32
+      @scatter_wts = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # float32
     end
   end
 
@@ -89,7 +91,7 @@ module ML::GGUF
       %w[fused_q5k_matmul_gelu fused_q6k_matmul_gelu
          qkv_split rope_neox_inplace attention_forward
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
-         gelu_inplace gate_matmul softmax_topk moe_gather].each do |name|
+         gelu_inplace gate_matmul softmax_topk moe_gather scatter_weighted_add].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
         }
@@ -268,13 +270,15 @@ module ML::GGUF
             (expert_groups[ei] ||= [] of {Int32, Float32}) << {pos, weight}
           end
 
-          # Build gather_map: for each routing entry (grouped by expert), store pos
+          # Build gather_map + scatter_wts: pos and weight for each entry, grouped by expert
           gmap = ws.gather_map.contents.as(Pointer(Int32))
+          swts = ws.scatter_wts.contents.as(Pointer(Float32))
           total_routing = routing.size
           ri_base = 0
           expert_groups.each do |_, entries|
-            entries.each_with_index do |(pos, _), local_i|
+            entries.each_with_index do |(pos, weight), local_i|
               gmap[ri_base + local_i] = pos
+              swts[ri_base + local_i] = weight
             end
             ri_base += entries.size
           end
@@ -325,16 +329,14 @@ module ML::GGUF
             enc.set_value(eb.to_u32, 6); enc.set_value(no_gelu, 7)
             grid, tg = matmul_dispatch_tg(dim, eb); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
-            # Weighted accumulate per token (need different pos offsets)
-            outp = ws.moe_output
-            entries.each_with_index do |(pos, weight), local_i|
-              entry_offset = (ri_base + local_i).to_i64 * dim * 4
-              pos_offset = (pos * dim).to_u32
-              enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("weighted_add"))
-              enc.set_buffer(ws.ffn_out, 0); enc.set_buffer(outp, 1, offset: entry_offset)
-              enc.set_value(pos_offset, 2); enc.set_value(weight, 3)
-              enc.dispatch_1d(dim, 256); enc.end_encoding
-            end
+            # Scatter-weighted-add for this expert group (pos unique within group)
+            enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("scatter_weighted_add"))
+            enc.set_buffer(ws.ffn_out, 0)
+            enc.set_buffer(ws.moe_output, 1, offset: ri_base.to_i64 * dim * 4)
+            enc.set_buffer(ws.gather_map, 2, offset: ri_base.to_i64 * 4)
+            enc.set_buffer(ws.scatter_wts, 3, offset: ri_base.to_i64 * 4)
+            enc.set_value(dim_u, 4)
+            enc.dispatch_1d(eb * dim, 256); enc.end_encoding
 
             ri_base += entries.size
           end
