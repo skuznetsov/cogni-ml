@@ -128,10 +128,10 @@ module ML::GGUF
       @pipelines["attention_flash"] = ML::Metal::PipelineCache.get("attention_flash") {
         ML::Metal::ComputePipeline.new("attention_flash", FLASH_ATTN_SOURCE)
       }
-      # Tiled half attention
-      tiled_src = {{ read_file("#{__DIR__}/kernels/attention_simdmat.metal") }}
-      @pipelines["attention_tiled_half"] = ML::Metal::PipelineCache.get("attention_tiled_half") {
-        ML::Metal::ComputePipeline.new("attention_tiled_half", tiled_src)
+      # simdgroup_matrix flash attention
+      matmul_attn_src = {{ read_file("#{__DIR__}/kernels/attention_matmul.metal") }}
+      @pipelines["attention_matmul"] = ML::Metal::PipelineCache.get("attention_matmul") {
+        ML::Metal::ComputePipeline.new("attention_matmul", matmul_attn_src)
       }
       # SIMD GEMM kernels (primary — better precision via simd_sum)
       %w[simd_gemm_q5k simd_gemm_q6k].each do |name|
@@ -237,13 +237,32 @@ module ML::GGUF
           enc.dispatch_1d(seq_len * n_heads, 256); enc.end_encoding
         end
 
-        n_qr = 8  # N_QR in bert_fused.metal
-        enc = ML::Metal::ComputeEncoder.new(cmd)
-        enc.set_pipeline(pipe("attention_forward"))
-        enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
-        enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
-        enc.set_threadgroup_memory(n_qr * seq_len * 4, 0)
-        enc.dispatch_threadgroups({n_heads, (seq_len + n_qr - 1) // n_qr, 1}, {32, n_qr, 1}); enc.end_encoding
+        if false  # simdgroup_matrix attention disabled — needs debugging
+          # simdgroup_matrix flash attention for long sequences
+          q_total = 8 * 2  # Q_PER_SG * NSG_FA
+          n_sg = 2
+          # Shared: sq[Q_TOTAL*DK] + so[Q_TOTAL*PV] + ss[Q_TOTAL*SH + 64] (half/float mixed)
+          sh_q = q_total * head_dim * 2      # Q tile (half)
+          sh_o = q_total * head_dim * 2      # O accumulator (half)
+          sh_s = q_total * 64 * 4            # scores (float, SH=64)
+          sh_tmp = 64 * 4                    # temp for score conversion
+          total_shared = sh_q + sh_o + sh_s + sh_tmp
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(pipe("attention_matmul"))
+          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
+          enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
+          enc.set_threadgroup_memory(total_shared, 0)
+          enc.dispatch_threadgroups({(seq_len + q_total - 1) // q_total, n_heads, 1}, {32, n_sg, 1}); enc.end_encoding
+        else
+          # Scalar attention for very short sequences
+          n_qr = 8
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(pipe("attention_forward"))
+          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
+          enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
+          enc.set_threadgroup_memory(n_qr * seq_len * 4, 0)
+          enc.dispatch_threadgroups({n_heads, (seq_len + n_qr - 1) // n_qr, 1}, {32, n_qr, 1}); enc.end_encoding
+        end
 
         out_gw = gw(lw.attn_out_w, lw.attn_out_b)
         enc = ML::Metal::ComputeEncoder.new(cmd)
