@@ -31,7 +31,8 @@ module ML::GGUF
     getter qkv : ML::MetalBuffer
     getter q : ML::MetalBuffer
     getter k : ML::MetalBuffer
-    getter v : ML::MetalBuffer
+    getter v : ML::MetalBuffer      # V original [n_heads, seq, DV]
+    getter v_t : ML::MetalBuffer    # V transposed [n_heads, DV, seq]
     getter attn_out : ML::MetalBuffer
     getter ffn_mid : ML::MetalBuffer
     getter ffn_out : ML::MetalBuffer
@@ -58,6 +59,7 @@ module ML::GGUF
       @q        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
       @k        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
       @v        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
+      @v_t      = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
       @attn_out = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
       @ffn_mid  = ML::MetalBuffer.new(max_seq.to_i64 * ffn_dim * 2)
       @ffn_out  = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
@@ -225,8 +227,9 @@ module ML::GGUF
 
         enc = ML::Metal::ComputeEncoder.new(cmd)
         enc.set_pipeline(pipe("qkv_split"))
-        enc.set_buffer(ws.qkv, 0); enc.set_buffer(ws.q, 1); enc.set_buffer(ws.k, 2); enc.set_buffer(ws.v, 3)
-        enc.set_value(batch, 4); enc.set_value(dim_u, 5); enc.set_value(n_heads_u, 6); enc.set_value(head_dim_u, 7)
+        enc.set_buffer(ws.qkv, 0); enc.set_buffer(ws.q, 1); enc.set_buffer(ws.k, 2)
+        enc.set_buffer(ws.v, 3); enc.set_buffer(ws.v_t, 4)
+        enc.set_value(batch, 5); enc.set_value(dim_u, 6); enc.set_value(n_heads_u, 7); enc.set_value(head_dim_u, 8)
         enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
 
         [ws.q, ws.k].each do |buf|
@@ -237,16 +240,15 @@ module ML::GGUF
           enc.dispatch_1d(seq_len * n_heads, 256); enc.end_encoding
         end
 
-        if false  # simdgroup_matrix attention disabled — needs debugging
+        if seq_len > 32  # simdgroup_matrix attention for long sequences
           # simdgroup_matrix flash attention for long sequences
           q_total = 8 * 2  # Q_PER_SG * NSG_FA
           n_sg = 2
           # Shared: sq[Q_TOTAL*DK] + so[Q_TOTAL*PV] + ss[Q_TOTAL*SH + 64] (half/float mixed)
           sh_q = q_total * head_dim * 2      # Q tile (half)
-          sh_o = q_total * head_dim * 2      # O accumulator (half)
+          sh_o = q_total * head_dim * 4      # O accumulator (FLOAT)
           sh_s = q_total * 64 * 4            # scores (float, SH=64)
-          sh_tmp = 64 * 4                    # temp for score conversion
-          total_shared = sh_q + sh_o + sh_s + sh_tmp
+          total_shared = sh_q + sh_o + sh_s
           enc = ML::Metal::ComputeEncoder.new(cmd)
           enc.set_pipeline(pipe("attention_matmul"))
           enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
@@ -258,7 +260,7 @@ module ML::GGUF
           n_qr = 8
           enc = ML::Metal::ComputeEncoder.new(cmd)
           enc.set_pipeline(pipe("attention_forward"))
-          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
+          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v_t, 2); enc.set_buffer(ws.attn_out, 3)
           enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
           enc.set_threadgroup_memory(n_qr * seq_len * 4, 0)
           enc.dispatch_threadgroups({n_heads, (seq_len + n_qr - 1) // n_qr, 1}, {32, n_qr, 1}); enc.end_encoding

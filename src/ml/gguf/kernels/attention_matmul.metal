@@ -66,14 +66,14 @@ kernel void attention_matmul(
     const short T = DK + 2 * PV;  // per query: DK(Q) + PV(O) + PV(O copy) ... simplified:
     // Actually simpler:
     //   sq[Q_TOTAL * DK] half  — all queries
-    //   so[Q_TOTAL * PV] half  — output accumulator
-    //   ss[Q_TOTAL * SH] float — scores scratch (SH = 2*C_TILE = 64 floats per query)
-    threadgroup half4*  sq4 = (threadgroup half4*)shmem;
-    threadgroup half*   sq  = (threadgroup half*)shmem;
-    threadgroup half4*  so4 = (threadgroup half4*)(sq + Q_TOTAL * DK);
-    threadgroup half*   so  = (threadgroup half*)(sq + Q_TOTAL * DK);
-    threadgroup float*  ss  = (threadgroup float*)(so + Q_TOTAL * PV);
-    threadgroup float2* ss2 = (threadgroup float2*)ss;
+    //   so[Q_TOTAL * PV] FLOAT — output accumulator (F32 for precision)
+    //   ss[Q_TOTAL * SH] float — scores scratch
+    threadgroup half4*   sq4 = (threadgroup half4*)shmem;
+    threadgroup half*    sq  = (threadgroup half*)shmem;
+    threadgroup float4*  so4 = (threadgroup float4*)(sq + Q_TOTAL * DK);
+    threadgroup float*   so  = (threadgroup float*)(sq + Q_TOTAL * DK);
+    threadgroup float*   ss  = (threadgroup float*)(so + Q_TOTAL * PV);
+    threadgroup float2*  ss2 = (threadgroup float2*)ss;
 
     // Load Q into shared — contiguous per simdgroup (sg0: rows 0-7, sg1: rows 8-15)
     {
@@ -92,7 +92,7 @@ kernel void attention_matmul(
         const short q_off = sgitg * Q_PER_SG;
         for (short jj = 0; jj < Q_PER_SG; ++jj) {
             const short j = q_off + jj;
-            for (short i = tiisg; i < DV4; i += NW) so4[j * PV4 + i] = half4(0);
+            for (short i = tiisg; i < DV4; i += NW) so4[j * PV4 + i] = float4(0);
             for (short i = tiisg; i < SH; i += NW)  ss[j * SH + i] = 0.0f;
         }
     }
@@ -159,26 +159,37 @@ kernel void attention_matmul(
 
             // Correct output accumulator: O *= exp(m_old - m_new)
             for (short i = tiisg; i < PV4; i += NW) {
-                so4[j * PV4 + i] = half4(float4(so4[j * PV4 + i]) * ms);
+                so4[j * PV4 + i] *= ms;  // float4 *= float
             }
         }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        // === S · V: scalar accumulation from shared scores ===
-        for (short jj = 0; jj < Q_PER_SG; ++jj) {
-            const short j = sgitg * Q_PER_SG + jj;
-            if (iq1 + j >= seq_len) continue;
-            threadgroup float* sc_row = ss + j * SH;
-            for (short d = tiisg; d < DV; d += NW) {
-                float val = float(so[j * PV + d]);
-                device const half* pv_d = v_src + h_off_v + ic * DV + d;
-                uint c_end = min(ic + (uint)C_TILE, seq_len) - ic;
-                for (uint c = 0; c < c_end; c++) {
-                    val += sc_row[c] * float(pv_d[c * DV]);
+        // === S · V via simdgroup_matrix: float += float × half ===
+        // V original layout: [n_heads, seq, DV]
+        {
+            threadgroup float* my_so = so + sgitg * Q_PER_SG * PV;
+
+            simdgroup_matrix<float, 8, 8> lo[DV8];
+            for (short dk = 0; dk < DV8; ++dk)
+                simdgroup_load(lo[dk], my_so + dk * 8, PV);
+
+            const uint v_base = h * seq_len * DV;
+
+            for (short cc = 0; cc < C_TILE/8; ++cc) {
+                simdgroup_matrix<float, 8, 8> vs;
+                simdgroup_load(vs, ss + sgitg * Q_PER_SG * SH + cc * 8, SH);
+
+                for (short dk = 0; dk < DV8; ++dk) {
+                    simdgroup_matrix<half, 8, 8> mv;
+                    device const half* pv = v_src + v_base + (ic + cc*8) * DV + dk * 8;
+                    simdgroup_load(mv, pv, DV);
+                    simdgroup_multiply_accumulate(lo[dk], vs, mv, lo[dk]);
                 }
-                so[j * PV + d] = half(val);
             }
+
+            for (short dk = 0; dk < DV8; ++dk)
+                simdgroup_store(lo[dk], my_so + dk * 8, PV);
         }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -192,7 +203,7 @@ kernel void attention_matmul(
         const float inv_s = 1.0f / S[jj];
 
         for (short i = tiisg; i < DV4; i += NW) {
-            float4 o = float4(so4[j * PV4 + i]) * inv_s;
+            float4 o = so4[j * PV4 + i] * inv_s;
             // Write to output: [seq, n_heads * DV]
             device half* out_row = output + (iq1 + j) * n_heads * DV + h * DV;
             device half4* out4 = (device half4*)out_row;

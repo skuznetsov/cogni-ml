@@ -13,11 +13,12 @@ kernel void qkv_split(
     device const half*  qkv    [[buffer(0)]],
     device       half*  Q      [[buffer(1)]],
     device       half*  K      [[buffer(2)]],
-    device       half*  V_t    [[buffer(3)]],
-    constant     uint&  seq_len  [[buffer(4)]],
-    constant     uint&  dim      [[buffer(5)]],
-    constant     uint&  n_heads  [[buffer(6)]],
-    constant     uint&  head_dim [[buffer(7)]],
+    device       half*  V      [[buffer(3)]],  // original layout
+    device       half*  V_t    [[buffer(4)]],  // transposed layout
+    constant     uint&  seq_len  [[buffer(5)]],
+    constant     uint&  dim      [[buffer(6)]],
+    constant     uint&  n_heads  [[buffer(7)]],
+    constant     uint&  head_dim [[buffer(8)]],
     uint tid [[thread_position_in_grid]])
 {
     if (tid >= seq_len * dim) return;
@@ -26,11 +27,13 @@ kernel void qkv_split(
     const uint h = d / head_dim;
     const uint hd = d % head_dim;
     const uint src = pos * 3 * dim;
-    const uint qk = h * seq_len * head_dim + pos * head_dim + hd;
+    const uint dst = h * seq_len * head_dim + pos * head_dim + hd;
     const uint vt = h * head_dim * seq_len + hd * seq_len + pos;
-    Q[qk]  = qkv[src + d];
-    K[qk]  = qkv[src + dim + d];
-    V_t[vt] = qkv[src + 2 * dim + d];
+    half v_val = qkv[src + 2 * dim + d];
+    Q[dst]  = qkv[src + d];
+    K[dst]  = qkv[src + dim + d];
+    V[dst]  = v_val;
+    V_t[vt] = v_val;
 }
 
 // ============================================================================
