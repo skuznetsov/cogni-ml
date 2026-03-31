@@ -49,6 +49,8 @@ module ML::GGUF
     getter routing_wts : ML::MetalBuffer  # [max_seq, k] float32
     getter gather_map : ML::MetalBuffer    # [max_routing] int32 (also used as scatter_map)
     getter scatter_wts : ML::MetalBuffer  # [max_routing] float32 — weights for scatter
+    getter expert_counts : ML::MetalBuffer  # [8] int32 atomic counters
+    getter expert_offsets : ML::MetalBuffer  # [9] int32 prefix sums
     getter expert_mid : ML::MetalBuffer   # [n_experts, max_seq, ffn_dim]
     getter expert_out : ML::MetalBuffer  # [n_experts, max_seq, dim]
 
@@ -80,6 +82,8 @@ module ML::GGUF
       @routing_wts = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # float32
       @gather_map  = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # int32
       @scatter_wts = ML::MetalBuffer.new(max_routing.to_i64 * 4)  # float32
+      @expert_counts = ML::MetalBuffer.new(8_i64 * 4)   # int32
+      @expert_offsets = ML::MetalBuffer.new(9_i64 * 4)  # int32 (n_experts + 1)
       # All-experts buffers FP16
       @expert_mid  = ML::MetalBuffer.new(8_i64 * max_seq * ffn_dim * 2)
       @expert_out  = ML::MetalBuffer.new(8_i64 * max_seq * dim * 2)
@@ -117,7 +121,8 @@ module ML::GGUF
       %w[qkv_split rope_neox_inplace attention_forward
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
          gelu_inplace gate_matmul softmax_topk moe_gather scatter_weighted_add
-         moe_weighted_scatter residual_layernorm residual_layernorm_copy].each do |name|
+         moe_weighted_scatter residual_layernorm residual_layernorm_copy
+         moe_count_experts moe_prefix_sum moe_build_routing zero_int].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
         }
@@ -344,47 +349,63 @@ module ML::GGUF
             enc.set_value(n_experts_used.to_u32, 6); enc.set_value(n_experts.to_u32, 7)
             enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
           else
-            # === SYNC PATH: only routed experts (4x less compute) ===
-            cmd.commit_and_wait
-            rids = ws.routing_ids.contents.as(Pointer(Int32))
-            rwts = ws.routing_wts.contents.as(Pointer(Float32))
-
-            expert_groups = Hash(Int32, Array({Int32, Float32})).new
-            seq_len.times do |pos|
-              n_experts_used.times do |ki|
-                idx = pos * n_experts_used + ki
-                ei = rids[idx]; w = rwts[idx]
-                (expert_groups[ei] ||= [] of {Int32, Float32}) << {pos, w}
-              end
-            end
-
-            gmap = ws.gather_map.contents.as(Pointer(Int32))
-            swts = ws.scatter_wts.contents.as(Pointer(Float32))
+            # === GPU-NATIVE ROUTING PATH (no CPU sync for routing) ===
             total_routing = seq_len * n_experts_used
-            ri_base = 0
-            expert_groups.each do |_, entries|
-              entries.each_with_index do |(pos, weight), li|
-                gmap[ri_base + li] = pos; swts[ri_base + li] = weight
-              end
-              ri_base += entries.size
-            end
 
-            cmd = ML::Metal::CommandBuffer.new
+            # Zero expert_counts
+            enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("zero_int"))
+            enc.set_buffer(ws.expert_counts, 0)
+            enc.dispatch_1d(n_experts, 1); enc.end_encoding
+
+            # Count tokens per expert (GPU)
+            enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("moe_count_experts"))
+            enc.set_buffer(ws.routing_ids, 0); enc.set_buffer(ws.expert_counts, 1)
+            enc.set_value(n_experts_used.to_u32, 2)
+            enc.dispatch_1d(seq_len, 1); enc.end_encoding
+
+            # Prefix sum (GPU, single thread)
+            enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("moe_prefix_sum"))
+            enc.set_buffer(ws.expert_counts, 0); enc.set_buffer(ws.expert_offsets, 1)
+            enc.set_value(n_experts.to_u32, 2)
+            enc.dispatch_1d(1, 1); enc.end_encoding
+
+            # Zero expert_counts again (reused as atomic counters for build_routing)
+            enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("zero_int"))
+            enc.set_buffer(ws.expert_counts, 0)
+            enc.dispatch_1d(n_experts, 1); enc.end_encoding
+
+            # Build gather_map + scatter_wts (GPU, atomic)
+            enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("moe_build_routing"))
+            enc.set_buffer(ws.routing_ids, 0); enc.set_buffer(ws.routing_wts, 1)
+            enc.set_buffer(ws.gather_map, 2); enc.set_buffer(ws.scatter_wts, 3)
+            enc.set_buffer(ws.expert_offsets, 4); enc.set_buffer(ws.expert_counts, 5)
+            enc.set_value(n_experts_used.to_u32, 6); enc.set_value(n_experts.to_u32, 7)
+            enc.dispatch_1d(seq_len, 1); enc.end_encoding
+
+            # Gather hidden → moe_input (GPU)
             enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("moe_gather"))
             enc.set_buffer(h_out, 0); enc.set_buffer(ws.moe_input, 1); enc.set_buffer(ws.gather_map, 2)
             enc.set_value(dim_u, 3)
             enc.dispatch_1d(total_routing * dim, 256); enc.end_encoding
 
+            # Sync: read expert_offsets (tiny: 9 ints = 36 bytes)
+            cmd.commit_and_wait
+            eoff = ws.expert_offsets.contents.as(Pointer(Int32))
+
+            # Expert matmuls using GPU-built gather_map
+            cmd = ML::Metal::CommandBuffer.new
             enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("zero_region"))
             enc.set_buffer(ws.ffn_out, 0); enc.set_value(0_u32, 1)
             enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
 
-            ri_base = 0
-            expert_groups.each do |ei, entries|
-              eb = entries.size
+            n_experts.times do |ei|
+              eb = eoff[ei + 1] - eoff[ei]
+              next if eb == 0
+              ri_base = eoff[ei]
+
               up_offset = ei.to_i64 * up_expert_bytes
-              input_off = ri_base.to_i64 * dim * 2      # FP16
-              mid_off = ri_base.to_i64 * ffn_dim * 2    # FP16
+              input_off = ri_base.to_i64 * dim * 2
+              mid_off = ri_base.to_i64 * ffn_dim * 2
               enc = ML::Metal::ComputeEncoder.new(cmd)
               enc.set_pipeline(pipe(matmul_kernel(exp_up_qw.type)))
               enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
@@ -414,7 +435,6 @@ module ML::GGUF
               enc.set_buffer(ws.scatter_wts, 3, offset: ri_base.to_i64 * 4)
               enc.set_value(dim_u, 4)
               enc.dispatch_1d(eb * dim, 256); enc.end_encoding
-              ri_base += entries.size
             end
           end
 

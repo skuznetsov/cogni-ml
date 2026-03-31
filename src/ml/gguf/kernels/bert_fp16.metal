@@ -274,6 +274,81 @@ kernel void softmax_topk(
 }
 
 // ============================================================================
+// Zero int32 buffer
+// ============================================================================
+kernel void zero_int(
+    device int* x [[buffer(0)]],
+    uint tid [[thread_position_in_grid]])
+{
+    x[tid] = 0;
+}
+
+// ============================================================================
+// GPU MoE routing: build gather_map + scatter_wts from routing_ids/wts
+// Uses atomic counters per expert to build contiguous expert groups.
+// Grid: [seq_len]  (one thread per token position)
+// ============================================================================
+
+kernel void moe_build_routing(
+    device const int*   routing_ids  [[buffer(0)]],  // [seq, k] expert indices
+    device const float* routing_wts  [[buffer(1)]],  // [seq, k] weights
+    device       int*   gather_map   [[buffer(2)]],  // [total_routing] output: pos indices
+    device       float* scatter_wts  [[buffer(3)]],  // [total_routing] output: weights
+    device       int*   expert_offsets [[buffer(4)]], // [n_experts+1] prefix sums (pre-computed)
+    device atomic_int*  expert_counts [[buffer(5)]],  // [n_experts] atomic counters
+    constant     uint&  k            [[buffer(6)]],  // n_experts_used (=2)
+    constant     uint&  n_experts    [[buffer(7)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint pos = tid;
+    for (uint ki = 0; ki < k; ki++) {
+        int ei = routing_ids[pos * k + ki];
+        float w = routing_wts[pos * k + ki];
+        // Atomically get slot within this expert's group
+        int slot = atomic_fetch_add_explicit(&expert_counts[ei], 1, memory_order_relaxed);
+        int dest = expert_offsets[ei] + slot;
+        gather_map[dest] = (int)pos;
+        scatter_wts[dest] = w;
+    }
+}
+
+// ============================================================================
+// Count tokens per expert (for prefix sum)
+// Grid: [seq_len]
+// ============================================================================
+
+kernel void moe_count_experts(
+    device const int*   routing_ids  [[buffer(0)]],
+    device atomic_int*  expert_counts [[buffer(1)]],
+    constant     uint&  k            [[buffer(2)]],
+    uint tid [[thread_position_in_grid]])
+{
+    for (uint ki = 0; ki < k; ki++) {
+        int ei = routing_ids[tid * k + ki];
+        atomic_fetch_add_explicit(&expert_counts[ei], 1, memory_order_relaxed);
+    }
+}
+
+// ============================================================================
+// Prefix sum for expert offsets (single-thread, tiny: 8 experts)
+// Grid: [1]
+// ============================================================================
+
+kernel void moe_prefix_sum(
+    device const int* expert_counts [[buffer(0)]],
+    device       int* expert_offsets [[buffer(1)]],
+    constant     uint& n_experts    [[buffer(2)]],
+    uint tid [[thread_position_in_grid]])
+{
+    int sum = 0;
+    for (uint e = 0; e < n_experts; e++) {
+        expert_offsets[e] = sum;
+        sum += expert_counts[e];
+    }
+    expert_offsets[n_experts] = sum;
+}
+
+// ============================================================================
 // MoE gather: hidden(half) → moe_input(half)
 // ============================================================================
 kernel void moe_gather(
