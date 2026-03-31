@@ -28,6 +28,7 @@ module ML::GGUF
 
   class GPUWorkspace
     getter hidden : ML::MetalBuffer
+    getter hidden2 : ML::MetalBuffer  # double buffer for pipeline overlap
     getter qkv : ML::MetalBuffer
     getter q : ML::MetalBuffer
     getter k : ML::MetalBuffer
@@ -55,6 +56,7 @@ module ML::GGUF
                    n_experts_used : Int32, rope_cos : Array(Float32), rope_sin : Array(Float32))
       # FP16 intermediate buffers (2 bytes per element)
       @hidden   = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
+      @hidden2  = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
       @qkv      = ML::MetalBuffer.new(max_seq.to_i64 * 3 * dim * 2)
       @q        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
       @k        = ML::MetalBuffer.new(n_heads.to_i64 * max_seq * head_dim * 2)
@@ -115,7 +117,7 @@ module ML::GGUF
       %w[qkv_split rope_neox_inplace attention_forward
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
          gelu_inplace gate_matmul softmax_topk moe_gather scatter_weighted_add
-         moe_weighted_scatter residual_layernorm].each do |name|
+         moe_weighted_scatter residual_layernorm residual_layernorm_copy].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
         }
@@ -210,16 +212,19 @@ module ML::GGUF
       end
 
       cmd = ML::Metal::CommandBuffer.new
+      h_bufs = [ws.hidden, ws.hidden2]
 
       layers.each_with_index do |lw, layer_idx|
         is_moe = (layer_idx % moe_every_n == 1) && n_experts > 0
         n1w_buf, n1b_buf, n2w_buf, n2b_buf = norm_bufs[layer_idx]
+        h_in = h_bufs[layer_idx % 2]
+        h_out = h_bufs[(layer_idx + 1) % 2]
 
-        # === Attention (always GPU) ===
+        # === Attention (reads h_in) ===
         qkv_gw = gw(lw.attn_qkv_w, lw.attn_qkv_b)
         enc = ML::Metal::ComputeEncoder.new(cmd)
         enc.set_pipeline(pipe(matmul_kernel(qkv_gw.type)))
-        enc.set_buffer(qkv_gw.buffer, 0); enc.set_buffer(ws.hidden, 1)
+        enc.set_buffer(qkv_gw.buffer, 0); enc.set_buffer(h_in, 1)
         enc.set_buffer(qkv_gw.bias_buffer, 2); enc.set_buffer(ws.qkv, 3)
         enc.set_value(dim_u, 4); enc.set_value(3_u32 * dim_u, 5)
         enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
@@ -274,12 +279,13 @@ module ML::GGUF
         enc.set_value(dim_u, 4); enc.set_value(dim_u, 5); enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
         grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
-        enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_layernorm"))
-        enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
-        enc.set_buffer(n1w_buf, 2); enc.set_buffer(n1b_buf, 3)
-        enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
+        # norm1: h_out = layernorm(h_in + attn_proj) — COPY to new buffer
+        enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_layernorm_copy"))
+        enc.set_buffer(h_in, 0); enc.set_buffer(ws.ffn_out, 1); enc.set_buffer(h_out, 2)
+        enc.set_buffer(n1w_buf, 3); enc.set_buffer(n1b_buf, 4)
+        enc.set_value(dim_u, 5); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
 
-        # === FFN ===
+        # === FFN (reads from h_out) ===
         if is_moe
           gate_w_arr = lw.gate_w.not_nil!
           exp_up_qw = lw.expert_up_w.not_nil!
@@ -294,7 +300,7 @@ module ML::GGUF
           # GPU gate + softmax + top-k
           gate_w_buf = upload_f32(gate_w_arr)
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("gate_matmul"))
-          enc.set_buffer(ws.hidden, 0); enc.set_buffer(gate_w_buf, 1); enc.set_buffer(ws.gate_logits, 2)
+          enc.set_buffer(h_out, 0); enc.set_buffer(gate_w_buf, 1); enc.set_buffer(ws.gate_logits, 2)
           enc.set_value(dim_u, 3); enc.set_value(n_experts.to_u32, 4)
           enc.dispatch({n_experts, seq_len, 1}, {n_experts, 1, 1}); enc.end_encoding
 
@@ -312,7 +318,7 @@ module ML::GGUF
               enc = ML::Metal::ComputeEncoder.new(cmd)
               enc.set_pipeline(pipe(matmul_kernel(exp_up_qw.type)))
               enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
-              enc.set_buffer(ws.hidden, 1)
+              enc.set_buffer(h_out, 1)
               enc.set_buffer(up_gw_full.bias_buffer, 2)
               enc.set_buffer(ws.expert_mid, 3, offset: ei.to_i64 * expert_stride_mid)
               enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
@@ -365,7 +371,7 @@ module ML::GGUF
 
             cmd = ML::Metal::CommandBuffer.new
             enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("moe_gather"))
-            enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.moe_input, 1); enc.set_buffer(ws.gather_map, 2)
+            enc.set_buffer(h_out, 0); enc.set_buffer(ws.moe_input, 1); enc.set_buffer(ws.gather_map, 2)
             enc.set_value(dim_u, 3)
             enc.dispatch_1d(total_routing * dim, 256); enc.end_encoding
 
@@ -412,17 +418,17 @@ module ML::GGUF
             end
           end
 
-          # Fused residual + norm2
+          # norm2: h_out = layernorm(h_out + ffn_out) — in-place on h_out
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_layernorm"))
-          enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
+          enc.set_buffer(h_out, 0); enc.set_buffer(ws.ffn_out, 1)
           enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
           enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
         else
-          # Dense FFN
+          # Dense FFN (reads from h_out)
           up_gw = gw(lw.ffn_up_w.not_nil!, lw.ffn_up_b.not_nil!)
           enc = ML::Metal::ComputeEncoder.new(cmd)
           enc.set_pipeline(pipe(matmul_kernel(up_gw.type)))
-          enc.set_buffer(up_gw.buffer, 0); enc.set_buffer(ws.hidden, 1)
+          enc.set_buffer(up_gw.buffer, 0); enc.set_buffer(h_out, 1)
           enc.set_buffer(up_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_mid, 3)
           enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
           enc.set_value(batch, 6); enc.set_value(yes_gelu, 7)
@@ -438,17 +444,16 @@ module ML::GGUF
           grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg); enc.end_encoding
 
           enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("residual_layernorm"))
-          enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.ffn_out, 1)
+          enc.set_buffer(h_out, 0); enc.set_buffer(ws.ffn_out, 1)
           enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
           enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1}); enc.end_encoding
-          # No commit — dense layers continue in same cmd buffer
         end
 
         # Per-layer comparison with CPU reference (if provided)
         if (refs = cpu_ref_per_layer) && layer_idx < refs.size
           cr = refs[layer_idx]
           cmd.commit_and_wait
-          hp16 = ws.hidden.contents.as(Pointer(UInt16))
+          hp16 = h_out.contents.as(Pointer(UInt16))
           n = seq_len * dim
           dot = 0.0_f64; ng = 0.0_f64; nc = 0.0_f64
           max_err = 0.0_f64
@@ -464,10 +469,11 @@ module ML::GGUF
         end
       end
 
-      # Mean pool + normalize
+      # Mean pool + normalize (read from last layer's output buffer)
+      final_hidden = h_bufs[layers.size % 2]  # after N layers, output is in h_bufs[N%2]
       enc = ML::Metal::ComputeEncoder.new(cmd)
       enc.set_pipeline(pipe("mean_pool_l2"))
-      enc.set_buffer(ws.hidden, 0); enc.set_buffer(ws.output, 1)
+      enc.set_buffer(final_hidden, 0); enc.set_buffer(ws.output, 1)
       enc.set_value(seq_len.to_u32, 2); enc.set_value(dim_u, 3)
       enc.dispatch_1d(1, 1); enc.end_encoding
 
