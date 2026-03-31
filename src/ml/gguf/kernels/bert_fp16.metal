@@ -5,6 +5,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#define FOR_UNROLL _Pragma("clang loop unroll(full)")
+
 // ============================================================================
 // QKV split: [seq, 3*dim] half → Q, K half [n_heads, seq, head_dim]
 //                                 V_t half [n_heads, head_dim, seq]
@@ -168,6 +170,39 @@ kernel void residual_layernorm(
 
     for (uint j = lane; j < dim; j += 32) {
         row[j] = half((float(row[j]) - mean) * inv_std * w[j] + b[j]);
+    }
+}
+
+// ============================================================================
+// Residual + layernorm with COPY: out = layernorm(x + y) — different output buffer
+// ============================================================================
+kernel void residual_layernorm_copy(
+    device const half* x    [[buffer(0)]],   // input 1 (read-only)
+    device const half* y    [[buffer(1)]],   // input 2 (residual)
+    device       half* out  [[buffer(2)]],   // output (different from x and y)
+    device const float* w   [[buffer(3)]],
+    device const float* b   [[buffer(4)]],
+    constant uint& dim      [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint pos = tgpig.x;
+    const uint lane = tiisg;
+
+    float local_sum = 0.0f;
+    for (uint j = lane; j < dim; j += 32) {
+        float v = float(x[pos * dim + j]) + float(y[pos * dim + j]);
+        out[pos * dim + j] = half(v);
+        local_sum += v;
+    }
+    float mean = simd_sum(local_sum) / float(dim);
+
+    float local_var = 0.0f;
+    for (uint j = lane; j < dim; j += 32) { float d = float(out[pos * dim + j]) - mean; local_var += d * d; }
+    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+
+    for (uint j = lane; j < dim; j += 32) {
+        out[pos * dim + j] = half((float(out[pos * dim + j]) - mean) * inv_std * w[j] + b[j]);
     }
 }
 

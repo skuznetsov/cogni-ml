@@ -9,6 +9,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#define FOR_UNROLL _Pragma("clang loop unroll(full)")
+
 constant uint QK_K = 256;
 constant uint N_ROWS = 2;  // output rows per threadgroup (2 simdgroups)
 
@@ -73,7 +75,7 @@ kernel void simd_gemm_q5k(
         // Load 16 src1 floats and accumulate per-quadrant sums
         float yl[16], yh[16];
         float4 sumy = {0.f, 0.f, 0.f, 0.f};
-        for (short l = 0; l < 8; ++l) {
+        FOR_UNROLL for (short l = 0; l < 8; ++l) {
             yl[l+0] = yp[l+ 0]; sumy[0] += yl[l+0];
             yl[l+8] = yp[l+32]; sumy[1] += yl[l+8];
             yh[l+0] = y2[l+ 0]; sumy[2] += yh[l+0];
@@ -92,7 +94,7 @@ kernel void simd_gemm_q5k(
         float4 acc1 = {0.f};  // low 4-bit products
         float4 acc2 = {0.f};  // high bit (5th bit) contributions
 
-        for (short l = 0; l < 8; ++l) {
+        FOR_UNROLL for (short l = 0; l < 8; ++l) {
             uint8_t h = qh[l];
             acc1[0] += yl[l+0] * float(q1[l] & 0x0F);
             acc1[1] += yl[l+8] * float(q1[l] & 0xF0);
@@ -192,7 +194,7 @@ kernel void simd_gemm_q6k(
         device const half* y = yy + i * QK_K + y_offset;
 
         // Load 4 elements from each of 4 sub-rows (stride 32)
-        for (short l = 0; l < 4; ++l) {
+        FOR_UNROLL for (short l = 0; l < 4; ++l) {
             yl[4*l + 0] = y[l +  0];
             yl[4*l + 1] = y[l + 32];
             yl[4*l + 2] = y[l + 64];
@@ -201,7 +203,7 @@ kernel void simd_gemm_q6k(
 
         float4 sums = {0.f, 0.f, 0.f, 0.f};
 
-        for (short l = 0; l < 4; ++l) {
+        FOR_UNROLL for (short l = 0; l < 4; ++l) {
             sums[0] += yl[4*l + 0] * float((int8_t)((q1[l] & 0xF) | ((qh[l] & kmask1) << 4)) - 32);
             sums[1] += yl[4*l + 1] * float((int8_t)((q2[l] & 0xF) | ((qh[l] & kmask2) << 2)) - 32);
             sums[2] += yl[4*l + 2] * float((int8_t)((q1[l]  >> 4) | ((qh[l] & kmask3) << 0)) - 32);
