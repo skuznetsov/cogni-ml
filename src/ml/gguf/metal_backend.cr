@@ -130,6 +130,7 @@ module ML::GGUF
     @gpu_f32_bufs : Hash(UInt64, ML::MetalBuffer)
     @pipelines : Hash(String, ML::Metal::ComputePipeline)
     @workspace : GPUWorkspace?
+    @norm_bufs_cache : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer))?
 
     def initialize
       raise "Metal not available" unless ML::Metal::Device.available?
@@ -311,7 +312,7 @@ module ML::GGUF
       n_heads_u = n_heads.to_u32; head_dim_u = head_dim.to_u32; ffn_dim_u = ffn_dim.to_u32
       no_gelu = 0_u32; yes_gelu = 1_u32
 
-      norm_bufs = layers.map do |lw|
+      norm_bufs = @norm_bufs_cache ||= layers.map do |lw|
         n1w = ML::MetalBuffer.new(dim.to_i64 * 4); n1w.write(lw.norm1_w)
         n1b = ML::MetalBuffer.new(dim.to_i64 * 4); n1b.write(lw.norm1_b)
         n2w = ML::MetalBuffer.new(dim.to_i64 * 4); n2w.write(lw.norm2_w)
@@ -627,16 +628,11 @@ module ML::GGUF
 
       cmd.commit
       cmd.wait
-      if ENV["PROFILE_MOE"]?
-        _cpu_ms = (_t_encode_done - _t_encode_start).total_milliseconds
-        _gpu_ms = (Time.instant - _t_encode_done).total_milliseconds
-        _total_ms = (Time.instant - _t_encode_start).total_milliseconds
-        STDERR.puts "  cpu_encode=#{_cpu_ms.round(1)}ms gpu_exec=#{_gpu_ms.round(1)}ms total=#{_total_ms.round(1)}ms"
-      end
 
       o_ptr = ws.output.contents.as(Pointer(Float32))
       Array(Float32).new(dim) { |i| o_ptr[i] }
     end
+
 
     # ComputeBackend interface fallbacks
     def matmul(x : Array(Float32), rows : Int32, qw : QuantWeight, bias : Array(Float32)) : Array(Float32)

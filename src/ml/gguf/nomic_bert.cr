@@ -243,9 +243,22 @@ module ML::GGUF
     end
     {% end %}
 
-    # Embed multiple texts (sequential for now)
+    # Batch embed: pre-tokenize all texts, then sequential GPU forward passes
+    # (true parallel batching requires attention masking — future work)
     def embed_batch(texts : Array(String)) : Array(Array(Float32))
-      texts.map { |t| embed(t) }
+      # Pre-tokenize all texts upfront (CPU parallelizable)
+      token_batches = texts.map { |t| tokenize(t) }
+      token_batches.map { |tokens| embed_tokens(tokens) }
+    end
+
+    # Embed pre-tokenized input
+    def embed_tokens(tokens : Array(Int32)) : Array(Float32)
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        return embed_gpu(tokens)
+      end
+      {% end %}
+      forward(tokens)
     end
 
     # Tokenize text → token IDs (delegates to SentencePiece unigram tokenizer)
