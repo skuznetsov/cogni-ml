@@ -216,8 +216,16 @@ module ML::GGUF
         {n1w, n1b, n2w, n2b}
       end
 
-      cmd = ML::Metal::CommandBuffer.new(fast: true)
-      cmd.enqueue  # tell Metal execution order upfront
+      # Pre-create and enqueue command buffers for pipelined execution
+      # For MoE sync path (seq > 64): 7 cmd buffers (one initial + 6 post-MoE)
+      # For sync-free path (seq ≤ 64): 1 cmd buffer
+      n_moe_layers = layers.each_with_index.count { |_, i| (i % moe_every_n == 1) && n_experts > 0 }
+      needs_sync = seq_len > 64
+      n_cmds = needs_sync ? n_moe_layers + 1 : 1
+      cmds = Array(ML::Metal::CommandBuffer).new(n_cmds) { ML::Metal::CommandBuffer.new(fast: true) }
+      cmds.each(&.enqueue)  # establish execution order
+      cmd = cmds[0]
+      cmd_idx = 0
       h_bufs = [ws.hidden, ws.hidden2]
 
       layers.each_with_index do |lw, layer_idx|
@@ -389,12 +397,14 @@ module ML::GGUF
             enc.set_value(dim_u, 3)
             enc.dispatch_1d(total_routing * dim, 256); enc.end_encoding
 
-            # Sync: read expert_offsets (tiny: 9 ints = 36 bytes)
-            cmd.commit_and_wait
+            # Sync: commit current cmd (GPU starts), wait for routing results
+            cmd.commit
+            cmd.wait
             eoff = ws.expert_offsets.contents.as(Pointer(Int32))
 
-            # Expert matmuls using GPU-built gather_map
-            cmd = ML::Metal::CommandBuffer.new(fast: true); cmd.enqueue
+            # Switch to next pre-enqueued command buffer
+            cmd_idx += 1
+            cmd = cmds[cmd_idx]
             enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("zero_region"))
             enc.set_buffer(ws.ffn_out, 0); enc.set_value(0_u32, 1)
             enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
@@ -498,7 +508,8 @@ module ML::GGUF
       enc.set_value(seq_len.to_u32, 2); enc.set_value(dim_u, 3)
       enc.dispatch_1d(1, 1); enc.end_encoding
 
-      cmd.commit_and_wait
+      cmd.commit
+      cmd.wait
 
       o_ptr = ws.output.contents.as(Pointer(Float32))
       Array(Float32).new(dim) { |i| o_ptr[i] }

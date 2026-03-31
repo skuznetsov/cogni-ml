@@ -255,6 +255,19 @@ extern "C" void gs_commit_command_buffer(void* cmd_handle) {
     [cmd commit];
 }
 
+// Submit two command buffers: commit first immediately, commit second after callback
+// The first buffer starts executing on GPU while second is still being encoded
+extern "C" void gs_submit_pipeline(void* cmd1, void* cmd2) {
+    if (cmd1) {
+        id<MTLCommandBuffer> c1 = (__bridge id<MTLCommandBuffer>)cmd1;
+        [c1 commit];
+    }
+    if (cmd2) {
+        id<MTLCommandBuffer> c2 = (__bridge id<MTLCommandBuffer>)cmd2;
+        [c2 commit];
+    }
+}
+
 // Wait for previously committed command buffer
 extern "C" void gs_wait_command_buffer(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
