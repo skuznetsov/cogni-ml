@@ -2,12 +2,18 @@
 # CPU-only stubs (Metal disabled)
 module ML
   module Metal
+    enum BufferAccess
+      Read
+      Write
+      ReadWrite
+    end
+
     struct ComputeEncoder
       def set_pipeline(pipeline : ComputePipeline) : self
         raise "Metal disabled (cpu_only)"
       end
 
-      def set_buffer(buffer : MetalBuffer, index : Int32, offset : Int64 = 0) : self
+      def set_buffer(buffer : MetalBuffer, index : Int32, access : BufferAccess = BufferAccess::Read, offset : Int64 = 0) : self
         raise "Metal disabled (cpu_only)"
       end
 
@@ -161,6 +167,12 @@ require "../core/tensor"
 
 module ML
   module Metal
+    enum BufferAccess
+      Read
+      Write
+      ReadWrite
+    end
+
     # Compute encoder for setting up kernel dispatch
     struct ComputeEncoder
       @cmd_buffer : Pointer(Void)
@@ -190,8 +202,9 @@ module ML
         self
       end
 
-      # Bind Metal buffer at index
-      def set_buffer(buffer : MetalBuffer, index : Int32, offset : Int64 = 0) : self
+      # Bind Metal buffer at index (access/length/partition accepted for GraphEncoder API compat)
+      def set_buffer(buffer : MetalBuffer, index : Int32, access : BufferAccess = BufferAccess::Read,
+                     offset : Int64 = 0, length : Int64 = -1, partition : Int32 = -1) : self
         MetalDispatchFFI.encoder_set_buffer(@encoder, buffer.handle, offset, index)
         self
       end
@@ -251,6 +264,16 @@ module ML
         MetalDispatchFFI.encoder_dispatch_threadgroups(
           @encoder,
           threadgroup_count[0], threadgroup_count[1], threadgroup_count[2],
+          threadgroup_size[0], threadgroup_size[1], threadgroup_size[2]
+        )
+        self
+      end
+
+      # Indirect dispatch — threadgroup counts come from GPU buffer
+      def dispatch_threadgroups_indirect(indirect_buffer : ML::MetalBuffer, offset : Int64, threadgroup_size : {Int32, Int32, Int32}) : self
+        MetalDispatchFFI.encoder_dispatch_threadgroups_indirect(
+          @encoder,
+          indirect_buffer.handle, offset,
           threadgroup_size[0], threadgroup_size[1], threadgroup_size[2]
         )
         self
@@ -472,6 +495,11 @@ lib MetalDispatchFFI
     tg_count_x : Int32, tg_count_y : Int32, tg_count_z : Int32,
     tg_x : Int32, tg_y : Int32, tg_z : Int32
   ) : Void
+  fun encoder_dispatch_threadgroups_indirect = gs_encoder_dispatch_threadgroups_indirect(
+    encoder : Pointer(Void),
+    indirect_buffer : Pointer(Void), indirect_offset : Int64,
+    tg_x : Int32, tg_y : Int32, tg_z : Int32
+  ) : Void
   fun create_concurrent_compute_encoder = gs_create_concurrent_compute_encoder(cmd : Pointer(Void)) : Pointer(Void)
   fun encoder_memory_barrier = gs_encoder_memory_barrier(encoder : Pointer(Void)) : Void
   fun encoder_end_encoding = gs_encoder_end_encoding(encoder : Pointer(Void)) : Void
@@ -497,6 +525,11 @@ lib MetalDispatchFFI
   fun encoder_dispatch_threadgroups = gs_encoder_dispatch_threadgroups(
     encoder : Pointer(Void),
     tg_count_x : Int32, tg_count_y : Int32, tg_count_z : Int32,
+    tg_x : Int32, tg_y : Int32, tg_z : Int32
+  ) : Void
+  fun encoder_dispatch_threadgroups_indirect = gs_encoder_dispatch_threadgroups_indirect(
+    encoder : Pointer(Void),
+    indirect_buffer : Pointer(Void), indirect_offset : Int64,
     tg_x : Int32, tg_y : Int32, tg_z : Int32
   ) : Void
   fun create_concurrent_compute_encoder = gs_create_concurrent_compute_encoder(cmd : Pointer(Void)) : Pointer(Void)

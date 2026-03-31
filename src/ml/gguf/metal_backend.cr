@@ -4,21 +4,28 @@
 {% unless flag?(:cpu_only) %}
 
 require "./compute"
+require "../metal/compute_graph"
 
 module ML::GGUF
   BERT_FUSED_SOURCE = {{ read_file("#{__DIR__}/kernels/bert_fp16.metal") }}
   GEMM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q5k.metal") }}
   SIMD_GEMM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_simd.metal") }}
+  GEMM_MM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_mm.metal") }}
+  GEMM_MM_F16_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_mm_f16.metal") }}
   FLASH_ATTN_SOURCE = {{ read_file("#{__DIR__}/kernels/attention_flash.metal") }}
 
   class GPUWeight
-    getter buffer : ML::MetalBuffer
+    getter buffer : ML::MetalBuffer       # FP16 pre-dequantized weights [out_dim, in_dim]
     getter bias_buffer : ML::MetalBuffer
     getter type : TensorType
     getter out_dim : Int32
     getter in_dim : Int32
+    getter fp16 : Bool                     # true = pre-dequantized FP16
+
     def initialize(qw : QuantWeight, bias : Array(Float32))
       @type = qw.type; @out_dim = qw.out_dim; @in_dim = qw.in_dim
+      @fp16 = false  # FP16 pre-dequant disabled — bandwidth penalty > dequant savings
+
       @buffer = ML::MetalBuffer.new(qw.raw.size.to_i64)
       @buffer.write_bytes(qw.raw.to_unsafe, qw.raw.size)
       @bias_buffer = ML::MetalBuffer.new(bias.size.to_i64 * 4)
@@ -32,11 +39,12 @@ module ML::GGUF
     getter qkv : ML::MetalBuffer
     getter q : ML::MetalBuffer
     getter k : ML::MetalBuffer
-    getter v : ML::MetalBuffer      # V original [n_heads, seq, DV]
-    getter v_t : ML::MetalBuffer    # V transposed [n_heads, DV, seq]
+    getter v : ML::MetalBuffer
+    getter v_t : ML::MetalBuffer
     getter attn_out : ML::MetalBuffer
     getter ffn_mid : ML::MetalBuffer
     getter ffn_out : ML::MetalBuffer
+    getter ffn_out_f32 : ML::MetalBuffer
     getter output : ML::MetalBuffer
     getter cos_cache : ML::MetalBuffer
     getter sin_cache : ML::MetalBuffer
@@ -53,6 +61,7 @@ module ML::GGUF
     getter expert_offsets : ML::MetalBuffer  # [9] int32 prefix sums
     getter expert_mid : ML::MetalBuffer   # [n_experts, max_seq, ffn_dim]
     getter expert_out : ML::MetalBuffer  # [n_experts, max_seq, dim]
+    getter dispatch_args : ML::MetalBuffer  # indirect dispatch args for MoE
 
     def initialize(max_seq : Int32, dim : Int32, ffn_dim : Int32, n_heads : Int32, head_dim : Int32,
                    n_experts_used : Int32, rope_cos : Array(Float32), rope_sin : Array(Float32))
@@ -67,6 +76,7 @@ module ML::GGUF
       @attn_out = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
       @ffn_mid  = ML::MetalBuffer.new(max_seq.to_i64 * ffn_dim * 2)
       @ffn_out  = ML::MetalBuffer.new(max_seq.to_i64 * dim * 2)
+      @ffn_out_f32 = ML::MetalBuffer.new(max_seq.to_i64 * dim * 4)
       @output   = ML::MetalBuffer.new(dim.to_i64 * 4)  # final output stays F32
       @cos_cache = ML::MetalBuffer.new(rope_cos.size.to_i64 * 4); @cos_cache.write(rope_cos)
       @sin_cache = ML::MetalBuffer.new(rope_sin.size.to_i64 * 4); @sin_cache.write(rope_sin)
@@ -87,6 +97,8 @@ module ML::GGUF
       # All-experts buffers FP16
       @expert_mid  = ML::MetalBuffer.new(8_i64 * max_seq * ffn_dim * 2)
       @expert_out  = ML::MetalBuffer.new(8_i64 * max_seq * dim * 2)
+      # Indirect dispatch args: 8 UP + 8 DOWN + 8 scatter = 24 entries × 12 bytes
+      @dispatch_args = ML::MetalBuffer.new(24_i64 * 12)
     end
   end
 
@@ -122,7 +134,11 @@ module ML::GGUF
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2
          gelu_inplace gate_matmul softmax_topk moe_gather scatter_weighted_add
          moe_weighted_scatter residual_layernorm residual_layernorm_copy
-         moe_count_experts moe_prefix_sum moe_build_routing zero_int].each do |name|
+         moe_count_experts moe_prefix_sum moe_build_routing zero_int
+         moe_write_dispatch_args scatter_weighted_add_moe
+         moe_scatter_atomic f32_to_f16 residual_layernorm_f32
+         gate_softmax_topk_count qkv_split_rope
+         moe_route_and_dispatch].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
         }
@@ -142,10 +158,22 @@ module ML::GGUF
       @pipelines["attention_matmul"] = ML::Metal::PipelineCache.get("attention_matmul") {
         ML::Metal::ComputePipeline.new("attention_matmul", matmul_attn_src)
       }
-      # SIMD GEMM kernels (primary — better precision via simd_sum)
-      %w[simd_gemm_q5k simd_gemm_q6k].each do |name|
+      # SIMD GEMM kernels (scalar path — for small batch or MoE per-expert)
+      %w[simd_gemm_q5k simd_gemm_q6k simd_gemm_q5k_moe simd_gemm_q6k_moe].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, SIMD_GEMM_SOURCE)
+        }
+      end
+      # Matrix-matrix GEMM kernels (simdgroup_matrix — for batch > 8)
+      %w[simd_mm_q5k simd_mm_q6k simd_mm_q5k_moe simd_mm_q6k_moe].each do |name|
+        @pipelines[name] = ML::Metal::PipelineCache.get(name) {
+          ML::Metal::ComputePipeline.new(name, GEMM_MM_SOURCE)
+        }
+      end
+      # FP16 pre-dequantized GEMM kernels (fastest — no dequant overhead)
+      %w[simd_mm_f16 simd_mm_f16_moe].each do |name|
+        @pipelines[name] = ML::Metal::PipelineCache.get(name) {
+          ML::Metal::ComputePipeline.new(name, GEMM_MM_F16_SOURCE)
         }
       end
     end
@@ -179,16 +207,84 @@ module ML::GGUF
     end
 
     SIMD_N_ROWS = 2  # Must match N_ROWS in gemm_simd.metal
+    SIMD_NR0    = 2  # Must match NR0 in gemm_simd.metal — output rows per simdgroup
 
+    # Scalar SIMD GEMM (mul_mv) — good for small batch
     private def matmul_kernel(type : TensorType) : String
       type.q5_k? ? "simd_gemm_q5k" : "simd_gemm_q6k"
     end
 
-    # Returns {threadgroup_count, threadgroup_size} for dispatchThreadgroups
+    # Matrix-matrix GEMM (mul_mm) — simdgroup_matrix, good for batch > 8
+    private def matmul_kernel_mm(type : TensorType, fp16 : Bool = false) : String
+      fp16 ? "simd_mm_f16" : (type.q5_k? ? "simd_mm_q5k" : "simd_mm_q6k")
+    end
+
+    private def matmul_kernel_moe(type : TensorType) : String
+      type.q5_k? ? "simd_gemm_q5k_moe" : "simd_gemm_q6k_moe"
+    end
+
+    private def matmul_kernel_mm_moe(type : TensorType, fp16 : Bool = false) : String
+      fp16 ? "simd_mm_f16_moe" : (type.q5_k? ? "simd_mm_q5k_moe" : "simd_mm_q6k_moe")
+    end
+
+    MM_BATCH_THRESHOLD = 8  # Switch to simdgroup_matrix GEMM above this batch size
+    MM_NR0 = 64             # Output rows per threadgroup for mm kernel
+    MM_NR1 = 32             # Batch elements per threadgroup for mm kernel
+    MM_SHMEM = 16384        # Double-buffered threadgroup memory (2×6KB tiles + output temp)
+
+    # Dispatch matmul — auto-selects mm vs mv based on batch size
+    private def matmul_dispatch(enc, type : TensorType,
+                                 out_dim : Int32, batch : Int32)
+      if batch > MM_BATCH_THRESHOLD
+        enc.set_pipeline(pipe(matmul_kernel_mm(type)))
+        enc.set_threadgroup_memory(MM_SHMEM, 0)
+        grid = {(batch + MM_NR1 - 1) // MM_NR1, (out_dim + MM_NR0 - 1) // MM_NR0, 1}
+        enc.dispatch_threadgroups(grid, {128, 1, 1})
+      else
+        enc.set_pipeline(pipe(matmul_kernel(type)))
+        grid, tg = matmul_dispatch_tg(out_dim, batch)
+        enc.dispatch_threadgroups(grid, tg)
+      end
+    end
+
+    # Returns {threadgroup_count, threadgroup_size} for scalar SIMD dispatch
     private def matmul_dispatch_tg(out_dim : Int32, batch : Int32) : { {Int32, Int32, Int32}, {Int32, Int32, Int32} }
-      tg_count = {(out_dim + SIMD_N_ROWS - 1) // SIMD_N_ROWS, {batch, 1}.max, 1}
+      rows_per_tg = SIMD_N_ROWS * SIMD_NR0
+      tg_count = {(out_dim + rows_per_tg - 1) // rows_per_tg, {batch, 1}.max, 1}
       tg_size = {32, SIMD_N_ROWS, 1}
       {tg_count, tg_size}
+    end
+
+    # Add a matmul op to the compute graph (auto-selects mm vs mv)
+    private def graph_matmul(g : ML::Metal::ComputeGraph,
+                              gw : GPUWeight, x_buf : ML::MetalBuffer, out_buf : ML::MetalBuffer,
+                              in_dim : UInt32, out_dim_val : UInt32, batch_val : UInt32, gelu : UInt32,
+                              w_offset : Int64 = 0)
+      batch_i = batch_val.to_i32; out_dim_i = out_dim_val.to_i32
+      if batch_i > MM_BATCH_THRESHOLD
+        grid = {(batch_i + MM_NR1 - 1) // MM_NR1, (out_dim_i + MM_NR0 - 1) // MM_NR0, 1}
+        g.add_op(pipe(matmul_kernel_mm(gw.type))) do |op|
+          op.buffer(gw.buffer, 0, :read, offset: w_offset)
+          op.buffer(x_buf, 1, :read)
+          op.buffer(gw.bias_buffer, 2, :read)
+          op.buffer(out_buf, 3, :write)
+          op.value(in_dim, 4); op.value(out_dim_val, 5)
+          op.value(batch_val, 6); op.value(gelu, 7)
+          op.threadgroup_memory(MM_SHMEM)
+          op.dispatch_threadgroups(grid, {128, 1, 1})
+        end
+      else
+        grid, tg = matmul_dispatch_tg(out_dim_i, batch_i)
+        g.add_op(pipe(matmul_kernel(gw.type))) do |op|
+          op.buffer(gw.buffer, 0, :read, offset: w_offset)
+          op.buffer(x_buf, 1, :read)
+          op.buffer(gw.bias_buffer, 2, :read)
+          op.buffer(out_buf, 3, :write)
+          op.value(in_dim, 4); op.value(out_dim_val, 5)
+          op.value(batch_val, 6); op.value(gelu, 7)
+          op.dispatch_threadgroups(grid, tg)
+        end
+      end
     end
 
     def encode_layers(
@@ -216,89 +312,75 @@ module ML::GGUF
         {n1w, n1b, n2w, n2b}
       end
 
-      # Pre-create and enqueue command buffers for pipelined execution
-      # For MoE sync path (seq > 64): 7 cmd buffers (one initial + 6 post-MoE)
-      # For sync-free path (seq ≤ 64): 1 cmd buffer
-      n_moe_layers = layers.each_with_index.count { |_, i| (i % moe_every_n == 1) && n_experts > 0 }
-      needs_sync = seq_len > 64
-      n_cmds = needs_sync ? n_moe_layers + 1 : 1
-      cmds = Array(ML::Metal::CommandBuffer).new(n_cmds) { ML::Metal::CommandBuffer.new(fast: true) }
-      cmds.each(&.enqueue)  # establish execution order
-      cmd = cmds[0]
-      cmd_idx = 0
+      cmd = ML::Metal::CommandBuffer.new(fast: true)
+      cmd.enqueue
       h_bufs = [ws.hidden, ws.hidden2]
 
-      # ONE concurrent encoder per cmd — Metal can overlap independent dispatches
-      enc = ML::Metal::ComputeEncoder.new(cmd, concurrent: true)
+      # Build compute graph
+      graph = ML::Metal::ComputeGraph.new
+      enc = ML::Metal::GraphEncoder.new(graph)
+      _t_encode_start = Time.instant
 
       layers.each_with_index do |lw, layer_idx|
         is_moe = (layer_idx % moe_every_n == 1) && n_experts > 0
         n1w_buf, n1b_buf, n2w_buf, n2b_buf = norm_bufs[layer_idx]
         h_in = h_bufs[layer_idx % 2]
         h_out = h_bufs[(layer_idx + 1) % 2]
+        w = ML::Metal::BufferAccess::Write
+        rw = ML::Metal::BufferAccess::ReadWrite
 
         # === Attention ===
         # QKV matmul: h_in → qkv
         qkv_gw = gw(lw.attn_qkv_w, lw.attn_qkv_b)
-        enc.set_pipeline(pipe(matmul_kernel(qkv_gw.type)))
         enc.set_buffer(qkv_gw.buffer, 0); enc.set_buffer(h_in, 1)
-        enc.set_buffer(qkv_gw.bias_buffer, 2); enc.set_buffer(ws.qkv, 3)
+        enc.set_buffer(qkv_gw.bias_buffer, 2); enc.set_buffer(ws.qkv, 3, w)
         enc.set_value(dim_u, 4); enc.set_value(3_u32 * dim_u, 5)
         enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
-        grid, tg = matmul_dispatch_tg(3 * dim, seq_len); enc.dispatch_threadgroups(grid, tg)
-        enc.memory_barrier  # qkv ready → split reads it
+        matmul_dispatch(enc, qkv_gw.type, 3 * dim, seq_len)
+        enc.memory_barrier
 
-        # QKV split: qkv → Q, K, V, V_t
-        enc.set_pipeline(pipe("qkv_split"))
-        enc.set_buffer(ws.qkv, 0); enc.set_buffer(ws.q, 1); enc.set_buffer(ws.k, 2)
-        enc.set_buffer(ws.v, 3); enc.set_buffer(ws.v_t, 4)
-        enc.set_value(batch, 5); enc.set_value(dim_u, 6); enc.set_value(n_heads_u, 7); enc.set_value(head_dim_u, 8)
+        # Fused QKV split + RoPE: 1 dispatch replaces split + 2×rope + 2 barriers
+        enc.set_pipeline(pipe("qkv_split_rope"))
+        enc.set_buffer(ws.qkv, 0); enc.set_buffer(ws.q, 1, w); enc.set_buffer(ws.k, 2, w)
+        enc.set_buffer(ws.v, 3, w); enc.set_buffer(ws.v_t, 4, w)
+        enc.set_buffer(ws.cos_cache, 5); enc.set_buffer(ws.sin_cache, 6)
+        enc.set_value(batch, 7); enc.set_value(dim_u, 8); enc.set_value(n_heads_u, 9); enc.set_value(head_dim_u, 10)
         enc.dispatch_1d(seq_len * dim, 256)
-        enc.memory_barrier  # Q,K ready → RoPE reads them
-
-        # RoPE Q and K — INDEPENDENT (no barrier between them)
-        [ws.q, ws.k].each do |buf|
-          enc.set_pipeline(pipe("rope_neox_inplace"))
-          enc.set_buffer(buf, 0); enc.set_buffer(ws.cos_cache, 1); enc.set_buffer(ws.sin_cache, 2)
-          enc.set_value(batch, 3); enc.set_value(n_heads_u, 4); enc.set_value(head_dim_u, 5)
-          enc.dispatch_1d(seq_len * n_heads, 256)
-        end
-        enc.memory_barrier  # Q,K after RoPE → attention reads them
+        enc.memory_barrier
 
         # Attention
         if seq_len > 32
           q_total = 8 * 2; n_sg = 2
           sh_q = q_total * head_dim * 2; sh_o = q_total * head_dim * 4; sh_s = q_total * 64 * 4
           enc.set_pipeline(pipe("attention_matmul"))
-          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3)
+          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3, w)
           enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
           enc.set_threadgroup_memory(sh_q + sh_o + sh_s, 0)
           enc.dispatch_threadgroups({(seq_len + q_total - 1) // q_total, n_heads, 1}, {32, n_sg, 1})
         else
           n_qr = 8
           enc.set_pipeline(pipe("attention_forward"))
-          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v_t, 2); enc.set_buffer(ws.attn_out, 3)
+          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v_t, 2); enc.set_buffer(ws.attn_out, 3, w)
           enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
           enc.set_threadgroup_memory(n_qr * seq_len * 4, 0)
           enc.dispatch_threadgroups({n_heads, (seq_len + n_qr - 1) // n_qr, 1}, {32, n_qr, 1})
         end
-        enc.memory_barrier  # attn_out ready → out_proj reads it
+        enc.memory_barrier
 
         # Output projection: attn_out → ffn_out
         out_gw = gw(lw.attn_out_w, lw.attn_out_b)
-        enc.set_pipeline(pipe(matmul_kernel(out_gw.type)))
         enc.set_buffer(out_gw.buffer, 0); enc.set_buffer(ws.attn_out, 1)
-        enc.set_buffer(out_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_out, 3)
+        enc.set_buffer(out_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_out, 3, w)
         enc.set_value(dim_u, 4); enc.set_value(dim_u, 5); enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
-        grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg)
-        enc.memory_barrier  # ffn_out ready → norm1 reads it
+        matmul_dispatch(enc, out_gw.type, dim, seq_len)
+        enc.memory_barrier
 
         # Norm1: h_out = layernorm(h_in + ffn_out)
         enc.set_pipeline(pipe("residual_layernorm_copy"))
-        enc.set_buffer(h_in, 0); enc.set_buffer(ws.ffn_out, 1); enc.set_buffer(h_out, 2)
+        enc.set_buffer(h_in, 0); enc.set_buffer(ws.ffn_out, 1); enc.set_buffer(h_out, 2, w)
         enc.set_buffer(n1w_buf, 3); enc.set_buffer(n1b_buf, 4)
         enc.set_value(dim_u, 5); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
-        enc.memory_barrier  # h_out ready → FFN reads it
+        enc.memory_barrier
 
         # === FFN (reads from h_out) ===
         if is_moe
@@ -312,19 +394,21 @@ module ML::GGUF
           up_gw_full = gw(exp_up_qw, Array(Float32).new(ffn_dim, 0.0_f32))
           down_gw_full = gw(exp_down_qw, Array(Float32).new(dim, 0.0_f32))
 
-          # GPU gate + softmax + top-k (all in concurrent encoder)
+          # Fused SIMD gate + softmax + top-k + expert count (1 simdgroup per token)
           gate_w_buf = upload_f32(gate_w_arr)
-          enc.set_pipeline(pipe("gate_matmul"))
-          enc.set_buffer(h_out, 0); enc.set_buffer(gate_w_buf, 1); enc.set_buffer(ws.gate_logits, 2)
-          enc.set_value(dim_u, 3); enc.set_value(n_experts.to_u32, 4)
-          enc.dispatch({n_experts, seq_len, 1}, {n_experts, 1, 1})
-          enc.memory_barrier  # gate_logits → softmax
+          enc.set_pipeline(pipe("zero_int"))
+          enc.set_buffer(ws.expert_counts, 0, w)
+          enc.dispatch_1d(n_experts, 256)
+          enc.memory_barrier
 
-          enc.set_pipeline(pipe("softmax_topk"))
-          enc.set_buffer(ws.gate_logits, 0); enc.set_buffer(ws.routing_ids, 1); enc.set_buffer(ws.routing_wts, 2)
-          enc.set_value(n_experts.to_u32, 3); enc.set_value(n_experts_used.to_u32, 4)
-          enc.dispatch_1d(seq_len, 1)
-          enc.memory_barrier  # routing ready → expert dispatches
+          enc.set_pipeline(pipe("gate_softmax_topk_count"))
+          enc.set_buffer(h_out, 0); enc.set_buffer(gate_w_buf, 1)
+          enc.set_buffer(ws.routing_ids, 2, w); enc.set_buffer(ws.routing_wts, 3, w)
+          enc.set_buffer(ws.expert_counts, 4, rw)
+          enc.set_value(dim_u, 5); enc.set_value(n_experts.to_u32, 6)
+          enc.set_value(n_experts_used.to_u32, 7)
+          enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+          enc.memory_barrier
 
           if seq_len <= 64
             # === SYNC-FREE PATH: all experts × all tokens ===
@@ -337,7 +421,7 @@ module ML::GGUF
               enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
               enc.set_buffer(h_out, 1)
               enc.set_buffer(up_gw_full.bias_buffer, 2)
-              enc.set_buffer(ws.expert_mid, 3, offset: ei.to_i64 * expert_stride_mid)
+              enc.set_buffer(ws.expert_mid, 3, w, offset: ei.to_i64 * expert_stride_mid, length: expert_stride_mid)
               enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
               enc.set_value(batch, 6); enc.set_value(yes_gelu, 7)
               grid, tg = matmul_dispatch_tg(ffn_dim, seq_len); enc.dispatch_threadgroups(grid, tg)
@@ -348,9 +432,9 @@ module ML::GGUF
               down_offset = ei.to_i64 * down_expert_bytes
               enc.set_pipeline(pipe(matmul_kernel(exp_down_qw.type)))
               enc.set_buffer(down_gw_full.buffer, 0, offset: down_offset)
-              enc.set_buffer(ws.expert_mid, 1, offset: ei.to_i64 * expert_stride_mid)
+              enc.set_buffer(ws.expert_mid, 1, offset: ei.to_i64 * expert_stride_mid, length: expert_stride_mid)
               enc.set_buffer(down_gw_full.bias_buffer, 2)
-              enc.set_buffer(ws.expert_out, 3, offset: ei.to_i64 * expert_stride_out)
+              enc.set_buffer(ws.expert_out, 3, w, offset: ei.to_i64 * expert_stride_out, length: expert_stride_out)
               enc.set_value(ffn_dim_u, 4); enc.set_value(dim_u, 5)
               enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
               grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg)
@@ -358,137 +442,132 @@ module ML::GGUF
             enc.memory_barrier  # all downs done → scatter reads expert_out
 
             enc.set_pipeline(pipe("moe_weighted_scatter"))
-            enc.set_buffer(ws.ffn_out, 0); enc.set_buffer(ws.expert_out, 1)
+            enc.set_buffer(ws.ffn_out, 0, rw); enc.set_buffer(ws.expert_out, 1)
             enc.set_buffer(ws.routing_ids, 2); enc.set_buffer(ws.routing_wts, 3)
             enc.set_value(dim_u, 4); enc.set_value(batch, 5)
             enc.set_value(n_experts_used.to_u32, 6); enc.set_value(n_experts.to_u32, 7)
             enc.dispatch_1d(seq_len * dim, 256)
             enc.memory_barrier  # ffn_out ready → norm2
           else
-            # === GPU-NATIVE ROUTING + SYNC for expert offsets ===
+            # === GPU-NATIVE ROUTING — zero CPU sync ===
+            # expert_counts already populated by fused gate_softmax_topk_count
             total_routing = seq_len * n_experts_used
 
-            enc.set_pipeline(pipe("zero_int"))
-            enc.set_buffer(ws.expert_counts, 0)
-            enc.dispatch_1d(n_experts, 1)
-            enc.memory_barrier
-
-            enc.set_pipeline(pipe("moe_count_experts"))
-            enc.set_buffer(ws.routing_ids, 0); enc.set_buffer(ws.expert_counts, 1)
-            enc.set_value(n_experts_used.to_u32, 2)
-            enc.dispatch_1d(seq_len, 1)
-            enc.memory_barrier
-
-            enc.set_pipeline(pipe("moe_prefix_sum"))
-            enc.set_buffer(ws.expert_counts, 0); enc.set_buffer(ws.expert_offsets, 1)
-            enc.set_value(n_experts.to_u32, 2)
-            enc.dispatch_1d(1, 1)
-            enc.memory_barrier
-
-            enc.set_pipeline(pipe("zero_int"))
-            enc.set_buffer(ws.expert_counts, 0)
-            enc.dispatch_1d(n_experts, 1)
-            enc.memory_barrier
-
-            enc.set_pipeline(pipe("moe_build_routing"))
+            # Fused: prefix_sum + zero_counts + build_routing + write_dispatch_args
+            enc.set_pipeline(pipe("moe_route_and_dispatch"))
             enc.set_buffer(ws.routing_ids, 0); enc.set_buffer(ws.routing_wts, 1)
-            enc.set_buffer(ws.gather_map, 2); enc.set_buffer(ws.scatter_wts, 3)
-            enc.set_buffer(ws.expert_offsets, 4); enc.set_buffer(ws.expert_counts, 5)
-            enc.set_value(n_experts_used.to_u32, 6); enc.set_value(n_experts.to_u32, 7)
-            enc.dispatch_1d(seq_len, 1)
+            enc.set_buffer(ws.gather_map, 2, w); enc.set_buffer(ws.scatter_wts, 3, w)
+            enc.set_buffer(ws.expert_counts, 4, rw); enc.set_buffer(ws.expert_offsets, 5, w)
+            enc.set_buffer(ws.dispatch_args, 6, w)
+            enc.set_value(n_experts_used.to_u32, 7); enc.set_value(n_experts.to_u32, 8)
+            enc.set_value(batch, 9)
+            enc.set_value(ffn_dim_u, 10); enc.set_value(dim_u, 11); enc.set_value(dim_u, 12)
+            tg_sz = {seq_len, 1024}.min
+            enc.dispatch_threadgroups({1, 1, 1}, {tg_sz, 1, 1})
             enc.memory_barrier
 
+            # Gather routed tokens to packed buffer
             enc.set_pipeline(pipe("moe_gather"))
-            enc.set_buffer(h_out, 0); enc.set_buffer(ws.moe_input, 1); enc.set_buffer(ws.gather_map, 2)
+            enc.set_buffer(h_out, 0); enc.set_buffer(ws.moe_input, 1, w); enc.set_buffer(ws.gather_map, 2)
             enc.set_value(dim_u, 3)
             enc.dispatch_1d(total_routing * dim, 256)
-
-            # End concurrent encoder, sync to read expert_offsets
-            enc.end_encoding
-            cmd.commit; cmd.wait
-            eoff = ws.expert_offsets.contents.as(Pointer(Int32))
-
-            # New cmd + concurrent encoder for expert matmuls
-            cmd_idx += 1; cmd = cmds[cmd_idx]
-            enc = ML::Metal::ComputeEncoder.new(cmd, concurrent: true)
-
-            enc.set_pipeline(pipe("zero_region"))
-            enc.set_buffer(ws.ffn_out, 0); enc.set_value(0_u32, 1)
-            enc.dispatch_1d(seq_len * dim, 256)
             enc.memory_barrier
 
+            # [LTP Collapse] Removed dead zero_int(ffn_out_f32) — UPs write to moe_mid, not ffn_out_f32.
+            # ffn_out_f32 is zeroed again at line ~517 before scatter (the only reader).
+
+            # All 8 expert UPs — concurrent via indirect mm dispatch
+            mm_tg_size = {128, 1, 1}
             n_experts.times do |ei|
-              eb = eoff[ei + 1] - eoff[ei]
-              next if eb == 0
-              ri_base = eoff[ei]
-
               up_offset = ei.to_i64 * up_expert_bytes
-              input_off = ri_base.to_i64 * dim * 2
-              mid_off = ri_base.to_i64 * ffn_dim * 2
-              enc.set_pipeline(pipe(matmul_kernel(exp_up_qw.type)))
+              enc.set_pipeline(pipe(matmul_kernel_mm_moe(exp_up_qw.type)))
               enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
-              enc.set_buffer(ws.moe_input, 1, offset: input_off)
+              enc.set_buffer(ws.moe_input, 1, partition: ei)        # Block Integrity: expert partition
               enc.set_buffer(up_gw_full.bias_buffer, 2)
-              enc.set_buffer(ws.moe_mid, 3, offset: mid_off)
-              enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
-              enc.set_value(eb.to_u32, 6); enc.set_value(yes_gelu, 7)
-              grid, tg = matmul_dispatch_tg(ffn_dim, eb); enc.dispatch_threadgroups(grid, tg)
-              enc.memory_barrier  # up done → down reads mid
-
-              down_offset = ei.to_i64 * down_expert_bytes
-              out_off = ri_base.to_i64 * dim * 2
-              enc.set_pipeline(pipe(matmul_kernel(exp_down_qw.type)))
-              enc.set_buffer(down_gw_full.buffer, 0, offset: down_offset)
-              enc.set_buffer(ws.moe_mid, 1, offset: mid_off)
-              enc.set_buffer(down_gw_full.bias_buffer, 2)
-              enc.set_buffer(ws.moe_output, 3, offset: out_off)
-              enc.set_value(ffn_dim_u, 4); enc.set_value(dim_u, 5)
-              enc.set_value(eb.to_u32, 6); enc.set_value(no_gelu, 7)
-              grid, tg = matmul_dispatch_tg(dim, eb); enc.dispatch_threadgroups(grid, tg)
-              enc.memory_barrier  # down done → scatter reads output
-
-              enc.set_pipeline(pipe("scatter_weighted_add"))
-              enc.set_buffer(ws.ffn_out, 0)
-              enc.set_buffer(ws.moe_output, 1, offset: ri_base.to_i64 * dim * 2)
-              enc.set_buffer(ws.gather_map, 2, offset: ri_base.to_i64 * 4)
-              enc.set_buffer(ws.scatter_wts, 3, offset: ri_base.to_i64 * 4)
-              enc.set_value(dim_u, 4)
-              enc.dispatch_1d(eb * dim, 256)
-              enc.memory_barrier  # scatter done (for next expert's potential conflict)
+              enc.set_buffer(ws.moe_mid, 3, w, partition: ei)      # Block Integrity: expert partition
+              enc.set_buffer(ws.expert_offsets, 4)
+              enc.set_value(ei.to_u32, 5)
+              enc.set_value(dim_u, 6); enc.set_value(ffn_dim_u, 7)
+              enc.set_value(yes_gelu, 8)
+              enc.set_threadgroup_memory(MM_SHMEM, 0)
+              enc.dispatch_threadgroups_indirect(ws.dispatch_args, ei.to_i64 * 12, mm_tg_size)
             end
+            enc.memory_barrier
+
+            # All 8 expert DOWNs — concurrent via indirect mm dispatch
+            n_experts.times do |ei|
+              down_offset = ei.to_i64 * down_expert_bytes
+              enc.set_pipeline(pipe(matmul_kernel_mm_moe(exp_down_qw.type)))
+              enc.set_buffer(down_gw_full.buffer, 0, offset: down_offset)
+              enc.set_buffer(ws.moe_mid, 1, partition: ei)          # Block Integrity: expert partition
+              enc.set_buffer(down_gw_full.bias_buffer, 2)
+              enc.set_buffer(ws.moe_output, 3, w, partition: ei)    # Block Integrity: expert partition
+              enc.set_buffer(ws.expert_offsets, 4)
+              enc.set_value(ei.to_u32, 5)
+              enc.set_value(ffn_dim_u, 6); enc.set_value(dim_u, 7)
+              enc.set_value(no_gelu, 8)
+              enc.set_threadgroup_memory(MM_SHMEM, 0)
+              enc.dispatch_threadgroups_indirect(ws.dispatch_args, (n_experts + ei).to_i64 * 12, mm_tg_size)
+            end
+            enc.memory_barrier
+
+            # Atomic scatter: ALL routing slots in ONE dispatch (no sequential barriers)
+            # Zero the f32 accumulator (use zero_int for 4-byte elements)
+            enc.set_pipeline(pipe("zero_int"))
+            enc.set_buffer(ws.ffn_out_f32, 0, w)
+            enc.dispatch_1d(seq_len * dim, 256)  # zero_int writes int32 = same size as float
+            enc.memory_barrier
+
+            # Single atomic scatter dispatch
+            enc.set_pipeline(pipe("moe_scatter_atomic"))
+            enc.set_buffer(ws.ffn_out_f32, 0, rw)
+            enc.set_buffer(ws.moe_output, 1)
+            enc.set_buffer(ws.gather_map, 2)
+            enc.set_buffer(ws.scatter_wts, 3)
+            enc.set_value(dim_u, 4)
+            enc.set_value(total_routing.to_u32, 5)
+            enc.dispatch_1d(total_routing * dim, 256)
+            enc.memory_barrier
+
+            # norm2 reads f32 scatter output directly (fused f32→f16 + residual + layernorm)
+            enc.set_pipeline(pipe("residual_layernorm_f32"))
+            enc.set_buffer(h_out, 0, rw); enc.set_buffer(ws.ffn_out_f32, 1)
+            enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
+            enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+            enc.memory_barrier
           end
 
-          # norm2
-          enc.set_pipeline(pipe("residual_layernorm"))
-          enc.set_buffer(h_out, 0); enc.set_buffer(ws.ffn_out, 1)
-          enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
-          enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
-          enc.memory_barrier  # h_out ready for next layer
+          # norm2 for sync-free MoE path (half input from ffn_out)
+          if seq_len <= 64
+            enc.set_pipeline(pipe("residual_layernorm"))
+            enc.set_buffer(h_out, 0, rw); enc.set_buffer(ws.ffn_out, 1)
+            enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
+            enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+            enc.memory_barrier
+          end
         else
           # Dense FFN
           up_gw = gw(lw.ffn_up_w.not_nil!, lw.ffn_up_b.not_nil!)
-          enc.set_pipeline(pipe(matmul_kernel(up_gw.type)))
           enc.set_buffer(up_gw.buffer, 0); enc.set_buffer(h_out, 1)
-          enc.set_buffer(up_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_mid, 3)
+          enc.set_buffer(up_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_mid, 3, w)
           enc.set_value(dim_u, 4); enc.set_value(ffn_dim_u, 5)
           enc.set_value(batch, 6); enc.set_value(yes_gelu, 7)
-          grid, tg = matmul_dispatch_tg(ffn_dim, seq_len); enc.dispatch_threadgroups(grid, tg)
-          enc.memory_barrier  # ffn_mid ready → down reads it
+          matmul_dispatch(enc, up_gw.type, ffn_dim, seq_len)
+          enc.memory_barrier
 
           down_gw = gw(lw.ffn_down_w.not_nil!, lw.ffn_down_b.not_nil!)
-          enc.set_pipeline(pipe(matmul_kernel(down_gw.type)))
           enc.set_buffer(down_gw.buffer, 0); enc.set_buffer(ws.ffn_mid, 1)
-          enc.set_buffer(down_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_out, 3)
+          enc.set_buffer(down_gw.bias_buffer, 2); enc.set_buffer(ws.ffn_out, 3, w)
           enc.set_value(ffn_dim_u, 4); enc.set_value(dim_u, 5)
           enc.set_value(batch, 6); enc.set_value(no_gelu, 7)
-          grid, tg = matmul_dispatch_tg(dim, seq_len); enc.dispatch_threadgroups(grid, tg)
-          enc.memory_barrier  # ffn_out ready → norm2 reads it
+          matmul_dispatch(enc, down_gw.type, dim, seq_len)
+          enc.memory_barrier
 
           enc.set_pipeline(pipe("residual_layernorm"))
-          enc.set_buffer(h_out, 0); enc.set_buffer(ws.ffn_out, 1)
+          enc.set_buffer(h_out, 0, rw); enc.set_buffer(ws.ffn_out, 1)
           enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
           enc.set_value(dim_u, 4); enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
-          enc.memory_barrier  # h_out ready for next layer
+          enc.memory_barrier
         end
 
         # Per-layer comparison with CPU reference (if provided)
@@ -512,16 +591,36 @@ module ML::GGUF
         end
       end
 
-      # Mean pool (uses same concurrent encoder)
+      # Mean pool
       final_hidden = h_bufs[layers.size % 2]
       enc.set_pipeline(pipe("mean_pool_l2"))
-      enc.set_buffer(final_hidden, 0); enc.set_buffer(ws.output, 1)
+      enc.set_buffer(final_hidden, 0); enc.set_buffer(ws.output, 1, ML::Metal::BufferAccess::Write)
       enc.set_value(seq_len.to_u32, 2); enc.set_value(dim_u, 3)
       enc.dispatch_1d(1, 1)
-      enc.end_encoding
+
+      _t_encode_done = Time.instant
+
+      # Compile and encode with wave-optimized barriers
+      graph.compile!
+      if ENV["PROFILE_MOE"]?
+        st = graph.stats
+        STDERR.puts "  graph: ops=#{st.n_ops} waves=#{st.n_waves} barriers=#{st.n_barriers} max_width=#{st.max_wave_width}"
+      end
+      graph.compile!
+      if ENV["PROFILE_MOE"]?
+        st = graph.stats
+        STDERR.puts "  graph: ops=#{st.n_ops} waves=#{st.n_waves} barriers=#{st.n_barriers} max_width=#{st.max_wave_width}"
+      end
+      graph.encode(cmd)
 
       cmd.commit
       cmd.wait
+      if ENV["PROFILE_MOE"]?
+        _cpu_ms = (_t_encode_done - _t_encode_start).total_milliseconds
+        _gpu_ms = (Time.instant - _t_encode_done).total_milliseconds
+        _total_ms = (Time.instant - _t_encode_start).total_milliseconds
+        STDERR.puts "  cpu_encode=#{_cpu_ms.round(1)}ms gpu_exec=#{_gpu_ms.round(1)}ms total=#{_total_ms.round(1)}ms"
+      end
 
       o_ptr = ws.output.contents.as(Pointer(Float32))
       Array(Float32).new(dim) { |i| o_ptr[i] }

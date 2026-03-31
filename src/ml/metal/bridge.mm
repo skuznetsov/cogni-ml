@@ -615,6 +615,22 @@ extern "C" void gs_encoder_dispatch_threadgroups(
     [enc dispatchThreadgroups:gridSize threadsPerThreadgroup:tgSize];
 }
 
+// Indirect dispatch — threadgroup counts come from a GPU buffer
+extern "C" void gs_encoder_dispatch_threadgroups_indirect(
+    void* encoder,
+    void* indirect_buffer,
+    int64_t indirect_offset,
+    int32_t tg_x, int32_t tg_y, int32_t tg_z
+) {
+    if (encoder == nullptr || indirect_buffer == nullptr) return;
+    id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)encoder;
+    id<MTLBuffer> buf = (__bridge id<MTLBuffer>)indirect_buffer;
+    MTLSize tgSize = MTLSizeMake((NSUInteger)tg_x, (NSUInteger)tg_y, (NSUInteger)tg_z);
+    [enc dispatchThreadgroupsWithIndirectBuffer:buf
+                           indirectBufferOffset:(NSUInteger)indirect_offset
+                          threadsPerThreadgroup:tgSize];
+}
+
 extern "C" void gs_encoder_end_encoding(void* encoder) {
     encoder_end_encoding_impl(encoder);
 }
