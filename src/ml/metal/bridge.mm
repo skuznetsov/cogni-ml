@@ -234,6 +234,34 @@ extern "C" void* create_command_buffer_impl() {
     return (__bridge_retained void*)cmd;
 }
 
+// Lightweight command buffer (no retain tracking — faster)
+extern "C" void* gs_create_command_buffer_fast() {
+    if (ensure_device() != 0) return nullptr;
+    id<MTLCommandBuffer> cmd = [gs_command_queue commandBufferWithUnretainedReferences];
+    return (__bridge_retained void*)cmd;
+}
+
+// Enqueue without commit — tells Metal the execution order
+extern "C" void gs_enqueue_command_buffer(void* cmd_handle) {
+    if (cmd_handle == nullptr) return;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)cmd_handle;
+    [cmd enqueue];
+}
+
+// Commit without waiting (async GPU execution)
+extern "C" void gs_commit_command_buffer(void* cmd_handle) {
+    if (cmd_handle == nullptr) return;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)cmd_handle;
+    [cmd commit];
+}
+
+// Wait for previously committed command buffer
+extern "C" void gs_wait_command_buffer(void* cmd_handle) {
+    if (cmd_handle == nullptr) return;
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    [cmd waitUntilCompleted];
+}
+
 extern "C" void commit_and_wait_impl(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;

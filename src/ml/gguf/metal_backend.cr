@@ -216,7 +216,8 @@ module ML::GGUF
         {n1w, n1b, n2w, n2b}
       end
 
-      cmd = ML::Metal::CommandBuffer.new
+      cmd = ML::Metal::CommandBuffer.new(fast: true)
+      cmd.enqueue  # tell Metal execution order upfront
       h_bufs = [ws.hidden, ws.hidden2]
 
       layers.each_with_index do |lw, layer_idx|
@@ -393,7 +394,7 @@ module ML::GGUF
             eoff = ws.expert_offsets.contents.as(Pointer(Int32))
 
             # Expert matmuls using GPU-built gather_map
-            cmd = ML::Metal::CommandBuffer.new
+            cmd = ML::Metal::CommandBuffer.new(fast: true); cmd.enqueue
             enc = ML::Metal::ComputeEncoder.new(cmd); enc.set_pipeline(pipe("zero_region"))
             enc.set_buffer(ws.ffn_out, 0); enc.set_value(0_u32, 1)
             enc.dispatch_1d(seq_len * dim, 256); enc.end_encoding
@@ -482,7 +483,7 @@ module ML::GGUF
             dot += g * c; ng += g * g; nc += c * c
             e = (g - c).abs; max_err = e if e > max_err
           end
-          cmd = ML::Metal::CommandBuffer.new
+          cmd = ML::Metal::CommandBuffer.new(fast: true); cmd.enqueue
           cos = dot / (Math.sqrt(ng) * Math.sqrt(nc))
           moe = (layer_idx % moe_every_n == 1) ? " (MoE)" : " (dense)"
           STDERR.puts "L#{layer_idx}#{moe} cos=#{cos.round(6)} max_err=#{max_err.round(6)}"

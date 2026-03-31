@@ -226,14 +226,19 @@ module ML
       @handle : Pointer(Void)
       @committed : Bool = false
 
-      def initialize
+      def initialize(fast : Bool = false)
         raise "Metal not available" unless Device.available?
-        @handle = MetalDeviceFFI.create_command_buffer
+        @handle = fast ? MetalDeviceFFI.create_command_buffer_fast : MetalDeviceFFI.create_command_buffer
         raise "Failed to create command buffer" if @handle.null?
       end
 
       def handle : Pointer(Void)
         @handle
+      end
+
+      # Enqueue: tells Metal execution order WITHOUT committing
+      def enqueue : Nil
+        MetalDeviceFFI.enqueue_command_buffer(@handle)
       end
 
       # Commit and wait for completion
@@ -243,11 +248,16 @@ module ML
         @committed = true
       end
 
-      # Commit without waiting (async)
+      # Commit without waiting (async GPU execution)
       def commit : Nil
         return if @committed
-        MetalDeviceFFI.commit(@handle)
+        MetalDeviceFFI.commit_command_buffer(@handle)
         @committed = true
+      end
+
+      # Wait for already-committed buffer to complete
+      def wait : Nil
+        MetalDeviceFFI.wait_command_buffer(@handle)
       end
 
       def committed? : Bool
@@ -341,6 +351,10 @@ lib MetalDeviceFFI
 
   # Command buffer
   fun create_command_buffer = gs_create_command_buffer : Pointer(Void)
+  fun create_command_buffer_fast = gs_create_command_buffer_fast : Pointer(Void)
+  fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
+  fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
+  fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
 
@@ -362,6 +376,10 @@ lib MetalDeviceFFI
   fun recommended_working_set_size = gs_recommended_working_set_size : Int64
   fun has_unified_memory = gs_has_unified_memory : Int32
   fun create_command_buffer = gs_create_command_buffer : Pointer(Void)
+  fun create_command_buffer_fast = gs_create_command_buffer_fast : Pointer(Void)
+  fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
+  fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
+  fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
   fun create_pipeline = gs_create_pipeline(source : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)
