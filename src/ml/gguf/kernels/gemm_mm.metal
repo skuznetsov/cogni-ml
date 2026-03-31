@@ -596,3 +596,112 @@ kernel void simd_mm_q6k_moe(
         }
     }
 }
+
+// ============================================================================
+// Batched expert GEMM — ALL experts in ONE dispatch (LTP Diamond surgery)
+// tgpig.x = flattened batch tiles across ALL experts
+// tgpig.y = output row tile
+// Binary search expert_tg_offsets to find expert_id from tgpig.x
+// Grid: {sum_of_all_expert_batch_tgs, ceil(out_dim/64), 1}
+// ============================================================================
+
+inline int find_expert(device const int* tg_offsets, int flat_x, int n) {
+    int lo = 0, hi = n - 1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (tg_offsets[mid] <= flat_x) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+}
+
+#define BATCHED_MM_BODY(BLOCK_T, BLOCK_BYTES, DEQUANT_FN) \
+    threadgroup half * sa = (threadgroup half *)(shmem); \
+    threadgroup half * sb = (threadgroup half *)(shmem + 4096); \
+    const int eid = find_expert(expert_tg_offs, (int)tgpig.x, (int)n_experts); \
+    const int local_x = (int)tgpig.x - expert_tg_offs[eid]; \
+    const int base = expert_offs[eid]; \
+    const int eb = expert_offs[eid + 1] - base; \
+    if (eb <= 0) return; \
+    const int r0 = tgpig.y * MM_NR0; \
+    const int r1 = local_x * MM_NR1; \
+    const short nr0 = min(MM_NR0, (int)out_dim - r0); \
+    const short nr1 = min(MM_NR1, eb - r1); \
+    if (nr0 <= 0 || nr1 <= 0) return; \
+    const short lr0 = min((short)(tiitg/MM_NL0), (short)(nr0 - 1)); \
+    const short lr1 = min((short)(tiitg/MM_NL1), (short)(nr1 - 1)); \
+    const short il0 = tiitg % MM_NL0; \
+    short il = il0; \
+    const uint row_bytes = (in_dim / QK_K) * BLOCK_BYTES; \
+    device const BLOCK_T * xw = (device const BLOCK_T *)(all_weights + eid * weight_stride + (r0 + lr0) * row_bytes) + il0/MM_NL; \
+    const short iy = 8 * (tiitg % MM_NL1); \
+    device const half * y = x_packed + (base + r1 + lr1) * in_dim + iy; \
+    simdgroup_half8x8 ma[4]; simdgroup_half8x8 mb[2]; simdgroup_float8x8 mc[8]; \
+    for (short i = 0; i < 8; i++) mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f); \
+    for (uint loop_k = 0; loop_k < in_dim; loop_k += MM_NK) { \
+        half4x4 temp_a; DEQUANT_FN(xw, il, temp_a); \
+        threadgroup_barrier(mem_flags::mem_threadgroup); \
+        FOR_UNROLL for (short i = 0; i < 16; i++) { \
+            const short sx = 2*il0 + i/8, sy = (tiitg/MM_NL0)/8, lx = (tiitg/MM_NL0)%8, ly = i%8; \
+            *(sa + 64*(8*sx + sy) + 8*ly + lx) = temp_a[i/4][i%4]; } \
+        { const short sx = tiitg%MM_NL1, sy = (tiitg/MM_NL1)/8, ly = (tiitg/MM_NL1)%8; \
+          *(threadgroup half2x4 *)(sb + 64*(4*sx + sy) + 8*ly) = *(device const half2x4 *)y; } \
+        il = (il + 2 < MM_NL) ? il + 2 : il % 2; \
+        xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw; y += MM_NK; \
+        threadgroup_barrier(mem_flags::mem_threadgroup); \
+        threadgroup const half * lsma = sa + 4*64*(sgitg%2), * lsmb = sb + 2*64*(sgitg/2); \
+        FOR_UNROLL for (short ik = 0; ik < MM_NK/8; ik++) { \
+            simdgroup_barrier(mem_flags::mem_none); \
+            FOR_UNROLL for (short i = 0; i < 4; i++) simdgroup_load(ma[i], lsma + 64*i, 8, 0, false); \
+            simdgroup_barrier(mem_flags::mem_none); \
+            FOR_UNROLL for (short i = 0; i < 2; i++) simdgroup_load(mb[i], lsmb + 64*i, 8, 0, false); \
+            simdgroup_barrier(mem_flags::mem_none); \
+            FOR_UNROLL for (short i = 0; i < 8; i++) simdgroup_multiply_accumulate(mc[i], mb[i/4], ma[i%4], mc[i]); \
+            lsma += 8*64; lsmb += 4*64; } \
+    } \
+    threadgroup float * temp = (threadgroup float *)shmem; \
+    { threadgroup float * sg_out = temp + 32*(sgitg&1) + 16*(sgitg>>1)*MM_NR0; \
+      for (short i = 0; i < 8; i++) simdgroup_store(mc[i], sg_out + 8*(i%4) + 8*MM_NR0*(i/4), MM_NR0, 0, false); } \
+    threadgroup_barrier(mem_flags::mem_threadgroup); \
+    { const int total_out = nr0 * nr1; \
+      for (int idx = (int)tiitg; idx < total_out; idx += 128) { \
+          const int i = idx%nr0, j = idx/nr0; \
+          float val = temp[j*MM_NR0 + i] + bias[r0 + i]; \
+          if (apply_gelu) { if (val > 10.0f) {} else if (val < -10.0f) { val = 0.0f; } \
+            else { float t = 0.7978845608f*(val + 0.044715f*val*val*val); val = 0.5f*val*(1.0f + tanh(t)); } } \
+          out_packed[(base + r1 + j)*out_dim + r0 + i] = half(val); } }
+
+kernel void batched_mm_q5k(
+    device const uint8_t* all_weights    [[buffer(0)]],
+    device const half*    x_packed       [[buffer(1)]],
+    device const float*   bias           [[buffer(2)]],
+    device       half*    out_packed     [[buffer(3)]],
+    device const int*     expert_offs    [[buffer(4)]],
+    device const int*     expert_tg_offs [[buffer(5)]],
+    constant     uint&    in_dim         [[buffer(6)]],
+    constant     uint&    out_dim        [[buffer(7)]],
+    constant     uint&    apply_gelu     [[buffer(8)]],
+    constant     uint&    n_experts      [[buffer(9)]],
+    constant     uint&    weight_stride  [[buffer(10)]],
+    threadgroup  char*    shmem          [[threadgroup(0)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiitg [[thread_index_in_threadgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{ BATCHED_MM_BODY(block_q5_K, 176, dequantize_q5_K_fn) }
+
+kernel void batched_mm_q6k(
+    device const uint8_t* all_weights    [[buffer(0)]],
+    device const half*    x_packed       [[buffer(1)]],
+    device const float*   bias           [[buffer(2)]],
+    device       half*    out_packed     [[buffer(3)]],
+    device const int*     expert_offs    [[buffer(4)]],
+    device const int*     expert_tg_offs [[buffer(5)]],
+    constant     uint&    in_dim         [[buffer(6)]],
+    constant     uint&    out_dim        [[buffer(7)]],
+    constant     uint&    apply_gelu     [[buffer(8)]],
+    constant     uint&    n_experts      [[buffer(9)]],
+    constant     uint&    weight_stride  [[buffer(10)]],
+    threadgroup  char*    shmem          [[threadgroup(0)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiitg [[thread_index_in_threadgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{ BATCHED_MM_BODY(block_q6_K, 210, dequantize_q6_K_fn) }

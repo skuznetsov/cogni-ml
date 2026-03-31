@@ -604,6 +604,38 @@ kernel void moe_write_dispatch_args(
 }
 
 // ============================================================================
+// Batched expert dispatch args: compute expert_tg_offsets (prefix sum of per-expert TG counts)
+// + total grid size for batched_mm kernels. Single-thread kernel.
+// Grid: [1]
+// ============================================================================
+kernel void moe_write_batched_args(
+    device const int*  expert_offsets  [[buffer(0)]],  // [n_experts+1] token offsets
+    device       int*  expert_tg_offs [[buffer(1)]],   // [n_experts+1] output: TG prefix sums
+    device       uint* up_grid        [[buffer(2)]],   // [3] output: indirect dispatch args for batched UP
+    device       uint* down_grid      [[buffer(3)]],   // [3] output: indirect dispatch args for batched DOWN
+    constant     uint& n_experts      [[buffer(4)]],
+    constant     uint& up_out_dim     [[buffer(5)]],   // ffn_dim
+    constant     uint& down_out_dim   [[buffer(6)]],   // dim
+    uint tid [[thread_position_in_grid]])
+{
+    int sum_tg = 0;
+    for (uint e = 0; e < n_experts; e++) {
+        expert_tg_offs[e] = sum_tg;
+        int eb = expert_offsets[e + 1] - expert_offsets[e];
+        sum_tg += (max(eb, 0) + 31) / 32;  // ceil(eb / MM_NR1=32)
+    }
+    expert_tg_offs[n_experts] = sum_tg;
+    // UP indirect dispatch: {total_batch_tgs, ceil(ffn_dim/64), 1}
+    up_grid[0] = (uint)sum_tg;
+    up_grid[1] = (up_out_dim + 63) / 64;
+    up_grid[2] = 1;
+    // DOWN indirect dispatch: {total_batch_tgs, ceil(dim/64), 1}
+    down_grid[0] = (uint)sum_tg;
+    down_grid[1] = (down_out_dim + 63) / 64;
+    down_grid[2] = 1;
+}
+
+// ============================================================================
 // MoE gather: hidden(half) → moe_input(half)
 // ============================================================================
 kernel void moe_gather(

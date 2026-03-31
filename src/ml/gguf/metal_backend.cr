@@ -62,6 +62,9 @@ module ML::GGUF
     getter expert_mid : ML::MetalBuffer   # [n_experts, max_seq, ffn_dim]
     getter expert_out : ML::MetalBuffer  # [n_experts, max_seq, dim]
     getter dispatch_args : ML::MetalBuffer  # indirect dispatch args for MoE
+    getter expert_tg_offs : ML::MetalBuffer  # [9] int32 — TG prefix sums for batched expert GEMM
+    getter batched_up_grid : ML::MetalBuffer   # [3] uint32 — indirect dispatch for batched UP
+    getter batched_down_grid : ML::MetalBuffer # [3] uint32 — indirect dispatch for batched DOWN
 
     def initialize(max_seq : Int32, dim : Int32, ffn_dim : Int32, n_heads : Int32, head_dim : Int32,
                    n_experts_used : Int32, rope_cos : Array(Float32), rope_sin : Array(Float32))
@@ -99,6 +102,9 @@ module ML::GGUF
       @expert_out  = ML::MetalBuffer.new(8_i64 * max_seq * dim * 2)
       # Indirect dispatch args: 8 UP + 8 DOWN + 8 scatter = 24 entries × 12 bytes
       @dispatch_args = ML::MetalBuffer.new(24_i64 * 12)
+      @expert_tg_offs = ML::MetalBuffer.new(9_i64 * 4)     # [n_experts+1] int32
+      @batched_up_grid = ML::MetalBuffer.new(3_i64 * 4)   # [3] uint32 indirect dispatch
+      @batched_down_grid = ML::MetalBuffer.new(3_i64 * 4) # [3] uint32 indirect dispatch
     end
   end
 
@@ -138,7 +144,7 @@ module ML::GGUF
          moe_write_dispatch_args scatter_weighted_add_moe
          moe_scatter_atomic f32_to_f16 residual_layernorm_f32
          gate_softmax_topk_count qkv_split_rope
-         moe_route_and_dispatch].each do |name|
+         moe_route_and_dispatch moe_write_batched_args].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, BERT_FUSED_SOURCE)
         }
@@ -165,7 +171,8 @@ module ML::GGUF
         }
       end
       # Matrix-matrix GEMM kernels (simdgroup_matrix — for batch > 8)
-      %w[simd_mm_q5k simd_mm_q6k simd_mm_q5k_moe simd_mm_q6k_moe].each do |name|
+      %w[simd_mm_q5k simd_mm_q6k simd_mm_q5k_moe simd_mm_q6k_moe
+         batched_mm_q5k batched_mm_q6k].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
           ML::Metal::ComputePipeline.new(name, GEMM_MM_SOURCE)
         }
@@ -473,42 +480,47 @@ module ML::GGUF
             enc.dispatch_1d(total_routing * dim, 256)
             enc.memory_barrier
 
-            # [LTP Collapse] Removed dead zero_int(ffn_out_f32) — UPs write to moe_mid, not ffn_out_f32.
-            # ffn_out_f32 is zeroed again at line ~517 before scatter (the only reader).
-
-            # All 8 expert UPs — concurrent via indirect mm dispatch
-            mm_tg_size = {128, 1, 1}
-            n_experts.times do |ei|
-              up_offset = ei.to_i64 * up_expert_bytes
-              enc.set_pipeline(pipe(matmul_kernel_mm_moe(exp_up_qw.type)))
-              enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
-              enc.set_buffer(ws.moe_input, 1, partition: ei)        # Block Integrity: expert partition
-              enc.set_buffer(up_gw_full.bias_buffer, 2)
-              enc.set_buffer(ws.moe_mid, 3, w, partition: ei)      # Block Integrity: expert partition
-              enc.set_buffer(ws.expert_offsets, 4)
-              enc.set_value(ei.to_u32, 5)
-              enc.set_value(dim_u, 6); enc.set_value(ffn_dim_u, 7)
-              enc.set_value(yes_gelu, 8)
-              enc.set_threadgroup_memory(MM_SHMEM, 0)
-              enc.dispatch_threadgroups_indirect(ws.dispatch_args, ei.to_i64 * 12, mm_tg_size)
-            end
+            # Compute batched dispatch args on GPU (expert_tg_offsets + indirect grids)
+            enc.set_pipeline(pipe("moe_write_batched_args"))
+            enc.set_buffer(ws.expert_offsets, 0)
+            enc.set_buffer(ws.expert_tg_offs, 1, w)
+            enc.set_buffer(ws.batched_up_grid, 2, w)
+            enc.set_buffer(ws.batched_down_grid, 3, w)
+            enc.set_value(n_experts.to_u32, 4)
+            enc.set_value(ffn_dim_u, 5); enc.set_value(dim_u, 6)
+            enc.dispatch_1d(1, 1)
             enc.memory_barrier
 
-            # All 8 expert DOWNs — concurrent via indirect mm dispatch
-            n_experts.times do |ei|
-              down_offset = ei.to_i64 * down_expert_bytes
-              enc.set_pipeline(pipe(matmul_kernel_mm_moe(exp_down_qw.type)))
-              enc.set_buffer(down_gw_full.buffer, 0, offset: down_offset)
-              enc.set_buffer(ws.moe_mid, 1, partition: ei)          # Block Integrity: expert partition
-              enc.set_buffer(down_gw_full.bias_buffer, 2)
-              enc.set_buffer(ws.moe_output, 3, w, partition: ei)    # Block Integrity: expert partition
-              enc.set_buffer(ws.expert_offsets, 4)
-              enc.set_value(ei.to_u32, 5)
-              enc.set_value(ffn_dim_u, 6); enc.set_value(dim_u, 7)
-              enc.set_value(no_gelu, 8)
-              enc.set_threadgroup_memory(MM_SHMEM, 0)
-              enc.dispatch_threadgroups_indirect(ws.dispatch_args, (n_experts + ei).to_i64 * 12, mm_tg_size)
-            end
+            # LTP Diamond: ALL 8 expert UPs in ONE batched dispatch
+            batched_up_kernel = exp_up_qw.type.q5_k? ? "batched_mm_q5k" : "batched_mm_q6k"
+            enc.set_pipeline(pipe(batched_up_kernel))
+            enc.set_buffer(up_gw_full.buffer, 0)       # all expert weights concatenated
+            enc.set_buffer(ws.moe_input, 1)
+            enc.set_buffer(up_gw_full.bias_buffer, 2)
+            enc.set_buffer(ws.moe_mid, 3, w)
+            enc.set_buffer(ws.expert_offsets, 4)
+            enc.set_buffer(ws.expert_tg_offs, 5)
+            enc.set_value(dim_u, 6); enc.set_value(ffn_dim_u, 7)
+            enc.set_value(yes_gelu, 8); enc.set_value(n_experts.to_u32, 9)
+            enc.set_value(up_expert_bytes.to_u32, 10)
+            enc.set_threadgroup_memory(MM_SHMEM, 0)
+            enc.dispatch_threadgroups_indirect(ws.batched_up_grid, 0_i64, {128, 1, 1})
+            enc.memory_barrier
+
+            # LTP Diamond: ALL 8 expert DOWNs in ONE batched dispatch
+            batched_down_kernel = exp_down_qw.type.q5_k? ? "batched_mm_q5k" : "batched_mm_q6k"
+            enc.set_pipeline(pipe(batched_down_kernel))
+            enc.set_buffer(down_gw_full.buffer, 0)
+            enc.set_buffer(ws.moe_mid, 1)
+            enc.set_buffer(down_gw_full.bias_buffer, 2)
+            enc.set_buffer(ws.moe_output, 3, w)
+            enc.set_buffer(ws.expert_offsets, 4)
+            enc.set_buffer(ws.expert_tg_offs, 5)
+            enc.set_value(ffn_dim_u, 6); enc.set_value(dim_u, 7)
+            enc.set_value(no_gelu, 8); enc.set_value(n_experts.to_u32, 9)
+            enc.set_value(down_expert_bytes.to_u32, 10)
+            enc.set_threadgroup_memory(MM_SHMEM, 0)
+            enc.dispatch_threadgroups_indirect(ws.batched_down_grid, 0_i64, {128, 1, 1})
             enc.memory_barrier
 
             # Atomic scatter: ALL routing slots in ONE dispatch (no sequential barriers)
