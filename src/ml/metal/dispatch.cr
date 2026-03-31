@@ -167,11 +167,21 @@ module ML
       @encoder : Pointer(Void)
       @pipeline : ComputePipeline?
 
-      def initialize(command_buffer : CommandBuffer)
+      def initialize(command_buffer : CommandBuffer, concurrent : Bool = false)
         @cmd_buffer = command_buffer.handle
-        @encoder = MetalDispatchFFI.create_compute_encoder(@cmd_buffer)
+        @encoder = if concurrent
+                     MetalDispatchFFI.create_concurrent_compute_encoder(@cmd_buffer)
+                   else
+                     MetalDispatchFFI.create_compute_encoder(@cmd_buffer)
+                   end
         raise "Failed to create compute encoder" if @encoder.null?
         @pipeline = nil
+      end
+
+      # Insert memory barrier between dependent dispatches (concurrent encoder only)
+      def memory_barrier : self
+        MetalDispatchFFI.encoder_memory_barrier(@encoder)
+        self
       end
 
       def set_pipeline(pipeline : ComputePipeline) : self
@@ -462,6 +472,8 @@ lib MetalDispatchFFI
     tg_count_x : Int32, tg_count_y : Int32, tg_count_z : Int32,
     tg_x : Int32, tg_y : Int32, tg_z : Int32
   ) : Void
+  fun create_concurrent_compute_encoder = gs_create_concurrent_compute_encoder(cmd : Pointer(Void)) : Pointer(Void)
+  fun encoder_memory_barrier = gs_encoder_memory_barrier(encoder : Pointer(Void)) : Void
   fun encoder_end_encoding = gs_encoder_end_encoding(encoder : Pointer(Void)) : Void
   fun encoder_set_threadgroup_memory = gs_encoder_set_threadgroup_memory(encoder : Pointer(Void), length : Int32, index : Int32) : Void
 
@@ -487,6 +499,8 @@ lib MetalDispatchFFI
     tg_count_x : Int32, tg_count_y : Int32, tg_count_z : Int32,
     tg_x : Int32, tg_y : Int32, tg_z : Int32
   ) : Void
+  fun create_concurrent_compute_encoder = gs_create_concurrent_compute_encoder(cmd : Pointer(Void)) : Pointer(Void)
+  fun encoder_memory_barrier = gs_encoder_memory_barrier(encoder : Pointer(Void)) : Void
   fun encoder_end_encoding = gs_encoder_end_encoding(encoder : Pointer(Void)) : Void
   fun encoder_set_threadgroup_memory = gs_encoder_set_threadgroup_memory(encoder : Pointer(Void), length : Int32, index : Int32) : Void
 

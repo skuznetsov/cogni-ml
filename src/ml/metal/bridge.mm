@@ -586,6 +586,23 @@ extern "C" void gs_encoder_dispatch_threads(
     encoder_dispatch_threads_impl(encoder, grid_x, grid_y, grid_z, tg_x, tg_y, tg_z);
 }
 
+// Create compute encoder with concurrent dispatch type
+extern "C" void* gs_create_concurrent_compute_encoder(void* cmd_handle) {
+    if (cmd_handle == nullptr) return nullptr;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)cmd_handle;
+    MTLComputePassDescriptor *desc = [[MTLComputePassDescriptor alloc] init];
+    desc.dispatchType = MTLDispatchTypeConcurrent;
+    id<MTLComputeCommandEncoder> encoder = [cmd computeCommandEncoderWithDescriptor:desc];
+    return (__bridge_retained void*)encoder;
+}
+
+// Memory barrier for concurrent encoder (between dependent dispatches)
+extern "C" void gs_encoder_memory_barrier(void* encoder_handle) {
+    if (encoder_handle == nullptr) return;
+    id<MTLComputeCommandEncoder> encoder = (__bridge id<MTLComputeCommandEncoder>)encoder_handle;
+    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+}
+
 extern "C" void gs_encoder_dispatch_threadgroups(
     void* encoder,
     int32_t tg_count_x, int32_t tg_count_y, int32_t tg_count_z,
