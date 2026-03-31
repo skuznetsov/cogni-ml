@@ -1,15 +1,13 @@
 name: cogni-ml
-version: 0.39.0
+version: 0.40.0
 
 authors:
   - Sergey Kuznetsov <oss@rigelstar.com>
 
 description: |
-  Crystal machine learning library with:
-  - Autograd engine (automatic differentiation)
-  - Tensor operations with Metal GPU support
-  - Neural network layers (Linear, LayerNorm, Attention, ViT)
-  - Optimizers (Adam, SGD) with LR scheduling
+  Crystal ML library with native Metal GPU acceleration.
+  GGUF model inference, BERT embeddings (43ms on M2 Max),
+  autograd, NN layers, optimizers, llama.cpp bindings.
 
 crystal: ">= 1.10.0"
 

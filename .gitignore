@@ -23,3 +23,10 @@ Thumbs.db
 
 # Local Codex agent state
 .agents/
+
+# Build artifacts
+bridge.o
+test_*
+!test_*.cr
+*.dwarf
+bin/

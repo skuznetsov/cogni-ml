@@ -1,54 +1,96 @@
 # Cogni-ML
 
-Experimental Crystal ML library extracted from internal projects (weather, folding, 3d_scanner).
+Crystal machine learning library with native Apple Silicon GPU acceleration.
 
-Status: Early-stage. Metal and LLM features require native dependencies. See `docs/CRITICAL_REVIEW.md` for remaining gaps and risks.
+**Highlights:**
+- Native Metal GPU embedding pipeline — **43ms** for 260 tokens on M2 Max (2.2x faster than baseline)
+- GGUF model loading with Q5_K/Q6_K quantization support
+- `simdgroup_matrix_multiply_accumulate` GEMM kernels
+- Compute graph with automatic wave-based barrier optimization
+- Autograd engine, NN layers, Adam optimizer
+- llama.cpp bindings for any GGUF model
 
-## Features
-- Tensor core with shapes, strides, and CPU/GPU storage
-- Autograd engine for a small set of ops (add/sub/mul/div/matmul/relu/sigmoid/sum/mean)
-- NN layers: Linear, LayerNorm, RMSNorm, Multi-Head Attention, ViT encoder blocks
-- Optimizers: Adam/AdamW, SGD, LR schedulers
-- LLM wrapper around llama.cpp (optional)
-- Metal GPU kernels (experimental)
+## Architecture
 
-## Repository layout
-- `src/ml/core` Tensor/Shape/Buffer
-- `src/ml/autograd` Variable + GradFn
-- `src/ml/nn` Layers and GPU ops
-- `src/ml/optim` Optimizers + schedulers
-- `src/ml/llm` llama.cpp bindings and high-level API
-- `src/ml/metal` Metal stubs and kernels
-
-## Installation
-This repository is not published as a shard. Use it via a local path in your app:
-
-```yaml
-# shard.yml
-name: my_app
-version: 0.1.0
-
-dependencies:
-  cogni-ml:
-    path: ../cogni-ml
+```
+src/ml/
+  core/         Tensor, Shape, MetalBuffer
+  autograd/     Variable, GradFn (backward pass)
+  nn/           Linear, LayerNorm, MultiHeadAttention, ViT
+  optim/        Adam/AdamW
+  llm/          llama.cpp FFI bindings
+  gguf/         GGUF reader, tokenizer, dequantization, NomicBertMoE
+  metal/        Device, ComputeEncoder, ComputeGraph, GraphEncoder
 ```
 
-Then require it:
+## GPU Embedding Pipeline
+
+The crown jewel: a fully native Metal compute pipeline for nomic-embed-text-v2-moe BERT embeddings.
 
 ```crystal
 require "ml"
+require "ml/gguf/nomic_bert"
+require "ml/gguf/metal_backend"
+require "ml/metal/compute_graph"
+
+ML::Metal::Device.init!
+model = ML::GGUF::NomicBertMoE.from_gguf("path/to/model.gguf", ML::GGUF::MetalBackend.new)
+
+embedding = model.embed("Your text here")  # → Array(Float32), dim=768
+```
+
+### Performance (Apple M2 Max, 38 GPU cores)
+
+| Tokens | Latency |
+|--------|---------|
+| 20     | 14ms    |
+| 94     | 16ms    |
+| 196    | 33ms    |
+| 433    | 70ms    |
+
+### What's inside
+
+- **simdgroup_matrix GEMM** — hardware-accelerated 8x8 matrix tiles for Q5_K/Q6_K dequant+multiply
+- **Batched expert GEMM** — all 8 MoE experts in 1 dispatch (LTP Diamond surgery)
+- **ComputeGraph** — automatic wave scheduling with offset-aware + Block Integrity dependency analysis
+- **GraphEncoder** — drop-in ComputeEncoder replacement that builds the compute graph
+- **Fused kernels** — QKV split+RoPE, gate+softmax+topk, atomic scatter, f32 norm2
+- **Indirect dispatch** — GPU-driven threadgroup counts, zero CPU-GPU sync for MoE routing
+
+### Supported models
+
+| Model | Format | Status |
+|-------|--------|--------|
+| nomic-embed-text-v2-moe | GGUF Q5_K_M | Full native Metal pipeline |
+| Any BERT-like encoder | GGUF | Via NomicBertMoE (if architecture matches) |
+| Llama, Qwen, Mistral, etc. | GGUF | Via llama.cpp bindings |
+
+## Installation
+
+```yaml
+# shard.yml
+dependencies:
+  cogni-ml:
+    github: anthropics/cogni-ml  # or local path
+    version: ~> 0.10.0
+```
+
+### Build with Metal GPU
+
+```sh
+make build    # Compiles bridge.mm + links Metal frameworks
+make spec     # Run tests with GPU
 ```
 
 ### CPU-only build
-If you want a CPU-only build (no Metal usage), compile with `-Dcpu_only`:
 
 ```sh
-make spec_cpu
-make build_cpu
+crystal build -Dcpu_only your_app.cr
 ```
 
-## Quick start (CPU)
-The default device for `Tensor` is GPU. For CPU-only usage, pass `device: ML::Tensor::Device::CPU`.
+## Quick Start
+
+### Tensor + Autograd (CPU)
 
 ```crystal
 require "ml"
@@ -56,73 +98,77 @@ require "ml"
 x = ML::Autograd::Variable.rand(2, 3, requires_grad: true, device: ML::Tensor::Device::CPU)
 layer = ML::NN::Linear.new(3, 4, device: ML::Tensor::Device::CPU)
 
-# Forward + loss
 out = layer.forward(x)
 loss = out.mean
-
-# Backward
 loss.backward
 
-# Optimize
 opt = ML::Optim::Adam.new(layer.parameters)
 opt.step
 opt.zero_grad
 ```
 
-## GPU / Metal
-Metal support relies on a small Objective‑C++ bridge. Use the provided `Makefile` to compile and link it:
-
-```sh
-make build
-make spec
-```
-
-This compiles `src/ml/metal/bridge.mm` and links it with Metal + Foundation. You’ll need Xcode/Command Line Tools installed.
-
-## Platform Support
-- macOS: Metal GPU backend supported.
-- Linux/FreeBSD: CPU-only build via `make build_cpu` or `-Dcpu_only`.
-- Planned: CUDA backend (not implemented, no test hardware yet).
-
-## LLM (llama.cpp)
-The LLM wrapper is optional and lives under `ML::LLM`. It requires linking `libllama` from llama.cpp. The bindings in `src/ml/llm/llama_ffi.cr` target llama.cpp API version ~7340 (Dec 2024).
-
-To build llama.cpp locally:
-
-```sh
-make llama
-```
-
-`make llama` will build from `LLAMA_DIR` if it exists, or use an already-installed `libllama` (e.g., Homebrew on macOS) if found.
-
-Then make sure the library is discoverable:
-
-```sh
-eval "$(make llama_env)"
-```
+### LLM Inference (llama.cpp)
 
 ```crystal
 require "ml/llm/llama"
 
 ML::LLM.init
-begin
-  model = ML::LLM::Model.new("/path/to/model.gguf")
-  ctx = model.create_context
-  ctx.setup_greedy_sampler
-  ctx.eval(model.tokenize("Hello"))
-  puts model.token_to_piece(ctx.sample)
-ensure
-  ctx.try(&.free)
-  model.try(&.free)
-  ML::LLM.cleanup
-end
+model = ML::LLM::Model.new("path/to/model.gguf")
+gen = ML::LLM::Generator.new(model)
+puts gen.ask("What is Crystal?", max_tokens: 100)
+ML::LLM.cleanup
 ```
 
-See also `docs/LLM.md` and `examples/llm_inference.cr`.
+### GGUF Embeddings (Metal GPU)
 
-## Docs
-- `docs/USAGE.md`
-- `docs/CRITICAL_REVIEW.md`
+```crystal
+require "ml"
+require "ml/gguf/nomic_bert"
+require "ml/gguf/metal_backend"
+require "ml/metal/compute_graph"
+
+ML::Metal::Device.init!
+model = ML::GGUF::NomicBertMoE.from_gguf(
+  "nomic-embed-text-v2-moe.Q5_K_M.gguf",
+  ML::GGUF::MetalBackend.new
+)
+
+# Single embedding
+vec = model.embed("Crystal programming language")
+puts "dim=#{vec.size}"  # 768
+
+# Batch embedding
+vecs = model.embed_batch(["Hello", "World", "Crystal"])
+```
+
+## Metal Kernels
+
+11 Metal shader files implementing:
+
+| Kernel | Purpose |
+|--------|---------|
+| `gemm_mm.metal` | simdgroup_matrix GEMM for Q5_K/Q6_K + batched expert variants |
+| `gemm_simd.metal` | Scalar SIMD GEMM (small batch fallback) |
+| `attention_matmul.metal` | Flash attention with simdgroup_matrix Q*K^T |
+| `bert_fp16.metal` | Fused ops: QKV split+RoPE, gate+softmax+topk, norms, scatter, routing |
+| `gemm_mm_f16.metal` | FP16 GEMM (experimental) |
+| `nn.metal` | General NN ops (linear, layernorm, GELU) |
+
+## Platform Support
+
+| Platform | GPU | CPU | Status |
+|----------|-----|-----|--------|
+| macOS (Apple Silicon) | Metal | Yes | Primary target |
+| macOS (Intel) | Metal | Yes | Supported |
+| Linux | - | Yes | `-Dcpu_only` |
+
+## Build Flags
+
+| Flag | Effect |
+|------|--------|
+| `-Dcpu_only` | Disable Metal, pure CPU |
+| `-Duse_gguf` | Enable GGUF model loading (requires llama.cpp for LLM, standalone for embeddings) |
 
 ## License
+
 MIT
