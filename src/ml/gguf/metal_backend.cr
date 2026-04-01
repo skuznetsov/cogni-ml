@@ -619,11 +619,6 @@ module ML::GGUF
         st = graph.stats
         STDERR.puts "  graph: ops=#{st.n_ops} waves=#{st.n_waves} barriers=#{st.n_barriers} max_width=#{st.max_wave_width}"
       end
-      graph.compile!
-      if ENV["PROFILE_MOE"]?
-        st = graph.stats
-        STDERR.puts "  graph: ops=#{st.n_ops} waves=#{st.n_waves} barriers=#{st.n_barriers} max_width=#{st.max_wave_width}"
-      end
       graph.encode(cmd)
 
       cmd.commit
