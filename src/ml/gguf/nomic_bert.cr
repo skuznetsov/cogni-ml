@@ -243,8 +243,9 @@ module ML::GGUF
     end
     {% end %}
 
-    # Batch embed: pre-tokenize all texts, then sequential GPU forward passes
-    # (true parallel batching requires attention masking — future work)
+    # Batch embed: pre-tokenize all texts, then run the single-sequence fast path.
+    # Metal graph reuse now removes repeated graph-build cost for matching seq_len,
+    # but true multi-text batching still needs batch-aware attention + per-sequence masking.
     def embed_batch(texts : Array(String)) : Array(Array(Float32))
       # Pre-tokenize all texts upfront (CPU parallelizable)
       token_batches = texts.map { |t| tokenize(t) }
