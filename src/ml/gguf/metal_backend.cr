@@ -34,6 +34,7 @@ module ML::GGUF
   end
 
   class GPUWorkspace
+    getter token_ids : ML::MetalBuffer
     getter hidden : ML::MetalBuffer
     getter hidden2 : ML::MetalBuffer  # double buffer for pipeline overlap
     getter qkv : ML::MetalBuffer
@@ -70,6 +71,7 @@ module ML::GGUF
     def initialize(max_tokens : Int32, dim : Int32, ffn_dim : Int32, n_heads : Int32, head_dim : Int32,
                    n_experts_used : Int32, rope_cos : Array(Float32), rope_sin : Array(Float32))
       # FP16 intermediate buffers (2 bytes per element)
+      @token_ids = ML::MetalBuffer.new(max_tokens.to_i64 * 4)
       @hidden   = ML::MetalBuffer.new(max_tokens.to_i64 * dim * 2)
       @hidden2  = ML::MetalBuffer.new(max_tokens.to_i64 * dim * 2)
       @qkv      = ML::MetalBuffer.new(max_tokens.to_i64 * 3 * dim * 2)
@@ -177,6 +179,7 @@ module ML::GGUF
       @compiled_graphs = {} of GraphCacheKey => ML::Metal::ComputeGraph
       @compiled_batch_graphs = {} of BatchGraphCacheKey => ML::Metal::ComputeGraph
       %w[qkv_split rope_neox_inplace attention_forward
+         embed_lookup_add_type
          qkv_split_rope_batch attention_forward_batch
          layernorm_inplace residual_add weighted_add zero_region mean_pool_l2 mean_pool_l2_batch
          gelu_inplace gate_matmul softmax_topk moe_gather scatter_weighted_add
@@ -1408,6 +1411,59 @@ module ML::GGUF
       Array(Float32).new(dim) { |i| o_ptr[i] }
     end
 
+    def encode_token_ids(
+      token_ids : Array(Int32),
+      seq_len : Int32,
+      layers : Array(NomicBertMoE::LayerWeights),
+      dim : Int32,
+      n_heads : Int32,
+      head_dim : Int32,
+      ffn_dim : Int32,
+      n_experts : Int32,
+      n_experts_used : Int32,
+      moe_every_n : Int32,
+      token_embd_buf : ML::MetalBuffer,
+      token_types_buf : ML::MetalBuffer,
+      embd_norm_w_buf : ML::MetalBuffer,
+      embd_norm_b_buf : ML::MetalBuffer,
+    ) : Array(Float32)
+      ensure_workspace_capacity(seq_len)
+      ws = @workspace.not_nil!
+
+      token_ptr = ws.token_ids.contents.as(Pointer(Int32))
+      seq_len.times { |i| token_ptr[i] = token_ids[i] }
+
+      graph = compiled_graph_for(seq_len, layers, dim, n_heads, head_dim, ffn_dim, n_experts, n_experts_used, moe_every_n)
+      cmd = ML::Metal::CommandBuffer.new(fast: true)
+      cmd.enqueue
+
+      enc = ML::Metal::ComputeEncoder.new(cmd, concurrent: true)
+      enc.set_pipeline(pipe("embed_lookup_add_type"))
+      enc.set_buffer(ws.token_ids, 0)
+      enc.set_buffer(token_embd_buf, 1)
+      enc.set_buffer(token_types_buf, 2)
+      enc.set_buffer(ws.hidden, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(seq_len.to_u32, 4)
+      enc.set_value(dim.to_u32, 5)
+      enc.dispatch_1d(seq_len * dim, 256)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("layernorm_inplace"))
+      enc.set_buffer(ws.hidden, 0, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_buffer(embd_norm_w_buf, 1)
+      enc.set_buffer(embd_norm_b_buf, 2)
+      enc.set_value(dim.to_u32, 3)
+      enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+      enc.end_encoding
+
+      graph.encode(cmd)
+      cmd.commit
+      cmd.wait
+
+      o_ptr = ws.output.contents.as(Pointer(Float32))
+      Array(Float32).new(dim) { |i| o_ptr[i] }
+    end
+
     def encode_layers_batch(
       hidden_data : Array(Float32),
       batch_size : Int32,
@@ -1437,6 +1493,70 @@ module ML::GGUF
       graph = compiled_batch_graph_for(batch_size, max_seq_len, layers, dim, n_heads, head_dim, ffn_dim, n_experts, n_experts_used, moe_every_n)
       cmd = ML::Metal::CommandBuffer.new(fast: true)
       cmd.enqueue
+      graph.encode(cmd)
+      cmd.commit
+      cmd.wait
+
+      o_ptr = ws.output.contents.as(Pointer(Float32))
+      Array(Array(Float32)).new(batch_size) do |b|
+        base = b * dim
+        Array(Float32).new(dim) { |i| o_ptr[base + i] }
+      end
+    end
+
+    def encode_token_ids_batch(
+      token_ids : Array(Int32),
+      batch_size : Int32,
+      max_seq_len : Int32,
+      lengths : Array(Int32),
+      layers : Array(NomicBertMoE::LayerWeights),
+      dim : Int32,
+      n_heads : Int32,
+      head_dim : Int32,
+      ffn_dim : Int32,
+      n_experts : Int32,
+      n_experts_used : Int32,
+      moe_every_n : Int32,
+      token_embd_buf : ML::MetalBuffer,
+      token_types_buf : ML::MetalBuffer,
+      embd_norm_w_buf : ML::MetalBuffer,
+      embd_norm_b_buf : ML::MetalBuffer,
+    ) : Array(Array(Float32))
+      token_count = batch_size * max_seq_len
+      ensure_workspace_capacity(token_count)
+      ws = @workspace.not_nil!
+
+      token_ptr = ws.token_ids.contents.as(Pointer(Int32))
+      token_count.times { |i| token_ptr[i] = token_ids[i] }
+
+      len_ptr = ws.lengths.contents.as(Pointer(UInt32))
+      batch_size.times do |i|
+        len_ptr[i] = lengths[i].to_u32
+      end
+
+      graph = compiled_batch_graph_for(batch_size, max_seq_len, layers, dim, n_heads, head_dim, ffn_dim, n_experts, n_experts_used, moe_every_n)
+      cmd = ML::Metal::CommandBuffer.new(fast: true)
+      cmd.enqueue
+
+      enc = ML::Metal::ComputeEncoder.new(cmd, concurrent: true)
+      enc.set_pipeline(pipe("embed_lookup_add_type"))
+      enc.set_buffer(ws.token_ids, 0)
+      enc.set_buffer(token_embd_buf, 1)
+      enc.set_buffer(token_types_buf, 2)
+      enc.set_buffer(ws.hidden, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(token_count.to_u32, 4)
+      enc.set_value(dim.to_u32, 5)
+      enc.dispatch_1d(token_count * dim, 256)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("layernorm_inplace"))
+      enc.set_buffer(ws.hidden, 0, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_buffer(embd_norm_w_buf, 1)
+      enc.set_buffer(embd_norm_b_buf, 2)
+      enc.set_value(dim.to_u32, 3)
+      enc.dispatch_threadgroups({token_count, 1, 1}, {32, 1, 1})
+      enc.end_encoding
+
       graph.encode(cmd)
       cmd.commit
       cmd.wait

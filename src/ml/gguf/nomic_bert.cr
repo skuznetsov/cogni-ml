@@ -38,6 +38,12 @@ module ML::GGUF
 
     # Tokenizer
     @tokenizer : UnigramTokenizer?
+    {% unless flag?(:cpu_only) %}
+    @gpu_token_embd_buf : ML::MetalBuffer?
+    @gpu_token_types_buf : ML::MetalBuffer?
+    @gpu_embd_norm_w_buf : ML::MetalBuffer?
+    @gpu_embd_norm_b_buf : ML::MetalBuffer?
+    {% end %}
 
     # Precomputed RoPE cos/sin tables [max_seq_len, head_dim/2]
     @rope_cos = [] of Float32
@@ -120,6 +126,10 @@ module ML::GGUF
     {% unless flag?(:cpu_only) %}
     private def upload_weights_to_gpu
       mb = @backend.as(MetalBackend)
+      @gpu_token_embd_buf = mb.upload_f32(@token_embd)
+      @gpu_token_types_buf = mb.upload_f32(@token_types)
+      @gpu_embd_norm_w_buf = mb.upload_f32(@embd_norm_w)
+      @gpu_embd_norm_b_buf = mb.upload_f32(@embd_norm_b)
       @layers.each do |lw|
         mb.upload_weight(lw.attn_qkv_w, lw.attn_qkv_b)
         mb.upload_weight(lw.attn_out_w, lw.attn_out_b)
@@ -222,19 +232,40 @@ module ML::GGUF
       seq_len = tokens.size
       mb = @backend.as(MetalBackend)
 
-      # Embedding lookup + type embedding + layernorm (CPU — small, fast)
-      hidden = Array(Float32).new(seq_len * @dim, 0.0_f32)
-      seq_len.times do |pos|
-        tid = tokens[pos].clamp(0, @vocab_size - 1)
-        @dim.times { |j| hidden[pos * @dim + j] = @token_embd[tid * @dim + j] + @token_types[j] }
-      end
-      @backend.layer_norm!(hidden, seq_len, @dim, @embd_norm_w, @embd_norm_b)
+      if cpu_ref_per_layer
+        # Keep debug path unchanged so per-layer comparison stays directly comparable.
+        hidden = Array(Float32).new(seq_len * @dim, 0.0_f32)
+        seq_len.times do |pos|
+          tid = tokens[pos].clamp(0, @vocab_size - 1)
+          @dim.times { |j| hidden[pos * @dim + j] = @token_embd[tid * @dim + j] + @token_types[j] }
+        end
+        @backend.layer_norm!(hidden, seq_len, @dim, @embd_norm_w, @embd_norm_b)
 
-      # All 12 transformer layers on GPU — ONE command buffer, ONE sync
-      mb.encode_layers(hidden, seq_len, @layers,
-        @dim, @n_heads, @head_dim, @ffn_dim,
-        @n_experts, @n_experts_used, @moe_every_n,
-        cpu_ref_per_layer: cpu_ref_per_layer)
+        return mb.encode_layers(hidden, seq_len, @layers,
+          @dim, @n_heads, @head_dim, @ffn_dim,
+          @n_experts, @n_experts_used, @moe_every_n,
+          cpu_ref_per_layer: cpu_ref_per_layer)
+      end
+
+      token_ids = Array(Int32).new(seq_len) { |i| tokens[i].clamp(0, @vocab_size - 1) }
+
+      # Keep input staging on GPU so the hot path avoids CPU hidden-buffer materialization.
+      mb.encode_token_ids(
+        token_ids,
+        seq_len,
+        @layers,
+        @dim,
+        @n_heads,
+        @head_dim,
+        @ffn_dim,
+        @n_experts,
+        @n_experts_used,
+        @moe_every_n,
+        @gpu_token_embd_buf.not_nil!,
+        @gpu_token_types_buf.not_nil!,
+        @gpu_embd_norm_w_buf.not_nil!,
+        @gpu_embd_norm_b_buf.not_nil!,
+      )
     end
     # Debug: embed with per-layer GPU vs CPU comparison
     def embed_debug(text : String, cpu_ref : Array(Array(Float32))) : Array(Float32)
@@ -283,27 +314,20 @@ module ML::GGUF
       indexed.each_slice(max_batch) do |slice|
         batch_size = slice.size.to_i32
         max_seq_len = slice.max_of(&.[1].size).to_i32
-        token_count = batch_size * max_seq_len
         lengths = Array(Int32).new(batch_size, 0)
-        hidden = Array(Float32).new(token_count * @dim, 0.0_f32)
+        token_ids = Array(Int32).new(batch_size * max_seq_len, pad_id)
 
         slice.each_with_index do |entry, batch_idx|
           _, tokens = entry
           lengths[batch_idx] = tokens.size.to_i32
           max_seq_len.times do |pos|
             tid = pos < tokens.size ? tokens[pos] : pad_id
-            tid = tid.clamp(0, @vocab_size - 1)
-            emb_off = tid * @dim
-            dst_off = (batch_idx * max_seq_len + pos) * @dim
-            @dim.times do |j|
-              hidden[dst_off + j] = @token_embd[emb_off + j] + @token_types[j]
-            end
+            token_ids[batch_idx * max_seq_len + pos] = tid.clamp(0, @vocab_size - 1)
           end
         end
 
-        @backend.layer_norm!(hidden, token_count, @dim, @embd_norm_w, @embd_norm_b)
-        batch_results = mb.encode_layers_batch(
-          hidden,
+        batch_results = mb.encode_token_ids_batch(
+          token_ids,
           batch_size,
           max_seq_len,
           lengths,
@@ -315,6 +339,10 @@ module ML::GGUF
           @n_experts,
           @n_experts_used,
           @moe_every_n,
+          @gpu_token_embd_buf.not_nil!,
+          @gpu_token_types_buf.not_nil!,
+          @gpu_embd_norm_w_buf.not_nil!,
+          @gpu_embd_norm_b_buf.not_nil!,
         )
 
         slice.each_with_index do |entry, batch_idx|

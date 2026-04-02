@@ -39,6 +39,29 @@ kernel void qkv_split(
 }
 
 // ============================================================================
+// Token embedding gather + type embedding add
+// token_ids: [token_count] int32
+// token_embd: [vocab, dim] f32
+// token_types: [dim] f32
+// output: [token_count, dim] half
+// ============================================================================
+kernel void embed_lookup_add_type(
+    device const int*   token_ids   [[buffer(0)]],
+    device const float* token_embd  [[buffer(1)]],
+    device const float* token_types [[buffer(2)]],
+    device       half*  output      [[buffer(3)]],
+    constant     uint&  token_count [[buffer(4)]],
+    constant     uint&  dim         [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= token_count * dim) return;
+    const uint pos = tid / dim;
+    const uint d = tid % dim;
+    const int token_id = max(token_ids[pos], 0);
+    output[tid] = half(token_embd[uint(token_id) * dim + d] + token_types[d]);
+}
+
+// ============================================================================
 // Fused QKV split + RoPE: [seq, 3*dim] → Q(rope'd), K(rope'd), V, V_t
 // Eliminates 3 dispatches (split + 2×rope) + 2 barriers per layer
 // Dispatch: dispatch_1d(seq_len * dim, 256)
