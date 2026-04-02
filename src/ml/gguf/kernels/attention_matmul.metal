@@ -211,3 +211,164 @@ kernel void attention_matmul(
         }
     }
 }
+
+kernel void attention_matmul_batch(
+    device const half*  q_src       [[buffer(0)]],  // [batch, n_heads, max_seq, DK]
+    device const half*  k_src       [[buffer(1)]],  // [batch, n_heads, max_seq, DK]
+    device const half*  v_src       [[buffer(2)]],  // [batch, n_heads, max_seq, DV]
+    device       half*  output      [[buffer(3)]],  // [batch * max_seq, n_heads * DV]
+    device const uint*  lengths     [[buffer(4)]],  // [batch]
+    constant     uint&  batch_size  [[buffer(5)]],
+    constant     uint&  max_seq     [[buffer(6)]],
+    constant     uint&  n_heads     [[buffer(7)]],
+    constant     uint&  head_dim    [[buffer(8)]],
+    constant     float& scale       [[buffer(9)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    threadgroup half* shmem [[threadgroup(0)]])
+{
+    const uint b = tgpig.z;
+    const uint iq1 = tgpig.x * Q_TOTAL;
+    const uint h = tgpig.y;
+    if (b >= batch_size || h >= n_heads) return;
+
+    const uint valid_len = lengths[b];
+    if (valid_len == 0) return;
+
+    const uint head_base_k = (b * n_heads + h) * max_seq * DK;
+    const uint head_base_v = (b * n_heads + h) * max_seq * DV;
+    const uint NS_K = DK;
+    const uint NS_V = DV;
+
+    threadgroup half4*  sq4 = (threadgroup half4*)shmem;
+    threadgroup half*   sq  = (threadgroup half*)shmem;
+    threadgroup float4* so4 = (threadgroup float4*)(sq + Q_TOTAL * DK);
+    threadgroup float*  so  = (threadgroup float*)(sq + Q_TOTAL * DK);
+    threadgroup float*  ss  = (threadgroup float*)(so + Q_TOTAL * PV);
+    threadgroup float2* ss2 = (threadgroup float2*)ss;
+
+    {
+        const short q_off = sgitg * Q_PER_SG;
+        for (short jj = 0; jj < Q_PER_SG; ++jj) {
+            const short j = q_off + jj;
+            const uint q_pos = iq1 + j;
+            device const half4* q4 = (device const half4*)(q_src + head_base_k + q_pos * DK);
+            for (short i = tiisg; i < DK/4; i += NW) {
+                sq4[j * DK/4 + i] = (q_pos < valid_len) ? q4[i] : half4(0);
+            }
+        }
+    }
+
+    {
+        const short q_off = sgitg * Q_PER_SG;
+        for (short jj = 0; jj < Q_PER_SG; ++jj) {
+            const short j = q_off + jj;
+            for (short i = tiisg; i < DV4; i += NW) so4[j * PV4 + i] = float4(0);
+            for (short i = tiisg; i < SH; i += NW) ss[j * SH + i] = 0.0f;
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float S[Q_PER_SG], M[Q_PER_SG];
+    for (short j = 0; j < Q_PER_SG; ++j) {
+        S[j] = 0.0f;
+        M[j] = -FLT_MAX/2;
+    }
+
+    for (uint ic = 0; ic < valid_len; ic += C_TILE) {
+        device const half* pk = k_src + head_base_k + ic * DK;
+        threadgroup const half* pq = sq + sgitg * Q_PER_SG * DK;
+        threadgroup float* ps = ss + sgitg * Q_PER_SG * SH;
+
+        for (short cc = 0; cc < C_TILE/8; ++cc) {
+            simdgroup_matrix<float, 8, 8> mqk = simdgroup_matrix<float, 8, 8>(0);
+
+            for (short i = 0; i < DK8/2; ++i) {
+                simdgroup_matrix<half, 8, 8> mq[2], mk[2];
+
+                simdgroup_barrier(mem_flags::mem_none);
+                simdgroup_load(mq[0], pq + 16*i + 0, DK);
+                simdgroup_load(mq[1], pq + 16*i + 8, DK);
+                simdgroup_load(mk[0], pk + cc*8*NS_K + 16*i + 0, NS_K, 0, true);
+                simdgroup_load(mk[1], pk + cc*8*NS_K + 16*i + 8, NS_K, 0, true);
+                simdgroup_barrier(mem_flags::mem_none);
+
+                simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
+                simdgroup_multiply_accumulate(mqk, mq[1], mk[1], mqk);
+            }
+
+            simdgroup_store(mqk, ps + cc*8, SH, 0, false);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (short jj = 0; jj < Q_PER_SG; ++jj) {
+            const short j = sgitg * Q_PER_SG + jj;
+            const uint q_pos = iq1 + j;
+            const float m = M[jj];
+
+            float2 s2 = ss2[j * SH/2 + tiisg] * scale;
+            uint k0 = ic + tiisg * 2;
+            if (q_pos >= valid_len) {
+                s2[0] = -FLT_MAX/2;
+                s2[1] = -FLT_MAX/2;
+            } else {
+                if (tiisg * 2 >= C_TILE || k0 >= valid_len) s2[0] = -FLT_MAX/2;
+                if (tiisg * 2 + 1 >= C_TILE || k0 + 1 >= valid_len) s2[1] = -FLT_MAX/2;
+            }
+
+            M[jj] = simd_max(max(M[jj], max(s2[0], s2[1])));
+
+            const float ms = exp(m - M[jj]);
+            const float2 vs2 = exp(s2 - M[jj]);
+            S[jj] = S[jj] * ms + simd_sum(vs2[0] + vs2[1]);
+            ss2[j * SH/2 + tiisg] = vs2;
+
+            for (short i = tiisg; i < PV4; i += NW) {
+                so4[j * PV4 + i] *= ms;
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        {
+            threadgroup float* my_so = so + sgitg * Q_PER_SG * PV;
+            simdgroup_matrix<float, 8, 8> lo[DV8];
+            for (short dk = 0; dk < DV8; ++dk)
+                simdgroup_load(lo[dk], my_so + dk * 8, PV);
+
+            for (short cc = 0; cc < C_TILE/8; ++cc) {
+                simdgroup_matrix<float, 8, 8> vs;
+                simdgroup_load(vs, ss + sgitg * Q_PER_SG * SH + cc * 8, SH);
+
+                for (short dk = 0; dk < DV8; ++dk) {
+                    simdgroup_matrix<half, 8, 8> mv;
+                    device const half* pv = v_src + head_base_v + (ic + cc*8) * NS_V + dk * 8;
+                    simdgroup_load(mv, pv, NS_V);
+                    simdgroup_multiply_accumulate(lo[dk], vs, mv, lo[dk]);
+                }
+            }
+
+            for (short dk = 0; dk < DV8; ++dk)
+                simdgroup_store(lo[dk], my_so + dk * 8, PV);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (short jj = 0; jj < Q_PER_SG; ++jj) {
+        const short j = sgitg * Q_PER_SG + jj;
+        const uint q_pos = iq1 + j;
+        if (q_pos >= valid_len) continue;
+
+        const float inv_s = 1.0f / S[jj];
+        for (short i = tiisg; i < DV4; i += NW) {
+            float4 o = so4[j * PV4 + i] * inv_s;
+            device half* out_row = output + (b * max_seq + q_pos) * n_heads * DV + h * DV;
+            device half4* out4 = (device half4*)out_row;
+            out4[i] = half4(o);
+        }
+    }
+}

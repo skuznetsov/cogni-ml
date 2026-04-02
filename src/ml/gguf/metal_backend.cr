@@ -205,6 +205,9 @@ module ML::GGUF
       @pipelines["attention_matmul"] = ML::Metal::PipelineCache.get("attention_matmul") {
         ML::Metal::ComputePipeline.new("attention_matmul", matmul_attn_src)
       }
+      @pipelines["attention_matmul_batch"] = ML::Metal::PipelineCache.get("attention_matmul_batch") {
+        ML::Metal::ComputePipeline.new("attention_matmul_batch", matmul_attn_src)
+      }
       # SIMD GEMM kernels (scalar path — for small batch or MoE per-expert)
       %w[simd_gemm_q5k simd_gemm_q6k simd_gemm_q5k_moe simd_gemm_q6k_moe].each do |name|
         @pipelines[name] = ML::Metal::PipelineCache.get(name) {
@@ -831,13 +834,27 @@ module ML::GGUF
         enc.dispatch_1d(token_count * dim, 256)
         enc.memory_barrier
 
-        n_qr = 8
-        enc.set_pipeline(pipe("attention_forward_batch"))
-        enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v_t, 2); enc.set_buffer(ws.attn_out, 3, w)
-        enc.set_buffer(ws.lengths, 4)
-        enc.set_value(batch_size_u, 5); enc.set_value(max_seq_u, 6); enc.set_value(n_heads_u, 7); enc.set_value(head_dim_u, 8); enc.set_value(scale, 9)
-        enc.set_threadgroup_memory(n_qr * max_seq_len * 4, 0)
-        enc.dispatch_threadgroups({n_heads, (max_seq_len + n_qr - 1) // n_qr, batch_size}, {32, n_qr, 1})
+        if max_seq_len > 32
+          q_total = 8 * 2
+          n_sg = 2
+          sh_q = q_total * head_dim * 2
+          sh_o = q_total * head_dim * 4
+          sh_s = q_total * 64 * 4
+          enc.set_pipeline(pipe("attention_matmul_batch"))
+          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3, w)
+          enc.set_buffer(ws.lengths, 4)
+          enc.set_value(batch_size_u, 5); enc.set_value(max_seq_u, 6); enc.set_value(n_heads_u, 7); enc.set_value(head_dim_u, 8); enc.set_value(scale, 9)
+          enc.set_threadgroup_memory(sh_q + sh_o + sh_s, 0)
+          enc.dispatch_threadgroups({(max_seq_len + q_total - 1) // q_total, n_heads, batch_size}, {32, n_sg, 1})
+        else
+          n_qr = 8
+          enc.set_pipeline(pipe("attention_forward_batch"))
+          enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v_t, 2); enc.set_buffer(ws.attn_out, 3, w)
+          enc.set_buffer(ws.lengths, 4)
+          enc.set_value(batch_size_u, 5); enc.set_value(max_seq_u, 6); enc.set_value(n_heads_u, 7); enc.set_value(head_dim_u, 8); enc.set_value(scale, 9)
+          enc.set_threadgroup_memory(n_qr * max_seq_len * 4, 0)
+          enc.dispatch_threadgroups({n_heads, (max_seq_len + n_qr - 1) // n_qr, batch_size}, {32, n_qr, 1})
+        end
         enc.memory_barrier
 
         out_gw = gw(lw.attn_out_w, lw.attn_out_b)
