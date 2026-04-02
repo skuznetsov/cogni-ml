@@ -23,9 +23,19 @@ module ML::GGUF
     @scores : Array(Float32)
     @types : Array(Int32)        # 1=normal, 2=unknown, 3=control
     @token_to_id : Hash(String, Int32)
+    @trie : Array(TrieNode)
 
     # For Viterbi: max token length to bound the inner loop
     @max_token_len : Int32
+
+    private class TrieNode
+      property token_id : Int32
+      getter children : Hash(UInt8, Int32)
+
+      def initialize(@token_id : Int32 = -1)
+        @children = {} of UInt8 => Int32
+      end
+    end
 
     def initialize(gguf : GGUFFile)
       @bos_id = (gguf.get_int("tokenizer.ggml.bos_token_id") || 0).to_i32
@@ -48,12 +58,14 @@ module ML::GGUF
 
       # Build lookup (only normal tokens, not control/unknown)
       @token_to_id = {} of String => Int32
+      @trie = [TrieNode.new]
       @max_token_len = 0
       @tokens.each_with_index do |tok, i|
         next if tok.empty?
         next if @types[i]? == 3  # Skip control tokens
         @token_to_id[tok] = i.to_i32
         @max_token_len = Math.max(@max_token_len, tok.bytesize)
+        trie_insert(tok.to_slice, i.to_i32)
       end
     end
 
@@ -109,27 +121,30 @@ module ML::GGUF
       # DP arrays
       best_score = Array(Float64).new(n + 1, -Float64::MAX)
       best_len = Array(Int32).new(n + 1, 0)
+      best_id = Array(Int32).new(n + 1, -1)
       best_score[0] = 0.0
 
       n.times do |i|
         next if best_score[i] == -Float64::MAX
 
-        # Try all tokens starting at position i
+        node_idx = 0
         max_len = Math.min(@max_token_len, n - i)
-        1.upto(max_len) do |len|
-          # Extract substring as String (must be valid UTF-8 boundary)
-          piece = String.new(bytes[i, len])
+        len = 0
+        while len < max_len
+          next_idx = @trie[node_idx].children[bytes[i + len]]?
+          break unless next_idx
 
-          if id = @token_to_id[piece]?
-            score = best_score[i] + @scores[id].to_f64
+          node_idx = next_idx
+          len += 1
+          token_id = @trie[node_idx].token_id
+          if token_id >= 0
+            score = best_score[i] + @scores[token_id].to_f64
             if score > best_score[i + len]
               best_score[i + len] = score
               best_len[i + len] = len
+              best_id[i + len] = token_id
             end
           end
-        rescue
-          # Invalid UTF-8 slice — skip
-          next
         end
 
         # Always allow single-byte fallback (UNK) to guarantee coverage
@@ -141,6 +156,7 @@ module ML::GGUF
             if fallback_score > best_score[i + char_len]
               best_score[i + char_len] = fallback_score
               best_len[i + char_len] = char_len
+              best_id[i + char_len] = @unk_id
             end
           end
         end
@@ -151,20 +167,33 @@ module ML::GGUF
       pos = n
       while pos > 0
         len = best_len[pos]
-        if len <= 0
+        id = best_id[pos]
+        if len <= 0 || id < 0
           # Should not happen, but safety fallback
           pos -= 1
           ids.unshift(@unk_id)
           next
         end
 
-        piece = String.new(bytes[pos - len, len])
-        id = @token_to_id[piece]? || @unk_id
         ids.unshift(id)
         pos -= len
       end
 
       ids
+    end
+
+    private def trie_insert(bytes : Bytes, token_id : Int32) : Nil
+      node_idx = 0
+      bytes.each do |byte|
+        next_idx = @trie[node_idx].children[byte]?
+        unless next_idx
+          next_idx = @trie.size
+          @trie[node_idx].children[byte] = next_idx
+          @trie << TrieNode.new
+        end
+        node_idx = next_idx
+      end
+      @trie[node_idx].token_id = token_id
     end
 
     # Get the byte length of a UTF-8 character from its first byte
