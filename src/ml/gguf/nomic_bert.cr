@@ -552,8 +552,8 @@ module ML::GGUF
 
     private def configured_metal_batch_size : Int32
       raw = ENV["EMBED_NATIVE_MAX_BATCH"]?
-      val = raw.try(&.to_i?) || 4
-      val > 0 ? val.to_i32 : 4_i32
+      val = raw.try(&.to_i?) || 8
+      val > 0 ? val.to_i32 : 8_i32
     end
     {% end %}
 
