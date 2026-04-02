@@ -53,4 +53,58 @@ module ML::GGUF
       @tokenize_ms + @prepare_ms + @reorder_ms
     end
   end
+
+  record LayerStageProfile,
+    layer_index : Int32,
+    kind : String,
+    attn_proj_ms : Float64,
+    attn_core_ms : Float64,
+    attn_out_norm_ms : Float64,
+    ffn_route_ms : Float64,
+    ffn_up_ms : Float64,
+    ffn_down_ms : Float64,
+    ffn_scatter_norm_ms : Float64 do
+    def attention_ms : Float64
+      @attn_proj_ms + @attn_core_ms + @attn_out_norm_ms
+    end
+
+    def ffn_ms : Float64
+      @ffn_route_ms + @ffn_up_ms + @ffn_down_ms + @ffn_scatter_norm_ms
+    end
+
+    def total_ms : Float64
+      attention_ms + ffn_ms
+    end
+
+    def +(other : LayerStageProfile) : LayerStageProfile
+      LayerStageProfile.new(
+        layer_index: @layer_index,
+        kind: @kind,
+        attn_proj_ms: @attn_proj_ms + other.attn_proj_ms,
+        attn_core_ms: @attn_core_ms + other.attn_core_ms,
+        attn_out_norm_ms: @attn_out_norm_ms + other.attn_out_norm_ms,
+        ffn_route_ms: @ffn_route_ms + other.ffn_route_ms,
+        ffn_up_ms: @ffn_up_ms + other.ffn_up_ms,
+        ffn_down_ms: @ffn_down_ms + other.ffn_down_ms,
+        ffn_scatter_norm_ms: @ffn_scatter_norm_ms + other.ffn_scatter_norm_ms,
+      )
+    end
+  end
+
+  record LayerEmbedProfile,
+    seq_len : Int32,
+    tokenize_ms : Float64,
+    prepare_ms : Float64,
+    prepass_wait_ms : Float64,
+    pool_wait_ms : Float64,
+    readback_ms : Float64,
+    layers : Array(LayerStageProfile) do
+    def layer_wait_ms : Float64
+      @layers.sum(&.total_ms)
+    end
+
+    def total_ms : Float64
+      @tokenize_ms + @prepare_ms + @prepass_wait_ms + layer_wait_ms + @pool_wait_ms + @readback_ms
+    end
+  end
 end

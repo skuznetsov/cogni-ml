@@ -1069,6 +1069,517 @@ module ML::GGUF
       graph
     end
 
+    private def profile_stage_wait_ms(&block : ML::Metal::ComputeEncoder ->) : Float64
+      cmd = ML::Metal::CommandBuffer.new(fast: true)
+      cmd.enqueue
+      enc = ML::Metal::ComputeEncoder.new(cmd, concurrent: true)
+      yield enc
+      enc.end_encoding
+      t0 = Time.instant
+      cmd.commit
+      cmd.wait
+      (Time.instant - t0).total_milliseconds
+    end
+
+    private def encode_embed_prepass_stage(enc, ws : GPUWorkspace, seq_len : Int32, dim : Int32,
+                                           token_embd_buf : ML::MetalBuffer, token_types_buf : ML::MetalBuffer,
+                                           embd_norm_w_buf : ML::MetalBuffer, embd_norm_b_buf : ML::MetalBuffer)
+      enc.set_pipeline(pipe("embed_lookup_add_type"))
+      enc.set_buffer(ws.token_ids, 0)
+      enc.set_buffer(token_embd_buf, 1)
+      enc.set_buffer(token_types_buf, 2)
+      enc.set_buffer(ws.hidden, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(seq_len.to_u32, 4)
+      enc.set_value(dim.to_u32, 5)
+      enc.dispatch_1d(seq_len * dim, 256)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("layernorm_inplace"))
+      enc.set_buffer(ws.hidden, 0, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_buffer(embd_norm_w_buf, 1)
+      enc.set_buffer(embd_norm_b_buf, 2)
+      enc.set_value(dim.to_u32, 3)
+      enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+    end
+
+    private def encode_attention_proj_stage(enc, ws : GPUWorkspace, h_in : ML::MetalBuffer,
+                                            qkv_gw : GPUWeight, seq_len : Int32, dim : Int32,
+                                            n_heads : Int32, head_dim : Int32)
+      dim_u = dim.to_u32
+      batch = seq_len.to_u32
+
+      enc.set_buffer(qkv_gw.buffer, 0)
+      enc.set_buffer(h_in, 1)
+      enc.set_buffer(qkv_gw.bias_buffer, 2)
+      enc.set_buffer(ws.qkv, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(dim_u, 4)
+      enc.set_value(3_u32 * dim_u, 5)
+      enc.set_value(batch, 6)
+      enc.set_value(0_u32, 7)
+      matmul_dispatch(enc, qkv_gw.type, 3 * dim, seq_len)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("qkv_split_rope"))
+      enc.set_buffer(ws.qkv, 0)
+      enc.set_buffer(ws.q, 1, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.k, 2, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.v, 3, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.v_t, 4, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.cos_cache, 5)
+      enc.set_buffer(ws.sin_cache, 6)
+      enc.set_value(batch, 7)
+      enc.set_value(dim_u, 8)
+      enc.set_value(n_heads.to_u32, 9)
+      enc.set_value(head_dim.to_u32, 10)
+      enc.dispatch_1d(seq_len * dim, 256)
+    end
+
+    private def encode_attention_core_stage(enc, ws : GPUWorkspace, seq_len : Int32, n_heads : Int32, head_dim : Int32)
+      scale = 1.0_f32 / Math.sqrt(head_dim.to_f32)
+      batch = seq_len.to_u32
+
+      if seq_len > 32
+        q_total = 8 * 2
+        n_sg = 2
+        sh_q = q_total * head_dim * 2
+        sh_o = q_total * head_dim * 4
+        sh_s = q_total * 64 * 4
+        enc.set_pipeline(pipe("attention_matmul"))
+        enc.set_buffer(ws.q, 0)
+        enc.set_buffer(ws.k, 1)
+        enc.set_buffer(ws.v, 2)
+        enc.set_buffer(ws.attn_out, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(batch, 4)
+        enc.set_value(n_heads.to_u32, 5)
+        enc.set_value(head_dim.to_u32, 6)
+        enc.set_value(scale, 7)
+        enc.set_threadgroup_memory(sh_q + sh_o + sh_s, 0)
+        enc.dispatch_threadgroups({(seq_len + q_total - 1) // q_total, n_heads, 1}, {32, n_sg, 1})
+      else
+        n_qr = 8
+        enc.set_pipeline(pipe("attention_forward"))
+        enc.set_buffer(ws.q, 0)
+        enc.set_buffer(ws.k, 1)
+        enc.set_buffer(ws.v_t, 2)
+        enc.set_buffer(ws.attn_out, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(batch, 4)
+        enc.set_value(n_heads.to_u32, 5)
+        enc.set_value(head_dim.to_u32, 6)
+        enc.set_value(scale, 7)
+        enc.set_threadgroup_memory(n_qr * seq_len * 4, 0)
+        enc.dispatch_threadgroups({n_heads, (seq_len + n_qr - 1) // n_qr, 1}, {32, n_qr, 1})
+      end
+    end
+
+    private def encode_attention_out_norm_stage(enc, ws : GPUWorkspace, h_in : ML::MetalBuffer, h_out : ML::MetalBuffer,
+                                                out_gw : GPUWeight, n1w_buf : ML::MetalBuffer, n1b_buf : ML::MetalBuffer,
+                                                seq_len : Int32, dim : Int32)
+      dim_u = dim.to_u32
+      batch = seq_len.to_u32
+
+      enc.set_buffer(out_gw.buffer, 0)
+      enc.set_buffer(ws.attn_out, 1)
+      enc.set_buffer(out_gw.bias_buffer, 2)
+      enc.set_buffer(ws.ffn_out, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(dim_u, 4)
+      enc.set_value(dim_u, 5)
+      enc.set_value(batch, 6)
+      enc.set_value(0_u32, 7)
+      matmul_dispatch(enc, out_gw.type, dim, seq_len)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("residual_layernorm_copy"))
+      enc.set_buffer(h_in, 0)
+      enc.set_buffer(ws.ffn_out, 1)
+      enc.set_buffer(h_out, 2, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(n1w_buf, 3)
+      enc.set_buffer(n1b_buf, 4)
+      enc.set_value(dim_u, 5)
+      enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+    end
+
+    private def encode_dense_ffn_up_stage(enc, ws : GPUWorkspace, h_out : ML::MetalBuffer,
+                                          up_gw : GPUWeight, seq_len : Int32, dim : Int32, ffn_dim : Int32)
+      enc.set_buffer(up_gw.buffer, 0)
+      enc.set_buffer(h_out, 1)
+      enc.set_buffer(up_gw.bias_buffer, 2)
+      enc.set_buffer(ws.ffn_mid, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(dim.to_u32, 4)
+      enc.set_value(ffn_dim.to_u32, 5)
+      enc.set_value(seq_len.to_u32, 6)
+      enc.set_value(1_u32, 7)
+      matmul_dispatch(enc, up_gw.type, ffn_dim, seq_len)
+    end
+
+    private def encode_dense_ffn_down_norm_stage(enc, ws : GPUWorkspace, h_out : ML::MetalBuffer,
+                                                 down_gw : GPUWeight, n2w_buf : ML::MetalBuffer, n2b_buf : ML::MetalBuffer,
+                                                 seq_len : Int32, dim : Int32, ffn_dim : Int32)
+      enc.set_buffer(down_gw.buffer, 0)
+      enc.set_buffer(ws.ffn_mid, 1)
+      enc.set_buffer(down_gw.bias_buffer, 2)
+      enc.set_buffer(ws.ffn_out, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(ffn_dim.to_u32, 4)
+      enc.set_value(dim.to_u32, 5)
+      enc.set_value(seq_len.to_u32, 6)
+      enc.set_value(0_u32, 7)
+      matmul_dispatch(enc, down_gw.type, dim, seq_len)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("residual_layernorm"))
+      enc.set_buffer(h_out, 0, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_buffer(ws.ffn_out, 1)
+      enc.set_buffer(n2w_buf, 2)
+      enc.set_buffer(n2b_buf, 3)
+      enc.set_value(dim.to_u32, 4)
+      enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+    end
+
+    private def encode_moe_route_stage(enc, ws : GPUWorkspace, h_out : ML::MetalBuffer,
+                                       gate_w_buf : ML::MetalBuffer, seq_len : Int32, dim : Int32,
+                                       n_experts : Int32, n_experts_used : Int32, ffn_dim : Int32)
+      batch = seq_len.to_u32
+      dim_u = dim.to_u32
+
+      enc.set_pipeline(pipe("zero_int"))
+      enc.set_buffer(ws.expert_counts, 0, ML::Metal::BufferAccess::Write)
+      enc.dispatch_1d(n_experts, 256)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("gate_softmax_topk_count"))
+      enc.set_buffer(h_out, 0)
+      enc.set_buffer(gate_w_buf, 1)
+      enc.set_buffer(ws.routing_ids, 2, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.routing_wts, 3, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.expert_counts, 4, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_value(dim_u, 5)
+      enc.set_value(n_experts.to_u32, 6)
+      enc.set_value(n_experts_used.to_u32, 7)
+      enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+
+      return if seq_len <= 64
+
+      total_routing = seq_len * n_experts_used
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("moe_route_and_dispatch"))
+      enc.set_buffer(ws.routing_ids, 0)
+      enc.set_buffer(ws.routing_wts, 1)
+      enc.set_buffer(ws.gather_map, 2, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.scatter_wts, 3, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.expert_counts, 4, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_buffer(ws.expert_offsets, 5, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.dispatch_args, 6, ML::Metal::BufferAccess::Write)
+      enc.set_value(n_experts_used.to_u32, 7)
+      enc.set_value(n_experts.to_u32, 8)
+      enc.set_value(batch, 9)
+      enc.set_value(ffn_dim.to_u32, 10)
+      enc.set_value(dim_u, 11)
+      enc.set_value(dim_u, 12)
+      tg_sz = {seq_len, 1024}.min
+      enc.dispatch_threadgroups({1, 1, 1}, {tg_sz, 1, 1})
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("moe_gather"))
+      enc.set_buffer(h_out, 0)
+      enc.set_buffer(ws.moe_input, 1, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.gather_map, 2)
+      enc.set_value(dim_u, 3)
+      enc.dispatch_1d(total_routing * dim, 256)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("moe_write_batched_args"))
+      enc.set_buffer(ws.expert_offsets, 0)
+      enc.set_buffer(ws.expert_tg_offs, 1, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.batched_up_grid, 2, ML::Metal::BufferAccess::Write)
+      enc.set_buffer(ws.batched_down_grid, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(n_experts.to_u32, 4)
+      enc.set_value(ffn_dim.to_u32, 5)
+      enc.set_value(dim_u, 6)
+      enc.dispatch_1d(1, 1)
+    end
+
+    private def encode_moe_up_stage(enc, ws : GPUWorkspace, h_out : ML::MetalBuffer, seq_len : Int32, dim : Int32,
+                                    ffn_dim : Int32, n_experts : Int32, exp_up_qw : QuantWeight, up_gw_full : GPUWeight,
+                                    up_expert_bytes : Int32)
+      batch = seq_len.to_u32
+      dim_u = dim.to_u32
+      ffn_dim_u = ffn_dim.to_u32
+
+      if seq_len <= 64
+        expert_stride_mid = seq_len.to_i64 * ffn_dim * 2
+        n_experts.times do |ei|
+          up_offset = ei.to_i64 * up_expert_bytes
+          enc.set_pipeline(pipe(matmul_kernel(exp_up_qw.type)))
+          enc.set_buffer(up_gw_full.buffer, 0, offset: up_offset)
+          enc.set_buffer(h_out, 1)
+          enc.set_buffer(up_gw_full.bias_buffer, 2)
+          enc.set_buffer(ws.expert_mid, 3, ML::Metal::BufferAccess::Write, offset: ei.to_i64 * expert_stride_mid, length: expert_stride_mid)
+          enc.set_value(dim_u, 4)
+          enc.set_value(ffn_dim_u, 5)
+          enc.set_value(batch, 6)
+          enc.set_value(1_u32, 7)
+          grid, tg = matmul_dispatch_tg(ffn_dim, seq_len)
+          enc.dispatch_threadgroups(grid, tg)
+        end
+      else
+        batched_up_kernel = exp_up_qw.type.q5_k? ? "batched_mm_q5k" : "batched_mm_q6k"
+        enc.set_pipeline(pipe(batched_up_kernel))
+        enc.set_buffer(up_gw_full.buffer, 0)
+        enc.set_buffer(ws.moe_input, 1)
+        enc.set_buffer(up_gw_full.bias_buffer, 2)
+        enc.set_buffer(ws.moe_mid, 3, ML::Metal::BufferAccess::Write)
+        enc.set_buffer(ws.expert_offsets, 4)
+        enc.set_buffer(ws.expert_tg_offs, 5)
+        enc.set_value(dim_u, 6)
+        enc.set_value(ffn_dim_u, 7)
+        enc.set_value(1_u32, 8)
+        enc.set_value(n_experts.to_u32, 9)
+        enc.set_value(up_expert_bytes.to_u32, 10)
+        enc.set_threadgroup_memory(MM_SHMEM, 0)
+        enc.dispatch_threadgroups_indirect(ws.batched_up_grid, 0_i64, {128, 1, 1})
+      end
+    end
+
+    private def encode_moe_down_stage(enc, ws : GPUWorkspace, seq_len : Int32, dim : Int32,
+                                      ffn_dim : Int32, n_experts : Int32, exp_down_qw : QuantWeight, down_gw_full : GPUWeight,
+                                      down_expert_bytes : Int32)
+      batch = seq_len.to_u32
+      dim_u = dim.to_u32
+      ffn_dim_u = ffn_dim.to_u32
+
+      if seq_len <= 64
+        expert_stride_mid = seq_len.to_i64 * ffn_dim * 2
+        expert_stride_out = seq_len.to_i64 * dim * 2
+        n_experts.times do |ei|
+          down_offset = ei.to_i64 * down_expert_bytes
+          enc.set_pipeline(pipe(matmul_kernel(exp_down_qw.type)))
+          enc.set_buffer(down_gw_full.buffer, 0, offset: down_offset)
+          enc.set_buffer(ws.expert_mid, 1, offset: ei.to_i64 * expert_stride_mid, length: expert_stride_mid)
+          enc.set_buffer(down_gw_full.bias_buffer, 2)
+          enc.set_buffer(ws.expert_out, 3, ML::Metal::BufferAccess::Write, offset: ei.to_i64 * expert_stride_out, length: expert_stride_out)
+          enc.set_value(ffn_dim_u, 4)
+          enc.set_value(dim_u, 5)
+          enc.set_value(batch, 6)
+          enc.set_value(0_u32, 7)
+          grid, tg = matmul_dispatch_tg(dim, seq_len)
+          enc.dispatch_threadgroups(grid, tg)
+        end
+      else
+        batched_down_kernel = exp_down_qw.type.q5_k? ? "batched_mm_q5k" : "batched_mm_q6k"
+        enc.set_pipeline(pipe(batched_down_kernel))
+        enc.set_buffer(down_gw_full.buffer, 0)
+        enc.set_buffer(ws.moe_mid, 1)
+        enc.set_buffer(down_gw_full.bias_buffer, 2)
+        enc.set_buffer(ws.moe_output, 3, ML::Metal::BufferAccess::Write)
+        enc.set_buffer(ws.expert_offsets, 4)
+        enc.set_buffer(ws.expert_tg_offs, 5)
+        enc.set_value(ffn_dim_u, 6)
+        enc.set_value(dim_u, 7)
+        enc.set_value(0_u32, 8)
+        enc.set_value(n_experts.to_u32, 9)
+        enc.set_value(down_expert_bytes.to_u32, 10)
+        enc.set_threadgroup_memory(MM_SHMEM, 0)
+        enc.dispatch_threadgroups_indirect(ws.batched_down_grid, 0_i64, {128, 1, 1})
+      end
+    end
+
+    private def encode_moe_scatter_norm_stage(enc, ws : GPUWorkspace, h_out : ML::MetalBuffer,
+                                              n2w_buf : ML::MetalBuffer, n2b_buf : ML::MetalBuffer,
+                                              seq_len : Int32, dim : Int32, n_experts : Int32, n_experts_used : Int32)
+      batch = seq_len.to_u32
+      dim_u = dim.to_u32
+
+      if seq_len <= 64
+        enc.set_pipeline(pipe("moe_weighted_scatter"))
+        enc.set_buffer(ws.ffn_out, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(ws.expert_out, 1)
+        enc.set_buffer(ws.routing_ids, 2)
+        enc.set_buffer(ws.routing_wts, 3)
+        enc.set_value(dim_u, 4)
+        enc.set_value(batch, 5)
+        enc.set_value(n_experts_used.to_u32, 6)
+        enc.set_value(n_experts.to_u32, 7)
+        enc.dispatch_1d(seq_len * dim, 256)
+        enc.memory_barrier
+
+        enc.set_pipeline(pipe("residual_layernorm"))
+        enc.set_buffer(h_out, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(ws.ffn_out, 1)
+        enc.set_buffer(n2w_buf, 2)
+        enc.set_buffer(n2b_buf, 3)
+        enc.set_value(dim_u, 4)
+        enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+      else
+        total_routing = seq_len * n_experts_used
+
+        enc.set_pipeline(pipe("zero_int"))
+        enc.set_buffer(ws.ffn_out_f32, 0, ML::Metal::BufferAccess::Write)
+        enc.dispatch_1d(seq_len * dim, 256)
+        enc.memory_barrier
+
+        enc.set_pipeline(pipe("moe_scatter_atomic"))
+        enc.set_buffer(ws.ffn_out_f32, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(ws.moe_output, 1)
+        enc.set_buffer(ws.gather_map, 2)
+        enc.set_buffer(ws.scatter_wts, 3)
+        enc.set_value(dim_u, 4)
+        enc.set_value(total_routing.to_u32, 5)
+        enc.dispatch_1d(total_routing * dim, 256)
+        enc.memory_barrier
+
+        enc.set_pipeline(pipe("residual_layernorm_f32"))
+        enc.set_buffer(h_out, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(ws.ffn_out_f32, 1)
+        enc.set_buffer(n2w_buf, 2)
+        enc.set_buffer(n2b_buf, 3)
+        enc.set_value(dim_u, 4)
+        enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+      end
+    end
+
+    private def encode_mean_pool_stage(enc, ws : GPUWorkspace, final_hidden : ML::MetalBuffer, seq_len : Int32, dim : Int32)
+      enc.set_pipeline(pipe("mean_pool_l2"))
+      enc.set_buffer(final_hidden, 0)
+      enc.set_buffer(ws.output, 1, ML::Metal::BufferAccess::Write)
+      enc.set_value(seq_len.to_u32, 2)
+      enc.set_value(dim.to_u32, 3)
+      enc.dispatch_1d(1, 1)
+    end
+
+    def profile_encode_token_ids_layers(
+      token_ids : Array(Int32),
+      seq_len : Int32,
+      layers : Array(NomicBertMoE::LayerWeights),
+      dim : Int32,
+      n_heads : Int32,
+      head_dim : Int32,
+      ffn_dim : Int32,
+      n_experts : Int32,
+      n_experts_used : Int32,
+      moe_every_n : Int32,
+      token_embd_buf : ML::MetalBuffer,
+      token_types_buf : ML::MetalBuffer,
+      embd_norm_w_buf : ML::MetalBuffer,
+      embd_norm_b_buf : ML::MetalBuffer,
+    ) : {Array(Float32), LayerEmbedProfile}
+      ensure_workspace_capacity(seq_len)
+      ws = @workspace.not_nil!
+      token_ptr = ws.token_ids.contents.as(Pointer(Int32))
+      seq_len.times { |i| token_ptr[i] = token_ids[i] }
+
+      prepass_wait_ms = profile_stage_wait_ms do |enc|
+        encode_embed_prepass_stage(enc, ws, seq_len, dim, token_embd_buf, token_types_buf, embd_norm_w_buf, embd_norm_b_buf)
+      end
+
+      norm_bufs = norm_bufs_for(layers, dim)
+      h_bufs = [ws.hidden, ws.hidden2]
+      layer_profiles = Array(LayerStageProfile).new(layers.size)
+
+      layers.each_with_index do |lw, layer_idx|
+        is_moe = (layer_idx % moe_every_n == 1) && n_experts > 0
+        n1w_buf, n1b_buf, n2w_buf, n2b_buf = norm_bufs[layer_idx]
+        h_in = h_bufs[layer_idx % 2]
+        h_out = h_bufs[(layer_idx + 1) % 2]
+        kind = if is_moe
+                 seq_len <= 64 ? "moe_sync" : "moe_batched"
+               else
+                 "dense"
+               end
+
+        qkv_gw = gw(lw.attn_qkv_w, lw.attn_qkv_b)
+        out_gw = gw(lw.attn_out_w, lw.attn_out_b)
+
+        attn_proj_ms = profile_stage_wait_ms do |enc|
+          encode_attention_proj_stage(enc, ws, h_in, qkv_gw, seq_len, dim, n_heads, head_dim)
+        end
+
+        attn_core_ms = profile_stage_wait_ms do |enc|
+          encode_attention_core_stage(enc, ws, seq_len, n_heads, head_dim)
+        end
+
+        attn_out_norm_ms = profile_stage_wait_ms do |enc|
+          encode_attention_out_norm_stage(enc, ws, h_in, h_out, out_gw, n1w_buf, n1b_buf, seq_len, dim)
+        end
+
+        ffn_route_ms = 0.0
+        ffn_up_ms = 0.0
+        ffn_down_ms = 0.0
+        ffn_scatter_norm_ms = 0.0
+
+        if is_moe
+          gate_w_buf = upload_f32(lw.gate_w.not_nil!)
+          exp_up_qw = lw.expert_up_w.not_nil!
+          exp_down_qw = lw.expert_down_w.not_nil!
+          up_row_bytes = (dim // 256) * exp_up_qw.type.block_bytes
+          up_expert_bytes = ffn_dim * up_row_bytes
+          down_row_bytes = (ffn_dim // 256) * exp_down_qw.type.block_bytes
+          down_expert_bytes = dim * down_row_bytes
+          up_gw_full = gw(exp_up_qw, Array(Float32).new(ffn_dim, 0.0_f32))
+          down_gw_full = gw(exp_down_qw, Array(Float32).new(dim, 0.0_f32))
+
+          ffn_route_ms = profile_stage_wait_ms do |enc|
+            encode_moe_route_stage(enc, ws, h_out, gate_w_buf, seq_len, dim, n_experts, n_experts_used, ffn_dim)
+          end
+
+          ffn_up_ms = profile_stage_wait_ms do |enc|
+            encode_moe_up_stage(enc, ws, h_out, seq_len, dim, ffn_dim, n_experts, exp_up_qw, up_gw_full, up_expert_bytes)
+          end
+
+          ffn_down_ms = profile_stage_wait_ms do |enc|
+            encode_moe_down_stage(enc, ws, seq_len, dim, ffn_dim, n_experts, exp_down_qw, down_gw_full, down_expert_bytes)
+          end
+
+          ffn_scatter_norm_ms = profile_stage_wait_ms do |enc|
+            encode_moe_scatter_norm_stage(enc, ws, h_out, n2w_buf, n2b_buf, seq_len, dim, n_experts, n_experts_used)
+          end
+        else
+          up_gw = gw(lw.ffn_up_w.not_nil!, lw.ffn_up_b.not_nil!)
+          down_gw = gw(lw.ffn_down_w.not_nil!, lw.ffn_down_b.not_nil!)
+
+          ffn_up_ms = profile_stage_wait_ms do |enc|
+            encode_dense_ffn_up_stage(enc, ws, h_out, up_gw, seq_len, dim, ffn_dim)
+          end
+
+          ffn_down_ms = profile_stage_wait_ms do |enc|
+            encode_dense_ffn_down_norm_stage(enc, ws, h_out, down_gw, n2w_buf, n2b_buf, seq_len, dim, ffn_dim)
+          end
+        end
+
+        layer_profiles << LayerStageProfile.new(
+          layer_index: layer_idx.to_i32,
+          kind: kind,
+          attn_proj_ms: attn_proj_ms,
+          attn_core_ms: attn_core_ms,
+          attn_out_norm_ms: attn_out_norm_ms,
+          ffn_route_ms: ffn_route_ms,
+          ffn_up_ms: ffn_up_ms,
+          ffn_down_ms: ffn_down_ms,
+          ffn_scatter_norm_ms: ffn_scatter_norm_ms,
+        )
+      end
+
+      final_hidden = h_bufs[layers.size % 2]
+      pool_wait_ms = profile_stage_wait_ms do |enc|
+        encode_mean_pool_stage(enc, ws, final_hidden, seq_len, dim)
+      end
+
+      t_read = Time.instant
+      o_ptr = ws.output.contents.as(Pointer(Float32))
+      embedding = Array(Float32).new(dim) { |i| o_ptr[i] }
+      readback_ms = (Time.instant - t_read).total_milliseconds
+
+      profile = LayerEmbedProfile.new(
+        seq_len: seq_len,
+        tokenize_ms: 0.0,
+        prepare_ms: 0.0,
+        prepass_wait_ms: prepass_wait_ms,
+        pool_wait_ms: pool_wait_ms,
+        readback_ms: readback_ms,
+        layers: layer_profiles,
+      )
+      {embedding, profile}
+    end
+
     def encode_layers(
       hidden_data : Array(Float32), seq_len : Int32,
       layers : Array(NomicBertMoE::LayerWeights),

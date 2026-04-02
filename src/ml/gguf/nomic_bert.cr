@@ -252,6 +252,30 @@ module ML::GGUF
       raise "profile_embed requires MetalBackend"
     end
 
+    def profile_embed_layers(text : String) : LayerEmbedProfile
+      total_start = Time.instant
+      t0 = Time.instant
+      tokens = tokenize(text)
+      tokenize_ms = (Time.instant - t0).total_milliseconds
+
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        _, layer_profile, prepare_ms = profile_embed_gpu_layers(tokens)
+        return LayerEmbedProfile.new(
+          seq_len: tokens.size.to_i32,
+          tokenize_ms: tokenize_ms,
+          prepare_ms: prepare_ms,
+          prepass_wait_ms: layer_profile.prepass_wait_ms,
+          pool_wait_ms: layer_profile.pool_wait_ms,
+          readback_ms: layer_profile.readback_ms,
+          layers: layer_profile.layers,
+        )
+      end
+      {% end %}
+
+      raise "profile_embed_layers requires MetalBackend"
+    end
+
     {% unless flag?(:cpu_only) %}
     # GPU-accelerated embed: all 12 layers in one command buffer
     private def embed_gpu(tokens : Array(Int32), cpu_ref_per_layer : Array(Array(Float32))? = nil) : Array(Float32)
@@ -316,6 +340,30 @@ module ML::GGUF
         @gpu_embd_norm_b_buf.not_nil!,
       )
       {embedding, backend_profile, prepare_ms}
+    end
+
+    private def profile_embed_gpu_layers(tokens : Array(Int32)) : {Array(Float32), LayerEmbedProfile, Float64}
+      mb = @backend.as(MetalBackend)
+      t0 = Time.instant
+      token_ids = Array(Int32).new(tokens.size) { |i| tokens[i].clamp(0, @vocab_size - 1) }
+      prepare_ms = (Time.instant - t0).total_milliseconds
+      embedding, layer_profile = mb.profile_encode_token_ids_layers(
+        token_ids,
+        tokens.size.to_i32,
+        @layers,
+        @dim,
+        @n_heads,
+        @head_dim,
+        @ffn_dim,
+        @n_experts,
+        @n_experts_used,
+        @moe_every_n,
+        @gpu_token_embd_buf.not_nil!,
+        @gpu_token_types_buf.not_nil!,
+        @gpu_embd_norm_w_buf.not_nil!,
+        @gpu_embd_norm_b_buf.not_nil!,
+      )
+      {embedding, layer_profile, prepare_ms}
     end
 
     # Debug: embed with per-layer GPU vs CPU comparison

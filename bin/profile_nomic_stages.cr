@@ -73,6 +73,57 @@ struct AveragedProfile
   end
 end
 
+struct AveragedLayerEmbedProfile
+  getter seq_len : Int32
+  getter tokenize_ms : Float64
+  getter prepare_ms : Float64
+  getter prepass_wait_ms : Float64
+  getter pool_wait_ms : Float64
+  getter readback_ms : Float64
+  getter layers : Array(ML::GGUF::LayerStageProfile)
+
+  def initialize(@seq_len, @tokenize_ms, @prepare_ms, @prepass_wait_ms, @pool_wait_ms, @readback_ms, @layers)
+  end
+
+  def layer_wait_ms : Float64
+    @layers.sum(&.total_ms)
+  end
+
+  def total_ms : Float64
+    @tokenize_ms + @prepare_ms + @prepass_wait_ms + layer_wait_ms + @pool_wait_ms + @readback_ms
+  end
+
+  def self.from_profiles(profiles : Array(ML::GGUF::LayerEmbedProfile)) : AveragedLayerEmbedProfile
+    raise "no profiles" if profiles.empty?
+    n = profiles.size.to_f64
+    base_layers = profiles.first.layers
+    avg_layers = Array(ML::GGUF::LayerStageProfile).new(base_layers.size)
+    base_layers.each_with_index do |base, idx|
+      avg_layers << ML::GGUF::LayerStageProfile.new(
+        layer_index: base.layer_index,
+        kind: base.kind,
+        attn_proj_ms: profiles.sum { |p| p.layers[idx].attn_proj_ms } / n,
+        attn_core_ms: profiles.sum { |p| p.layers[idx].attn_core_ms } / n,
+        attn_out_norm_ms: profiles.sum { |p| p.layers[idx].attn_out_norm_ms } / n,
+        ffn_route_ms: profiles.sum { |p| p.layers[idx].ffn_route_ms } / n,
+        ffn_up_ms: profiles.sum { |p| p.layers[idx].ffn_up_ms } / n,
+        ffn_down_ms: profiles.sum { |p| p.layers[idx].ffn_down_ms } / n,
+        ffn_scatter_norm_ms: profiles.sum { |p| p.layers[idx].ffn_scatter_norm_ms } / n,
+      )
+    end
+
+    AveragedLayerEmbedProfile.new(
+      profiles.first.seq_len,
+      profiles.sum(&.tokenize_ms) / n,
+      profiles.sum(&.prepare_ms) / n,
+      profiles.sum(&.prepass_wait_ms) / n,
+      profiles.sum(&.pool_wait_ms) / n,
+      profiles.sum(&.readback_ms) / n,
+      avg_layers,
+    )
+  end
+end
+
 def fmt(ms : Float64) : String
   ms.round(2).to_s.rjust(8)
 end
@@ -81,13 +132,15 @@ mode = "all"
 runs = 5
 warmup = 3
 model_path = DEFAULT_MODEL
+layers_case = "all"
 
 OptionParser.parse do |p|
   p.banner = "Usage: profile_nomic_stages [options]"
-  p.on("--mode=MODE", "single | batch | all (default: all)") { |v| mode = v }
+  p.on("--mode=MODE", "single | batch | layers | all (default: all)") { |v| mode = v }
   p.on("--runs=N", "Number of measured runs per case (default: 5)") { |v| runs = v.to_i }
   p.on("--warmup=N", "Warmup runs before measuring (default: 3)") { |v| warmup = v.to_i }
   p.on("--model=PATH", "Path to GGUF model") { |v| model_path = v }
+  p.on("--layers-case=LABEL", "short | medium | long | all (default: all)") { |v| layers_case = v }
 end
 
 unless File.exists?(model_path)
@@ -106,6 +159,7 @@ if mode == "single" || mode == "all"
   STDERR.puts "-" * 108
 
   SINGLE_TEXTS.each do |label, text|
+    warmup.times { model.profile_embed(text) }
     profiles = Array(ML::GGUF::EmbedProfile).new(runs)
     runs.times { profiles << model.profile_embed(text) }
     avg = AveragedProfile.from_profiles(profiles)
@@ -119,8 +173,43 @@ if mode == "batch" || mode == "all"
   STDERR.puts "#{"texts".rjust(5)} #{"tok".rjust(5)} #{"max".rjust(5)} #{"tokenize".rjust(8)} #{"prepare".rjust(8)} #{"reorder".rjust(8)} #{"graph".rjust(8)} #{"cmd".rjust(8)} #{"tokwrite".rjust(8)} #{"lenwrite".rjust(8)} #{"prepass".rjust(8)} #{"encode".rjust(8)} #{"wait".rjust(8)} #{"read".rjust(8)} #{"total".rjust(8)}"
   STDERR.puts "-" * 136
 
+  warmup.times { model.profile_embed_batch(BATCH_TEXTS) }
   profiles = Array(ML::GGUF::EmbedProfile).new(runs)
   runs.times { profiles << model.profile_embed_batch(BATCH_TEXTS) }
   avg = AveragedProfile.from_profiles(profiles)
   STDERR.puts "#{avg.text_count.to_s.rjust(5)} #{avg.total_tokens.to_s.rjust(5)} #{avg.max_seq_len.to_s.rjust(5)} #{fmt(avg.tokenize_ms)} #{fmt(avg.prepare_ms)} #{fmt(avg.reorder_ms)} #{fmt(avg.graph_lookup_ms)} #{fmt(avg.cmd_setup_ms)} #{fmt(avg.token_write_ms)} #{fmt(avg.lengths_write_ms)} #{fmt(avg.prepass_encode_ms)} #{fmt(avg.graph_encode_ms)} #{fmt(avg.submit_wait_ms)} #{fmt(avg.readback_ms)} #{fmt(avg.total_ms)}"
+end
+
+if mode == "layers" || mode == "all"
+  cases = if layers_case == "all"
+            SINGLE_TEXTS.to_a
+          else
+            text = SINGLE_TEXTS[layers_case]?
+            raise "unknown layers case: #{layers_case}" unless text
+            [{layers_case, text}]
+          end
+
+  cases.each do |label, text|
+    warmup.times { model.profile_embed_layers(text) }
+    profiles = Array(ML::GGUF::LayerEmbedProfile).new(runs)
+    runs.times { profiles << model.profile_embed_layers(text) }
+    avg = AveragedLayerEmbedProfile.from_profiles(profiles)
+
+    STDERR.puts
+    STDERR.puts "=== Layer Profile: #{label} (seq=#{avg.seq_len}) ==="
+    STDERR.puts "tokenize=#{fmt(avg.tokenize_ms).strip}ms prepare=#{fmt(avg.prepare_ms).strip}ms prepass_wait=#{fmt(avg.prepass_wait_ms).strip}ms pool_wait=#{fmt(avg.pool_wait_ms).strip}ms read=#{fmt(avg.readback_ms).strip}ms total=#{fmt(avg.total_ms).strip}ms"
+    STDERR.puts "#{"layer".rjust(5)} #{"kind".ljust(11)} #{"a_proj".rjust(8)} #{"a_core".rjust(8)} #{"a_out".rjust(8)} #{"route".rjust(8)} #{"ffn_up".rjust(8)} #{"ffn_dn".rjust(8)} #{"scatter".rjust(8)} #{"total".rjust(8)}"
+    STDERR.puts "-" * 96
+
+    avg.layers.each do |layer|
+      STDERR.puts "#{layer.layer_index.to_s.rjust(5)} #{layer.kind.ljust(11)} #{fmt(layer.attn_proj_ms)} #{fmt(layer.attn_core_ms)} #{fmt(layer.attn_out_norm_ms)} #{fmt(layer.ffn_route_ms)} #{fmt(layer.ffn_up_ms)} #{fmt(layer.ffn_down_ms)} #{fmt(layer.ffn_scatter_norm_ms)} #{fmt(layer.total_ms)}"
+    end
+
+    attn_total = avg.layers.sum(&.attention_ms)
+    dense_total = avg.layers.select { |l| l.kind == "dense" }.sum(&.ffn_ms)
+    moe_total = avg.layers.reject { |l| l.kind == "dense" }.sum(&.ffn_ms)
+    hot = avg.layers.max_by(&.total_ms)
+    STDERR.puts "-" * 96
+    STDERR.puts "attention_total=#{fmt(attn_total).strip}ms dense_ffn_total=#{fmt(dense_total).strip}ms moe_ffn_total=#{fmt(moe_total).strip}ms hottest=L#{hot.layer_index}(#{hot.kind}) #{fmt(hot.total_ms).strip}ms"
+  end
 end
