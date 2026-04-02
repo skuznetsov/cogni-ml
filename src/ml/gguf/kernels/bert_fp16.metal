@@ -956,19 +956,29 @@ kernel void mean_pool_l2(
     device       float* output  [[buffer(1)]],
     constant     uint&  seq_len [[buffer(2)]],
     constant     uint&  dim     [[buffer(3)]],
-    uint tid [[thread_position_in_grid]])
+    uint lid [[thread_index_in_threadgroup]])
 {
-    // Mean pool
-    for (uint d = 0; d < dim; d++) {
+    threadgroup float partial_norm[256];
+    float local_norm = 0.0f;
+
+    for (uint d = lid; d < dim; d += 256) {
         float sum = 0.0f;
         for (uint p = 0; p < seq_len; p++) sum += float(hidden[p * dim + d]);
-        output[d] = sum / float(seq_len);
+        float mean = sum / float(seq_len);
+        output[d] = mean;
+        local_norm += mean * mean;
     }
-    // L2 normalize
-    float norm = 0.0f;
-    for (uint d = 0; d < dim; d++) norm += output[d] * output[d];
-    norm = rsqrt(norm + 1e-12f);
-    for (uint d = 0; d < dim; d++) output[d] *= norm;
+
+    partial_norm[lid] = local_norm;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (lid < stride) partial_norm[lid] += partial_norm[lid + stride];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    float inv_norm = rsqrt(partial_norm[0] + 1e-12f);
+    for (uint d = lid; d < dim; d += 256) output[d] *= inv_norm;
 }
 
 // ============================================================================
@@ -983,24 +993,36 @@ kernel void mean_pool_l2_batch(
     constant     uint&  batch_size  [[buffer(3)]],
     constant     uint&  max_seq     [[buffer(4)]],
     constant     uint&  dim         [[buffer(5)]],
-    uint tid [[thread_position_in_grid]])
+    uint3 tgpig [[threadgroup_position_in_grid]],
+    uint  lid   [[thread_index_in_threadgroup]])
 {
-    if (tid >= batch_size) return;
-    const uint b = tid;
+    const uint b = tgpig.x;
+    if (b >= batch_size) return;
+
+    threadgroup float partial_norm[256];
     const uint valid_len = max(lengths[b], 1u);
     const uint token_base = b * max_seq;
     const uint out_base = b * dim;
+    float local_norm = 0.0f;
 
-    for (uint d = 0; d < dim; d++) {
+    for (uint d = lid; d < dim; d += 256) {
         float sum = 0.0f;
         for (uint p = 0; p < valid_len; p++) sum += float(hidden[(token_base + p) * dim + d]);
-        output[out_base + d] = sum / float(valid_len);
+        float mean = sum / float(valid_len);
+        output[out_base + d] = mean;
+        local_norm += mean * mean;
     }
 
-    float norm = 0.0f;
-    for (uint d = 0; d < dim; d++) norm += output[out_base + d] * output[out_base + d];
-    norm = rsqrt(norm + 1e-12f);
-    for (uint d = 0; d < dim; d++) output[out_base + d] *= norm;
+    partial_norm[lid] = local_norm;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (lid < stride) partial_norm[lid] += partial_norm[lid + stride];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    float inv_norm = rsqrt(partial_norm[0] + 1e-12f);
+    for (uint d = lid; d < dim; d += 256) output[out_base + d] *= inv_norm;
 }
 
 // ============================================================================

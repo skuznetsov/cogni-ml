@@ -777,7 +777,7 @@ module ML::GGUF
       enc.set_buffer(ws.output, 1, ML::Metal::BufferAccess::Write)
       enc.set_value(seq_len.to_u32, 2)
       enc.set_value(dim_u, 3)
-      enc.dispatch_1d(1, 1)
+      enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
 
       graph
     end
@@ -1064,7 +1064,7 @@ module ML::GGUF
       enc.set_value(batch_size_u, 3)
       enc.set_value(max_seq_u, 4)
       enc.set_value(dim_u, 5)
-      enc.dispatch_1d(batch_size, 1)
+      enc.dispatch_threadgroups({batch_size, 1, 1}, {256, 1, 1})
 
       graph
     end
@@ -1443,7 +1443,7 @@ module ML::GGUF
       enc.set_buffer(ws.output, 1, ML::Metal::BufferAccess::Write)
       enc.set_value(seq_len.to_u32, 2)
       enc.set_value(dim.to_u32, 3)
-      enc.dispatch_1d(1, 1)
+      enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
     end
 
     def profile_encode_token_ids_layers(
@@ -1904,7 +1904,7 @@ module ML::GGUF
       enc.set_pipeline(pipe("mean_pool_l2"))
       enc.set_buffer(final_hidden, 0); enc.set_buffer(ws.output, 1, ML::Metal::BufferAccess::Write)
       enc.set_value(seq_len.to_u32, 2); enc.set_value(dim_u, 3)
-      enc.dispatch_1d(1, 1)
+      enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
 
       _t_encode_done = Time.instant
 
