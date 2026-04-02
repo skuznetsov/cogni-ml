@@ -68,7 +68,7 @@ warmup = 3
 n_gpu_layers = 99
 n_batch = 512
 n_threads = 0
-llama_flash_attn = true
+llama_flash_attn = false
 llama_fresh_context = false
 
 OptionParser.parse do |p|
@@ -79,8 +79,8 @@ OptionParser.parse do |p|
   p.on("--n-gpu-layers=N", "llama.cpp GPU layers (default: 99)") { |v| n_gpu_layers = v.to_i }
   p.on("--n-batch=N", "llama.cpp context batch size (default: 512)") { |v| n_batch = v.to_i }
   p.on("--n-threads=N", "llama.cpp CPU threads (default: auto)") { |v| n_threads = v.to_i }
-  p.on("--llama-flash-attn", "Enable llama.cpp flash attention (default)") { llama_flash_attn = true }
-  p.on("--llama-no-flash-attn", "Disable llama.cpp flash attention") { llama_flash_attn = false }
+  p.on("--llama-flash-attn", "Enable llama.cpp flash attention") { llama_flash_attn = true }
+  p.on("--llama-no-flash-attn", "Disable llama.cpp flash attention (default)") { llama_flash_attn = false }
   p.on("--llama-fresh-context", "Recreate llama.cpp context per embedding call") { llama_fresh_context = true }
 end
 
