@@ -103,6 +103,67 @@ kernel void qkv_split_rope(
 }
 
 // ============================================================================
+// Batched fused QKV split + RoPE
+// Input qkv is flattened as [batch * max_seq, 3 * dim]
+// Q/K/V layouts are [batch, n_heads, max_seq, head_dim] flattened.
+// ============================================================================
+kernel void qkv_split_rope_batch(
+    device const half*   qkv        [[buffer(0)]],
+    device       half*   Q          [[buffer(1)]],
+    device       half*   K          [[buffer(2)]],
+    device       half*   V          [[buffer(3)]],
+    device       half*   V_t        [[buffer(4)]],
+    device const float*  cos_t      [[buffer(5)]],
+    device const float*  sin_t      [[buffer(6)]],
+    constant     uint&   batch_size [[buffer(7)]],
+    constant     uint&   max_seq    [[buffer(8)]],
+    constant     uint&   dim        [[buffer(9)]],
+    constant     uint&   n_heads    [[buffer(10)]],
+    constant     uint&   head_dim   [[buffer(11)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint token_count = batch_size * max_seq;
+    if (tid >= token_count * dim) return;
+
+    const uint token = tid / dim;
+    const uint b = token / max_seq;
+    const uint pos = token % max_seq;
+    const uint d = tid % dim;
+    const uint h = d / head_dim;
+    const uint hd = d % head_dim;
+    const uint hd2 = head_dim / 2;
+    const uint src = token * 3 * dim;
+    const uint base = (b * n_heads + h) * max_seq;
+    const uint dst = base * head_dim + pos * head_dim + hd;
+
+    half v_val = qkv[src + 2 * dim + d];
+    V[dst] = v_val;
+    V_t[(base * head_dim) + hd * max_seq + pos] = v_val;
+
+    float q_raw = float(qkv[src + d]);
+    float k_raw = float(qkv[src + dim + d]);
+
+    if (hd < hd2) {
+        uint d_pair = h * head_dim + hd + hd2;
+        float q1 = float(qkv[src + d_pair]);
+        float k1 = float(qkv[src + dim + d_pair]);
+        float c = cos_t[pos * hd2 + hd];
+        float s = sin_t[pos * hd2 + hd];
+        Q[dst] = half(q_raw * c - q1 * s);
+        K[dst] = half(k_raw * c - k1 * s);
+    } else {
+        uint hd_lo = hd - hd2;
+        uint d_pair = h * head_dim + hd_lo;
+        float q0 = float(qkv[src + d_pair]);
+        float k0 = float(qkv[src + dim + d_pair]);
+        float c = cos_t[pos * hd2 + hd_lo];
+        float s = sin_t[pos * hd2 + hd_lo];
+        Q[dst] = half(q0 * s + q_raw * c);
+        K[dst] = half(k0 * s + k_raw * c);
+    }
+}
+
+// ============================================================================
 // RoPE NeoX in-place on half Q/K
 // ============================================================================
 kernel void rope_neox_inplace(
@@ -200,6 +261,85 @@ kernel void attention_forward(
         }
         for (; j < seq_len; j++) val += shared[j] * float(vt_row[j]);
         output[i * (n_heads * head_dim) + h * head_dim + d] = half(val);
+    }
+}
+
+// ============================================================================
+// Batched attention: Q/K/V_t layouts are [batch, heads, max_seq, head_dim].
+// Output is flattened token-major [batch * max_seq, dim].
+// lengths[b] limits the valid key range for each sequence.
+// ============================================================================
+kernel void attention_forward_batch(
+    device const half*  Q          [[buffer(0)]],
+    device const half*  K          [[buffer(1)]],
+    device const half*  V_t        [[buffer(2)]],
+    device       half*  output     [[buffer(3)]],
+    device const uint*  lengths    [[buffer(4)]],
+    constant     uint&  batch_size [[buffer(5)]],
+    constant     uint&  max_seq    [[buffer(6)]],
+    constant     uint&  n_heads    [[buffer(7)]],
+    constant     uint&  head_dim   [[buffer(8)]],
+    constant     float& scale      [[buffer(9)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]],
+    threadgroup float* shared_base [[threadgroup(0)]])
+{
+    const uint h = tgpig.x;
+    const uint b = tgpig.z;
+    const uint pos = tgpig.y * N_QR + sgitg;
+    if (b >= batch_size || h >= n_heads || pos >= max_seq) return;
+
+    const uint valid_len = lengths[b];
+    if (valid_len == 0) return;
+
+    const uint lane = tiisg;
+    const uint head_base = (b * n_heads + h) * max_seq * head_dim;
+    threadgroup float* shared = shared_base + sgitg * max_seq;
+
+    device const half* qi = Q + head_base + pos * head_dim;
+    float qr[64];
+    for (uint d = 0; d < head_dim; d++) qr[d] = float(qi[d]);
+
+    float local_max = -1e30f;
+    for (uint j = lane; j < valid_len; j += 32) {
+        device const half4* kj4 = (device const half4*)(K + head_base + j * head_dim);
+        float dot = 0.0f;
+        for (uint d4 = 0; d4 < head_dim / 4; d4++) {
+            half4 k4 = kj4[d4];
+            dot += qr[d4*4]*float(k4.x) + qr[d4*4+1]*float(k4.y) + qr[d4*4+2]*float(k4.z) + qr[d4*4+3]*float(k4.w);
+        }
+        float s = dot * scale;
+        shared[j] = s;
+        local_max = max(local_max, s);
+    }
+
+    float global_max = simd_max(local_max);
+    float local_sum = 0.0f;
+    for (uint j = lane; j < valid_len; j += 32) {
+        float e = exp(shared[j] - global_max);
+        shared[j] = e;
+        local_sum += e;
+    }
+    float denom = simd_sum(local_sum);
+    if (denom <= 1e-12f) return;
+    float inv_sum = 1.0f / denom;
+    for (uint j = lane; j < valid_len; j += 32) shared[j] *= inv_sum;
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint vt_h_off = (b * n_heads + h) * head_dim * max_seq;
+    const uint out_base = (b * max_seq + pos) * (n_heads * head_dim) + h * head_dim;
+    for (uint d = lane; d < head_dim; d += 32) {
+        device const half* vt_row = V_t + vt_h_off + d * max_seq;
+        float val = 0.0f;
+        uint j = 0;
+        for (; j + 3 < valid_len; j += 4) {
+            half4 v4 = *(device const half4*)(vt_row + j);
+            val += shared[j] * float(v4.x) + shared[j + 1] * float(v4.y) +
+                   shared[j + 2] * float(v4.z) + shared[j + 3] * float(v4.w);
+        }
+        for (; j < valid_len; j++) val += shared[j] * float(vt_row[j]);
+        output[out_base + d] = half(val);
     }
 }
 
@@ -806,6 +946,38 @@ kernel void mean_pool_l2(
     for (uint d = 0; d < dim; d++) norm += output[d] * output[d];
     norm = rsqrt(norm + 1e-12f);
     for (uint d = 0; d < dim; d++) output[d] *= norm;
+}
+
+// ============================================================================
+// Batched mean pool + L2 normalize
+// hidden is flattened token-major [batch * max_seq, dim]
+// output is [batch, dim]
+// ============================================================================
+kernel void mean_pool_l2_batch(
+    device const half*  hidden      [[buffer(0)]],
+    device       float* output      [[buffer(1)]],
+    device const uint*  lengths     [[buffer(2)]],
+    constant     uint&  batch_size  [[buffer(3)]],
+    constant     uint&  max_seq     [[buffer(4)]],
+    constant     uint&  dim         [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= batch_size) return;
+    const uint b = tid;
+    const uint valid_len = max(lengths[b], 1u);
+    const uint token_base = b * max_seq;
+    const uint out_base = b * dim;
+
+    for (uint d = 0; d < dim; d++) {
+        float sum = 0.0f;
+        for (uint p = 0; p < valid_len; p++) sum += float(hidden[(token_base + p) * dim + d]);
+        output[out_base + d] = sum / float(valid_len);
+    }
+
+    float norm = 0.0f;
+    for (uint d = 0; d < dim; d++) norm += output[out_base + d] * output[out_base + d];
+    norm = rsqrt(norm + 1e-12f);
+    for (uint d = 0; d < dim; d++) output[out_base + d] *= norm;
 }
 
 // ============================================================================

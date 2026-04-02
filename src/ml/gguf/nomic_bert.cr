@@ -244,11 +244,20 @@ module ML::GGUF
     {% end %}
 
     # Batch embed: pre-tokenize all texts, then run the single-sequence fast path.
-    # Metal graph reuse now removes repeated graph-build cost for matching seq_len,
-    # but true multi-text batching still needs batch-aware attention + per-sequence masking.
+    # Metal fast path uses padded microbatches with per-sequence lengths so attention
+    # and pooling ignore padding instead of faking sequential execution.
     def embed_batch(texts : Array(String)) : Array(Array(Float32))
+      return [] of Array(Float32) if texts.empty?
+
       # Pre-tokenize all texts upfront (CPU parallelizable)
       token_batches = texts.map { |t| tokenize(t) }
+
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        return embed_gpu_batch(token_batches)
+      end
+      {% end %}
+
       token_batches.map { |tokens| embed_tokens(tokens) }
     end
 
@@ -261,6 +270,68 @@ module ML::GGUF
       {% end %}
       forward(tokens)
     end
+
+    {% unless flag?(:cpu_only) %}
+    private def embed_gpu_batch(token_batches : Array(Array(Int32))) : Array(Array(Float32))
+      mb = @backend.as(MetalBackend)
+      pad_id = @tokenizer.not_nil!.pad_id
+      max_batch = configured_metal_batch_size
+      indexed = token_batches.each_with_index.map { |tokens, idx| {idx, tokens} }.to_a
+      indexed.sort_by! { |(_, tokens)| -tokens.size }
+      results = Array(Array(Float32)?).new(token_batches.size, nil)
+
+      indexed.each_slice(max_batch) do |slice|
+        batch_size = slice.size.to_i32
+        max_seq_len = slice.max_of(&.[1].size).to_i32
+        token_count = batch_size * max_seq_len
+        lengths = Array(Int32).new(batch_size, 0)
+        hidden = Array(Float32).new(token_count * @dim, 0.0_f32)
+
+        slice.each_with_index do |entry, batch_idx|
+          _, tokens = entry
+          lengths[batch_idx] = tokens.size.to_i32
+          max_seq_len.times do |pos|
+            tid = pos < tokens.size ? tokens[pos] : pad_id
+            tid = tid.clamp(0, @vocab_size - 1)
+            emb_off = tid * @dim
+            dst_off = (batch_idx * max_seq_len + pos) * @dim
+            @dim.times do |j|
+              hidden[dst_off + j] = @token_embd[emb_off + j] + @token_types[j]
+            end
+          end
+        end
+
+        @backend.layer_norm!(hidden, token_count, @dim, @embd_norm_w, @embd_norm_b)
+        batch_results = mb.encode_layers_batch(
+          hidden,
+          batch_size,
+          max_seq_len,
+          lengths,
+          @layers,
+          @dim,
+          @n_heads,
+          @head_dim,
+          @ffn_dim,
+          @n_experts,
+          @n_experts_used,
+          @moe_every_n,
+        )
+
+        slice.each_with_index do |entry, batch_idx|
+          orig_idx, _ = entry
+          results[orig_idx] = batch_results[batch_idx]
+        end
+      end
+
+      results.map(&.not_nil!)
+    end
+
+    private def configured_metal_batch_size : Int32
+      raw = ENV["EMBED_NATIVE_MAX_BATCH"]?
+      val = raw.try(&.to_i?) || 4
+      val > 0 ? val.to_i32 : 4_i32
+    end
+    {% end %}
 
     # Tokenize text → token IDs (delegates to SentencePiece unigram tokenizer)
     def tokenize(text : String) : Array(Int32)
