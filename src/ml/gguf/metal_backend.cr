@@ -4,6 +4,7 @@
 {% unless flag?(:cpu_only) %}
 
 require "./compute"
+require "./profile"
 require "../metal/compute_graph"
 
 module ML::GGUF
@@ -1464,6 +1465,87 @@ module ML::GGUF
       Array(Float32).new(dim) { |i| o_ptr[i] }
     end
 
+    def profile_encode_token_ids(
+      token_ids : Array(Int32),
+      seq_len : Int32,
+      layers : Array(NomicBertMoE::LayerWeights),
+      dim : Int32,
+      n_heads : Int32,
+      head_dim : Int32,
+      ffn_dim : Int32,
+      n_experts : Int32,
+      n_experts_used : Int32,
+      moe_every_n : Int32,
+      token_embd_buf : ML::MetalBuffer,
+      token_types_buf : ML::MetalBuffer,
+      embd_norm_w_buf : ML::MetalBuffer,
+      embd_norm_b_buf : ML::MetalBuffer,
+    ) : {Array(Float32), MetalEncodeProfile}
+      ensure_workspace_capacity(seq_len)
+      ws = @workspace.not_nil!
+
+      t0 = Time.instant
+      token_ptr = ws.token_ids.contents.as(Pointer(Int32))
+      seq_len.times { |i| token_ptr[i] = token_ids[i] }
+      token_write_ms = (Time.instant - t0).total_milliseconds
+
+      t1 = Time.instant
+      graph = compiled_graph_for(seq_len, layers, dim, n_heads, head_dim, ffn_dim, n_experts, n_experts_used, moe_every_n)
+      graph_lookup_ms = (Time.instant - t1).total_milliseconds
+
+      t2 = Time.instant
+      cmd = ML::Metal::CommandBuffer.new(fast: true)
+      cmd.enqueue
+      cmd_setup_ms = (Time.instant - t2).total_milliseconds
+
+      t3 = Time.instant
+      enc = ML::Metal::ComputeEncoder.new(cmd, concurrent: true)
+      enc.set_pipeline(pipe("embed_lookup_add_type"))
+      enc.set_buffer(ws.token_ids, 0)
+      enc.set_buffer(token_embd_buf, 1)
+      enc.set_buffer(token_types_buf, 2)
+      enc.set_buffer(ws.hidden, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(seq_len.to_u32, 4)
+      enc.set_value(dim.to_u32, 5)
+      enc.dispatch_1d(seq_len * dim, 256)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("layernorm_inplace"))
+      enc.set_buffer(ws.hidden, 0, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_buffer(embd_norm_w_buf, 1)
+      enc.set_buffer(embd_norm_b_buf, 2)
+      enc.set_value(dim.to_u32, 3)
+      enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
+      enc.end_encoding
+      prepass_encode_ms = (Time.instant - t3).total_milliseconds
+
+      t4 = Time.instant
+      graph.encode(cmd)
+      graph_encode_ms = (Time.instant - t4).total_milliseconds
+
+      t5 = Time.instant
+      cmd.commit
+      cmd.wait
+      submit_wait_ms = (Time.instant - t5).total_milliseconds
+
+      t6 = Time.instant
+      o_ptr = ws.output.contents.as(Pointer(Float32))
+      embedding = Array(Float32).new(dim) { |i| o_ptr[i] }
+      readback_ms = (Time.instant - t6).total_milliseconds
+
+      profile = MetalEncodeProfile.new(
+        graph_lookup_ms: graph_lookup_ms,
+        cmd_setup_ms: cmd_setup_ms,
+        token_write_ms: token_write_ms,
+        lengths_write_ms: 0.0,
+        prepass_encode_ms: prepass_encode_ms,
+        graph_encode_ms: graph_encode_ms,
+        submit_wait_ms: submit_wait_ms,
+        readback_ms: readback_ms,
+      )
+      {embedding, profile}
+    end
+
     def encode_layers_batch(
       hidden_data : Array(Float32),
       batch_size : Int32,
@@ -1566,6 +1648,100 @@ module ML::GGUF
         base = b * dim
         Array(Float32).new(dim) { |i| o_ptr[base + i] }
       end
+    end
+
+    def profile_encode_token_ids_batch(
+      token_ids : Array(Int32),
+      batch_size : Int32,
+      max_seq_len : Int32,
+      lengths : Array(Int32),
+      layers : Array(NomicBertMoE::LayerWeights),
+      dim : Int32,
+      n_heads : Int32,
+      head_dim : Int32,
+      ffn_dim : Int32,
+      n_experts : Int32,
+      n_experts_used : Int32,
+      moe_every_n : Int32,
+      token_embd_buf : ML::MetalBuffer,
+      token_types_buf : ML::MetalBuffer,
+      embd_norm_w_buf : ML::MetalBuffer,
+      embd_norm_b_buf : ML::MetalBuffer,
+    ) : {Array(Array(Float32)), MetalEncodeProfile}
+      token_count = batch_size * max_seq_len
+      ensure_workspace_capacity(token_count)
+      ws = @workspace.not_nil!
+
+      t0 = Time.instant
+      token_ptr = ws.token_ids.contents.as(Pointer(Int32))
+      token_count.times { |i| token_ptr[i] = token_ids[i] }
+      token_write_ms = (Time.instant - t0).total_milliseconds
+
+      t1 = Time.instant
+      len_ptr = ws.lengths.contents.as(Pointer(UInt32))
+      batch_size.times do |i|
+        len_ptr[i] = lengths[i].to_u32
+      end
+      lengths_write_ms = (Time.instant - t1).total_milliseconds
+
+      t2 = Time.instant
+      graph = compiled_batch_graph_for(batch_size, max_seq_len, layers, dim, n_heads, head_dim, ffn_dim, n_experts, n_experts_used, moe_every_n)
+      graph_lookup_ms = (Time.instant - t2).total_milliseconds
+
+      t3 = Time.instant
+      cmd = ML::Metal::CommandBuffer.new(fast: true)
+      cmd.enqueue
+      cmd_setup_ms = (Time.instant - t3).total_milliseconds
+
+      t4 = Time.instant
+      enc = ML::Metal::ComputeEncoder.new(cmd, concurrent: true)
+      enc.set_pipeline(pipe("embed_lookup_add_type"))
+      enc.set_buffer(ws.token_ids, 0)
+      enc.set_buffer(token_embd_buf, 1)
+      enc.set_buffer(token_types_buf, 2)
+      enc.set_buffer(ws.hidden, 3, ML::Metal::BufferAccess::Write)
+      enc.set_value(token_count.to_u32, 4)
+      enc.set_value(dim.to_u32, 5)
+      enc.dispatch_1d(token_count * dim, 256)
+      enc.memory_barrier
+
+      enc.set_pipeline(pipe("layernorm_inplace"))
+      enc.set_buffer(ws.hidden, 0, ML::Metal::BufferAccess::ReadWrite)
+      enc.set_buffer(embd_norm_w_buf, 1)
+      enc.set_buffer(embd_norm_b_buf, 2)
+      enc.set_value(dim.to_u32, 3)
+      enc.dispatch_threadgroups({token_count, 1, 1}, {32, 1, 1})
+      enc.end_encoding
+      prepass_encode_ms = (Time.instant - t4).total_milliseconds
+
+      t5 = Time.instant
+      graph.encode(cmd)
+      graph_encode_ms = (Time.instant - t5).total_milliseconds
+
+      t6 = Time.instant
+      cmd.commit
+      cmd.wait
+      submit_wait_ms = (Time.instant - t6).total_milliseconds
+
+      t7 = Time.instant
+      o_ptr = ws.output.contents.as(Pointer(Float32))
+      embeddings = Array(Array(Float32)).new(batch_size) do |b|
+        base = b * dim
+        Array(Float32).new(dim) { |i| o_ptr[base + i] }
+      end
+      readback_ms = (Time.instant - t7).total_milliseconds
+
+      profile = MetalEncodeProfile.new(
+        graph_lookup_ms: graph_lookup_ms,
+        cmd_setup_ms: cmd_setup_ms,
+        token_write_ms: token_write_ms,
+        lengths_write_ms: lengths_write_ms,
+        prepass_encode_ms: prepass_encode_ms,
+        graph_encode_ms: graph_encode_ms,
+        submit_wait_ms: submit_wait_ms,
+        readback_ms: readback_ms,
+      )
+      {embeddings, profile}
     end
 
 

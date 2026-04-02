@@ -80,6 +80,7 @@ dependencies:
 ```sh
 make build    # Compiles bridge.mm + links Metal frameworks
 make spec     # Run tests with GPU
+EMBED_MODEL=/path/to/nomic.gguf make profile_nomic  # Stage breakdown for native Metal embeddings
 ```
 
 ### CPU-only build

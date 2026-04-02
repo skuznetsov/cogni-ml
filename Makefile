@@ -23,7 +23,7 @@ BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec build spec_cpu build_cpu llama llama_env clean help
+.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic clean help
 
 all: spec
 
@@ -41,6 +41,10 @@ spec: $(BRIDGE_OBJ)
 
 build: $(BRIDGE_OBJ)
 	$(CRYSTAL) build src/ml.cr \
+		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
+
+profile_nomic: $(BRIDGE_OBJ)
+	$(CRYSTAL) run bin/profile_nomic_stages.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
 
 spec_cpu:
@@ -84,6 +88,7 @@ help:
 	@echo "  build - compile library entrypoint"
 	@echo "  spec_cpu  - run specs in CPU-only mode"
 	@echo "  build_cpu - build in CPU-only mode"
+	@echo "  profile_nomic - run native Metal stage profiler for nomic GGUF"
 	@echo "  llama - build llama.cpp shared library (requires LLAMA_DIR)"
 	@echo "  llama_env - print env vars for libllama discovery"
 	@echo "  clean - remove build artifacts"

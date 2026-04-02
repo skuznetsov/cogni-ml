@@ -13,6 +13,7 @@
 require "./reader"
 require "./tokenizer"
 require "./compute"
+require "./profile"
 
 module ML::GGUF
   class NomicBertMoE(B)
@@ -226,6 +227,31 @@ module ML::GGUF
       forward(tokens)
     end
 
+    def profile_embed(text : String) : EmbedProfile
+      total_start = Time.instant
+      t0 = Time.instant
+      tokens = tokenize(text)
+      tokenize_ms = (Time.instant - t0).total_milliseconds
+
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        _, backend_profile, prepare_ms = profile_embed_gpu(tokens)
+        return EmbedProfile.new(
+          text_count: 1,
+          total_tokens: tokens.size.to_i32,
+          max_seq_len: tokens.size.to_i32,
+          tokenize_ms: tokenize_ms,
+          prepare_ms: prepare_ms,
+          reorder_ms: 0.0,
+          backend: backend_profile,
+          total_ms: (Time.instant - total_start).total_milliseconds,
+        )
+      end
+      {% end %}
+
+      raise "profile_embed requires MetalBackend"
+    end
+
     {% unless flag?(:cpu_only) %}
     # GPU-accelerated embed: all 12 layers in one command buffer
     private def embed_gpu(tokens : Array(Int32), cpu_ref_per_layer : Array(Array(Float32))? = nil) : Array(Float32)
@@ -267,6 +293,31 @@ module ML::GGUF
         @gpu_embd_norm_b_buf.not_nil!,
       )
     end
+
+    private def profile_embed_gpu(tokens : Array(Int32)) : {Array(Float32), MetalEncodeProfile, Float64}
+      mb = @backend.as(MetalBackend)
+      t0 = Time.instant
+      token_ids = Array(Int32).new(tokens.size) { |i| tokens[i].clamp(0, @vocab_size - 1) }
+      prepare_ms = (Time.instant - t0).total_milliseconds
+      embedding, backend_profile = mb.profile_encode_token_ids(
+        token_ids,
+        tokens.size.to_i32,
+        @layers,
+        @dim,
+        @n_heads,
+        @head_dim,
+        @ffn_dim,
+        @n_experts,
+        @n_experts_used,
+        @moe_every_n,
+        @gpu_token_embd_buf.not_nil!,
+        @gpu_token_types_buf.not_nil!,
+        @gpu_embd_norm_w_buf.not_nil!,
+        @gpu_embd_norm_b_buf.not_nil!,
+      )
+      {embedding, backend_profile, prepare_ms}
+    end
+
     # Debug: embed with per-layer GPU vs CPU comparison
     def embed_debug(text : String, cpu_ref : Array(Array(Float32))) : Array(Float32)
       tokens = tokenize(text)
@@ -290,6 +341,44 @@ module ML::GGUF
       {% end %}
 
       token_batches.map { |tokens| embed_tokens(tokens) }
+    end
+
+    def profile_embed_batch(texts : Array(String)) : EmbedProfile
+      return EmbedProfile.new(
+        text_count: 0,
+        total_tokens: 0,
+        max_seq_len: 0,
+        tokenize_ms: 0.0,
+        prepare_ms: 0.0,
+        reorder_ms: 0.0,
+        backend: MetalEncodeProfile.zero,
+        total_ms: 0.0,
+      ) if texts.empty?
+
+      total_start = Time.instant
+      t0 = Time.instant
+      token_batches = texts.map { |t| tokenize(t) }
+      tokenize_ms = (Time.instant - t0).total_milliseconds
+
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        _, backend_profile, prepare_ms, reorder_ms = profile_embed_gpu_batch(token_batches)
+        total_tokens = token_batches.sum(&.size).to_i32
+        max_seq_len = token_batches.max_of(&.size).to_i32
+        return EmbedProfile.new(
+          text_count: texts.size.to_i32,
+          total_tokens: total_tokens,
+          max_seq_len: max_seq_len,
+          tokenize_ms: tokenize_ms,
+          prepare_ms: prepare_ms,
+          reorder_ms: reorder_ms,
+          backend: backend_profile,
+          total_ms: (Time.instant - total_start).total_milliseconds,
+        )
+      end
+      {% end %}
+
+      raise "profile_embed_batch requires MetalBackend"
     end
 
     # Embed pre-tokenized input
@@ -352,6 +441,65 @@ module ML::GGUF
       end
 
       results.map(&.not_nil!)
+    end
+
+    private def profile_embed_gpu_batch(token_batches : Array(Array(Int32))) : {Array(Array(Float32)), MetalEncodeProfile, Float64, Float64}
+      mb = @backend.as(MetalBackend)
+      pad_id = @tokenizer.not_nil!.pad_id
+      max_batch = configured_metal_batch_size
+      indexed = token_batches.each_with_index.map { |tokens, idx| {idx, tokens} }.to_a
+      indexed.sort_by! { |(_, tokens)| -tokens.size }
+      results = Array(Array(Float32)?).new(token_batches.size, nil)
+      backend_total = MetalEncodeProfile.zero
+      prepare_ms = 0.0
+      reorder_ms = 0.0
+
+      indexed.each_slice(max_batch) do |slice|
+        t0 = Time.instant
+        batch_size = slice.size.to_i32
+        max_seq_len = slice.max_of(&.[1].size).to_i32
+        lengths = Array(Int32).new(batch_size, 0)
+        token_ids = Array(Int32).new(batch_size * max_seq_len, pad_id)
+
+        slice.each_with_index do |entry, batch_idx|
+          _, tokens = entry
+          lengths[batch_idx] = tokens.size.to_i32
+          max_seq_len.times do |pos|
+            tid = pos < tokens.size ? tokens[pos] : pad_id
+            token_ids[batch_idx * max_seq_len + pos] = tid.clamp(0, @vocab_size - 1)
+          end
+        end
+        prepare_ms += (Time.instant - t0).total_milliseconds
+
+        batch_results, backend_profile = mb.profile_encode_token_ids_batch(
+          token_ids,
+          batch_size,
+          max_seq_len,
+          lengths,
+          @layers,
+          @dim,
+          @n_heads,
+          @head_dim,
+          @ffn_dim,
+          @n_experts,
+          @n_experts_used,
+          @moe_every_n,
+          @gpu_token_embd_buf.not_nil!,
+          @gpu_token_types_buf.not_nil!,
+          @gpu_embd_norm_w_buf.not_nil!,
+          @gpu_embd_norm_b_buf.not_nil!,
+        )
+        backend_total += backend_profile
+
+        t1 = Time.instant
+        slice.each_with_index do |entry, batch_idx|
+          orig_idx, _ = entry
+          results[orig_idx] = batch_results[batch_idx]
+        end
+        reorder_ms += (Time.instant - t1).total_milliseconds
+      end
+
+      {results.map(&.not_nil!), backend_total, prepare_ms, reorder_ms}
     end
 
     private def configured_metal_batch_size : Int32
