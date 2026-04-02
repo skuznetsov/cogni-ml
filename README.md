@@ -82,6 +82,8 @@ make build    # Compiles bridge.mm + links Metal frameworks
 make spec     # Run tests with GPU
 EMBED_MODEL=/path/to/nomic.gguf make profile_nomic  # Stage breakdown for native Metal embeddings
 EMBED_MODEL=/path/to/nomic.gguf make profile_nomic_layers  # Per-layer hotspot breakdown
+EMBED_MODEL=/path/to/nomic.gguf make profile_nomic_vs_llama  # Head-to-head vs llama.cpp
+EMBED_MODEL=/path/to/nomic.gguf make profile_nomic_vs_llama ARGS="--runs=15 --warmup=6"  # Override benchmark depth
 ```
 
 ### CPU-only build

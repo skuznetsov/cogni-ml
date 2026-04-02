@@ -3,6 +3,7 @@ BUILD_DIR ?= build
 LLAMA_DIR ?= ../llama.cpp
 LLAMA_BUILD ?= $(LLAMA_DIR)/build
 BUILD_SENTINEL := $(BUILD_DIR)/.dir
+ARGS ?=
 UNAME_S := $(shell uname -s)
 IS_DARWIN := $(filter Darwin,$(UNAME_S))
 BREW_PREFIX := $(shell if command -v brew >/dev/null 2>&1; then brew --prefix; fi)
@@ -23,7 +24,7 @@ BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers clean help
+.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama clean help
 
 all: spec
 
@@ -45,12 +46,25 @@ build: $(BRIDGE_OBJ)
 
 profile_nomic: $(BRIDGE_OBJ)
 	$(CRYSTAL) run bin/profile_nomic_stages.cr \
-		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
+		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)" \
+		-- $(ARGS)
 
 profile_nomic_layers: $(BRIDGE_OBJ)
 	$(CRYSTAL) run bin/profile_nomic_stages.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)" \
-		-- --mode=layers
+		-- --mode=layers $(ARGS)
+
+profile_nomic_vs_llama: $(BRIDGE_OBJ)
+	@if [ -z "$(LLAMA_LIB_DIR)" ]; then \
+		echo "ERROR: libllama not detected. Set LLAMA_DIR or LLAMA_LIB_DIR."; \
+		exit 1; \
+	fi
+	LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LIBRARY_PATH" \
+	LD_LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LD_LIBRARY_PATH" \
+	DYLD_LIBRARY_PATH="$(LLAMA_LIB_DIR):$$DYLD_LIBRARY_PATH" \
+	$(CRYSTAL) run bin/profile_nomic_vs_llama.cr \
+		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR)" \
+		-- $(ARGS)
 
 spec_cpu:
 	$(CRYSTAL) spec -Dcpu_only
@@ -95,6 +109,7 @@ help:
 	@echo "  build_cpu - build in CPU-only mode"
 	@echo "  profile_nomic - run native Metal stage profiler for nomic GGUF"
 	@echo "  profile_nomic_layers - run per-layer native Metal profiler for nomic GGUF"
+	@echo "  profile_nomic_vs_llama - compare native Metal embeddings against llama.cpp"
 	@echo "  llama - build llama.cpp shared library (requires LLAMA_DIR)"
 	@echo "  llama_env - print env vars for libllama discovery"
 	@echo "  clean - remove build artifacts"
