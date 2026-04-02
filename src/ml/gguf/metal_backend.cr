@@ -17,6 +17,7 @@ module ML::GGUF
   # Tuned on the live Nomic Metal path: batched MoE already wins by ~20 tokens,
   # so keep the sync path only for truly tiny sequences unless explicitly overridden.
   MOE_SYNC_MAX_TOKENS = ENV["NOMIC_MOE_SYNC_MAX_TOKENS"]?.try(&.to_i?) || 16
+  ATTN_MATMUL_MIN_TOKENS = ENV["NOMIC_ATTN_MATMUL_MIN_TOKENS"]?.try(&.to_i?) || 33
 
   class GPUWeight
     getter buffer : ML::MetalBuffer       # FP16 pre-dequantized weights [out_dim, in_dim]
@@ -406,7 +407,7 @@ module ML::GGUF
       fp16 ? "simd_mm_f16_moe" : (type.q5_k? ? "simd_mm_q5k_moe" : "simd_mm_q6k_moe")
     end
 
-    MM_BATCH_THRESHOLD = 8  # Switch to simdgroup_matrix GEMM above this batch size
+    MM_BATCH_THRESHOLD = ENV["NOMIC_MM_BATCH_THRESHOLD"]?.try(&.to_i?) || 8  # Switch to simdgroup_matrix GEMM above this batch size
     MM_NR0 = 64             # Output rows per threadgroup for mm kernel
     MM_NR1 = 32             # Batch elements per threadgroup for mm kernel
     MM_SHMEM = 16384        # Double-buffered threadgroup memory (2×6KB tiles + output temp)
@@ -414,6 +415,11 @@ module ML::GGUF
     @[AlwaysInline]
     private def use_sync_moe_path?(token_count : Int32) : Bool
       token_count <= MOE_SYNC_MAX_TOKENS
+    end
+
+    @[AlwaysInline]
+    private def use_matmul_attention_path?(seq_len : Int32) : Bool
+      seq_len >= ATTN_MATMUL_MIN_TOKENS
     end
 
     # Dispatch matmul — auto-selects mm vs mv based on batch size
@@ -563,7 +569,7 @@ module ML::GGUF
         enc.dispatch_1d(seq_len * dim, 256)
         enc.memory_barrier
 
-        if seq_len > 32
+        if use_matmul_attention_path?(seq_len)
           q_total = 8 * 2
           n_sg = 2
           sh_q = q_total * head_dim * 2
@@ -846,7 +852,7 @@ module ML::GGUF
         enc.dispatch_1d(token_count * dim, 256)
         enc.memory_barrier
 
-        if max_seq_len > 32
+        if use_matmul_attention_path?(max_seq_len)
           q_total = 8 * 2
           n_sg = 2
           sh_q = q_total * head_dim * 2
@@ -1146,7 +1152,7 @@ module ML::GGUF
       scale = 1.0_f32 / Math.sqrt(head_dim.to_f32)
       batch = seq_len.to_u32
 
-      if seq_len > 32
+      if use_matmul_attention_path?(seq_len)
         q_total = 8 * 2
         n_sg = 2
         sh_q = q_total * head_dim * 2
@@ -1660,7 +1666,7 @@ module ML::GGUF
         enc.memory_barrier
 
         # Attention
-        if seq_len > 32
+        if use_matmul_attention_path?(seq_len)
           q_total = 8 * 2; n_sg = 2
           sh_q = q_total * head_dim * 2; sh_o = q_total * head_dim * 4; sh_s = q_total * 64 * 4
           enc.set_pipeline(pipe("attention_matmul"))
