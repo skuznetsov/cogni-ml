@@ -615,8 +615,14 @@ inline int find_expert(device const int* tg_offsets, int flat_x, int n) {
 }
 
 #define BATCHED_MM_BODY(BLOCK_T, BLOCK_BYTES, DEQUANT_FN) \
-    threadgroup half * sa = (threadgroup half *)(shmem); \
-    threadgroup half * sb = (threadgroup half *)(shmem + 4096); \
+    threadgroup half * sa_buf[2] = { \
+        (threadgroup half *)(shmem), \
+        (threadgroup half *)(shmem + MM_TILE_SIZE) \
+    }; \
+    threadgroup half * sb_buf[2] = { \
+        (threadgroup half *)(shmem + MM_SA_SIZE), \
+        (threadgroup half *)(shmem + MM_TILE_SIZE + MM_SA_SIZE) \
+    }; \
     const int eid = find_expert(expert_tg_offs, (int)tgpig.x, (int)n_experts); \
     const int local_x = (int)tgpig.x - expert_tg_offs[eid]; \
     const int base = expert_offs[eid]; \
@@ -637,17 +643,26 @@ inline int find_expert(device const int* tg_offsets, int flat_x, int n) {
     device const half * y = x_packed + (base + r1 + lr1) * in_dim + iy; \
     simdgroup_half8x8 ma[4]; simdgroup_half8x8 mb[2]; simdgroup_float8x8 mc[8]; \
     for (short i = 0; i < 8; i++) mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f); \
-    for (uint loop_k = 0; loop_k < in_dim; loop_k += MM_NK) { \
+    { \
+        threadgroup half * sa = sa_buf[0]; \
+        threadgroup half * sb = sb_buf[0]; \
         half4x4 temp_a; DEQUANT_FN(xw, il, temp_a); \
-        threadgroup_barrier(mem_flags::mem_threadgroup); \
         FOR_UNROLL for (short i = 0; i < 16; i++) { \
             const short sx = 2*il0 + i/8, sy = (tiitg/MM_NL0)/8, lx = (tiitg/MM_NL0)%8, ly = i%8; \
             *(sa + 64*(8*sx + sy) + 8*ly + lx) = temp_a[i/4][i%4]; } \
         { const short sx = tiitg%MM_NL1, sy = (tiitg/MM_NL1)/8, ly = (tiitg/MM_NL1)%8; \
           *(threadgroup half2x4 *)(sb + 64*(4*sx + sy) + 8*ly) = *(device const half2x4 *)y; } \
         il = (il + 2 < MM_NL) ? il + 2 : il % 2; \
-        xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw; y += MM_NK; \
-        threadgroup_barrier(mem_flags::mem_threadgroup); \
+        xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw; \
+        y += MM_NK; \
+    } \
+    threadgroup_barrier(mem_flags::mem_threadgroup); \
+    const uint n_iter = (in_dim + MM_NK - 1) / MM_NK; \
+    for (uint iter = 0; iter < n_iter; iter++) { \
+        const short cur = iter % 2; \
+        const short nxt = 1 - cur; \
+        threadgroup half * sa = sa_buf[cur]; \
+        threadgroup half * sb = sb_buf[cur]; \
         threadgroup const half * lsma = sa + 4*64*(sgitg%2), * lsmb = sb + 2*64*(sgitg/2); \
         FOR_UNROLL for (short ik = 0; ik < MM_NK/8; ik++) { \
             simdgroup_barrier(mem_flags::mem_none); \
@@ -657,6 +672,20 @@ inline int find_expert(device const int* tg_offsets, int flat_x, int n) {
             simdgroup_barrier(mem_flags::mem_none); \
             FOR_UNROLL for (short i = 0; i < 8; i++) simdgroup_multiply_accumulate(mc[i], mb[i/4], ma[i%4], mc[i]); \
             lsma += 8*64; lsmb += 4*64; } \
+        if (iter + 1 < n_iter) { \
+            threadgroup half * sa_n = sa_buf[nxt]; \
+            threadgroup half * sb_n = sb_buf[nxt]; \
+            half4x4 temp_a; DEQUANT_FN(xw, il, temp_a); \
+            FOR_UNROLL for (short i = 0; i < 16; i++) { \
+                const short sx = 2*il0 + i/8, sy = (tiitg/MM_NL0)/8, lx = (tiitg/MM_NL0)%8, ly = i%8; \
+                *(sa_n + 64*(8*sx + sy) + 8*ly + lx) = temp_a[i/4][i%4]; } \
+            { const short sx = tiitg%MM_NL1, sy = (tiitg/MM_NL1)/8, ly = (tiitg/MM_NL1)%8; \
+              *(threadgroup half2x4 *)(sb_n + 64*(4*sx + sy) + 8*ly) = *(device const half2x4 *)y; } \
+            il = (il + 2 < MM_NL) ? il + 2 : il % 2; \
+            xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw; \
+            y += MM_NK; \
+        } \
+        threadgroup_barrier(mem_flags::mem_threadgroup); \
     } \
     threadgroup float * temp = (threadgroup float *)shmem; \
     { threadgroup float * sg_out = temp + 32*(sgitg&1) + 16*(sgitg>>1)*MM_NR0; \
