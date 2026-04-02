@@ -14,6 +14,9 @@ module ML::GGUF
   GEMM_MM_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_mm.metal") }}
   GEMM_MM_F16_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_mm_f16.metal") }}
   FLASH_ATTN_SOURCE = {{ read_file("#{__DIR__}/kernels/attention_flash.metal") }}
+  # Tuned on the live Nomic Metal path: batched MoE already wins by ~20 tokens,
+  # so keep the sync path only for truly tiny sequences unless explicitly overridden.
+  MOE_SYNC_MAX_TOKENS = ENV["NOMIC_MOE_SYNC_MAX_TOKENS"]?.try(&.to_i?) || 16
 
   class GPUWeight
     getter buffer : ML::MetalBuffer       # FP16 pre-dequantized weights [out_dim, in_dim]
@@ -408,6 +411,11 @@ module ML::GGUF
     MM_NR1 = 32             # Batch elements per threadgroup for mm kernel
     MM_SHMEM = 16384        # Double-buffered threadgroup memory (2×6KB tiles + output temp)
 
+    @[AlwaysInline]
+    private def use_sync_moe_path?(token_count : Int32) : Bool
+      token_count <= MOE_SYNC_MAX_TOKENS
+    end
+
     # Dispatch matmul — auto-selects mm vs mv based on batch size
     private def matmul_dispatch(enc, type : TensorType,
                                  out_dim : Int32, batch : Int32)
@@ -615,7 +623,7 @@ module ML::GGUF
           enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
           enc.memory_barrier
 
-          if seq_len <= 64
+          if use_sync_moe_path?(seq_len)
             expert_stride_mid = seq_len.to_i64 * ffn_dim * 2
             expert_stride_out = seq_len.to_i64 * dim * 2
             n_experts.times do |ei|
@@ -737,7 +745,7 @@ module ML::GGUF
             enc.memory_barrier
           end
 
-          if seq_len <= 64
+          if use_sync_moe_path?(seq_len)
             enc.set_pipeline(pipe("residual_layernorm"))
             enc.set_buffer(h_out, 0, rw); enc.set_buffer(ws.ffn_out, 1)
             enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
@@ -900,7 +908,7 @@ module ML::GGUF
           enc.dispatch_threadgroups({token_count, 1, 1}, {32, 1, 1})
           enc.memory_barrier
 
-          if token_count <= 64
+          if use_sync_moe_path?(token_count)
             expert_stride_mid = token_count.to_i64 * ffn_dim * 2
             expert_stride_out = token_count.to_i64 * dim * 2
             n_experts.times do |ei|
@@ -1022,7 +1030,7 @@ module ML::GGUF
             enc.memory_barrier
           end
 
-          if token_count <= 64
+          if use_sync_moe_path?(token_count)
             enc.set_pipeline(pipe("residual_layernorm"))
             enc.set_buffer(h_out, 0, rw); enc.set_buffer(ws.ffn_out, 1)
             enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
@@ -1256,7 +1264,7 @@ module ML::GGUF
       enc.set_value(n_experts_used.to_u32, 7)
       enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
 
-      return if seq_len <= 64
+      return if use_sync_moe_path?(seq_len)
 
       total_routing = seq_len * n_experts_used
       enc.memory_barrier
@@ -1305,7 +1313,7 @@ module ML::GGUF
       dim_u = dim.to_u32
       ffn_dim_u = ffn_dim.to_u32
 
-      if seq_len <= 64
+      if use_sync_moe_path?(seq_len)
         expert_stride_mid = seq_len.to_i64 * ffn_dim * 2
         n_experts.times do |ei|
           up_offset = ei.to_i64 * up_expert_bytes
@@ -1347,7 +1355,7 @@ module ML::GGUF
       dim_u = dim.to_u32
       ffn_dim_u = ffn_dim.to_u32
 
-      if seq_len <= 64
+      if use_sync_moe_path?(seq_len)
         expert_stride_mid = seq_len.to_i64 * ffn_dim * 2
         expert_stride_out = seq_len.to_i64 * dim * 2
         n_experts.times do |ei|
@@ -1389,7 +1397,7 @@ module ML::GGUF
       batch = seq_len.to_u32
       dim_u = dim.to_u32
 
-      if seq_len <= 64
+      if use_sync_moe_path?(seq_len)
         enc.set_pipeline(pipe("moe_weighted_scatter"))
         enc.set_buffer(ws.ffn_out, 0, ML::Metal::BufferAccess::ReadWrite)
         enc.set_buffer(ws.expert_out, 1)
@@ -1481,7 +1489,7 @@ module ML::GGUF
         h_in = h_bufs[layer_idx % 2]
         h_out = h_bufs[(layer_idx + 1) % 2]
         kind = if is_moe
-                 seq_len <= 64 ? "moe_sync" : "moe_batched"
+                 use_sync_moe_path?(seq_len) ? "moe_sync" : "moe_batched"
                else
                  "dense"
                end
@@ -1713,7 +1721,7 @@ module ML::GGUF
           enc.dispatch_threadgroups({seq_len, 1, 1}, {32, 1, 1})
           enc.memory_barrier
 
-          if seq_len <= 64
+          if use_sync_moe_path?(seq_len)
             # === SYNC-FREE PATH: all experts × all tokens ===
             expert_stride_mid = seq_len.to_i64 * ffn_dim * 2
             expert_stride_out = seq_len.to_i64 * dim * 2
@@ -1846,7 +1854,7 @@ module ML::GGUF
           end
 
           # norm2 for sync-free MoE path (half input from ffn_out)
-          if seq_len <= 64
+          if use_sync_moe_path?(seq_len)
             enc.set_pipeline(pipe("residual_layernorm"))
             enc.set_buffer(h_out, 0, rw); enc.set_buffer(ws.ffn_out, 1)
             enc.set_buffer(n2w_buf, 2); enc.set_buffer(n2b_buf, 3)
