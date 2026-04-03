@@ -120,15 +120,18 @@ eval_toks = all_tokens[eval_start..]
 tail_toks = all_tokens[tail_start...eval_start]
 prefix_toks = all_tokens[0...tail_start]
 
-n_blocks = prefix_toks.size // BLOCK_SIZE
-STDERR.puts "Prefix: #{prefix_toks.size} tokens (#{n_blocks} blocks), Tail: #{tail_toks.size}, Eval: #{eval_toks.size}"
+n_full_blocks = prefix_toks.size // BLOCK_SIZE
+remainder = prefix_toks.size % BLOCK_SIZE
+n_blocks = n_full_blocks + (remainder > 0 ? 1 : 0)
+STDERR.puts "Prefix: #{prefix_toks.size} tokens (#{n_full_blocks} full + #{remainder > 0 ? 1 : 0} partial blocks), Tail: #{tail_toks.size}, Eval: #{eval_toks.size}"
 
 # Spill blocks to file (PG latency already validated in Experiment 0)
 spill_path = "/tmp/kv_offload_exp2a.json"
 STDERR.puts "\nSpilling #{n_blocks} blocks to #{spill_path}..."
 blocks_data = (0...n_blocks).map do |bi|
   start = bi * BLOCK_SIZE
-  prefix_toks[start, BLOCK_SIZE]
+  len = Math.min(BLOCK_SIZE, prefix_toks.size - start)
+  prefix_toks[start, len]
 end
 
 spill_times = [] of Float64
@@ -146,11 +149,11 @@ restored_prefix = [] of Int32
 restored_blocks.each { |b| restored_prefix.concat(b) }
 STDERR.puts "  restore: #{restore_ms.round(3)}ms"
 
-# Verify restored == original
-if restored_prefix == prefix_toks[0, n_blocks * BLOCK_SIZE]
-  STDERR.puts "  integrity: OK (restored tokens match original)"
+# Verify restored == original (now includes partial block)
+if restored_prefix == prefix_toks
+  STDERR.puts "  integrity: OK (#{restored_prefix.size} restored == #{prefix_toks.size} original)"
 else
-  STDERR.puts "  integrity: FAIL"
+  STDERR.puts "  integrity: FAIL (restored=#{restored_prefix.size} vs original=#{prefix_toks.size})"
   exit 1
 end
 File.delete(spill_path) rescue nil
