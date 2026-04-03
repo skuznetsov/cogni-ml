@@ -1,13 +1,18 @@
 #!/usr/bin/env crystal
-# Experiment 2B: Sketch-routed restore vs exact restore.
+# Experiment 2B: Selective context routing proxy.
+#
+# Tests whether FlashHadamard sketch can select relevant text blocks
+# for context construction. This is a CONTEXT SELECTION experiment,
+# not a live KV-cache spill/restore test — it re-evaluates from tokens,
+# not from serialized KV tensors.
 #
 # Four-way perplexity comparison:
 #   a. Full context (baseline)
 #   b. Recency only (tail)
-#   c. Exact restore (all spilled blocks + tail)
-#   d. Routed restore (top-k blocks by FlashHadamard sketch + tail)
+#   c. Full prefix + tail (same as full — correctness check)
+#   d. Sketch-selected blocks + tail (selective routing)
 #
-# Primary metric: ppl delta of routed vs exact restore.
+# Primary metric: ppl of sketch-selected vs full context.
 # Fixed setup: one block_size, one tail, one k, one text.
 
 require "../src/ml/llm/llama_ffi"
