@@ -14,7 +14,7 @@ require "../src/ml/gguf/nomic_bert"
 require "../src/ml/gguf/metal_backend"
 require "../src/ml/metal/compute_graph"
 
-LLM_MODEL = ENV["LLM_MODEL"]? || (Path.home / ".cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf").to_s
+LLM_MODEL = ENV["LLM_MODEL"]? || (Path.home / ".cache/lm-studio/models/google/gemma-3-4b-it-qat-q4_0-gguf/gemma-3-4b-it-q4_0.gguf").to_s
 EMBED_MODEL = ENV["EMBED_MODEL"]? || (Path.home / ".cache/lm-studio/models/nomic-ai/nomic-embed-text-v2-moe-GGUF/nomic-embed-text-v2-moe.Q5_K_M.gguf").to_s
 
 BLOCK_SIZE   = (ENV["BLOCK_SIZE"]? || "128").to_i    # tokens per block
