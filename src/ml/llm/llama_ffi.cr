@@ -259,6 +259,33 @@ module ML
       fun llama_set_n_threads(ctx : LlamaContext, n_threads : Int32, n_threads_batch : Int32) : Void
       fun llama_n_threads(ctx : LlamaContext) : Int32
 
+      # KV cache / memory management
+      fun llama_memory_clear(ctx : LlamaContext) : Void
+
+      # State serialization (full context: KV cache + logits + embeddings)
+      fun llama_state_get_size(ctx : LlamaContext) : LibC::SizeT
+      fun llama_state_get_data(ctx : LlamaContext, dst : UInt8*, size : LibC::SizeT) : LibC::SizeT
+      fun llama_state_set_data(ctx : LlamaContext, src : UInt8*, size : LibC::SizeT) : LibC::SizeT
+      fun llama_state_save_file(ctx : LlamaContext, path : LibC::Char*, tokens : LlamaToken*, n_tokens : LibC::SizeT) : Bool
+      fun llama_state_load_file(ctx : LlamaContext, path : LibC::Char*, tokens_out : LlamaToken*, n_token_capacity : LibC::SizeT, n_token_count_out : LibC::SizeT*) : Bool
+
+      # Per-sequence state (save/restore individual session KV caches)
+      fun llama_state_seq_get_size(ctx : LlamaContext, seq_id : LlamaSeqId) : LibC::SizeT
+      fun llama_state_seq_get_data(ctx : LlamaContext, dst : UInt8*, size : LibC::SizeT, seq_id : LlamaSeqId) : LibC::SizeT
+      fun llama_state_seq_set_data(ctx : LlamaContext, src : UInt8*, size : LibC::SizeT, dest_seq_id : LlamaSeqId) : LibC::SizeT
+      fun llama_state_seq_save_file(ctx : LlamaContext, filepath : LibC::Char*, seq_id : LlamaSeqId, tokens : LlamaToken*, n_tokens : LibC::SizeT) : LibC::SizeT
+      fun llama_state_seq_load_file(ctx : LlamaContext, filepath : LibC::Char*, dest_seq_id : LlamaSeqId, tokens_out : LlamaToken*, n_token_capacity : LibC::SizeT, n_token_count_out : LibC::SizeT*) : LibC::SizeT
+
+      # KV cache sequence operations (for multi-session management)
+      fun llama_kv_self_seq_rm(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Bool
+      fun llama_kv_self_seq_cp(ctx : LlamaContext, seq_id_src : LlamaSeqId, seq_id_dst : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Void
+      fun llama_kv_self_seq_keep(ctx : LlamaContext, seq_id : LlamaSeqId) : Void
+      fun llama_kv_self_seq_shift(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos, delta : LlamaPos) : Void
+      fun llama_kv_self_defrag(ctx : LlamaContext) : Void
+      fun llama_kv_self_seq_pos_max(ctx : LlamaContext, seq_id : LlamaSeqId) : LlamaPos
+      fun llama_kv_self_used_cells(ctx : LlamaContext) : Int32
+      fun llama_kv_self_clear(ctx : LlamaContext) : Void
+
       # Performance
       fun llama_perf_context(ctx : LlamaContext) : LlamaPerfContextData
       fun llama_perf_context_print(ctx : LlamaContext) : Void

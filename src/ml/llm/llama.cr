@@ -411,9 +411,97 @@ module ML
         LlamaFFI.llama_memory_clear(@handle) unless @freed
       end
 
+      # ── KV Cache State Management ──
+
+      # Save full context state (KV cache + logits) to file
+      def state_save(path : String, tokens : Array(Int32)) : Bool
+        LlamaFFI.llama_state_save_file(@handle, path.to_unsafe, tokens.to_unsafe, tokens.size.to_u64)
+      end
+
+      # Load full context state from file. Returns restored tokens.
+      def state_load(path : String, max_tokens : Int32 = 131072) : Array(Int32)?
+        tokens = Array(Int32).new(max_tokens, 0)
+        n_loaded = uninitialized LibC::SizeT
+        ok = LlamaFFI.llama_state_load_file(@handle, path.to_unsafe, tokens.to_unsafe, max_tokens.to_u64, pointerof(n_loaded))
+        return nil unless ok
+        @pos = n_loaded.to_i32
+        tokens[0, n_loaded]
+      end
+
+      # Get state size in bytes (for allocation)
+      def state_size : UInt64
+        LlamaFFI.llama_state_get_size(@handle).to_u64
+      end
+
+      # Save per-sequence state to file (lighter than full state)
+      def seq_state_save(path : String, seq_id : Int32, tokens : Array(Int32)) : Bool
+        result = LlamaFFI.llama_state_seq_save_file(@handle, path.to_unsafe, seq_id, tokens.to_unsafe, tokens.size.to_u64)
+        result > 0
+      end
+
+      # Load per-sequence state from file into a target sequence
+      def seq_state_load(path : String, dest_seq_id : Int32, max_tokens : Int32 = 131072) : Array(Int32)?
+        tokens = Array(Int32).new(max_tokens, 0)
+        n_loaded = uninitialized LibC::SizeT
+        result = LlamaFFI.llama_state_seq_load_file(@handle, path.to_unsafe, dest_seq_id, tokens.to_unsafe, max_tokens.to_u64, pointerof(n_loaded))
+        return nil if result == 0
+        tokens[0, n_loaded]
+      end
+
+      # Get per-sequence state size
+      def seq_state_size(seq_id : Int32) : UInt64
+        LlamaFFI.llama_state_seq_get_size(@handle, seq_id).to_u64
+      end
+
+      # ── KV Cache Sequence Operations ──
+
+      # Remove tokens [p0, p1) from sequence. -1 for full range.
+      def kv_seq_rm(seq_id : Int32, p0 : Int32 = -1, p1 : Int32 = -1) : Bool
+        LlamaFFI.llama_kv_self_seq_rm(@handle, seq_id, p0, p1)
+      end
+
+      # Copy sequence src to dst in range [p0, p1)
+      def kv_seq_cp(src_seq : Int32, dst_seq : Int32, p0 : Int32 = 0, p1 : Int32 = -1) : Nil
+        LlamaFFI.llama_kv_self_seq_cp(@handle, src_seq, dst_seq, p0, p1)
+      end
+
+      # Keep only this sequence, remove all others
+      def kv_seq_keep(seq_id : Int32) : Nil
+        LlamaFFI.llama_kv_self_seq_keep(@handle, seq_id)
+      end
+
+      # Shift positions in sequence by delta
+      def kv_seq_shift(seq_id : Int32, p0 : Int32, p1 : Int32, delta : Int32) : Nil
+        LlamaFFI.llama_kv_self_seq_shift(@handle, seq_id, p0, p1, delta)
+      end
+
+      # Defragment KV cache (reclaim gaps)
+      def kv_defrag : Nil
+        LlamaFFI.llama_kv_self_defrag(@handle)
+      end
+
+      # Max position in sequence
+      def kv_seq_pos_max(seq_id : Int32) : Int32
+        LlamaFFI.llama_kv_self_seq_pos_max(@handle, seq_id)
+      end
+
+      # Number of used KV cells
+      def kv_used_cells : Int32
+        LlamaFFI.llama_kv_self_used_cells(@handle)
+      end
+
+      # Clear entire KV cache
+      def kv_clear : Nil
+        LlamaFFI.llama_kv_self_clear(@handle)
+        @pos = 0
+      end
+
       # Current position in context
       def position : Int32
         @pos
+      end
+
+      def position=(@pos : Int32)
       end
 
       # Remaining context space
