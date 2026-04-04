@@ -209,6 +209,32 @@ module ML
         String.new(buf[0, len])
       end
 
+      # Get the model's built-in chat template string
+      def chat_template : String?
+        ptr = LlamaFFI.llama_model_chat_template(@handle, Pointer(LibC::Char).null)
+        ptr.null? ? nil : String.new(ptr)
+      end
+
+      # Apply chat template to format messages into a prompt string
+      def apply_chat_template(messages : Array(ChatMessage), add_assistant : Bool = true) : String
+        tmpl_ptr = LlamaFFI.llama_model_chat_template(@handle, Pointer(LibC::Char).null)
+        tmpl = tmpl_ptr.null? ? Pointer(LibC::Char).null : tmpl_ptr
+
+        # Build C struct array
+        c_msgs = messages.map do |msg|
+          LlamaFFI::LlamaChatMessage.new(role: msg.role.to_unsafe, content: msg.content.to_unsafe)
+        end
+
+        # First call to get required size
+        needed = LlamaFFI.llama_chat_apply_template(tmpl, c_msgs.to_unsafe, c_msgs.size.to_u64, add_assistant, Pointer(LibC::Char).null, 0)
+        return "" if needed <= 0
+
+        # Allocate and format
+        buf = Bytes.new(needed + 1)
+        LlamaFFI.llama_chat_apply_template(tmpl, c_msgs.to_unsafe, c_msgs.size.to_u64, add_assistant, buf.to_unsafe.as(LibC::Char*), buf.size.to_i32)
+        String.new(buf[0, needed])
+      end
+
       # Create inference context from this model
       def create_context(
         n_ctx : Int32 = 0,

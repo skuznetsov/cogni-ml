@@ -286,6 +286,15 @@ module ML
       fun llama_kv_self_used_cells(ctx : LlamaContext) : Int32
       fun llama_kv_self_clear(ctx : LlamaContext) : Void
 
+      # Chat template
+      struct LlamaChatMessage
+        role : LibC::Char*
+        content : LibC::Char*
+      end
+
+      fun llama_model_chat_template(model : LlamaModel, name : LibC::Char*) : LibC::Char*
+      fun llama_chat_apply_template(tmpl : LibC::Char*, chat : LlamaChatMessage*, n_msg : LibC::SizeT, add_ass : Bool, buf : LibC::Char*, length : Int32) : Int32
+
       # Performance
       fun llama_perf_context(ctx : LlamaContext) : LlamaPerfContextData
       fun llama_perf_context_print(ctx : LlamaContext) : Void
