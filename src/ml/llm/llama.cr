@@ -247,11 +247,11 @@ module ML
         Context.new(self, n_ctx: n_ctx, n_batch: n_batch, n_ubatch: n_ubatch, n_threads: n_threads, flash_attn: flash_attn, embeddings: embeddings)
       end
 
-      protected def handle : LlamaFFI::LlamaModel
+      def handle : LlamaFFI::LlamaModel
         @handle
       end
 
-      protected def vocab : LlamaFFI::LlamaVocab
+      def vocab : LlamaFFI::LlamaVocab
         @vocab
       end
     end
@@ -479,46 +479,36 @@ module ML
         LlamaFFI.llama_state_seq_get_size(@handle, seq_id).to_u64
       end
 
-      # ── KV Cache Sequence Operations ──
+      # ── Memory/KV Cache Sequence Operations (b8400 API) ──
 
       # Remove tokens [p0, p1) from sequence. -1 for full range.
       def kv_seq_rm(seq_id : Int32, p0 : Int32 = -1, p1 : Int32 = -1) : Bool
-        LlamaFFI.llama_kv_self_seq_rm(@handle, seq_id, p0, p1)
+        LlamaFFI.llama_memory_seq_rm(@handle, seq_id, p0, p1)
       end
 
       # Copy sequence src to dst in range [p0, p1)
       def kv_seq_cp(src_seq : Int32, dst_seq : Int32, p0 : Int32 = 0, p1 : Int32 = -1) : Nil
-        LlamaFFI.llama_kv_self_seq_cp(@handle, src_seq, dst_seq, p0, p1)
+        LlamaFFI.llama_memory_seq_cp(@handle, src_seq, dst_seq, p0, p1)
       end
 
       # Keep only this sequence, remove all others
       def kv_seq_keep(seq_id : Int32) : Nil
-        LlamaFFI.llama_kv_self_seq_keep(@handle, seq_id)
+        LlamaFFI.llama_memory_seq_keep(@handle, seq_id)
       end
 
       # Shift positions in sequence by delta
-      def kv_seq_shift(seq_id : Int32, p0 : Int32, p1 : Int32, delta : Int32) : Nil
-        LlamaFFI.llama_kv_self_seq_shift(@handle, seq_id, p0, p1, delta)
-      end
-
-      # Defragment KV cache (reclaim gaps)
-      def kv_defrag : Nil
-        LlamaFFI.llama_kv_self_defrag(@handle)
+      def kv_seq_add(seq_id : Int32, p0 : Int32, p1 : Int32, delta : Int32) : Nil
+        LlamaFFI.llama_memory_seq_add(@handle, seq_id, p0, p1, delta)
       end
 
       # Max position in sequence
       def kv_seq_pos_max(seq_id : Int32) : Int32
-        LlamaFFI.llama_kv_self_seq_pos_max(@handle, seq_id)
+        LlamaFFI.llama_memory_seq_pos_max(@handle, seq_id)
       end
 
-      # Number of used KV cells
-      def kv_used_cells : Int32
-        LlamaFFI.llama_kv_self_used_cells(@handle)
-      end
-
-      # Clear entire KV cache
+      # Clear entire memory (KV cache + recurrent state)
       def kv_clear : Nil
-        LlamaFFI.llama_kv_self_clear(@handle)
+        LlamaFFI.llama_memory_clear(@handle)
         @pos = 0
       end
 
@@ -550,7 +540,7 @@ module ML
         LlamaFFI.llama_perf_context_reset(@handle)
       end
 
-      protected def handle : LlamaFFI::LlamaContext
+      def handle : LlamaFFI::LlamaContext
         @handle
       end
     end

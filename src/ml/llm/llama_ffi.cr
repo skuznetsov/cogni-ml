@@ -276,15 +276,15 @@ module ML
       fun llama_state_seq_save_file(ctx : LlamaContext, filepath : LibC::Char*, seq_id : LlamaSeqId, tokens : LlamaToken*, n_tokens : LibC::SizeT) : LibC::SizeT
       fun llama_state_seq_load_file(ctx : LlamaContext, filepath : LibC::Char*, dest_seq_id : LlamaSeqId, tokens_out : LlamaToken*, n_token_capacity : LibC::SizeT, n_token_count_out : LibC::SizeT*) : LibC::SizeT
 
-      # KV cache sequence operations (for multi-session management)
-      fun llama_kv_self_seq_rm(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Bool
-      fun llama_kv_self_seq_cp(ctx : LlamaContext, seq_id_src : LlamaSeqId, seq_id_dst : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Void
-      fun llama_kv_self_seq_keep(ctx : LlamaContext, seq_id : LlamaSeqId) : Void
-      fun llama_kv_self_seq_shift(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos, delta : LlamaPos) : Void
-      fun llama_kv_self_defrag(ctx : LlamaContext) : Void
-      fun llama_kv_self_seq_pos_max(ctx : LlamaContext, seq_id : LlamaSeqId) : LlamaPos
-      fun llama_kv_self_used_cells(ctx : LlamaContext) : Int32
-      fun llama_kv_self_clear(ctx : LlamaContext) : Void
+      # Memory/KV cache sequence operations (b8400 API: llama_memory_*)
+      fun llama_memory_seq_rm(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Bool
+      fun llama_memory_seq_cp(ctx : LlamaContext, seq_id_src : LlamaSeqId, seq_id_dst : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Void
+      fun llama_memory_seq_keep(ctx : LlamaContext, seq_id : LlamaSeqId) : Void
+      fun llama_memory_seq_add(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos, delta : LlamaPos) : Void
+      fun llama_memory_seq_pos_max(ctx : LlamaContext, seq_id : LlamaSeqId) : LlamaPos
+      fun llama_memory_seq_pos_min(ctx : LlamaContext, seq_id : LlamaSeqId) : LlamaPos
+      fun llama_memory_clear(ctx : LlamaContext) : Void
+      fun llama_memory_can_shift(ctx : LlamaContext) : Bool
 
       # Chat template
       struct LlamaChatMessage
