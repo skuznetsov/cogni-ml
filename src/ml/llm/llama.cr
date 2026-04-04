@@ -142,7 +142,7 @@ module ML
       end
 
       # Tokenize text to token IDs
-      def tokenize(text : String, add_bos : Bool = true) : Array(Int32)
+      def tokenize(text : String, add_bos : Bool = true, parse_special : Bool = false) : Array(Int32)
         max_tokens = text.bytesize + 32
         tokens = Array(Int32).new(max_tokens, 0)
 
@@ -153,7 +153,7 @@ module ML
           tokens.to_unsafe,
           max_tokens.to_i32,
           add_bos,
-          false
+          parse_special
         )
 
         if n < 0
@@ -167,7 +167,7 @@ module ML
             tokens.to_unsafe,
             max_tokens.to_i32,
             add_bos,
-            false
+            parse_special
           )
         end
 
