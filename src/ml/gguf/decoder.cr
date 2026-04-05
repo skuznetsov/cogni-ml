@@ -90,21 +90,23 @@ module ML::GGUF
       n_tokens = k_data.size // kv_d
       raise "KV cache overflow: #{@position} + #{n_tokens} > #{@max_seq}" if @position + n_tokens > @max_seq
 
+      # Write K/V at offset in GPU buffer via direct pointer access (unified memory)
       byte_offset = (@position * kv_d * 4).to_i64
-      @k_buf.write_bytes(k_data.to_unsafe.as(Pointer(UInt8)), k_data.size * 4, offset: byte_offset)
-      @v_buf.write_bytes(v_data.to_unsafe.as(Pointer(UInt8)), v_data.size * 4, offset: byte_offset)
+      k_dst = @k_buf.contents.as(Pointer(UInt8)) + byte_offset
+      k_dst.copy_from(k_data.to_unsafe.as(Pointer(UInt8)), k_data.size * 4)
+      v_dst = @v_buf.contents.as(Pointer(UInt8)) + byte_offset
+      v_dst.copy_from(v_data.to_unsafe.as(Pointer(UInt8)), v_data.size * 4)
 
       # Transpose V into v_t_buf: [n_kv_heads, head_dim, max_seq]
       # v_data layout: [n_tokens, n_kv_heads * head_dim]
       # v_t layout:    [kv_head, d, seq_pos]
+      vt_ptr = @v_t_buf.contents.as(Pointer(Float32))
       n_tokens.times do |t|
         @n_kv_heads.times do |kh|
           @head_dim.times do |d|
             src_idx = t * kv_d + kh * @head_dim + d
             dst_idx = kh * @head_dim * @max_seq + d * @max_seq + (@position + t)
-            # Write single float to transposed position
-            val = v_data[src_idx]
-            @v_t_buf.write_bytes(pointerof(val).as(Pointer(UInt8)), 4, offset: (dst_idx * 4).to_i64)
+            vt_ptr[dst_idx] = v_data[src_idx]
           end
         end
       end
