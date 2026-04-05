@@ -50,6 +50,10 @@ module ML::GGUF
       @use_cross_attn = true,
       @cross_attn_every_n = 2
     )
+      raise "dim must equal n_heads * head_dim (#{@dim} != #{@n_heads} * #{@head_dim})" unless @dim == @n_heads * @head_dim
+      raise "n_heads must be divisible by n_kv_heads (#{@n_heads} % #{@n_kv_heads} != 0)" unless @n_heads % @n_kv_heads == 0
+      raise "n_kv_heads must be <= n_heads" unless @n_kv_heads <= @n_heads
+      raise "head_dim must be even for RoPE" unless @head_dim.even?
     end
   end
 
@@ -58,25 +62,53 @@ module ML::GGUF
     getter k_buf : MetalBuffer   # [max_seq, n_kv_heads * head_dim] float32
     getter v_buf : MetalBuffer   # [max_seq, n_kv_heads * head_dim] float32
     getter v_t_buf : MetalBuffer # [n_kv_heads, head_dim, max_seq] transposed for flash attn
+    getter max_seq : Int32
+    getter n_kv_heads : Int32
+    getter head_dim : Int32
     property position : Int32 = 0
 
-    def initialize(max_seq : Int32, n_kv_heads : Int32, head_dim : Int32)
-      kv_dim = n_kv_heads * head_dim
-      @k_buf = MetalBuffer.new((max_seq * kv_dim * 4).to_i64)
-      @v_buf = MetalBuffer.new((max_seq * kv_dim * 4).to_i64)
-      @v_t_buf = MetalBuffer.new((n_kv_heads * head_dim * max_seq * 4).to_i64)
+    def initialize(@max_seq : Int32, @n_kv_heads : Int32, @head_dim : Int32)
+      kv_dim = @n_kv_heads * @head_dim
+      @k_buf = MetalBuffer.new((@max_seq * kv_dim * 4).to_i64)
+      @v_buf = MetalBuffer.new((@max_seq * kv_dim * 4).to_i64)
+      @v_t_buf = MetalBuffer.new((@n_kv_heads * @head_dim * @max_seq * 4).to_i64)
     end
 
     def reset : Nil
       @position = 0
     end
 
-    # Append new K/V vectors at current position
-    def append(k_data : Array(Float32), v_data : Array(Float32), kv_dim : Int32) : Nil
-      n_tokens = k_data.size // kv_dim
-      byte_offset = (@position * kv_dim * 4).to_i64
-      @k_buf.write_bytes((k_data.to_unsafe + 0).as(Pointer(UInt8)), k_data.size * 4, offset: byte_offset)
-      @v_buf.write_bytes((v_data.to_unsafe + 0).as(Pointer(UInt8)), v_data.size * 4, offset: byte_offset)
+    def kv_dim : Int32
+      @n_kv_heads * @head_dim
+    end
+
+    # Append new K/V vectors at current position, including V transpose for flash attn
+    def append(k_data : Array(Float32), v_data : Array(Float32)) : Nil
+      kv_d = kv_dim
+      raise "K/V size mismatch: #{k_data.size} vs #{v_data.size}" unless k_data.size == v_data.size
+      raise "K data not divisible by kv_dim #{kv_d}" unless k_data.size % kv_d == 0
+      n_tokens = k_data.size // kv_d
+      raise "KV cache overflow: #{@position} + #{n_tokens} > #{@max_seq}" if @position + n_tokens > @max_seq
+
+      byte_offset = (@position * kv_d * 4).to_i64
+      @k_buf.write_bytes(k_data.to_unsafe.as(Pointer(UInt8)), k_data.size * 4, offset: byte_offset)
+      @v_buf.write_bytes(v_data.to_unsafe.as(Pointer(UInt8)), v_data.size * 4, offset: byte_offset)
+
+      # Transpose V into v_t_buf: [n_kv_heads, head_dim, max_seq]
+      # v_data layout: [n_tokens, n_kv_heads * head_dim]
+      # v_t layout:    [kv_head, d, seq_pos]
+      n_tokens.times do |t|
+        @n_kv_heads.times do |kh|
+          @head_dim.times do |d|
+            src_idx = t * kv_d + kh * @head_dim + d
+            dst_idx = kh * @head_dim * @max_seq + d * @max_seq + (@position + t)
+            # Write single float to transposed position
+            val = v_data[src_idx]
+            @v_t_buf.write_bytes(pointerof(val).as(Pointer(UInt8)), 4, offset: (dst_idx * 4).to_i64)
+          end
+        end
+      end
+
       @position += n_tokens
     end
   end
@@ -147,7 +179,8 @@ module ML::GGUF
     # Layer weights (loaded from GGUF)
     @token_embd : Array(Float32) = [] of Float32
     @final_norm_w : Array(Float32) = [] of Float32
-    @lm_head_w : Array(Float32) = [] of Float32  # [vocab_size, dim] or tied to token_embd
+    @lm_head_w : Array(Float32) = [] of Float32  # [vocab_size, dim] — dense F32 (or tied to token_embd)
+    @tie_word_embeddings : Bool = false
     @layers = [] of DecoderLayerWeights
 
     # GPU buffers for weights
@@ -207,6 +240,9 @@ module ML::GGUF
     # ── Forward pass: prefill mode ──
     # Processes full sequence, builds KV cache for all layers
     def prefill(tokens : Array(Int32)) : Array(Float32)
+      return [] of Float32 if tokens.empty?
+      raise "prefill must start at position 0 (current: #{@position})" unless @position == 0
+
       seq_len = tokens.size
       dim = @config.dim
       n_heads = @config.n_heads
@@ -237,7 +273,7 @@ module ML::GGUF
         apply_rope!(k, seq_len, n_kv_heads, head_dim, @position)
 
         # Store K/V in cache
-        kv_cache.append(k, v, n_kv_heads * head_dim)
+        kv_cache.append(k, v)
 
         # b. Causal self-attention (CPU reference — GPU version uses kernel)
         attn_out = causal_attention_cpu(q, k, v, seq_len, n_heads, n_kv_heads, head_dim, scale)
@@ -278,7 +314,7 @@ module ML::GGUF
 
       # 4. LM head → logits (only for last token)
       last_hidden = hidden[(seq_len - 1) * dim, dim]
-      logits = matmul_cpu([last_hidden], @lm_head_w, 1, dim, @config.vocab_size)
+      logits = lm_head_matmul(last_hidden)
 
       @position += seq_len
       logits
@@ -312,7 +348,7 @@ module ML::GGUF
 
         apply_rope!(q, 1, n_heads, head_dim, @position)
         apply_rope!(k, 1, n_kv_heads, head_dim, @position)
-        kv_cache.append(k, v, n_kv_heads * head_dim)
+        kv_cache.append(k, v)
 
         # Attend to full KV cache
         attn_out = decode_attention_cpu(q, kv_cache, n_heads, n_kv_heads, head_dim, scale)
@@ -340,7 +376,7 @@ module ML::GGUF
 
       # Final norm → logits
       rms_norm_single!(hidden, dim, @final_norm_w)
-      logits = matmul_cpu([hidden], @lm_head_w, 1, dim, @config.vocab_size)
+      logits = lm_head_matmul(hidden)
 
       @position += 1
       logits
@@ -367,6 +403,20 @@ module ML::GGUF
       exps.size - 1
     end
 
+    # ── LM head: hidden → logits (dense F32 matmul, optionally tied to embeddings) ──
+    private def lm_head_matmul(hidden : Array(Float32)) : Array(Float32)
+      dim = @config.dim
+      vocab = @config.vocab_size
+      weights = @tie_word_embeddings ? @token_embd : @lm_head_w
+      raise "LM head weights not loaded" if weights.empty?
+
+      Array(Float32).new(vocab) do |v|
+        sum = 0.0_f32
+        dim.times { |d| sum += hidden[d] * weights[v * dim + d] }
+        sum
+      end
+    end
+
     # ── CPU reference implementations (to be replaced with GPU) ──
 
     private def rms_norm(x : Array(Float32), n_pos : Int32, dim : Int32, w : Array(Float32)) : Array(Float32)
@@ -375,7 +425,7 @@ module ML::GGUF
         off = pos * dim
         ss = 0.0_f64
         dim.times { |j| ss += x[off + j].to_f64 ** 2 }
-        inv_rms = (1.0 / Math.sqrt(ss / dim + 1e-6)).to_f32
+        inv_rms = (1.0 / Math.sqrt(ss / dim.to_f64 + 1e-6)).to_f32
         dim.times { |j| result[off + j] = x[off + j] * inv_rms * w[j] }
       end
       result
@@ -386,7 +436,7 @@ module ML::GGUF
         off = pos * dim
         ss = 0.0_f64
         dim.times { |j| ss += x[off + j].to_f64 ** 2 }
-        inv_rms = (1.0 / Math.sqrt(ss / dim + 1e-6)).to_f32
+        inv_rms = (1.0 / Math.sqrt(ss / dim.to_f64 + 1e-6)).to_f32
         dim.times { |j| x[off + j] = x[off + j] * inv_rms * w[j] }
       end
     end
@@ -394,14 +444,14 @@ module ML::GGUF
     private def rms_norm_single(x : Array(Float32), dim : Int32, w : Array(Float32)) : Array(Float32)
       ss = 0.0_f64
       dim.times { |j| ss += x[j].to_f64 ** 2 }
-      inv_rms = (1.0 / Math.sqrt(ss / dim + 1e-6)).to_f32
+      inv_rms = (1.0 / Math.sqrt(ss / dim.to_f64 + 1e-6)).to_f32
       Array(Float32).new(dim) { |j| x[j] * inv_rms * w[j] }
     end
 
     private def rms_norm_single!(x : Array(Float32), dim : Int32, w : Array(Float32)) : Nil
       ss = 0.0_f64
       dim.times { |j| ss += x[j].to_f64 ** 2 }
-      inv_rms = (1.0 / Math.sqrt(ss / dim + 1e-6)).to_f32
+      inv_rms = (1.0 / Math.sqrt(ss / dim.to_f64 + 1e-6)).to_f32
       dim.times { |j| x[j] = x[j] * inv_rms * w[j] }
     end
 
