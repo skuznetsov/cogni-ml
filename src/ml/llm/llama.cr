@@ -85,11 +85,11 @@ module ML
       @vocab : LlamaFFI::LlamaVocab
       @freed : Bool = false
 
-      def initialize(@path : String, n_gpu_layers : Int32 = 99, use_mlock : Bool = true)
+      def initialize(@path : String, n_gpu_layers : Int32 = 99, use_mlock : Bool = false)
         params = LlamaFFI.llama_model_default_params
         params.n_gpu_layers = n_gpu_layers
         params.use_mmap = true
-        params.use_mlock = use_mlock  # prevent mmap page eviction → SIGBUS
+        params.use_mlock = use_mlock
 
         @handle = LlamaFFI.llama_model_load_from_file(@path.to_unsafe, params)
         raise "Failed to load model: #{@path}" if @handle.null?
