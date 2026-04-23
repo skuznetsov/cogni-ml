@@ -347,6 +347,25 @@ module ML::GGUF
       {% end %}
     end
 
+    # Batched matvec — runs all qws against the same input in ONE Metal
+    # command buffer (one commit+wait, one readback of all outputs).
+    # Falls back to per-qw `qmatvec_nobias` when any qw can't hit Metal
+    # (below size threshold or unsupported type).
+    def qmatvec_many(qws : Array(QuantWeight), x : Array(Float32)) : Array(Array(Float32))
+      return [] of Array(Float32) if qws.empty?
+      {% unless flag?(:cpu_only) %}
+        if ENV["QWEN35_BATCH_OFF"]? != "1"
+          all_eligible = qws.all? { |qw| qw.out_dim >= METAL_QK_MIN_OUT && qw.in_dim >= METAL_QK_MIN_IN }
+          if all_eligible && Qwen35Metal.available?
+            if results = Qwen35Metal.matmul_many(qws, x)
+              return results
+            end
+          end
+        end
+      {% end %}
+      qws.map { |qw| qmatvec_nobias(qw, x) }
+    end
+
     # Quantized matvec — wrapper that routes to QuantMatmul for a single row.
     # result = bias + W @ x, where W is [out_dim, in_dim] stored row-major.
     def qmatvec(qw : QuantWeight, x : Array(Float32), bias : Array(Float32)? = nil) : Array(Float32)
@@ -416,8 +435,11 @@ module ML::GGUF
       # 1. attn_norm
       cur = rms_norm(inpSA, lw.attn_norm, hp.rms_eps)
 
-      # 2. Q+gate combined projection
-      q_full = qmatvec_nobias(lw.attn_q_qw, cur)  # [2 * head_dim * n_head]
+      # 2-4. Batched Q+gate/K/V projections (all from same `cur` → one sync)
+      qkv_outs = qmatvec_many([lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw], cur)
+      q_full = qkv_outs[0]  # [2 * head_dim * n_head]
+      k      = qkv_outs[1]  # [head_dim * n_head_kv]
+      v      = qkv_outs[2]  # [head_dim * n_head_kv]
 
       # 3. Split Q and gate (interleaved per head: [Q_h0, gate_h0, Q_h1, gate_h1, ...])
       q    = Array(Float32).new(q_dim, 0.0_f32)
@@ -430,10 +452,6 @@ module ML::GGUF
           gate[dst_base + d] = q_full[src_base + head_dim + d]
         end
       end
-
-      # 4. K, V projections
-      k = qmatvec_nobias(lw.attn_k_qw, cur)  # [head_dim * n_head_kv]
-      v = qmatvec_nobias(lw.attn_v_qw, cur)  # [head_dim * n_head_kv]
 
       # 5. Per-head RMSNorm on Q and K (shared weights across heads)
       n_head.times do |h|
@@ -465,9 +483,10 @@ module ML::GGUF
       # 12. post_attention_norm
       cur2 = rms_norm(inpL2, lw.post_attention_norm, hp.rms_eps)
 
-      # 13. SwiGLU FFN
-      gate_ff = qmatvec_nobias(lw.ffn_gate_qw, cur2)  # [n_ff]
-      up_ff   = qmatvec_nobias(lw.ffn_up_qw,   cur2)  # [n_ff]
+      # 13. SwiGLU FFN (batched gate+up, same `cur2` input → one sync)
+      gu = qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], cur2)
+      gate_ff = gu[0]  # [n_ff]
+      up_ff   = gu[1]  # [n_ff]
       silu!(gate_ff)
       combined = Array(Float32).new(n_ff) { |i| gate_ff[i] * up_ff[i] }
       ffn_out = qmatvec_nobias(lw.ffn_down_qw, combined)  # [n_embd]
@@ -538,15 +557,12 @@ module ML::GGUF
       # 1. attn_norm
       cur = rms_norm(inpSA, lw.attn_norm, hp.rms_eps)
 
-      # 2. QKV-mixed projection
-      qkv_mixed = qmatvec_nobias(lw.attn_qkv_qw, cur)  # [qkv_dim]
-
-      # 3. z (gate for SiLU-gated RMSNorm after delta net)
-      z = qmatvec_nobias(lw.attn_gate_qw, cur)         # [d_inner = h_v * s_v]
-
-      # 4. alpha, beta
-      alpha = qmatvec_nobias(lw.ssm_alpha_qw, cur)     # [h_v]
-      beta  = qmatvec_nobias(lw.ssm_beta_qw,  cur)     # [h_v]
+      # 2-4. Batched qkv/gate/alpha/beta projections (all from same `cur` → one sync)
+      proj = qmatvec_many([lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw], cur)
+      qkv_mixed = proj[0]  # [qkv_dim]
+      z         = proj[1]  # [d_inner = h_v * s_v]
+      alpha     = proj[2]  # [h_v]
+      beta      = proj[3]  # [h_v]
       h_v.times { |i| beta[i] = sigmoid(beta[i]) }
 
       # 5. gate per head (g[h] = softplus(alpha[h] + ssm_dt_bias[h]) * ssm_a[h])
@@ -622,9 +638,10 @@ module ML::GGUF
       # 16. Post-attention norm
       cur2 = rms_norm(inpL2, lw.post_attention_norm, hp.rms_eps)
 
-      # 17. SwiGLU FFN
-      gate_ff = qmatvec_nobias(lw.ffn_gate_qw, cur2)
-      up_ff   = qmatvec_nobias(lw.ffn_up_qw,   cur2)
+      # 17. SwiGLU FFN (batched gate+up, same `cur2` input → one sync)
+      gu = qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], cur2)
+      gate_ff = gu[0]
+      up_ff   = gu[1]
       silu!(gate_ff)
       combined = Array(Float32).new(n_ff) { |i| gate_ff[i] * up_ff[i] }
       ffn_out = qmatvec_nobias(lw.ffn_down_qw, combined)

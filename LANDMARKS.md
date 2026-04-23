@@ -510,6 +510,32 @@ Rich landmarks include full State/Relations/Evidence structure.
 - After each step: run `make spec` + `./ml "The capital of France is" 5` to confirm output unchanged.
 - Quadrumvirate (Cassandra/Daedalus/Maieutic/Adversary) before starting and after completing each sub-phase.
 
+### [LM-claude-PHASE4.1a-VERIFIED] Batched within-layer projections — 18 ms/tok saved
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 4 — sync reduction via batch encoding)
+**result:** batching Q/K/V (full-attn) + gate/up (ffn) + qkv/gate/α/β (recurrent) + gate/up (recurrent ffn) into one `matmul_many` call each cuts 48 `commit_and_wait` barriers per token (2330 → 1850) and **shaves ~18 ms/tok** (85.45 vs 103.83 ms/tok, paired t=3.57 across 8 interleaved trials, p≈0.009). Long-context pos=257: 109 ms vs 146 ms total forward (confirmed at longer context too).
+**evidence:**
+- claim: "4.1a saves 18.38 ± 5.15 ms/tok (mean paired diff over 8 trials, 17.7% faster)"
+  source: `./bin/qwen35_sync_profile 5 10` interleaved with `QWEN35_BATCH_OFF=1` toggle, 8 trials each
+  verified_at: 2026-04-23
+  decay_trigger: kernel fusion (Phase 4.3) changes the projection dispatch structure
+- claim: "correctness preserved — 70/70 specs, top logit 11.423702 unchanged"
+  source: `make spec` after implementation; `attn_decode_spec` cos=1.0 max|Δ|=4.47e-8
+  verified_at: 2026-04-23
+  decay_trigger: kernel code changes
+- claim: "single-run measurements are unreliable for sub-20ms effects — thermal variance is ~10 ms/tok"
+  source: first single-run showed 126 ms (regression); paired-interleaved showed -18 ms (real win). Within-condition spread 20-34 ms.
+  verified_at: 2026-04-23
+  decay_trigger: M2 Max thermal characteristics change (different machine, background load)
+**implementation:**
+- `Qwen35CPU.qmatvec_many(qws, x)` — dispatches all eligible qws in one encoder; falls back to per-qw when any is below Metal threshold or Metal unavailable.
+- `Qwen35Metal.matmul_many(qws, x)` — uploads `x` once, encodes N dispatches on one `MTLComputeEncoder`, one `commit_and_wait`, reads N outputs. Counts as ONE `gemv` sync in Profile.
+- `ENV["QWEN35_BATCH_OFF"]="1"` disables batching at runtime for future A/B.
+- 4 call sites wired: full-attn Q/K/V + ffn gate/up; recurrent qkv/gate/α/β + ffn gate/up.
+**builds_on:** [LM-claude-PHASE4.0-VERIFIED]
+**insight:** Predicted 48×150μs = 7 ms saved from sync count alone. Measured 18 ms — ~11 ms extra comes from reduced Metal state transitions and amortized encoder setup. Single-run measurement was misleading (126 ms regression vanished under interleaved A/B). Lesson: for sub-20ms effects on a thermally-constrained laptop, paired interleaved trials are mandatory.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)

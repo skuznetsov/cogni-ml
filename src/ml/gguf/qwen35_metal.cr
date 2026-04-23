@@ -548,6 +548,77 @@ module ML
           end
         end
 
+        # Batched single-input GEMV: upload x once, encode a GEMV per
+        # qw on the same compute encoder, commit+wait once, read all
+        # outputs. Returns `nil` if any qw is a type we don't GPU-route
+        # (caller falls back to per-qw `matmul`).
+        #
+        # All qws must share `in_dim == x.size`. Output shape is the list
+        # of [out_dim] arrays in the same order as `qws`.
+        def self.matmul_many(qws : Array(QuantWeight), x : Array(Float32)) : Array(Array(Float32))?
+          return [] of Array(Float32) if qws.empty?
+          ML::Metal::Device.init!
+
+          # Resolve pipeline + weight buf for each qw upfront.
+          # Bail out if any qw isn't Metal-routable.
+          resolved = Array({ML::Metal::ComputePipeline, ML::MetalBuffer, Int64, Int32, Int32}).new(qws.size)
+          qws.each do |qw|
+            pipeline = case qw.type
+                       when .q4_k? then mv_pipeline
+                       when .q5_k? then mv5_pipeline
+                       when .q6_k? then mv6_pipeline
+                       else
+                         return nil
+                       end
+            buf, off = if slot = mmap_slot_for(qw.raw)
+                         slot
+                       else
+                         {qw.fallback_metal_buffer, 0_i64}
+                       end
+            resolved << {pipeline, buf, off, qw.in_dim, qw.out_dim}
+          end
+
+          t0 = Time.instant if Profile.enabled?
+          x_buf = ML::MetalBuffer.new(x.size.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+
+          out_bufs = Array(ML::MetalBuffer).new(qws.size) do |i|
+            ML::MetalBuffer.new(qws[i].out_dim.to_i64 * sizeof(Float32))
+          end
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          rows_per_tg = MV_NSG * MV_NR0
+          resolved.each_with_index do |(pipeline, w_buf, w_off, in_dim, out_dim), i|
+            enc.set_pipeline(pipeline)
+            enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+            enc.set_buffer(x_buf, 1)
+            enc.set_buffer(out_bufs[i], 2, ML::Metal::BufferAccess::Write)
+            enc.set_value(in_dim.to_u32,  3)
+            enc.set_value(out_dim.to_u32, 4)
+            enc.set_value(1_u32,          5)
+            grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}
+            enc.dispatch_threadgroups(grid, {32 * MV_NSG, 1, 1})
+          end
+          enc.end_encoding
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          results = Array(Array(Float32)).new(qws.size) { |i| out_bufs[i].read(qws[i].out_dim) }
+          if Profile.enabled?
+            t_read = Time.instant
+            # One sync for N dispatches — count as ONE gemv call so
+            # `total metal syncs` reflects actual barriers, not work.
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          results
+        end
+
         # Persistent-buffer path: dispatch by QuantWeight type, using the
         # whole-mmap buffer when available (zero-copy) or falling back to
         # a per-weight upload held by the QuantWeight itself. Returns nil
