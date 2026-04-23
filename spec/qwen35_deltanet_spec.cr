@@ -7,6 +7,17 @@ QWEN_9B_DN = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-
 describe ML::GGUF::Qwen35CPU, "DeltaNet recurrent layer forward" do
   pending!("9B model not present") unless File.exists?(QWEN_9B_DN)
 
+  # SSM state lives on whichever backend the routing helper picked up first:
+  # `ssm_state` (Array) on CPU, `ssm_state_buf` (MetalBuffer) on Metal. They
+  # never coexist for a given sequence.
+  ssm_state_as_array = ->(ls : ML::GGUF::Qwen35CPU::LayerState, expected_size : Int32) do
+    if buf = ls.ssm_state_buf
+      buf.read(expected_size)
+    else
+      ls.ssm_state.not_nil!
+    end
+  end
+
   it "runs blk.0 (first recurrent layer) on embedding of token 0" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_DN)
     hp = w.hparams
@@ -23,9 +34,10 @@ describe ML::GGUF::Qwen35CPU, "DeltaNet recurrent layer forward" do
 
     # conv_state and ssm_state should have been allocated and (at least partially) written
     cs = state.layers[0].conv_state.not_nil!
-    ss = state.layers[0].ssm_state.not_nil!
+    expected_ss_size = hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size
+    ss = ssm_state_as_array.call(state.layers[0], expected_ss_size)
     cs.size.should eq((hp.ssm_conv_kernel - 1) * (2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size))
-    ss.size.should eq(hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size)
+    ss.size.should eq(expected_ss_size)
 
     # First token wrote qkv_mixed into conv_state slot 2 (the "current" row). Slots 0,1 still zero.
     kv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size

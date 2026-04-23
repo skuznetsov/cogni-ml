@@ -37,6 +37,13 @@ module ML::GGUF
       property conv_state : Array(Float32)?
       property ssm_state : Array(Float32)?
 
+      # GPU-resident SSM state. Kept in parallel to the CPU `ssm_state`
+      # but only one of the two is used per sequence — whichever matches
+      # the backend dispatched on the first recurrent call. Persists
+      # across decode steps so the DeltaNet kernel reads and writes it
+      # in place.
+      property ssm_state_buf : ML::MetalBuffer?
+
       def initialize
       end
     end
@@ -159,6 +166,87 @@ module ML::GGUF
     # stay on CPU.
     METAL_QK_MIN_OUT = 256
     METAL_QK_MIN_IN  = 256
+
+    # DeltaNet / GatedDeltaRule state-update + output, shared between the
+    # CPU path and the Metal spec reference. `state` and `y` are written
+    # in place. `ghead` is the per-head decay multiplier (i.e. caller
+    # computes `exp(softplus(...) * ssm_a[h])` up front).
+    def delta_net_step!(state : Array(Float32),
+                        q_conv : Array(Float32),
+                        k_conv : Array(Float32),
+                        v_conv : Array(Float32),
+                        ghead : Array(Float32),
+                        beta : Array(Float32),
+                        y : Array(Float32),
+                        h_k : Int32, h_v : Int32, s : Int32,
+                        scale : Float32) : Nil
+      h_v.times do |h|
+        k_head = h % h_k
+        q_off  = k_head * s
+        k_off  = k_head * s
+        v_off  = h * s
+        st_base = h * s * s
+        gh = ghead[h]
+        bh = beta[h]
+
+        (s * s).times { |i| state[st_base + i] *= gh }
+
+        sk = Array(Float32).new(s) do |d2|
+          row_off = st_base + d2 * s
+          a = 0.0_f32
+          s.times { |d1| a += state[row_off + d1] * k_conv[k_off + d1] }
+          a
+        end
+
+        delt = Array(Float32).new(s) { |d2| bh * (v_conv[v_off + d2] - sk[d2]) }
+
+        s.times do |d2|
+          row_off = st_base + d2 * s
+          dd = delt[d2]
+          s.times { |d1| state[row_off + d1] += k_conv[k_off + d1] * dd }
+        end
+
+        y_off = h * s
+        s.times do |d2|
+          row_off = st_base + d2 * s
+          acc = 0.0_f32
+          s.times { |d1| acc += state[row_off + d1] * q_conv[q_off + d1] }
+          y[y_off + d2] = acc * scale
+        end
+      end
+    end
+
+    # Route the DeltaNet step to Metal when available, CPU otherwise.
+    # State persists across decode steps on whichever backend owns it:
+    # Array(Float32) for CPU, MetalBuffer for GPU — never both at once.
+    private def delta_net_step_routed(lstate : LayerState,
+                                       q_conv : Array(Float32),
+                                       k_conv : Array(Float32),
+                                       v_conv : Array(Float32),
+                                       ghead : Array(Float32),
+                                       beta : Array(Float32),
+                                       h_k : Int32, h_v : Int32, s : Int32,
+                                       scale : Float32) : Array(Float32)
+      {% unless flag?(:cpu_only) %}
+        if Qwen35Metal.available?
+          bytes = (h_v * s * s).to_i64 * sizeof(Float32)
+          state_buf = lstate.ssm_state_buf
+          if state_buf.nil?
+            state_buf = ML::MetalBuffer.new(bytes)
+            state_buf.contents.as(Pointer(UInt8)).clear(bytes)
+            lstate.ssm_state_buf = state_buf
+          end
+          return Qwen35Metal.delta_net_step(state_buf, q_conv, k_conv, v_conv,
+                                             ghead, beta, h_k, h_v, s, scale)
+        end
+      {% end %}
+
+      state = lstate.ssm_state ||= Array(Float32).new(h_v * s * s, 0.0_f32)
+      y     = Array(Float32).new(h_v * s, 0.0_f32)
+      delta_net_step!(state, q_conv, k_conv, v_conv, ghead, beta, y,
+                       h_k, h_v, s, scale)
+      y
+    end
 
     # Try to run a GEMV (batch=1) on Metal if the type is supported and
     # the op is large enough. Returns `nil` if the call should fall back
@@ -460,50 +548,12 @@ module ML::GGUF
 
       # 12. Delta rule state update + output computation
       scale = (1.0 / Math.sqrt(s_k.to_f64)).to_f32
-      state = lstate.ssm_state ||= Array(Float32).new(h_v * s_v * s_v, 0.0_f32)
-      y     = Array(Float32).new(h_v * s_v, 0.0_f32)
+      # Convert g[h] to ghead = exp(g[h]) inline; kernel and reference share
+      # `delta_net_step!` below, which expects the already-exp'd decay.
+      ghead = Array(Float32).new(h_v) { |h| Math.exp(g[h].to_f64).to_f32 }
 
-      h_v.times do |h|
-        k_head = h % h_k  # ggml_repeat tiles: v-head h → k-head (h mod H_k)
-        q_off  = k_head * s_k
-        k_off  = k_head * s_k
-        v_off  = h * s_v
-        st_base = h * s_v * s_v
-
-        ghead = Math.exp(g[h].to_f64).to_f32
-        bhead = beta[h]
-
-        # Decay state by ghead (per v-head, multiplies entire S_v×S_v block)
-        (s_v * s_v).times { |i| state[st_base + i] *= ghead }
-
-        # sk[d2] = sum_{d1} state[h, d1, d2] * K[k_head, d1]
-        #   with state layout [h, d2, d1] (d1 contiguous for fixed d2)
-        sk = Array(Float32).new(s_v) do |d2|
-          row_off = st_base + d2 * s_v
-          s = 0.0_f32
-          s_k.times { |d1| s += state[row_off + d1] * k_conv[k_off + d1] }
-          s
-        end
-
-        # delt[d2] = bhead * (V[h, d2] - sk[d2])
-        delt = Array(Float32).new(s_v) { |d2| bhead * (v_conv[v_off + d2] - sk[d2]) }
-
-        # Update state: state[h, d1, d2] += K[k_head, d1] * delt[d2]
-        s_v.times do |d2|
-          row_off = st_base + d2 * s_v
-          dd = delt[d2]
-          s_k.times { |d1| state[row_off + d1] += k_conv[k_off + d1] * dd }
-        end
-
-        # Output: y[h, d2] = sum_{d1} state[h, d1, d2] * (Q[k_head, d1] * scale)
-        y_off = h * s_v
-        s_v.times do |d2|
-          row_off = st_base + d2 * s_v
-          acc = 0.0_f32
-          s_k.times { |d1| acc += state[row_off + d1] * q_conv[q_off + d1] }
-          y[y_off + d2] = acc * scale
-        end
-      end
+      y = delta_net_step_routed(lstate, q_conv, k_conv, v_conv, ghead, beta,
+                                  h_k, h_v, s_k, scale)
 
       # 13. Gated RMSNorm: norm[h,d] = RMSNorm_per_head(y[h,:], ssm_norm) * silu(z[h,d])
       h_v.times do |h|

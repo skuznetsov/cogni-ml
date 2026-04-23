@@ -394,6 +394,40 @@ Rich landmarks include full State/Relations/Evidence structure.
 **unblocks:** [Phase 4b: KV-cache persistent buffers, Phase 3a: Metal attention — now worthwhile since upload isn't the bottleneck]
 **note:** User correction "Apple Silicon has unified memory, only locks matter, not uploads" was the key insight. Pre-correction design (copy once + reuse) would still have paid the 80ms memcpy on first call; true zero-copy is free. Owes entire 27× to `newBufferWithBytesNoCopy` + per-dispatch `setBuffer:offset:`.
 
+### [LM-claude-PHASE3b-VERIFIED] Metal DeltaNet / GatedDeltaRule recurrent step
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 3b — recurrent state update on GPU)
+**evidence:**
+- claim: "Metal `delta_net_step` bit-matches CPU reference on Qwen 3.5 9B shapes (h_k=16, h_v=32, s=128, seeded random inputs): y cos≈1.0 max|Δ|=1.21e-8, state cos≈1.0 max|Δ|=2.98e-8"
+  source: spec/qwen35_delta_net_spec.cr (2026-04-23)
+  verified_at: 2026-04-23
+  decay_trigger: kernels/delta_net.metal OR qwen35_cpu.cr delta_net_step! changed
+- claim: "End-to-end decode 418 ms/token (Phase 4a, CPU DeltaNet) → 78.3 ms/token (Phase 3b, Metal DeltaNet) = 5.3× total speedup. Recurrent layers 15.1 → 2.29 ms/layer = 6.6×"
+  source: bin/qwen35_phase_profile on 2026-04-23, n_runs=5, pos starting at 6
+  verified_at: 2026-04-23
+  decay_trigger: delta_net kernel tuning OR forward_recurrent_layer changes
+- claim: "Per-phase allocation after Phase 3b: total=78 ms (full_attn=14.1 ms/18%, recurrent=54.9 ms/70%, head=2.6 ms/3%, embedding=6.7 ms/9%). Recurrent still dominant — Phase 3a (Metal attention head_dim=256) is next highest-leverage target."
+  source: same profiler run
+  verified_at: 2026-04-23
+  decay_trigger: any forward-path change
+- claim: "Greedy output with Metal DeltaNet identical to Phase 4a CPU path: 'The capital of France is Paris.\\nThe capital' — deterministic under the new routing"
+  source: bin/qwen35_generate_bin "The capital of France is" 5 on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: numeric kernel change
+- claim: "All 69 specs pass (new qwen35_delta_net_spec + updated qwen35_deltanet_spec both pass; no regressions)"
+  source: make spec 2026-04-23 (57 s, 0 failures, 0 errors)
+  verified_at: 2026-04-23
+  decay_trigger: kernels/delta_net.metal or dispatch glue changed
+**architecture:**
+- kernels/delta_net.metal: one threadgroup per v-head (dispatch (h_v, 1, 1)), 32 threads each. Four sequential stages with `threadgroup_barrier(mem_flags::mem_threadgroup)` between: (1) state *= ghead decay, (2) sk[d2] = Σ state[d2,:]·K via float4 dot, (3) state[d2,:] += K·(β·(V-sk))[d2] outer-product, (4) out[d2] = Σ state[d2,:]·Q · scale. Uses `float4` aligned loads/stores on s_v-stride rows (128·4B = 512B, 16-B aligned).
+- qwen35_metal.cr: `DELTA_NET_SOURCE` embedded; `@@dn_pipeline` lazy-cached; `delta_net_step(state_buf, q/k/v/g/β, h_k/h_v/s, scale)` allocates per-call q/k/v/g/β/out buffers (~s·(h_k+h_v+h_v+2)·4B ≈ few KB) and reads out buffer back to `Array(Float32)`. State buffer is *persistent*, passed in and written in place.
+- qwen35_cpu.cr: `delta_net_step!` extracted as top-level module fn (callable from specs as CPU reference). `LayerState.ssm_state_buf : ML::MetalBuffer?` added alongside `ssm_state : Array(Float32)?`. `delta_net_step_routed` picks whichever backend is available on first call and populates the matching field; later calls for that LayerState reuse the same backend — the two fields never coexist.
+- spec/qwen35_deltanet_spec.cr updated: tests read SSM state via backend-agnostic helper `ssm_state_as_array.call(ls, expected_size)` → `ls.ssm_state_buf.read(n) ?? ls.ssm_state.not_nil!`.
+**builds_on:** [LM-claude-PHASE4a-VERIFIED]
+**unblocks:** [Phase 3a: Metal attention — now the critical path at ~18%, Phase 4: fused kernels + ComputeGraph]
+**note:** Per-call q/k/v/g/β/out buffer allocation (small, 1–4 KB per layer) is probably wasteful at 24 layers × decode step; a persistent set of scratch buffers in `Qwen35Metal` is a cheap Phase 4 win. The `h_v=32` threadgroup dispatch leaves most of the M2 Max (30 cores × 4 concurrent TGs ≈ 120 TGs) idle per layer — likely why the kernel is still 2.3 ms/layer despite being tiny (128³ fma ≈ 2 Mops). Fusing across layers or across the two halves of the step would help.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)

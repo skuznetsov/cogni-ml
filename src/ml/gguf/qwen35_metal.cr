@@ -68,11 +68,13 @@ module ML
       {% else %}
         GEMM_Q4K_SOURCE  = {{ read_file("#{__DIR__}/kernels/gemm_q4k.metal") }}
         GEMM_Q56K_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }}
+        DELTA_NET_SOURCE = {{ read_file("#{__DIR__}/kernels/delta_net.metal") }}
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
         @@mm_pipeline   : ML::Metal::ComputePipeline?
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
+        @@dn_pipeline   : ML::Metal::ComputePipeline?
 
         # Whole-mmap MetalBuffer. Registered once per model load via
         # `register_mmap`. All weights whose `raw` bytes are slices
@@ -157,6 +159,66 @@ module ML
           @@mv6_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_f32", GEMM_Q56K_SOURCE)
           }
+        end
+
+        private def self.dn_pipeline : ML::Metal::ComputePipeline
+          @@dn_pipeline ||= ML::Metal::PipelineCache.get("delta_net_step") {
+            ML::Metal::ComputePipeline.new("delta_net_step", DELTA_NET_SOURCE)
+          }
+        end
+
+        # DeltaNet / GatedDeltaRule step on Metal.
+        #
+        # `state_buf` holds `h_v * s * s` floats in layout [h, d2, d1]
+        # and is updated in place. `ghead[h]` is the pre-computed decay
+        # multiplier (caller does `exp(softplus(...) * ssm_a[h])`);
+        # `beta[h]` is already sigmoid'd.
+        #
+        # Returns the output `y` as `Array(Float32)` of length `h_v * s`.
+        # NOTE: uploads inputs, dispatches, downloads output each call.
+        # State stays GPU-resident across calls via `state_buf`.
+        def self.delta_net_step(state_buf : ML::MetalBuffer,
+                                q_conv : Array(Float32),
+                                k_conv : Array(Float32),
+                                v_conv : Array(Float32),
+                                ghead : Array(Float32),
+                                beta : Array(Float32),
+                                h_k : Int32, h_v : Int32, s : Int32,
+                                scale : Float32) : Array(Float32)
+          ML::Metal::Device.init!
+
+          q_buf  = ML::MetalBuffer.new(q_conv.size.to_i64 * sizeof(Float32))
+          k_buf  = ML::MetalBuffer.new(k_conv.size.to_i64 * sizeof(Float32))
+          v_buf  = ML::MetalBuffer.new(v_conv.size.to_i64 * sizeof(Float32))
+          g_buf  = ML::MetalBuffer.new(ghead.size.to_i64 * sizeof(Float32))
+          b_buf  = ML::MetalBuffer.new(beta.size.to_i64  * sizeof(Float32))
+          out_buf = ML::MetalBuffer.new((h_v * s).to_i64 * sizeof(Float32))
+
+          q_buf.write(q_conv)
+          k_buf.write(k_conv)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(dn_pipeline)
+          enc.set_buffer(state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          enc.set_buffer(q_buf,     1)
+          enc.set_buffer(k_buf,     2)
+          enc.set_buffer(v_buf,     3)
+          enc.set_buffer(g_buf,     4)
+          enc.set_buffer(b_buf,     5)
+          enc.set_buffer(out_buf,   6, ML::Metal::BufferAccess::Write)
+          enc.set_value(h_k.to_u32,  7)
+          enc.set_value(h_v.to_u32,  8)
+          enc.set_value(s.to_u32,    9)
+          enc.set_value(scale,      10)
+          enc.dispatch_threadgroups({h_v, 1, 1}, {32, 1, 1})
+          enc.end_encoding
+          cmd.commit_and_wait
+
+          out_buf.read(h_v * s)
         end
 
         # Shared GEMV machinery: takes pre-allocated weight buffer and a
