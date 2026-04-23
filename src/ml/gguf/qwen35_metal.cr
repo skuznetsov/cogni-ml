@@ -78,6 +78,98 @@ module ML
         @@dn_pipeline   : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
 
+        # ── Phase 4.0 instrumentation ─────────────────────────────────
+        # Counters and nanosecond timers broken down by dispatch type
+        # and phase (encode / wait / read). Enable with Profile.enable!
+        # before a region, query with Profile.report, reset between runs.
+        module Profile
+          @@enabled = false
+          @@gemv_count    = 0_i64
+          @@gemm_count    = 0_i64
+          @@dn_count      = 0_i64
+          @@attn_count    = 0_i64
+          @@cpu_fallback  = 0_i64
+          @@gemv_encode_ns = 0_i64
+          @@gemv_wait_ns   = 0_i64
+          @@gemv_read_ns   = 0_i64
+          @@gemm_wait_ns   = 0_i64
+          @@dn_encode_ns   = 0_i64
+          @@dn_wait_ns     = 0_i64
+          @@dn_read_ns     = 0_i64
+          @@attn_encode_ns = 0_i64
+          @@attn_wait_ns   = 0_i64
+          @@attn_read_ns   = 0_i64
+
+          def self.enabled? : Bool; @@enabled end
+          def self.enable!  : Nil ; @@enabled = true end
+          def self.disable! : Nil ; @@enabled = false end
+
+          def self.reset : Nil
+            @@gemv_count = @@gemm_count = @@dn_count = @@attn_count = 0_i64
+            @@cpu_fallback = 0_i64
+            @@gemv_encode_ns = @@gemv_wait_ns = @@gemv_read_ns = 0_i64
+            @@gemm_wait_ns = 0_i64
+            @@dn_encode_ns = @@dn_wait_ns = @@dn_read_ns = 0_i64
+            @@attn_encode_ns = @@attn_wait_ns = @@attn_read_ns = 0_i64
+          end
+
+          # Sampling hooks — cheap branches, no-op when disabled.
+          def self.bump_gemv(encode_ns : Int64, wait_ns : Int64, read_ns : Int64)
+            return unless @@enabled
+            @@gemv_count += 1
+            @@gemv_encode_ns += encode_ns
+            @@gemv_wait_ns   += wait_ns
+            @@gemv_read_ns   += read_ns
+          end
+
+          def self.bump_gemm(wait_ns : Int64)
+            return unless @@enabled
+            @@gemm_count += 1
+            @@gemm_wait_ns += wait_ns
+          end
+
+          def self.bump_dn(encode_ns : Int64, wait_ns : Int64, read_ns : Int64)
+            return unless @@enabled
+            @@dn_count += 1
+            @@dn_encode_ns += encode_ns
+            @@dn_wait_ns   += wait_ns
+            @@dn_read_ns   += read_ns
+          end
+
+          def self.bump_attn(encode_ns : Int64, wait_ns : Int64, read_ns : Int64)
+            return unless @@enabled
+            @@attn_count += 1
+            @@attn_encode_ns += encode_ns
+            @@attn_wait_ns   += wait_ns
+            @@attn_read_ns   += read_ns
+          end
+
+          def self.bump_cpu_fallback : Nil
+            return unless @@enabled
+            @@cpu_fallback += 1
+          end
+
+          def self.report_io : String
+            String.build do |s|
+              total_syncs = @@gemv_count + @@gemm_count + @@dn_count + @@attn_count
+              s << "── Qwen35Metal.Profile report ──\n"
+              s << sprintf("  gemv:  %d calls  encode %.2f ms  wait %.2f ms  read %.2f ms\n",
+                           @@gemv_count, @@gemv_encode_ns / 1_000_000.0,
+                           @@gemv_wait_ns / 1_000_000.0, @@gemv_read_ns / 1_000_000.0)
+              s << sprintf("  gemm:  %d calls  wait %.2f ms\n",
+                           @@gemm_count, @@gemm_wait_ns / 1_000_000.0)
+              s << sprintf("  dn:    %d calls  encode %.2f ms  wait %.2f ms  read %.2f ms\n",
+                           @@dn_count, @@dn_encode_ns / 1_000_000.0,
+                           @@dn_wait_ns / 1_000_000.0, @@dn_read_ns / 1_000_000.0)
+              s << sprintf("  attn:  %d calls  encode %.2f ms  wait %.2f ms  read %.2f ms\n",
+                           @@attn_count, @@attn_encode_ns / 1_000_000.0,
+                           @@attn_wait_ns / 1_000_000.0, @@attn_read_ns / 1_000_000.0)
+              s << sprintf("  cpu_fallback matvecs: %d\n", @@cpu_fallback)
+              s << sprintf("  total metal syncs: %d\n", total_syncs)
+            end
+          end
+        end
+
         # Whole-mmap MetalBuffer. Registered once per model load via
         # `register_mmap`. All weights whose `raw` bytes are slices
         # inside this region dispatch against it with a byte offset —
@@ -189,6 +281,7 @@ module ML
                              scale : Float32) : Array(Float32)
           ML::Metal::Device.init!
 
+          t0 = Time.instant if Profile.enabled?
           q_dim    = n_head * head_dim
           q_buf    = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
           gate_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
@@ -214,9 +307,20 @@ module ML
           enc.set_value(scale,                 10)
           enc.dispatch_threadgroups({n_head, 1, 1}, {32, 1, 1})
           enc.end_encoding
-          cmd.commit_and_wait
-
-          out_buf.read(q_dim)
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = out_buf.read(q_dim)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_attn(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
         end
 
         # DeltaNet / GatedDeltaRule step on Metal.
@@ -239,6 +343,7 @@ module ML
                                 scale : Float32) : Array(Float32)
           ML::Metal::Device.init!
 
+          t0 = Time.instant if Profile.enabled?
           q_buf  = ML::MetalBuffer.new(q_conv.size.to_i64 * sizeof(Float32))
           k_buf  = ML::MetalBuffer.new(k_conv.size.to_i64 * sizeof(Float32))
           v_buf  = ML::MetalBuffer.new(v_conv.size.to_i64 * sizeof(Float32))
@@ -268,9 +373,20 @@ module ML
           enc.set_value(scale,      10)
           enc.dispatch_threadgroups({h_v, 1, 1}, {32, 1, 1})
           enc.end_encoding
-          cmd.commit_and_wait
-
-          out_buf.read(h_v * s)
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = out_buf.read(h_v * s)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_dn(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
         end
 
         # Shared GEMV machinery: takes pre-allocated weight buffer and a
@@ -283,6 +399,7 @@ module ML
                                          in_dim : Int32,
                                          out_dim : Int32,
                                          batch : Int32) : Array(Float32)
+          t0 = Time.instant if Profile.enabled?
           x_buf = ML::MetalBuffer.new(x.size.to_i64 * sizeof(Float32))
           x_buf.write(x)
 
@@ -301,9 +418,20 @@ module ML
           grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, batch, 1}
           enc.dispatch_threadgroups(grid, {32 * MV_NSG, 1, 1})
           enc.end_encoding
-          cmd.commit_and_wait
-
-          out_buf.read(batch * out_dim)
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = out_buf.read(batch * out_dim)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
         end
 
         # Q4_K-specific GEMM path (prefill batch > threshold). Takes
@@ -336,9 +464,17 @@ module ML
           }
           enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
           enc.end_encoding
-          cmd.commit_and_wait
-
-          out_buf.read(batch * out_dim)
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = out_buf.read(batch * out_dim)
+          if Profile.enabled?
+            Profile.bump_gemm(
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
         end
 
         # Upload w_raw into a fresh MetalBuffer (test + one-shot paths).

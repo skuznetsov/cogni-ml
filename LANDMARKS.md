@@ -463,6 +463,53 @@ Rich landmarks include full State/Relations/Evidence structure.
 **unblocks:** [Phase 3.5: state save/load, Phase 4: fused kernels]
 **note:** Attention is now ~18% at short context (pos<64) and dominates the remaining CPU/GPU disparity at long context. Per-call q/gate/out allocation can be pooled in Phase 4 (same pattern as DeltaNet). The `kv_dim.times { k_ptr[i] = k[i] }` write is a small trivial CPU loop inside the decode step — could be fused into a Metal compute shader once K/V projections themselves land on GPU. Phase 4 fusion (qkv gemm → rope → kv-write → attn → gate → o_proj) is the next big lever vs llama.cpp.
 
+### [LM-claude-PHASE4.0-VERIFIED] Instrumentation — sync overhead is the dominant cost
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 4.0 — bottleneck identification)
+**evidence:**
+- claim: "At pos=6+, wall clock 96.8 ms/tok on 9B Q4_K_M. Per-token Metal dispatches: 201 gemv + 24 delta_net + 8 attn = 233 sync barriers. gemv wait 60.5 ms (62%), dn wait 12.9 ms (13%), attn wait 2.0 ms (2%), encode total 5.8 ms (6%), read total 2.9 ms (3%). Remaining ~12.7 ms is CPU glue (norm/activations) + 48/tok CPU-fallback matvecs below Metal size threshold."
+  source: bin/qwen35_sync_profile 5 10 2026-04-23 (Qwen35Metal::Profile instrumentation)
+  verified_at: 2026-04-23
+  decay_trigger: forward path changes dispatch count or adds batching
+- claim: "Per-gemv wait = 301 μs (kernel exec + commit/sync overhead). Encode = 23 μs/dispatch (setup only). Sync overhead per barrier ≈ 100–150 μs based on kernel-size estimate."
+  source: same profiler run
+  verified_at: 2026-04-23
+  decay_trigger: batched-submission landing
+- claim: "All 70 specs still pass with the no-op-when-disabled Profile hooks added to matmul_gemv_buf / matmul_q4k_gemm_buf / delta_net_step / attn_decode."
+  source: make spec 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: dispatch paths refactored
+**architecture:**
+- qwen35_metal.cr `Qwen35Metal::Profile` submodule: module-level counters + ns accumulators for gemv/gemm/dn/attn, split into encode (everything up to end_encoding), wait (commit→wait), read (out_buf.read). `Profile.enable!` / `Profile.disable!` / `Profile.reset` / `Profile.report_io`. Each bump checks `@@enabled` first; disabled path is a branch-and-return, ~1 ns.
+- All four Metal dispatch sites changed from `cmd.commit_and_wait` to `cmd.commit; cmd.wait` sandwiched by `Time.instant` markers; the commit/wait split lets us measure synchronization cost vs kernel compute cost separately in future phases.
+- `metal_matvec_or_nil` in qwen35_cpu.cr bumps `Profile.cpu_fallback` when size thresholds or availability rule out Metal, quantifying how much work is missing the GPU.
+- bin/qwen35_sync_profile: prefills N tokens then runs n_runs decode steps with Profile enabled, prints the report + wall clock.
+**builds_on:** [LM-claude-PHASE3a-VERIFIED]
+**unblocks:** [Phase 4.1: batched command buffer, Phase 4.2–4.4]
+**note:** Bedrock found. The decode step is **sync-bound**, not compute-bound. 233 `commit_and_wait` barriers dominate the budget at ~150 μs sync overhead each. Phase 4.1 (single command buffer per token) predicts ~35 ms/tok saved → ~62 ms/tok. CPU-fallback count (48/tok) hints that small matmuls (k_norm, β projection) are round-tripping to CPU — Phase 4.4 will move them to GPU. The fact that Metal's `attn` kernel is only 2% of budget (vs CPU attn at ~10%) means Phase 3a's real benefit was already captured by enabling the batched-dispatch opportunity for attention, not the raw kernel win; long-context benefit remains as measured in [LM-claude-PHASE3a-VERIFIED].
+
+### [LM-claude-PHASE4-PLAN-v2] Phase 4 plan revision — evidence-driven
+**status:** proposed
+**trust:** {F:0.7, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 4 — close gap to bandwidth floor)
+**target:** approach 12.5 ms/tok theoretical floor (M2 Max, 400 GB/s, 5 GB Q4_K_M model). Prior mandate ≤20.7 ms/tok; user escalation (2026-04-23) to maximalist target near the floor.
+**evidence:**
+- claim: "Phase 4 split into 4.0/4.1/4.2/4.3/4.4 with testable hypotheses at each step, based on the Phase 4.0 instrumentation findings."
+  source: Quadrumvirate discussion with user 2026-04-23; prediction anchored in 233-sync / 150-μs-sync-overhead measurement
+  verified_at: 2026-04-23 (plan; steps to be verified individually)
+  decay_trigger: plan revised after a phase reveals different bottleneck
+**plan:**
+- **4.0** (done): instrument Metal dispatches; confirm sync-bound.
+- **4.1**: single command buffer per token — encode all 233 dispatches, one commit+wait. Hypothesis: save ≥25 ms/tok. Risk: command buffer size limits, dependency tracking between kernels.
+- **4.2**: persistent scratch buffers (DeltaNet q/k/v/g/β/out, attn q/gate/out, matmul x_buf/out_buf). Hypothesis: save ~5 ms/tok from MetalBuffer.new + free + zero on every dispatch.
+- **4.3**: kernel fusion — rms_norm+projection, pre-attn (K/V projection + position write), post-attn (gate+o_proj). Hypothesis: reduce dispatch count from 233 to ~80–120 and remove readback of intermediates.
+- **4.4**: move remaining CPU glue to GPU — rms_norm (currently CPU), softplus/sigmoid (currently CPU), small matmuls below threshold. Eliminate all 48 cpu_fallback matvecs per token. Hypothesis: close remaining gap and enable full single-command-buffer flow.
+**guard rails:**
+- After each step: re-run `bin/qwen35_sync_profile` to quantify the gain + catch regressions.
+- After each step: run `make spec` + `./ml "The capital of France is" 5` to confirm output unchanged.
+- Quadrumvirate (Cassandra/Daedalus/Maieutic/Adversary) before starting and after completing each sub-phase.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)

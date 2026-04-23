@@ -335,8 +335,14 @@ module ML::GGUF
       {% if flag?(:cpu_only) %}
         nil
       {% else %}
-        return nil if qw.out_dim < METAL_QK_MIN_OUT || qw.in_dim < METAL_QK_MIN_IN
-        return nil unless Qwen35Metal.available?
+        if qw.out_dim < METAL_QK_MIN_OUT || qw.in_dim < METAL_QK_MIN_IN
+          Qwen35Metal::Profile.bump_cpu_fallback
+          return nil
+        end
+        unless Qwen35Metal.available?
+          Qwen35Metal::Profile.bump_cpu_fallback
+          return nil
+        end
         Qwen35Metal.matmul(qw, x, 1)
       {% end %}
     end
