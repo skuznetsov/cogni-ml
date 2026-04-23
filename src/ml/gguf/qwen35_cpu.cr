@@ -1,6 +1,7 @@
 require "./qwen35_meta"
 require "./qwen35_weights"
 require "./quant_matmul"
+require "./qwen35_metal"
 
 # Qwen 3.5 / 3.6 CPU reference forward pass.
 #
@@ -153,17 +154,46 @@ module ML::GGUF
       len.times { |i| x[offset + i] *= inv }
     end
 
+    # Threshold: use Metal for Q4_K only when the op is large enough to
+    # amortize upload/download overhead. Tiny matmuls (e.g. ssm_alpha
+    # 4096→32) stay on CPU.
+    METAL_Q4K_MIN_OUT = 256
+    METAL_Q4K_MIN_IN  = 256
+
+    private def use_metal_q4k?(qw : QuantWeight) : Bool
+      {% if flag?(:cpu_only) %}
+        false
+      {% else %}
+        qw.type.q4_k? &&
+          qw.out_dim >= METAL_Q4K_MIN_OUT &&
+          qw.in_dim >= METAL_Q4K_MIN_IN &&
+          Qwen35Metal.available?
+      {% end %}
+    end
+
     # Quantized matvec — wrapper that routes to QuantMatmul for a single row.
     # result = bias + W @ x, where W is [out_dim, in_dim] stored row-major.
     def qmatvec(qw : QuantWeight, x : Array(Float32), bias : Array(Float32)? = nil) : Array(Float32)
-      b = bias || Array(Float32).new(qw.out_dim, 0.0_f32)
-      QuantMatmul.matmul_add(x, 1, qw.in_dim, qw.raw, qw.type, qw.out_dim, b)
+      if use_metal_q4k?(qw)
+        out = Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
+        if bias
+          out.size.times { |i| out[i] += bias[i] }
+        end
+        out
+      else
+        b = bias || Array(Float32).new(qw.out_dim, 0.0_f32)
+        QuantMatmul.matmul_add(x, 1, qw.in_dim, qw.raw, qw.type, qw.out_dim, b)
+      end
     end
 
     # Same but without bias (save the allocation when we know bias=0).
     def qmatvec_nobias(qw : QuantWeight, x : Array(Float32)) : Array(Float32)
-      zero = Array(Float32).new(qw.out_dim, 0.0_f32)
-      QuantMatmul.matmul_add(x, 1, qw.in_dim, qw.raw, qw.type, qw.out_dim, zero)
+      if use_metal_q4k?(qw)
+        Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
+      else
+        zero = Array(Float32).new(qw.out_dim, 0.0_f32)
+        QuantMatmul.matmul_add(x, 1, qw.in_dim, qw.raw, qw.type, qw.out_dim, zero)
+      end
     end
 
     # ─────────────────────────────────────────────────────────────────────
