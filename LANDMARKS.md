@@ -240,6 +240,20 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-22
   decay_trigger: user revises target
 
+### [LM-claude-WEIGHTS-1] Qwen35 weight loader structures layer types
+**status:** verified
+**trust:** {F:0.9, G:high, R:0.9}
+**context:** ml (Qwen port, Phase 1b.1)
+**evidence:**
+- claim: "Qwen35Weights.from_gguf loads 9B: 32 layers dispatched as 8 full-attn + 24 recurrent. Tensor shapes match Qwen35Hparams (attn_q=[4096,8192] combined Q+gate; attn_qkv=[4096,8192] recurrent; ssm_conv1d=[4,8192] covers full q+k+v)"
+  source: spec/qwen35_weights_spec.cr, loaded from Qwen3.5-9B-Q4_K_M.gguf
+  verified_at: 2026-04-22
+  decay_trigger: tensor name convention changes OR hparams struct changes
+- claim: "ssm_conv1d channel count 8192 = 2*num_k_heads*state + num_v_heads*state (full q+k+v stream), NOT just 2*num_k_heads*state as one might infer from Mamba-style conv. Relevant for Phase 1b.4 DeltaNet CPU reference."
+  source: dims inspection on blk.0.ssm_conv1d vs hparams derivation
+  verified_at: 2026-04-22
+  decay_trigger: N/A
+
 ### [LM-claude-Q4K-CPU-VERIFIED] Q4_K CPU path bit-identical to llama.cpp
 **status:** verified
 **trust:** {F:1.0, G:medium, R:1.0}
