@@ -303,6 +303,31 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-22
   decay_trigger: GGUF spec changes (extremely unlikely)
 
+### [LM-claude-PHASE2-VERIFIED] Metal Q4_K matmul (GEMV+GEMM) correct and fast
+**status:** verified
+**trust:** {F:0.9, G:0.6, R:0.9}
+**context:** ml (Qwen port, Phase 2 — standalone Metal kernel, not integrated into BERT compute graph)
+**evidence:**
+- claim: "simd_mv_q4k_f32 (GEMV, batch=1, 4096→12288 Q4_K ffn_up): cos=1.0, max|Δ|=3.28e-7 vs CPU matmul_add reference"
+  source: spec/qwen35_metal_spec.cr on blk.0.ffn_up.weight
+  verified_at: 2026-04-23
+  decay_trigger: kernels/gemm_q4k.metal or qwen35_metal.cr modified
+- claim: "simd_mm_q4k_f32 (GEMM, batch=16, 4096→12288 Q4_K ffn_up): cos=1.0, max|Δ|=4.9e-4 vs CPU reference"
+  source: spec/qwen35_metal_spec.cr
+  verified_at: 2026-04-23
+  decay_trigger: kernels/gemm_q4k.metal modified
+- claim: "Inverse shape (12288→4096 Q4_K ffn_down) works: cos=1.0, max|Δ|=5.96e-7"
+  source: spec/qwen35_metal_spec.cr on blk.4.ffn_down.weight
+  verified_at: 2026-04-23
+  decay_trigger: kernel modified
+- claim: "Performance (M2 Max, includes upload+download overhead, warm): GEMV 8.8ms vs CPU 783ms = 89x; GEMM batch=16 7.1ms vs CPU 12540ms = 1766x. First-run JIT warmup adds ~120ms to pipeline compile."
+  source: spec output 2026-04-23 06:57
+  verified_at: 2026-04-23
+  decay_trigger: optimizations applied OR M-series architecture changes
+**builds_on:** [LM-claude-Q4K-CPU-VERIFIED]
+**unblocks:** [Phase 3a: Metal attention, Phase 3b: Metal Mamba]
+**note:** Auto-selects GEMV for batch≤8, GEMM for batch>8. F32 in/out (no GELU, no bias — unlike BERT path). Full-upload per call — persistent weight buffers are a Phase 4 optimization.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)
