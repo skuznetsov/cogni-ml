@@ -6,17 +6,22 @@ require "../src/ml/gguf/reader"
 
 QWEN_9B_METAL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
-# Borrow a real Q4_K weight from the 9B model and return its raw bytes +
-# dimensions. Uses the tensor info from the GGUF file to find the Q4_K slice.
-def q4k_tensor_bytes(model_path : String, name : String) : {Bytes, Int32, Int32}
+# Borrow a real quantized weight from the 9B model and return raw bytes
+# + dimensions. Caller asserts the expected TensorType.
+def quant_tensor_bytes(model_path : String, name : String,
+                       expected : ML::GGUF::TensorType) : {Bytes, Int32, Int32}
   g = ML::GGUF::GGUFFile.new(model_path)
   info = g.tensor(name).not_nil!
-  raise "expected Q4_K tensor, got #{info.type}" unless info.type.q4_k?
+  raise "expected #{expected} tensor, got #{info.type}" unless info.type == expected
   raw = g.read_tensor_raw(info)
   # GGUF dims are [in_dim, out_dim] for matmul weights (dims[0] innermost).
   in_dim = info.dims[0].to_i32
   out_dim = info.dims[1].to_i32
   {raw, in_dim, out_dim}
+end
+
+def q4k_tensor_bytes(model_path : String, name : String) : {Bytes, Int32, Int32}
+  quant_tensor_bytes(model_path, name, ML::GGUF::TensorType::Q4_K)
 end
 
 def cosine(a : Array(Float32), b : Array(Float32)) : Float64
@@ -113,6 +118,72 @@ describe ML::GGUF::Qwen35Metal do
     cos = cosine(gpu, cpu)
     diff = max_abs_diff(gpu, cpu)
     puts "  [metal_q4k_ffndown] cos=#{cos.round(6)}, max|Δ|=#{diff}"
+    cos.should be >= 0.9999
+  end
+
+  it "matmul_q5k GEMV matches CPU reference" do
+    w_raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_9B_METAL, "blk.0.attn_qkv.weight", ML::GGUF::TensorType::Q5_K)
+    rng = Random.new(11)
+    x = Array(Float32).new(in_dim) { rng.rand(-1.0_f32..1.0_f32) }
+    zero_bias = Array(Float32).new(out_dim, 0.0_f32)
+
+    t0 = Time.instant
+    gpu = ML::GGUF::Qwen35Metal.matmul_q5k(x, w_raw, in_dim, out_dim, 1)
+    dt_gpu = Time.instant - t0
+    t0 = Time.instant
+    cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, in_dim, w_raw, ML::GGUF::TensorType::Q5_K, out_dim, zero_bias)
+    dt_cpu = Time.instant - t0
+
+    cos = cosine(gpu, cpu)
+    diff = max_abs_diff(gpu, cpu)
+    puts "  [metal_q5k_gemv] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
+    puts "  [metal_q5k_gemv] cos=#{cos.round(6)}, max|Δ|=#{diff}  (#{in_dim}→#{out_dim})"
+    cos.should be >= 0.9999
+  end
+
+  it "matmul_q6k GEMV matches CPU reference (ffn_down)" do
+    w_raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_9B_METAL, "blk.0.ffn_down.weight", ML::GGUF::TensorType::Q6_K)
+    rng = Random.new(13)
+    x = Array(Float32).new(in_dim) { rng.rand(-1.0_f32..1.0_f32) }
+    zero_bias = Array(Float32).new(out_dim, 0.0_f32)
+
+    t0 = Time.instant
+    gpu = ML::GGUF::Qwen35Metal.matmul_q6k(x, w_raw, in_dim, out_dim, 1)
+    dt_gpu = Time.instant - t0
+    t0 = Time.instant
+    cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, in_dim, w_raw, ML::GGUF::TensorType::Q6_K, out_dim, zero_bias)
+    dt_cpu = Time.instant - t0
+
+    cos = cosine(gpu, cpu)
+    diff = max_abs_diff(gpu, cpu)
+    puts "  [metal_q6k_gemv] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
+    puts "  [metal_q6k_gemv] cos=#{cos.round(6)}, max|Δ|=#{diff}  (#{in_dim}→#{out_dim})"
+    cos.should be >= 0.9999
+  end
+
+  it "matmul_q6k GEMV matches CPU on lm_head shape (4096→248320)" do
+    w_raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_9B_METAL, "output.weight", ML::GGUF::TensorType::Q6_K)
+    in_dim.should eq(4096)
+    out_dim.should eq(248320)
+
+    rng = Random.new(17)
+    x = Array(Float32).new(in_dim) { rng.rand(-1.0_f32..1.0_f32) }
+    zero_bias = Array(Float32).new(out_dim, 0.0_f32)
+
+    t0 = Time.instant
+    gpu = ML::GGUF::Qwen35Metal.matmul_q6k(x, w_raw, in_dim, out_dim, 1)
+    dt_gpu = Time.instant - t0
+    t0 = Time.instant
+    cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, in_dim, w_raw, ML::GGUF::TensorType::Q6_K, out_dim, zero_bias)
+    dt_cpu = Time.instant - t0
+
+    cos = cosine(gpu, cpu)
+    diff = max_abs_diff(gpu, cpu)
+    puts "  [metal_q6k_lmhead] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
+    puts "  [metal_q6k_lmhead] cos=#{cos.round(6)}, max|Δ|=#{diff}"
     cos.should be >= 0.9999
   end
 end

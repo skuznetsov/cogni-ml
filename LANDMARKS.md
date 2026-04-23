@@ -303,6 +303,35 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-22
   decay_trigger: GGUF spec changes (extremely unlikely)
 
+### [LM-claude-PHASE2_6-VERIFIED] Metal Q4_K + Q5_K + Q6_K matmul, integrated
+**status:** verified
+**trust:** {F:0.9, G:0.6, R:0.9}
+**context:** ml (Qwen port, Phase 2.5+2.6)
+**evidence:**
+- claim: "Metal Q5_K GEMV (4096→8192 attn_qkv Q5_K): cos=1.0, max|Δ|=1.10e-6 vs CPU reference; 63ms GPU vs 711ms CPU = 11× (small matmul)"
+  source: spec/qwen35_metal_spec.cr 2026-04-23 07:08
+  verified_at: 2026-04-23
+  decay_trigger: kernels/gemm_q56k.metal or qwen35_metal.cr modified
+- claim: "Metal Q6_K GEMV (12288→4096 ffn_down Q6_K): cos=1.0, max|Δ|=4.77e-7; 8ms GPU vs 1080ms CPU = 135×"
+  source: spec/qwen35_metal_spec.cr
+  verified_at: 2026-04-23
+  decay_trigger: kernel modified
+- claim: "Metal Q6_K GEMV on lm_head (4096→248320 Q6_K, 796 MB tensor): cos=1.0, max|Δ|=3.58e-7; 143ms GPU vs 21867ms CPU = 152×"
+  source: spec/qwen35_metal_spec.cr
+  verified_at: 2026-04-23
+  decay_trigger: kernel modified
+- claim: "End-to-end decoder forward on Qwen 3.5 9B: 665 ms/token (vs 137 s/token in Phase 1b CPU = 206×). 80% of weights now on Metal (Q4_K+Q5_K+Q6_K), only tiny Q4_K ssm_alpha and all non-matmul ops remain on CPU."
+  source: bin/qwen35_profile.cr single-token timing 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: qwen35_cpu.cr or metal kernels changed
+- claim: "Output on prompt 'The capital of France is' unchanged: still generates ' Paris.\\n'"
+  source: bin/qwen35_generate.cr 2026-04-23 07:09
+  verified_at: 2026-04-23
+  decay_trigger: kernel modified or qmatvec logic changed
+**builds_on:** [LM-claude-PHASE2-VERIFIED]
+**unblocks:** [Phase 4: persistent buffers, Phase 3: attention/Mamba Metal]
+**note:** Q5_K/Q6_K GEMV only (batch=1). Prefill for these types still on CPU. Persistent weight buffers (avoid per-call upload) are the biggest remaining single win — ~800 MB lm_head re-uploaded every token.
+
 ### [LM-claude-PHASE2-VERIFIED] Metal Q4_K matmul (GEMV+GEMM) correct and fast
 **status:** verified
 **trust:** {F:0.9, G:0.6, R:0.9}

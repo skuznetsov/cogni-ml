@@ -154,28 +154,34 @@ module ML::GGUF
       len.times { |i| x[offset + i] *= inv }
     end
 
-    # Threshold: use Metal for Q4_K only when the op is large enough to
-    # amortize upload/download overhead. Tiny matmuls (e.g. ssm_alpha
-    # 4096→32) stay on CPU.
-    METAL_Q4K_MIN_OUT = 256
-    METAL_Q4K_MIN_IN  = 256
+    # Threshold: only use Metal when the op is large enough to amortize
+    # upload/download overhead. Tiny matmuls (e.g. ssm_alpha 4096→32)
+    # stay on CPU.
+    METAL_QK_MIN_OUT = 256
+    METAL_QK_MIN_IN  = 256
 
-    private def use_metal_q4k?(qw : QuantWeight) : Bool
+    # Try to run a GEMV (batch=1) on Metal if the type is supported and
+    # the op is large enough. Returns `nil` if the call should fall back
+    # to CPU.
+    private def metal_matvec_or_nil(qw : QuantWeight, x : Array(Float32)) : Array(Float32)?
       {% if flag?(:cpu_only) %}
-        false
+        nil
       {% else %}
-        qw.type.q4_k? &&
-          qw.out_dim >= METAL_Q4K_MIN_OUT &&
-          qw.in_dim >= METAL_Q4K_MIN_IN &&
-          Qwen35Metal.available?
+        return nil if qw.out_dim < METAL_QK_MIN_OUT || qw.in_dim < METAL_QK_MIN_IN
+        return nil unless Qwen35Metal.available?
+        case
+        when qw.type.q4_k? then Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
+        when qw.type.q5_k? then Qwen35Metal.matmul_q5k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
+        when qw.type.q6_k? then Qwen35Metal.matmul_q6k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
+        else                    nil
+        end
       {% end %}
     end
 
     # Quantized matvec — wrapper that routes to QuantMatmul for a single row.
     # result = bias + W @ x, where W is [out_dim, in_dim] stored row-major.
     def qmatvec(qw : QuantWeight, x : Array(Float32), bias : Array(Float32)? = nil) : Array(Float32)
-      if use_metal_q4k?(qw)
-        out = Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
+      if (out = metal_matvec_or_nil(qw, x))
         if bias
           out.size.times { |i| out[i] += bias[i] }
         end
@@ -188,8 +194,8 @@ module ML::GGUF
 
     # Same but without bias (save the allocation when we know bias=0).
     def qmatvec_nobias(qw : QuantWeight, x : Array(Float32)) : Array(Float32)
-      if use_metal_q4k?(qw)
-        Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
+      if (out = metal_matvec_or_nil(qw, x))
+        out
       else
         zero = Array(Float32).new(qw.out_dim, 0.0_f32)
         QuantMatmul.matmul_add(x, 1, qw.in_dim, qw.raw, qw.type, qw.out_dim, zero)
