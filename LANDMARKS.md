@@ -536,6 +536,32 @@ Rich landmarks include full State/Relations/Evidence structure.
 **builds_on:** [LM-claude-PHASE4.0-VERIFIED]
 **insight:** Predicted 48×150μs = 7 ms saved from sync count alone. Measured 18 ms — ~11 ms extra comes from reduced Metal state transitions and amortized encoder setup. Single-run measurement was misleading (126 ms regression vanished under interleaved A/B). Lesson: for sub-20ms effects on a thermally-constrained laptop, paired interleaved trials are mandatory.
 
+### [LM-claude-PHASE4.2-VERIFIED] Persistent Metal scratch pool — 9.6 ms/tok saved
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 4 — cut per-dispatch allocator churn)
+**result:** per-dispatch scratch buffers (q/gate/out for attn_decode, q/k/v/g/b/out for delta_net, x/out for matmul_gemv/gemm, x + up-to-8 out slots for matmul_many) are now allocated once on first use and reused per `(tag, size)` key. Cuts the ~550 `MetalBuffer.new`+`finalize` pairs per token to effectively zero steady-state. **Saves ~9.6 ms/tok** (17 cool paired trials, 15/17 wins, paired t=-3.75, p≈0.0017). Long-context pos=257 recurrent stack: 70 vs 83 ms (~15%).
+**evidence:**
+- claim: "4.2 saves ~9.57 ms/tok (mean paired diff over 17 interleaved cool trials, 10% faster)"
+  source: `./bin/qwen35_sync_profile 5 10` interleaved with `QWEN35_SCRATCH_OFF=1` toggle
+  verified_at: 2026-04-23
+  decay_trigger: Phase 4.3 (kernel fusion) consolidates scratch shapes; Phase 4.4 eliminates CPU→Metal upload sites
+- claim: "correctness preserved — 70/70 specs, top logit 11.423702 unchanged, attn_decode cos=1.0 max|Δ|=4.47e-8"
+  source: `make spec` after implementation
+  verified_at: 2026-04-23
+  decay_trigger: kernel code changes
+- claim: "thermal throttling above ~100 ms/tok regime masks the effect — 4.2 ON even appeared slower than OFF under sustained load (T14-T16 hit 103/126/145 ms)"
+  source: A/B trials T14-T16 under sustained load; recovery on cool-down at T17-T20
+  verified_at: 2026-04-23
+  decay_trigger: machine changes / ambient temperature changes
+**implementation:**
+- `Qwen35Metal::Scratch.get(tag, bytes)` — `{Symbol, Int64}`-keyed Hash lookup; miss allocates `ML::MetalBuffer.new` and inserts; `ENV["QWEN35_SCRATCH_OFF"]="1"` bypasses.
+- `MANY_SLOT_TAGS` array of 8 per-slot tags for `matmul_many` output buffers (must not alias within one encoder).
+- Replaced 10 call-site `MetalBuffer.new` allocations: attn_decode(3), delta_net_step(6), matmul_gemv_buf(2), matmul_q4k_gemm_buf(2), matmul_many(1 x + N out).
+- `upload_weights` (test-only path) intentionally left unchanged — called once, not per token.
+**builds_on:** [LM-claude-PHASE4.1a-VERIFIED]
+**insight:** Predicted 500 allocs × ~10 μs = 5 ms/tok. Measured 9.6 ms — the extra likely comes from `finalize` / ARC release work on the old buffers, which amortizes outside Metal timing but shows up in wall clock. Thermal throttling above ~100 ms/tok swamped the signal; cool-trial filtering was necessary to extract a clean measurement.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)

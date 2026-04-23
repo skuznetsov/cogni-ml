@@ -170,6 +170,58 @@ module ML
           end
         end
 
+        # Per-slot tags for `matmul_many` output buffers. Multiple outputs
+        # are bound into one compute encoder, so they must not alias.
+        # Add more tags here if a batched dispatch ever grows past 8.
+        MANY_SLOT_TAGS = [
+          :mv_many_out_0,
+          :mv_many_out_1,
+          :mv_many_out_2,
+          :mv_many_out_3,
+          :mv_many_out_4,
+          :mv_many_out_5,
+          :mv_many_out_6,
+          :mv_many_out_7,
+        ]
+
+        # ── Phase 4.2 scratch pool ─────────────────────────────────────
+        # Persistent per-dispatch scratch buffers keyed by (tag, bytes).
+        # Each dispatch-site tag names a buffer slot that must not alias
+        # another buffer alive in the same command buffer. Sizes vary
+        # across call sites and layers, so key includes size; reuse
+        # within a key is a cache hit. Buffers live until `clear`.
+        module Scratch
+          @@pool : Hash({Symbol, Int64}, ML::MetalBuffer) = {} of {Symbol, Int64} => ML::MetalBuffer
+          @@hits   = 0_i64
+          @@misses = 0_i64
+
+          def self.get(tag : Symbol, byte_size : Int64) : ML::MetalBuffer
+            # A/B gate — when set, always allocate fresh (emulates pre-4.2).
+            if ENV["QWEN35_SCRATCH_OFF"]? == "1"
+              @@misses += 1
+              return ML::MetalBuffer.new(byte_size)
+            end
+            key = {tag, byte_size}
+            if buf = @@pool[key]?
+              @@hits += 1
+              return buf
+            end
+            @@misses += 1
+            buf = ML::MetalBuffer.new(byte_size)
+            @@pool[key] = buf
+            buf
+          end
+
+          def self.stats : {Int64, Int64}
+            {@@hits, @@misses}
+          end
+
+          def self.clear : Nil
+            @@pool.clear
+            @@hits = @@misses = 0_i64
+          end
+        end
+
         # Whole-mmap MetalBuffer. Registered once per model load via
         # `register_mmap`. All weights whose `raw` bytes are slices
         # inside this region dispatch against it with a byte offset —
@@ -283,9 +335,10 @@ module ML
 
           t0 = Time.instant if Profile.enabled?
           q_dim    = n_head * head_dim
-          q_buf    = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
-          gate_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
-          out_buf  = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+          q_bytes  = q_dim.to_i64 * sizeof(Float32)
+          q_buf    = Scratch.get(:attn_q,    q_bytes)
+          gate_buf = Scratch.get(:attn_gate, q_bytes)
+          out_buf  = Scratch.get(:attn_out,  q_bytes)
           q_buf.write(q)
           gate_buf.write(gate)
 
@@ -344,12 +397,12 @@ module ML
           ML::Metal::Device.init!
 
           t0 = Time.instant if Profile.enabled?
-          q_buf  = ML::MetalBuffer.new(q_conv.size.to_i64 * sizeof(Float32))
-          k_buf  = ML::MetalBuffer.new(k_conv.size.to_i64 * sizeof(Float32))
-          v_buf  = ML::MetalBuffer.new(v_conv.size.to_i64 * sizeof(Float32))
-          g_buf  = ML::MetalBuffer.new(ghead.size.to_i64 * sizeof(Float32))
-          b_buf  = ML::MetalBuffer.new(beta.size.to_i64  * sizeof(Float32))
-          out_buf = ML::MetalBuffer.new((h_v * s).to_i64 * sizeof(Float32))
+          q_buf  = Scratch.get(:dn_q,   q_conv.size.to_i64 * sizeof(Float32))
+          k_buf  = Scratch.get(:dn_k,   k_conv.size.to_i64 * sizeof(Float32))
+          v_buf  = Scratch.get(:dn_v,   v_conv.size.to_i64 * sizeof(Float32))
+          g_buf  = Scratch.get(:dn_g,   ghead.size.to_i64  * sizeof(Float32))
+          b_buf  = Scratch.get(:dn_b,   beta.size.to_i64   * sizeof(Float32))
+          out_buf = Scratch.get(:dn_out, (h_v * s).to_i64  * sizeof(Float32))
 
           q_buf.write(q_conv)
           k_buf.write(k_conv)
@@ -400,10 +453,10 @@ module ML
                                          out_dim : Int32,
                                          batch : Int32) : Array(Float32)
           t0 = Time.instant if Profile.enabled?
-          x_buf = ML::MetalBuffer.new(x.size.to_i64 * sizeof(Float32))
+          x_buf   = Scratch.get(:mv_x,   x.size.to_i64 * sizeof(Float32))
           x_buf.write(x)
 
-          out_buf = ML::MetalBuffer.new((batch * out_dim).to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:mv_out, (batch * out_dim).to_i64 * sizeof(Float32))
 
           cmd = ML::Metal::CommandBuffer.new
           enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -442,10 +495,10 @@ module ML
                                              in_dim : Int32,
                                              out_dim : Int32,
                                              batch : Int32) : Array(Float32)
-          x_buf = ML::MetalBuffer.new(x.size.to_i64 * sizeof(Float32))
+          x_buf   = Scratch.get(:mm_x,   x.size.to_i64 * sizeof(Float32))
           x_buf.write(x)
 
-          out_buf = ML::MetalBuffer.new((batch * out_dim).to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:mm_out, (batch * out_dim).to_i64 * sizeof(Float32))
 
           cmd = ML::Metal::CommandBuffer.new
           enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -579,11 +632,13 @@ module ML
           end
 
           t0 = Time.instant if Profile.enabled?
-          x_buf = ML::MetalBuffer.new(x.size.to_i64 * sizeof(Float32))
+          x_buf = Scratch.get(:mv_many_x, x.size.to_i64 * sizeof(Float32))
           x_buf.write(x)
 
+          # Per-slot tags so concurrently-alive outputs don't alias within
+          # one encoder. Up to MANY_SLOT_TAGS.size simultaneous outputs.
           out_bufs = Array(ML::MetalBuffer).new(qws.size) do |i|
-            ML::MetalBuffer.new(qws[i].out_dim.to_i64 * sizeof(Float32))
+            Scratch.get(MANY_SLOT_TAGS[i], qws[i].out_dim.to_i64 * sizeof(Float32))
           end
 
           cmd = ML::Metal::CommandBuffer.new
