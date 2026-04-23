@@ -30,6 +30,13 @@ module ML::GGUF
       property v_cache : Array(Float32)?
       property position : Int32 = 0  # number of cached tokens
 
+      # GPU-resident KV cache. Same layout as k_cache/v_cache (position-
+      # major). When Metal is available the full-attn path writes K/V
+      # straight into these buffers via `contents` (unified memory) and
+      # dispatches the Metal attention kernel against them.
+      property k_cache_buf : ML::MetalBuffer?
+      property v_cache_buf : ML::MetalBuffer?
+
       # DeltaNet: recurrent state
       # conv_state: [conv_kernel - 1, qkv_stream_dim] — past (kernel-1) token activations
       #   for the 1D conv (padded with zeros at start).
@@ -248,6 +255,79 @@ module ML::GGUF
       y
     end
 
+    # Append K, V to the layer's KV cache at `pos` and run gated GQA
+    # attention. On Metal: writes K/V into persistent MetalBuffers via
+    # unified-memory `contents` and dispatches `Qwen35Metal.attn_decode`.
+    # On CPU: allocates the Array caches lazily and runs the per-head
+    # dot-product / softmax / V-weighted-sum + sigmoid(gate) multiply.
+    # Returns gated attention output of length `n_head * head_dim`.
+    private def attn_decode_routed(lstate : LayerState,
+                                    q : Array(Float32), gate : Array(Float32),
+                                    k : Array(Float32), v : Array(Float32),
+                                    pos : Int32, n_head : Int32, n_head_kv : Int32,
+                                    head_dim : Int32, heads_per_group : Int32,
+                                    kv_dim : Int32, max_seq : Int32,
+                                    scale : Float32) : Array(Float32)
+      q_dim = n_head * head_dim
+      base  = pos * kv_dim
+
+      {% unless flag?(:cpu_only) %}
+        if Qwen35Metal.available? && ENV["QWEN35_ATTN_CPU"]? != "1"
+          bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+          k_buf = lstate.k_cache_buf
+          v_buf = lstate.v_cache_buf
+          if k_buf.nil?
+            k_buf = ML::MetalBuffer.new(bytes)
+            k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+            lstate.k_cache_buf = k_buf
+          end
+          if v_buf.nil?
+            v_buf = ML::MetalBuffer.new(bytes)
+            v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+            lstate.v_cache_buf = v_buf
+          end
+          k_ptr = k_buf.contents.as(Pointer(Float32)) + base
+          v_ptr = v_buf.contents.as(Pointer(Float32)) + base
+          kv_dim.times do |i|
+            k_ptr[i] = k[i]
+            v_ptr[i] = v[i]
+          end
+          return Qwen35Metal.attn_decode(q, gate, k_buf, v_buf,
+                                          pos, n_head, n_head_kv, head_dim,
+                                          heads_per_group, scale)
+        end
+      {% end %}
+
+      k_cache = lstate.k_cache ||= Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+      v_cache = lstate.v_cache ||= Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+      kv_dim.times do |i|
+        k_cache[base + i] = k[i]
+        v_cache[base + i] = v[i]
+      end
+
+      attn_o = Array(Float32).new(q_dim, 0.0_f32)
+      scores = Array(Float32).new(pos + 1, 0.0_f32)
+      n_head.times do |h|
+        kv_h  = h // heads_per_group
+        q_off = h * head_dim
+        (pos + 1).times do |p|
+          k_off = p * kv_dim + kv_h * head_dim
+          s = 0.0_f32
+          head_dim.times { |d| s += q[q_off + d] * k_cache[k_off + d] }
+          scores[p] = s * scale
+        end
+        softmax_slice!(scores, 0, pos + 1)
+        out_off = h * head_dim
+        (pos + 1).times do |p|
+          v_off = p * kv_dim + kv_h * head_dim
+          w = scores[p]
+          head_dim.times { |d| attn_o[out_off + d] += w * v_cache[v_off + d] }
+        end
+      end
+      q_dim.times { |i| attn_o[i] = attn_o[i] * sigmoid(gate[i]) }
+      attn_o
+    end
+
     # Try to run a GEMV (batch=1) on Metal if the type is supported and
     # the op is large enough. Returns `nil` if the call should fall back
     # to CPU.
@@ -365,44 +445,10 @@ module ML::GGUF
         rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
       end
 
-      # 7. Append K, V to cache at current position (allocate lazily)
-      k_cache = lstate.k_cache ||= Array(Float32).new(max_seq * kv_dim, 0.0_f32)
-      v_cache = lstate.v_cache ||= Array(Float32).new(max_seq * kv_dim, 0.0_f32)
-      base = pos * kv_dim
-      kv_dim.times do |i|
-        k_cache[base + i] = k[i]
-        v_cache[base + i] = v[i]
-      end
-
-      # 8. GQA attention
+      # 7. Append K, V to cache at current position + 8-9. GQA attention + gate.
       scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
-      attn_o = Array(Float32).new(q_dim, 0.0_f32)
-      scores = Array(Float32).new(pos + 1, 0.0_f32)
-
-      n_head.times do |h|
-        kv_h = h // heads_per_group
-        q_off = h * head_dim
-
-        # scores[p] = (Q_h · K[p, kv_h]) * scale
-        (pos + 1).times do |p|
-          k_off = p * kv_dim + kv_h * head_dim
-          s = 0.0_f32
-          head_dim.times { |d| s += q[q_off + d] * k_cache[k_off + d] }
-          scores[p] = s * scale
-        end
-
-        softmax_slice!(scores, 0, pos + 1)
-
-        out_off = h * head_dim
-        (pos + 1).times do |p|
-          v_off = p * kv_dim + kv_h * head_dim
-          w = scores[p]
-          head_dim.times { |d| attn_o[out_off + d] += w * v_cache[v_off + d] }
-        end
-      end
-
-      # 9. Multiply by sigmoid(gate) elementwise
-      q_dim.times { |i| attn_o[i] = attn_o[i] * sigmoid(gate[i]) }
+      attn_o = attn_decode_routed(lstate, q, gate, k, v, pos, n_head, n_head_kv,
+                                   head_dim, heads_per_group, kv_dim, max_seq, scale)
 
       # 10. Output projection
       attn_out = qmatvec_nobias(lw.attn_output_qw, attn_o)  # [n_embd]

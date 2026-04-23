@@ -7,6 +7,17 @@ QWEN_9B_FULLATTN = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qw
 describe ML::GGUF::Qwen35CPU, "full-attention layer forward" do
   pending!("9B model not present") unless File.exists?(QWEN_9B_FULLATTN)
 
+  # KV cache lives on whichever backend the routing helper picked up:
+  # Array on CPU, MetalBuffer on GPU. Cache fields are mutually exclusive.
+  read_kv = ->(ls : ML::GGUF::Qwen35CPU::LayerState, expected : Int32, pick_k : Bool) do
+    buf = pick_k ? ls.k_cache_buf : ls.v_cache_buf
+    if buf
+      buf.read(expected)
+    else
+      (pick_k ? ls.k_cache : ls.v_cache).not_nil!
+    end
+  end
+
   it "runs blk.3 (first full-attn layer) at pos=0 on embedding of token 0" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FULLATTN)
     hp = w.hparams
@@ -25,11 +36,12 @@ describe ML::GGUF::Qwen35CPU, "full-attention layer forward" do
 
     # KV cache should have been written at pos=0
     state.layers[3].position = 1  # bump for next call
-    kc = state.layers[3].k_cache.not_nil!
-    vc = state.layers[3].v_cache.not_nil!
     kv_dim = hp.head_dim * hp.n_head_kv
-    kc.size.should eq(64 * kv_dim)
-    vc.size.should eq(64 * kv_dim)
+    expected_size = 64 * kv_dim
+    kc = read_kv.call(state.layers[3], expected_size, true)
+    vc = read_kv.call(state.layers[3], expected_size, false)
+    kc.size.should eq(expected_size)
+    vc.size.should eq(expected_size)
 
     # Cache at pos=0 should be non-zero (values were written)
     nonzero_k = (0...kv_dim).count { |i| kc[i] != 0.0_f32 }

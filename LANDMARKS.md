@@ -428,6 +428,41 @@ Rich landmarks include full State/Relations/Evidence structure.
 **unblocks:** [Phase 3a: Metal attention — now the critical path at ~18%, Phase 4: fused kernels + ComputeGraph]
 **note:** Per-call q/k/v/g/β/out buffer allocation (small, 1–4 KB per layer) is probably wasteful at 24 layers × decode step; a persistent set of scratch buffers in `Qwen35Metal` is a cheap Phase 4 win. The `h_v=32` threadgroup dispatch leaves most of the M2 Max (30 cores × 4 concurrent TGs ≈ 120 TGs) idle per layer — likely why the kernel is still 2.3 ms/layer despite being tiny (128³ fma ≈ 2 Mops). Fusing across layers or across the two halves of the step would help.
 
+### [LM-claude-PHASE3a-VERIFIED] Metal gated attention decode (head_dim=256 + GQA)
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 3a — full-attention decode on GPU)
+**evidence:**
+- claim: "Qwen35-specific Metal kernel `attn_decode_qwen35.metal` bit-matches CPU reference on 9B shapes (n_head=40, n_head_kv=8, head_dim=256, heads_per_group=5, pos=17): cos=1.0 max|Δ|=4.47e-8"
+  source: spec/qwen35_attn_decode_spec.cr (2026-04-23)
+  verified_at: 2026-04-23
+  decay_trigger: kernels/attn_decode_qwen35.metal OR forward_full_attn_layer attn inner loop changed
+- claim: "Metal attention scales better than CPU with position. Per full-attn-layer decode time (Metal vs CPU, 8 layers): pos=257 3.70 vs 6.19 ms (1.67×); pos=513 6.70 vs 8.68 ms (1.30×); pos=1025 5.76 vs 13.68 ms (2.38×)"
+  source: bin/qwen35_long_ctx_profile 2026-04-23, n_runs=5 each, QWEN35_ATTN_CPU=1 env gate for A/B
+  verified_at: 2026-04-23
+  decay_trigger: kernel/routing changes
+- claim: "Total decode savings vs CPU attn at long context — pos=1025: 118.1 ms/tok (Metal) vs 188.2 ms/tok (CPU) = 70 ms/tok saved (37% faster)"
+  source: same profiler
+  verified_at: 2026-04-23
+  decay_trigger: forward-path change
+- claim: "Short-context (pos<32) cost is neutral to small: Phase 3a integration did not regress end-to-end greedy output — first-token top logit 11.423702 numerically identical to pre-integration; full generation 'The capital of France is Paris.\\nThe capital' unchanged"
+  source: bin/qwen35_generate_bin 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: numeric kernel change
+- claim: "All 70 specs pass (new qwen35_attn_decode_spec + updated qwen35_fullattn_spec both pass; no regressions)"
+  source: make spec 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: kernel or dispatch glue changed
+**architecture:**
+- kernels/attn_decode_qwen35.metal: one threadgroup per query head (n_head=40 TGs), 32 threads each. Q and gate for the head are cached in threadgroup memory (QA_HD=256 bound). Online (flash-style) softmax over position tiles of 32 with simd_max for the max update and simd_sum for the normalizer correction. GQA broadcast in-kernel via `kv_h = h / heads_per_group`. Per-lane output accumulators (8 slots for head_dim=256 / warp=32). Fused `sigmoid(gate)` multiply at write-out.
+- qwen35_metal.cr: `ATTN_DECODE_SOURCE` embedded via `read_file`; `@@attn_pipeline` lazy-cached; `Qwen35Metal.attn_decode(q, gate, k_cache_buf, v_cache_buf, pos, ...)` allocates per-call q/gate/out MetalBuffers and dispatches `(n_head, 1, 1)` threadgroups.
+- qwen35_cpu.cr: `LayerState.k_cache_buf`/`v_cache_buf : ML::MetalBuffer?` added alongside Array-based `k_cache`/`v_cache`. `attn_decode_routed` picks Metal first; on first call lazily allocates persistent max_seq·kv_dim KV buffers in unified memory, writes per-position K/V slice via `contents.as(Pointer(Float32)) + base` pointer arithmetic (zero-copy), then dispatches attn_decode. CPU path writes Array cache and runs the inner loop inline.
+- ENV `QWEN35_ATTN_CPU=1` forces CPU attention for A/B profiling without disabling the rest of the Metal path.
+- spec/qwen35_fullattn_spec.cr updated: reads KV via backend-agnostic `read_kv` helper that picks `k_cache_buf.read(n)` or `k_cache.not_nil!` depending on which LayerState field is populated.
+**builds_on:** [LM-claude-PHASE3b-VERIFIED]
+**unblocks:** [Phase 3.5: state save/load, Phase 4: fused kernels]
+**note:** Attention is now ~18% at short context (pos<64) and dominates the remaining CPU/GPU disparity at long context. Per-call q/gate/out allocation can be pooled in Phase 4 (same pattern as DeltaNet). The `kv_dim.times { k_ptr[i] = k[i] }` write is a small trivial CPU loop inside the decode step — could be fused into a Metal compute shader once K/V projections themselves land on GPU. Phase 4 fusion (qkv gemm → rope → kv-write → attn → gate → o_proj) is the next big lever vs llama.cpp.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)

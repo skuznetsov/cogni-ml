@@ -69,12 +69,14 @@ module ML
         GEMM_Q4K_SOURCE  = {{ read_file("#{__DIR__}/kernels/gemm_q4k.metal") }}
         GEMM_Q56K_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }}
         DELTA_NET_SOURCE = {{ read_file("#{__DIR__}/kernels/delta_net.metal") }}
+        ATTN_DECODE_SOURCE = {{ read_file("#{__DIR__}/kernels/attn_decode_qwen35.metal") }}
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
         @@mm_pipeline   : ML::Metal::ComputePipeline?
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
         @@dn_pipeline   : ML::Metal::ComputePipeline?
+        @@attn_pipeline : ML::Metal::ComputePipeline?
 
         # Whole-mmap MetalBuffer. Registered once per model load via
         # `register_mmap`. All weights whose `raw` bytes are slices
@@ -165,6 +167,56 @@ module ML
           @@dn_pipeline ||= ML::Metal::PipelineCache.get("delta_net_step") {
             ML::Metal::ComputePipeline.new("delta_net_step", DELTA_NET_SOURCE)
           }
+        end
+
+        private def self.attn_pipeline : ML::Metal::ComputePipeline
+          @@attn_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode", ATTN_DECODE_SOURCE)
+          }
+        end
+
+        # Gated attention decode on Metal. CPU side prepares Q (post-rmsnorm,
+        # post-RoPE) and gate (raw, kernel applies sigmoid); K/V are already
+        # appended to the per-layer k_cache_buf/v_cache_buf at row `pos`.
+        # Returns the gated attention output `attn_o` as `Array(Float32)`
+        # of length `n_head * head_dim`, ready for the output projection.
+        def self.attn_decode(q : Array(Float32),
+                             gate : Array(Float32),
+                             k_cache_buf : ML::MetalBuffer,
+                             v_cache_buf : ML::MetalBuffer,
+                             pos : Int32, n_head : Int32, n_head_kv : Int32,
+                             head_dim : Int32, heads_per_group : Int32,
+                             scale : Float32) : Array(Float32)
+          ML::Metal::Device.init!
+
+          q_dim    = n_head * head_dim
+          q_buf    = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+          gate_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+          out_buf  = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+          q_buf.write(q)
+          gate_buf.write(gate)
+
+          cache_len = pos + 1
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(attn_pipeline)
+          enc.set_buffer(q_buf,         0)
+          enc.set_buffer(gate_buf,      1)
+          enc.set_buffer(k_cache_buf,   2)
+          enc.set_buffer(v_cache_buf,   3)
+          enc.set_buffer(out_buf,       4, ML::Metal::BufferAccess::Write)
+          enc.set_value(cache_len.to_u32,       5)
+          enc.set_value(n_head.to_u32,          6)
+          enc.set_value(n_head_kv.to_u32,       7)
+          enc.set_value(head_dim.to_u32,        8)
+          enc.set_value(heads_per_group.to_u32, 9)
+          enc.set_value(scale,                 10)
+          enc.dispatch_threadgroups({n_head, 1, 1}, {32, 1, 1})
+          enc.end_encoding
+          cmd.commit_and_wait
+
+          out_buf.read(q_dim)
         end
 
         # DeltaNet / GatedDeltaRule step on Metal.
