@@ -272,6 +272,37 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-22
   decay_trigger: matmul interface changes
 
+### [LM-claude-PHASE1B-VERIFIED] Qwen 3.5 9B CPU end-to-end generates adequate output
+**status:** verified
+**trust:** {F:0.9, G:0.6, R:0.9}
+**context:** ml (Qwen port, Phase 1b complete)
+**evidence:**
+- claim: "Prompt 'The capital of France is' → greedy token ' Paris' (id=11751), continuation '.\\nThe capital'"
+  source: bin/qwen35_generate_bin, /tmp/qwen35_ours2.log 2026-04-22
+  verified_at: 2026-04-22
+  decay_trigger: qwen35_cpu.cr modified
+- claim: "spec/qwen35_forward_spec passes: logits finite, spread >1.0, distinct top-1 across different token inputs. First-token latency 137s on M2 Max (CPU only — expected, Phase 2 adds Metal)"
+  source: crystal spec spec/qwen35_forward_spec.cr 2026-04-22
+  verified_at: 2026-04-22
+  decay_trigger: qwen35_cpu.cr modified
+- claim: "Root bug fixed: ssm_conv1d accessed as [t*qkv_dim+ch]. GGUF dims=[4, 8192] with dims[0] innermost means layout is [ch*K+t]. Pre-fix output was garbage '{'_人家'."
+  source: bin/qwen35_tensor_dump.cr + llama.cpp ops.cpp:9297 `c[i0 + i1*nc]` + commit 4dfafdb
+  verified_at: 2026-04-22
+  decay_trigger: N/A (foundational)
+**builds_on:** [LM-claude-Q4K-CPU-VERIFIED], [LM-claude-WEIGHTS-1], [LM-claude-DELTANET-1]
+**unblocks:** [Phase 2: Metal Q4_K kernels]
+
+### [LM-claude-GGUF-LAYOUT-LESSON] GGUF dimension convention (learned the hard way)
+**status:** verified
+**trust:** {F:1.0, G:high, R:1.0}
+**context:** ml (weights loading, any arch)
+**lesson:** "dims[0] is the INNERMOST (contiguous) axis in memory. For a weight with dims=[A, B], memory layout is flat[i*A + a] where i ∈ [0, B), a ∈ [0, A). Always check dims AND expected inner axis before writing indexing code."
+**evidence:**
+- claim: "ssm_conv1d dims=[4, 8192] — conv_kernel (K=4) is innermost, channels (qkv_dim=8192) outermost. Indexing: [ch*K + t]. Same convention for matmul weights: [K=in_dim, N=out_dim] → flat[col*in_dim + row_inner]."
+  source: Phase 1b debugging + llama.cpp ggml tensor layout convention
+  verified_at: 2026-04-22
+  decay_trigger: GGUF spec changes (extremely unlikely)
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)
