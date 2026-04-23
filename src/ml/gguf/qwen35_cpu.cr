@@ -169,12 +169,7 @@ module ML::GGUF
       {% else %}
         return nil if qw.out_dim < METAL_QK_MIN_OUT || qw.in_dim < METAL_QK_MIN_IN
         return nil unless Qwen35Metal.available?
-        case
-        when qw.type.q4_k? then Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
-        when qw.type.q5_k? then Qwen35Metal.matmul_q5k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
-        when qw.type.q6_k? then Qwen35Metal.matmul_q6k(x, qw.raw, qw.in_dim, qw.out_dim, 1)
-        else                    nil
-        end
+        Qwen35Metal.matmul(qw, x, 1)
       {% end %}
     end
 

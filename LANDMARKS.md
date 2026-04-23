@@ -357,6 +357,43 @@ Rich landmarks include full State/Relations/Evidence structure.
 **unblocks:** [Phase 3a: Metal attention, Phase 3b: Metal Mamba]
 **note:** Auto-selects GEMV for batch≤8, GEMM for batch>8. F32 in/out (no GELU, no bias — unlike BERT path). Full-upload per call — persistent weight buffers are a Phase 4 optimization.
 
+### [LM-claude-PHASE4a-VERIFIED] Zero-copy mmap weight buffers via newBufferWithBytesNoCopy
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 4a — unified-memory zero-copy for weights)
+**evidence:**
+- claim: "lm_head Q6_K (4096→248320, 796 MB) dispatch: upload-per-call 80.2 ms → zero-copy 3.0 ms = 26.9× speedup"
+  source: bin/qwen35_metal_micro run 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: qwen35_metal.cr register_mmap OR bridge.mm gs_create_buffer_no_copy changed
+- claim: "End-to-end Qwen 3.5 9B decode per-token: 665 ms (Phase 2.6) → ~130-140 ms (Phase 4a steady-state) ≈ 5× speedup. First token 2.1 s includes kernel JIT."
+  source: bin/qwen35_generate_bin "The capital of France is" 5 on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: qwen35_cpu.cr forward path or any Metal kernel modified
+- claim: "Output unchanged vs Phase 2.6: 'The capital of France is Paris.\\nThe capital' — model still coherent and deterministic under greedy decoding"
+  source: bin/qwen35_generate_bin same run
+  verified_at: 2026-04-23
+  decay_trigger: any numeric kernel change
+- claim: "All 68 existing specs pass (6 Metal Q4_K/Q5_K/Q6_K specs show cos=1.0); no regressions in QuantWeight struct→class refactor"
+  source: make spec 2026-04-23 (1 min, 0 failures, 0 errors)
+  verified_at: 2026-04-23
+  decay_trigger: specs or compute.cr changed
+- claim: "Tensor data region inside GGUF is NOT page-aligned (data_offset=10967456, mod 16384 = 6560; 0/427 tensors page-aligned), but mmap base IS page-aligned. Therefore wrap whole mmap as one MTLBuffer and dispatch per-tensor via setBuffer:offset:."
+  source: bin/qwen35_align_check run 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: GGUF file format or mmap allocator behavior changes
+**architecture:**
+- bridge.mm: new `gs_create_buffer_no_copy(void*, size, mode)` wrapping `[device newBufferWithBytesNoCopy:length:options:deallocator:nil]`. `nil` deallocator = Metal does NOT free bytes (caller/mmap owns them).
+- core/buffer.cr: `MetalBuffer.wrap_no_copy(ptr, size, mode)` + `new_from_external`/`init_external` for non-owned handles. `release` always releases MTLBuffer ObjC handle, sets purgeable only for owned.
+- gguf/reader.cr: `mmap_region : {Pointer(UInt8), UInt64}?` exposes base+size.
+- gguf/compute.cr: `QuantWeight` changed `struct` → `class` (reference semantics for lazy cached MetalBuffer fallback when raw bytes lie outside mmap region).
+- gguf/qwen35_metal.cr: module-level `@@mmap_buf` holds whole-file MTLBuffer. `register_mmap` sets it up once. `mmap_slot_for(raw)` returns `{buf, offset}` if Bytes lies within mmap; `weight_slot`/`matmul(qw, ...)` dispatch to `matmul_gemv_buf`/`matmul_q4k_gemm_buf` with per-call `w_offset`.
+- gguf/qwen35_weights.cr: keeps `@gguf : GGUFFile` alive for model lifetime so mmap stays mapped; drops `.dup` on raw weight bytes; calls `Qwen35Metal.register_mmap` after constructing all weights.
+- gguf/qwen35_cpu.cr: `metal_matvec_or_nil` simplified to single `Qwen35Metal.matmul(qw, x, 1)` call.
+**builds_on:** [LM-claude-PHASE2_6-VERIFIED]
+**unblocks:** [Phase 4b: KV-cache persistent buffers, Phase 3a: Metal attention — now worthwhile since upload isn't the bottleneck]
+**note:** User correction "Apple Silicon has unified memory, only locks matter, not uploads" was the key insight. Pre-correction design (copy once + reuse) would still have paid the 80ms memcpy on first call; true zero-copy is free. Owes entire 27× to `newBufferWithBytesNoCopy` + per-dispatch `setBuffer:offset:`.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)

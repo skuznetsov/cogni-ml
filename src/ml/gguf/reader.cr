@@ -166,6 +166,16 @@ module ML::GGUF
       tensor_bytes(info)
     end
 
+    # Base pointer + size of the underlying mmap region (or nil if
+    # mmap failed and the reader fell back to regular IO). The base is
+    # guaranteed page-aligned; use this to build a single whole-file
+    # NoCopy MetalBuffer and then address individual tensors by offset.
+    def mmap_region : {Pointer(UInt8), UInt64}?
+      if ptr = @mmap
+        {ptr, @mmap_size}
+      end
+    end
+
     private def tensor_bytes(info : TensorInfo) : Bytes
       offset = data_offset + info.offset.to_i64
       size = info.data_bytes.to_i32

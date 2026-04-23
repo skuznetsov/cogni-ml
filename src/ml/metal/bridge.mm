@@ -128,6 +128,41 @@ extern "C" void release_buffer_impl(void* handle) {
     buffer = nil; // ARC will release
 }
 
+// Zero-copy buffer: wraps an existing page-aligned memory region (e.g. the
+// mmap'd GGUF file) as an MTLBuffer without allocating or copying. Caller
+// retains ownership of the underlying memory and must keep it alive at
+// least as long as the MTLBuffer.
+//
+// Apple Silicon requires the base pointer AND size to be multiples of
+// vm_page_size (16 KiB on M-series). Returns nullptr on failure.
+extern "C" void* create_buffer_no_copy_impl(void* ptr, int64_t size, int32_t storage_mode) {
+    if (ensure_device() != 0) return nullptr;
+    if (ptr == nullptr || size <= 0) return nullptr;
+
+    MTLResourceOptions options;
+    switch (storage_mode) {
+        case 0: options = MTLResourceStorageModeShared;  break;
+        case 2: options = MTLResourceStorageModeManaged; break;
+        // Private storage is incompatible with NoCopy (GPU-only memory).
+        default: options = MTLResourceStorageModeShared;
+    }
+
+    // Passing a nil deallocator keeps the MTLBuffer as a pure view —
+    // Metal will NOT free this memory on release.
+    id<MTLBuffer> buffer = [gs_device newBufferWithBytesNoCopy:ptr
+                                                       length:(NSUInteger)size
+                                                      options:options
+                                                  deallocator:nil];
+    if (buffer == nil) {
+        NSLog(@"GS: newBufferWithBytesNoCopy failed (ptr=%p, size=%lld). "
+              "Check page alignment (need multiple of %lu).",
+              ptr, size, (unsigned long)getpagesize());
+        return nullptr;
+    }
+
+    return (__bridge_retained void*)buffer;
+}
+
 extern "C" void* buffer_contents_impl(void* handle) {
     if (handle == nullptr) return nullptr;
     id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)handle;
@@ -466,6 +501,10 @@ extern "C" void encoder_set_threadgroup_memory_impl(void* encoder_handle, int32_
 // MetalFFI (buffer management)
 extern "C" void* gs_create_buffer(int64_t size, int32_t storage_mode) {
     return create_buffer_impl(size, storage_mode);
+}
+
+extern "C" void* gs_create_buffer_no_copy(void* ptr, int64_t size, int32_t storage_mode) {
+    return create_buffer_no_copy_impl(ptr, size, storage_mode);
 }
 
 extern "C" void gs_release_buffer(void* handle) {

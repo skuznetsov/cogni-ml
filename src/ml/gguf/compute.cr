@@ -7,17 +7,40 @@
 require "./quant_matmul"
 require "./dequant"
 require "./reader"  # for TensorType
+require "../core/buffer"
 
 module ML::GGUF
-  # Quantized weight: raw bytes + type for on-the-fly dequant during matmul
-  struct QuantWeight
+  # Quantized weight: raw bytes + type for on-the-fly dequant during matmul.
+  #
+  # Reference semantics (class, not struct) so weights can cache a
+  # per-call Metal buffer when the mmap-backed zero-copy path is not
+  # available (e.g. when `raw` is a heap copy, not a slice of the
+  # model's mmap). When the mmap path IS available, the whole-file
+  # MetalBuffer held by Qwen35Metal is reused and this cache stays nil.
+  class QuantWeight
     getter raw : Bytes
     getter type : TensorType
     getter out_dim : Int32
     getter in_dim : Int32
 
+    @metal_buf : ML::MetalBuffer? = nil
+
     def initialize(@raw, @type, @out_dim, @in_dim)
     end
+
+    {% unless flag?(:cpu_only) %}
+      # Per-weight MetalBuffer for raw bytes not covered by the model's
+      # whole-mmap buffer (test code, ad-hoc tensors). Allocated and
+      # populated via a single memcpy on first call, then reused.
+      def fallback_metal_buffer : ML::MetalBuffer
+        buf = @metal_buf
+        return buf if buf
+        new_buf = ML::MetalBuffer.new(@raw.size.to_i64)
+        new_buf.write_bytes(@raw.to_unsafe, @raw.size)
+        @metal_buf = new_buf
+        new_buf
+      end
+    {% end %}
   end
   # Abstract compute backend. All math ops go through this interface.
   module ComputeBackend

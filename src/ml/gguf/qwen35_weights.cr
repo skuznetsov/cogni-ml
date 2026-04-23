@@ -1,6 +1,7 @@
 require "./reader"
 require "./compute"         # for QuantWeight
 require "./qwen35_meta"
+require "./qwen35_metal"
 
 # Qwen 3.5 / 3.6 weight loader.
 #
@@ -74,25 +75,44 @@ module ML::GGUF
     getter output : QuantWeight                  # [n_embd, vocab_size]  (lm_head)
     getter layers : Array(Qwen35LayerWeights)
 
-    def initialize(g : GGUFFile, @hparams : Qwen35Hparams)
-      @token_embd = load_qw(g, "token_embd.weight")
-      @output_norm = load_f32(g, "output_norm.weight")
-      @output = load_qw(g, "output.weight")
+    # Kept alive so the mmap region backing every QuantWeight.raw stays
+    # mapped for the lifetime of the model. Closing it would invalidate
+    # both the heap-free slices and any whole-mmap Metal buffer built on
+    # top of them.
+    @gguf : GGUFFile
+
+    def initialize(@gguf : GGUFFile, @hparams : Qwen35Hparams)
+      @token_embd = load_qw(@gguf, "token_embd.weight")
+      @output_norm = load_f32(@gguf, "output_norm.weight")
+      @output = load_qw(@gguf, "output.weight")
       @layers = Array(Qwen35LayerWeights).new(@hparams.n_layer) do |il|
         if @hparams.full_attention?(il)
-          load_full_attn_layer(g, il)
+          load_full_attn_layer(@gguf, il)
         else
-          load_recurrent_layer(g, il)
+          load_recurrent_layer(@gguf, il)
         end
       end
+
+      # Register the whole mmap region as a zero-copy Metal buffer so
+      # subsequent matmuls dispatch against a byte-offset into it
+      # instead of re-uploading weights every call. Cheap no-op in
+      # cpu_only mode.
+      {% unless flag?(:cpu_only) %}
+        if Qwen35Metal.available?
+          if region = @gguf.mmap_region
+            base, size = region
+            Qwen35Metal.register_mmap(base, size)
+          end
+        end
+      {% end %}
     end
 
     def self.from_gguf(path : String) : Qwen35Weights
       g = GGUFFile.new(path)
       hp = Qwen35Hparams.new(g)
-      w = Qwen35Weights.new(g, hp)
-      g.close
-      w
+      # Do NOT close `g` here — the mmap backs every QuantWeight.raw;
+      # Qwen35Weights keeps a reference to it for its lifetime.
+      Qwen35Weights.new(g, hp)
     end
 
     private def load_full_attn_layer(g : GGUFFile, il : Int32) : Qwen35FullAttnWeights
@@ -134,7 +154,10 @@ module ML::GGUF
 
     private def load_qw(g : GGUFFile, name : String) : QuantWeight
       info = g.tensor(name) || raise "qwen35_weights: missing tensor #{name.inspect}"
-      raw = g.read_tensor_raw(info).dup  # dup out of mmap region to avoid lifetime coupling
+      # Keep raw as a slice into the mmap — GGUFFile stays alive as a
+      # field of this Qwen35Weights, so the pointer remains valid and
+      # the whole-mmap Metal buffer can address it by offset.
+      raw = g.read_tensor_raw(info)
       # GGUF convention: dims=[in_dim, out_dim], row-major with out_dim rows.
       in_dim  = info.dims[0].to_i32
       out_dim = info.dims.size >= 2 ? info.dims[1].to_i32 : 1

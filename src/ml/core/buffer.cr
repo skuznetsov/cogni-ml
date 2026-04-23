@@ -31,6 +31,11 @@ module ML
       raise "Metal disabled (cpu_only)"
     end
 
+    def self.wrap_no_copy(ptr : Pointer(Void), size : Int64,
+                          mode : StorageMode = StorageMode::Shared) : MetalBuffer
+      raise "Metal disabled (cpu_only)"
+    end
+
     def write(data : Array(Float32)) : Nil
       raise "Metal disabled (cpu_only)"
     end
@@ -157,6 +162,41 @@ module ML
       track_alloc(@size)
     end
 
+    # Wrap an existing page-aligned memory region as an MTLBuffer with
+    # zero copy (Apple `newBufferWithBytesNoCopy`). Caller retains
+    # ownership of the underlying memory and must keep it alive at least
+    # as long as this MetalBuffer. Both `ptr` and `size` must be page-
+    # aligned (vm_page_size — 16 KiB on M-series).
+    def self.wrap_no_copy(ptr : Pointer(Void), size : Int64,
+                          mode : StorageMode = StorageMode::Shared) : MetalBuffer
+      raise ArgumentError.new("Buffer size must be positive") if size <= 0
+      raise ArgumentError.new("Null pointer") if ptr.null?
+      handle = MetalFFI.gs_create_buffer_no_copy(ptr, size, mode.value)
+      raise "newBufferWithBytesNoCopy failed (ptr=#{ptr}, size=#{size}) — check page alignment" if handle.null?
+      new_from_external(handle, size, mode)
+    end
+
+    # Construct from an externally-created MTLBuffer handle that this
+    # object does not own (used by wrap_no_copy). We still track stats so
+    # live/peak reflect Metal-visible memory, but we do not free the
+    # underlying bytes on finalize.
+    protected def self.new_from_external(handle : Pointer(Void), size : Int64,
+                                         mode : StorageMode) : MetalBuffer
+      buf = allocate
+      buf.init_external(handle, size, mode)
+      buf
+    end
+
+    protected def init_external(handle : Pointer(Void), size : Int64,
+                                mode : StorageMode) : Nil
+      @handle = handle
+      @size = size
+      @storage_mode = mode
+      @owned = false
+      @valid = true
+      track_alloc(size)
+    end
+
     # Wrap existing Array without copy (zero-copy)
     def self.from_array(data : Array(Float32), mode : StorageMode = StorageMode::Shared) : MetalBuffer
       byte_size = data.size.to_i64 * sizeof(Float32)
@@ -264,19 +304,20 @@ module ML
 
     # RAII cleanup
     def finalize
-      if @valid && @owned
-        release
-      end
+      release if @valid
     end
 
     # Manual release (for explicit control)
     def release : Nil
-      if @valid && @owned
+      return unless @valid
+      if @owned
         set_purgeable(PurgeableState::Empty)
-        MetalFFI.gs_release_buffer(@handle)
-        @valid = false
-        track_free(@size)
       end
+      # Always release our MTLBuffer handle (NoCopy MTLBuffers still need
+      # the ObjC object released — only the underlying bytes are kept).
+      MetalFFI.gs_release_buffer(@handle)
+      @valid = false
+      track_free(@size)
     end
 
     def self.stats : NamedTuple(live_buffers: Int32, live_bytes: Int64, peak_bytes: Int64)
@@ -430,6 +471,7 @@ end
 @[Link(ldflags: "-framework Metal -framework Foundation")]
 lib MetalFFI
   fun gs_create_buffer = gs_create_buffer(size : Int64, storage_mode : Int32) : Pointer(Void)
+  fun gs_create_buffer_no_copy = gs_create_buffer_no_copy(ptr : Pointer(Void), size : Int64, storage_mode : Int32) : Pointer(Void)
   fun gs_release_buffer = gs_release_buffer(handle : Pointer(Void)) : Void
   fun gs_buffer_contents = gs_buffer_contents(handle : Pointer(Void)) : Pointer(Void)
   fun gs_buffer_size = gs_buffer_size(handle : Pointer(Void)) : Int64
@@ -443,6 +485,7 @@ end
 # Stub for non-Darwin platforms (CPU fallback)
 lib MetalFFI
   fun gs_create_buffer = gs_create_buffer(size : Int64, storage_mode : Int32) : Pointer(Void)
+  fun gs_create_buffer_no_copy = gs_create_buffer_no_copy(ptr : Pointer(Void), size : Int64, storage_mode : Int32) : Pointer(Void)
   fun gs_release_buffer = gs_release_buffer(handle : Pointer(Void)) : Void
   fun gs_buffer_contents = gs_buffer_contents(handle : Pointer(Void)) : Pointer(Void)
   fun gs_buffer_size = gs_buffer_size(handle : Pointer(Void)) : Int64
