@@ -389,15 +389,18 @@ module ML::GGUF
       # 6. Conv state (lazy alloc). Layout: conv[t*qkv_dim + ch], t in 0..K-2 (K=conv_k)
       conv_state = lstate.conv_state ||= Array(Float32).new((conv_k - 1) * qkv_dim, 0.0_f32)
 
-      # 7. Convolution output for current token:
-      #    conv_out[ch] = sum_{k=0}^{K-2} conv_state[k*qkv_dim+ch] * conv1d[k*qkv_dim+ch]
-      #                 + qkv_mixed[ch]                          * conv1d[(K-1)*qkv_dim+ch]
+      # 7. Convolution output for current token.
+      # GGUF ssm_conv1d dims=[K, qkv_dim] with dims[0]=K innermost → layout is conv1d[ch*K + t].
+      # conv_state is OUR internal buffer (layout [t*qkv_dim + ch]) — unchanged.
+      #    conv_out[ch] = sum_{k=0}^{K-2} conv_state[k*qkv_dim+ch] * conv1d[ch*K + k]
+      #                 + qkv_mixed[ch]                          * conv1d[ch*K + (K-1)]
       conv_out = Array(Float32).new(qkv_dim) do |ch|
         acc = 0.0_f32
+        w_base = ch * conv_k
         (conv_k - 1).times do |t|
-          acc += conv_state[t * qkv_dim + ch] * lw.ssm_conv1d[t * qkv_dim + ch]
+          acc += conv_state[t * qkv_dim + ch] * lw.ssm_conv1d[w_base + t]
         end
-        acc += qkv_mixed[ch] * lw.ssm_conv1d[(conv_k - 1) * qkv_dim + ch]
+        acc += qkv_mixed[ch] * lw.ssm_conv1d[w_base + (conv_k - 1)]
         acc
       end
 
