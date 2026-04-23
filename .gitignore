@@ -30,3 +30,6 @@ test_*
 !test_*.cr
 *.dwarf
 bin/
+
+# Test helper binaries (rebuildable via `make q4k_ref`)
+spec/support/q4k_ref

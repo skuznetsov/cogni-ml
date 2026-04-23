@@ -230,6 +230,22 @@ module ML::GGUF
       end
     end
 
+    # Get array-of-int metadata (uint8/int8..uint64/int64/bool).
+    # Returns nil if key missing or not an integer array.
+    def get_int_array(key : String) : Array(Int64)?
+      arr = @metadata[key]?.as?(Array(Value))
+      return nil unless arr
+      out = Array(Int64).new(arr.size)
+      arr.each do |v|
+        case v
+        when Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64 then out << v.to_i64
+        when UInt64                                            then out << v.to_i64
+        else                                                        return nil
+        end
+      end
+      out
+    end
+
     private def parse_header
       # Magic
       magic = read_bytes(4)

@@ -1,7 +1,7 @@
 # Dequantization routines for GGUF quantized tensors.
 # Ported from llama.cpp ggml-quants.c
 #
-# Supports: F32, F16, Q5_K, Q6_K (used by nomic-embed-text-v2-moe.Q5_K_M)
+# Supports: F32, F16, Q4_K, Q5_K, Q6_K
 # QK_K = 256 elements per super-block
 
 module ML::GGUF::Dequant
@@ -13,6 +13,7 @@ module ML::GGUF::Dequant
     case type
     when .f32?  then dequantize_f32(data, n_elements)
     when .f16?  then dequantize_f16(data, n_elements)
+    when .q4_k? then dequantize_q4_k(data, n_elements)
     when .q5_k? then dequantize_q5_k(data, n_elements)
     when .q6_k? then dequantize_q6_k(data, n_elements)
     else
@@ -35,6 +36,47 @@ module ML::GGUF::Dequant
     n.times do |i|
       result[i] = fp16_to_f32(data[i * 2, 2])
     end
+    result
+  end
+
+  # Q4_K: 4.5 bits per weight, QK_K=256 block, 144 bytes/block
+  # Block layout: [d:f16][dmin:f16][scales:12B][qs:128B]
+  # Ported from llama.cpp dequantize_row_q4_K (ggml-quants.c).
+  def self.dequantize_q4_k(data : Bytes, n : Int32) : Array(Float32)
+    nb = n // QK_K
+    result = Array(Float32).new(n, 0.0_f32)
+    block_size = 144  # 2 + 2 + 12 + 128
+
+    nb.times do |i|
+      off = i * block_size
+      d    = fp16_to_f32(data[off, 2])
+      dmin = fp16_to_f32(data[off + 2, 2])
+      scales_ptr = data.to_unsafe + off + 4      # 12 bytes
+      qs_ptr     = data.to_unsafe + off + 4 + 12 # 128 bytes
+
+      is = 0
+      yi = i * QK_K
+      4.times do |_j|  # 4 iterations × 64 elements = 256 (QK_K)
+        sc, m = get_scale_min_k4(is, scales_ptr)
+        d1 = d * sc
+        m1 = dmin * m
+        sc2, m2 = get_scale_min_k4(is + 1, scales_ptr)
+        d2 = d * sc2
+        m2f = dmin * m2
+
+        32.times do |l|
+          result[yi + l] = d1 * (qs_ptr[l] & 0x0F).to_f32 - m1
+        end
+        32.times do |l|
+          result[yi + 32 + l] = d2 * (qs_ptr[l].to_u32 >> 4).to_f32 - m2f
+        end
+
+        qs_ptr += 32
+        is += 2
+        yi += 64
+      end
+    end
+
     result
   end
 

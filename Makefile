@@ -24,7 +24,7 @@ BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama clean help
+.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama q4k_ref clean help
 
 all: spec
 
@@ -68,6 +68,18 @@ profile_nomic_vs_llama: $(BRIDGE_OBJ)
 
 spec_cpu:
 	$(CRYSTAL) spec -Dcpu_only
+
+# Q4_K dequantization reference helper — links llama.cpp's libggml-base
+# so specs can bit-compare Crystal output against the reference.
+q4k_ref: spec/support/q4k_ref
+spec/support/q4k_ref: spec/support/q4k_ref.c
+	@if [ ! -d "$(LLAMA_DIR)/build/bin" ]; then \
+		echo "ERROR: $(LLAMA_DIR)/build/bin not found. Run 'make llama' first or set LLAMA_DIR."; \
+		exit 1; \
+	fi
+	clang -O2 -o spec/support/q4k_ref spec/support/q4k_ref.c \
+		-L$(LLAMA_DIR)/build/bin -lggml-base \
+		-Wl,-rpath,$(LLAMA_DIR)/build/bin
 
 build_cpu:
 	$(CRYSTAL) build src/ml.cr -Dcpu_only

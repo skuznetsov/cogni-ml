@@ -5,7 +5,7 @@
 # This matches llama.cpp's approach and gives higher precision than
 # bulk dequant→F32→matmul because intermediate values stay in registers.
 #
-# Supports: Q5_K, Q6_K, F32, F16
+# Supports: Q4_K, Q5_K, Q6_K, F32, F16
 
 require "./reader"  # for TensorType
 
@@ -22,6 +22,7 @@ module ML::GGUF
       bias : Array(Float32),
     ) : Array(Float32)
       case w_type
+      when .q4_k? then matmul_add_q4k(x, rows, in_dim, w_raw, out_dim, bias)
       when .q5_k? then matmul_add_q5k(x, rows, in_dim, w_raw, out_dim, bias)
       when .q6_k? then matmul_add_q6k(x, rows, in_dim, w_raw, out_dim, bias)
       when .f32?  then matmul_add_f32(x, rows, in_dim, w_raw, out_dim, bias)
@@ -29,6 +30,69 @@ module ML::GGUF
       else
         raise "Unsupported quant type for fused matmul: #{w_type.name}"
       end
+    end
+
+    # Q4_K fused matmul: for each output neuron, walk through Q4_K blocks
+    # and accumulate dot product with dequantized values.
+    # Block layout: [d:f16][dmin:f16][scales:12B][qs:128B] = 144 B
+    private def self.matmul_add_q4k(
+      x : Array(Float32), rows : Int32, in_dim : Int32,
+      w_raw : Bytes, out_dim : Int32, bias : Array(Float32),
+    ) : Array(Float32)
+      block_size = 144
+      blocks_per_row = in_dim // QK_K
+      row_bytes = blocks_per_row * block_size
+      result = Array(Float32).new(rows * out_dim, 0.0_f32)
+      w_ptr = w_raw.to_unsafe
+
+      rows.times do |r|
+        x_off = r * in_dim
+        r_off = r * out_dim
+
+        out_dim.times do |o|
+          sum = bias[o].to_f64
+          w_row = w_ptr + o * row_bytes
+
+          blocks_per_row.times do |blk|
+            blk_ptr = w_row + blk * block_size
+            d    = Dequant.fp16_to_f32(Bytes.new(blk_ptr, 2)).to_f64
+            dmin = Dequant.fp16_to_f32(Bytes.new(blk_ptr + 2, 2)).to_f64
+            scales_ptr = blk_ptr + 4
+            qs_ptr     = blk_ptr + 4 + 12
+
+            base_j = blk * QK_K
+            is = 0
+            qs_off = 0
+
+            4.times do
+              sc, m = Dequant.get_scale_min_k4(is, scales_ptr)
+              d1 = d * sc; m1 = dmin * m
+              sc2, m2 = Dequant.get_scale_min_k4(is + 1, scales_ptr)
+              d2 = d * sc2; m2_val = dmin * m2
+
+              32.times do |l|
+                j = base_j + (is // 2) * 64 + l
+                q_low = (qs_ptr[qs_off + l] & 0x0F).to_i32
+                val = d1 * q_low - m1
+                sum += x[x_off + j] * val
+              end
+              32.times do |l|
+                j = base_j + (is // 2) * 64 + 32 + l
+                q_hi = (qs_ptr[qs_off + l].to_u32 >> 4).to_i32
+                val = d2 * q_hi - m2_val
+                sum += x[x_off + j] * val
+              end
+
+              qs_off += 32
+              is += 2
+            end
+          end
+
+          result[r_off + o] = sum.to_f32
+        end
+      end
+
+      result
     end
 
     # Q5_K fused matmul: for each output neuron, walk through Q5_K blocks
