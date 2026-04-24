@@ -389,6 +389,12 @@ module ML
             @@written[tag] = true
           end
 
+          def self.write_zero_f32_once(tag : String, buf : ML::MetalBuffer, count : Int32) : Nil
+            return if @@written[tag]?
+            buf.contents.as(Pointer(UInt8)).clear(count.to_i64 * sizeof(Float32))
+            @@written[tag] = true
+          end
+
           def self.clear : Nil
             @@written.clear
           end
@@ -862,7 +868,7 @@ module ML
           x16_buf = Scratch.get("mm56_x16_#{w_offset}_#{in_dim}_#{batch}", (batch * in_dim).to_i64 * 2_i64)
           out16_buf = Scratch.get("mm56_out16_#{w_offset}_#{out_dim}_#{batch}", (batch * out_dim).to_i64 * 2_i64)
           bias_buf = Scratch.get("mm56_bias_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
-          ConstCache.write_once("mm56_bias_#{out_dim}", bias_buf, Array(Float32).new(out_dim, 0.0_f32))
+          ConstCache.write_zero_f32_once("mm56_bias_#{out_dim}", bias_buf, out_dim)
 
           enc.set_pipeline(f32_to_f16_pipeline)
           enc.set_buffer(x_buf, 0)
