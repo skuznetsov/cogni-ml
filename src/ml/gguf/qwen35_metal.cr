@@ -320,17 +320,23 @@ module ML
               end
               unless @@matmul_counts.empty?
                 s << "  matmul shapes:\n"
+                total_weight_bytes = @@matmul_weight_bytes.values.sum
                 @@matmul_counts.keys.sort_by { |name| {-@@matmul_weight_bytes[name], name} }.each do |name|
                   s << sprintf("    %-34s %4d calls  %.2f MiB logical weights\n",
                                name, @@matmul_counts[name], @@matmul_weight_bytes[name] / 1_048_576.0)
                 end
+                s << sprintf("    %-34s      total  %.2f MiB logical weights\n",
+                             "matmul", total_weight_bytes / 1_048_576.0)
               end
               unless @@conversion_counts.empty?
                 s << "  conversion kernels:\n"
+                total_conversion_bytes = @@conversion_bytes.values.sum
                 @@conversion_counts.keys.sort_by { |name| {-@@conversion_bytes[name], name} }.each do |name|
                   s << sprintf("    %-34s %4d calls  %.2f MiB logical traffic\n",
                                name, @@conversion_counts[name], @@conversion_bytes[name] / 1_048_576.0)
                 end
+                s << sprintf("    %-34s      total  %.2f MiB logical traffic\n",
+                             "conversion", total_conversion_bytes / 1_048_576.0)
               end
               s << sprintf("  cpu_fallback matvecs: %d\n", @@cpu_fallback)
               s << sprintf("  total metal syncs: %d\n", total_syncs)

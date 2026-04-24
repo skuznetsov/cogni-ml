@@ -3006,8 +3006,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conversion_profile_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: spec fixtures, Metal kernels, or Qwen35 prefill path changes
-- claim: "A non-baseline pp16 smoke run printed the new `conversion kernels` section, including recurrent FFN up/gate Q4 input conversions and Q56 input/output conversion rows. The run was only used to verify report formatting, not speed."
-  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conversion_profile_smoke crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=16 --warmup=0 --reps=1 --load-warning-threshold=0 | sed -n '/conversion kernels:/,+8p'` on 2026-04-24
+- claim: "A non-baseline pp16 smoke run printed the new `conversion kernels` section plus logical traffic totals: matmul `3992.53 MiB`, conversion `102.47 MiB`. The run was only used to verify report formatting/totals, not speed."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conversion_totals_smoke crystal build --release bin/qwen35_prefill_attribution.cr ... && /tmp/qwen35_prefill_attribution_totals --prompt=16 --warmup=0 --reps=1 --load-warning-threshold=0 | rg "total  .*logical"` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: report formatting or conversion path changes
 **note:** This is measurement infrastructure, not a speedup. It supports the next quiet-host phase by quantifying whether a proposed conversion-elimination branch can matter before changing kernels.
