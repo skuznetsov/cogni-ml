@@ -674,6 +674,48 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, host load, or command-buffer bridge changes
 **adversary:** "The remaining prefill gap is not command-buffer creation overhead at current grouping. The temporary code was removed; focus on weight-traffic/matmul throughput or eliminating CPU hidden round-trips structurally."
 
+### [LM-prefill-Q56-HOST-SCRATCH-CLEANUP-1] Q56 host/scratch cleanup is exact but small
+**status:** verified
+**trust:** {F:0.78, G:narrow, R:0.78}
+**context:** ml (Qwen35 prefill host/runtime cleanup)
+**evidence:**
+- claim: "Shared F32 buffer reads no longer allocate a zero-filled Array before copying from unified-memory `contents`; the destination array is built and immediately overwritten."
+  source: `src/ml/gguf/qwen35_metal.cr`, commit `ce98bfd`
+  verified_at: 2026-04-24
+  decay_trigger: Metal buffer read path or Crystal Array.build semantics change
+- claim: "Q5/Q6 batch GEMM zero bias buffers are cleared directly through shared `contents` once, avoiding a heap zero Array before `ConstCache.write_once` in the steady prefill encode path."
+  source: `src/ml/gguf/qwen35_metal.cr`, commit `57ceaad`
+  verified_at: 2026-04-24
+  decay_trigger: Q56 GEMM bias handling changes
+- claim: "Q5/Q6 F16 conversion scratch buffers are reused by byte size instead of by weight offset; dispatches are encoded in order and the intermediate buffers are consumed before reuse."
+  source: `src/ml/gguf/qwen35_metal.cr`, commit `06dd28d`
+  verified_at: 2026-04-24
+  decay_trigger: Q56 conversion scheduling or command-buffer hazard assumptions change
+- claim: "Focused correctness gate passed after each cleanup; the final scratch cleanup run measured pp64 smoke avg `151.73 ms` / p50 `151.80 ms`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56scratch_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` and `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q56 staging code changes
+**adversary:** "This is exact cleanup and memory-footprint reduction, not a robust standalone speed breakthrough. The remaining gap is still dominated by Q4/Q5/Q6 matmul weight traffic."
+
+### [LM-prefill-Q56-NOBIAS-GEMM-FALSIFIER] Q56 no-bias GEMM mode is not a pp64 win
+**status:** refuted
+**trust:** {F:0.78, G:narrow, R:0.76}
+**context:** ml (Qwen35 prefill Q56_K GEMM)
+**evidence:**
+- claim: "A temporary exact branch added `apply_gelu=2` to `simd_mm_q5k` and `simd_mm_q6k`, skipping the zero-bias read/add for Qwen35 Q5/Q6 batch GEMM calls."
+  source: temporary local patch to `src/ml/gguf/kernels/gemm_mm.metal` and `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q56 GEMM output epilogue changes
+- claim: "Focused correctness passed with the branch: `spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr` -> 14 examples, 0 failures."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56nobias_spec crystal spec ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or Q56 route changes
+- claim: "Paired pp64 A/B refuted promotion: no-bias default avg `152.30 ms` / p50 `151.84 ms`, old bias path avg `152.00 ms` / p50 `151.80 ms`, wins `3/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56nobias_ab crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_Q56_NOBIAS_GEMM_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q56 kernel rewrite
+**decision:** "Do not add a Q56 no-bias epilogue mode now; it adds kernel branch surface without wall-time evidence. The temporary code was removed."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}

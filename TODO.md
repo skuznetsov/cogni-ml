@@ -107,6 +107,8 @@
   - [x] Disable Crystal GC during multi-token prefill hot path with `QWEN35_PREFILL_GC_GUARD_OFF=1` escape hatch; pp64 paired A/B improves default from `158.00 ms` off to `151.80 ms` on (`8/8` wins), and matched llama comparison moves native prefill to `421.41 tok/s` p50 vs llama `463.04 tok/s`
   - [x] Falsifier: direct Q5_K F32-input/F32-output batch GEMM compiled and passed focused specs, but pp64 paired A/B was neutral/negative (`152.56 ms` default vs `152.52 ms` branch p50, avg worse and wins `3/8`), so Q5 conversion removal is not enough leverage
   - [x] Falsifier: using fast command buffers for prefill helper/group paths compiled and passed specs, but pp64 was neutral (`152.02 ms` default vs `151.97 ms` fast, wins `2/8`) and pp256 slightly worse (`490.49 ms` default vs `490.79 ms` fast), so command-buffer creation is not the remaining gap
+  - [x] Remove avoidable host churn in Qwen35 prefill boundaries and Q5/Q6 GEMM staging: shared-buffer reads no longer zero-fill before copy, Q56 zero bias buffers are cleared directly once, and Q56 F16 conversion scratch is reused by size; focused specs pass and pp64 smoke remains around `151.80 ms` p50
+  - [x] Falsifier: adding a Q5/Q6 GEMM `no-bias` mode (`apply_gelu=2`) compiled and passed focused specs, but pp64 paired A/B was neutral/negative (`151.84 ms` default vs `151.80 ms` bias path off, wins `3/8`), so the bias add/read is not material enough to justify a kernel mode
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context
