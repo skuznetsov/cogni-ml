@@ -3462,3 +3462,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, Q5_K GEMM schedule, or benchmark harness change
 **note:** Keep the current double-buffered Q5_K GEMM. This closes the inverse of the earlier Q6 double-buffer falsifier: Q5 and Q6 prefer different schedules in the current kernels.
+
+### [LM-codex-SPEC-SKIP-KV-BACKUP-FALSIFIER-1] Speculative target rollback is not KV-copy bound
+**status:** verified-falsifier
+**trust:** {F:0.74, G:0.42, R:0.72}
+**context:** ml (Qwen speculative verifier rollback)
+**evidence:**
+- claim: "A temporary branch added recurrent-only target backup/restore for `chunk-inplace` speculative verification, leaving full-attention KV rows written after the cycle start in place because causal attention ignores future rows and later corrections overwrite them."
+  source: temporary `copy_recurrent_from!` branch in `src/ml/gguf/qwen35_cpu.cr` and `bin/qwen35_speculative_accept.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: attention cache semantics, rollback policy, or verifier state model changes
+- claim: "The shortcut preserved exactness in a focused rollback spec: a rejected speculative span followed by recurrent-only restore and correction matched full state restore on top1 and logit."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_skipkv_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...` -> `14 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 state layout or verifier correctness fixtures change
+- claim: "The shortcut was not a speed win on the high-accept path. `The capital of France is`, tokens=64/gamma=4/max_gamma=32 measured skip-KV default `16.30 ms/tok` and full backup `16.20 ms/tok`; `target_backup` stayed `10.6 ms` in both runs."
+  source: `bin/qwen35_speculative_accept.cr -- --tokens 64 --gamma 4 --max-gamma 32 "The capital of France is"`, with and without `QWEN35_SPEC_TARGET_BACKUP_KV_OFF=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, state buffer sizes, or backup implementation changes
+**note:** Do not spend more time on KV-only rollback copies for current short-context speculative decode. The remaining rollback cost is recurrent conv/SSM state, while the larger wall remains target verification plus draft generation.
