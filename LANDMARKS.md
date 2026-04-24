@@ -540,6 +540,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, host load, or Q56 FFN-down route changes
 **adversary:** "The conversion kernel/output buffer is not a material wall at pp64; the branch was removed. Future Q56 work needs to change matmul throughput or eliminate work, not only fold the final conversion."
 
+### [LM-prefill-SMALL-Q4-GEMV-1] Tiny Q4_K prefill projections should stay on GEMV
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.84}
+**context:** ml (Qwen35 prefill routing)
+**evidence:**
+- claim: "For small Q4_K prefill projections with `out_dim <= 64`, the 64-row Q4 GEMM tile is underfilled enough that the existing Q4 GEMV route is faster despite batch 64."
+  source: local patch to `src/ml/gguf/qwen35_metal.cr`, routed behind `QWEN35_SMALL_Q4_GEMV_OFF=1`
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K GEMM/GEMV kernel rewrite, alpha/beta projection shapes, or batch threshold changes
+- claim: "Correctness passed after default-enabling the small-Q4 GEMV route: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_smallq4gemv_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or prefill routing changes
+- claim: "Paired pp64 A/B favored the new default: default p50 `156.14 ms`, route-off p50 `164.04 ms`, wins `8/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_smallq4gemv_default_ab crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_SMALL_Q4_GEMV_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or route toggle semantics change
+- claim: "Matched llama comparison after promotion measured native pp64 p50 `408.02 tok/s` versus llama.cpp `463.3 tok/s`; decode remained ahead at native p50 `47.14 tok/s` versus llama `45.27 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_smallq4gemv_vs_llama crystal run --release ... bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: llama.cpp rebuild, benchmark settings, thermal/power state, or Qwen35 route changes
+**adversary:** "This is a narrow routing win, not a general GEMV-over-GEMM rule. Keep GEMM for large Q4 prefill projections; only the tiny alpha/beta-style projections are defaulted to GEMV."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}

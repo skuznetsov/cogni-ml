@@ -101,6 +101,7 @@
   - [x] Falsifier: a 256-thread Q4_K batch-64 GEMM reduced nominal batch tiles but did not survive benchmark adversary; same-process attribution was slightly positive (`164.51 ms` default vs `165.41 ms` off), but matched llama benchmark regressed (`378.72 tok/s` b64 vs `394.94 tok/s` current), so the branch was removed
   - [x] Falsifier: direct Q56_K FFN-down half-output add avoided an explicit `f16_to_f32` buffer but was neutral at pp64 (`167.22 ms` default vs `167.30 ms` branch p50, wins `4/8`), so conversion removal is not enough leverage
   - [x] Falsifier: llama.cpp-style single-buffer Q4_K GEMM with Q4-only `6144` byte threadgroup memory passed focused specs and improved standalone `4096x12288 b64` op attribution (`3.171 ms` → `2.975 ms`), but pp64 wall regressed (`167.39 ms` default p50 vs `176.01 ms` branch p50), so it is not a default prefill win
+  - [x] Route tiny Q4_K prefill projections (`out_dim <= 64`, especially recurrent alpha/beta) through GEMV instead of underfilled 64-row GEMM tiles; pp64 paired A/B improves default from `164.04 ms` off to `156.14 ms` on (`8/8` wins), and matched llama comparison moves native prefill to `408.02 tok/s` p50 vs llama `463.3 tok/s`
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context
@@ -146,6 +147,6 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - **Active phase:** 4 (optimization: beat llama.cpp)
 - **Active task:** 4.9 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
-- **Latest verified decode tweak:** default decode wave chunking moved from 4 layers to 2 layers after same-binary A/B (`2` beat `4` on prompt64/gen32, `8/10` wins, mean `22.385` vs `22.518 ms/tok`); fresh llama comparison still has native decode ahead (`47.01` vs `45.36 tok/s`) while pp64 prefill remains behind (`394.46` vs `462.28 tok/s`)
+- **Latest verified prefill tweak:** tiny Q4_K prefill projections now use GEMV by default (`QWEN35_SMALL_Q4_GEMV_OFF=1` disables it); matched prompt64/gen64 comparison shows native pp64 `408.02 tok/s` p50 vs llama.cpp `463.3 tok/s`, while decode remains ahead (`47.14` vs `45.27 tok/s`)
 - **Blocked:** nothing
 - **Last updated:** 2026-04-24

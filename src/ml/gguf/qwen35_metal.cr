@@ -904,7 +904,8 @@ module ML
                                        in_dim : Int32,
                                        out_dim : Int32,
                                        batch : Int32) : Nil
-          route = if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD
+          force_small_q4_gemv = small_q4_gemv_enabled? && qw.type.q4_k? && out_dim <= 64
+          route = if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD && !force_small_q4_gemv
                     "q4_gemm"
                   elsif q56_batch_gemm_enabled? && qw.type.q5_k? && batch > GEMM_BATCH_THRESHOLD
                     "q5_gemm"
@@ -915,7 +916,7 @@ module ML
                   end
           Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
 
-          if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD
+          if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD && !force_small_q4_gemv
             encode_q4k_gemm(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           elsif q56_batch_gemm_enabled? && qw.type.q5_k? && batch > GEMM_BATCH_THRESHOLD
             encode_q56k_gemm_f32(enc, mm5_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
@@ -1040,6 +1041,10 @@ module ML
 
         private def self.swiglu_inplace_enabled? : Bool
           ENV["QWEN35_SWIGLU_INPLACE_OFF"]? != "1"
+        end
+
+        private def self.small_q4_gemv_enabled? : Bool
+          ENV["QWEN35_SMALL_Q4_GEMV_OFF"]? != "1"
         end
 
         private def self.read_shared_top1(id_buf : ML::MetalBuffer, value_buf : ML::MetalBuffer) : Array(Float32)
