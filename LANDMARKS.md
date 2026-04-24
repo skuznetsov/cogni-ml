@@ -695,6 +695,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56scratch_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` and `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8`
   verified_at: 2026-04-24
   decay_trigger: benchmark harness, host load, or Q56 staging code changes
+- claim: "Matched llama comparison after the cleanup commits measured native pp64 p50 `420.49 tok/s` versus llama.cpp `461.16 tok/s`; decode remained ahead at native p50 `47.72 tok/s` versus llama `45.23 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_after_q56_cleanup_vs_llama crystal run --release ... bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: llama.cpp rebuild, benchmark settings, thermal/power state, or Q56 staging code changes
 **adversary:** "This is exact cleanup and memory-footprint reduction, not a robust standalone speed breakthrough. The remaining gap is still dominated by Q4/Q5/Q6 matmul weight traffic."
 
 ### [LM-prefill-Q56-NOBIAS-GEMM-FALSIFIER] Q56 no-bias GEMM mode is not a pp64 win

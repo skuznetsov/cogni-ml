@@ -154,6 +154,6 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - **Active phase:** 4 (optimization: beat llama.cpp)
 - **Active task:** 4.9 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
-- **Latest verified prefill tweak:** multi-token prefill disables Crystal GC during the hot path (`QWEN35_PREFILL_GC_GUARD_OFF=1` disables it); matched prompt64/gen64 comparison shows native pp64 `421.41 tok/s` p50 vs llama.cpp `463.04 tok/s`, while decode remains ahead (`48.02` vs `44.43 tok/s`)
+- **Latest verified prefill tweak:** multi-token prefill disables Crystal GC during the hot path (`QWEN35_PREFILL_GC_GUARD_OFF=1` disables it), followed by exact host/scratch cleanup in Qwen35 Metal staging; latest matched prompt64/gen64 comparison shows native pp64 `420.49 tok/s` p50 vs llama.cpp `461.16 tok/s`, while decode remains ahead (`47.72` vs `45.23 tok/s`)
 - **Blocked:** nothing
 - **Last updated:** 2026-04-24
