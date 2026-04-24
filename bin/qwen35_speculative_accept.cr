@@ -90,16 +90,17 @@ def greedy_sequence(weights : ML::GGUF::Qwen35Weights,
   ids
 end
 
-def resync_draft(weights : ML::GGUF::Qwen35Weights,
-                 base : ML::GGUF::Qwen35CPU::State,
-                 accepted_or_corrected : Array(Int32),
-                 start_pos : Int32) : {ML::GGUF::Qwen35CPU::State, Int32}
-  state = base.fork
+def resync_draft!(weights : ML::GGUF::Qwen35Weights,
+                  state : ML::GGUF::Qwen35CPU::State,
+                  base : ML::GGUF::Qwen35CPU::State,
+                  accepted_or_corrected : Array(Int32),
+                  start_pos : Int32) : Int32
+  state.copy_from!(base)
   next_id = -1
   accepted_or_corrected.each_with_index do |tok, i|
     next_id = advance_next(weights, tok, start_pos + i, state)
   end
-  {state, next_id}
+  next_id
 end
 
 puts "Loading tokenizer and models..."
@@ -153,136 +154,142 @@ while generated_ids.size < n_gen
   cycle_gamma = adaptive_gamma ? current_gamma : gamma
   gamma_sum += cycle_gamma
   gamma_max_seen = Math.max(gamma_max_seen, cycle_gamma)
-  tdb0 = Time.instant
-  draft_cycle_base.copy_from!(draft_state)
-  draft_backup_ms += (Time.instant - tdb0).total_milliseconds
-  candidates = [] of Int32
-
-  td0 = Time.instant
-  cycle_gamma.times do |i|
-    break if generated_ids.size + candidates.size >= n_gen
-    candidates << draft_next
-    draft_next = advance_next(draft, draft_next, pos + i, draft_state)
-  end
-  draft_ms += (Time.instant - td0).total_milliseconds
-  proposed += candidates.size
-
   correction_or_accepted = [] of Int32
+  candidates = [] of Int32
   rejected = false
 
-  if early_reject_enabled && verify_mode != "serial" && candidates[0] != target_next
-    # The first verifier expectation is already known from the previous step;
-    # avoid running a whole chunk when the cycle must reject immediately.
+  if early_reject_enabled && verify_mode != "serial" && draft_next != target_next
     generated_ids << target_next
     correction_or_accepted << target_next
+    proposed += 1
     tv0 = Time.instant
     target_next = advance_next(target, target_next, pos, target_state)
     target_verify_ms += (Time.instant - tv0).total_milliseconds
+    td0 = Time.instant
+    draft_next = advance_next(draft, correction_or_accepted[0], pos, draft_state)
+    draft_ms += (Time.instant - td0).total_milliseconds
     pos += 1
     rejected = true
     early_rejects += 1
-  elsif verify_mode == "serial"
-    candidates.each do |cand|
-      if cand == target_next
-        generated_ids << cand
-        correction_or_accepted << cand
-        accepted += 1
-        tv0 = Time.instant
-        target_next = advance_next(target, cand, pos, target_state)
-        target_verify_ms += (Time.instant - tv0).total_milliseconds
-        pos += 1
-      else
-        generated_ids << target_next
-        correction_or_accepted << target_next
-        tv0 = Time.instant
-        target_next = advance_next(target, target_next, pos, target_state)
-        target_verify_ms += (Time.instant - tv0).total_milliseconds
-        pos += 1
-        rejected = true
-        break
-      end
-    end
-  elsif verify_mode == "chunk"
-    target_base = target_state
-    verify_state = target_base.fork
-    tv0 = Time.instant
-    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, verify_state)
-    target_verify_ms += (Time.instant - tv0).total_milliseconds
-    if trace
-      puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
-    end
-
-    expected = target_next
-    reject_at = nil.as(Int32?)
-    candidates.each_with_index do |cand, i|
-      if cand == expected
-        generated_ids << cand
-        correction_or_accepted << cand
-        accepted += 1
-        expected = target_nexts[i][0]
-      else
-        generated_ids << expected
-        correction_or_accepted << expected
-        reject_at = i
-        rejected = true
-        break
-      end
-    end
-
-    if rejected
-      tv1 = Time.instant
-      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
-      target_verify_ms += (Time.instant - tv1).total_milliseconds
-      target_next = corrected[-1][0]
-      pos += correction_or_accepted.size
-    else
-      target_state.copy_from!(verify_state)
-      target_next = target_nexts[-1][0]
-      pos += candidates.size
-    end
-  else
-    tb0 = Time.instant
-    target_backup_state.copy_from!(target_state)
-    target_backup_ms += (Time.instant - tb0).total_milliseconds
-    tv0 = Time.instant
-    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, target_state)
-    target_verify_ms += (Time.instant - tv0).total_milliseconds
-    if trace
-      puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
-    end
-
-    expected = target_next
-    candidates.each_with_index do |cand, i|
-      if cand == expected
-        generated_ids << cand
-        correction_or_accepted << cand
-        accepted += 1
-        expected = target_nexts[i][0]
-      else
-        generated_ids << expected
-        correction_or_accepted << expected
-        rejected = true
-        break
-      end
-    end
-
-    if rejected
-      target_state.copy_from!(target_backup_state)
-      tv1 = Time.instant
-      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
-      target_verify_ms += (Time.instant - tv1).total_milliseconds
-      target_next = corrected[-1][0]
-      pos += correction_or_accepted.size
-    else
-      target_next = target_nexts[-1][0]
-      pos += candidates.size
-    end
   end
 
-  if rejected
-    tr0 = Time.instant
-    draft_state, draft_next = resync_draft(draft, draft_cycle_base, correction_or_accepted, cycle_start_pos)
-    draft_resync_ms += (Time.instant - tr0).total_milliseconds
+  unless rejected
+    tdb0 = Time.instant
+    draft_cycle_base.copy_from!(draft_state)
+    draft_backup_ms += (Time.instant - tdb0).total_milliseconds
+
+    td0 = Time.instant
+    cycle_gamma.times do |i|
+      break if generated_ids.size + candidates.size >= n_gen
+      candidates << draft_next
+      draft_next = advance_next(draft, draft_next, pos + i, draft_state)
+    end
+    draft_ms += (Time.instant - td0).total_milliseconds
+    proposed += candidates.size
+
+    if verify_mode == "serial"
+      candidates.each do |cand|
+        if cand == target_next
+          generated_ids << cand
+          correction_or_accepted << cand
+          accepted += 1
+          tv0 = Time.instant
+          target_next = advance_next(target, cand, pos, target_state)
+          target_verify_ms += (Time.instant - tv0).total_milliseconds
+          pos += 1
+        else
+          generated_ids << target_next
+          correction_or_accepted << target_next
+          tv0 = Time.instant
+          target_next = advance_next(target, target_next, pos, target_state)
+          target_verify_ms += (Time.instant - tv0).total_milliseconds
+          pos += 1
+          rejected = true
+          break
+        end
+      end
+    elsif verify_mode == "chunk"
+      target_base = target_state
+      verify_state = target_base.fork
+      tv0 = Time.instant
+      target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, verify_state)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+      if trace
+        puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
+      end
+
+      expected = target_next
+      reject_at = nil.as(Int32?)
+      candidates.each_with_index do |cand, i|
+        if cand == expected
+          generated_ids << cand
+          correction_or_accepted << cand
+          accepted += 1
+          expected = target_nexts[i][0]
+        else
+          generated_ids << expected
+          correction_or_accepted << expected
+          reject_at = i
+          rejected = true
+          break
+        end
+      end
+
+      if rejected
+        tv1 = Time.instant
+        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+        target_verify_ms += (Time.instant - tv1).total_milliseconds
+        target_next = corrected[-1][0]
+        pos += correction_or_accepted.size
+      else
+        target_state.copy_from!(verify_state)
+        target_next = target_nexts[-1][0]
+        pos += candidates.size
+      end
+    else
+      tb0 = Time.instant
+      target_backup_state.copy_from!(target_state)
+      target_backup_ms += (Time.instant - tb0).total_milliseconds
+      tv0 = Time.instant
+      target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, target_state)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+      if trace
+        puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
+      end
+
+      expected = target_next
+      candidates.each_with_index do |cand, i|
+        if cand == expected
+          generated_ids << cand
+          correction_or_accepted << cand
+          accepted += 1
+          expected = target_nexts[i][0]
+        else
+          generated_ids << expected
+          correction_or_accepted << expected
+          rejected = true
+          break
+        end
+      end
+
+      if rejected
+        target_state.copy_from!(target_backup_state)
+        tv1 = Time.instant
+        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+        target_verify_ms += (Time.instant - tv1).total_milliseconds
+        target_next = corrected[-1][0]
+        pos += correction_or_accepted.size
+      else
+        target_next = target_nexts[-1][0]
+        pos += candidates.size
+      end
+    end
+
+    if rejected
+      tr0 = Time.instant
+      draft_next = resync_draft!(draft, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
+      draft_resync_ms += (Time.instant - tr0).total_milliseconds
+    end
   end
 
   if adaptive_gamma
