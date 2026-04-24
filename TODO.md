@@ -114,6 +114,7 @@
   - [x] Reuse Q4_K half-input conversion across paired FFN gate/up matmuls for large prefill batches (`QWEN35_Q4K_PAIR_H16_GEMM_OFF=1` disables it, active at batch `>=256`): pp256 isolated paired A/B improves default by `~1.56 ms` avg / `~2.21 ms` p50 (`7/10` wins), pp512 opt-in A/B improved by `~1.82 ms` (`4/4` pair wins), and pp64 is gated off after adversary A/B showed the pair path is not reliable at short prompts
   - [x] Falsifier: sharing one H16 activation conversion between recurrent Q5 qkv and Q4 gate/z projections compiled and passed focused specs, but pp256 paired A/B was flat (`485.56 ms` default vs `485.59 ms` opt-in, wins `4/8`), so recurrent projection conversion reuse is not enough leverage
   - [x] Add conversion-kernel attribution to the prefill profile report so future quiet runs can separate duplicated `F32<->F16` activation/output traffic from quantized weight traffic; smoke pp16 report shows conversion rows plus matmul/conversion logical traffic totals
+  - [x] Harden benchmark quiet-mode checks with both per-process and aggregate CPU thresholds (`--load-warning-threshold`, `--load-total-warning-threshold`) so noisy multi-process desktops do not silently pass `--require-quiet`
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

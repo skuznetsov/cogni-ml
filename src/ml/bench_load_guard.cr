@@ -1,10 +1,14 @@
 module ML::BenchLoadGuard
   record ProcessLoad, pid : Int64, cpu : Float64, command : String
+  record HostLoad, busy_processes : Array(ProcessLoad), total_cpu : Float64,
+    per_process_threshold : Float64, total_threshold : Float64 do
+    def busy? : Bool
+      !busy_processes.empty? ||
+        (total_threshold > 0.0 && total_cpu >= total_threshold)
+    end
+  end
 
-  def self.busy_processes(threshold_pct : Float64,
-                          self_pid : Int64 = Process.pid) : Array(ProcessLoad)
-    return [] of ProcessLoad if threshold_pct <= 0.0
-
+  def self.process_loads(self_pid : Int64 = Process.pid) : Array(ProcessLoad)
     output = IO::Memory.new
     status = Process.run("ps", args: ["-Ao", "pid=,pcpu=,comm="], output: output, error: Process::Redirect::Close)
     return [] of ProcessLoad unless status.success?
@@ -19,7 +23,6 @@ module ML::BenchLoadGuard
       command = fields[2]
       next unless pid && cpu
       next if pid == self_pid
-      next if cpu < threshold_pct
 
       loads << ProcessLoad.new(pid, cpu, command)
     end
@@ -28,29 +31,53 @@ module ML::BenchLoadGuard
     [] of ProcessLoad
   end
 
-  def self.warn_if_busy(threshold_pct : Float64, io : IO = STDERR) : Nil
-    busy = busy_processes(threshold_pct)
-    report_busy(busy, threshold_pct, io)
+  def self.sample(per_process_threshold : Float64,
+                  total_threshold : Float64,
+                  self_pid : Int64 = Process.pid) : HostLoad
+    loads = process_loads(self_pid)
+    busy = if per_process_threshold > 0.0
+             loads.select { |load| load.cpu >= per_process_threshold }
+           else
+             [] of ProcessLoad
+           end
+    HostLoad.new(
+      busy,
+      loads.sum(0.0) { |load| load.cpu },
+      per_process_threshold,
+      total_threshold
+    )
   end
 
-  def self.require_quiet!(threshold_pct : Float64, io : IO = STDERR) : Nil
-    busy = busy_processes(threshold_pct)
-    return if busy.empty?
-
-    report_busy(busy, threshold_pct, io)
-    raise "benchmark host is not quiet; lower load or pass --load-warning-threshold=0 to bypass"
+  def self.warn_if_busy(per_process_threshold : Float64,
+                        total_threshold : Float64 = 0.0,
+                        io : IO = STDERR) : Nil
+    report(sample(per_process_threshold, total_threshold), io)
   end
 
-  private def self.report_busy(busy : Array(ProcessLoad),
-                               threshold_pct : Float64,
-                               io : IO) : Nil
-    return if busy.empty?
+  def self.require_quiet!(per_process_threshold : Float64,
+                          total_threshold : Float64 = 0.0,
+                          io : IO = STDERR) : Nil
+    host_load = sample(per_process_threshold, total_threshold)
+    return unless host_load.busy?
+
+    report(host_load, io)
+    raise "benchmark host is not quiet; lower load or pass --load-warning-threshold=0 --load-total-warning-threshold=0 to bypass"
+  end
+
+  private def self.report(host_load : HostLoad, io : IO) : Nil
+    return unless host_load.busy?
 
     io.puts "WARNING: host CPU load may contaminate benchmark results."
-    io.puts "         Processes above #{threshold_pct.round(1)}% CPU:"
-    busy.first(5).each do |load|
-      io.printf "         pid=%d cpu=%.1f%% cmd=%s\n", load.pid, load.cpu, load.command
+    if host_load.total_threshold > 0.0 && host_load.total_cpu >= host_load.total_threshold
+      io.printf "         Total observed CPU %.1f%% exceeds %.1f%%.\n",
+        host_load.total_cpu, host_load.total_threshold
     end
-    io.puts "         Re-run with --load-warning-threshold=0 to suppress this warning."
+    unless host_load.busy_processes.empty?
+      io.puts "         Processes above #{host_load.per_process_threshold.round(1)}% CPU:"
+      host_load.busy_processes.first(5).each do |load|
+        io.printf "         pid=%d cpu=%.1f%% cmd=%s\n", load.pid, load.cpu, load.command
+      end
+    end
+    io.puts "         Re-run with --load-warning-threshold=0 --load-total-warning-threshold=0 to suppress this warning."
   end
 end

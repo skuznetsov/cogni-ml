@@ -13,6 +13,7 @@ reps = 3
 compare_env = nil.as(String?)
 compare_off = "1"
 load_warning_threshold = 50.0
+load_total_warning_threshold = 100.0
 require_quiet = false
 
 OptionParser.parse do |p|
@@ -24,7 +25,8 @@ OptionParser.parse do |p|
   p.on("--compare-env=NAME", "Also run A/B with NAME unset vs NAME=1") { |v| compare_env = v }
   p.on("--compare-off=VALUE", "Off value for --compare-env (default: 1)") { |v| compare_off = v }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
-  p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds --load-warning-threshold") { require_quiet = true }
+  p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
+  p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -34,9 +36,9 @@ raise "--warmup must be non-negative" unless warmup >= 0
 raise "--reps must be positive" unless reps > 0
 
 if require_quiet
-  ML::BenchLoadGuard.require_quiet!(load_warning_threshold)
+  ML::BenchLoadGuard.require_quiet!(load_warning_threshold, load_total_warning_threshold)
 else
-  ML::BenchLoadGuard.warn_if_busy(load_warning_threshold)
+  ML::BenchLoadGuard.warn_if_busy(load_warning_threshold, load_total_warning_threshold)
 end
 
 def prompt_tokens(n : Int32) : Array(Int32)

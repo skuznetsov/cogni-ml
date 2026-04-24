@@ -143,6 +143,7 @@ threads = 8
 flash_attn = false
 native_decode_top1 = true
 load_warning_threshold = 50.0
+load_total_warning_threshold = 100.0
 require_quiet = false
 
 OptionParser.parse do |p|
@@ -158,16 +159,17 @@ OptionParser.parse do |p|
   p.on("--flash-attn", "Enable flash attention in llama.cpp") { flash_attn = true }
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
-  p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds --load-warning-threshold") { require_quiet = true }
+  p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
+  p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
 end
 
 raise "Model not found: #{model}" unless File.exists?(model)
 raise "llama-bench not found: #{llama_bench}" unless File.exists?(llama_bench)
 
 if require_quiet
-  ML::BenchLoadGuard.require_quiet!(load_warning_threshold)
+  ML::BenchLoadGuard.require_quiet!(load_warning_threshold, load_total_warning_threshold)
 else
-  ML::BenchLoadGuard.warn_if_busy(load_warning_threshold)
+  ML::BenchLoadGuard.warn_if_busy(load_warning_threshold, load_total_warning_threshold)
 end
 
 w = ML::GGUF::Qwen35Weights.from_gguf(model)
