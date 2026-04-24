@@ -2660,6 +2660,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: temporary local release probes `tmp_qwen_fork_bench.cr` and `tmp_qwen_restore_bench.cr` on AC power on 2026-04-23
   verified_at: 2026-04-23
   decay_trigger: state size, buffer-copy implementation, or power/load changes
+- claim: "A naive optimization that copied only `position / max_seq` bytes for Metal K/V buffers was not exact with the current state invariant. Focused verifier specs failed with logit mismatches in `chunked top1 verifier matches serial greedy target steps` and `keeps chunk verifier constants model-specific`, so the code was reverted."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefixcopy_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_state_snapshot_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: per-layer KV valid-length tracking, full-attention position semantics, or state copy implementation changes
 **note:** This is infrastructure, not a speed win by itself. It removes a blocker for exact speculative verification; naive per-candidate fork is too expensive, but preallocated restore is cheap enough to use as a rollback primitive while building a batched verifier.
 
 ### [LM-codex-DUAL-Q4-FFN-REFUTE-1] Fusing FFN gate/up Q4 GEMV into one kernel is slower
@@ -3590,6 +3594,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `crystal run --release bin/qwen35_speculative_accept.cr -- --tokens 64 --gamma 4/8 --max-gamma 32 "def fibonacci(n):"` with schedule env variants on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: host load, gamma schedule, or early-reject/fallback policy changes
+- claim: "After exact row-batched top1 was promoted for large verifier chunks, re-enabling adaptive regrow remained a strong regression. `def fibonacci(n):` moved from default `23.77 ms/tok` to `48.00 ms/tok` with `QWEN35_SPEC_ADAPTIVE_REGROW=1`, because draft/resync costs returned (`draft=820.9 ms`, `draft_resync=192.8 ms`)."
+  source: `/tmp/qwen35_spec_ab_current --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "def fibonacci(n):"` with and without `QWEN35_SPEC_ADAPTIVE_REGROW=1` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: draft model speed, target verifier cost, or rejection fallback policy changes
 **note:** Keep the current default schedule. The next exact win is unlikely to come from more schedule aggressiveness; it needs lower target verifier cost or a true batched verifier path.
 
 ### [LM-codex-SPEC-STAGED-VERIFY-1] Staged verifier is useful only as high-accept opt-in turbo
@@ -3613,6 +3621,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: same `/tmp/qwen35_speculative_accept_staged` A/B on `def fibonacci(n):` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: prompt distribution, rejection fallback policy, or staged guard policy changes
+- claim: "After row-batched top1 promotion, adaptive staged mode with larger gates was not a default win either: high-accept `The capital of France is` regressed from chunk-inplace `18.76 ms/tok` to staged gate8 `26.86` and gate16 `21.79`, while rejection-heavy prompts were neutral/slower."
+  source: `/tmp/qwen35_spec_ab_current --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace|staged --stage-gate 8|16` prompt suite on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: verifier route, row-batched top1 threshold, staged policy, or host load changes
 **note:** Keep staged verifier opt-in. It is an exact high-accept turbo lever, but default scheduling still needs a prompt-safe acceptance predictor or cheaper verifier before using gamma 32 broadly.
 
 ### [LM-codex-Q6-TOP1-ROWS16-FALSIFIER-1] Q6 top1 rows16 does not improve verifier cost
