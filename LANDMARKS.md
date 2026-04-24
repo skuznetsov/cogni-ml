@@ -3665,6 +3665,21 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: GEMM input format, fused conversion kernels, or profile accounting changes
 **note:** Defer FlashAttention as a performance project until recurrent scan and conversion pressure are reduced. The next long-prefill breakthrough is parallel/chunked DeltaNet scan or an exact recurrent WBA diamond, not attention.
 
+### [LM-codex-QWEN-LLAMA-BENCH-20260424-1] Current Qwen35 native path beats llama.cpp on pp64 prefill and matches decode
+**status:** verified-benchmark
+**trust:** {F:0.76, G:0.42, R:0.70}
+**context:** ml (Qwen performance benchmark)
+**evidence:**
+- claim: "On the current M2 Max run, native pp64 prefill with preallocated prompt state beat llama.cpp by `+35.53%`: cogni-ml p50 `335.25 tok/s` versus llama.cpp avg `247.37 tok/s`."
+  source: `/tmp/benchmark_qwen_vs_llama_current --prompt=64 --gen=64 --reps=3 --warmup=1 --native-prefill-prealloc --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, llama.cpp build/model, native prefill route, or benchmark harness changes
+- claim: "Decode is currently parity/slightly ahead in the same run: cogni-ml p50 `16.32 tok/s` versus llama.cpp avg `16.15 tok/s`, a `+1.03%` gap."
+  source: same benchmark run on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, decode wave route, speculative mode, llama.cpp build/model, or benchmark harness changes
+**note:** Treat this as current local evidence, not a stable public claim. Rerun under quiet-load conditions before publishing; the next decode target is a meaningful margin beyond parity, not another small scheduler tweak.
+
 ### [LM-codex-Q6-TOP1-ROWS16-FALSIFIER-1] Q6 top1 rows16 does not improve verifier cost
 **status:** verified-falsifier
 **trust:** {F:0.72, G:0.36, R:0.68}
