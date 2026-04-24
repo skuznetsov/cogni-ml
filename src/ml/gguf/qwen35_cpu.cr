@@ -23,6 +23,7 @@ module ML::GGUF
     FALLBACK_PREFILL_CHUNK_SIZE = 4096
     GIB                         = 1024_u64 * 1024_u64 * 1024_u64
     @@default_prefill_chunk_size : Int32?
+    @@prefill_gc_guard_active = false
 
     def prefill_chunk_size_for_memory(total_bytes : UInt64?) : Int32
       return FALLBACK_PREFILL_CHUNK_SIZE unless bytes = total_bytes
@@ -33,6 +34,23 @@ module ML::GGUF
 
     def default_prefill_chunk_size : Int32
       @@default_prefill_chunk_size ||= prefill_chunk_size_for_memory(physical_memory_bytes?)
+    end
+
+    private def prefill_gc_guard_enabled? : Bool
+      ENV["QWEN35_PREFILL_GC_GUARD_OFF"]? != "1"
+    end
+
+    private def with_prefill_gc_guard
+      return yield if @@prefill_gc_guard_active || !prefill_gc_guard_enabled?
+
+      @@prefill_gc_guard_active = true
+      GC.disable
+      begin
+        yield
+      ensure
+        GC.enable
+        @@prefill_gc_guard_active = false
+      end
     end
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1548,6 +1566,10 @@ module ML::GGUF
                        start_pos : Int32,
                        state : State) : Nil
       return if token_ids.empty?
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        with_prefill_gc_guard { prefill_tokens(weights, token_ids, start_pos, state) }
+        return
+      end
 
       prefill_tokens_hidden(weights, token_ids, start_pos, state)
     end
@@ -1557,6 +1579,9 @@ module ML::GGUF
                             start_pos : Int32,
                             state : State) : {Int32, Float32}
       raise ArgumentError.new("prefill_tokens_top1 token_ids must not be empty") if token_ids.empty?
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard { prefill_tokens_top1(weights, token_ids, start_pos, state) }
+      end
 
       if ENV["QWEN35_PREFILL_FINAL_CHUNK_OFF"]? != "1" &&
          ENV["QWEN35_PREFILL_CHUNK_OFF"]? != "1" &&

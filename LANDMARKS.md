@@ -601,6 +601,33 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, host load, or Q56 route changes
 **adversary:** "Even with F32/F16 conversion overhead, Q5/Q6 batch GEMM remains better for 1024-wide projections at batch 64. Do not copy the Q4 `out_dim <= 64` rule to Q56 without new evidence."
 
+### [LM-prefill-GC-GUARD-1] Disable Crystal GC during multi-token prefill hot path
+**status:** verified
+**trust:** {F:0.82, G:medium, R:0.80}
+**context:** ml (Qwen35 prefill runtime)
+**evidence:**
+- claim: "Multi-token prefill allocates several large boundary `Array(Float32)` objects while moving hidden states between fused Metal layer groups; disabling Crystal GC only during the hot prefill call reduces GC/jitter without changing numerical semantics."
+  source: local patch to `src/ml/gguf/qwen35_cpu.cr`, guarded by `QWEN35_PREFILL_GC_GUARD_OFF=1`
+  verified_at: 2026-04-24
+  decay_trigger: GPU-resident layer scheduler, boundary Array allocation pattern, or Crystal GC behavior changes
+- claim: "Correctness passed after default-enabling the guard: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_gc_guard_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or prefill control flow changes
+- claim: "Paired pp64 A/B favored the guard: default p50 `151.80 ms`, guard-off p50 `158.00 ms`, wins `8/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_gc_guard_ab64 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_PREFILL_GC_GUARD_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or prefill allocation changes
+- claim: "At pp256, profile read spikes dropped from a prior `31.34 ms` read total to `3.23 ms` with the guard; paired wall was mixed but average favored the guard (`489.36 ms` vs `493.41 ms`) while p50 was effectively neutral."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_gc_guard_ab256 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=6 --compare-env=QWEN35_PREFILL_GC_GUARD_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: host load, GC behavior, or GPU-resident hidden-state refactor
+- claim: "Matched llama comparison after promotion measured native pp64 p50 `421.41 tok/s` versus llama.cpp `463.04 tok/s`; decode measured native p50 `48.02 tok/s` versus llama `44.43 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_gc_guard_vs_llama crystal run --release ... bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: llama.cpp rebuild, benchmark settings, thermal/power state, or prefill runtime changes
+**adversary:** "This is a runtime-jitter optimization, not a substitute for GPU-resident hidden-state scheduling. It is scoped to multi-token prefill, has an env escape hatch, and should be revisited if boundary Arrays are eliminated."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}

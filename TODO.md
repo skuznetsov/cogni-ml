@@ -104,6 +104,7 @@
   - [x] Route tiny Q4_K prefill projections (`out_dim <= 64`, especially recurrent alpha/beta) through GEMV instead of underfilled 64-row GEMM tiles; pp64 paired A/B improves default from `164.04 ms` off to `156.14 ms` on (`8/8` wins), and matched llama comparison moves native prefill to `408.02 tok/s` p50 vs llama `463.3 tok/s`
   - [x] Falsifier: extending the tiny-Q4 GEMV rule to `out_dim <= 1024` makes pp64 slower (`165.86 ms` p50 at threshold 64 vs `169.08 ms` at threshold 1024, wins `8/8` for threshold 64), so keep the rule narrow
   - [x] Falsifier: routing small Q5/Q6 prefill projections (`out_dim <= 1024`) through GEMV instead of batch GEMM is also slower at pp64 (`165.07 ms` default vs `167.05 ms` GEMV, wins `8/8` for default)
+  - [x] Disable Crystal GC during multi-token prefill hot path with `QWEN35_PREFILL_GC_GUARD_OFF=1` escape hatch; pp64 paired A/B improves default from `158.00 ms` off to `151.80 ms` on (`8/8` wins), and matched llama comparison moves native prefill to `421.41 tok/s` p50 vs llama `463.04 tok/s`
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context
@@ -149,6 +150,6 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - **Active phase:** 4 (optimization: beat llama.cpp)
 - **Active task:** 4.9 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
-- **Latest verified prefill tweak:** tiny Q4_K prefill projections now use GEMV by default (`QWEN35_SMALL_Q4_GEMV_OFF=1` disables it); matched prompt64/gen64 comparison shows native pp64 `408.02 tok/s` p50 vs llama.cpp `463.3 tok/s`, while decode remains ahead (`47.14` vs `45.27 tok/s`)
+- **Latest verified prefill tweak:** multi-token prefill disables Crystal GC during the hot path (`QWEN35_PREFILL_GC_GUARD_OFF=1` disables it); matched prompt64/gen64 comparison shows native pp64 `421.41 tok/s` p50 vs llama.cpp `463.04 tok/s`, while decode remains ahead (`48.02` vs `44.43 tok/s`)
 - **Blocked:** nothing
 - **Last updated:** 2026-04-24
