@@ -217,6 +217,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_hybrid --tokens 64 --gamma 4 --verify hybrid|chunk-inplace`, prompts `The capital of France is`, `Once upon a time`, `The quick brown fox`, `def fibonacci(n):`, `Today I want to`, on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: verifier mode policy, serial verifier performance, chunk verifier performance, or prompt acceptance distribution changes
+- claim: "A progressive first-cycle verifier that serial-probes 1/2/3 candidates and chunks the rest is exact but not worth carrying. High-acceptance prompt regressed (`19.41-19.70 ms/tok` vs chunk `19.04`), partial-reject prompts were weaker than `hybrid`, and `def fibonacci(n):` regressed (`21.67-21.90` vs chunk `21.51`). The temporary code was removed."
+  source: temporary `/tmp/qwen35_speculative_accept_progressive --tokens 64 --gamma 4 --verify progressive --progressive-probe 1|2|3`, same prompts, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: verifier implementation, prompt acceptance distribution, or progressive verifier redesign
 
 ## Graph Visualization
 
