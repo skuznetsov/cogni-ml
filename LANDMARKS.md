@@ -218,9 +218,28 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-22
   decay_trigger: N/A
 - claim: "kernel_mul_mv_q4_K_f32 (GEMV for decode, batch=1) at ggml-metal.metal:7716-7824. N_R0_Q4_K template for row-parallelism."
-  source: same file
+  source: `ggml-metal.metal:7716-7824`
   verified_at: 2026-04-22
   decay_trigger: N/A
+
+### [LM-prefill-FR-FUSION-1] Full-attention to recurrent boundary fusion
+**status:** verified
+**trust:** {F:0.85, G:narrow, R:0.85}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "Qwen35 prefill now fuses each full-attention chunk followed by a recurrent run into one Metal command buffer, preserving exact layer order/state updates while removing seven CPU read/write/sync boundaries at pp64."
+  source: `src/ml/gguf/qwen35_cpu.cr`, `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: prefill scheduler or Qwen35 layer cadence changes
+- claim: "Correctness gate passed: `crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` -> 27 examples, 0 failures."
+  source: local command output
+  verified_at: 2026-04-24
+  decay_trigger: Metal kernels, state layout, or Qwen35 forward path changes
+- claim: "Warm prefill profile syncs drop from 17 to 10 and wall improves from 177.20 ms with `QWEN35_PREFILL_FUSE_FULL_REC_OFF=1` to 172.53 ms default; post-fix paired native A/B won 9/12 with p50 174.77 ms vs 179.81 ms, but the standard llama comparison run was noisy and did not monotonically improve."
+  source: local paired A/B, warm profile scripts, and `bin/benchmark_qwen_vs_llama.cr`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, power state, or kernel scheduler changes
+**adversary:** "Effect size is small and near system noise; keep env-off fallback and treat this as a boundary-overhead reduction, not a kernel breakthrough. Earlier A/B before layer-unique constant buffers is stale."
 
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified

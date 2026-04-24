@@ -677,6 +677,125 @@ module ML::GGUF
       {% end %}
     end
 
+    private def full_attn_then_recurrent_chunk_project_many_routed(inp : Array(Float32),
+                                                                   n_tokens : Int32,
+                                                                   start_pos : Int32,
+                                                                   state : State,
+                                                                   weights : Qwen35Weights,
+                                                                   il : Int32,
+                                                                   hp : Qwen35Hparams,
+                                                                   max_seq : Int32) : {Array(Float32), Int32}?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_PREFILL_FUSE_FULL_REC_OFF"]? == "1"
+        return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
+        return nil if ENV["QWEN35_PREFILL_REC_RUN_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        full_lw = weights.layers[il].as?(Qwen35FullAttnWeights)
+        return nil unless full_lw
+
+        run_start = il + 1
+        return nil if run_start >= weights.layers.size
+        run_end = run_start
+        while run_end < weights.layers.size
+          break unless weights.layers[run_end].is_a?(Qwen35RecurrentWeights)
+          run_end += 1
+        end
+        return nil if run_end == run_start
+
+        supported = metal_qw_supported?(full_lw.attn_q_qw) &&
+                    metal_qw_supported?(full_lw.attn_k_qw) &&
+                    metal_qw_supported?(full_lw.attn_v_qw) &&
+                    metal_qw_supported?(full_lw.attn_output_qw) &&
+                    metal_qw_supported?(full_lw.ffn_gate_qw) &&
+                    metal_qw_supported?(full_lw.ffn_up_qw) &&
+                    metal_qw_supported?(full_lw.ffn_down_qw)
+        return nil unless supported
+
+        rec_layers = [] of Qwen35RecurrentWeights
+        conv_bufs = [] of ML::MetalBuffer
+        ssm_bufs = [] of ML::MetalBuffer
+        h_k = hp.ssm_group_count
+        h_v = hp.ssm_time_step_rank
+        s = hp.ssm_state_size
+        qkv_dim = 2 * h_k * s + h_v * s
+        conv_k = hp.ssm_conv_kernel
+
+        j = run_start
+        while j < run_end
+          rw = weights.layers[j].as(Qwen35RecurrentWeights)
+          supported &&= metal_qw_supported?(rw.attn_qkv_qw) &&
+                        metal_qw_supported?(rw.attn_gate_qw) &&
+                        metal_qw_supported?(rw.ssm_alpha_qw) &&
+                        metal_qw_supported?(rw.ssm_beta_qw) &&
+                        metal_qw_supported?(rw.ssm_out_qw) &&
+                        metal_qw_supported?(rw.ffn_gate_qw) &&
+                        metal_qw_supported?(rw.ffn_up_qw) &&
+                        metal_qw_supported?(rw.ffn_down_qw)
+          rec_layers << rw
+
+          lstate = state.layers[j]
+          conv_bytes = ((conv_k - 1) * qkv_dim).to_i64 * sizeof(Float32)
+          conv_buf = lstate.conv_state_buf
+          if conv_buf.nil?
+            conv_buf = ML::MetalBuffer.new(conv_bytes)
+            if conv_state = lstate.conv_state
+              conv_buf.write(conv_state)
+            else
+              conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
+            end
+            lstate.conv_state_buf = conv_buf
+          end
+          conv_bufs << conv_buf
+
+          ssm_bytes = (h_v * s * s).to_i64 * sizeof(Float32)
+          ssm_buf = lstate.ssm_state_buf
+          if ssm_buf.nil?
+            ssm_buf = ML::MetalBuffer.new(ssm_bytes)
+            if ssm_state = lstate.ssm_state
+              ssm_buf.write(ssm_state)
+            else
+              ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
+            end
+            lstate.ssm_state_buf = ssm_buf
+          end
+          ssm_bufs << ssm_buf
+          j += 1
+        end
+        return nil unless supported
+
+        kv_dim = hp.head_dim * hp.n_head_kv
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        full_state = state.layers[il]
+        k_buf = full_state.k_cache_buf
+        v_buf = full_state.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          full_state.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          full_state.v_cache_buf = v_buf
+        end
+
+        scale = (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32
+        out = Qwen35Metal.full_attn_then_recurrent_chunk_project_many(
+          inp,
+          full_lw.attn_q_qw, full_lw.attn_k_qw, full_lw.attn_v_qw,
+          full_lw.attn_norm, full_lw.attn_q_norm, full_lw.attn_k_norm,
+          full_lw.attn_output_qw, k_buf, v_buf, full_lw.post_attention_norm,
+          full_lw.ffn_gate_qw, full_lw.ffn_up_qw, full_lw.ffn_down_qw,
+          start_pos, n_tokens,
+          hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
+          hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
+          conv_bufs, ssm_bufs, rec_layers, h_k, h_v, s, conv_k)
+        out ? {out, run_end} : nil
+      {% else %}
+        nil
+      {% end %}
+    end
+
     # Full-attention GPU route:
     #   qkv projections -> split/norm/rope -> kv write -> attn -> out proj
     private def full_attn_project_routed(lstate : LayerState,
@@ -1413,7 +1532,11 @@ module ML::GGUF
         lw = weights.layers[il]
         case lw
         in Qwen35FullAttnWeights
-          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
+          if fused = full_attn_then_recurrent_chunk_project_many_routed(x, n_tokens, start_pos, state, weights, il, hp, max_seq)
+            x = fused[0]
+            il = fused[1]
+            next
+          elsif gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
             x = gpu_out
           else
             out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)

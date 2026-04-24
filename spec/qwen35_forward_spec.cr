@@ -154,6 +154,34 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "chunk-prefill remains deterministic after cached Metal constants are reused" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32, 279_i32, 9821_i32, 13_i32]
+
+    old = ENV["QWEN35_PREFILL_CHUNK_OFF"]?
+    ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+    begin
+      first = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      second = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt[0...-1], 0, first)
+      first_top, first_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prompt.last, (prompt.size - 1).to_i32, first)
+
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt[0...-1], 0, second)
+      second_top, second_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prompt.last, (prompt.size - 1).to_i32, second)
+
+      second_top.should eq(first_top)
+      second_logit.should be_close(first_logit, 1e-4_f32)
+    ensure
+      if old
+        ENV["QWEN35_PREFILL_CHUNK_OFF"] = old
+      else
+        ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+      end
+    end
+  end
+
   it "forks decode state into independent buffers" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams
