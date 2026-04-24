@@ -2225,3 +2225,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: benchmark harness, host load, llama.cpp version, or prefill wave implementation changes
 **note:** This is still only a partial prefill win because full-attention layers are serial inside each chunk and recurrent layer outputs still return to the host between layers. The next speed step is a true Metal-side prefill wave with persistent chunk hidden buffers across layers and causal full-attention chunk kernels.
+
+### [LM-codex-DN-CHUNK-ROWWISE-1] DeltaNet prefill chunk keeps state rows register-resident
+**status:** verified-default
+**trust:** {F:0.88, G:0.62, R:0.86}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "Added `delta_net_chunk_128_rowwise`, a default-on s=128 prefill chunk kernel that assigns four state rows per threadgroup and keeps each row stripe in simdgroup registers across the token scan; disable with `QWEN35_DN_CHUNK_ROWWISE_OFF=1`."
+  source: `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet recurrence semantics, state layout, or prefill chunk launch geometry changes
+- claim: "Correctness gates pass with rowwise DeltaNet enabled: isolated DeltaNet spec `3 examples, 0 failures`; targeted Qwen gate `26 examples, 0 failures`; full-logit A/B against rowwise-off on a 16-token prompt gives same top1 `198`, cosine `1.0`, max_abs `0.0`."
+  source: `crystal spec spec/qwen35_delta_net_spec.cr ...`, `crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...`, and temporary A/B harness on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: spec fixtures, full-logit comparison harness, or Metal bridge changes
+- claim: "pp64 profile improved DeltaNet wait from `148.06 ms` to `121.28 ms`; total profiled prefill improved from `229.31 ms` (`279.10 tok/s`) to `200.06 ms` (`319.90 tok/s`)."
+  source: temporary pp64 profile harness with and without `QWEN35_DN_CHUNK_ROWWISE_OFF=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: host load, power state, benchmark harness, or Metal driver behavior changes
+- claim: "Matched prompt=64/gen=16/reps=3/warmup=1 benchmark measured native prefill p50 `308.86 tok/s` vs llama.cpp `457.81 tok/s`; decode stayed ahead at native `46.80 tok/s` vs llama.cpp `44.08 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_rowwise crystal run --link-flags="build/bridge.o -framework Metal -framework Foundation -lc++" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or Qwen prefill path changes
+**note:** This closes the obvious state-traffic waste inside the chunked DeltaNet scan. The remaining first-run prefill gap is now more likely inter-layer host readbacks plus non-DeltaNet work than the recurrent scan kernel itself.

@@ -93,6 +93,7 @@ module ML
         @@dn128_fused_pipeline : ML::Metal::ComputePipeline?
         @@dn128_fused_post_pipeline : ML::Metal::ComputePipeline?
         @@dn128_chunk_fused_pipeline : ML::Metal::ComputePipeline?
+        @@dn128_chunk_rowwise_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
@@ -486,8 +487,18 @@ module ML
           }
         end
 
+        private def self.dn128_chunk_rowwise_pipeline : ML::Metal::ComputePipeline
+          @@dn128_chunk_rowwise_pipeline ||= ML::Metal::PipelineCache.get("delta_net_chunk_128_rowwise") {
+            ML::Metal::ComputePipeline.new("delta_net_chunk_128_rowwise", DELTA_NET_SOURCE)
+          }
+        end
+
         private def self.dn_128_enabled? : Bool
           ENV["QWEN35_DN_128"]? != "0"
+        end
+
+        private def self.dn_chunk_rowwise_enabled?(s : Int32) : Bool
+          s == 128 && ENV["QWEN35_DN_CHUNK_ROWWISE_OFF"]? != "1"
         end
 
         private def self.dn_fused_enabled? : Bool
@@ -1197,7 +1208,8 @@ module ML
 
           cmd = ML::Metal::CommandBuffer.new
           enc = ML::Metal::ComputeEncoder.new(cmd)
-          enc.set_pipeline(dn128_chunk_fused_pipeline)
+          use_rowwise = dn_chunk_rowwise_enabled?(s)
+          enc.set_pipeline(use_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline)
           enc.set_buffer(state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
           enc.set_buffer(q_buf,     1)
           enc.set_buffer(k_buf,     2)
@@ -1210,7 +1222,11 @@ module ML
           enc.set_value(s.to_u32,         9)
           enc.set_value(scale,           10)
           enc.set_value(n_tokens.to_u32, 11)
-          enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
+          if use_rowwise
+            enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
+          else
+            enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
+          end
           enc.end_encoding
 
           t_enc = Time.instant if Profile.enabled?
@@ -2202,7 +2218,8 @@ module ML
           ab_enc.end_encoding
 
           dn_enc = ML::Metal::ComputeEncoder.new(cmd)
-          dn_enc.set_pipeline(dn128_chunk_fused_pipeline)
+          use_dn_rowwise = dn_chunk_rowwise_enabled?(s)
+          dn_enc.set_pipeline(use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline)
           dn_enc.set_buffer(ssm_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
           dn_enc.set_buffer(q_buf,         1)
           dn_enc.set_buffer(k_buf,         2)
@@ -2215,7 +2232,11 @@ module ML
           dn_enc.set_value(s.to_u32,       9)
           dn_enc.set_value(scale,         10)
           dn_enc.set_value(n_tokens.to_u32, 11)
-          dn_enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
+          if use_dn_rowwise
+            dn_enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
+          else
+            dn_enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
+          end
           dn_enc.end_encoding
 
           post_enc = ML::Metal::ComputeEncoder.new(cmd)

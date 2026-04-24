@@ -77,6 +77,7 @@
   - [x] Reuse Q4_K simdgroup-matrix GEMM inside GPU-resident recurrent prefill chunks; pp64 p50 improves from `56.70 tok/s` to `70.38 tok/s`
   - [x] Chunk full-attention prefill layers on Metal; pp64 p50 improves from `70.38 tok/s` to `143.18 tok/s`
   - [x] Enable Q5_K/Q6_K batch GEMM in prefill chunks with GPU-side F32↔F16 conversion; pp64 p50 improves from `143.18 tok/s` to `278.50 tok/s`
+  - [x] Keep DeltaNet chunk state rows register-resident across the token scan; pp64 p50 improves from `278.50 tok/s` to `308.86 tok/s`
   - [ ] Next: keep recurrent prefill layer outputs GPU-resident across layers and remove remaining recurrent chunk readbacks
 
 ## Phase 5 — Scale to 27B
