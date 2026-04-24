@@ -82,7 +82,8 @@
   - [x] Batch the final prompt token into prefill and run only fused lm-head top1; pp64 p50 improves from `308.82 tok/s` to `358.44 tok/s`
   - [x] Fast-path full Q4_K GEMM output tiles with direct simdgroup stores; pp64 p50 improves from `358.44 tok/s` to `373.80 tok/s`
   - [x] Fuse full-attention chunk boundaries into following recurrent runs; total pp64 syncs drop from `17` to `10`, warm profile improves `177.20 ms` → `172.53 ms` (small/noisy but positive paired A/B)
-  - [ ] Next: attribute Q5_K/Q6_K prefill GEMM and recurrent/full-attn chunk internals without approximate inference
+  - [x] Add prefill attribution harness and matmul shape counters; pp64 shows FFN up/gate Q4_K dominates logical weight traffic (`1728 MiB`), Q6/Q4 FFN-down follows (`1062 MiB` combined), and Q5/Q6 batch GEMM is mandatory (`~170 ms` default vs `~367 ms` with `QWEN35_Q56K_BATCH_GEMM_OFF=1`)
+  - [ ] Next: attack FFN weight traffic directly (exact fused up/gate+SwiGLU/down memory staging first; speculative/sparsity only behind eval harness)
 
 ## Phase 5 — Scale to 27B
 

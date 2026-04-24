@@ -150,6 +150,8 @@ module ML
           @@wave_read_ns   = 0_i64
           @@trace_counts = Hash(String, Int64).new(0_i64)
           @@trace_ns = Hash(String, Int64).new(0_i64)
+          @@matmul_counts = Hash(String, Int64).new(0_i64)
+          @@matmul_weight_bytes = Hash(String, Int64).new(0_i64)
 
           def self.enabled? : Bool; @@enabled end
           def self.enable!  : Nil ; @@enabled = true end
@@ -166,6 +168,8 @@ module ML
             @@wave_encode_ns = @@wave_wait_ns = @@wave_read_ns = 0_i64
             @@trace_counts.clear
             @@trace_ns.clear
+            @@matmul_counts.clear
+            @@matmul_weight_bytes.clear
           end
 
           # Sampling hooks — cheap branches, no-op when disabled.
@@ -224,6 +228,12 @@ module ML
             @@trace_ns[name] += (Time.instant - t0).total_nanoseconds.to_i64
           end
 
+          def self.bump_matmul_shape(name : String, weight_bytes : Int64) : Nil
+            return unless @@enabled
+            @@matmul_counts[name] += 1
+            @@matmul_weight_bytes[name] += weight_bytes
+          end
+
           def self.report_io : String
             String.build do |s|
               total_syncs = @@gemv_count + @@gemm_count + @@dn_count + @@attn_count + @@wave_count
@@ -247,6 +257,13 @@ module ML
                 @@trace_counts.keys.sort_by { |name| -@@trace_ns[name] }.each do |name|
                   s << sprintf("    %-18s %4d calls  %.2f ms\n",
                                name, @@trace_counts[name], @@trace_ns[name] / 1_000_000.0)
+                end
+              end
+              unless @@matmul_counts.empty?
+                s << "  matmul shapes:\n"
+                @@matmul_counts.keys.sort_by { |name| {-@@matmul_weight_bytes[name], name} }.each do |name|
+                  s << sprintf("    %-34s %4d calls  %.2f MiB logical weights\n",
+                               name, @@matmul_counts[name], @@matmul_weight_bytes[name] / 1_048_576.0)
                 end
               end
               s << sprintf("  cpu_fallback matvecs: %d\n", @@cpu_fallback)
@@ -811,6 +828,17 @@ module ML
                                        in_dim : Int32,
                                        out_dim : Int32,
                                        batch : Int32) : Nil
+          route = if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD
+                    "q4_gemm"
+                  elsif q56_batch_gemm_enabled? && qw.type.q5_k? && batch > GEMM_BATCH_THRESHOLD
+                    "q5_gemm"
+                  elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
+                    "q6_gemm"
+                  else
+                    "gemv"
+                  end
+          Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
+
           if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD
             encode_q4k_gemm(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           elsif q56_batch_gemm_enabled? && qw.type.q5_k? && batch > GEMM_BATCH_THRESHOLD

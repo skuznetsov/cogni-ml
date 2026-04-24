@@ -241,6 +241,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, power state, or kernel scheduler changes
 **adversary:** "Effect size is small and near system noise; keep env-off fallback and treat this as a boundary-overhead reduction, not a kernel breakthrough. Earlier A/B before layer-unique constant buffers is stale."
 
+### [LM-prefill-ATTRIBUTION-1] Prefill matmul shape attribution
+**status:** verified
+**trust:** {F:0.9, G:narrow, R:0.9}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "`bin/qwen35_prefill_attribution.cr` profiles pp prefill and reports matmul route/quant/shape/batch counts plus logical weight traffic from the exact `encode_matmul` route."
+  source: `src/ml/gguf/qwen35_metal.cr`, `bin/qwen35_prefill_attribution.cr`
+  verified_at: 2026-04-24
+  decay_trigger: prefill scheduler or matmul route selection changes
+- claim: "At pp64, dominant logical weight traffic is `q4_gemm Q4_K 4096x12288 b64` with 64 calls / 1728 MiB; Q6 down-projection traffic is `q6_gemm Q6_K 12288x4096 b64` with 16 calls / 630 MiB; Q5 recurrent QKV traffic is 24 calls / 528 MiB."
+  source: `crystal run bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=1 --reps=3 --compare-env=QWEN35_Q56K_BATCH_GEMM_OFF`
+  verified_at: 2026-04-24
+  decay_trigger: model quant mix, batch size, or route selection changes
+- claim: "Q5/Q6 batch GEMM remains mandatory: same attribution run measured default p50 around 170.72 ms versus 367.23 ms with `QWEN35_Q56K_BATCH_GEMM_OFF=1`."
+  source: same command
+  verified_at: 2026-04-24
+  decay_trigger: Q5/Q6 kernels or benchmark environment changes
+**decision:** "Next exact optimization should target FFN traffic/staging first; more Q5/Q6 fallback experimentation is refuted for pp64."
+
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified
 **trust:** {F:0.9, G:medium, R:0.9}
