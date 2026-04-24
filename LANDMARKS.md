@@ -3627,6 +3627,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: verifier route, row-batched top1 threshold, staged policy, or host load changes
 **note:** Keep staged verifier opt-in. It is an exact high-accept turbo lever, but default scheduling still needs a prompt-safe acceptance predictor or cheaper verifier before using gamma 32 broadly.
 
+### [LM-codex-SPEC-BOOTSTRAP-GAMMA-1] Bootstrap gamma jump is an opt-in high-accept turbo
+**status:** verified-feature-with-caveat
+**trust:** {F:0.74, G:0.34, R:0.70}
+**context:** ml (Qwen speculative scheduler tuning)
+**evidence:**
+- claim: "Added `--bootstrap-gamma N` / `QWEN35_SPEC_BOOTSTRAP_GAMMA` as an exact scheduler knob: after one fully accepted initial chunk, adaptive decode can jump directly to a larger gamma instead of waiting for the conservative two-cycle growth."
+  source: `bin/qwen35_speculative_accept.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative scheduler, acceptance policy, or CLI/env option changes
+- claim: "On the 100%-accept prompt `The capital of France is`, bootstrap32 reduced verifier cycles from `5` to `3` and improved exact speculative decode from default `17.89 ms/tok` to `15.10 ms/tok`; target verification dropped from `621.8 ms` to `455.5 ms`."
+  source: `/tmp/qwen35_spec_bootstrap --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` with and without `QWEN35_SPEC_BOOTSTRAP_GAMMA=32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, draft model speed, verifier chunk route, or gamma policy changes
+- claim: "Bootstrap is not a safe default: `def fibonacci(n):` regressed from default `23.36 ms/tok` to bootstrap16 `28.83` and bootstrap32 `29.93`, because an initially accepted prefix was not enough to predict continued high acceptance."
+  source: same `/tmp/qwen35_spec_bootstrap` A/B on `def fibonacci(n):` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, acceptance predictor, or fallback policy changes
+**note:** Keep bootstrap default-off. It is useful for controlled high-accept/repetitive workloads, but default promotion needs a stronger predictor than "first gamma=4 chunk fully accepted".
+
 ### [LM-codex-Q6-TOP1-ROWS16-FALSIFIER-1] Q6 top1 rows16 does not improve verifier cost
 **status:** verified-falsifier
 **trust:** {F:0.72, G:0.36, R:0.68}
