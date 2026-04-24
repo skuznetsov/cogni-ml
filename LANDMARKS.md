@@ -279,6 +279,21 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness or power state changes
 **adversary:** "Effect size is tiny; keep `QWEN35_SWIGLU_INPLACE_OFF=1` fallback and do not treat this as attacking the dominant weight-read wall."
 
+### [LM-prefill-Q4-SWIGLU-GEMM-FALSIFIER] Dual Q4_K gate/up+SwiGLU GEMM
+**status:** refuted
+**trust:** {F:0.8, G:narrow, R:0.85}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "A fused Q4_K kernel that computes gate/up GEMMs together and writes SwiGLU directly reduced logical dispatch count, but slowed pp64."
+  source: temporary `simd_mm_q4k_swiglu_f32` branch in `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K GEMM tile design or Apple GPU register/threadgroup limits change
+- claim: "A/B with `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=6 --compare-env=QWEN35_Q4K_SWIGLU_GEMM_OFF` measured fused default avg 174.78 ms vs off avg 168.65 ms."
+  source: local command output
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, power state, or kernel implementation changes
+**decision:** "Do not retry the same dual-accumulator Q4_K SwiGLU GEMM shape; if revisited, change the frame to a lower-register design or fused down-projection tiling."
+
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified
 **trust:** {F:0.9, G:medium, R:0.9}
