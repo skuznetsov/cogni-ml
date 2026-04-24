@@ -55,6 +55,66 @@ def measure_native_prefill(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps :
   )
 end
 
+def clear_float_buffer(buf : ML::MetalBuffer?) : Nil
+  return unless b = buf
+
+  b.contents.as(Pointer(UInt8)).clear(b.size)
+end
+
+def clear_float_array(values : Array(Float32)?) : Nil
+  return unless xs = values
+
+  xs.fill(0.0_f32)
+end
+
+def reset_prefill_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
+  state.layers.each do |layer|
+    layer.position = 0
+    # At start_pos=0 full-attention K/V rows used by the prompt are overwritten
+    # before attention reads them. DeltaNet conv/SSM state is true recurrence
+    # state and must be reset for exact repeated timing.
+    clear_float_array(layer.conv_state)
+    clear_float_array(layer.ssm_state)
+    clear_float_buffer(layer.conv_state_buf)
+    clear_float_buffer(layer.ssm_state_buf)
+  end
+end
+
+def measure_native_prefill_preallocated(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32) : NativeStats
+  hp = w.hparams
+  prompt = Array(Int32).new(n_prompt) { |i| ((i * 7 + 11) % 1000).to_i32 }
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
+
+  # Allocate the backing GPU state buffers once, outside the timed section.
+  run_native_prefill(w, prompt, state)
+  reset_prefill_state!(state)
+
+  warmup.times do
+    run_native_prefill(w, prompt, state)
+    reset_prefill_state!(state)
+  end
+
+  times = Array(Float64).new(reps)
+  reps.times do
+    t0 = Time.instant
+    run_native_prefill(w, prompt, state)
+    times << (Time.instant - t0).total_milliseconds
+    reset_prefill_state!(state)
+  end
+
+  sorted = times.sort
+  avg_ms = times.sum / times.size
+  p50_ms = percentile(sorted, 50)
+  p95_ms = percentile(sorted, 95)
+  NativeStats.new(
+    avg_ms: avg_ms,
+    p50_ms: p50_ms,
+    p95_ms: p95_ms,
+    tok_s_avg: (n_prompt * 1000.0) / avg_ms,
+    tok_s_p50: (n_prompt * 1000.0) / p50_ms,
+  )
+end
+
 def measure_native_prefill_cached(w : ML::GGUF::Qwen35Weights,
                                   model : String,
                                   n_prompt : Int32,
@@ -198,6 +258,7 @@ threads = 8
 flash_attn = false
 native_decode_top1 = true
 native_prefill_cache = false
+native_prefill_prealloc = false
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
@@ -217,6 +278,7 @@ OptionParser.parse do |p|
   p.on("--flash-attn", "Enable flash attention in llama.cpp") { flash_attn = true }
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
   p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
+  p.on("--native-prefill-prealloc", "Measure native prefill with state buffers allocated outside the timed loop") { native_prefill_prealloc = true }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
@@ -240,6 +302,8 @@ w = ML::GGUF::Qwen35Weights.from_gguf(model)
 
 native_prefill = if native_prefill_cache
                    measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
+                 elsif native_prefill_prealloc
+                   measure_native_prefill_preallocated(w, n_prompt, reps, warmup)
                  else
                    measure_native_prefill(w, n_prompt, reps, warmup)
                  end
@@ -251,7 +315,13 @@ llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers,
 puts "Qwen 3.5 9B benchmark vs llama.cpp"
 puts "model: #{model}"
 puts "llama-bench: #{llama_bench}"
-native_prefill_mode = native_prefill_cache ? "prompt_cache_restore_after_seed" : "chunked_prompt_plus_final_top1"
+native_prefill_mode = if native_prefill_cache
+                        "prompt_cache_restore_after_seed"
+                      elsif native_prefill_prealloc
+                        "preallocated_state_chunked_prompt_plus_final_top1"
+                      else
+                        "chunked_prompt_plus_final_top1"
+                      end
 puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
 puts
 puts "Prefill"

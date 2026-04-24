@@ -222,6 +222,21 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: verifier implementation, prompt acceptance distribution, or progressive verifier redesign
 
+### [LM-PREFILL-PREALLOC-1] Preallocated prompt state benchmark mode
+**status:** verified
+**trust:** {F:0.85, G:medium, R:0.85}
+**context:** ml (prefill benchmarking)
+**evidence:**
+- claim: "`--native-prefill-prealloc` is exact for repeated `start_pos=0` prompt timing when recurrent conv/SSM state is reset and full-attention K/V rows are left allocated; prompt rows are overwritten before read."
+  source: temporary `build/tmp/qwen35_prealloc_correctness.cr` output `fresh=72:9.439041 seed=72:9.439041 reuse=72:9.439041`
+  verified_at: 2026-04-24
+  decay_trigger: prefill state layout, full-attention start_pos semantics, or recurrent state reset changes
+- claim: "Prompt64/gen64 smoke with the same built benchmark improves native prefill p50 from `165.90 ms` default to `156.27 ms` preallocated, moving matched llama.cpp gap from `-3.10%` to `-1.57%`; decode remains faster than llama.cpp in both runs."
+  source: `/tmp/benchmark_qwen_vs_llama_prealloc --prompt=64 --gen=64 --warmup=1 --reps=3` with and without `--native-prefill-prealloc`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, prefill state allocation behavior, or llama.cpp rebuild changes
+**note:** This is a fair session-style measurement and attribution tool, not a first-run prefill kernel optimization. It shows allocation/state setup costs are measurable but not the remaining breakthrough lever.
+
 ## Graph Visualization
 
 ```
