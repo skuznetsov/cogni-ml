@@ -1,5 +1,5 @@
 require "./reader"
-require "./compute"         # for QuantWeight
+require "./compute" # for QuantWeight
 require "./qwen35_meta"
 require "./qwen35_metal"
 
@@ -70,9 +70,9 @@ module ML::GGUF
   # Top-level weight container for Qwen 3.5 / 3.6 (arch=qwen35).
   class Qwen35Weights
     getter hparams : Qwen35Hparams
-    getter token_embd : QuantWeight              # [n_embd, vocab_size]
-    getter output_norm : Array(Float32)          # [n_embd]
-    getter output : QuantWeight                  # [n_embd, vocab_size]  (lm_head)
+    getter token_embd : QuantWeight     # [n_embd, vocab_size]
+    getter output_norm : Array(Float32) # [n_embd]
+    getter output : QuantWeight         # [n_embd, vocab_size]  (lm_head)
     getter layers : Array(Qwen35LayerWeights)
 
     # Kept alive so the mmap region backing every QuantWeight.raw stays
@@ -84,7 +84,14 @@ module ML::GGUF
     def initialize(@gguf : GGUFFile, @hparams : Qwen35Hparams)
       @token_embd = load_qw(@gguf, "token_embd.weight")
       @output_norm = load_f32(@gguf, "output_norm.weight")
-      @output = load_qw(@gguf, "output.weight")
+      @output = if @gguf.tensor("output.weight")
+                  load_qw(@gguf, "output.weight")
+                else
+                  # Some small Qwen GGUFs tie lm_head to token embeddings and
+                  # omit output.weight. The embedding layout is already
+                  # [n_embd, vocab_size], matching the lm-head projection.
+                  @token_embd
+                end
       @layers = Array(Qwen35LayerWeights).new(@hparams.n_layer) do |il|
         if @hparams.full_attention?(il)
           load_full_attn_layer(@gguf, il)
@@ -118,37 +125,37 @@ module ML::GGUF
     private def load_full_attn_layer(g : GGUFFile, il : Int32) : Qwen35FullAttnWeights
       p = "blk.#{il}"
       Qwen35FullAttnWeights.new(
-        attn_norm:            load_f32(g, "#{p}.attn_norm.weight"),
-        attn_q_qw:            load_qw(g, "#{p}.attn_q.weight"),
-        attn_q_norm:          load_f32(g, "#{p}.attn_q_norm.weight"),
-        attn_k_qw:            load_qw(g, "#{p}.attn_k.weight"),
-        attn_k_norm:          load_f32(g, "#{p}.attn_k_norm.weight"),
-        attn_v_qw:            load_qw(g, "#{p}.attn_v.weight"),
-        attn_output_qw:       load_qw(g, "#{p}.attn_output.weight"),
-        post_attention_norm:  load_f32(g, "#{p}.post_attention_norm.weight"),
-        ffn_gate_qw:          load_qw(g, "#{p}.ffn_gate.weight"),
-        ffn_up_qw:            load_qw(g, "#{p}.ffn_up.weight"),
-        ffn_down_qw:          load_qw(g, "#{p}.ffn_down.weight"),
+        attn_norm: load_f32(g, "#{p}.attn_norm.weight"),
+        attn_q_qw: load_qw(g, "#{p}.attn_q.weight"),
+        attn_q_norm: load_f32(g, "#{p}.attn_q_norm.weight"),
+        attn_k_qw: load_qw(g, "#{p}.attn_k.weight"),
+        attn_k_norm: load_f32(g, "#{p}.attn_k_norm.weight"),
+        attn_v_qw: load_qw(g, "#{p}.attn_v.weight"),
+        attn_output_qw: load_qw(g, "#{p}.attn_output.weight"),
+        post_attention_norm: load_f32(g, "#{p}.post_attention_norm.weight"),
+        ffn_gate_qw: load_qw(g, "#{p}.ffn_gate.weight"),
+        ffn_up_qw: load_qw(g, "#{p}.ffn_up.weight"),
+        ffn_down_qw: load_qw(g, "#{p}.ffn_down.weight"),
       )
     end
 
     private def load_recurrent_layer(g : GGUFFile, il : Int32) : Qwen35RecurrentWeights
       p = "blk.#{il}"
       Qwen35RecurrentWeights.new(
-        attn_norm:            load_f32(g, "#{p}.attn_norm.weight"),
-        attn_qkv_qw:          load_qw(g, "#{p}.attn_qkv.weight"),
-        attn_gate_qw:         load_qw(g, "#{p}.attn_gate.weight"),
-        ssm_a:                load_f32(g, "#{p}.ssm_a"),
-        ssm_alpha_qw:         load_qw(g, "#{p}.ssm_alpha.weight"),
-        ssm_beta_qw:          load_qw(g, "#{p}.ssm_beta.weight"),
-        ssm_conv1d:           load_f32(g, "#{p}.ssm_conv1d.weight"),
-        ssm_dt_bias:          load_f32(g, "#{p}.ssm_dt.bias"),
-        ssm_norm:             load_f32(g, "#{p}.ssm_norm.weight"),
-        ssm_out_qw:           load_qw(g, "#{p}.ssm_out.weight"),
-        post_attention_norm:  load_f32(g, "#{p}.post_attention_norm.weight"),
-        ffn_gate_qw:          load_qw(g, "#{p}.ffn_gate.weight"),
-        ffn_up_qw:            load_qw(g, "#{p}.ffn_up.weight"),
-        ffn_down_qw:          load_qw(g, "#{p}.ffn_down.weight"),
+        attn_norm: load_f32(g, "#{p}.attn_norm.weight"),
+        attn_qkv_qw: load_qw(g, "#{p}.attn_qkv.weight"),
+        attn_gate_qw: load_qw(g, "#{p}.attn_gate.weight"),
+        ssm_a: load_f32(g, "#{p}.ssm_a"),
+        ssm_alpha_qw: load_qw(g, "#{p}.ssm_alpha.weight"),
+        ssm_beta_qw: load_qw(g, "#{p}.ssm_beta.weight"),
+        ssm_conv1d: load_f32(g, "#{p}.ssm_conv1d.weight"),
+        ssm_dt_bias: load_f32(g, "#{p}.ssm_dt.bias"),
+        ssm_norm: load_f32(g, "#{p}.ssm_norm.weight"),
+        ssm_out_qw: load_qw(g, "#{p}.ssm_out.weight"),
+        post_attention_norm: load_f32(g, "#{p}.post_attention_norm.weight"),
+        ffn_gate_qw: load_qw(g, "#{p}.ffn_gate.weight"),
+        ffn_up_qw: load_qw(g, "#{p}.ffn_up.weight"),
+        ffn_down_qw: load_qw(g, "#{p}.ffn_down.weight"),
       )
     end
 
@@ -159,7 +166,7 @@ module ML::GGUF
       # the whole-mmap Metal buffer can address it by offset.
       raw = g.read_tensor_raw(info)
       # GGUF convention: dims=[in_dim, out_dim], row-major with out_dim rows.
-      in_dim  = info.dims[0].to_i32
+      in_dim = info.dims[0].to_i32
       out_dim = info.dims.size >= 2 ? info.dims[1].to_i32 : 1
       QuantWeight.new(raw, info.type, out_dim, in_dim)
     end

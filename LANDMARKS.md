@@ -90,6 +90,42 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-22
   decay_trigger: N/A
 
+### [LM-QWEN35-DRAFT-08B] Qwen 3.5 0.8B Q8_0 draft model support
+**status:** verified
+**trust:** {F:0.9, G:medium, R:0.9}
+**context:** ml (speculative decode)
+**evidence:**
+- claim: "0.8B draft GGUF uses arch=qwen35, Q8_0 tensors, 24 layers, 1024 dim, 8/2 GQA, full_attention_interval=4, vocab=248320, and omits output.weight."
+  source: local GGUF metadata read on `~/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf`
+  verified_at: 2026-04-24
+  decay_trigger: model file replaced
+- claim: "Native Qwen35 loader and Metal top1 path can run the 0.8B Q8_0 model with tied lm-head fallback."
+  source: `tmp_qwen08_smoke.cr` output `hp layers=24 dim=1024 heads=8/2 output=Q8_0 1024x248320`, `top=198 logit=12.774761`
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 matmul/tied-output path changed
+- claim: "Focused Q8_0 Metal GEMV correctness passes: cosine=1.0, max|Δ|=7.4505806e-8 on 1024→3584."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8_spec2 crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags=...` → `20 examples, 0 failures`
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 kernel or quant matmul changed
+
+### [LM-SPECULATIVE-08B-1] 0.8B draft speculative acceptance baseline
+**status:** verified
+**trust:** {F:0.85, G:medium, R:0.85}
+**context:** ml (speculative decode)
+**evidence:**
+- claim: "llama.cpp runs Qwen3.5 0.8B Q8_0 draft at tg64=145.53 tok/s (~6.87 ms/tok) and pp64=3291 tok/s on this M2 Max."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/build/bin/llama-bench -m Qwen3.5-0.8B-Q8_0.gguf -p 64 -n 64 -r 5 -ngl 99 -fa 0 -t 8 -o json`
+  verified_at: 2026-04-24
+  decay_trigger: llama.cpp rebuild, model file replaced, power/thermal state changes
+- claim: "Native 0.8B Q8_0 top1 decode is correct but currently slower than llama.cpp: 11.99 ms/tok (~83.4 tok/s), with 100% logical traffic in Q8_0 matmuls."
+  source: `/tmp/qwen35_sync_profile_qwen08 --model Qwen3.5-0.8B-Q8_0.gguf 64 64` with `QWEN35_PROFILE_TOP1=1`
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 kernel retuned or decode scheduler changed
+- claim: "Greedy exact draft acceptance with 9B target + 0.8B draft is prompt-sensitive and low/moderate in short smoke prompts: 13.33%, 40.48%, 57.14%, 48.72%, 51.35%."
+  source: `/tmp/qwen35_speculative_accept --gamma 4 --tokens 16/24 ...`
+  verified_at: 2026-04-24
+  decay_trigger: draft/target model, tokenizer, decoding mode, or prompt suite changes
+
 ## Graph Visualization
 
 ```

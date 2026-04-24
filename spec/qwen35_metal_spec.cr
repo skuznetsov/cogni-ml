@@ -4,7 +4,8 @@ require "../src/ml/gguf/qwen35_metal"
 require "../src/ml/gguf/quant_matmul"
 require "../src/ml/gguf/reader"
 
-QWEN_9B_METAL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_9B_METAL  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_08B_METAL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
 
 # Borrow a real quantized weight from the 9B model and return raw bytes
 # + dimensions. Caller asserts the expected TensorType.
@@ -248,6 +249,31 @@ describe ML::GGUF::Qwen35Metal do
     diff = max_abs_diff(gpu, cpu)
     puts "  [metal_q6k_lmhead] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
     puts "  [metal_q6k_lmhead] cos=#{cos.round(6)}, max|Δ|=#{diff}"
+    cos.should be >= 0.9999
+  end
+
+  it "matmul_q8_0 GEMV matches CPU reference when 0.8B draft is present" do
+    pending!("0.8B Q8_0 model not present") unless File.exists?(QWEN_08B_METAL)
+    w_raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_08B_METAL, "blk.0.ffn_up.weight", ML::GGUF::TensorType::Q8_0)
+    in_dim.should eq(1024)
+    out_dim.should eq(3584)
+
+    rng = Random.new(23)
+    x = Array(Float32).new(in_dim) { rng.rand(-1.0_f32..1.0_f32) }
+    zero_bias = Array(Float32).new(out_dim, 0.0_f32)
+
+    t0 = Time.instant
+    gpu = ML::GGUF::Qwen35Metal.matmul_q8_0(x, w_raw, in_dim, out_dim, 1)
+    dt_gpu = Time.instant - t0
+    t0 = Time.instant
+    cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, in_dim, w_raw, ML::GGUF::TensorType::Q8_0, out_dim, zero_bias)
+    dt_cpu = Time.instant - t0
+
+    cos = cosine(gpu, cpu)
+    diff = max_abs_diff(gpu, cpu)
+    puts "  [metal_q8_0_gemv] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
+    puts "  [metal_q8_0_gemv] cos=#{cos.round(6)}, max|Δ|=#{diff}  (#{in_dim}→#{out_dim})"
     cos.should be >= 0.9999
   end
 end

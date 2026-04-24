@@ -123,7 +123,10 @@
   - [x] Relaxed-load baseline after CPU-core clarification: sequential pp64 attribution remains stable at p50 `150.80 ms` / `424.39 tok/s`, pp256 at p50 `486.56 ms` / `526.14 tok/s`; matched pp64/gen64 reports native prefill `422.41 tok/s` p50 vs llama.cpp `461.35 tok/s` (`-8.44%`) and native decode `46.59 tok/s` p50 vs llama.cpp `44.38 tok/s` (`+4.98%`)
   - [x] Falsifier: nearby decode scheduler/glue knobs do not recover the missing margin: `QWEN35_WAVE_CHUNK_LAYERS=3` is neutral vs default `2` (`4/8`, delta `+0.013 ms/tok`), `QWEN35_WAVE_FAST_CMD=1` is neutral vs off (`3/6`, delta `-0.018 ms/tok`), `QWEN35_REC_CONVSHIFT_FUSED=1` is slightly worse/noisy (`3/8`, delta `+0.025 ms/tok`), and `QWEN35_DN_POST_FUSED=1` is neutral (`3/8`, delta `-0.014 ms/tok`)
   - [x] Falsifier: matching llama.cpp's Q6_K GEMV `NR0=2` passed focused specs but slowed decode sync profile (`25.67 ms/tok` vs `24.60 ms/tok` old binary in same sequence), so keep local `MV6_NR0=1`
-  - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
+  - [x] Add native Q8_0 draft-model support for Qwen3.5 0.8B: CPU dequant/matmul, Metal GEMV/top1, tied-output fallback when `output.weight` is absent, focused Q8_0 Metal spec, and reusable `--model` sync profiler
+  - [x] Add first greedy speculative acceptance harness for Qwen35 target/draft pairs; serial verifier is correctness-only, but establishes acceptance-rate evidence before building a batched verifier
+  - [x] Draft baseline: llama.cpp Qwen3.5 0.8B Q8_0 tg64 `145.53 tok/s` (`6.87 ms/tok`), native Q8_0 top1 `11.99 ms/tok`; greedy exact acceptance smoke ranges `13.33%` to `57.14%`, so exact greedy speculative needs either a faster draft, a closer draft, or a sampling-acceptance path before it can beat plain target decode
+  - [ ] Next: attack FFN weight traffic with lower-level Q4/Q6 tile changes, retune Q8_0 draft GEMV, and build true batched target verifier for speculative decode
 
 ## Deferred research backlog — efficient attention / long context
 

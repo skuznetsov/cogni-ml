@@ -5,9 +5,9 @@
 # This matches llama.cpp's approach and gives higher precision than
 # bulk dequant→F32→matmul because intermediate values stay in registers.
 #
-# Supports: Q4_K, Q5_K, Q6_K, F32, F16
+# Supports: Q4_K, Q5_K, Q6_K, Q8_0, F32, F16
 
-require "./reader"  # for TensorType
+require "./reader" # for TensorType
 
 module ML::GGUF
   module QuantMatmul
@@ -25,6 +25,7 @@ module ML::GGUF
       when .q4_k? then matmul_add_q4k(x, rows, in_dim, w_raw, out_dim, bias)
       when .q5_k? then matmul_add_q5k(x, rows, in_dim, w_raw, out_dim, bias)
       when .q6_k? then matmul_add_q6k(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q8_0? then matmul_add_q8_0(x, rows, in_dim, w_raw, out_dim, bias)
       when .f32?  then matmul_add_f32(x, rows, in_dim, w_raw, out_dim, bias)
       when .f16?  then matmul_add_f16(x, rows, in_dim, w_raw, out_dim, bias)
       else
@@ -55,10 +56,10 @@ module ML::GGUF
 
           blocks_per_row.times do |blk|
             blk_ptr = w_row + blk * block_size
-            d    = Dequant.fp16_to_f32(Bytes.new(blk_ptr, 2)).to_f64
+            d = Dequant.fp16_to_f32(Bytes.new(blk_ptr, 2)).to_f64
             dmin = Dequant.fp16_to_f32(Bytes.new(blk_ptr + 2, 2)).to_f64
             scales_ptr = blk_ptr + 4
-            qs_ptr     = blk_ptr + 4 + 12
+            qs_ptr = blk_ptr + 4 + 12
 
             base_j = blk * QK_K
             is = 0
@@ -101,7 +102,7 @@ module ML::GGUF
       x : Array(Float32), rows : Int32, in_dim : Int32,
       w_raw : Bytes, out_dim : Int32, bias : Array(Float32),
     ) : Array(Float32)
-      block_size = 176  # bytes per Q5_K block
+      block_size = 176 # bytes per Q5_K block
       blocks_per_row = in_dim // QK_K
       row_bytes = blocks_per_row * block_size
       result = Array(Float32).new(rows * out_dim, 0.0_f32)
@@ -227,6 +228,45 @@ module ML::GGUF
       result
     end
 
+    # Q8_0 fused matmul.
+    # Block layout: [d:f16][qs:int8[32]] = 34 B.
+    private def self.matmul_add_q8_0(
+      x : Array(Float32), rows : Int32, in_dim : Int32,
+      w_raw : Bytes, out_dim : Int32, bias : Array(Float32),
+    ) : Array(Float32)
+      block_elems = 32
+      block_size = 34
+      blocks_per_row = (in_dim + block_elems - 1) // block_elems
+      row_bytes = blocks_per_row * block_size
+      result = Array(Float32).new(rows * out_dim, 0.0_f32)
+      w_ptr = w_raw.to_unsafe
+
+      rows.times do |r|
+        x_off = r * in_dim
+        r_off = r * out_dim
+
+        out_dim.times do |o|
+          sum = bias[o].to_f64
+          w_row = w_ptr + o * row_bytes
+
+          blocks_per_row.times do |blk|
+            blk_ptr = w_row + blk * block_size
+            d = Dequant.fp16_to_f32(Bytes.new(blk_ptr, 2)).to_f64
+            qs_ptr = blk_ptr + 2
+            base_j = blk * block_elems
+            count = Math.min(block_elems, in_dim - base_j)
+            count.times do |j|
+              sum += x[x_off + base_j + j] * (d * qs_ptr[j].unsafe_as(Int8))
+            end
+          end
+
+          result[r_off + o] = sum.to_f32
+        end
+      end
+
+      result
+    end
+
     # F32 fused matmul (reference — same as regular matmul)
     private def self.matmul_add_f32(
       x : Array(Float32), rows : Int32, in_dim : Int32,
@@ -261,7 +301,7 @@ module ML::GGUF
         r_off = r * out_dim
         out_dim.times do |o|
           sum = bias[o].to_f64
-          w_off = (o * in_dim) * 2  # 2 bytes per f16
+          w_off = (o * in_dim) * 2 # 2 bytes per f16
           in_dim.times do |j|
             val = Dequant.fp16_to_f32(Bytes.new(w_ptr + w_off + j * 2, 2))
             sum += x[x_off + j] * val

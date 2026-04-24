@@ -16,6 +16,7 @@ module ML::GGUF::Dequant
     when .q4_k? then dequantize_q4_k(data, n_elements)
     when .q5_k? then dequantize_q5_k(data, n_elements)
     when .q6_k? then dequantize_q6_k(data, n_elements)
+    when .q8_0? then dequantize_q8_0(data, n_elements)
     else
       raise "Unsupported dequantization type: #{type.name}"
     end
@@ -39,24 +40,46 @@ module ML::GGUF::Dequant
     result
   end
 
+  # Q8_0: symmetric 8-bit quantization, 32 elements per block.
+  # Block layout: [d:f16][qs:int8[32]] = 34 bytes.
+  def self.dequantize_q8_0(data : Bytes, n : Int32) : Array(Float32)
+    block_size = 34
+    block_elems = 32
+    nb = (n + block_elems - 1) // block_elems
+    result = Array(Float32).new(n, 0.0_f32)
+
+    nb.times do |i|
+      off = i * block_size
+      d = fp16_to_f32(data[off, 2])
+      qs_ptr = data.to_unsafe + off + 2
+      base = i * block_elems
+      count = Math.min(block_elems, n - base)
+      count.times do |j|
+        result[base + j] = d * qs_ptr[j].unsafe_as(Int8).to_f32
+      end
+    end
+
+    result
+  end
+
   # Q4_K: 4.5 bits per weight, QK_K=256 block, 144 bytes/block
   # Block layout: [d:f16][dmin:f16][scales:12B][qs:128B]
   # Ported from llama.cpp dequantize_row_q4_K (ggml-quants.c).
   def self.dequantize_q4_k(data : Bytes, n : Int32) : Array(Float32)
     nb = n // QK_K
     result = Array(Float32).new(n, 0.0_f32)
-    block_size = 144  # 2 + 2 + 12 + 128
+    block_size = 144 # 2 + 2 + 12 + 128
 
     nb.times do |i|
       off = i * block_size
-      d    = fp16_to_f32(data[off, 2])
+      d = fp16_to_f32(data[off, 2])
       dmin = fp16_to_f32(data[off + 2, 2])
-      scales_ptr = data.to_unsafe + off + 4      # 12 bytes
-      qs_ptr     = data.to_unsafe + off + 4 + 12 # 128 bytes
+      scales_ptr = data.to_unsafe + off + 4  # 12 bytes
+      qs_ptr = data.to_unsafe + off + 4 + 12 # 128 bytes
 
       is = 0
       yi = i * QK_K
-      4.times do |_j|  # 4 iterations × 64 elements = 256 (QK_K)
+      4.times do |_j| # 4 iterations × 64 elements = 256 (QK_K)
         sc, m = get_scale_min_k4(is, scales_ptr)
         d1 = d * sc
         m1 = dmin * m
@@ -85,22 +108,22 @@ module ML::GGUF::Dequant
   def self.dequantize_q5_k(data : Bytes, n : Int32) : Array(Float32)
     nb = n // QK_K
     result = Array(Float32).new(n, 0.0_f32)
-    block_size = 176  # 2+2+12+32+128
+    block_size = 176 # 2+2+12+32+128
     yi = 0
 
     nb.times do |i|
       off = i * block_size
       d = fp16_to_f32(data[off, 2])
       dmin = fp16_to_f32(data[off + 2, 2])
-      scales_ptr = (data.to_unsafe + off + 4)    # 12 bytes
-      qh_ptr = (data.to_unsafe + off + 4 + 12)   # 32 bytes
+      scales_ptr = (data.to_unsafe + off + 4)       # 12 bytes
+      qh_ptr = (data.to_unsafe + off + 4 + 12)      # 32 bytes
       ql_ptr = (data.to_unsafe + off + 4 + 12 + 32) # 128 bytes
 
       u1 = 1_u8
       u2 = 2_u8
       is = 0
 
-      4.times do |_j|  # 4 iterations × 64 elements = 256
+      4.times do |_j| # 4 iterations × 64 elements = 256
         sc, m = get_scale_min_k4(is, scales_ptr)
         d1 = d * sc
         m1 = dmin * m
@@ -136,17 +159,17 @@ module ML::GGUF::Dequant
   def self.dequantize_q6_k(data : Bytes, n : Int32) : Array(Float32)
     nb = n // QK_K
     result = Array(Float32).new(n, 0.0_f32)
-    block_size = 210  # 128+64+16+2
+    block_size = 210 # 128+64+16+2
     yi = 0
 
     nb.times do |i|
       off = i * block_size
-      ql_ptr = data.to_unsafe + off               # 128 bytes (QK_K/2)
-      qh_ptr = data.to_unsafe + off + 128         # 64 bytes (QK_K/4)
-      sc_ptr = data.to_unsafe + off + 128 + 64    # 16 bytes (QK_K/16) — signed int8
+      ql_ptr = data.to_unsafe + off            # 128 bytes (QK_K/2)
+      qh_ptr = data.to_unsafe + off + 128      # 64 bytes (QK_K/4)
+      sc_ptr = data.to_unsafe + off + 128 + 64 # 16 bytes (QK_K/16) — signed int8
       d = fp16_to_f32(data[off + 128 + 64 + 16, 2])
 
-      2.times do |_n|  # 2 iterations × 128 elements = 256
+      2.times do |_n| # 2 iterations × 128 elements = 256
         32.times do |l|
           is = l // 16
           q1 = ((ql_ptr[l].to_i32 & 0xF) | (((qh_ptr[l].to_i32 >> 0) & 3) << 4)) - 32
@@ -159,7 +182,7 @@ module ML::GGUF::Dequant
           sc4 = sc_ptr[is + 4].unsafe_as(Int8).to_f32
           sc6 = sc_ptr[is + 6].unsafe_as(Int8).to_f32
 
-          result[yi + l]      = d * sc0 * q1
+          result[yi + l] = d * sc0 * q1
           result[yi + l + 32] = d * sc2 * q2
           result[yi + l + 64] = d * sc4 * q3
           result[yi + l + 96] = d * sc6 * q4

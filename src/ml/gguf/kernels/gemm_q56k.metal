@@ -14,6 +14,119 @@ using namespace metal;
 #define FOR_UNROLL _Pragma("clang loop unroll(full)")
 
 constant uint Q56K_QK_K = 256;
+constant uint Q8_0_QK = 32;
+
+// ============================================================================
+// Q8_0
+// ============================================================================
+struct block_q8_0_56 {
+    half   d;
+    int8_t qs[32];
+};
+
+constant short MV8_NSG = 2;
+constant short MV8_NR0 = 2;
+
+kernel void simd_mv_q8_0_f32(
+    device const uint8_t* w_raw   [[buffer(0)]],
+    device const float*   x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint nb = in_dim / Q8_0_QK;
+    const uint first_row = (tgpig.x * MV8_NSG + sgitg) * MV8_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    const uint row_bytes = nb * 34;
+    device const float * y_base = x + n * in_dim;
+    float sumf[MV8_NR0] = {0.f, 0.f};
+
+    for (uint ib = 0; ib < nb; ++ib) {
+        const float y = y_base[ib * Q8_0_QK + tiisg];
+        for (short row = 0; row < MV8_NR0; ++row) {
+            const uint row_id = first_row + row;
+            if (row_id >= out_dim) continue;
+            device const block_q8_0_56 * blk =
+                (device const block_q8_0_56 *)(w_raw + row_id * row_bytes) + ib;
+            sumf[row] += (float)blk->d * y * (float)blk->qs[tiisg];
+        }
+    }
+
+    for (short row = 0; row < MV8_NR0 && first_row + row < out_dim; ++row) {
+        float tot = simd_sum(sumf[row]);
+        if (tiisg == 0) {
+            output[n * out_dim + first_row + row] = tot;
+        }
+    }
+}
+
+constant short MV8_TOP_ROWS_PER_TG = 12;
+
+kernel void simd_mv_q8_0_top1_tiles_f32(
+    device const uint8_t* w_raw       [[buffer(0)]],
+    device const float*   x           [[buffer(1)]],
+    device       float*   tile_values [[buffer(2)]],
+    device       uint*    tile_ids    [[buffer(3)]],
+    constant     uint&    in_dim      [[buffer(4)]],
+    constant     uint&    out_dim     [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint nb = in_dim / Q8_0_QK;
+    const uint row_bytes = nb * 34;
+
+    threadgroup float sg_values[MV8_NSG];
+    threadgroup uint  sg_ids[MV8_NSG];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+
+    for (short tile_row = 0; tile_row < MV8_TOP_ROWS_PER_TG / MV8_NSG; ++tile_row) {
+        const uint row_id = tgpig.x * MV8_TOP_ROWS_PER_TG + tile_row * MV8_NSG + sgitg;
+        if (row_id >= out_dim) continue;
+
+        float sumf = 0.0f;
+        for (uint ib = 0; ib < nb; ++ib) {
+            device const block_q8_0_56 * blk =
+                (device const block_q8_0_56 *)(w_raw + row_id * row_bytes) + ib;
+            sumf += (float)blk->d * x[ib * Q8_0_QK + tiisg] * (float)blk->qs[tiisg];
+        }
+
+        const float total = simd_sum(sumf);
+        if (tiisg == 0 && (total > best || (total == best && row_id < best_id))) {
+            best = total;
+            best_id = row_id;
+        }
+    }
+
+    if (tiisg == 0) {
+        sg_values[sgitg] = best;
+        sg_ids[sgitg] = best_id;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0 && tiisg == 0) {
+        float group_best = sg_values[0];
+        uint group_best_id = sg_ids[0];
+        for (uint i = 1; i < MV8_NSG; ++i) {
+            const float v = sg_values[i];
+            const uint id = sg_ids[i];
+            if (v > group_best || (v == group_best && id < group_best_id)) {
+                group_best = v;
+                group_best_id = id;
+            }
+        }
+        tile_values[tgpig.x] = group_best;
+        tile_ids[tgpig.x] = group_best_id;
+    }
+}
 
 // ============================================================================
 // Q5_K

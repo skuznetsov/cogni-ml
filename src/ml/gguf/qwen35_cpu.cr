@@ -40,7 +40,7 @@ module ML::GGUF
       ENV["QWEN35_PREFILL_GC_GUARD_OFF"]? != "1"
     end
 
-    private def with_prefill_gc_guard
+    private def with_prefill_gc_guard(&)
       return yield if @@prefill_gc_guard_active || !prefill_gc_guard_enabled?
 
       @@prefill_gc_guard_active = true
@@ -289,7 +289,7 @@ module ML::GGUF
     METAL_QK_MIN_IN  = 256
 
     private def metal_qw_supported?(qw : QuantWeight) : Bool
-      qw.type.q4_k? || qw.type.q5_k? || qw.type.q6_k?
+      qw.type.q4_k? || qw.type.q5_k? || qw.type.q6_k? || qw.type.q8_0?
     end
 
     private def metal_qw_eligible?(qw : QuantWeight) : Bool
@@ -1792,10 +1792,11 @@ module ML::GGUF
       # Dequantize just the one row. row_bytes depends on quant type.
       # Use slice into raw and dequantize full block-aligned segment.
       t = token_embd.type
-      # All K-quants: 256 elts per block, so one row of 4096 elts = 16 blocks.
-      # Row bytes = (n_embd / 256) * block_bytes
-      if n_embd % 256 != 0 && !(t.f32? || t.f16?)
+      # K-quants use 256 elements per block; Q8_0 uses 32.
+      if (t.q4_k? || t.q5_k? || t.q6_k?) && n_embd % 256 != 0
         raise "embedding: n_embd #{n_embd} not divisible by 256 for K-quant"
+      elsif t.q8_0? && n_embd % 32 != 0
+        raise "embedding: n_embd #{n_embd} not divisible by 32 for Q8_0"
       end
       row_bytes = case
                   when t.f32?  then n_embd * 4
@@ -1803,6 +1804,7 @@ module ML::GGUF
                   when t.q4_k? then (n_embd // 256) * 144
                   when t.q5_k? then (n_embd // 256) * 176
                   when t.q6_k? then (n_embd // 256) * 210
+                  when t.q8_0? then (n_embd // 32) * 34
                   else              raise "embedding: unsupported quant type #{t.name}"
                   end
       offset = token_id.to_i64 * row_bytes.to_i64

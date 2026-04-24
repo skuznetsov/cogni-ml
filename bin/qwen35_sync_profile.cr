@@ -9,14 +9,29 @@
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_metal"
+require "option_parser"
 
-MODEL_PATH = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+model_path = ENV["QWEN35_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+args = [] of String
 
-w     = ML::GGUF::Qwen35Weights.from_gguf(MODEL_PATH)
-hp    = w.hparams
+OptionParser.parse(ARGV) do |parser|
+  parser.banner = "Usage: qwen35_sync_profile [--model PATH] [prefill] [n_runs]"
+  parser.on("--model PATH", "GGUF model path (or QWEN35_MODEL)") { |path| model_path = path }
+  parser.on("-h", "--help", "Show this help") do
+    puts parser
+    exit
+  end
+  parser.unknown_args do |before_dash, after_dash|
+    args.concat(before_dash)
+    args.concat(after_dash)
+  end
+end
 
-prefill = (ARGV[0]? || "5").to_i
-n_runs  = (ARGV[1]? || "5").to_i
+w = ML::GGUF::Qwen35Weights.from_gguf(model_path)
+hp = w.hparams
+
+prefill = (args[0]? || "5").to_i
+n_runs = (args[1]? || "5").to_i
 top1_only = ENV["QWEN35_PROFILE_TOP1"]? == "1"
 # Include the warm-up token plus measured decode positions; otherwise 64/64
 # writes past the KV cache allocation and corrupts benchmark evidence.

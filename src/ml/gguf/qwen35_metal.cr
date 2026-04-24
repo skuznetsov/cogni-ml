@@ -19,10 +19,12 @@ require "./qwen35_weights"
 module ML
   module GGUF
     module Qwen35Metal
-      Q4K_BLOCK_BYTES = 144
-      Q5K_BLOCK_BYTES = 176
-      Q6K_BLOCK_BYTES = 210
-      QK_K            = 256
+      Q4K_BLOCK_BYTES  = 144
+      Q5K_BLOCK_BYTES  = 176
+      Q6K_BLOCK_BYTES  = 210
+      Q8_0_BLOCK_BYTES =  34
+      QK_K             = 256
+      Q8_0_QK          =  32
 
       # GEMV (decode) tiling — must match the quant-specific kernels.
       MV_Q4_NSG             =  2
@@ -31,6 +33,8 @@ module ML
       MV_Q5_NR0             =  1
       MV_Q6_NSG             =  2
       MV_Q6_NR0             =  1
+      MV_Q8_NSG             =  2
+      MV_Q8_NR0             =  2
       HEAD_TOP1_ROWS_PER_TG = 12
 
       # GEMM (prefill) tiling — Q4_K only for now.
@@ -91,6 +95,8 @@ module ML
         @@mm6_pipeline  : ML::Metal::ComputePipeline?
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
+        @@mv8_pipeline  : ML::Metal::ComputePipeline?
+        @@mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_tiles_pipeline : ML::Metal::ComputePipeline?
         @@dn_pipeline   : ML::Metal::ComputePipeline?
@@ -558,9 +564,21 @@ module ML
           }
         end
 
+        private def self.mv8_pipeline : ML::Metal::ComputePipeline
+          @@mv8_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q8_0_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q8_0_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline
           @@mv6_top1_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_tiles_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_tiles_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline
+          @@mv8_top1_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q8_0_top1_tiles_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q8_0_top1_tiles_f32", GEMM_Q56K_SOURCE)
           }
         end
 
@@ -816,6 +834,7 @@ module ML
           when .q4_k? then mv_pipeline
           when .q5_k? then mv5_pipeline
           when .q6_k? then mv6_pipeline
+          when .q8_0? then mv8_pipeline
           else             nil
           end
         end
@@ -826,6 +845,8 @@ module ML
             MV_Q5_NSG * MV_Q5_NR0
           when .same?(mv6_pipeline)
             MV_Q6_NSG * MV_Q6_NR0
+          when .same?(mv8_pipeline)
+            MV_Q8_NSG * MV_Q8_NR0
           else
             MV_Q4_NSG * MV_Q4_NR0
           end
@@ -837,6 +858,8 @@ module ML
             {"Q5_K", Q5K_BLOCK_BYTES}
           when .same?(mv6_pipeline), .same?(mv6_top1_tiles_pipeline)
             {"Q6_K", Q6K_BLOCK_BYTES}
+          when .same?(mv8_pipeline), .same?(mv8_top1_tiles_pipeline)
+            {"Q8_0", Q8_0_BLOCK_BYTES}
           else
             {"Q4_K", Q4K_BLOCK_BYTES}
           end
@@ -1287,8 +1310,8 @@ module ML
 
         private def self.can_use_head_top1_fused?(output_qw : QuantWeight) : Bool
           head_top1_fused_enabled? &&
-            output_qw.type.q6_k? &&
-            output_qw.in_dim % QK_K == 0
+            ((output_qw.type.q6_k? && output_qw.in_dim % QK_K == 0) ||
+              (output_qw.type.q8_0? && output_qw.in_dim % Q8_0_QK == 0))
         end
 
         # Gated attention decode on Metal. CPU side prepares Q (post-rmsnorm,
@@ -4345,7 +4368,7 @@ module ML
           norm_enc.end_encoding
 
           head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
-          head_top1_enc.set_pipeline(mv6_top1_tiles_pipeline)
+          head_top1_enc.set_pipeline(out_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
           head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
           head_top1_enc.set_buffer(normed_buf, 1)
           head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
@@ -4899,7 +4922,7 @@ module ML
               if use_head_top1
                 Profile.trace("head.top1") do
                   head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  head_top1_enc.set_pipeline(mv6_top1_tiles_pipeline)
+                  head_top1_enc.set_pipeline(output_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
                   head_top1_enc.set_buffer(out_w_buf.not_nil!, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
                   head_top1_enc.set_buffer(pre_norm_buf, 1)
                   head_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
@@ -5123,6 +5146,20 @@ module ML
           end
         end
 
+        def self.matmul_q8_0(x : Array(Float32),
+                             w_raw : Bytes,
+                             in_dim : Int32,
+                             out_dim : Int32,
+                             batch : Int32) : Array(Float32)
+          raise "in_dim must be multiple of #{Q8_0_QK}: got #{in_dim}" unless in_dim % Q8_0_QK == 0
+          raise "x size mismatch: expected #{batch * in_dim}, got #{x.size}" unless x.size == batch * in_dim
+          expected_w = (in_dim // Q8_0_QK) * Q8_0_BLOCK_BYTES * out_dim
+          raise "w_raw size mismatch: expected #{expected_w}, got #{w_raw.size}" unless w_raw.size == expected_w
+          ML::Metal::Device.init!
+          buf, off = weight_slot(w_raw)
+          matmul_gemv_buf(mv8_pipeline, x, buf, off, in_dim, out_dim, batch)
+        end
+
         # Full-upload Q4_K matmul. Output row-major [batch, out_dim].
         # result[b, o] = Σ_k x[b, k] * W_dequant[o, k]
         #
@@ -5178,6 +5215,7 @@ module ML
                        when .q4_k? then mv_pipeline
                        when .q5_k? then mv5_pipeline
                        when .q6_k? then mv6_pipeline
+                       when .q8_0? then mv8_pipeline
                        else
                          return nil
                        end
@@ -5264,6 +5302,8 @@ module ML
             else
               matmul_gemv_buf(mv6_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
             end
+          when .q8_0?
+            matmul_gemv_buf(mv8_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
           else
             nil
           end
