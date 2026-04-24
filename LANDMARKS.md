@@ -2992,3 +2992,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, power state, benchmark harness, or Q4/Q5 projection kernels change
 **note:** This reinforces the current bottleneck model: removing small activation conversions is mostly exhausted; future exact prefill gains need lower-level quantized tile throughput or elimination of work, not more conversion plumbing.
+
+### [LM-codex-CONVERSION-ATTRIBUTION-1] Prefill profile reports F32/F16 conversion traffic
+**status:** verified-instrumentation
+**trust:** {F:0.84, G:0.62, R:0.82}
+**context:** ml (Qwen prefill attribution)
+**evidence:**
+- claim: "Added `Qwen35Metal::Profile.bump_conversion` and report rows for conversion kernels. The report now separates logical `F32->F16` and `F16->F32` traffic from quantized matmul weight traffic, scoped by the current profile trace label."
+  source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Profile report format, Q4/Q56 GEMM conversion path, or prefill attribution harness changes
+- claim: "Correctness gate remains green after instrumentation: targeted Qwen forward and DeltaNet specs report `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conversion_profile_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: spec fixtures, Metal kernels, or Qwen35 prefill path changes
+- claim: "A non-baseline pp16 smoke run printed the new `conversion kernels` section, including recurrent FFN up/gate Q4 input conversions and Q56 input/output conversion rows. The run was only used to verify report formatting, not speed."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conversion_profile_smoke crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=16 --warmup=0 --reps=1 --load-warning-threshold=0 | sed -n '/conversion kernels:/,+8p'` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: report formatting or conversion path changes
+**note:** This is measurement infrastructure, not a speedup. It supports the next quiet-host phase by quantifying whether a proposed conversion-elimination branch can matter before changing kernels.

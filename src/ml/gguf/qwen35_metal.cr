@@ -162,6 +162,8 @@ module ML
           @@group_read_ns = Hash(String, Int64).new(0_i64)
           @@matmul_counts = Hash(String, Int64).new(0_i64)
           @@matmul_weight_bytes = Hash(String, Int64).new(0_i64)
+          @@conversion_counts = Hash(String, Int64).new(0_i64)
+          @@conversion_bytes = Hash(String, Int64).new(0_i64)
           @@scope_stack = [] of String
 
           def self.enabled? : Bool; @@enabled end
@@ -185,6 +187,8 @@ module ML
             @@group_read_ns.clear
             @@matmul_counts.clear
             @@matmul_weight_bytes.clear
+            @@conversion_counts.clear
+            @@conversion_bytes.clear
             @@scope_stack.clear
           end
 
@@ -268,6 +272,17 @@ module ML
             @@matmul_weight_bytes[scoped_name] += weight_bytes
           end
 
+          def self.bump_conversion(name : String, traffic_bytes : Int64) : Nil
+            return unless @@enabled
+            scoped_name = if scope = @@scope_stack.last?
+                            "#{scope} #{name}"
+                          else
+                            name
+                          end
+            @@conversion_counts[scoped_name] += 1
+            @@conversion_bytes[scoped_name] += traffic_bytes
+          end
+
           def self.report_io : String
             String.build do |s|
               total_syncs = @@gemv_count + @@gemm_count + @@dn_count + @@attn_count + @@wave_count
@@ -308,6 +323,13 @@ module ML
                 @@matmul_counts.keys.sort_by { |name| {-@@matmul_weight_bytes[name], name} }.each do |name|
                   s << sprintf("    %-34s %4d calls  %.2f MiB logical weights\n",
                                name, @@matmul_counts[name], @@matmul_weight_bytes[name] / 1_048_576.0)
+                end
+              end
+              unless @@conversion_counts.empty?
+                s << "  conversion kernels:\n"
+                @@conversion_counts.keys.sort_by { |name| {-@@conversion_bytes[name], name} }.each do |name|
+                  s << sprintf("    %-34s %4d calls  %.2f MiB logical traffic\n",
+                               name, @@conversion_counts[name], @@conversion_bytes[name] / 1_048_576.0)
                 end
               end
               s << sprintf("  cpu_fallback matvecs: %d\n", @@cpu_fallback)
@@ -884,6 +906,7 @@ module ML
                                              batch : Int32) : Nil
           x16_buf = Scratch.get(:mm4_x16, (batch * in_dim).to_i64 * 2_i64)
 
+          Profile.bump_conversion("f32_to_f16 q4_gemm_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
           enc.set_pipeline(f32_to_f16_pipeline)
           enc.set_buffer(x_buf, 0)
           enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
@@ -943,6 +966,7 @@ module ML
                                                   batch : Int32) : Nil
           x16_buf = Scratch.get(:mm4_pair_x16, (batch * in_dim).to_i64 * 2_i64)
 
+          Profile.bump_conversion("f32_to_f16 q4_pair_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
           enc.set_pipeline(f32_to_f16_pipeline)
           enc.set_buffer(x_buf, 0)
           enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
@@ -967,6 +991,7 @@ module ML
           bias_buf = Scratch.get("mm56_bias_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
           ConstCache.write_zero_f32_once("mm56_bias_#{out_dim}", bias_buf, out_dim)
 
+          Profile.bump_conversion("f32_to_f16 q56_gemm_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
           enc.set_pipeline(f32_to_f16_pipeline)
           enc.set_buffer(x_buf, 0)
           enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
@@ -990,6 +1015,7 @@ module ML
           }
           enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
 
+          Profile.bump_conversion("f16_to_f32 q56_gemm_output #{out_dim} b#{batch}", (batch * out_dim).to_i64 * 6_i64)
           enc.set_pipeline(f16_to_f32_pipeline)
           enc.set_buffer(out16_buf, 0)
           enc.set_buffer(out_buf, 1, ML::Metal::BufferAccess::Write)
@@ -1010,6 +1036,7 @@ module ML
           bias_buf = Scratch.get("mm56_bias_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
           ConstCache.write_zero_f32_once("mm56_bias_#{out_dim}", bias_buf, out_dim)
 
+          Profile.bump_conversion("f32_to_f16 q56_h16_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
           enc.set_pipeline(f32_to_f16_pipeline)
           enc.set_buffer(x_buf, 0)
           enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
