@@ -3352,3 +3352,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, target verifier, draft speed, or adaptive schedule changes
 **note:** Keep `QWEN35_SPEC_FULL_ACCEPT_STREAK=2` for the initial gamma. The win comes from faster regrowth only after the first safe promotion to gamma 8, avoiding the known `def fibonacci` regression.
+
+### [LM-codex-Q8-KV-DUAL-GEMV-1] Q8_0 full-attention K/V dual GEMV is a small draft win
+**status:** verified
+**trust:** {F:0.80, G:0.44, R:0.76}
+**context:** ml (Qwen speculative draft decode kernel optimization)
+**evidence:**
+- claim: "Qwen3.5 0.8B Q8_0 full-attention `K` and `V` projections have matching `1024x512` shapes and can reuse the existing exact Q8 dual GEMV kernel. The route is guarded by `QWEN35_Q8_KV_DUAL_GEMV_OFF=1` and respects the broader `QWEN35_Q8_DUAL_GEMV_OFF=1`."
+  source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: full-attention projection layout, Q8_0 dual GEMV kernel, or draft quantization changes
+- claim: "Focused Qwen forward specs passed after enabling K/V dual routing: `13 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8kv_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 full-attention decode route or spec fixtures change
+- claim: "In 64-token Qwen3.5 0.8B Q8_0 draft sync profiles, full.qkv encode accounting dropped from about `3.73-3.75 ms` off to `2.68-2.74 ms` default, and wall time moved from `525.7/521.3 ms` off to `520.5/520.2 ms` default."
+  source: interleaved `QWEN35_Q8_KV_DUAL_GEMV_OFF=1` vs default with `QWEN35_MODEL=...Qwen3.5-0.8B-Q8_0.gguf QWEN35_PROFILE_TOP1=1 /tmp/qwen35_sync_profile_q8kv 64 64` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Metal compiler, or Q8_0 GEMV route changes
+- claim: "High-accept exact speculative smokes show a small end-to-end gain: K/V dual off measured `15.73/15.73 ms/tok`, default measured `15.68/15.71 ms/tok`, with draft time dropping from about `446 ms` to `443-445 ms`."
+  source: interleaved `QWEN35_Q8_KV_DUAL_GEMV_OFF=1` vs default with `/tmp/qwen35_speculative_accept_q8kv --tokens 64 --gamma 4 --max-gamma 32 "The capital of France is"` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative scheduler, draft model, or host load changes
+**note:** This is worth keeping because it is exact and low-risk, but the gain is small; target verifier and bulk draft GEMV remain the major costs.

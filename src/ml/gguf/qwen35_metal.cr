@@ -1344,6 +1344,10 @@ module ML
           q8_dual_gemv_enabled? && ENV["QWEN35_Q8_ALPHA_BETA_DUAL_GEMV_OFF"]? != "1"
         end
 
+        private def self.q8_kv_dual_gemv_enabled? : Bool
+          q8_dual_gemv_enabled? && ENV["QWEN35_Q8_KV_DUAL_GEMV_OFF"]? != "1"
+        end
+
         private def self.q8_dual_gemv_candidate?(gate_qw : QuantWeight,
                                                  up_qw : QuantWeight,
                                                  batch : Int32 = 1) : Bool
@@ -1360,6 +1364,15 @@ module ML
             alpha_qw.type.q8_0? && beta_qw.type.q8_0? &&
             alpha_qw.in_dim == beta_qw.in_dim &&
             alpha_qw.out_dim == beta_qw.out_dim
+        end
+
+        private def self.q8_kv_dual_gemv_candidate?(k_qw : QuantWeight,
+                                                    v_qw : QuantWeight,
+                                                    batch : Int32 = 1) : Bool
+          q8_kv_dual_gemv_enabled? && batch == 1 &&
+            k_qw.type.q8_0? && v_qw.type.q8_0? &&
+            k_qw.in_dim == v_qw.in_dim &&
+            k_qw.out_dim == v_qw.out_dim
         end
 
         private def self.q4_pair_h16_gemm_candidate?(gate_qw : QuantWeight,
@@ -3083,8 +3096,13 @@ module ML
 
           proj_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_gemv(proj_enc, q_pipe.not_nil!, x_buf, qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim)
-          encode_gemv(proj_enc, k_pipe.not_nil!, x_buf, k_buf,     k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim)
-          encode_gemv(proj_enc, v_pipe.not_nil!, x_buf, v_buf,     v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim)
+          if q8_kv_dual_gemv_candidate?(k_qw, v_qw)
+            encode_gemv_q8_dual(proj_enc, x_buf, k_buf, v_buf,
+              k_w_buf, k_w_off, v_w_buf, v_w_off, k_qw.in_dim, k_qw.out_dim)
+          else
+            encode_gemv(proj_enc, k_pipe.not_nil!, x_buf, k_buf,     k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim)
+            encode_gemv(proj_enc, v_pipe.not_nil!, x_buf, v_buf,     v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim)
+          end
           proj_enc.end_encoding
 
           split_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -3294,8 +3312,13 @@ module ML
 
           proj_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_gemv(proj_enc, q_pipe.not_nil!, cur_buf, qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim)
-          encode_gemv(proj_enc, k_pipe.not_nil!, cur_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim)
-          encode_gemv(proj_enc, v_pipe.not_nil!, cur_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim)
+          if q8_kv_dual_gemv_candidate?(k_qw, v_qw)
+            encode_gemv_q8_dual(proj_enc, cur_buf, k_buf, v_buf,
+              k_w_buf, k_w_off, v_w_buf, v_w_off, k_qw.in_dim, k_qw.out_dim)
+          else
+            encode_gemv(proj_enc, k_pipe.not_nil!, cur_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim)
+            encode_gemv(proj_enc, v_pipe.not_nil!, cur_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim)
+          end
           proj_enc.end_encoding
 
           split_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -4748,8 +4771,13 @@ module ML
               Profile.trace("full.qkv") do
                 proj_enc = ML::Metal::ComputeEncoder.new(cmd)
                 encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_q_qw).not_nil!, pre_norm_buf, qfull_buf, q_w_buf, q_w_off, lw.attn_q_qw.in_dim, lw.attn_q_qw.out_dim)
-                encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_k_qw).not_nil!, pre_norm_buf, k_buf, k_w_buf, k_w_off, lw.attn_k_qw.in_dim, lw.attn_k_qw.out_dim)
-                encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_v_qw).not_nil!, pre_norm_buf, v_buf, v_w_buf, v_w_off, lw.attn_v_qw.in_dim, lw.attn_v_qw.out_dim)
+                if q8_kv_dual_gemv_candidate?(lw.attn_k_qw, lw.attn_v_qw)
+                  encode_gemv_q8_dual(proj_enc, pre_norm_buf, k_buf, v_buf,
+                    k_w_buf, k_w_off, v_w_buf, v_w_off, lw.attn_k_qw.in_dim, lw.attn_k_qw.out_dim)
+                else
+                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_k_qw).not_nil!, pre_norm_buf, k_buf, k_w_buf, k_w_off, lw.attn_k_qw.in_dim, lw.attn_k_qw.out_dim)
+                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_v_qw).not_nil!, pre_norm_buf, v_buf, v_w_buf, v_w_off, lw.attn_v_qw.in_dim, lw.attn_v_qw.out_dim)
+                end
                 proj_enc.end_encoding
               end
 
