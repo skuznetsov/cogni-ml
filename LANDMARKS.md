@@ -317,6 +317,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness or power state changes
 **adversary:** "The branch must choose fallback before mutating state through layers 0..30; a discarded earlier A/B violated that and was invalid."
 
+### [LM-prefill-SWIGLU-F16-DOWN-FALSIFIER] SwiGLU-to-F16 FFN-down staging
+**status:** refuted
+**trust:** {F:0.8, G:narrow, R:0.85}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "Computing SwiGLU directly into an F16 activation buffer before Q6 FFN-down is exact relative to the existing Q5/Q6 batch GEMM path, which already consumes F16 inputs internally."
+  source: temporary `qwen35_swiglu_mul_f16` route in `src/ml/gguf/kernels/ffn_qwen35.metal` and `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q5/Q6 GEMM input precision or FFN-down route changes
+- claim: "Focused correctness smoke passed while the route was enabled: `spec/qwen35_forward_spec.cr` -> 10 examples, 0 failures."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_swiglu_f16_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"`
+  verified_at: 2026-04-24
+  decay_trigger: prefill FFN path changes
+- claim: "A/B with `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=6 --compare-env=QWEN35_SWIGLU_F16_DOWN_OFF` measured default avg 170.02 ms / p50 170.68 ms versus off avg 167.52 ms / p50 169.64 ms."
+  source: local command output
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness or power state changes
+**decision:** "Do not keep or retry direct SwiGLU-to-F16 staging as a default optimization; activation staging removal is smaller than its scheduling/conversion overhead on pp64."
+
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified
 **trust:** {F:0.9, G:medium, R:0.9}
