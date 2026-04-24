@@ -3588,3 +3588,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: exact full-row verifier implementation or margin-guard validation
 **note:** The useful next direction is not default-on F16 batched logits; it is exact guarded batching: compute fast batched candidates, detect close top1/top2 margins, and fall back to exact F32 per-row top1 for ambiguous rows, or build a batched lm-head that preserves the greedy route's precision enough to pass all-row parity.
+
+### [LM-codex-Q56-PREFILL-F32OUT-1] Q5/Q6 prefill GEMM can skip the f16-output conversion dispatch
+**status:** verified-feature-with-caveat
+**trust:** {F:0.82, G:0.52, R:0.76}
+**context:** ml (Qwen prefill Metal GEMM)
+**evidence:**
+- claim: "Added `simd_mm_q5k_f32out` and `simd_mm_q6k_f32out` for Qwen prefill. They keep the existing F16 activation input and explicitly round the accumulator through `half` before writing f32 output, preserving the prior half-output numeric contract while removing the separate `f16_to_f32` conversion dispatch."
+  source: `src/ml/gguf/kernels/gemm_mm.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q5/Q6 GEMM precision policy, prefill output format, or Metal kernel routing changes
+- claim: "Focused Qwen specs passed after the kernel change, including forward and Metal coverage: `23 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56f32_fullspec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_metal_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: spec fixtures, quant kernels, or Qwen forward routing changes
+- claim: "Standalone pp64 op attribution lower bound improved materially: total weighted measured hot-shape time dropped from the refreshed baseline `8.209 ms` to `2.913 ms`; Q5_K 4096x8192 dropped from `4.186 ms` p50 to `0.421 ms`, and Q6_K 12288x4096 from `3.733 ms` to `0.779 ms`."
+  source: `/tmp/qwen35_op_q56f32 --batch=64 --warmup=3 --runs=9 --limit=12` compared with the earlier same-session refreshed baseline on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: op attribution harness, host load, or kernel pipeline changes
+- claim: "End-to-end prefill wall did not yet move by the same amount under current host noise/scheduling: pp64 measured around `152.66-153.82 ms` and pp256 around `494.02-496.99 ms`, so the remaining >10% llama.cpp gap is not solved by this dispatch-elimination alone."
+  source: `/tmp/qwen35_prefill_q4h16vec --prompt=64 --warmup=2 --reps=8` and `--prompt=256 --warmup=1 --reps=4` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: quiet-system benchmark rerun, prefill grouping, or Metal scheduler behavior changes
+**note:** Keep the exact f32-output Q5/Q6 kernels, but do not count this as the pp64 breakthrough. The next prefill step should attack Q4_K 4096x12288/12288x4096 traffic or eliminate materialized FFN intermediates; this change mainly removes a provable conversion dispatch and improves isolated operator lower bounds.

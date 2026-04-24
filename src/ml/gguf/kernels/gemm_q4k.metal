@@ -429,9 +429,7 @@ kernel void simd_mm_q4k_h16(
             const short sy = (tiitg/MM_NL1)/8;
             const short ly = (tiitg/MM_NL1)%8;
             threadgroup half * dst = sb + 64*(4*sx + sy) + 8*ly;
-            FOR_UNROLL for (short i = 0; i < 8; i++) {
-                dst[i] = y[i];
-            }
+            *(threadgroup half2x4 *)dst = *(device const half2x4 *)y;
         }
         il = (il + 2 < MM_NL) ? il + 2 : il % 2;
         xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw;
@@ -477,9 +475,7 @@ kernel void simd_mm_q4k_h16(
                 const short sy = (tiitg/MM_NL1)/8;
                 const short ly = (tiitg/MM_NL1)%8;
                 threadgroup half * dst = sb_n + 64*(4*sx + sy) + 8*ly;
-                FOR_UNROLL for (short i = 0; i < 8; i++) {
-                    dst[i] = y[i];
-                }
+                *(threadgroup half2x4 *)dst = *(device const half2x4 *)y;
             }
             il = (il + 2 < MM_NL) ? il + 2 : il % 2;
             xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw;

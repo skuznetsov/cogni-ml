@@ -93,6 +93,8 @@ module ML
         @@mm_h16_pipeline : ML::Metal::ComputePipeline?
         @@mm5_pipeline  : ML::Metal::ComputePipeline?
         @@mm6_pipeline  : ML::Metal::ComputePipeline?
+        @@mm5_f32out_pipeline : ML::Metal::ComputePipeline?
+        @@mm6_f32out_pipeline : ML::Metal::ComputePipeline?
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
         @@mv8_pipeline  : ML::Metal::ComputePipeline?
@@ -555,6 +557,18 @@ module ML
         private def self.mm6_pipeline : ML::Metal::ComputePipeline
           @@mm6_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q6k") {
             ML::Metal::ComputePipeline.new("simd_mm_q6k", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm5_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm5_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q5k_f32out") {
+            ML::Metal::ComputePipeline.new("simd_mm_q5k_f32out", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm6_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm6_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q6k_f32out") {
+            ML::Metal::ComputePipeline.new("simd_mm_q6k_f32out", GEMM_MM_SOURCE)
           }
         end
 
@@ -1098,9 +1112,6 @@ module ML
                                               out_dim : Int32,
                                               batch : Int32) : Nil
           x16_buf = Scratch.get(:mm56_x16, (batch * in_dim).to_i64 * 2_i64)
-          out16_buf = Scratch.get(:mm56_out16, (batch * out_dim).to_i64 * 2_i64)
-          bias_buf = Scratch.get("mm56_bias_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
-          ConstCache.write_zero_f32_once("mm56_bias_#{out_dim}", bias_buf, out_dim)
 
           Profile.bump_conversion("f32_to_f16 q56_gemm_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
           enc.set_pipeline(f32_to_f16_pipeline)
@@ -1112,12 +1123,10 @@ module ML
           enc.set_pipeline(pipeline)
           enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
           enc.set_buffer(x16_buf, 1)
-          enc.set_buffer(bias_buf, 2)
-          enc.set_buffer(out16_buf, 3, ML::Metal::BufferAccess::Write)
-          enc.set_value(in_dim.to_u32, 4)
-          enc.set_value(out_dim.to_u32, 5)
-          enc.set_value(batch.to_u32, 6)
-          enc.set_value(0_u32, 7)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(out_dim.to_u32, 4)
+          enc.set_value(batch.to_u32, 5)
           enc.set_threadgroup_memory(MM_SHMEM, 0)
           grid = {
             (batch   + MM_NR1 - 1) // MM_NR1,
@@ -1125,13 +1134,6 @@ module ML
             1,
           }
           enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
-
-          Profile.bump_conversion("f16_to_f32 q56_gemm_output #{out_dim} b#{batch}", (batch * out_dim).to_i64 * 6_i64)
-          enc.set_pipeline(f16_to_f32_pipeline)
-          enc.set_buffer(out16_buf, 0)
-          enc.set_buffer(out_buf, 1, ML::Metal::BufferAccess::Write)
-          enc.set_value((batch * out_dim).to_u32, 2)
-          enc.dispatch_1d(batch * out_dim, 256)
         end
 
         private def self.encode_q56k_gemm_h16(enc : ML::Metal::ComputeEncoder,
@@ -1202,9 +1204,9 @@ module ML
           elsif qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD && !force_small_q4_gemv
             encode_q4k_gemm(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           elsif q56_batch_gemm_enabled? && qw.type.q5_k? && batch > GEMM_BATCH_THRESHOLD
-            encode_q56k_gemm_f32(enc, mm5_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+            encode_q56k_gemm_f32(enc, mm5_f32out_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
-            encode_q56k_gemm_f32(enc, mm6_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+            encode_q56k_gemm_f32(enc, mm6_f32out_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           else
             encode_gemv(enc, gemv_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false)
           end
@@ -5367,10 +5369,9 @@ module ML
           result
         end
 
-        # Q5_K/Q6_K simdgroup-matrix GEMM path. The shared kernel inherited
-        # from the embedding backend uses F16 activations/output, so keep this
-        # behind the batch threshold where the throughput win outweighs the
-        # conversion cost. Callers get Float32 converted back from F16.
+        # Q5_K/Q6_K simdgroup-matrix GEMM path. The prefill f32-output
+        # kernels round through half internally to preserve the previous
+        # F16-output numeric contract without a separate conversion dispatch.
         private def self.matmul_q56k_gemm_buf(pipeline : ML::Metal::ComputePipeline,
                                               x : Array(Float32),
                                               w_buf : ML::MetalBuffer,
@@ -5381,22 +5382,17 @@ module ML
           x_buf = Scratch.get(:mm56_x, x.size.to_i64 * 2_i64)
           write_shared_f16(x_buf, x)
 
-          bias_buf = Scratch.get(:mm56_bias, out_dim.to_i64 * sizeof(Float32))
-          bias_buf.write(Array(Float32).new(out_dim, 0.0_f32))
-
-          out_buf = Scratch.get(:mm56_out, (batch * out_dim).to_i64 * 2_i64)
+          out_buf = Scratch.get(:mm56_out, (batch * out_dim).to_i64 * sizeof(Float32))
 
           cmd = ML::Metal::CommandBuffer.new
           enc = ML::Metal::ComputeEncoder.new(cmd)
           enc.set_pipeline(pipeline)
           enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
           enc.set_buffer(x_buf, 1)
-          enc.set_buffer(bias_buf, 2)
-          enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
-          enc.set_value(in_dim.to_u32,  4)
-          enc.set_value(out_dim.to_u32, 5)
-          enc.set_value(batch.to_u32,   6)
-          enc.set_value(0_u32,          7)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32,  3)
+          enc.set_value(out_dim.to_u32, 4)
+          enc.set_value(batch.to_u32,   5)
           enc.set_threadgroup_memory(MM_SHMEM, 0)
           grid = {
             (batch   + MM_NR1 - 1) // MM_NR1,
@@ -5409,13 +5405,12 @@ module ML
           cmd.commit
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
-          result = read_shared_f16(out_buf, batch * out_dim)
           if Profile.enabled?
             Profile.bump_gemm(
               (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
             )
           end
-          result
+          read_shared_f32(out_buf, batch * out_dim)
         end
 
         # Upload w_raw into a fresh MetalBuffer (test + one-shot paths).
@@ -5437,7 +5432,7 @@ module ML
           ML::Metal::Device.init!
           buf, off = weight_slot(w_raw)
           if q56_batch_gemm_enabled? && batch > GEMM_BATCH_THRESHOLD
-            matmul_q56k_gemm_buf(mm5_pipeline, x, buf, off, in_dim, out_dim, batch)
+            matmul_q56k_gemm_buf(mm5_f32out_pipeline, x, buf, off, in_dim, out_dim, batch)
           else
             matmul_gemv_buf(mv5_pipeline, x, buf, off, in_dim, out_dim, batch)
           end
@@ -5455,7 +5450,7 @@ module ML
           ML::Metal::Device.init!
           buf, off = weight_slot(w_raw)
           if q56_batch_gemm_enabled? && batch > GEMM_BATCH_THRESHOLD
-            matmul_q56k_gemm_buf(mm6_pipeline, x, buf, off, in_dim, out_dim, batch)
+            matmul_q56k_gemm_buf(mm6_f32out_pipeline, x, buf, off, in_dim, out_dim, batch)
           else
             matmul_gemv_buf(mv6_pipeline, x, buf, off, in_dim, out_dim, batch)
           end
