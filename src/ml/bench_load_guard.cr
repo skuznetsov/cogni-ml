@@ -55,6 +55,26 @@ module ML::BenchLoadGuard
     report(sample(per_process_threshold, total_threshold), io)
   end
 
+  def self.wait_until_quiet!(per_process_threshold : Float64,
+                             total_threshold : Float64,
+                             timeout_ms : Int32,
+                             poll_ms : Int32 = 1000,
+                             io : IO = STDERR) : Nil
+    return if timeout_ms <= 0
+
+    deadline = Time.instant + timeout_ms.milliseconds
+    last_load = sample(per_process_threshold, total_threshold)
+    until Time.instant >= deadline
+      return unless last_load.busy?
+
+      sleep poll_ms.milliseconds
+      last_load = sample(per_process_threshold, total_threshold)
+    end
+
+    report(last_load, io)
+    raise "benchmark host did not become quiet before --wait-quiet-ms timeout"
+  end
+
   def self.require_quiet!(per_process_threshold : Float64,
                           total_threshold : Float64 = 0.0,
                           io : IO = STDERR) : Nil

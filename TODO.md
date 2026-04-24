@@ -115,6 +115,7 @@
   - [x] Falsifier: sharing one H16 activation conversion between recurrent Q5 qkv and Q4 gate/z projections compiled and passed focused specs, but pp256 paired A/B was flat (`485.56 ms` default vs `485.59 ms` opt-in, wins `4/8`), so recurrent projection conversion reuse is not enough leverage
   - [x] Add conversion-kernel attribution to the prefill profile report so future quiet runs can separate duplicated `F32<->F16` activation/output traffic from quantized weight traffic; smoke pp16 report shows per-row percentages, matmul/conversion logical traffic totals, and mix (`97.50%` matmul / `2.50%` conversion)
   - [x] Harden benchmark quiet-mode checks with both per-process and aggregate CPU thresholds (`--load-warning-threshold`, `--load-total-warning-threshold`) so noisy multi-process desktops do not silently pass `--require-quiet`; aggregate warnings now print top CPU contributors
+  - [x] Add `--wait-quiet-ms` / `--quiet-poll-ms` to Qwen35 benchmark harnesses so queued A/B runs can wait for a quiet host before measuring instead of immediately aborting or recording noisy timings
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

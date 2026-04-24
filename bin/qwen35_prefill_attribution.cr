@@ -14,6 +14,8 @@ compare_env = nil.as(String?)
 compare_off = "1"
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
+wait_quiet_ms = 0
+quiet_poll_ms = 1000
 require_quiet = false
 
 OptionParser.parse do |p|
@@ -26,6 +28,8 @@ OptionParser.parse do |p|
   p.on("--compare-off=VALUE", "Off value for --compare-env (default: 1)") { |v| compare_off = v }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
+  p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
+  p.on("--quiet-poll-ms=N", "Polling interval for --wait-quiet-ms (default: 1000)") { |v| quiet_poll_ms = v.to_i }
   p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
@@ -34,7 +38,10 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt must be positive" unless prompt_len > 0
 raise "--warmup must be non-negative" unless warmup >= 0
 raise "--reps must be positive" unless reps > 0
+raise "--wait-quiet-ms must be non-negative" unless wait_quiet_ms >= 0
+raise "--quiet-poll-ms must be positive" unless quiet_poll_ms > 0
 
+ML::BenchLoadGuard.wait_until_quiet!(load_warning_threshold, load_total_warning_threshold, wait_quiet_ms, quiet_poll_ms)
 if require_quiet
   ML::BenchLoadGuard.require_quiet!(load_warning_threshold, load_total_warning_threshold)
 else
