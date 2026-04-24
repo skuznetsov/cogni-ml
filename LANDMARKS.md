@@ -256,6 +256,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: decode wave, SwiGLU kernel, FFN-down GEMV, or host load changes
 **decision:** Keep decode in-place SwiGLU default-off as a research knob. Do not count it as the WBA breakthrough; next branch should prototype true tile-streamed FFN or batched speculative verifier.
 
+### [LM-SPEC-VERIFY-ROWS-1] Large speculative verifier chunks should use exact row-batched top1
+**status:** verified
+**trust:** {F:0.85, G:medium, R:0.8}
+**context:** ml (speculative decode / WBA verifier)
+**evidence:**
+- claim: "Exact row-batched Q6 top1 is now a default win for large verifier chunks but should stay off for small `gamma=4` chunks. The policy uses `QWEN35_HEAD_TOP1_ROWS_MIN` default `8`, with `QWEN35_HEAD_TOP1_ROWS_OFF=1` as an escape hatch."
+  source: `src/ml/gguf/qwen35_cpu.cr` `output_project_top1s_routed`; targeted specs `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_headrows_auto_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` -> `17 examples, 0 failures`
+  verified_at: 2026-04-24
+  decay_trigger: verifier head kernels, Q6 lm-head quantization, or speculative verifier policy changes
+- claim: "On high-accept prompt `The capital of France is`, interleaved rows>=8 auto vs rows-off won all 4 pairs: auto `16.29/21.04/21.13/19.90 ms/tok`; off `17.63/21.30/22.10/23.93 ms/tok`. The largest gain comes from lower `target_verify` time on gamma>=8 chunks."
+  source: `/tmp/qwen35_speculative_accept_headrows_auto --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace 'The capital of France is'`, interleaved with `QWEN35_HEAD_TOP1_ROWS_OFF=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, draft speed, adaptive gamma policy, or head top1 kernel changed
+- claim: "Reject-heavy prompts that fall back after a `gamma=4` cycle do not use the new batched path under the default threshold, preserving the old per-row verifier behavior."
+  source: prompt suite with `def fibonacci(n):`, `Once upon a time`, and `The quick brown fox`; all reported `max_seen=4` and `plain_fallback` after the first cycle
+  verified_at: 2026-04-24
+  decay_trigger: adaptive gamma or fallback policy changes
+**decision:** Keep full-row F16 GEMM top1 default-off due exactness risk, but enable exact tile-reduce row-batched top1 for chunks at or above the WBA threshold.
+
 ## Graph Visualization
 
 ```

@@ -1111,7 +1111,9 @@ module ML::GGUF
             return top1s
           end
         end
-        if ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1"
+        rows_min = (ENV["QWEN35_HEAD_TOP1_ROWS_MIN"]? || "8").to_i
+        if ENV["QWEN35_HEAD_TOP1_ROWS_OFF"]? != "1" &&
+           (ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1" || rows >= rows_min)
           return Qwen35Metal.rmsnorm_project_top1_rows(x, rows, norm_weight, out_qw, eps)
         end
       {% end %}
