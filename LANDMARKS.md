@@ -382,6 +382,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, llama.cpp build, or power state changes
 **adversary:** "Larger chunks increase peak scratch memory; keep `QWEN35_PREFILL_CHUNK_SIZE` override for smaller devices or pathological long prompts."
 
+### [LM-prefill-LONG-SUFFIX-TOP1] Batched final chunk for long prompts
+**status:** verified
+**trust:** {F:0.85, G:medium, R:0.85}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "When `prefill_tokens_top1` receives more tokens than the chunk size, it can prefill the prefix and recursively run `prefill_tokens_top1` on the final chunk; this keeps the final token in a batched prefill chunk instead of falling back to single-token decode."
+  source: `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-24
+  decay_trigger: prefill chunking or final-token top1 semantics change
+- claim: "Correctness smoke with forced chunk size 4 passed against the final-token fallback including next decode state: `spec/qwen35_forward_spec.cr` -> 10 examples, 0 failures."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_long_suffix_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 forward path changes
+- claim: "pp2048 A/B with `--compare-env=QWEN35_PREFILL_LONG_SUFFIX_OFF` measured default avg 4748.53 ms / p50 4750.20 ms versus off avg 4982.20 ms / p50 4987.29 ms."
+  source: local command output
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness or power state changes
+**adversary:** "This only affects prompts longer than the active chunk size; shorter prompts are unchanged."
+
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified
 **trust:** {F:0.9, G:medium, R:0.9}

@@ -1518,6 +1518,13 @@ module ML::GGUF
          token_ids.size > 1
         chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || DEFAULT_PREFILL_CHUNK_SIZE.to_s).to_i
         if token_ids.size > chunk_size
+          if ENV["QWEN35_PREFILL_LONG_SUFFIX_OFF"]? != "1"
+            prefix_len = token_ids.size - chunk_size
+            if prefix_len > 0
+              prefill_tokens(weights, token_ids[0, prefix_len], start_pos, state)
+              return prefill_tokens_top1(weights, token_ids[prefix_len, token_ids.size - prefix_len], start_pos + prefix_len, state)
+            end
+          end
           prefill_tokens(weights, token_ids[0...-1], start_pos, state)
           return forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
         end
