@@ -153,6 +153,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: rebuild sweep of `bin/qwen35_sync_profile.cr` on Qwen3.5-0.8B-Q8_0 with `QWEN35_PROFILE_TOP1=1`, prefill64/decode64
   verified_at: 2026-04-24
   decay_trigger: Q8_0 GEMV kernel, top1 dispatch, or Metal scheduler changes
+- claim: "With Q8_0 NSG=4, exact speculative `chunk-inplace` improves to 27.70 ms/tok on `def fibonacci(n):` at 85.19% acceptance, but still trails plain target decode at 21.96 ms/tok."
+  source: `/tmp/qwen35_speculative_accept_after_q8nsg4 --verify chunk-inplace --gamma 4 --tokens 24 "def fibonacci(n):"`
+  verified_at: 2026-04-24
+  decay_trigger: draft speed, verifier mode, acceptance, or target decode changes
 
 ## Graph Visualization
 
