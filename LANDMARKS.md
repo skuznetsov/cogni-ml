@@ -189,6 +189,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_single_fast_ab --tokens 64 --gamma 4 "def fibonacci(n):"`, interleaved `QWEN35_SPEC_SINGLE_FAST_OFF=1` vs default
   verified_at: 2026-04-24
   decay_trigger: adaptive policy, verifier control flow, target_next semantics, or draft model changes
+- claim: "Exact target-only fallback is the right behavior after rejection-aware adaptive gamma has fallen to low gamma: at that point speculation adds draft cost with little batching upside. With `QWEN35_SPEC_PLAIN_FALLBACK_GAMMA=2` default, `def fibonacci(n):` generated 59 of 64 tokens through plain target after the first rejection and measured `21.57 ms/tok` versus plain target `22.89`; high-acceptance default prompt remained faster than plain target at `20.93` versus `23.51 ms/tok` with `plain_fallback=0`."
+  source: `/tmp/qwen35_speculative_accept_fallback_final --tokens 64 --gamma 4`, default prompt and `def fibonacci(n):`
+  verified_at: 2026-04-24
+  decay_trigger: fallback policy, adaptive policy, prompt acceptance distribution, verifier mode, or draft model changes
 
 ## Graph Visualization
 
