@@ -3567,28 +3567,24 @@ Rich landmarks include full State/Relations/Evidence structure.
 **note:** Keep Q6 top1 tile rows at 12. Larger tiles reduce tile count but do not reduce the measured verifier bottleneck in this implementation.
 
 ### [LM-codex-HEAD-FULL-ROWS-VERIFY-1] Batched full lm-head is faster for verifier chunks
-**status:** verified
-**trust:** {F:0.82, G:0.52, R:0.78}
+**status:** refuted as default; opt-in only
+**trust:** {F:0.88, G:0.62, R:0.86}
 **context:** ml (Qwen speculative target verifier)
 **evidence:**
 - claim: "llama.cpp speculative-simple evaluates the target model on `[id_last, draft0, ..., draftN-1]` as one batch and samples from those batched logits; our verifier body was already chunked, but its lm-head path emitted per-row fused top1."
   source: `/Users/sergey/SrcArchives/AI/llama.cpp/examples/speculative-simple/speculative-simple.cpp` lines around target batch construction, inspected on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: llama.cpp speculative implementation changes or local verifier control-flow changes
-- claim: "Added default-on `Qwen35Metal.rmsnorm_project_full_top1_rows` for Q6_K output heads when `prefill_tokens_top1s` has rows above the GEMM threshold. It RMSNorms all rows, runs one batched Q6 GEMM over the full lm-head, reduces the F16 logits on GPU, and reads only one `(id, value)` pair per row. `QWEN35_HEAD_FULL_ROWS_OFF=1` restores the old per-row top1 route."
-  source: `src/ml/gguf/qwen35_cpu.cr` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+- claim: "Full-row Q6 lm-head verifier is fast but not exact against the greedy target route because it converts activations/logits through F16; an all-row parity check found row24 mismatch at rows32/64: exact per-row `220@8.900501` vs full-row F16 `198@8.8984375`."
+  source: `build/tmp/qwen35_headfull_all_rows_correctness.cr` with `ROWS=32/64`, comparing all rows against `QWEN35_HEAD_FULL_ROWS_OFF=1`, on 2026-04-24
   verified_at: 2026-04-24
-  decay_trigger: output-head quant type, GEMM threshold, or verifier rows routing changes
-- claim: "Correctness gates passed with the default full-row GPU-reduce route: focused Qwen forward specs returned `13 examples, 0 failures`, targeted Metal specs returned `9 examples, 0 failures`, and speculative smoke matched greedy target output on both high-accept and rejection-sensitive prompts."
-  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_headgpu_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_headgpu_metal_spec crystal spec spec/qwen35_metal_spec.cr --link-flags=...`; `/tmp/qwen35_speculative_accept_headgpu --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace ...` on 2026-04-24
+  decay_trigger: output-head full-row route, activation precision, or verifier exactness policy changes
+- claim: "Default verifier was restored to exact per-row fused top1; full-row F16 verifier is now opt-in via `QWEN35_HEAD_FULL_ROWS=1`, and a rows32 ambiguous regression spec keeps default `prefill_tokens_top1s` aligned with serial greedy target steps."
+  source: `src/ml/gguf/qwen35_cpu.cr` and `spec/qwen35_forward_spec.cr` on 2026-04-24
   verified_at: 2026-04-24
-  decay_trigger: Qwen specs, output-head route, or speculative exactness check changes
-- claim: "In-process paired A/B on isolated verifier chunks showed the GPU-reduce route was consistently faster under the same host load: rows16 p50 `142.74 -> 100.43 ms` (`4/4` wins), rows32 p50 `181.14 -> 102.45 ms` (`4/4` wins), rows64 p50 `328.31 -> 165.69 ms` (`6/6` wins). Earlier full-row CPU-argmax b64 was only `557.39 -> 327.80 ms`, so GPU reduce removes another large readback/argmax cost."
-  source: `build/tmp/qwen35_headfull_default_ab.cr` with `ROWS=16/32/64`, comparing default GPU-reduce route against `QWEN35_HEAD_FULL_ROWS_OFF=1`, on 2026-04-24
+  decay_trigger: verifier routing env gates or top1 regression spec changes
+- claim: "The previous speed numbers remain useful only as an approximate/opt-in upper-bound: rows64 p50 improved to `165.69 ms` and staged high-accept reached `12.26 ms/tok`, but those figures must not be labeled exact until an exact guard or F32-equivalent batched lm-head exists."
+  source: earlier `build/tmp/qwen35_headfull_default_ab.cr` and `/tmp/qwen35_speculative_accept_headgpu ... --verify staged` runs on 2026-04-24, downgraded after all-row parity falsifier
   verified_at: 2026-04-24
-  decay_trigger: host load, Q6 GEMM kernel, output-head route, or benchmark harness changes
-- claim: "End-to-end high-accept speculative smoke improved materially with the GPU-reduce route: default adaptive chunk-inplace measured `14.02 ms/tok`, and opt-in staged gamma32 measured `12.26 ms/tok` on `The capital of France is` with exact greedy output."
-  source: `/tmp/qwen35_speculative_accept_headgpu --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` and `/tmp/qwen35_speculative_accept_headgpu --tokens 64 --gamma 32 --max-gamma 32 --verify staged --stage-gate 4 "The capital of France is"` on 2026-04-24
-  verified_at: 2026-04-24
-  decay_trigger: host load, draft model speed, target verifier route, or staged schedule changes
-**note:** This is the first verifier-side exact improvement matching llama.cpp's batched-logit structure. It does not solve all speculative overhead: draft generation and recurrent/full-attention chunk body still dominate, and full-row logits are only used for rows above the GEMM threshold.
+  decay_trigger: exact full-row verifier implementation or margin-guard validation
+**note:** The useful next direction is not default-on F16 batched logits; it is exact guarded batching: compute fast batched candidates, detect close top1/top2 margins, and fall back to exact F32 per-row top1 for ambiguous rows, or build a batched lm-head that preserves the greedy route's precision enough to pass all-row parity.

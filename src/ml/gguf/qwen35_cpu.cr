@@ -1106,7 +1106,7 @@ module ML::GGUF
         return nil if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
         return nil unless metal_qw_supported?(out_qw)
         return nil unless Qwen35Metal.available?
-        if ENV["QWEN35_HEAD_FULL_ROWS_OFF"]? != "1"
+        if ENV["QWEN35_HEAD_FULL_ROWS"]? == "1" && ENV["QWEN35_HEAD_FULL_ROWS_OFF"]? != "1"
           if top1s = Qwen35Metal.rmsnorm_project_full_top1_rows(x, rows, norm_weight, out_qw, eps)
             return top1s
           end
@@ -1683,7 +1683,7 @@ module ML::GGUF
 
       hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
       hp = weights.hparams
-      if (ENV["QWEN35_HEAD_FULL_ROWS_OFF"]? != "1" || ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1") &&
+      if (ENV["QWEN35_HEAD_FULL_ROWS"]? == "1" || ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1") &&
          (top1s = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps))
         return top1s
       end

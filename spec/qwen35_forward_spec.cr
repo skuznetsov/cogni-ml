@@ -322,6 +322,53 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "keeps chunked top1 verifier exact on large ambiguous verifier rows" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = Array(Int32).new(5) { |i| ((i * 7 + 11) % 1000).to_i32 }
+    candidates = Array(Int32).new(32) { |i| ((i * 13 + 11751) % 1000).to_i32 }
+
+    old_full = ENV["QWEN35_HEAD_FULL_ROWS"]?
+    old_full_off = ENV["QWEN35_HEAD_FULL_ROWS_OFF"]?
+    old_rows = ENV["QWEN35_HEAD_TOP1_ROWS"]?
+    ENV.delete("QWEN35_HEAD_FULL_ROWS")
+    ENV.delete("QWEN35_HEAD_FULL_ROWS_OFF")
+    ENV.delete("QWEN35_HEAD_TOP1_ROWS")
+    begin
+      serial_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: prompt.size + candidates.size + 8)
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, serial_state)
+      serial = [] of {Int32, Float32}
+      candidates.each_with_index do |token_id, i|
+        serial << ML::GGUF::Qwen35CPU.forward_top1(w, token_id, prompt.size + i, serial_state)
+      end
+
+      chunk_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: prompt.size + candidates.size + 8)
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, chunk_state)
+      chunked = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, prompt.size, chunk_state)
+
+      chunked.size.should eq(serial.size)
+      chunked.each_with_index do |(top_id, _top_logit), i|
+        top_id.should eq(serial[i][0])
+      end
+    ensure
+      if old_full
+        ENV["QWEN35_HEAD_FULL_ROWS"] = old_full
+      else
+        ENV.delete("QWEN35_HEAD_FULL_ROWS")
+      end
+      if old_full_off
+        ENV["QWEN35_HEAD_FULL_ROWS_OFF"] = old_full_off
+      else
+        ENV.delete("QWEN35_HEAD_FULL_ROWS_OFF")
+      end
+      if old_rows
+        ENV["QWEN35_HEAD_TOP1_ROWS"] = old_rows
+      else
+        ENV.delete("QWEN35_HEAD_TOP1_ROWS")
+      end
+    end
+  end
+
   it "keeps chunk verifier constants model-specific across target and draft models" do
     pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
     target = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
