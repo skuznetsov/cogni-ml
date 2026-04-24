@@ -89,6 +89,7 @@ module ML::BenchLoadGuard
     return unless host_load.busy?
 
     io.puts "WARNING: host CPU load may contaminate benchmark results."
+    io.puts "         CPU percentages are per logical core; about 100% means one busy core."
     if host_load.total_threshold > 0.0 && host_load.total_cpu >= host_load.total_threshold
       io.printf "         Total observed CPU %.1f%% exceeds %.1f%%.\n",
         host_load.total_cpu, host_load.total_threshold
