@@ -3375,3 +3375,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: speculative scheduler, draft model, or host load changes
 **note:** This is worth keeping because it is exact and low-risk, but the gain is small; target verifier and bulk draft GEMV remain the major costs.
+
+### [LM-codex-FALLBACK-BOUND-CHUNK-VERIFY-FALSIFIER-1] Forked chunk verifier is not better for fallback-bound cycles
+**status:** verified-falsifier
+**trust:** {F:0.76, G:0.42, R:0.74}
+**context:** ml (Qwen speculative verifier state strategy)
+**evidence:**
+- claim: "A temporary branch routed fallback-bound low-gamma cycles from `chunk-inplace` to forked `chunk` verification. The hypothesis was that avoiding `target_backup_state.copy_from!` would help cycles likely to reject and enter target-only fallback."
+  source: temporary `bin/qwen35_speculative_accept.cr` branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: verifier state-copy implementation or fallback policy changes
+- claim: "The branch removed target backup accounting on rejection prompts but did not improve wall time: `def fibonacci(n):` stayed around `21.5 ms/tok`, and `Once upon a time` stayed around `22.46-22.47 ms/tok`."
+  source: interleaved `QWEN35_SPEC_FALLBACK_BOUND_CHUNK_VERIFY=1` vs default with `/tmp/qwen35_speculative_accept_fbchunk --tokens 64 --gamma 4 --max-gamma 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, verifier state-copy cost, or speculative scheduler changes
+- claim: "High-accept prompts regressed because accepted fallback-bound early cycles must copy the forked verifier state back: default `chunk-inplace` measured about `15.79/15.81 ms/tok`, while the forked chunk branch measured about `15.96/16.02 ms/tok`."
+  source: same interleaved `/tmp/qwen35_speculative_accept_fbchunk` run on `The capital of France is` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: target State.copy_from! cost or verifier implementation changes
+**note:** Keep `chunk-inplace` as the default state strategy. Removing a small target backup copy is not enough when accepted cycles become more expensive.

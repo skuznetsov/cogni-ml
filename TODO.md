@@ -153,6 +153,7 @@
   - [x] Skip speculative draft-state backup when a future rejection is guaranteed to enter target-only fallback (`QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF=1` disables): exact harness output remains matched to greedy target, and partial-reject prompts avoid the unused draft copy (`draft_backup_skip=1`, `draft_backup=0.0 ms`)
   - [x] Add guarded fast regrowth after adaptive gamma reaches `8` (`QWEN35_SPEC_FAST_REGROW_MIN_GAMMA=0` disables): high-accept prompt now reaches `gamma=32` in `5` cycles instead of `7`, improving `The capital of France is` from `~19.2 ms/tok` to `~16.0-17.8 ms/tok`; `def fibonacci(n):` stays on the safe path (`max_seen=4`, fallback after reject)
   - [x] Reuse the existing Q8_0 dual GEMV kernel for full-attention `K + V` projections (`QWEN35_Q8_KV_DUAL_GEMV_OFF=1` disables): draft full.qkv encode drops from `~3.7 ms` to `~2.7 ms` over 64 tokens and high-accept speculative decode gets a small exact win (`15.73 ms/tok` off -> `15.68/15.71 ms/tok` default)
+  - [x] Falsifier: switching fallback-bound low-gamma verifier cycles from `chunk-inplace` to forked `chunk` removes target backup but is not a win; high-accept regresses (`~15.8` -> `~16.0 ms/tok`) and reject prompts are neutral, so keep `chunk-inplace` default
   - [ ] Next: target true batched speculative verification and lower-level Q4/Q6 kernel changes; Q8_0 draft is now closer, but exact speculative still trails plain target decode until verifier overhead is cut
 
 ## Deferred research backlog — efficient attention / long context
