@@ -3443,3 +3443,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, Q4 pair kernel, or prefill chunk schedule changes
 **note:** Keep `Q4_PAIR_H16_MIN_BATCH=256`. Pair conversion reuse remains useful for larger prompts but not robust enough for pp64 default.
+
+### [LM-codex-Q5-SINGLE-BUFFER-FALSIFIER-1] Q5_K GEMM should stay double-buffered
+**status:** verified-falsifier
+**trust:** {F:0.78, G:0.46, R:0.75}
+**context:** ml (Qwen prefill Q5_K GEMM kernel optimization)
+**evidence:**
+- claim: "A temporary opt-in branch added `simd_mm_q5k_single`, mirroring the Q6_K single-buffer schedule, and routed Q5_K batch GEMM through it with `QWEN35_Q5_SINGLE_GEMM=1`. The hypothesis was that Q5's extra prefetch state/register pressure might outweigh the saved barrier in the current double-buffered Q5 kernel."
+  source: temporary `src/ml/gguf/kernels/gemm_mm.metal` and `src/ml/gguf/qwen35_metal.cr` branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q5_K GEMM kernel rewrite, Metal compiler change, or recurrent qkv route change
+- claim: "Correctness was preserved under the opt-in branch: `QWEN35_Q5_SINGLE_GEMM=1 crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags=...` passed `22 examples, 0 failures`; Q5 batch GEMM kept cosine `1.0` and max delta `0.0033721924`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5single_spec QWEN35_Q5_SINGLE_GEMM=1 crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q5_K kernel or Qwen35 correctness fixtures change
+- claim: "The opt-in branch was slower in paired pp64 prefill A/B: current double-buffer default measured avg `159.40 ms`, p50 `159.99 ms`; single-buffer measured avg `160.51 ms`, p50 `161.55 ms`; default won `7/8` pairs. Standalone attribution also showed Q5 `4096x8192 b64` p50 worsening from `3.911 ms` to `4.316 ms`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5single_ab crystal run --release --link-flags=... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_Q5_SINGLE_GEMM --compare-off=1`, plus `qwen35_op_attribution` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Q5_K GEMM schedule, or benchmark harness change
+**note:** Keep the current double-buffered Q5_K GEMM. This closes the inverse of the earlier Q6 double-buffer falsifier: Q5 and Q6 prefer different schedules in the current kernels.
