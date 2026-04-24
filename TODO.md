@@ -111,6 +111,7 @@
   - [x] Falsifier: adding a Q5/Q6 GEMM `no-bias` mode (`apply_gelu=2`) compiled and passed focused specs, but pp64 paired A/B was neutral/negative (`151.84 ms` default vs `151.80 ms` bias path off, wins `3/8`), so the bias add/read is not material enough to justify a kernel mode
   - [x] Add exact Q4_K half-input prefill GEMM (`QWEN35_Q4K_H16_GEMM_OFF=1` disables it): Q4 prefill matmuls preconvert F32 activations to F16 once per matmul instead of per output tile; pp64 paired A/B improves default by `~1.28 ms` (`8/8` wins), pp256 improves by `~5.06 ms` (`6/6` wins), and matched pp64 moves native prefill to `424.96 tok/s` p50 vs llama.cpp `462.9 tok/s`
   - [x] Add exact Q5_K recurrent-qkv half-output prefill path (`QWEN35_Q5_QKV_H16_CONV_OFF=1` disables it): Q5 qkv GEMM output stays F16 and the recurrent conv-shift chunk reads half directly; pp64 paired A/B improves default by `~0.28 ms` (`6/8` wins), pp256 by `~0.52 ms` (`5/6` wins)
+  - [x] Reuse Q4_K half-input conversion across paired FFN gate/up matmuls for large prefill batches (`QWEN35_Q4K_PAIR_H16_GEMM_OFF=1` disables it, active at batch `>=256`): pp256 isolated paired A/B improves default by `~1.56 ms` avg / `~2.21 ms` p50 (`7/10` wins), pp512 opt-in A/B improved by `~1.82 ms` (`4/4` pair wins), and pp64 is gated off after adversary A/B showed the pair path is not reliable at short prompts
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context
@@ -156,6 +157,6 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - **Active phase:** 4 (optimization: beat llama.cpp)
 - **Active task:** 4.9 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
-- **Latest verified prefill tweak:** Q5_K recurrent-qkv half-output conv path (`QWEN35_Q5_QKV_H16_CONV_OFF=1` disables it) on top of Q4_K half-input prefill GEMM; latest stable local A/B shows pp64 `~0.28 ms` and pp256 `~0.52 ms` wins over the off path
+- **Latest verified prefill tweak:** large-batch Q4_K FFN gate/up half-input pair conversion reuse (`QWEN35_Q4K_PAIR_H16_GEMM_OFF=1` disables it, active at batch `>=256`) on top of Q4_K half-input GEMM and Q5_K recurrent-qkv half-output conv; latest isolated pp256 A/B shows `~1.56 ms` avg / `~2.21 ms` p50 win over the off path
 - **Blocked:** nothing
 - **Last updated:** 2026-04-24

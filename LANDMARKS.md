@@ -2954,3 +2954,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: Q5/Q6 GEMM kernel rewrite or Metal compiler behavior changes
 **note:** The direct-store Q4_K change is a local kernel win that moved pp64 p50 from the previous `358.44 tok/s` landmark to `373.80 tok/s`. It does not solve the remaining prefill gap by itself; the next measured wall is still recurrent/full-attn chunk work dominated by quantized batched matmuls and remaining readbacks.
+
+### [LM-codex-Q4K-PAIR-H16-1] Large-batch Q4_K FFN gate/up reuses one half-input conversion
+**status:** verified-default-gated
+**trust:** {F:0.86, G:0.56, R:0.82}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "Added a default-on, batch-gated Q4_K FFN gate/up pair route for prefill. It converts the shared normalized F32 activation matrix to F16 once, then feeds both Q4_K half-input GEMMs. The route is disabled with `QWEN35_Q4K_PAIR_H16_GEMM_OFF=1` and only activates at batch `>=256` because pp64 adversary runs were not reliable."
+  source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K half-input GEMM semantics, FFN gate/up layout, or prefill batch routing changes
+- claim: "Correctness gates pass with the default-gated route: targeted Qwen forward and DeltaNet specs report `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4pair_gate_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: spec fixtures, Metal kernels, or Qwen35 prefill path changes
+- claim: "Isolated pp256 paired A/B shows the gated default route faster than `QWEN35_Q4K_PAIR_H16_GEMM_OFF=1`: avg `488.35 ms` default vs `489.91 ms` off, p50 `486.48 ms` vs `488.69 ms`, wins `7/10`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4pair_gate_ab256_iso crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=2 --reps=10 --compare-env=QWEN35_Q4K_PAIR_H16_GEMM_OFF --compare-off=1` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, power state, benchmark harness, or Q4_K prefill route changes
+- claim: "pp64 is intentionally not routed through the pair helper: after adding the `batch >= 256` gate, an isolated pp64 A/B is neutral within noise (`150.94 ms` default vs `150.84 ms` off avg, wins `3/6`), while an earlier ungated pp64 run was noisy/regression-prone."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4pair_gate_ab64_iso crystal run --release ... --prompt=64 --warmup=2 --reps=6 --compare-env=QWEN35_Q4K_PAIR_H16_GEMM_OFF --compare-off=1` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prefill batch threshold, host load, or Q4_K pair routing changes
+**note:** This is a small exact long-prefill cleanup, not a paradigm shift. It removes duplicated activation conversion for paired FFN projections but does not reduce the dominant weight traffic.
