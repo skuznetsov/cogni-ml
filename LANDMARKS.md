@@ -355,7 +355,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness or power state changes
 **decision:** "Do not keep the double-buffered Q6_K variant; the observed effect is noise-level and p50 is slightly worse."
 
-### [LM-prefill-CHUNK-SIZE-2048] Larger default prefill chunks
+### [LM-prefill-CHUNK-SIZE-4096] Larger default prefill chunks
 **status:** verified
 **trust:** {F:0.85, G:medium, R:0.85}
 **context:** ml (Qwen35 prefill)
@@ -364,7 +364,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: local chunk sweep with `bin/qwen35_prefill_attribution.cr` for prompt sizes 64, 128, 256, 512, and 1024
   verified_at: 2026-04-24
   decay_trigger: prefill scheduler, memory budget, or full-attention chunk implementation changes
-- claim: "Changing the default chunk size to 1024 preserved the env override and passed focused forward/prompt-cache specs; later sweep raised it to 2048 for better pp2048 behavior."
+- claim: "Changing the default chunk size to 1024 preserved the env override and passed focused forward/prompt-cache specs; later sweeps raised it to 2048 and then 4096 for better long-prompt behavior."
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_chunk_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` -> 14 examples, 0 failures
   verified_at: 2026-04-24
   decay_trigger: Qwen35 prefill or prompt cache changes
@@ -384,6 +384,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: local `bin/qwen35_prefill_attribution.cr` chunk sweep
   verified_at: 2026-04-24
   decay_trigger: benchmark harness or power state changes
+- claim: "pp4096 one-shot sweep measured chunk4096 p50 11524.63 ms versus chunk2048 p50 11862.78 ms."
+  source: local `bin/qwen35_prefill_attribution.cr` chunk sweep
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, memory pressure, or power state changes
 **adversary:** "Larger chunks increase peak scratch memory; keep `QWEN35_PREFILL_CHUNK_SIZE` override for smaller devices or pathological long prompts."
 
 ### [LM-prefill-LONG-SUFFIX-TOP1] Batched final chunk for long prompts
