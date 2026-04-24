@@ -334,9 +334,18 @@ while generated_ids.size < n_gen
     end
 
     if rejected
-      tr0 = Time.instant
-      draft_next = resync_draft!(draft, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
-      draft_resync_ms += (Time.instant - tr0).total_milliseconds
+      will_plain_fallback_after_reject = plain_fallback_enabled &&
+                                         skip_draft_before_fallback_enabled &&
+                                         adaptive_gamma &&
+                                         !adaptive_regrow &&
+                                         Math.max(1, current_gamma // 2) <= plain_fallback_gamma
+      if will_plain_fallback_after_reject || generated_ids.size >= n_gen
+        draft_skips_before_fallback += 1
+      else
+        tr0 = Time.instant
+        draft_next = resync_draft!(draft, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
+        draft_resync_ms += (Time.instant - tr0).total_milliseconds
+      end
     end
   end
 
