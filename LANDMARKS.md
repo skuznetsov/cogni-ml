@@ -201,6 +201,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_skipdraft --tokens 64 --gamma 4`, with and without `QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF=1`, on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: early-reject policy, fallback policy, draft resync semantics, or adaptive gamma changes
+- claim: "A faster Q4_K_M draft cannot be produced from the currently downloaded 0.8B Q8_0 GGUF with local llama.cpp: `llama-quantize ... Q4_K_M` fails with `requantizing from type q8_0 is disabled`. The partial `.local.gguf` artifact was removed."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/build/bin/llama-quantize Qwen3.5-0.8B-Q8_0.gguf Qwen3.5-0.8B-Q4_K_M.local.gguf Q4_K_M` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: availability of F16/BF16 0.8B source GGUF, separately downloaded Q4 draft, or llama.cpp requantization policy changes
 
 ## Graph Visualization
 
