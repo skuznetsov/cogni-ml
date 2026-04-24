@@ -3519,3 +3519,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, gamma schedule, or early-reject/fallback policy changes
 **note:** Keep the current default schedule. The next exact win is unlikely to come from more schedule aggressiveness; it needs lower target verifier cost or a true batched verifier path.
+
+### [LM-codex-SPEC-STAGED-VERIFY-1] Staged verifier is useful only as high-accept opt-in turbo
+**status:** verified-feature-with-caveat
+**trust:** {F:0.76, G:0.38, R:0.72}
+**context:** ml (Qwen speculative verifier scheduling)
+**evidence:**
+- claim: "Added `--verify staged` and `--stage-gate N` to the speculative harness. The mode drafts and verifies a small guard stage before drafting/verifying the rest of a large gamma cycle, preserving exact greedy output while reducing high-accept cycle count."
+  source: `bin/qwen35_speculative_accept.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative harness control flow, target state rollback, or draft resync changes
+- claim: "Correctness and build hygiene passed: `crystal build --release bin/qwen35_speculative_accept.cr` succeeded, a staged smoke with `--tokens 16 --gamma 8 --verify staged --stage-gate 4` matched target greedy output, and focused Qwen forward specs passed `13 examples, 0 failures`."
+  source: `crystal build --release --link-flags=... bin/qwen35_speculative_accept.cr -o /tmp/qwen35_speculative_accept_staged`; `/tmp/qwen35_speculative_accept_staged --tokens 16 --gamma 8 --verify staged --stage-gate 4 "The capital of France is"`; `crystal spec spec/qwen35_forward_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Qwen forward specs, tokenizer behavior, or speculative exactness check changes
+- claim: "As a fixed-gamma high-accept opt-in, staged mode improves the 64-token `The capital of France is` smoke from default `16.45 ms/tok` to `15.04 ms/tok` with `--gamma 32 --verify staged --stage-gate 4`; target verification drops from `571.3 ms` to `476.3 ms`."
+  source: `/tmp/qwen35_speculative_accept_staged --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` vs `/tmp/qwen35_speculative_accept_staged --tokens 64 --gamma 32 --max-gamma 32 --verify staged --stage-gate 4 "The capital of France is"` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, gamma schedule, draft model speed, or target verifier implementation changes
+- claim: "The same fixed-gamma staged mode is not safe as default: on `def fibonacci(n):`, it regresses from default `23.82 ms/tok` to `32.58 ms/tok` because acceptance drops and draft resync dominates."
+  source: same `/tmp/qwen35_speculative_accept_staged` A/B on `def fibonacci(n):` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, rejection fallback policy, or staged guard policy changes
+**note:** Keep staged verifier opt-in. It is an exact high-accept turbo lever, but default scheduling still needs a prompt-safe acceptance predictor or cheaper verifier before using gamma 32 broadly.
