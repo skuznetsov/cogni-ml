@@ -301,6 +301,25 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     next_chunk = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size + candidates.size, prefix_chunk)
     next_chunk[0].should eq(next_serial[0])
     next_chunk[1].should be_close(next_serial[1], 1e-4_f32)
+
+    old_rows = ENV["QWEN35_HEAD_TOP1_ROWS"]?
+    ENV["QWEN35_HEAD_TOP1_ROWS"] = "1"
+    begin
+      prefix_batched = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, prefix_batched)
+      batched = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, prompt.size, prefix_batched)
+      batched.size.should eq(serial.size)
+      batched.each_with_index do |(top_id, top_logit), i|
+        top_id.should eq(serial[i][0])
+        top_logit.should be_close(serial[i][1], 1e-4_f32)
+      end
+    ensure
+      if old_rows
+        ENV["QWEN35_HEAD_TOP1_ROWS"] = old_rows
+      else
+        ENV.delete("QWEN35_HEAD_TOP1_ROWS")
+      end
+    end
   end
 
   it "keeps chunk verifier constants model-specific across target and draft models" do

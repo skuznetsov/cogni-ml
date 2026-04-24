@@ -129,6 +129,7 @@
   - [x] Fix Q8_0 GEMV attribution block accounting and retune Q8_0 GEMV row parallelism; `MV_Q8_NR0=1` improves native 0.8B Q8_0 draft decode from `11.59 ms/tok` to `9.06 ms/tok` in the same 64-token profile, while `NR0=3/4` regress
   - [x] Add exact chunked target top1 verifier primitive (`prefill_tokens_top1s`) and harden shared Metal constant caching for mixed target+draft models; regression spec covers 9B target after 0.8B draft cache pollution
   - [x] Falsifier: chunking only the target verifier body is not enough for speedup with the current 0.8B draft. On `def fibonacci(n):`, gamma=4/tokens=24 has the same acceptance (`85.19%`) but serial verifier is `31.47 ms/tok` while chunk-body verifier is `32.97 ms/tok`; target verification time drops (`503.9` → `471.5 ms`) but fork/copy and per-row lm-head overhead erase it
+  - [x] Falsifier: batched Q6_K lm-head top1 for verifier rows is exact but slower at gamma=4. On `def fibonacci(n):`, chunk verifier default is `30.03 ms/tok`; opt-in `QWEN35_HEAD_TOP1_ROWS=1` regresses to `32.44 ms/tok`, so keep row-batched top1 default-off
   - [ ] Next: attack FFN weight traffic with lower-level Q4/Q6 tile changes, search for the next Q8_0 draft GEMV algorithmic step, and build true batched target verifier for speculative decode
 
 ## Deferred research backlog — efficient attention / long context

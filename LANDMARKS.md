@@ -141,6 +141,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_modes --verify serial|chunk --gamma 4 --tokens 24 "def fibonacci(n):"`
   verified_at: 2026-04-24
   decay_trigger: draft GEMV, target verifier, state fork/copy, or lm-head batching changes
+- claim: "Batched Q6_K lm-head top1 over verifier rows is exact but slower for gamma=4: default chunk verifier is 30.03 ms/tok; opt-in `QWEN35_HEAD_TOP1_ROWS=1` is 32.44 ms/tok."
+  source: `/tmp/qwen35_speculative_accept_batched_head2 --verify chunk --gamma 4 --tokens 24 "def fibonacci(n):"` with and without `QWEN35_HEAD_TOP1_ROWS=1`
+  verified_at: 2026-04-24
+  decay_trigger: batched top1 kernel retuned, gamma changes, or verifier state-copy overhead removed
 
 ## Graph Visualization
 

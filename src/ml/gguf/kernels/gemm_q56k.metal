@@ -449,6 +449,112 @@ kernel void simd_mv_q6k_top1_tiles_f32(
     }
 }
 
+kernel void simd_mv_q6k_top1_tiles_batch_f32(
+    device const uint8_t* w_raw       [[buffer(0)]],
+    device const float*   x           [[buffer(1)]],
+    device       float*   tile_values [[buffer(2)]],
+    device       uint*    tile_ids    [[buffer(3)]],
+    constant     uint&    in_dim      [[buffer(4)]],
+    constant     uint&    out_dim     [[buffer(5)]],
+    constant     uint&    tile_count  [[buffer(6)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    constexpr uint8_t kmask1 = 0x03;
+    constexpr uint8_t kmask2 = 0x0C;
+    constexpr uint8_t kmask3 = 0x30;
+    constexpr uint8_t kmask4 = 0xC0;
+
+    const uint nb = in_dim / Q56K_QK_K;
+    const uint row_bytes = nb * 210;
+    const uint batch_id = tgpig.y;
+    device const float* x_row = x + batch_id * in_dim;
+
+    const short tid = tiisg / 2;
+    const short ix  = tiisg % 2;
+    const short ip  = tid / 8;
+    const short il  = tid % 8;
+    const short l0  = 4 * il;
+    const short is  = 8 * ip + l0 / 16;
+
+    const short y_offset   = 128 * ip + l0;
+    const short q_offset_l =  64 * ip + l0;
+    const short q_offset_h =  32 * ip + l0;
+
+    threadgroup float sg_values[MV6_NSG];
+    threadgroup uint  sg_ids[MV6_NSG];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+
+    for (short tile_row = 0; tile_row < MV6_TOP_ROWS_PER_TG / MV6_NSG; ++tile_row) {
+        const uint row_id = tgpig.x * MV6_TOP_ROWS_PER_TG + tile_row * MV6_NSG + sgitg;
+        if (row_id >= out_dim) continue;
+
+        float sumf = 0.0f;
+        float yl[16];
+
+        for (uint i = ix; i < nb; i += 2) {
+            device const float * y = x_row + i * Q56K_QK_K + y_offset;
+            for (short l = 0; l < 4; ++l) {
+                yl[4*l + 0] = y[l +  0];
+                yl[4*l + 1] = y[l + 32];
+                yl[4*l + 2] = y[l + 64];
+                yl[4*l + 3] = y[l + 96];
+            }
+
+            device const block_q6_K_56 * blk =
+                (device const block_q6_K_56 *)(w_raw + row_id * row_bytes) + i;
+
+            device const uint8_t * q1 = blk->ql + q_offset_l;
+            device const uint8_t * q2 = q1 + 32;
+            device const uint8_t * qh = blk->qh + q_offset_h;
+            device const int8_t  * sc = blk->scales + is;
+            device const half    * dh = &blk->d;
+
+            float4 sums = {0.f, 0.f, 0.f, 0.f};
+            FOR_UNROLL for (short l = 0; l < 4; ++l) {
+                sums[0] += yl[4*l + 0] * ((int8_t)((q1[l] & 0xF) | ((qh[l] & kmask1) << 4)) - 32);
+                sums[1] += yl[4*l + 1] * ((int8_t)((q2[l] & 0xF) | ((qh[l] & kmask2) << 2)) - 32);
+                sums[2] += yl[4*l + 2] * ((int8_t)((q1[l]  >> 4) | ((qh[l] & kmask3) << 0)) - 32);
+                sums[3] += yl[4*l + 3] * ((int8_t)((q2[l]  >> 4) | ((qh[l] & kmask4) >> 2)) - 32);
+            }
+
+            sumf += dh[0] * (sums[0] * sc[0] + sums[1] * sc[2] +
+                             sums[2] * sc[4] + sums[3] * sc[6]);
+        }
+
+        const float total = simd_sum(sumf);
+        if (tiisg == 0 && (total > best || (total == best && row_id < best_id))) {
+            best = total;
+            best_id = row_id;
+        }
+    }
+
+    if (tiisg == 0) {
+        sg_values[sgitg] = best;
+        sg_ids[sgitg] = best_id;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0 && tiisg == 0) {
+        float group_best = sg_values[0];
+        uint group_best_id = sg_ids[0];
+        for (uint i = 1; i < MV6_NSG; ++i) {
+            const float v = sg_values[i];
+            const uint id = sg_ids[i];
+            if (v > group_best || (v == group_best && id < group_best_id)) {
+                group_best = v;
+                group_best_id = id;
+            }
+        }
+        const uint out_idx = batch_id * tile_count + tgpig.x;
+        tile_values[out_idx] = group_best;
+        tile_ids[out_idx] = group_best_id;
+    }
+}
+
 kernel void qwen35_top1_reduce_tiles(
     device const float* tile_values [[buffer(0)]],
     device const uint*  tile_ids    [[buffer(1)]],
@@ -488,5 +594,49 @@ kernel void qwen35_top1_reduce_tiles(
         }
         top_id[0] = group_best_id;
         top_value[0] = group_best;
+    }
+}
+
+kernel void qwen35_top1_reduce_tiles_batch(
+    device const float* tile_values [[buffer(0)]],
+    device const uint*  tile_ids    [[buffer(1)]],
+    device       uint*  top_id      [[buffer(2)]],
+    device       float* top_value   [[buffer(3)]],
+    constant     uint&  tile_count  [[buffer(4)]],
+    uint row [[threadgroup_position_in_grid]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float local_values[256];
+    threadgroup uint  local_ids[256];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+    const uint base = row * tile_count;
+    for (uint i = tid; i < tile_count; i += 256) {
+        const float v = tile_values[base + i];
+        const uint id = tile_ids[base + i];
+        if (v > best || (v == best && id < best_id)) {
+            best = v;
+            best_id = id;
+        }
+    }
+
+    local_values[tid] = best;
+    local_ids[tid] = best_id;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid == 0) {
+        float group_best = local_values[0];
+        uint group_best_id = local_ids[0];
+        for (uint i = 1; i < 256; ++i) {
+            const float v = local_values[i];
+            const uint id = local_ids[i];
+            if (v > group_best || (v == group_best && id < group_best_id)) {
+                group_best = v;
+                group_best_id = id;
+            }
+        }
+        top_id[row] = group_best_id;
+        top_value[row] = group_best;
     }
 }

@@ -1097,6 +1097,20 @@ module ML::GGUF
       nil
     end
 
+    private def output_project_top1s_routed(x : Array(Float32),
+                                            rows : Int32,
+                                            norm_weight : Array(Float32),
+                                            out_qw : QuantWeight,
+                                            eps : Float32) : Array({Int32, Float32})?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
+        return nil unless metal_qw_supported?(out_qw)
+        return nil unless Qwen35Metal.available?
+        Qwen35Metal.rmsnorm_project_top1_rows(x, rows, norm_weight, out_qw, eps)
+      {% end %}
+      nil
+    end
+
     # ─────────────────────────────────────────────────────────────────────
     # Full-attention layer forward (single-token decode)
     # ─────────────────────────────────────────────────────────────────────
@@ -1662,6 +1676,11 @@ module ML::GGUF
 
       hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
       hp = weights.hparams
+      if ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1" &&
+         (top1s = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps))
+        return top1s
+      end
+
       results = Array({Int32, Float32}).new(token_ids.size)
       token_ids.size.times do |i|
         row = hidden[i * hp.n_embd, hp.n_embd]
