@@ -3542,3 +3542,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt distribution, rejection fallback policy, or staged guard policy changes
 **note:** Keep staged verifier opt-in. It is an exact high-accept turbo lever, but default scheduling still needs a prompt-safe acceptance predictor or cheaper verifier before using gamma 32 broadly.
+
+### [LM-codex-Q6-TOP1-ROWS16-FALSIFIER-1] Q6 top1 rows16 does not improve verifier cost
+**status:** verified-falsifier
+**trust:** {F:0.72, G:0.36, R:0.68}
+**context:** ml (Qwen Q6 lm-head top1 kernel retune)
+**evidence:**
+- claim: "A temporary branch changed `HEAD_TOP1_ROWS_PER_TG` and `MV6_TOP_ROWS_PER_TG` from `12` to `16` to reduce Q6 lm-head top1 tile count."
+  source: temporary `src/ml/gguf/qwen35_metal.cr` and `src/ml/gguf/kernels/gemm_q56k.metal` branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: output-head top1 kernel rewrite or Metal compiler change
+- claim: "Rows16 preserved the strict Qwen top-token gate: focused `spec/qwen35_forward_spec.cr` passed `13 examples, 0 failures`, top token `198`, logit `11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_head16_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Qwen forward specs or output-head route changes
+- claim: "Rows16 did not lower verifier target time. On high-accept default chunk-inplace, target verification stayed `573.8 ms` for rows12 and rows16; staged high-accept moved from `477.8 ms` rows12 to `479.9 ms` rows16."
+  source: `/tmp/qwen35_speculative_accept_staged` rows12 vs `/tmp/qwen35_speculative_accept_head16` rows16 on `The capital of France is`, 64 tokens, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, output-head top1 kernel, or speculative verifier schedule changes
+- claim: "Rows16 regressed rejection-sensitive default smoke: `def fibonacci(n):` default chunk-inplace moved from `22.84 ms/tok` rows12 to `23.45 ms/tok` rows16."
+  source: same `/tmp/qwen35_speculative_accept_staged` rows12 vs `/tmp/qwen35_speculative_accept_head16` rows16 A/B on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, output-head top1 kernel, or speculative verifier schedule changes
+**note:** Keep Q6 top1 tile rows at 12. Larger tiles reduce tile count but do not reduce the measured verifier bottleneck in this implementation.
