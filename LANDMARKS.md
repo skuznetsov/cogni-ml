@@ -521,6 +521,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: harness output format or env toggle semantics change
 **adversary:** "This does not remove the need for matched llama benchmarks before public claims; it only makes local env-toggle prefill decisions less vulnerable to block-order drift."
 
+### [LM-prefill-Q56-H16-ADD-FALSIFIER] Removing Q56 FFN-down F16->F32 conversion is not enough
+**status:** refuted
+**trust:** {F:0.80, G:narrow, R:0.78}
+**context:** ml (Qwen35 prefill Q56_K FFN-down)
+**evidence:**
+- claim: "A bounded exact branch kept Q5/Q6 GEMM FFN-down output as half and fused `residual + half(ffn_down)` in a new add kernel, avoiding the explicit `f16_to_f32` output conversion buffer for Q56 FFN-down paths."
+  source: temporary local patch to `src/ml/gguf/kernels/ffn_qwen35.metal` and `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q56 GEMM output format, FFN-down routing, or add kernel changes
+- claim: "Correctness passed with the branch enabled: targeted forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56h16_spec QWEN35_Q56_DOWN_H16_ADD=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or route toggles change
+- claim: "Paired pp64 attribution was neutral: default p50 `167.22 ms`, branch p50 `167.30 ms`, wins `4/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56h16_ab crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_Q56_DOWN_H16_ADD --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q56 FFN-down route changes
+**adversary:** "The conversion kernel/output buffer is not a material wall at pp64; the branch was removed. Future Q56 work needs to change matmul throughput or eliminate work, not only fold the final conversion."
+
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
 **trust:** {F:0.65, G:medium, R:0.70}
