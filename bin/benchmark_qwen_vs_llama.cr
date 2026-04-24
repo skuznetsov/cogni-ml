@@ -58,11 +58,7 @@ def run_native_prefill(w : ML::GGUF::Qwen35Weights,
                        state : ML::GGUF::Qwen35CPU::State) : Nil
   return if prompt.empty?
 
-  last = prompt.size - 1
-  if last > 0
-    ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt[0...last], 0, state)
-  end
-  ML::GGUF::Qwen35CPU.forward_top1(w, prompt[last], last.to_i32, state)
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
 end
 
 def forward_decode_token(w : ML::GGUF::Qwen35Weights, tok : Int32, pos : Int32,
@@ -174,7 +170,7 @@ llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers,
 puts "Qwen 3.5 9B benchmark vs llama.cpp"
 puts "model: #{model}"
 puts "llama-bench: #{llama_bench}"
-puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} native_prefill=no_head_until_final_top1 native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
+puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} native_prefill=chunked_prompt_plus_final_top1 native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
 puts
 puts "Prefill"
 puts "  cogni-ml:  avg=#{native_prefill.avg_ms.round(2)} ms  p50=#{native_prefill.p50_ms.round(2)} ms  p95=#{native_prefill.p95_ms.round(2)} ms  avg=#{native_prefill.tok_s_avg.round(2)} tok/s  p50=#{native_prefill.tok_s_p50.round(2)} tok/s"

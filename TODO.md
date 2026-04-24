@@ -79,6 +79,7 @@
   - [x] Enable Q5_K/Q6_K batch GEMM in prefill chunks with GPU-side F32↔F16 conversion; pp64 p50 improves from `143.18 tok/s` to `278.50 tok/s`
   - [x] Keep DeltaNet chunk state rows register-resident across the token scan; pp64 p50 improves from `278.50 tok/s` to `308.86 tok/s`
   - [x] Keep consecutive recurrent prefill layers GPU-resident; pp64 p50 improves from `308.86 tok/s` to `327.54 tok/s`
+  - [x] Batch the final prompt token into prefill and run only fused lm-head top1; pp64 p50 improves from `308.82 tok/s` to `358.44 tok/s`
   - [ ] Next: keep full prefill wave GPU-resident across recurrent/full-attn boundaries and remove remaining chunk readbacks
 
 ## Phase 5 — Scale to 27B

@@ -2275,3 +2275,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: full-attention chunk kernel rewrite or RoPE implementation changes
 **note:** This reduces orchestration/readback overhead within recurrent stretches. The remaining exact prefill gap is now the boundary between full-attention and recurrent chunks plus the first-run final-token decode included in the native benchmark.
+
+### [LM-codex-PREFILL-FINAL-CHUNK-1] Final prompt token is batched into exact prefill
+**status:** verified-default
+**trust:** {F:0.88, G:0.66, R:0.86}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "Added `Qwen35CPU.prefill_tokens_top1`, which processes the full prompt span including the final token through the chunked prefill path, then applies a fused Metal lm-head top1 to the final hidden row. The old final-token decode path remains available with `QWEN35_PREFILL_FINAL_CHUNK_OFF=1`."
+  source: `src/ml/gguf/qwen35_cpu.cr`, `src/ml/gguf/qwen35_metal.cr`, `bin/benchmark_qwen_vs_llama.cr`, `bin/qwen35_generate.cr`, and `src/ml/gguf/qwen35_prompt_cache.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: prompt prefill routing, output head top1 kernel, or benchmark semantics changes
+- claim: "Correctness gate passes: targeted Qwen specs `15 examples, 0 failures`; full targeted gate `26 examples, 0 failures`; A/B against `QWEN35_PREFILL_FINAL_CHUNK_OFF=1` on a 64-token prompt gives same top1 `72`, logit delta `0.00035572052`."
+  source: `crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_prompt_cache_spec.cr ...`, full targeted spec command, and temporary A/B harness on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: spec fixtures, top1 tolerance, or prompt-cache replay changes
+- claim: "Matched prompt=64/gen=16/reps=3/warmup=1 benchmark improved native prefill p50 from `308.82 tok/s` with `QWEN35_PREFILL_FINAL_CHUNK_OFF=1` to `358.44 tok/s` default; llama.cpp measured `458.39 tok/s` in the default run. Decode measured native `47.02 tok/s` vs llama.cpp `44.06 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_final_chunk crystal run --link-flags="build/bridge.o -framework Metal -framework Foundation -lc++" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1` and same command with `QWEN35_PREFILL_FINAL_CHUNK_OFF=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or Qwen prefill path changes
+- claim: "A same-binary A/B refuted changing `QWEN35_WAVE_CHUNK_LAYERS` default from `4` to `2`; paired 64/16 decode runs were effectively equal around `22.5 ms/tok`, so the default stayed `4`."
+  source: `/tmp/qwen35_sync_profile_wavechunk_ab` paired runs with `QWEN35_WAVE_CHUNK_LAYERS=2/4` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: decode wave scheduler or command-buffer behavior changes
+**note:** This is exact for greedy prompt ingestion because intermediate prompt-token logits are unobserved, and the final prompt token still produces next-token top1 before generation starts.

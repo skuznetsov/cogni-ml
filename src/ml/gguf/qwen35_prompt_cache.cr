@@ -192,11 +192,8 @@ module ML::GGUF
 
         suffix_start = entry.prefix_len
         final_pos = token_ids.size - 1
-        if suffix_start < final_pos
-          Qwen35CPU.prefill_tokens(weights, token_ids[suffix_start...final_pos], suffix_start.to_i32, state)
-        end
         if suffix_start <= final_pos
-          top, logit = Qwen35CPU.forward_top1(weights, token_ids[final_pos], final_pos.to_i32, state)
+          top, logit = Qwen35CPU.prefill_tokens_top1(weights, token_ids[suffix_start..final_pos], suffix_start.to_i32, state)
           next_token_id = top
           next_token_logit = logit
         end

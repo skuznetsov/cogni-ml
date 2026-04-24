@@ -847,6 +847,21 @@ module ML::GGUF
       {% end %}
     end
 
+    private def output_project_top1_routed(x : Array(Float32),
+                                           norm_weight : Array(Float32),
+                                           out_qw : QuantWeight,
+                                           eps : Float32) : {Int32, Float32}?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
+        return nil unless metal_qw_supported?(out_qw)
+        return nil unless Qwen35Metal.available?
+        if packed = Qwen35Metal.rmsnorm_project_top1(x, norm_weight, out_qw, eps)
+          return {packed[0].to_i32, packed[1]} if packed.size == 2
+        end
+      {% end %}
+      nil
+    end
+
     # ─────────────────────────────────────────────────────────────────────
     # Full-attention layer forward (single-token decode)
     # ─────────────────────────────────────────────────────────────────────
@@ -1317,11 +1332,56 @@ module ML::GGUF
                        state : State) : Nil
       return if token_ids.empty?
 
-      if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
-        token_ids.each_with_index do |token_id, i|
-          prefill_token(weights, token_id, start_pos + i, state)
+      prefill_tokens_hidden(weights, token_ids, start_pos, state)
+    end
+
+    def prefill_tokens_top1(weights : Qwen35Weights,
+                            token_ids : Array(Int32),
+                            start_pos : Int32,
+                            state : State) : {Int32, Float32}
+      raise ArgumentError.new("prefill_tokens_top1 token_ids must not be empty") if token_ids.empty?
+
+      if ENV["QWEN35_PREFILL_FINAL_CHUNK_OFF"]? != "1" &&
+         ENV["QWEN35_PREFILL_CHUNK_OFF"]? != "1" &&
+         token_ids.size > 1
+        chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || "64").to_i
+        if token_ids.size > chunk_size
+          prefill_tokens(weights, token_ids[0...-1], start_pos, state)
+          return forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
         end
-        return
+
+        x = prefill_tokens_hidden(weights, token_ids, start_pos, state)
+        hp = weights.hparams
+        last = x[(token_ids.size - 1) * hp.n_embd, hp.n_embd]
+        if top1 = output_project_top1_routed(last, weights.output_norm, weights.output, hp.rms_eps)
+          return top1
+        end
+        rms_norm!(last, weights.output_norm, hp.rms_eps)
+        logits = qmatvec_nobias(weights.output, last)
+        maxv = logits.max
+        return {logits.index(maxv).not_nil!.to_i32, maxv}
+      end
+
+      if token_ids.size > 1
+        prefill_tokens(weights, token_ids[0...-1], start_pos, state)
+      end
+      forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
+    end
+
+    private def prefill_tokens_hidden(weights : Qwen35Weights,
+                                      token_ids : Array(Int32),
+                                      start_pos : Int32,
+                                      state : State) : Array(Float32)
+      raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
+
+      if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
+        last_x = nil.as(Array(Float32)?)
+        token_ids.each_with_index do |token_id, i|
+          pos = start_pos + i
+          prefill_token(weights, token_id, pos, state)
+          last_x = embedding_lookup(weights.token_embd, token_id) if i == token_ids.size - 1
+        end
+        return last_x.not_nil!
       end
 
       hp = weights.hparams
@@ -1333,12 +1393,13 @@ module ML::GGUF
       raise ArgumentError.new("QWEN35_PREFILL_CHUNK_SIZE must be positive") unless chunk_size > 0
       if n_tokens > chunk_size
         offset = 0
+        x = nil.as(Array(Float32)?)
         while offset < n_tokens
           len = Math.min(chunk_size, n_tokens - offset)
-          prefill_tokens(weights, token_ids[offset, len], start_pos + offset, state)
+          x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state)
           offset += len
         end
-        return
+        return x.not_nil!
       end
 
       x = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
@@ -1441,6 +1502,7 @@ module ML::GGUF
           il += 1
         end
       end
+      x
     end
 
     # Embedding lookup for a single token id → Array(Float32)[n_embd].

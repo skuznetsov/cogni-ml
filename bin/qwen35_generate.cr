@@ -11,11 +11,11 @@ require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
 
-MODEL_PATH = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+MODEL_PATH         = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 
 prompt = ARGV[0]? || "The capital of France is"
-n_gen  = (ARGV[1]? || "8").to_i
+n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
 
 def cache_model_id(path : String) : String
@@ -81,7 +81,15 @@ end
 # set `QWEN35_PREFILL_CHUNK_OFF=1` to force the older whole-token prefill loop.
 if output_ids.empty?
   puts "\nPrefilling #{ids.size} tokens..."
-  if ids.size > 1
+  if !prompt_cache_enabled && ids.size > 1
+    tstart = Time.instant
+    top, top_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, ids, pos, state)
+    output_ids << top.to_i32
+    dt = (Time.instant - tstart).total_seconds
+    STDOUT << "  chunked #{ids.size}/#{ids.size} tokens with final top1 took #{dt.round(2)}s\n"
+    STDOUT.flush
+    pos += ids.size
+  elsif ids.size > 1
     prefix_ids = ids[0...-1]
     tstart = Time.instant
     ML::GGUF::Qwen35CPU.prefill_tokens(w, prefix_ids, pos, state)
@@ -106,7 +114,7 @@ if output_ids.empty?
     end
   end
 
-  if final_id = ids.last?
+  if output_ids.empty? && (final_id = ids.last?)
     tstart = Time.instant
     top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
     output_ids << top.to_i32
@@ -125,7 +133,7 @@ puts "\nGenerating #{n_gen} tokens greedily..."
   top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
   dt = (Time.instant - tstart).total_seconds
   piece = tok.decode_single(top)
-  STDOUT << "  gen #{g_i+1}/#{n_gen} pos=#{pos} id=#{top} piece=#{piece.inspect} took #{dt.round(2)}s\n"
+  STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos} id=#{top} piece=#{piece.inspect} took #{dt.round(2)}s\n"
   STDOUT.flush
   output_ids << top
   pos += 1
