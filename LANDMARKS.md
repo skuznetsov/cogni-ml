@@ -3500,3 +3500,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, Q8_0 launch shape, or Metal compiler change
 **note:** Do not retry simple threadgroup staging for Q8_0 x reads. The added load loop/barrier costs more than repeated cached x loads; future Q8 gains need a different dot-product algorithm or fewer GEMV calls.
+
+### [LM-codex-SPEC-GAMMA-AGGRESSIVE-FALSIFIER-1] Aggressive gamma regrowth is not a safe default
+**status:** verified-falsifier
+**trust:** {F:0.70, G:0.42, R:0.68}
+**context:** ml (Qwen speculative scheduler tuning)
+**evidence:**
+- claim: "A schedule sweep tested more aggressive exact speculative growth policies against the current conservative default: `QWEN35_SPEC_FULL_ACCEPT_STREAK=1`, `QWEN35_SPEC_FAST_REGROW_MIN_GAMMA=4`, and initial `--gamma 8`, all with `--tokens 64 --max-gamma 32`."
+  source: `bin/qwen35_speculative_accept.cr` schedule sweep on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative verifier implementation, draft speed, target verifier batch path, or gamma policy changes
+- claim: "On the 100%-accept prompt `The capital of France is`, aggressive policies were neutral or slower than default: default `16.44 ms/tok`, streak1 `16.93 ms/tok`, regrow4 `16.78 ms/tok`, gamma8 `16.54 ms/tok`."
+  source: `crystal run --release bin/qwen35_speculative_accept.cr -- --tokens 64 --gamma 4/8 --max-gamma 32 "The capital of France is"` with schedule env variants on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, gamma schedule, or target verifier route changes
+- claim: "On rejection-sensitive `def fibonacci(n):`, all aggressive policies regressed versus default: default `22.98 ms/tok`, streak1 `24.97 ms/tok`, regrow4 `24.83 ms/tok`, gamma8 `24.75 ms/tok`."
+  source: `crystal run --release bin/qwen35_speculative_accept.cr -- --tokens 64 --gamma 4/8 --max-gamma 32 "def fibonacci(n):"` with schedule env variants on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, gamma schedule, or early-reject/fallback policy changes
+**note:** Keep the current default schedule. The next exact win is unlikely to come from more schedule aggressiveness; it needs lower target verifier cost or a true batched verifier path.
