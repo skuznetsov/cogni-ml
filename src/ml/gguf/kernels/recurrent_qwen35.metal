@@ -202,6 +202,60 @@ kernel void qwen35_recurrent_conv_shift_chunk(
     }
 }
 
+// Same as qwen35_recurrent_conv_shift_chunk, but qkv_mixed is already
+// rounded to F16 by the upstream quantized GEMM. The old path expanded that
+// F16 output to F32 and immediately read it here, so reading half directly
+// preserves values while avoiding the expansion buffer.
+kernel void qwen35_recurrent_conv_shift_chunk_h16(
+    device       float* conv_state [[buffer(0)]],
+    device const half*  qkv_mixed  [[buffer(1)]],
+    device const float* conv1d     [[buffer(2)]],
+    device       float* q_out      [[buffer(3)]],
+    device       float* k_out      [[buffer(4)]],
+    device       float* v_out      [[buffer(5)]],
+    constant     uint&  h_k        [[buffer(6)]],
+    constant     uint&  h_v        [[buffer(7)]],
+    constant     uint&  s          [[buffer(8)]],
+    constant     uint&  conv_k     [[buffer(9)]],
+    constant     uint&  n_tokens   [[buffer(10)]],
+    uint gid [[thread_position_in_grid]])
+{
+    const uint qkv_dim = 2 * h_k * s + h_v * s;
+    if (gid >= qkv_dim) return;
+
+    const uint q_dim = h_k * s;
+    const uint k_dim = h_k * s;
+    const uint w_base = gid * conv_k;
+
+    for (uint tok = 0; tok < n_tokens; ++tok) {
+        float acc = 0.0f;
+        for (uint t = 0; t + 1 < conv_k; ++t) {
+            acc += conv_state[t * qkv_dim + gid] * conv1d[w_base + t];
+        }
+
+        const float mixed = float(qkv_mixed[tok * qkv_dim + gid]);
+        acc += mixed * conv1d[w_base + (conv_k - 1)];
+
+        if (conv_k >= 2) {
+            for (uint t = 0; t + 2 < conv_k; ++t) {
+                conv_state[t * qkv_dim + gid] = conv_state[(t + 1) * qkv_dim + gid];
+            }
+            conv_state[(conv_k - 2) * qkv_dim + gid] = mixed;
+        }
+
+        const float sig = 1.0f / (1.0f + exp(-acc));
+        const float val = acc * sig;
+
+        if (gid < q_dim) {
+            q_out[tok * q_dim + gid] = val;
+        } else if (gid < q_dim + k_dim) {
+            k_out[tok * k_dim + gid - q_dim] = val;
+        } else {
+            v_out[tok * (h_v * s) + gid - q_dim - k_dim] = val;
+        }
+    }
+}
+
 kernel void qwen35_l2_heads(
     device       float* x      [[buffer(0)]],
     constant     uint&  s      [[buffer(1)]],

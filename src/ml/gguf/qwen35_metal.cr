@@ -112,6 +112,7 @@ module ML
         @@recurrent_shift_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@recurrent_conv_shift_chunk_h16_pipeline : ML::Metal::ComputePipeline?
         @@l2_heads_pipeline : ML::Metal::ComputePipeline?
         @@l2_heads_chunk_pipeline : ML::Metal::ComputePipeline?
         @@split_qgate_pipeline : ML::Metal::ComputePipeline?
@@ -694,6 +695,12 @@ module ML
           }
         end
 
+        private def self.recurrent_conv_shift_chunk_h16_pipeline : ML::Metal::ComputePipeline
+          @@recurrent_conv_shift_chunk_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv_shift_chunk_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_recurrent_conv_shift_chunk_h16", RECURRENT_SOURCE)
+          }
+        end
+
         private def self.l2_heads_pipeline : ML::Metal::ComputePipeline
           @@l2_heads_pipeline ||= ML::Metal::PipelineCache.get("qwen35_l2_heads") {
             ML::Metal::ComputePipeline.new("qwen35_l2_heads", RECURRENT_SOURCE)
@@ -939,6 +946,43 @@ module ML
           enc.dispatch_1d(batch * out_dim, 256)
         end
 
+        private def self.encode_q56k_gemm_h16(enc : ML::Metal::ComputeEncoder,
+                                              pipeline : ML::Metal::ComputePipeline,
+                                              x_buf : ML::MetalBuffer,
+                                              out16_buf : ML::MetalBuffer,
+                                              w_buf : ML::MetalBuffer,
+                                              w_offset : Int64,
+                                              in_dim : Int32,
+                                              out_dim : Int32,
+                                              batch : Int32) : Nil
+          x16_buf = Scratch.get(:mm56_x16, (batch * in_dim).to_i64 * 2_i64)
+          bias_buf = Scratch.get("mm56_bias_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
+          ConstCache.write_zero_f32_once("mm56_bias_#{out_dim}", bias_buf, out_dim)
+
+          enc.set_pipeline(f32_to_f16_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
+          enc.set_value((batch * in_dim).to_u32, 2)
+          enc.dispatch_1d(batch * in_dim, 256)
+
+          enc.set_pipeline(pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x16_buf, 1)
+          enc.set_buffer(bias_buf, 2)
+          enc.set_buffer(out16_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 4)
+          enc.set_value(out_dim.to_u32, 5)
+          enc.set_value(batch.to_u32, 6)
+          enc.set_value(0_u32, 7)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          grid = {
+            (batch   + MM_NR1 - 1) // MM_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
         private def self.encode_matmul(enc : ML::Metal::ComputeEncoder,
                                        gemv_pipeline : ML::Metal::ComputePipeline,
                                        qw : QuantWeight,
@@ -1100,6 +1144,10 @@ module ML
 
         private def self.q4_h16_gemm_enabled? : Bool
           ENV["QWEN35_Q4K_H16_GEMM_OFF"]? != "1"
+        end
+
+        private def self.q5_qkv_h16_conv_enabled? : Bool
+          ENV["QWEN35_Q5_QKV_H16_CONV_OFF"]? != "1"
         end
 
         private def self.read_shared_top1(id_buf : ML::MetalBuffer, value_buf : ML::MetalBuffer) : Array(Float32)
@@ -2515,6 +2563,7 @@ module ML
           dst_buf = Scratch.get(:rec_chunk_many_hidden_b, inp.size.to_i64 * sizeof(Float32))
           cur_buf = Scratch.get(:rec_chunk_many_cur, inp.size.to_i64 * sizeof(Float32))
           qkv_buf = Scratch.get(:rec_chunk_many_qkv, (n_tokens * qkv_dim).to_i64 * sizeof(Float32))
+          qkv_h16_buf = Scratch.get(:rec_chunk_many_qkv_h16, (n_tokens * qkv_dim).to_i64 * 2_i64)
           z_buf = Scratch.get(:rec_chunk_many_z, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           alpha_buf = Scratch.get(:rec_chunk_many_alpha, (n_tokens * h_v).to_i64 * sizeof(Float32))
           beta_buf = Scratch.get(:rec_chunk_many_beta, (n_tokens * h_v).to_i64 * sizeof(Float32))
@@ -2566,7 +2615,13 @@ module ML
 
             Profile.trace("prefill.rec.proj") do
               proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-              encode_matmul(proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, lw.attn_qkv_qw, cur_buf, qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+              qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+              if qkv_h16
+                Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
+                encode_q56k_gemm_h16(proj_enc, mm5_pipeline, cur_buf, qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+              else
+                encode_matmul(proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, lw.attn_qkv_qw, cur_buf, qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+              end
               encode_matmul(proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, cur_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
               encode_matmul(proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, lw.ssm_alpha_qw, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim, n_tokens)
               encode_matmul(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, cur_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
@@ -2574,9 +2629,10 @@ module ML
             end
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
-            conv_enc.set_pipeline(recurrent_conv_shift_chunk_pipeline)
+            qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+            conv_enc.set_pipeline(qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline)
             conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
-            conv_enc.set_buffer(qkv_buf, 1)
+            conv_enc.set_buffer(qkv_h16 ? qkv_h16_buf : qkv_buf, 1)
             conv_enc.set_buffer(conv_w_buf, 2)
             conv_enc.set_buffer(q_buf, 3, ML::Metal::BufferAccess::Write)
             conv_enc.set_buffer(k_buf, 4, ML::Metal::BufferAccess::Write)
@@ -3707,6 +3763,7 @@ module ML
           rec_dst_buf = Scratch.get(:frec_rec_hidden_b, inp.size.to_i64 * sizeof(Float32))
           rec_cur_buf = Scratch.get(:frec_rec_cur, inp.size.to_i64 * sizeof(Float32))
           rec_qkv_buf = Scratch.get(:frec_rec_qkv, (n_tokens * rec_qkv_dim).to_i64 * sizeof(Float32))
+          rec_qkv_h16_buf = Scratch.get(:frec_rec_qkv_h16, (n_tokens * rec_qkv_dim).to_i64 * 2_i64)
           rec_z_buf = Scratch.get(:frec_rec_z, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           rec_alpha_buf = Scratch.get(:frec_rec_alpha, (n_tokens * h_v).to_i64 * sizeof(Float32))
           rec_beta_buf = Scratch.get(:frec_rec_beta, (n_tokens * h_v).to_i64 * sizeof(Float32))
@@ -3913,7 +3970,13 @@ module ML
 
             Profile.trace("prefill.rec.proj") do
               rec_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-              encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, lw.attn_qkv_qw, rec_cur_buf, rec_qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+              qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+              if qkv_h16
+                Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
+                encode_q56k_gemm_h16(rec_proj_enc, mm5_pipeline, rec_cur_buf, rec_qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+              else
+                encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, lw.attn_qkv_qw, rec_cur_buf, rec_qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+              end
               encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, rec_cur_buf, rec_z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
               encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, lw.ssm_alpha_qw, rec_cur_buf, rec_alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim, n_tokens)
               encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, rec_cur_buf, rec_beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
@@ -3921,9 +3984,10 @@ module ML
             end
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
-            conv_enc.set_pipeline(recurrent_conv_shift_chunk_pipeline)
+            qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+            conv_enc.set_pipeline(qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline)
             conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
-            conv_enc.set_buffer(rec_qkv_buf, 1)
+            conv_enc.set_buffer(qkv_h16 ? rec_qkv_h16_buf : rec_qkv_buf, 1)
             conv_enc.set_buffer(conv_w_buf, 2)
             conv_enc.set_buffer(rec_q_buf, 3, ML::Metal::BufferAccess::Write)
             conv_enc.set_buffer(rec_k_buf, 4, ML::Metal::BufferAccess::Write)

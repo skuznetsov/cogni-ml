@@ -747,6 +747,33 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: llama.cpp rebuild, benchmark settings, power state, or Q4_K route changes
 **adversary:** "The win comes from reducing repeated activation conversion/load work, not from changing quantized weight traffic. The route is exact for the current Q4 GEMM precision model but should be rechecked if the Q4 kernel moves to true F32 input accumulation."
 
+### [LM-prefill-Q5-QKV-H16-CONV-1] Q5_K recurrent qkv output can stay half through conv-shift
+**status:** verified
+**trust:** {F:0.82, G:narrow, R:0.80}
+**context:** ml (Qwen35 prefill Q5_K recurrent projection)
+**evidence:**
+- claim: "Q5_K recurrent `attn_qkv` batch GEMM already emits F16 internally, then the old route expanded that output to F32 only for `qwen35_recurrent_conv_shift_chunk` to read it immediately. The half-output route skips that expansion and uses `qwen35_recurrent_conv_shift_chunk_h16`, which casts the same half value to float inside the conv calculation."
+  source: `src/ml/gguf/kernels/recurrent_qwen35.metal`, `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q5 GEMM output precision or recurrent conv-shift semantics change
+- claim: "Correctness passed after default-enabling the route with `QWEN35_Q5_QKV_H16_CONV_OFF=1` escape hatch: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5qkvh16_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or Q5 recurrent path changes
+- claim: "Paired pp64 A/B favored the new default: default avg `150.73 ms` / p50 `150.56 ms`, off avg `151.01 ms` / p50 `150.97 ms`, wins `6/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5qkvh16_default_ab64 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_Q5_QKV_H16_CONV_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q5 recurrent route changes
+- claim: "Paired pp256 A/B also favored the default: default avg `486.90 ms` / p50 `486.62 ms`, off avg `487.43 ms` / p50 `487.22 ms`, wins `5/6`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5qkvh16_default_ab256 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=6 --compare-env=QWEN35_Q5_QKV_H16_CONV_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q5 recurrent route changes
+- claim: "Matched llama smoke after promotion measured native pp64 p50 `424.96 tok/s`; the llama.cpp side was noisy in this run (`pp` stddev `20.97 tok/s`, `tg` stddev `5.93 tok/s`), so do not use it as a refreshed public baseline."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5qkvh16_vs_llama crystal run --release ... bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: quiet-load matched llama rerun
+**adversary:** "The effect is small but consistent in paired local prefill A/B. It only covers recurrent Q5 qkv batch prefill, not decode GEMV and not full-attention q/v projections."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}
