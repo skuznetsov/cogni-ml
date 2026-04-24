@@ -3333,3 +3333,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, speculative scheduler, or target/draft model changes
 **note:** This is a small exact cleanup, not the main speculative breakthrough. It removes known-dead state copying on fallback-bound cycles; target verification remains the dominant cost.
+
+### [LM-codex-SPEC-FAST-REGROW-1] Fast adaptive regrowth after gamma 8 improves high-accept prompts
+**status:** verified
+**trust:** {F:0.80, G:0.48, R:0.76}
+**context:** ml (Qwen speculative scheduler optimization)
+**evidence:**
+- claim: "Unconditional grow-after-one-full-accept is unsafe as a default: it improves the 100%-accept prompt but lets `def fibonacci(n):` grow from `gamma=4` to `8` before the first rejection, regressing to about `23.7 ms/tok` versus about `21.4 ms/tok` on the conservative schedule."
+  source: interleaved `QWEN35_SPEC_FULL_ACCEPT_STREAK=2` vs `1` with `/tmp/qwen35_speculative_accept_streak --tokens 64 --gamma 4 --max-gamma 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative scheduler, draft model, target model, or fallback policy changes
+- claim: "A two-stage schedule keeps the conservative two-full-accept requirement at `gamma=4`, then grows after each full accept once `gamma>=8`. This preserves the rejection-heavy trajectory for `def fibonacci(n):`: `cycles=2`, `max_seen=4`, fallback after reject, and matched greedy target output."
+  source: `QWEN35_SPEC_FAST_REGROW_MIN_GAMMA=8` default in `bin/qwen35_speculative_accept.cr`; A/B against `QWEN35_SPEC_FAST_REGROW_MIN_GAMMA=0` on `def fibonacci(n):` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: adaptive gamma update logic or fallback policy changes
+- claim: "On the 100%-accept prompt `The capital of France is`, fast regrowth reduces verifier cycles from `7` to `5` and improves end-to-end exact speculative decode from off runs `18.95/19.37/19.17 ms/tok` to default runs `17.82/16.03/16.27 ms/tok`. Target verifier time drops from about `741-753 ms` to `554-618 ms`."
+  source: interleaved `QWEN35_SPEC_FAST_REGROW_MIN_GAMMA=0` vs default with `/tmp/qwen35_speculative_accept_fastregrow --tokens 64 --gamma 4 --max-gamma 32 "The capital of France is"` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, target verifier, draft speed, or adaptive schedule changes
+**note:** Keep `QWEN35_SPEC_FULL_ACCEPT_STREAK=2` for the initial gamma. The win comes from faster regrowth only after the first safe promotion to gamma 8, avoiding the known `def fibonacci` regression.
