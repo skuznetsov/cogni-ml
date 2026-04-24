@@ -179,6 +179,7 @@
 ## Deferred research backlog — efficient attention / long context
 
 - [ ] **R.1** FlashAttention-style exact full-attention prefill kernel for Qwen35 full-attn layers; first add intra-group phase attribution and only implement if `full.attn` is material at pp2048+.
+  - [x] Falsifier/current priority: pp2048 prefill attribution shows full-attention is not the wall yet (`attn wait 26.35 ms` inside `~10.17 s` profiled wall). The material wall is recurrent grouped prefill / DeltaNet serial work (`dn wait ~9991.69 ms`) plus large conversion traffic (`10.85 GiB`, 73% logical traffic), so FlashAttention is deferred until recurrent scan and conversion pressure are addressed.
 - [ ] **R.2** DeepSeek Sparse Attention / NSA-style indexer experiment; requires calibration + sparse adaptation, not an exact drop-in for existing Qwen weights.
 - [ ] **R.3** Linear-attention replacement track; treat as new architecture or distillation/continued-training project, not an inference-only optimization.
 - [ ] **R.4** Training-free long-context inference hacks under eval gates: attention sinks / sliding window, SnapKV/H2O-like KV retention, and KV quantization. Keep all default-off until LongBench/RULER/top-logit drift evidence exists.

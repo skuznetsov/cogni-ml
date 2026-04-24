@@ -3646,6 +3646,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: prompt distribution, acceptance predictor, or fallback policy changes
 **note:** Keep bootstrap default-off. It is useful for controlled high-accept/repetitive workloads, but default promotion needs a stronger predictor than "first gamma=4 chunk fully accepted".
 
+### [LM-codex-PREFILL-PP2048-ATTR-1] Qwen35 pp2048 prefill is recurrent-scan bound, not full-attention bound
+**status:** verified-falsifier
+**trust:** {F:0.78, G:0.46, R:0.72}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "A pp2048 prefill attribution run showed full-attention is not currently the dominant long-prompt wall: attention reported `26.35 ms` wait inside a `10170.50 ms` profiled wall."
+  source: `/tmp/qwen35_prefill_attr_current --prompt 2048 --warmup 0 --reps 1 --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: full-attention implementation, recurrent prefill implementation, profiling labels, or prompt length changes
+- claim: "The material pp2048 wall is recurrent grouped prefill / DeltaNet serial work: `dn` reported `8` calls with `9991.69 ms` wait and grouped command buffers each spent about `0.87-1.56 s` waiting."
+  source: same pp2048 attribution run on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: DeltaNet chunk kernel, recurrent scan algorithm, or grouped command-buffer composition changes
+- claim: "Logical conversion traffic at pp2048 is also large: `10848.00 MiB` conversion traffic versus `3992.53 MiB` logical matmul weights, so activation f32->f16 conversion pressure is a secondary exact target."
+  source: same pp2048 attribution run on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: GEMM input format, fused conversion kernels, or profile accounting changes
+**note:** Defer FlashAttention as a performance project until recurrent scan and conversion pressure are reduced. The next long-prefill breakthrough is parallel/chunked DeltaNet scan or an exact recurrent WBA diamond, not attention.
+
 ### [LM-codex-Q6-TOP1-ROWS16-FALSIFIER-1] Q6 top1 rows16 does not improve verifier cost
 **status:** verified-falsifier
 **trust:** {F:0.72, G:0.36, R:0.68}
