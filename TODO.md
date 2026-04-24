@@ -119,6 +119,7 @@
   - [x] Guarded baseline refresh: with `--require-quiet --wait-quiet-ms=60000`, pp64 attribution reports p50 `151.73 ms` / `421.80 tok/s`, traffic mix `90.69%` matmul / `9.31%` conversion; matched llama.cpp prompt64/gen64 reports native prefill `426.01 tok/s` p50 vs llama `461.90 tok/s` (`-7.77%`) and native decode `47.60 tok/s` p50 vs llama `45.35 tok/s` (`+4.96%`)
   - [x] Falsifier: removing the inner `simdgroup_barrier(mem_none)` calls from the Q4_K H16 prefill GEMM passed focused Qwen specs (`14 examples, 0 failures`) but regressed guarded pp64 attribution from baseline p50 `151.73 ms` to `154.49 ms`, so keep the barriers
   - [x] Add a guarded paired decode A/B harness for env-tuned wave experiments; guarded trials confirm `QWEN35_WAVE_CHUNK_LAYERS=2` beats unchunked `0` by `~1.34 ms/tok` (`6/6` wins), while `2` vs `4` and `1` vs `2` remain neutral/noisy, so keep default `2`
+  - [x] Falsifier: writing Q4 FFN pair input as H16 directly from add+RMSNorm was exact in focused specs, but pp256 paired A/B was neutral (`506.53 ms` default vs `506.29 ms` opt-in, wins `5/10`), so the separate conversion kernel is not the current wall
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

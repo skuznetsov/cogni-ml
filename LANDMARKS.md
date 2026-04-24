@@ -3060,3 +3060,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: decode wave scheduler or benchmark harness changes
 **note:** The missing decode margin is not recovered by retuning command-buffer chunk size. Keep default `2` and look at decode compute work or output-head path next.
+
+### [LM-codex-ADDNORM-H16-FFN-FALSIFIER-1] Direct H16 addnorm output for Q4 FFN pair is neutral
+**status:** verified-falsifier
+**trust:** {F:0.78, G:0.44, R:0.74}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "A temporary opt-in branch added `qwen35_add_rmsnorm_rows_h16` and routed large-batch Q4_K FFN gate/up pair prefill through direct H16 normalized rows. This preserves the effective Q4 H16 GEMM input precision because the default path already casts normalized F32 rows to H16 before the Q4 GEMM."
+  source: temporary `QWEN35_ADDNORM_H16_FFN=1` branch in `src/ml/gguf/kernels/ffn_qwen35.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: add+RMSNorm row kernel, Q4_K pair route, or Q4 H16 GEMM input semantics changes
+- claim: "Correctness stayed green with the opt-in route: targeted Qwen forward/DeltaNet specs reported `14 examples, 0 failures`, top token `198`, logit `11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_addnorm_h16_spec2 QWEN35_ADDNORM_H16_FFN=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: spec fixtures or Qwen35 prefill path changes
+- claim: "Relaxed-load paired pp256 A/B did not support promotion: default avg `506.53 ms` / p50 `510.47 ms` versus opt-in avg `506.29 ms` / p50 `509.64 ms`, wins `5/10`."
+  source: `/tmp/qwen35_prefill_attribution_addnorm_h16_2 --prompt=256 --warmup=2 --reps=10 --compare-env=QWEN35_ADDNORM_H16_FFN --compare-off=1 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, benchmark harness, or Q4 pair route changes
+**note:** This is another conversion-elimination falsifier. The branch was removed; future exact prefill wins need to reduce dominant quantized weight traffic or change the lower-level Q4/Q6 tile work, not just move the F32->H16 cast into addnorm.
