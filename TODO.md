@@ -142,5 +142,6 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - **Active phase:** 4 (optimization: beat llama.cpp)
 - **Active task:** 4.9 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
+- **Latest verified decode tweak:** default decode wave chunking moved from 4 layers to 2 layers after same-binary A/B (`2` beat `4` on prompt64/gen32, `8/10` wins, mean `22.385` vs `22.518 ms/tok`); fresh llama comparison still has native decode ahead (`47.01` vs `45.36 tok/s`) while pp64 prefill remains behind (`394.46` vs `462.28 tok/s`)
 - **Blocked:** nothing
-- **Last updated:** 2026-04-23
+- **Last updated:** 2026-04-24

@@ -1062,7 +1062,7 @@ module ML
 
         private def self.wave_chunk_layers : Int32
           raw = ENV["QWEN35_WAVE_CHUNK_LAYERS"]?
-          return 4 unless raw
+          return 2 unless raw
           value = raw.to_i? || 0
           value > 0 ? value : 0
         end

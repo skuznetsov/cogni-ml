@@ -1938,9 +1938,9 @@ Rich landmarks include full State/Relations/Evidence structure.
 **trust:** {F:0.86, G:0.68, R:0.78}
 **context:** ml (Qwen port, Metal decode scheduling)
 **evidence:**
-- claim: "The wave decode path now uses fast command buffers by default and splits the 32-layer decode wave into 4-layer command-buffer chunks by default. `QWEN35_WAVE_FAST_CMD=0` disables unretained-reference command buffers; `QWEN35_WAVE_CHUNK_LAYERS=0` disables chunking."
+- claim: "The wave decode path uses fast command buffers by default and now splits the 32-layer decode wave into 2-layer command-buffer chunks by default. `QWEN35_WAVE_FAST_CMD=0` disables unretained-reference command buffers; `QWEN35_WAVE_CHUNK_LAYERS=0` disables chunking; explicit `QWEN35_WAVE_CHUNK_LAYERS=N` keeps the runtime override."
   source: local patch to `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
-  verified_at: 2026-04-23
+  verified_at: 2026-04-24
   decay_trigger: Metal command-buffer wrapper or wave scheduler rewrite
 - claim: "Correctness stayed green with default chunk4 scheduling: strengthened Qwen specs returned `8 examples, 0 failures`, top token `198`, logit `11.423702`, and DeltaNet max state diff about `3.17e-08`."
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wave_chunk4_final_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
@@ -1962,7 +1962,19 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: paired local runs of `/tmp/qwen35_sync_profile_current` with `QWEN35_WAVE_CHUNK_LAYERS=2/4`, `QWEN35_PROFILE_TOP1=1`, and `QWEN35_HEAD_TOP1_FUSED=1` on 2026-04-23
   verified_at: 2026-04-23
   decay_trigger: quiet-load rerun or wave scheduler changes
-**note:** This branch is a scheduling/frame-shift win rather than a math-kernel win. It reduces idle GPU time by committing earlier chunks while the CPU encodes later chunks; it should be rebenchmarked under a quiet desktop before making public speed claims. Keep chunk4 as the default until a clean paired run justifies changing it.
+- claim: "Fresh same-binary release A/B after current prefill/top1 changes promoted chunk2 over chunk4 on prompt64/gen32: chunk2 won `8/10`, mean `22.385 ms/tok`, p50 `22.383`; chunk4 mean `22.518 ms/tok`, p50 `22.517`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wave_chunk_refresh24 crystal run --release --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_ab_profile.cr -- --env=QWEN35_WAVE_CHUNK_LAYERS --a=2 --b=4 --prompt=64 --gen=32 --trials=10 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: wave scheduler, command buffer implementation, background load, or host power state changes
+- claim: "Correctness stayed green after changing the default to chunk2: targeted Qwen Metal/forward/full-attn/DeltaNet/prompt-cache specs returned `23 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wave_chunk2_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 wave scheduler or correctness gates change
+- claim: "Fresh prompt64/gen64 llama comparison after chunk2 default measured native decode `47.01 tok/s` p50 versus llama.cpp `45.36 tok/s`; pp64 prefill remained behind at native `394.46 tok/s` p50 versus llama.cpp `462.28 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_wave_chunk2 crystal run --release --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: llama.cpp rebuild, host load, power state, or benchmark harness changes
+**note:** This branch is a scheduling/frame-shift win rather than a math-kernel win. It reduces idle GPU time by committing earlier chunks while the CPU encodes later chunks. The current clean same-binary A/B now justifies chunk2 as the default, but public claims should still use fresh matched llama.cpp reruns.
 
 ### [LM-codex-Q4-NSG4-REFUTE-1] Q4_K four-simdgroup threadgroups corrupt the strict Qwen top-token gate
 **status:** refuted
