@@ -96,6 +96,7 @@ module ML
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
         @@mv8_pipeline  : ML::Metal::ComputePipeline?
+        @@mv8_dual_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_batch_pipeline : ML::Metal::ComputePipeline?
@@ -574,6 +575,12 @@ module ML
           }
         end
 
+        private def self.mv8_dual_pipeline : ML::Metal::ComputePipeline
+          @@mv8_dual_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q8_0_dual_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q8_0_dual_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline
           @@mv6_top1_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_tiles_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_tiles_f32", GEMM_Q56K_SOURCE)
@@ -916,6 +923,37 @@ module ML
           rows_per_tg = gemv_rows_per_tg_for(pipeline)
           grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, batch, 1}
           enc.dispatch_threadgroups(grid, {gemv_threads_per_tg_for(pipeline), 1, 1})
+        end
+
+        private def self.encode_gemv_q8_dual(enc : ML::Metal::ComputeEncoder,
+                                             x_buf : ML::MetalBuffer,
+                                             gate_out_buf : ML::MetalBuffer,
+                                             up_out_buf : ML::MetalBuffer,
+                                             gate_w_buf : ML::MetalBuffer,
+                                             gate_w_offset : Int64,
+                                             up_w_buf : ML::MetalBuffer,
+                                             up_w_offset : Int64,
+                                             in_dim : Int32,
+                                             out_dim : Int32,
+                                             batch : Int32 = 1,
+                                             profile_shape : Bool = true) : Nil
+          if profile_shape
+            blocks_per_row = (in_dim + Q8_0_QK - 1) // Q8_0_QK
+            weight_bytes = 2_i64 * out_dim.to_i64 * blocks_per_row.to_i64 * Q8_0_BLOCK_BYTES.to_i64
+            Profile.bump_matmul_shape("gemv Q8_0 dual #{in_dim}x#{out_dim} b#{batch}", weight_bytes)
+          end
+          enc.set_pipeline(mv8_dual_pipeline)
+          enc.set_buffer(gate_w_buf, 0, ML::Metal::BufferAccess::Read, offset: gate_w_offset)
+          enc.set_buffer(up_w_buf, 1, ML::Metal::BufferAccess::Read, offset: up_w_offset)
+          enc.set_buffer(x_buf, 2)
+          enc.set_buffer(gate_out_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(up_out_buf, 4, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32,  5)
+          enc.set_value(out_dim.to_u32, 6)
+          enc.set_value(batch.to_u32,   7)
+          rows_per_tg = MV_Q8_NSG * MV_Q8_NR0
+          grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, batch, 1}
+          enc.dispatch_threadgroups(grid, {MV_Q8_NSG * 32, 1, 1})
         end
 
         private def self.encode_gemv_input_offset(enc : ML::Metal::ComputeEncoder,
@@ -1296,6 +1334,19 @@ module ML
 
         private def self.q4_pair_h16_gemm_enabled? : Bool
           ENV["QWEN35_Q4K_PAIR_H16_GEMM_OFF"]? != "1"
+        end
+
+        private def self.q8_dual_gemv_enabled? : Bool
+          ENV["QWEN35_Q8_DUAL_GEMV_OFF"]? != "1"
+        end
+
+        private def self.q8_dual_gemv_candidate?(gate_qw : QuantWeight,
+                                                 up_qw : QuantWeight,
+                                                 batch : Int32 = 1) : Bool
+          q8_dual_gemv_enabled? && batch == 1 &&
+            gate_qw.type.q8_0? && up_qw.type.q8_0? &&
+            gate_qw.in_dim == up_qw.in_dim &&
+            gate_qw.out_dim == up_qw.out_dim
         end
 
         private def self.q4_pair_h16_gemm_candidate?(gate_qw : QuantWeight,
@@ -4780,8 +4831,14 @@ module ML
 
               Profile.trace("full.ffn_upgate") do
                 ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-                encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
-                encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
+                if q8_dual_gemv_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw)
+                  encode_gemv_q8_dual(ffn_proj_enc, pre_norm_buf, ffn_gate_buf, ffn_up_buf,
+                    ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
+                    lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
+                else
+                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
+                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
+                end
                 ffn_proj_enc.end_encoding
               end
 
@@ -4971,8 +5028,14 @@ module ML
 
                 Profile.trace("rec.ffn_upgate") do
                   ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
-                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
+                  if q8_dual_gemv_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw)
+                    encode_gemv_q8_dual(ffn_proj_enc, pre_norm_buf, ffn_gate_buf, ffn_up_buf,
+                      ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
+                      lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
+                  else
+                    encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
+                    encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
+                  end
                   ffn_proj_enc.end_encoding
                 end
 

@@ -66,6 +66,54 @@ kernel void simd_mv_q8_0_f32(
     }
 }
 
+kernel void simd_mv_q8_0_dual_f32(
+    device const uint8_t* gate_w_raw [[buffer(0)]],
+    device const uint8_t* up_w_raw   [[buffer(1)]],
+    device const float*   x          [[buffer(2)]],
+    device       float*   gate_out   [[buffer(3)]],
+    device       float*   up_out     [[buffer(4)]],
+    constant     uint&    in_dim     [[buffer(5)]],
+    constant     uint&    out_dim    [[buffer(6)]],
+    constant     uint&    batch      [[buffer(7)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint nb = in_dim / Q8_0_QK;
+    const uint first_row = (tgpig.x * MV8_NSG + sgitg) * MV8_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    const uint row_bytes = nb * 34;
+    device const float * y_base = x + n * in_dim;
+    float gate_sum[MV8_NR0] = {0.f};
+    float up_sum[MV8_NR0] = {0.f};
+
+    for (uint ib = 0; ib < nb; ++ib) {
+        const float y = y_base[ib * Q8_0_QK + tiisg];
+        for (short row = 0; row < MV8_NR0; ++row) {
+            const uint row_id = first_row + row;
+            if (row_id >= out_dim) continue;
+            device const block_q8_0_56 * gate_blk =
+                (device const block_q8_0_56 *)(gate_w_raw + row_id * row_bytes) + ib;
+            device const block_q8_0_56 * up_blk =
+                (device const block_q8_0_56 *)(up_w_raw + row_id * row_bytes) + ib;
+            gate_sum[row] += (float)gate_blk->d * y * (float)gate_blk->qs[tiisg];
+            up_sum[row] += (float)up_blk->d * y * (float)up_blk->qs[tiisg];
+        }
+    }
+
+    for (short row = 0; row < MV8_NR0 && first_row + row < out_dim; ++row) {
+        const float gate_tot = simd_sum(gate_sum[row]);
+        const float up_tot = simd_sum(up_sum[row]);
+        if (tiisg == 0) {
+            const uint out_idx = n * out_dim + first_row + row;
+            gate_out[out_idx] = gate_tot;
+            up_out[out_idx] = up_tot;
+        }
+    }
+}
+
 constant short MV8_TOP_ROWS_PER_TG = 12;
 
 kernel void simd_mv_q8_0_top1_tiles_f32(

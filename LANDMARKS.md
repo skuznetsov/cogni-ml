@@ -157,6 +157,14 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_after_q8nsg4 --verify chunk-inplace --gamma 4 --tokens 24 "def fibonacci(n):"`
   verified_at: 2026-04-24
   decay_trigger: draft speed, verifier mode, acceptance, or target decode changes
+- claim: "A Q8_0-only FFN gate/up dual GEMV is an exact small win for the 0.8B draft decode wave: interleaved 64-token top1 profiles changed from fallback `8.54/8.85 ms/tok` to default `8.44/8.51 ms/tok`, while `rec.ffn_upgate` phase time dropped from `6.04/7.68 ms` to `3.69/3.71 ms` and `full.ffn_upgate` from `2.20/2.78 ms` to `1.35/1.59 ms`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8_dual_bench QWEN35_PROFILE_TOP1=1 crystal run bin/qwen35_sync_profile.cr --link-flags=... -- --model Qwen3.5-0.8B-Q8_0.gguf 64 64`, interleaved `QWEN35_Q8_DUAL_GEMV_OFF=1` vs default
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 GEMV kernel, FFN decode route, or Metal scheduler changes
+- claim: "The same Q8_0 dual-GEMV path only slightly improves the current exact speculative smoke because target verification dominates: default `chunk-inplace` changed from `23.96 ms/tok` to `23.83 ms/tok` on 32 generated tokens, with draft time `231.0 ms` -> `223.2 ms` and target verify time roughly unchanged (`483.2` -> `484.8 ms`)."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8_dual_specacc crystal run bin/qwen35_speculative_accept.cr --link-flags=... -- --tokens 32 --gamma 4`, `QWEN35_Q8_DUAL_GEMV_OFF=1` vs default
+  verified_at: 2026-04-24
+  decay_trigger: draft speed, verifier mode, acceptance, or target decode changes
 
 ## Graph Visualization
 

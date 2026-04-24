@@ -133,7 +133,8 @@
   - [x] Add exact `chunk-inplace` verifier mode that mutates target state directly and only restores a backup on rejection; on `def fibonacci(n):`, gamma=4/tokens=24 improves verifier wall from serial `29.09 ms/tok` and copy-back chunk `29.13 ms/tok` to `28.36 ms/tok`, but still trails plain target decode (`21.91 ms/tok`)
   - [x] Retune Q8_0 draft GEMV row parallelism from `MV_Q8_NSG=2` to `4` and make Q8 top1 dispatch width follow the Q8 simdgroup count; 0.8B Q8_0 draft decode improves from `~8.88-9.07 ms/tok` to `~8.36-8.38 ms/tok`, while `NSG=8/16/32` are slower or unstable
   - [x] After Q8_0 `NSG=4`, exact speculative `chunk-inplace` on `def fibonacci(n):` improves from `28.36 ms/tok` to `27.70 ms/tok` at the same `85.19%` acceptance, but still trails plain target decode (`21.96 ms/tok`)
-  - [ ] Next: attack FFN weight traffic with lower-level Q4/Q6 tile changes, search for the next Q8_0 draft GEMV algorithmic step, and build true batched target verifier for speculative decode
+  - [x] Add exact Q8_0 FFN gate/up dual GEMV for the 0.8B draft decode wave; it halves FFN-upgate dispatch count and improves interleaved draft decode from `8.54/8.85 ms/tok` with `QWEN35_Q8_DUAL_GEMV_OFF=1` to `8.44/8.51 ms/tok` default, while speculative `chunk-inplace` smoke improves draft time `231.0` -> `223.2 ms` over 32 generated tokens
+  - [ ] Next: target true batched speculative verification and lower-level Q4/Q6 kernel changes; Q8_0 draft is now closer, but exact speculative still trails plain target decode until verifier overhead is cut
 
 ## Deferred research backlog — efficient attention / long context
 
