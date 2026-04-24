@@ -852,16 +852,16 @@ module ML
           end
         end
 
-        private def self.gemv_profile_quant(pipeline : ML::Metal::ComputePipeline) : {String, Int32}
+        private def self.gemv_profile_quant(pipeline : ML::Metal::ComputePipeline) : {String, Int32, Int32}
           case pipeline
           when .same?(mv5_pipeline)
-            {"Q5_K", Q5K_BLOCK_BYTES}
+            {"Q5_K", Q5K_BLOCK_BYTES, QK_K}
           when .same?(mv6_pipeline), .same?(mv6_top1_tiles_pipeline)
-            {"Q6_K", Q6K_BLOCK_BYTES}
+            {"Q6_K", Q6K_BLOCK_BYTES, QK_K}
           when .same?(mv8_pipeline), .same?(mv8_top1_tiles_pipeline)
-            {"Q8_0", Q8_0_BLOCK_BYTES}
+            {"Q8_0", Q8_0_BLOCK_BYTES, Q8_0_QK}
           else
-            {"Q4_K", Q4K_BLOCK_BYTES}
+            {"Q4_K", Q4K_BLOCK_BYTES, QK_K}
           end
         end
 
@@ -876,8 +876,8 @@ module ML
                                      batch : Int32 = 1,
                                      profile_shape : Bool = true) : Nil
           if profile_shape
-            quant_name, block_bytes = gemv_profile_quant(pipeline)
-            blocks_per_row = (in_dim + QK_K - 1) // QK_K
+            quant_name, block_bytes, block_elems = gemv_profile_quant(pipeline)
+            blocks_per_row = (in_dim + block_elems - 1) // block_elems
             weight_bytes = out_dim.to_i64 * blocks_per_row.to_i64 * block_bytes.to_i64
             Profile.bump_matmul_shape("gemv #{quant_name} #{in_dim}x#{out_dim} b#{batch}", weight_bytes)
           end
