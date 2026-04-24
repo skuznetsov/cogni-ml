@@ -628,6 +628,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: llama.cpp rebuild, benchmark settings, thermal/power state, or prefill runtime changes
 **adversary:** "This is a runtime-jitter optimization, not a substitute for GPU-resident hidden-state scheduling. It is scoped to multi-token prefill, has an env escape hatch, and should be revisited if boundary Arrays are eliminated."
 
+### [LM-prefill-Q5-F32-GEMM-FALSIFIER] Direct Q5_K F32 GEMM is not a pp64 wall win
+**status:** refuted
+**trust:** {F:0.78, G:narrow, R:0.76}
+**context:** ml (Qwen35 prefill Q5_K GEMM)
+**evidence:**
+- claim: "A temporary branch added `simd_mm_q5k_f32`, a direct Q5_K F32-input/F32-output GEMM adapted from the Q4_K F32 kernel, and routed Q5_K batch prefill projections behind `QWEN35_Q5K_F32_GEMM=1`."
+  source: temporary local patch to `src/ml/gguf/kernels/gemm_mm.metal` and `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q5_K GEMM implementation, conversion path, or prefill projection mix changes
+- claim: "Correctness passed with the branch enabled: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5f32_spec QWEN35_Q5K_F32_GEMM=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or Q5 route changes
+- claim: "Paired pp64 A/B did not support promotion: default p50 `152.56 ms`, branch p50 `152.52 ms`, default average `152.42 ms`, branch average `153.67 ms`, wins `3/8` for default-as-first."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5f32_ab crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_Q5K_F32_GEMM`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q5 route changes
+- claim: "Standalone op attribution showed at most a narrow Q5 micro-win (`4096x8192 b64` p50 `4.112 ms` branch vs `4.253 ms` default) that did not survive the fused prefill wall test."
+  source: `bin/qwen35_op_attribution.cr -- --batch=64 --warmup=3 --runs=9 --limit=8` with and without `QWEN35_Q5K_F32_GEMM=1`
+  verified_at: 2026-04-24
+  decay_trigger: op attribution harness or Q5 kernel changes
+**adversary:** "Removing Q5 F32/F16 conversion is not a reliable wall-clock lever in the fused prefill wave. The temporary code was removed; revisit only with a materially different Q5 tile design or a code-variant harness showing pp64/pp256 wall improvement."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}
