@@ -326,7 +326,18 @@ kernel void simd_mm_q4k_f32(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    // Stage accumulators to shmem, then cooperative F32 output write.
+    // Most Qwen prefill shapes are exact 64x32 tiles. For those, write the
+    // simdgroup accumulators directly to device memory and avoid the extra
+    // shmem staging barrier. Keep the cooperative path for edge tiles.
+    if (nr0 == MM_NR0 && nr1 == MM_NR1) {
+        device float * C = output + (r0 + 32*(sgitg & 1)) + (r1 + 16*(sgitg >> 1))*out_dim;
+        for (short i = 0; i < 8; i++) {
+            simdgroup_store(mc[i], C + 8*(i%4) + 8*out_dim*(i/4), out_dim, 0, false);
+        }
+        return;
+    }
+
+    // Stage edge-tile accumulators to shmem, then cooperative F32 output write.
     threadgroup float * temp = (threadgroup float *)shmem;
     {
         threadgroup float * sg_out = temp + 32*(sgitg & 1) + 16*(sgitg >> 1)*MM_NR0;

@@ -2298,3 +2298,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: decode wave scheduler or command-buffer behavior changes
 **note:** This is exact for greedy prompt ingestion because intermediate prompt-token logits are unobserved, and the final prompt token still produces next-token top1 before generation starts.
+
+### [LM-codex-Q4K-GEMM-DIRECT-STORE-1] Q4_K prefill GEMM skips shmem output staging on full tiles
+**status:** verified-default
+**trust:** {F:0.86, G:0.64, R:0.82}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "Changed `simd_mm_q4k_f32` to write full 64x32 output tiles directly from simdgroup accumulators to device memory, keeping the previous cooperative shmem staging path for edge tiles. This follows the local llama.cpp Metal `kernel_mul_mm` fast path and is exact for full tiles."
+  source: `src/ml/gguf/kernels/gemm_q4k.metal` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K GEMM tiling, output layout, or batch GEMM routing changes
+- claim: "Correctness gate passes after the direct-store fast path: targeted Qwen specs `26 examples, 0 failures`; Q4_K GEMM spec reports cosine `1.0`, max delta `0.0004899502`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4_direct_gate crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Metal compiler behavior, spec fixtures, or Q4_K kernel changes
+- claim: "Matched prompt=64/gen=16/reps=5/warmup=1 benchmark measured native prefill p50 `373.80 tok/s` vs llama.cpp `464.02 tok/s`; decode p50 reached `48.22 tok/s` vs llama.cpp `45.13 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4_direct_bench_final crystal run --link-flags="build/bridge.o -framework Metal -framework Foundation -lc++" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=5 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: host load, power state, benchmark harness, llama.cpp version, or Qwen prefill path changes
+- claim: "A no-bias F32-output Q5_K/Q6_K GEMM branch was correct but slower in isolated specs (`Q5_K batch=16` around `138.9 ms`, `Q6_K batch=16` around `42.5 ms`), so it was discarded and the F16 activation/output Q5/Q6 path remains."
+  source: temporary Q5/Q6 F32 GEMM branch spec run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q5/Q6 GEMM kernel rewrite or Metal compiler behavior changes
+**note:** The direct-store Q4_K change is a local kernel win that moved pp64 p50 from the previous `358.44 tok/s` landmark to `373.80 tok/s`. It does not solve the remaining prefill gap by itself; the next measured wall is still recurrent/full-attn chunk work dominated by quantized batched matmuls and remaining readbacks.
