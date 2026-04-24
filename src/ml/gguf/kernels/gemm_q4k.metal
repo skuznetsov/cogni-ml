@@ -355,3 +355,165 @@ kernel void simd_mm_q4k_f32(
         output[(r1 + j) * out_dim + r0 + i] = temp[j * MM_NR0 + i];
     }
 }
+
+// ============================================================================
+// simd_mm_q4k_h16 — same GEMM as simd_mm_q4k_f32, but with pre-converted
+// F16 input. This is exact for the current F32 kernel because it also rounds
+// F32 inputs to half before simdgroup MMA, but does so per output tile.
+// ============================================================================
+kernel void simd_mm_q4k_h16(
+    device const uint8_t* w_raw   [[buffer(0)]],
+    device const half*    x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    threadgroup  char*    shmem   [[threadgroup(0)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiitg [[thread_index_in_threadgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    // Double-buffered shmem: tile 0 and tile 1 alternate
+    threadgroup half * sa_buf[2] = {
+        (threadgroup half *)(shmem),
+        (threadgroup half *)(shmem + MM_TILE_SIZE)
+    };
+    threadgroup half * sb_buf[2] = {
+        (threadgroup half *)(shmem + MM_SA_SIZE),
+        (threadgroup half *)(shmem + MM_TILE_SIZE + MM_SA_SIZE)
+    };
+
+    const int r0 = tgpig.y * MM_NR0;  // first output row in this tile
+    const int r1 = tgpig.x * MM_NR1;  // first batch row in this tile
+
+    const short nr0 = min(MM_NR0, (int)out_dim - r0);
+    const short nr1 = min(MM_NR1, (int)batch   - r1);
+
+    const short lr0 = min((short)(tiitg / MM_NL0), (short)(nr0 - 1));
+    const short lr1 = min((short)(tiitg / MM_NL1), (short)(nr1 - 1));
+
+    const short il0 = tiitg % MM_NL0;
+    short il = il0;
+
+    const uint row_bytes = (in_dim / QK_K) * 144;
+    device const block_q4_K * xw =
+        (device const block_q4_K *)(w_raw + (r0 + lr0) * row_bytes) + il0 / MM_NL;
+
+    const short iy = 8 * (tiitg % MM_NL1);
+    device const half * y = x + (r1 + lr1) * in_dim + iy;
+
+    simdgroup_half8x8  ma[4];
+    simdgroup_half8x8  mb[2];
+    simdgroup_float8x8 mc[8];
+    for (short i = 0; i < 8; i++) {
+        mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    }
+
+    // Preload first tile into buffer 0.
+    {
+        threadgroup half * sa = sa_buf[0];
+        threadgroup half * sb = sb_buf[0];
+
+        half4x4 temp_a;
+        dequantize_q4_K_fn(xw, il, temp_a);
+        FOR_UNROLL for (short i = 0; i < 16; i++) {
+            const short sx = 2*il0 + i/8;
+            const short sy = (tiitg/MM_NL0)/8;
+            const short lx = (tiitg/MM_NL0)%8;
+            const short ly = i%8;
+            *(sa + 64*(8*sx + sy) + 8*ly + lx) = temp_a[i/4][i%4];
+        }
+        {
+            // Input is pre-converted to F16 once per matmul.
+            const short sx = (tiitg % MM_NL1);
+            const short sy = (tiitg/MM_NL1)/8;
+            const short ly = (tiitg/MM_NL1)%8;
+            threadgroup half * dst = sb + 64*(4*sx + sy) + 8*ly;
+            FOR_UNROLL for (short i = 0; i < 8; i++) {
+                dst[i] = y[i];
+            }
+        }
+        il = (il + 2 < MM_NL) ? il + 2 : il % 2;
+        xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw;
+        y += MM_NK;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint n_iter = (in_dim + MM_NK - 1) / MM_NK;
+    for (uint iter = 0; iter < n_iter; iter++) {
+        short cur = iter % 2;
+        short nxt = 1 - cur;
+        threadgroup half * sa = sa_buf[cur];
+        threadgroup half * sb = sb_buf[cur];
+
+        // Compute from current buffer
+        threadgroup const half * lsma = sa + 4*64*(sgitg % 2);
+        threadgroup const half * lsmb = sb + 2*64*(sgitg / 2);
+        FOR_UNROLL for (short ik = 0; ik < MM_NK/8; ik++) {
+            simdgroup_barrier(mem_flags::mem_none);
+            FOR_UNROLL for (short i = 0; i < 4; i++) simdgroup_load(ma[i], lsma + 64*i, 8, 0, false);
+            simdgroup_barrier(mem_flags::mem_none);
+            FOR_UNROLL for (short i = 0; i < 2; i++) simdgroup_load(mb[i], lsmb + 64*i, 8, 0, false);
+            simdgroup_barrier(mem_flags::mem_none);
+            FOR_UNROLL for (short i = 0; i < 8; i++) simdgroup_multiply_accumulate(mc[i], mb[i/4], ma[i%4], mc[i]);
+            lsma += 8*64; lsmb += 4*64;
+        }
+
+        // Load next tile into alternate buffer (overlap with compute)
+        if (iter + 1 < n_iter) {
+            threadgroup half * sa_n = sa_buf[nxt];
+            threadgroup half * sb_n = sb_buf[nxt];
+            half4x4 temp_a;
+            dequantize_q4_K_fn(xw, il, temp_a);
+            FOR_UNROLL for (short i = 0; i < 16; i++) {
+                const short sx = 2*il0 + i/8;
+                const short sy = (tiitg/MM_NL0)/8;
+                const short lx = (tiitg/MM_NL0)%8;
+                const short ly = i%8;
+                *(sa_n + 64*(8*sx + sy) + 8*ly + lx) = temp_a[i/4][i%4];
+            }
+            {
+                const short sx = (tiitg % MM_NL1);
+                const short sy = (tiitg/MM_NL1)/8;
+                const short ly = (tiitg/MM_NL1)%8;
+                threadgroup half * dst = sb_n + 64*(4*sx + sy) + 8*ly;
+                FOR_UNROLL for (short i = 0; i < 8; i++) {
+                    dst[i] = y[i];
+                }
+            }
+            il = (il + 2 < MM_NL) ? il + 2 : il % 2;
+            xw = (il < 2) ? xw + (2 + MM_NL - 1)/MM_NL : xw;
+            y += MM_NK;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Most Qwen prefill shapes are exact 64x32 tiles. For those, write the
+    // simdgroup accumulators directly to device memory and avoid the extra
+    // shmem staging barrier. Keep the cooperative path for edge tiles.
+    if (nr0 == MM_NR0 && nr1 == MM_NR1) {
+        device float * C = output + (r0 + 32*(sgitg & 1)) + (r1 + 16*(sgitg >> 1))*out_dim;
+        for (short i = 0; i < 8; i++) {
+            simdgroup_store(mc[i], C + 8*(i%4) + 8*out_dim*(i/4), out_dim, 0, false);
+        }
+        return;
+    }
+
+    // Stage edge-tile accumulators to shmem, then cooperative F32 output write.
+    threadgroup float * temp = (threadgroup float *)shmem;
+    {
+        threadgroup float * sg_out = temp + 32*(sgitg & 1) + 16*(sgitg >> 1)*MM_NR0;
+        for (short i = 0; i < 8; i++) {
+            simdgroup_store(mc[i], sg_out + 8*(i%4) + 8*MM_NR0*(i/4), MM_NR0, 0, false);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ALL 128 threads cooperatively write output.
+    const int total_out = nr0 * nr1;
+    for (int idx = (int)tiitg; idx < total_out; idx += 128) {
+        const int i = idx % nr0;
+        const int j = idx / nr0;
+        output[(r1 + j) * out_dim + r0 + i] = temp[j * MM_NR0 + i];
+    }
+}

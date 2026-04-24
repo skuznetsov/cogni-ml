@@ -720,6 +720,33 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, host load, or Q56 kernel rewrite
 **decision:** "Do not add a Q56 no-bias epilogue mode now; it adds kernel branch surface without wall-time evidence. The temporary code was removed."
 
+### [LM-prefill-Q4-H16-GEMM-1] Q4_K half-input GEMM reduces prefill tile conversion work
+**status:** verified
+**trust:** {F:0.86, G:medium, R:0.84}
+**context:** ml (Qwen35 prefill Q4_K GEMM)
+**evidence:**
+- claim: "The existing Q4_K prefill GEMM already rounds F32 activations to half before simdgroup MMA, but it does that while loading each output-row tile. `simd_mm_q4k_h16` preconverts the F32 activation matrix to F16 once per matmul and reuses that half input across output-row tiles, preserving the same multiplication precision."
+  source: `src/ml/gguf/kernels/gemm_q4k.metal`, `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K GEMM input precision or prefill route changes
+- claim: "Correctness passed after default-enabling the half-input route with `QWEN35_Q4K_H16_GEMM_OFF=1` escape hatch: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4h16_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or Q4_K route changes
+- claim: "Paired pp64 A/B favored the new default: default avg `152.57 ms` / p50 `152.54 ms`, old F32-input path avg `153.86 ms` / p50 `153.83 ms`, wins `8/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4h16_default_ab64 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_Q4K_H16_GEMM_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q4_K kernel changes
+- claim: "Paired pp256 A/B also favored the half-input route before promotion: old F32-input path avg `491.72 ms` / p50 `491.08 ms`, half-input path avg `486.66 ms` / p50 `486.50 ms`, wins `6/6` for half-input."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4h16_ab256 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=6 --compare-env=QWEN35_Q4K_H16_GEMM --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q4_K kernel changes
+- claim: "Matched llama comparison after promotion measured native pp64 p50 `424.96 tok/s` versus llama.cpp `462.9 tok/s`; decode stayed ahead at native p50 `48.38 tok/s` versus llama `45.89 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4h16_vs_llama crystal run --release ... bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: llama.cpp rebuild, benchmark settings, power state, or Q4_K route changes
+**adversary:** "The win comes from reducing repeated activation conversion/load work, not from changing quantized weight traffic. The route is exact for the current Q4 GEMM precision model but should be rechecked if the Q4 kernel moves to true F32 input accumulation."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}
