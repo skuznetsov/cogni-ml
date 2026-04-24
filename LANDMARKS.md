@@ -177,6 +177,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_adaptive2 crystal run bin/qwen35_speculative_accept.cr --link-flags=... -- --tokens 64 --gamma 4 --max-gamma 16 --adaptive`
   verified_at: 2026-04-24
   decay_trigger: adaptive policy, acceptance predictor, verifier, or resync strategy changes
+- claim: "First-candidate early reject is an exact win for rejection-heavy speculative chunks: when `candidate[0] != target_next`, the verifier can skip the full target chunk and advance only the corrected token. On `def fibonacci(n):` gamma=4/tokens=64, interleaved runs improved from `32.77/32.89 ms/tok` with `QWEN35_SPEC_EARLY_REJECT_OFF=1` to `30.02/30.85 ms/tok` default, with `early_rejects=2` and target verifier time dropping by about `119-150 ms`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_early crystal run bin/qwen35_speculative_accept.cr --link-flags=... -- --tokens 64 --gamma 4 "def fibonacci(n):"`, interleaved `QWEN35_SPEC_EARLY_REJECT_OFF=1` vs default
+  verified_at: 2026-04-24
+  decay_trigger: speculative verifier control flow, target_next semantics, or rejection distribution changes
 
 ## Graph Visualization
 

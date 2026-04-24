@@ -25,6 +25,7 @@ adaptive_gamma = ENV["QWEN35_SPEC_ADAPTIVE"]? == "1"
 max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "16").to_i
 verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace"
 trace = ENV["QWEN35_SPEC_TRACE"]? == "1"
+early_reject_enabled = ENV["QWEN35_SPEC_EARLY_REJECT_OFF"]? != "1"
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
@@ -118,7 +119,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} n_gen=#{n_gen} verify=#{verify_mode}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} early_reject=#{early_reject_enabled} n_gen=#{n_gen} verify=#{verify_mode}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -143,6 +144,7 @@ current_gamma = gamma
 full_accept_streak = 0
 gamma_sum = 0
 gamma_max_seen = 0
+early_rejects = 0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
@@ -168,7 +170,18 @@ while generated_ids.size < n_gen
   correction_or_accepted = [] of Int32
   rejected = false
 
-  if verify_mode == "serial"
+  if early_reject_enabled && verify_mode != "serial" && candidates[0] != target_next
+    # The first verifier expectation is already known from the previous step;
+    # avoid running a whole chunk when the cycle must reject immediately.
+    generated_ids << target_next
+    correction_or_accepted << target_next
+    tv0 = Time.instant
+    target_next = advance_next(target, target_next, pos, target_state)
+    target_verify_ms += (Time.instant - tv0).total_milliseconds
+    pos += 1
+    rejected = true
+    early_rejects += 1
+  elsif verify_mode == "serial"
     candidates.each do |cand|
       if cand == target_next
         generated_ids << cand
@@ -301,7 +314,7 @@ plain_tokens_s = n_gen.to_f64 / (plain_ms / 1000.0)
 
 puts
 puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles}"
-puts "gamma_stats avg=#{(gamma_sum.to_f64 / cycles.to_f64).round(2)} max_seen=#{gamma_max_seen} final=#{current_gamma}"
+puts "gamma_stats avg=#{(gamma_sum.to_f64 / cycles.to_f64).round(2)} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects}"
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s)"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
