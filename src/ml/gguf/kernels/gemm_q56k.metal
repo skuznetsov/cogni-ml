@@ -688,3 +688,45 @@ kernel void qwen35_top1_reduce_tiles_batch(
         top_value[row] = group_best;
     }
 }
+
+kernel void qwen35_top1_reduce_f16_rows(
+    device const half* logits    [[buffer(0)]],
+    device       uint* top_id    [[buffer(1)]],
+    device       float* top_value [[buffer(2)]],
+    constant     uint& out_dim   [[buffer(3)]],
+    uint row [[threadgroup_position_in_grid]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float local_values[256];
+    threadgroup uint  local_ids[256];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+    const uint base = row * out_dim;
+    for (uint i = tid; i < out_dim; i += 256) {
+        const float v = float(logits[base + i]);
+        if (v > best || (v == best && i < best_id)) {
+            best = v;
+            best_id = i;
+        }
+    }
+
+    local_values[tid] = best;
+    local_ids[tid] = best_id;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid == 0) {
+        float group_best = local_values[0];
+        uint group_best_id = local_ids[0];
+        for (uint i = 1; i < 256; ++i) {
+            const float v = local_values[i];
+            const uint id = local_ids[i];
+            if (v > group_best || (v == group_best && id < group_best_id)) {
+                group_best = v;
+                group_best_id = id;
+            }
+        }
+        top_id[row] = group_best_id;
+        top_value[row] = group_best;
+    }
+}

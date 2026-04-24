@@ -102,6 +102,7 @@ module ML
         @@mv6_top1_tiles_batch_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_tiles_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_tiles_batch_pipeline : ML::Metal::ComputePipeline?
+        @@top1_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
         @@dn_pipeline   : ML::Metal::ComputePipeline?
         @@dn128_pipeline : ML::Metal::ComputePipeline?
         @@dn128_fused_pipeline : ML::Metal::ComputePipeline?
@@ -608,6 +609,12 @@ module ML
         private def self.top1_reduce_tiles_batch_pipeline : ML::Metal::ComputePipeline
           @@top1_reduce_tiles_batch_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top1_reduce_tiles_batch") {
             ML::Metal::ComputePipeline.new("qwen35_top1_reduce_tiles_batch", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.top1_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline
+          @@top1_reduce_f16_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top1_reduce_f16_rows") {
+            ML::Metal::ComputePipeline.new("qwen35_top1_reduce_f16_rows", GEMM_Q56K_SOURCE)
           }
         end
 
@@ -4618,13 +4625,16 @@ module ML
           x_buf = Scratch.get(:head_full_rows_x, x.size.to_i64 * sizeof(Float32))
           norm_w_buf = Scratch.get(:head_full_rows_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
           normed_buf = Scratch.get(:head_full_rows_normed, x.size.to_i64 * sizeof(Float32))
-          logits_buf = Scratch.get(:head_full_rows_logits, (rows * out_qw.out_dim).to_i64 * sizeof(Float32))
+          normed16_buf = Scratch.get(:head_full_rows_normed16, x.size.to_i64 * 2_i64)
+          bias_buf = Scratch.get("head_full_rows_bias_#{out_qw.out_dim}", out_qw.out_dim.to_i64 * sizeof(Float32))
+          logits16_buf = Scratch.get(:head_full_rows_logits16, (rows * out_qw.out_dim).to_i64 * 2_i64)
+          top1_id_buf = Scratch.get(:head_full_rows_id, rows.to_i64 * sizeof(UInt32))
+          top1_value_buf = Scratch.get(:head_full_rows_value, rows.to_i64 * sizeof(Float32))
           x_buf.write(x)
           norm_w_buf.write(norm_weight)
+          ConstCache.write_zero_f32_once("head_full_rows_bias_#{out_qw.out_dim}", bias_buf, out_qw.out_dim)
 
           out_w_buf, out_w_off = weight_slot(out_qw)
-          out_pipe = gemv_pipeline_for(out_qw)
-          return nil if out_pipe.nil?
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -4634,14 +4644,45 @@ module ML
           norm_enc.end_encoding
 
           out_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_matmul(out_enc, out_pipe, out_qw, normed_buf, logits_buf, out_w_buf, out_w_off, out_qw.in_dim, out_qw.out_dim, rows)
+          Profile.bump_matmul_shape("q6_gemm_top1 #{out_qw.type.name} #{out_qw.in_dim}x#{out_qw.out_dim} b#{rows}", out_qw.raw.size.to_i64)
+          Profile.bump_conversion("f32_to_f16 q56_gemm_input #{out_qw.in_dim} b#{rows}", (rows * out_qw.in_dim).to_i64 * 6_i64)
+          out_enc.set_pipeline(f32_to_f16_pipeline)
+          out_enc.set_buffer(normed_buf, 0)
+          out_enc.set_buffer(normed16_buf, 1, ML::Metal::BufferAccess::Write)
+          out_enc.set_value((rows * out_qw.in_dim).to_u32, 2)
+          out_enc.dispatch_1d(rows * out_qw.in_dim, 256)
+
+          out_enc.set_pipeline(mm6_pipeline)
+          out_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          out_enc.set_buffer(normed16_buf, 1)
+          out_enc.set_buffer(bias_buf, 2)
+          out_enc.set_buffer(logits16_buf, 3, ML::Metal::BufferAccess::Write)
+          out_enc.set_value(out_qw.in_dim.to_u32, 4)
+          out_enc.set_value(out_qw.out_dim.to_u32, 5)
+          out_enc.set_value(rows.to_u32, 6)
+          out_enc.set_value(0_u32, 7)
+          out_enc.set_threadgroup_memory(MM_SHMEM, 0)
+          out_enc.dispatch_threadgroups({
+            (rows + MM_NR1 - 1) // MM_NR1,
+            (out_qw.out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }, {MM_TG, 1, 1})
           out_enc.end_encoding
+
+          reduce_enc = ML::Metal::ComputeEncoder.new(cmd)
+          reduce_enc.set_pipeline(top1_reduce_f16_rows_pipeline)
+          reduce_enc.set_buffer(logits16_buf, 0)
+          reduce_enc.set_buffer(top1_id_buf, 1, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_buffer(top1_value_buf, 2, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_value(out_qw.out_dim.to_u32, 3)
+          reduce_enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+          reduce_enc.end_encoding
 
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
-          logits = read_shared_f32(logits_buf, rows * out_qw.out_dim)
+          result = read_shared_top1_rows(top1_id_buf, top1_value_buf, rows)
 
           if Profile.enabled?
             t_read = Time.instant
@@ -4652,22 +4693,6 @@ module ML
             )
           end
 
-          result = Array({Int32, Float32}).new(rows)
-          rows.times do |r|
-            base = r * out_qw.out_dim
-            best_id = 0
-            best = logits[base]
-            i = 1
-            while i < out_qw.out_dim
-              v = logits[base + i]
-              if v > best
-                best = v
-                best_id = i
-              end
-              i += 1
-            end
-            result << {best_id.to_i32, best}
-          end
           result
         end
 

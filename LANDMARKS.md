@@ -3575,16 +3575,20 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/Users/sergey/SrcArchives/AI/llama.cpp/examples/speculative-simple/speculative-simple.cpp` lines around target batch construction, inspected on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: llama.cpp speculative implementation changes or local verifier control-flow changes
-- claim: "Added default-on `Qwen35Metal.rmsnorm_project_full_top1_rows` for Q6_K output heads when `prefill_tokens_top1s` has rows above the GEMM threshold. It RMSNorms all rows, runs one batched Q6 GEMM over the full lm-head, reads logits, and performs exact CPU row argmax. `QWEN35_HEAD_FULL_ROWS_OFF=1` restores the old per-row top1 route."
+- claim: "Added default-on `Qwen35Metal.rmsnorm_project_full_top1_rows` for Q6_K output heads when `prefill_tokens_top1s` has rows above the GEMM threshold. It RMSNorms all rows, runs one batched Q6 GEMM over the full lm-head, reduces the F16 logits on GPU, and reads only one `(id, value)` pair per row. `QWEN35_HEAD_FULL_ROWS_OFF=1` restores the old per-row top1 route."
   source: `src/ml/gguf/qwen35_cpu.cr` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: output-head quant type, GEMM threshold, or verifier rows routing changes
-- claim: "Correctness gates passed with the default full-row route: focused Qwen forward specs returned `13 examples, 0 failures`, top token `198`, logit `11.423702`; speculative smoke matched greedy target output on both high-accept and rejection-sensitive prompts."
-  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_headfull_default_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...`; `/tmp/qwen35_speculative_accept_headfull_default --tokens 32 --gamma 4 --max-gamma 32 --verify chunk-inplace ...` on 2026-04-24
+- claim: "Correctness gates passed with the default full-row GPU-reduce route: focused Qwen forward specs returned `13 examples, 0 failures`, targeted Metal specs returned `9 examples, 0 failures`, and speculative smoke matched greedy target output on both high-accept and rejection-sensitive prompts."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_headgpu_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_headgpu_metal_spec crystal spec spec/qwen35_metal_spec.cr --link-flags=...`; `/tmp/qwen35_speculative_accept_headgpu --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace ...` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: Qwen specs, output-head route, or speculative exactness check changes
-- claim: "In-process paired A/B on isolated verifier chunks showed the new route was consistently faster under the same host load: rows16 p50 `245.46 -> 197.61 ms` (`6/6` wins), rows32 p50 `274.61 -> 174.12 ms` (`6/6` wins), rows64 p50 `557.39 -> 327.80 ms` (`6/6` wins). A separate b64 run also won `8/8`."
-  source: `build/tmp/qwen35_headfull_default_ab.cr` with `ROWS=16/32/64 REPS=6 WARMUP=1`, comparing default full-row route against `QWEN35_HEAD_FULL_ROWS_OFF=1`, on 2026-04-24
+- claim: "In-process paired A/B on isolated verifier chunks showed the GPU-reduce route was consistently faster under the same host load: rows16 p50 `142.74 -> 100.43 ms` (`4/4` wins), rows32 p50 `181.14 -> 102.45 ms` (`4/4` wins), rows64 p50 `328.31 -> 165.69 ms` (`6/6` wins). Earlier full-row CPU-argmax b64 was only `557.39 -> 327.80 ms`, so GPU reduce removes another large readback/argmax cost."
+  source: `build/tmp/qwen35_headfull_default_ab.cr` with `ROWS=16/32/64`, comparing default GPU-reduce route against `QWEN35_HEAD_FULL_ROWS_OFF=1`, on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: host load, Q6 GEMM kernel, output-head route, or benchmark harness changes
-**note:** This is the first verifier-side exact improvement matching llama.cpp's batched-logit structure. It does not solve all speculative overhead: draft generation and recurrent/full-attention chunk body still dominate under noisy host load, and full-row logits are only used for rows above the GEMM threshold.
+- claim: "End-to-end high-accept speculative smoke improved materially with the GPU-reduce route: default adaptive chunk-inplace measured `14.02 ms/tok`, and opt-in staged gamma32 measured `12.26 ms/tok` on `The capital of France is` with exact greedy output."
+  source: `/tmp/qwen35_speculative_accept_headgpu --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` and `/tmp/qwen35_speculative_accept_headgpu --tokens 64 --gamma 32 --max-gamma 32 --verify staged --stage-gate 4 "The capital of France is"` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, draft model speed, target verifier route, or staged schedule changes
+**note:** This is the first verifier-side exact improvement matching llama.cpp's batched-logit structure. It does not solve all speculative overhead: draft generation and recurrent/full-attention chunk body still dominate, and full-row logits are only used for rows above the GEMM threshold.
