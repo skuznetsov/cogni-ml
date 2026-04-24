@@ -237,6 +237,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, host load, prefill state allocation behavior, or llama.cpp rebuild changes
 **note:** This is a fair session-style measurement and attribution tool, not a first-run prefill kernel optimization. It shows allocation/state setup costs are measurable but not the remaining breakthrough lever.
 
+### [LM-WBA-FFN-DIAMOND-1] Qwen35 WBA should move from group waves to operator diamonds
+**status:** active hypothesis with one falsified sub-branch
+**trust:** {F:0.75, G:medium, R:0.8}
+**context:** ml (WBA/LTP performance)
+**evidence:**
+- claim: "Qwen35 already uses WBA-style wave scheduling: full decode wave, recurrent prefill runs, and full-attention-plus-recurrent groups. The next useful WBA level is algebraic operator diamonds, not merely more command-buffer grouping."
+  source: `src/ml/gguf/qwen35_metal.cr` functions `forward_decode_wave`, `recurrent_layer_chunk_project_many`, and `full_attn_then_recurrent_chunk_project_many`; `src/ml/metal/compute_graph.cr` Block Integrity partition logic
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 scheduler or ComputeGraph rewritten
+- claim: "The primary exact operator-diamond candidate is FFN: `normed -> gate/up -> SwiGLU -> down -> residual`. A real win likely needs tile-streaming across the diamond rather than only aliasing the activation buffer."
+  source: pp64 attribution in `/tmp/qwen35_prefill_attr` showed FFN up/gate and down dominate logical weight traffic; decode wave source materializes `ffn_gate`, `ffn_up`, activation, and `ffn_down`
+  verified_at: 2026-04-24
+  decay_trigger: FFN route, matmul kernels, or attribution counters changed
+- claim: "A simple decode-wave in-place SwiGLU sub-branch is exact but not a default speed win. Opt-in `QWEN35_DECODE_SWIGLU_INPLACE=1` passes targeted Qwen specs (`17 examples, 0 failures`), but paired decode A/B reports default `25.135 ms/tok` vs opt-in `25.786 ms/tok`, default wins `5/8`."
+  source: `QWEN35_DECODE_SWIGLU_INPLACE=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wba_decode_optin_on_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...`; `/tmp/qwen35_ab_profile_wba2 --env=QWEN35_DECODE_SWIGLU_INPLACE --a='<unset>' --b=1 --prompt=64 --gen=32 --trials=8 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: decode wave, SwiGLU kernel, FFN-down GEMV, or host load changes
+**decision:** Keep decode in-place SwiGLU default-off as a research knob. Do not count it as the WBA breakthrough; next branch should prototype true tile-streamed FFN or batched speculative verifier.
+
 ## Graph Visualization
 
 ```
