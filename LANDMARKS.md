@@ -563,6 +563,44 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: llama.cpp rebuild, benchmark settings, thermal/power state, or Qwen35 route changes
 **adversary:** "This is a narrow routing win, not a general GEMV-over-GEMM rule. Keep GEMM for large Q4 prefill projections; only the tiny alpha/beta-style projections are defaulted to GEMV."
 
+### [LM-prefill-SMALL-Q4-1024-REFUTE-1] Do not extend the tiny-Q4 GEMV rule to 1024-wide projections
+**status:** refuted
+**trust:** {F:0.78, G:narrow, R:0.78}
+**context:** ml (Qwen35 prefill routing)
+**evidence:**
+- claim: "A temporary env-threshold branch allowed `QWEN35_SMALL_Q4_GEMV_MAX=1024`, routing Q4_K projections with `out_dim <= 1024` through GEMV instead of only `out_dim <= 64`."
+  source: temporary local patch to `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K GEMM/GEMV kernel rewrite or projection mix changes
+- claim: "Correctness still passed on the branch: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_smallq4max_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or prefill routing changes
+- claim: "Paired pp64 A/B refuted promotion: default threshold 64 p50 `165.86 ms`, threshold 1024 p50 `169.08 ms`, wins `8/8` for threshold 64."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_smallq4max_ab QWEN35_SMALL_Q4_GEMV_MAX=64 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_SMALL_Q4_GEMV_MAX --compare-off=1024`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q4 route changes
+**adversary:** "The small-Q4 win is shape-specific. Once `out_dim` reaches 1024, batch GEMM's weight reuse beats GEMV's per-token rereads; keep the default cutoff at 64."
+
+### [LM-prefill-SMALL-Q56-GEMV-REFUTE-1] Small Q5/Q6 prefill projections should stay on batch GEMM
+**status:** refuted
+**trust:** {F:0.78, G:narrow, R:0.78}
+**context:** ml (Qwen35 prefill routing)
+**evidence:**
+- claim: "A temporary branch routed Q5_K/Q6_K prefill projections with `out_dim <= 1024` through GEMV instead of the batch GEMM route."
+  source: temporary local patch to `src/ml/gguf/qwen35_metal.cr` behind `QWEN35_SMALL_Q56_GEMV=1`
+  verified_at: 2026-04-24
+  decay_trigger: Q5/Q6 GEMM conversion path, GEMV kernels, or projection mix changes
+- claim: "Correctness still passed on the branch: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_smallq56_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or prefill routing changes
+- claim: "Paired pp64 A/B refuted promotion: default p50 `165.07 ms`, small-Q56-GEMV p50 `167.05 ms`, wins `8/8` for default."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_smallq56_ab crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_SMALL_Q56_GEMV`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q56 route changes
+**adversary:** "Even with F32/F16 conversion overhead, Q5/Q6 batch GEMM remains better for 1024-wide projections at batch 64. Do not copy the Q4 `out_dim <= 64` rule to Q56 without new evidence."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}

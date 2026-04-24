@@ -102,6 +102,8 @@
   - [x] Falsifier: direct Q56_K FFN-down half-output add avoided an explicit `f16_to_f32` buffer but was neutral at pp64 (`167.22 ms` default vs `167.30 ms` branch p50, wins `4/8`), so conversion removal is not enough leverage
   - [x] Falsifier: llama.cpp-style single-buffer Q4_K GEMM with Q4-only `6144` byte threadgroup memory passed focused specs and improved standalone `4096x12288 b64` op attribution (`3.171 ms` → `2.975 ms`), but pp64 wall regressed (`167.39 ms` default p50 vs `176.01 ms` branch p50), so it is not a default prefill win
   - [x] Route tiny Q4_K prefill projections (`out_dim <= 64`, especially recurrent alpha/beta) through GEMV instead of underfilled 64-row GEMM tiles; pp64 paired A/B improves default from `164.04 ms` off to `156.14 ms` on (`8/8` wins), and matched llama comparison moves native prefill to `408.02 tok/s` p50 vs llama `463.3 tok/s`
+  - [x] Falsifier: extending the tiny-Q4 GEMV rule to `out_dim <= 1024` makes pp64 slower (`165.86 ms` p50 at threshold 64 vs `169.08 ms` at threshold 1024, wins `8/8` for threshold 64), so keep the rule narrow
+  - [x] Falsifier: routing small Q5/Q6 prefill projections (`out_dim <= 1024`) through GEMV instead of batch GEMM is also slower at pp64 (`165.07 ms` default vs `167.05 ms` GEMV, wins `8/8` for default)
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context
