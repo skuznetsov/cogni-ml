@@ -3272,3 +3272,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, Metal compiler, Q6_K GEMV implementation, or decode wave scheduler changes
 **note:** Keep local `MV6_NR0=1`. This is one of the cases where blindly matching llama.cpp launch geometry is worse on the M2 Max local path.
+
+### [LM-codex-Q8-MIXED-DUAL-GEMV-FALSIFIER-1] Q8_0 mixed-size recurrent projection dual GEMV is slower
+**status:** verified-falsifier
+**trust:** {F:0.72, G:0.38, R:0.70}
+**context:** ml (Qwen speculative draft decode kernel optimization)
+**evidence:**
+- claim: "A temporary branch added `simd_mv_q8_0_dual_mixed_f32` and routed Q8_0 draft recurrent `qkv + gate` GEMVs through one mixed-output kernel. The first draft had an invalid collective placement (`simd_sum` under `tiisg == 0`); it was corrected before measurement."
+  source: temporary `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 GEMV kernel, recurrent projection route, or Metal compiler behavior changes
+- claim: "The corrected mixed kernel reduced encode attribution for recurrent projection from about `2.96-3.00 ms` to `2.36-2.42 ms` across 288 calls in a 16-token Qwen3.5 0.8B Q8_0 draft decode profile."
+  source: `QWEN35_MODEL=...Qwen3.5-0.8B-Q8_0.gguf QWEN35_PROFILE_TOP1=1 /tmp/qwen35_sync_profile_q8mixed2 64 16`, interleaved `QWEN35_Q8_MIXED_DUAL_GEMV_OFF=1` vs default on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, profiler accounting, or decode wave route changes
+- claim: "End-to-end wall time regressed despite lower encode attribution: separate GEMVs measured `126.1 ms` and `125.6 ms` for 16 tokens (`7.88` and `7.85 ms/tok`), while mixed dual measured `128.8 ms` and `129.0 ms` (`8.05` and `8.06 ms/tok`)."
+  source: same interleaved `/tmp/qwen35_sync_profile_q8mixed2 64 16` run on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Q8_0 GEMV kernel, Metal compiler, or draft model quantization changes
+**note:** Do not re-add mixed-size Q8 recurrent `qkv + gate` dual GEMV as a default path without a different kernel design. Saving dispatch/input reads was outweighed by lower occupancy/register pressure, matching the earlier Q4 dual-GEMV failure pattern.
