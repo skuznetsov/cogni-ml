@@ -25,7 +25,7 @@ struct block_q8_0_56 {
 };
 
 constant short MV8_NSG = 2;
-constant short MV8_NR0 = 2;
+constant short MV8_NR0 = 1;
 
 kernel void simd_mv_q8_0_f32(
     device const uint8_t* w_raw   [[buffer(0)]],
@@ -45,7 +45,7 @@ kernel void simd_mv_q8_0_f32(
 
     const uint row_bytes = nb * 34;
     device const float * y_base = x + n * in_dim;
-    float sumf[MV8_NR0] = {0.f, 0.f};
+    float sumf[MV8_NR0] = {0.f};
 
     for (uint ib = 0; ib < nb; ++ib) {
         const float y = y_base[ib * Q8_0_QK + tiisg];

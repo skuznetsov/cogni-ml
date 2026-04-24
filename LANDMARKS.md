@@ -121,6 +121,14 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_sync_profile_qwen08 --model Qwen3.5-0.8B-Q8_0.gguf 64 64` with `QWEN35_PROFILE_TOP1=1`
   verified_at: 2026-04-24
   decay_trigger: Q8_0 kernel retuned or decode scheduler changed
+- claim: "Q8_0 GEMV attribution must use 32-element blocks, not QK_K=256; after the fix, 16 draft tokens report 8067.56 MiB logical matmul traffic instead of 1008.45 MiB."
+  source: `/tmp/qwen35_sync_profile_qwen08_profilefix --model Qwen3.5-0.8B-Q8_0.gguf 16 16` with `QWEN35_PROFILE_TOP1=1`
+  verified_at: 2026-04-24
+  decay_trigger: profile accounting changed
+- claim: "Q8_0 GEMV `NR0=1` beats `NR0=2/3/4` for 0.8B draft decode: 9.06 ms/tok vs 11.59/13.53/14.58 ms/tok in same 64-token sync-profile loop."
+  source: bounded local retune loop rebuilding `bin/qwen35_sync_profile.cr` for `MV_Q8_NR0 ∈ {1,2,3,4}` and running `--model Qwen3.5-0.8B-Q8_0.gguf 64 64`
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 kernel, scheduler, or model shape changes
 - claim: "Greedy exact draft acceptance with 9B target + 0.8B draft is prompt-sensitive and low/moderate in short smoke prompts: 13.33%, 40.48%, 57.14%, 48.72%, 51.35%."
   source: `/tmp/qwen35_speculative_accept --gamma 4 --tokens 16/24 ...`
   verified_at: 2026-04-24

@@ -34,7 +34,7 @@ module ML
       MV_Q6_NSG             =  2
       MV_Q6_NR0             =  1
       MV_Q8_NSG             =  2
-      MV_Q8_NR0             =  2
+      MV_Q8_NR0             =  1
       HEAD_TOP1_ROWS_PER_TG = 12
 
       # GEMM (prefill) tiling — Q4_K only for now.
