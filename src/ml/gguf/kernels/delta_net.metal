@@ -351,6 +351,80 @@ kernel void delta_net_step_128_fused_post(
     }
 }
 
+// Multi-token DeltaNet scan for prefill chunks.
+//
+// This is the same recurrence as `delta_net_step_128_fused`, but it keeps the
+// scan over `n_tokens` inside one Metal dispatch. It mirrors llama.cpp's
+// `GGML_OP_GATED_DELTA_NET` strategy: the recurrence is still serial over
+// tokens, but Q/K/V/g/b are consumed as a chunk and recurrent state is kept
+// inside one layer/head dispatch instead of paying one dispatch per token.
+//
+// Layout:
+//   state  [h_v, s, s]
+//   q,k    [n_tokens, h_k, s]
+//   v,out  [n_tokens, h_v, s]
+//   g,beta [n_tokens, h_v]
+kernel void delta_net_chunk_128_fused(
+    device       float* state    [[buffer(0)]],
+    device const float* q_conv   [[buffer(1)]],
+    device const float* k_conv   [[buffer(2)]],
+    device const float* v_conv   [[buffer(3)]],
+    device const float* g        [[buffer(4)]],
+    device const float* beta     [[buffer(5)]],
+    device       float* out      [[buffer(6)]],
+    constant     uint&  h_k      [[buffer(7)]],
+    constant     uint&  h_v      [[buffer(8)]],
+    constant     uint&  s        [[buffer(9)]],
+    constant     float& scale    [[buffer(10)]],
+    constant     uint&  n_tokens [[buffer(11)]],
+    uint   tgpig [[threadgroup_position_in_grid]],
+    ushort tiitg [[thread_index_in_threadgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint h = tgpig;
+    if (h >= h_v) return;
+
+    const ushort lane = tiitg & 31;
+    const uint k_head = h % h_k;
+    const uint st_b   = h * s * s;
+
+    for (uint t = 0; t < n_tokens; ++t) {
+        const float ghead = g[t * h_v + h];
+        const float bhead = beta[t * h_v + h];
+
+        device const float* K = k_conv + (t * h_k + k_head) * s;
+        device const float* Q = q_conv + (t * h_k + k_head) * s;
+        device const float* V = v_conv + (t * h_v + h) * s;
+        device       float* O = out    + (t * h_v + h) * s;
+
+        for (uint d2 = sgitg; d2 < s; d2 += 4) {
+            device float* row = state + st_b + d2 * s;
+
+            float sk_acc = 0.0f;
+            for (uint d1 = lane * 4; d1 < s; d1 += 128) {
+                float4 rv = *((device const float4*)(row + d1));
+                float4 kv = *((device const float4*)(K   + d1));
+                sk_acc += rv.x * kv.x + rv.y * kv.y + rv.z * kv.z + rv.w * kv.w;
+            }
+            const float sk = simd_sum(sk_acc) * ghead;
+            const float delt = bhead * (V[d2] - sk);
+
+            float out_acc = 0.0f;
+            for (uint d1 = lane * 4; d1 < s; d1 += 128) {
+                float4 rv = *((device const float4*)(row + d1));
+                float4 kv = *((device const float4*)(K   + d1));
+                float4 qv = *((device const float4*)(Q   + d1));
+                rv = rv * ghead + kv * delt;
+                *((device float4*)(row + d1)) = rv;
+                out_acc += rv.x * qv.x + rv.y * qv.y + rv.z * qv.z + rv.w * qv.w;
+            }
+
+            const float ov = simd_sum(out_acc);
+            if (lane == 0) O[d2] = ov * scale;
+        }
+    }
+}
+
 // In-place recurrent post-processing for Qwen35 after DeltaNet:
 //   y[h, d] = RMSNorm(y[h, :], ssm_norm) * silu(z[h, d])
 //

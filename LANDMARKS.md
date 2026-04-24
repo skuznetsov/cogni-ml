@@ -2082,3 +2082,37 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: benchmark harness, host load, llama.cpp version, or Qwen prefill path changes
 **note:** This is exact because intermediate prompt-token logits are unobserved in greedy prefill. The remaining prefill gap needs a layerwise/microbatch known-token engine, not more output-head trimming.
+
+### [LM-codex-LLAMACPP-PREFILL-GDN-1] llama.cpp Qwen35 prefill uses ubatch graph plus fused chunked GDN
+**status:** verified-source
+**trust:** {F:0.86, G:0.72, R:0.82}
+**context:** ml (Qwen prefill architecture)
+**evidence:**
+- claim: "llama.cpp builds Qwen35 prefill as a multi-token `ubatch` graph, not as repeated single-token decode. `llm_build_qwen35` runs projections over `n_tokens`, limits final-layer outputs through `inp_out_ids`, and routes recurrent layers through `build_delta_net`."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/src/models/qwen35.cpp` and `/Users/sergey/SrcArchives/AI/llama.cpp/src/llama-graph.h` inspection on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: llama.cpp Qwen35 graph builder rewrite
+- claim: "For `n_seq_tokens > 1`, llama.cpp selects `build_delta_net_fused` when fused chunked GDN is supported; otherwise it falls back to a chunking graph. The Metal backend has `kernel_gated_delta_net_*` that loops over token time inside one dispatch per head/layer."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/src/models/delta-net-base.cpp`, `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal.metal`, and `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-ops.cpp` inspection on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: llama.cpp Gated Delta Net op or Metal backend rewrite
+**note:** Claude's serial-scan warning is directionally correct but incomplete. The recurrence remains serial over tokens, but llama.cpp removes token-by-token orchestration and batches projections around the scan.
+
+### [LM-codex-DN-CHUNK-PRIMITIVE-1] Chunked fused DeltaNet Metal primitive is correct and faster than repeated step dispatch
+**status:** verified-primitive
+**trust:** {F:0.84, G:0.58, R:0.80}
+**context:** ml (Qwen prefill primitive)
+**evidence:**
+- claim: "Added `delta_net_chunk_128_fused`, a token-major multi-token DeltaNet scan kernel with the same recurrence as the single-token fused path, plus `Qwen35Metal.delta_net_chunk` wrapper."
+  source: `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet state layout, recurrent tensor layout, or Metal wrapper changes
+- claim: "Correctness against repeated CPU `delta_net_step!` passed on Qwen35 9B shapes for an 8-token chunk: output cosine `1.0`, max output diff `1.49e-08`, state cosine `1.0`, max state diff `5.96e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_chunk_spec crystal spec spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet CPU reference or kernel launch geometry changes
+- claim: "Microbench comparing 8 repeated Metal `delta_net_step` calls to one `delta_net_chunk` call measured p50 `2.8041 ms` vs `0.9214 ms`, a `3.04x` p50 speedup for the scan primitive under the current upload/readback wrapper."
+  source: temporary `/tmp` Crystal microbench run with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_chunk_bench` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Metal command-buffer path, host load, or DeltaNet wrapper changes
+**note:** This is not yet an end-to-end prefill speedup because the Qwen forward path still lacks layerwise hidden-state buffers and batched full-attention/FFN plumbing. It establishes the central recurrent primitive needed for that path.

@@ -92,6 +92,7 @@ module ML
         @@dn128_pipeline : ML::Metal::ComputePipeline?
         @@dn128_fused_pipeline : ML::Metal::ComputePipeline?
         @@dn128_fused_post_pipeline : ML::Metal::ComputePipeline?
+        @@dn128_chunk_fused_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
         @@ffn_swiglu_pipeline : ML::Metal::ComputePipeline?
@@ -463,6 +464,12 @@ module ML
         private def self.dn128_fused_post_pipeline : ML::Metal::ComputePipeline
           @@dn128_fused_post_pipeline ||= ML::Metal::PipelineCache.get("delta_net_step_128_fused_post") {
             ML::Metal::ComputePipeline.new("delta_net_step_128_fused_post", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.dn128_chunk_fused_pipeline : ML::Metal::ComputePipeline
+          @@dn128_chunk_fused_pipeline ||= ML::Metal::PipelineCache.get("delta_net_chunk_128_fused") {
+            ML::Metal::ComputePipeline.new("delta_net_chunk_128_fused", DELTA_NET_SOURCE)
           }
         end
 
@@ -918,6 +925,81 @@ module ML
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
           result = read_shared_f32(out_buf, h_v * s)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_dn(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
+        end
+
+        # Multi-token DeltaNet scan on Metal.
+        #
+        # Inputs are token-major:
+        #   q/k    [n_tokens, h_k, s]
+        #   v/out  [n_tokens, h_v, s]
+        #   g/beta [n_tokens, h_v]
+        #
+        # This is a prefill building block: the recurrent scan over tokens is
+        # still exact and serial, but it runs inside one dispatch per layer/head
+        # chunk instead of launching one DeltaNet kernel per prompt token.
+        def self.delta_net_chunk(state_buf : ML::MetalBuffer,
+                                 q_conv : Array(Float32),
+                                 k_conv : Array(Float32),
+                                 v_conv : Array(Float32),
+                                 ghead : Array(Float32),
+                                 beta : Array(Float32),
+                                 h_k : Int32, h_v : Int32, s : Int32,
+                                 n_tokens : Int32,
+                                 scale : Float32) : Array(Float32)
+          ML::Metal::Device.init!
+          raise "delta_net_chunk n_tokens must be positive" unless n_tokens > 0
+          raise "delta_net_chunk q size mismatch" unless q_conv.size == n_tokens * h_k * s
+          raise "delta_net_chunk k size mismatch" unless k_conv.size == n_tokens * h_k * s
+          raise "delta_net_chunk v size mismatch" unless v_conv.size == n_tokens * h_v * s
+          raise "delta_net_chunk g size mismatch" unless ghead.size == n_tokens * h_v
+          raise "delta_net_chunk beta size mismatch" unless beta.size == n_tokens * h_v
+
+          t0 = Time.instant if Profile.enabled?
+          q_buf   = Scratch.get(:dn_chunk_q,   q_conv.size.to_i64 * sizeof(Float32))
+          k_buf   = Scratch.get(:dn_chunk_k,   k_conv.size.to_i64 * sizeof(Float32))
+          v_buf   = Scratch.get(:dn_chunk_v,   v_conv.size.to_i64 * sizeof(Float32))
+          g_buf   = Scratch.get(:dn_chunk_g,   ghead.size.to_i64  * sizeof(Float32))
+          b_buf   = Scratch.get(:dn_chunk_b,   beta.size.to_i64   * sizeof(Float32))
+          out_buf = Scratch.get(:dn_chunk_out, (n_tokens * h_v * s).to_i64 * sizeof(Float32))
+
+          q_buf.write(q_conv)
+          k_buf.write(k_conv)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(dn128_chunk_fused_pipeline)
+          enc.set_buffer(state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          enc.set_buffer(q_buf,     1)
+          enc.set_buffer(k_buf,     2)
+          enc.set_buffer(v_buf,     3)
+          enc.set_buffer(g_buf,     4)
+          enc.set_buffer(b_buf,     5)
+          enc.set_buffer(out_buf,   6, ML::Metal::BufferAccess::Write)
+          enc.set_value(h_k.to_u32,       7)
+          enc.set_value(h_v.to_u32,       8)
+          enc.set_value(s.to_u32,         9)
+          enc.set_value(scale,           10)
+          enc.set_value(n_tokens.to_u32, 11)
+          enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
+          enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_f32(out_buf, n_tokens * h_v * s)
           if Profile.enabled?
             t_read = Time.instant
             Profile.bump_dn(

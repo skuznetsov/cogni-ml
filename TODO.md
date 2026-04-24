@@ -68,7 +68,8 @@
 - [ ] **4.4** ComputeGraph wave scheduling for decoder
 - [ ] **4.5** Benchmark: ≥10% faster than llama.cpp HEAD on 9B decode
 - [x] **4.6** Exact first-run prefill shortcut: skip output RMSNorm/lm-head for non-final prompt tokens
-- [ ] **4.7** True layerwise/microbatch prefill for known prompt tokens
+- [x] **4.7** Port llama.cpp-style chunked fused DeltaNet scan primitive
+- [ ] **4.8** True layerwise/microbatch prefill for known prompt tokens
 
 ## Phase 5 — Scale to 27B
 
@@ -104,7 +105,7 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 ## Status
 
 - **Active phase:** 4 (optimization: beat llama.cpp)
-- **Active task:** 4.7 (true layerwise/microbatch prefill)
+- **Active task:** 4.8 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
 - **Blocked:** nothing
 - **Last updated:** 2026-04-23
