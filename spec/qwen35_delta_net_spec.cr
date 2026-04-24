@@ -252,6 +252,12 @@ describe "Qwen35Metal.delta_net_step" do
     )
     gpu_state = conv_buf.read(conv_state_init.size)
 
+    gpu_q.size.should eq(cpu_q.size)
+    gpu_k.size.should eq(cpu_k.size)
+    gpu_v.size.should eq(cpu_v.size)
+    gpu_g.size.should eq(cpu_g.size)
+    gpu_b.size.should eq(cpu_b.size)
+
     max_q = max_abs_diff(cpu_q, gpu_q)
     max_k = max_abs_diff(cpu_k, gpu_k)
     max_v = max_abs_diff(cpu_v, gpu_v)

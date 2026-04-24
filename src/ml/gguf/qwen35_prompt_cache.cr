@@ -189,14 +189,16 @@ module ML::GGUF
         state = restore(entry, weights.hparams, prefer_metal: prefer_metal)
         next_token_id = nil.as(Int32?)
         next_token_logit = nil.as(Float32?)
-        (entry.prefix_len...token_ids.size).each do |pos|
-          if pos == token_ids.size - 1
-            top, logit = Qwen35CPU.forward_top1(weights, token_ids[pos], pos.to_i32, state)
-            next_token_id = top
-            next_token_logit = logit
-          else
-            Qwen35CPU.prefill_token(weights, token_ids[pos], pos.to_i32, state)
-          end
+
+        suffix_start = entry.prefix_len
+        final_pos = token_ids.size - 1
+        if suffix_start < final_pos
+          Qwen35CPU.prefill_tokens(weights, token_ids[suffix_start...final_pos], suffix_start.to_i32, state)
+        end
+        if suffix_start <= final_pos
+          top, logit = Qwen35CPU.forward_top1(weights, token_ids[final_pos], final_pos.to_i32, state)
+          next_token_id = top
+          next_token_logit = logit
         end
         ReplayResult.new(state, entry.prefix_len, token_ids.size - entry.prefix_len, entry, next_token_id, next_token_logit)
       end

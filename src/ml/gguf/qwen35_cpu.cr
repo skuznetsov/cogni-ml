@@ -748,6 +748,41 @@ module ML::GGUF
       end
     end
 
+    # Batched quantized matmul for token-major activations:
+    #   x:   [batch, in_dim]
+    #   out: [batch, out_dim]
+    #
+    # This is the projection building block for layerwise prefill. It uses the
+    # existing Metal batch path when available and falls back to the CPU fused
+    # matmul without changing numerics.
+    private def qmatmul_nobias(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)
+      raise ArgumentError.new("qmatmul_nobias batch must be positive") unless batch > 0
+      raise ArgumentError.new("qmatmul_nobias x size mismatch: expected #{batch * qw.in_dim}, got #{x.size}") unless x.size == batch * qw.in_dim
+
+      if metal_qw_supported?(qw) && Qwen35Metal.available?
+        if (gpu_out = Qwen35Metal.matmul(qw, x, batch))
+          return gpu_out
+        end
+      end
+
+      zero = Array(Float32).new(qw.out_dim, 0.0_f32)
+      QuantMatmul.matmul_add(x, batch, qw.in_dim, qw.raw, qw.type, qw.out_dim, zero)
+    end
+
+    private def rms_norm_rows(x : Array(Float32), rows : Int32, dim : Int32,
+                              w : Array(Float32), eps : Float32) : Array(Float32)
+      raise ArgumentError.new("rms_norm_rows x size mismatch") unless x.size == rows * dim
+      out = Array(Float32).new(x.size, 0.0_f32)
+      rows.times do |r|
+        base = r * dim
+        ss = 0.0_f64
+        dim.times { |j| ss += x[base + j].to_f64 * x[base + j].to_f64 }
+        inv_rms = (1.0 / Math.sqrt(ss / dim.to_f64 + eps.to_f64)).to_f32
+        dim.times { |j| out[base + j] = x[base + j] * inv_rms * w[j] }
+      end
+      out
+    end
+
     private def output_project_routed(x : Array(Float32),
                                       norm_weight : Array(Float32),
                                       out_qw : QuantWeight,
@@ -1053,6 +1088,107 @@ module ML::GGUF
       Array(Float32).new(n_embd) { |i| inpL2[i] + ffn_out.not_nil![i] }
     end
 
+    # Multi-token recurrent layer prefill.
+    #
+    # Exact semantics are the same as repeated `forward_recurrent_layer` calls:
+    # the convolution and DeltaNet states are scanned in token order. The
+    # speedup comes from batching projections and running the recurrent prep +
+    # DeltaNet scan once per layer chunk instead of once per token.
+    private def forward_recurrent_layer_chunk(inp : Array(Float32),
+                                              n_tokens : Int32,
+                                              lw : Qwen35RecurrentWeights,
+                                              lstate : LayerState,
+                                              hp : Qwen35Hparams,
+                                              max_seq : Int32) : Array(Float32)
+      if ENV["QWEN35_PREFILL_CHUNK_OFF"]? != "1" && n_tokens > 1
+        supported = Qwen35Metal.available? &&
+                    metal_qw_supported?(lw.attn_qkv_qw) &&
+                    metal_qw_supported?(lw.attn_gate_qw) &&
+                    metal_qw_supported?(lw.ssm_alpha_qw) &&
+                    metal_qw_supported?(lw.ssm_beta_qw) &&
+                    metal_qw_supported?(lw.ssm_out_qw) &&
+                    metal_qw_supported?(lw.ffn_gate_qw) &&
+                    metal_qw_supported?(lw.ffn_up_qw) &&
+                    metal_qw_supported?(lw.ffn_down_qw)
+        if supported
+          n_embd = hp.n_embd
+          n_ff = hp.n_ff
+          h_k = hp.ssm_group_count
+          h_v = hp.ssm_time_step_rank
+          s = hp.ssm_state_size
+          d_inner = hp.ssm_inner_size
+          qkv_dim = 2 * h_k * s + h_v * s
+          conv_k = hp.ssm_conv_kernel
+
+          conv_bytes = ((conv_k - 1) * qkv_dim).to_i64 * sizeof(Float32)
+          conv_buf = lstate.conv_state_buf
+          if conv_buf.nil?
+            conv_buf = ML::MetalBuffer.new(conv_bytes)
+            if conv_state = lstate.conv_state
+              conv_buf.write(conv_state)
+            else
+              conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
+            end
+            lstate.conv_state_buf = conv_buf
+          end
+
+          ssm_bytes = (h_v * s * s).to_i64 * sizeof(Float32)
+          ssm_buf = lstate.ssm_state_buf
+          if ssm_buf.nil?
+            ssm_buf = ML::MetalBuffer.new(ssm_bytes)
+            if ssm_state = lstate.ssm_state
+              ssm_buf.write(ssm_state)
+            else
+              ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
+            end
+            lstate.ssm_state_buf = ssm_buf
+          end
+
+          cur = rms_norm_rows(inp, n_tokens, n_embd, lw.attn_norm, hp.rms_eps)
+          qkv_mixed = qmatmul_nobias(lw.attn_qkv_qw, cur, n_tokens)
+          z = qmatmul_nobias(lw.attn_gate_qw, cur, n_tokens)
+          alpha = qmatmul_nobias(lw.ssm_alpha_qw, cur, n_tokens)
+          beta = qmatmul_nobias(lw.ssm_beta_qw, cur, n_tokens)
+
+          q_conv, k_conv, v_conv, ghead, beta_sig = Qwen35Metal.recurrent_prep_chunk(
+            conv_buf, qkv_mixed, alpha, beta, lw.ssm_conv1d, lw.ssm_dt_bias, lw.ssm_a,
+            h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
+          )
+
+          scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+          y = Qwen35Metal.delta_net_chunk(ssm_buf, q_conv, k_conv, v_conv,
+            ghead, beta_sig, h_k, h_v, s, n_tokens, scale)
+
+          n_tokens.times do |t|
+            h_v.times do |h|
+              rms_norm_slice!(y, t * d_inner + h * s, s, lw.ssm_norm, hp.rms_eps)
+            end
+          end
+          (n_tokens * d_inner).times { |i| y[i] = y[i] * silu(z[i]) }
+
+          attn_proj = qmatmul_nobias(lw.ssm_out_qw, y, n_tokens)
+          inp_l2 = Array(Float32).new(n_tokens * n_embd) { |i| inp[i] + attn_proj[i] }
+          cur2 = rms_norm_rows(inp_l2, n_tokens, n_embd, lw.post_attention_norm, hp.rms_eps)
+
+          gate_ff = qmatmul_nobias(lw.ffn_gate_qw, cur2, n_tokens)
+          up_ff = qmatmul_nobias(lw.ffn_up_qw, cur2, n_tokens)
+          combined = Array(Float32).new(n_tokens * n_ff) do |i|
+            silu(gate_ff[i]) * up_ff[i]
+          end
+          ffn_proj = qmatmul_nobias(lw.ffn_down_qw, combined, n_tokens)
+          return Array(Float32).new(n_tokens * n_embd) { |i| inp_l2[i] + ffn_proj[i] }
+        end
+      end
+
+      out = Array(Float32).new(inp.size, 0.0_f32)
+      n_tokens.times do |t|
+        row = inp[t * hp.n_embd, hp.n_embd]
+        y = forward_recurrent_layer(row, 0, lw, lstate, hp, max_seq)
+        hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
+      end
+      out
+    end
+
     # ─────────────────────────────────────────────────────────────────────
     # Full decoder forward (single-token autoregressive)
     # ─────────────────────────────────────────────────────────────────────
@@ -1144,6 +1280,51 @@ module ML::GGUF
           x = forward_full_attn_layer(x, pos, lw, state.layers[il], hp, max_seq)
         in Qwen35RecurrentWeights
           x = forward_recurrent_layer(x, pos, lw, state.layers[il], hp, max_seq)
+        end
+      end
+    end
+
+    # Prefill a known prompt span whose logits are not observed.
+    #
+    # This is exact for intermediate prompt tokens. It processes recurrent
+    # layers in token chunks and falls back to serial full-attention layers,
+    # because full-attention prefill still needs a dedicated causal chunk path.
+    def prefill_tokens(weights : Qwen35Weights,
+                       token_ids : Array(Int32),
+                       start_pos : Int32,
+                       state : State) : Nil
+      return if token_ids.empty?
+
+      if ENV["QWEN35_PREFILL_CHUNK"]? != "1" || token_ids.size == 1
+        token_ids.each_with_index do |token_id, i|
+          prefill_token(weights, token_id, start_pos + i, state)
+        end
+        return
+      end
+
+      hp = weights.hparams
+      max_seq = state.max_seq
+      n_tokens = token_ids.size
+      raise ArgumentError.new("prefill span exceeds max_seq") if start_pos < 0 || start_pos + n_tokens > max_seq
+
+      x = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+      token_ids.each_with_index do |token_id, t|
+        emb = embedding_lookup(weights.token_embd, token_id)
+        hp.n_embd.times { |i| x[t * hp.n_embd + i] = emb[i] }
+      end
+
+      weights.layers.each_with_index do |lw, il|
+        case lw
+        in Qwen35FullAttnWeights
+          out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+          n_tokens.times do |t|
+            row = x[t * hp.n_embd, hp.n_embd]
+            y = forward_full_attn_layer(row, start_pos + t, lw, state.layers[il], hp, max_seq)
+            hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
+          end
+          x = out
+        in Qwen35RecurrentWeights
+          x = forward_recurrent_layer_chunk(x, n_tokens, lw, state.layers[il], hp, max_seq)
         end
       end
     end

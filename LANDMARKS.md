@@ -2139,3 +2139,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: Metal command-buffer path, host load, or recurrent prep wrapper changes
 **note:** Together with [LM-codex-DN-CHUNK-PRIMITIVE-1], this covers the recurrent scan core and its per-token prep. End-to-end prefill still needs batched layer hidden-state flow, SSM output/post/FFN for all chunk tokens, and full-attention layer chunking.
+
+### [LM-codex-PREFILL-CPU-CHUNK-FALSIFIER-1] CPU-orchestrated layerwise prefill chunking is correct but slower
+**status:** verified-falsifier
+**trust:** {F:0.82, G:0.62, R:0.78}
+**context:** ml (Qwen prefill architecture)
+**evidence:**
+- claim: "Added `Qwen35CPU.prefill_tokens`, a correctness-gated experimental path that processes known non-final prompt spans layerwise: recurrent layers use batched projections plus `recurrent_prep_chunk`/`delta_net_chunk`, while full-attention layers remain serial. The path is opt-in through `QWEN35_PREFILL_CHUNK=1` because it is not a speed win."
+  source: `src/ml/gguf/qwen35_cpu.cr`, `bin/qwen35_generate.cr`, `bin/benchmark_qwen_vs_llama.cr`, and `src/ml/gguf/qwen35_prompt_cache.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: prefill orchestration, whole-token decode wave, or full-attention chunk path changes
+- claim: "Correctness gate passed with opt-in chunk prefill: `10 examples, 0 failures` for forward plus DeltaNet specs, and `18 examples, 0 failures` across forward, DeltaNet, state snapshot, and prompt-cache specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_chunk_spec3 crystal spec spec/qwen35_delta_net_spec.cr spec/qwen35_forward_spec.cr ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_chunk_gate2 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen forward state semantics, prompt-cache replay, or recurrent chunk wrapper changes
+- claim: "Benchmark falsified CPU-orchestrated layerwise chunking as a default optimization on prompt=64/gen=16/reps=2/warmup=1: default whole-token wave prefill measured p50 `52.35 tok/s`; opt-in `QWEN35_PREFILL_CHUNK=1` measured p50 `23.01 tok/s`; llama.cpp measured about `461 tok/s` prefill. Decode stayed ahead of llama.cpp in this short run: p50 `47.16 tok/s` vs llama `44.48 tok/s`."
+  source: `bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=2 --warmup=1` with and without `QWEN35_PREFILL_CHUNK=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or prefill wave implementation changes
+**note:** This refutes the tempting CPU-layer-loop integration. The next viable prefill speed path is not more host-side chunk plumbing; it is a Metal-side chunk wave that keeps batched hidden rows and command-buffer scheduling on GPU, then adds full-attention causal chunking.

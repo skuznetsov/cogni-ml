@@ -125,6 +125,35 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     prefill_logit.should be_close(live_logit, 1e-4_f32)
   end
 
+  it "chunk-prefills non-final prompt tokens without changing final top1" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32]
+
+    serial = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+    prompt[0...-1].each_with_index do |token_id, pos|
+      ML::GGUF::Qwen35CPU.prefill_token(w, token_id, pos.to_i32, serial)
+    end
+    serial_top, serial_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prompt.last, (prompt.size - 1).to_i32, serial)
+
+    old = ENV["QWEN35_PREFILL_CHUNK"]?
+    ENV["QWEN35_PREFILL_CHUNK"] = "1"
+    begin
+      chunked = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt[0...-1], 0, chunked)
+      chunk_top, chunk_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prompt.last, (prompt.size - 1).to_i32, chunked)
+
+      chunk_top.should eq(serial_top)
+      chunk_logit.should be_close(serial_logit, 1e-4_f32)
+    ensure
+      if old
+        ENV["QWEN35_PREFILL_CHUNK"] = old
+      else
+        ENV.delete("QWEN35_PREFILL_CHUNK")
+      end
+    end
+  end
+
   it "forks decode state into independent buffers" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams

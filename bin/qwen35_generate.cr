@@ -76,12 +76,22 @@ if prompt_cache_enabled
   end
 end
 
-# Prefill: run forward on each prompt token sequentially
+# Prefill known non-final prompt tokens through the shared helper, then run the
+# final token for next-token logits. The experimental layerwise chunk path is
+# opt-in (`QWEN35_PREFILL_CHUNK=1`) because the current CPU-orchestrated version
+# is correct but slower than the whole-token Metal wave.
 if output_ids.empty?
   puts "\nPrefilling #{ids.size} tokens..."
-  ids.each_with_index do |tid, i|
-    if prompt_cache_enabled && i == ids.size - 1 && i > 0
-      prefix_ids = ids.first(i)
+  if ids.size > 1
+    prefix_ids = ids[0...-1]
+    tstart = Time.instant
+    ML::GGUF::Qwen35CPU.prefill_tokens(w, prefix_ids, pos, state)
+    dt = (Time.instant - tstart).total_seconds
+    pos += prefix_ids.size
+    STDOUT << "  prefix #{prefix_ids.size}/#{ids.size} tokens took #{dt.round(2)}s\n"
+    STDOUT.flush
+
+    if prompt_cache_enabled
       preview = ENV["QWEN35_PROMPT_CACHE_PREVIEW"]? == "1" ? tok.decode(prefix_ids) : nil
       saved = cache_store.not_nil!.save(
         session_id: ENV["QWEN35_SESSION_ID"]? || "default",
@@ -95,16 +105,14 @@ if output_ids.empty?
       )
       STDOUT << "  saved prompt-cache prefix #{prefix_ids.size} tokens sha=#{saved.artifact_sha256[0, 12]}\n"
     end
+  end
 
+  if final_id = ids.last?
     tstart = Time.instant
-    if i == ids.size - 1
-      top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, tid, pos, state)
-      output_ids << top.to_i32
-    else
-      ML::GGUF::Qwen35CPU.prefill_token(w, tid, pos, state)
-    end
+    top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
+    output_ids << top.to_i32
     dt = (Time.instant - tstart).total_seconds
-    STDOUT << "  token #{i+1}/#{ids.size} id=#{tid} took #{dt.round(2)}s\n"
+    STDOUT << "  final token #{ids.size}/#{ids.size} id=#{final_id} took #{dt.round(2)}s\n"
     STDOUT.flush
     pos += 1
   end
