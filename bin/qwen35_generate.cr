@@ -97,13 +97,15 @@ if output_ids.empty?
     end
 
     tstart = Time.instant
-    top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, tid, pos, state)
+    if i == ids.size - 1
+      top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, tid, pos, state)
+      output_ids << top.to_i32
+    else
+      ML::GGUF::Qwen35CPU.prefill_token(w, tid, pos, state)
+    end
     dt = (Time.instant - tstart).total_seconds
     STDOUT << "  token #{i+1}/#{ids.size} id=#{tid} took #{dt.round(2)}s\n"
     STDOUT.flush
-    if i == ids.size - 1
-      output_ids << top.to_i32
-    end
     pos += 1
   end
 end

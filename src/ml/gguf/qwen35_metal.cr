@@ -2132,9 +2132,10 @@ module ML
                                      output_qw : QuantWeight,
                                      hp : Qwen35Hparams,
                                      pos : Int32,
-                                     top1 : Bool = false) : Array(Float32)?
+                                     top1 : Bool = false,
+                                     emit_head : Bool = true) : Array(Float32)?
           out_pipe = gemv_pipeline_for(output_qw)
-          return nil if out_pipe.nil?
+          return nil if emit_head && out_pipe.nil?
 
           ML::Metal::Device.init!
 
@@ -2151,13 +2152,13 @@ module ML
           dst_buf = Scratch.get(:wave_hidden_b, hidden_dim.to_i64 * sizeof(Float32))
           pre_norm_buf = Scratch.get(:wave_pre_norm, hidden_dim.to_i64 * sizeof(Float32))
           residual_buf = Scratch.get(:wave_residual, hidden_dim.to_i64 * sizeof(Float32))
-          output_norm_buf = Scratch.get(:wave_output_norm, output_norm.size.to_i64 * sizeof(Float32))
-          logits_buf = Scratch.get(:wave_logits, output_qw.out_dim.to_i64 * sizeof(Float32))
-          tile_count = (output_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
-          top1_tile_values_buf = Scratch.get(:wave_top1_tile_values, tile_count.to_i64 * sizeof(Float32))
-          top1_tile_ids_buf = Scratch.get(:wave_top1_tile_ids, tile_count.to_i64 * sizeof(UInt32))
-          top1_id_buf = Scratch.get(:wave_top1_id, sizeof(UInt32).to_i64)
-          top1_value_buf = Scratch.get(:wave_top1_value, sizeof(Float32).to_i64)
+          output_norm_buf = emit_head ? Scratch.get(:wave_output_norm, output_norm.size.to_i64 * sizeof(Float32)) : nil
+          logits_buf = emit_head ? Scratch.get(:wave_logits, output_qw.out_dim.to_i64 * sizeof(Float32)) : nil
+          tile_count = emit_head ? ((output_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG) : 0
+          top1_tile_values_buf = emit_head ? Scratch.get(:wave_top1_tile_values, tile_count.to_i64 * sizeof(Float32)) : nil
+          top1_tile_ids_buf = emit_head ? Scratch.get(:wave_top1_tile_ids, tile_count.to_i64 * sizeof(UInt32)) : nil
+          top1_id_buf = emit_head ? Scratch.get(:wave_top1_id, sizeof(UInt32).to_i64) : nil
+          top1_value_buf = emit_head ? Scratch.get(:wave_top1_value, sizeof(Float32).to_i64) : nil
 
           # Full-attention scratch.
           qfull_buf = Scratch.get(:wave_qfull, (2 * q_dim).to_i64 * sizeof(Float32))
@@ -2187,7 +2188,9 @@ module ML
           ffn_out_buf = Scratch.get(:wave_ffn_out, hidden_dim.to_i64 * sizeof(Float32))
 
           src_buf.write(emb)
-          ConstCache.write_once("wave_output_norm", output_norm_buf, output_norm)
+          if emit_head
+            ConstCache.write_once("wave_output_norm", output_norm_buf.not_nil!, output_norm)
+          end
 
           layer_norm_bufs = Array(ML::MetalBuffer?).new(layers.size, nil)
           post_norm_bufs = Array(ML::MetalBuffer?).new(layers.size, nil)
@@ -2243,7 +2246,7 @@ module ML
             end
           end
 
-          out_w_buf, out_w_off = weight_slot(output_qw)
+          out_w_buf, out_w_off = emit_head ? weight_slot(output_qw) : {nil, 0_i64}
           attn_scale = (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32
           rec_scale = (1.0 / Math.sqrt(hp.ssm_state_size.to_f64)).to_f32
           use_dn_post_fused = dn_post_fused_enabled?
@@ -2620,42 +2623,44 @@ module ML
           end
 
           use_head_top1 = false
-          Profile.trace("head") do
-            Profile.trace("head.norm") do
-              head_norm_enc = ML::Metal::ComputeEncoder.new(cmd)
-              encode_rmsnorm_vec(head_norm_enc, src_buf, output_norm_buf, pre_norm_buf, hidden_dim, hp.rms_eps)
-              head_norm_enc.end_encoding
-            end
-
-            use_head_top1 = top1 && can_use_head_top1_fused?(output_qw)
-            if use_head_top1
-              Profile.trace("head.top1") do
-                head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
-                head_top1_enc.set_pipeline(mv6_top1_tiles_pipeline)
-                head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
-                head_top1_enc.set_buffer(pre_norm_buf, 1)
-                head_top1_enc.set_buffer(top1_tile_values_buf, 2, ML::Metal::BufferAccess::Write)
-                head_top1_enc.set_buffer(top1_tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
-                head_top1_enc.set_value(output_qw.in_dim.to_u32, 4)
-                head_top1_enc.set_value(output_qw.out_dim.to_u32, 5)
-                head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {64, 1, 1})
-                head_top1_enc.end_encoding
-
-                reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
-                reduce_top1_enc.set_pipeline(top1_reduce_tiles_pipeline)
-                reduce_top1_enc.set_buffer(top1_tile_values_buf, 0)
-                reduce_top1_enc.set_buffer(top1_tile_ids_buf, 1)
-                reduce_top1_enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
-                reduce_top1_enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
-                reduce_top1_enc.set_value(tile_count.to_u32, 4)
-                reduce_top1_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
-                reduce_top1_enc.end_encoding
+          if emit_head
+            Profile.trace("head") do
+              Profile.trace("head.norm") do
+                head_norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+                encode_rmsnorm_vec(head_norm_enc, src_buf, output_norm_buf.not_nil!, pre_norm_buf, hidden_dim, hp.rms_eps)
+                head_norm_enc.end_encoding
               end
-            else
-              Profile.trace("head.full") do
-                head_out_enc = ML::Metal::ComputeEncoder.new(cmd)
-                encode_gemv(head_out_enc, out_pipe.not_nil!, pre_norm_buf, logits_buf, out_w_buf, out_w_off, output_qw.in_dim, output_qw.out_dim)
-                head_out_enc.end_encoding
+
+              use_head_top1 = top1 && can_use_head_top1_fused?(output_qw)
+              if use_head_top1
+                Profile.trace("head.top1") do
+                  head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+                  head_top1_enc.set_pipeline(mv6_top1_tiles_pipeline)
+                  head_top1_enc.set_buffer(out_w_buf.not_nil!, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+                  head_top1_enc.set_buffer(pre_norm_buf, 1)
+                  head_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
+                  head_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
+                  head_top1_enc.set_value(output_qw.in_dim.to_u32, 4)
+                  head_top1_enc.set_value(output_qw.out_dim.to_u32, 5)
+                  head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {64, 1, 1})
+                  head_top1_enc.end_encoding
+
+                  reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+                  reduce_top1_enc.set_pipeline(top1_reduce_tiles_pipeline)
+                  reduce_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 0)
+                  reduce_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 1)
+                  reduce_top1_enc.set_buffer(top1_id_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
+                  reduce_top1_enc.set_buffer(top1_value_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
+                  reduce_top1_enc.set_value(tile_count.to_u32, 4)
+                  reduce_top1_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+                  reduce_top1_enc.end_encoding
+                end
+              else
+                Profile.trace("head.full") do
+                  head_out_enc = ML::Metal::ComputeEncoder.new(cmd)
+                  encode_gemv(head_out_enc, out_pipe.not_nil!, pre_norm_buf, logits_buf.not_nil!, out_w_buf.not_nil!, out_w_off, output_qw.in_dim, output_qw.out_dim)
+                  head_out_enc.end_encoding
+                end
               end
             end
           end
@@ -2665,7 +2670,11 @@ module ML
           pending_cmds.each(&.wait)
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
-          result = use_head_top1 ? read_shared_top1(top1_id_buf, top1_value_buf) : read_shared_f32(logits_buf, output_qw.out_dim)
+          result = if emit_head
+                     use_head_top1 ? read_shared_top1(top1_id_buf.not_nil!, top1_value_buf.not_nil!) : read_shared_f32(logits_buf.not_nil!, output_qw.out_dim)
+                   else
+                     [] of Float32
+                   end
           if Profile.enabled?
             t_read = Time.instant
             Profile.bump_wave(

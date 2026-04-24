@@ -98,6 +98,33 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "prefills non-final prompt tokens without changing final top1" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32] # "The capital of France is"
+
+    live = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+    final_top = 0_i32
+    final_logit = 0.0_f32
+    prompt.each_with_index do |token_id, pos|
+      final_top, final_logit = ML::GGUF::Qwen35CPU.forward_top1(w, token_id, pos.to_i32, live)
+    end
+
+    prefilled = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+    prompt[0...-1].each_with_index do |token_id, pos|
+      ML::GGUF::Qwen35CPU.prefill_token(w, token_id, pos.to_i32, prefilled)
+    end
+    top, logit = ML::GGUF::Qwen35CPU.forward_top1(w, prompt.last, (prompt.size - 1).to_i32, prefilled)
+
+    live_top, live_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, live)
+    prefill_top, prefill_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, prefilled)
+
+    top.should eq(final_top)
+    logit.should be_close(final_logit, 1e-4_f32)
+    prefill_top.should eq(live_top)
+    prefill_logit.should be_close(live_logit, 1e-4_f32)
+  end
+
   it "forks decode state into independent buffers" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams

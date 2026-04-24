@@ -2059,3 +2059,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: benchmark harness, host load, llama.cpp version, or decode/prefill path changes
 **note:** Prompt-cache optimizes repeated/shared-prefix prompts, not the first-run prefill measured here. First-run prefill still needs a real layerwise/microbatch implementation.
+
+### [LM-codex-PREFILL-NOHEAD-1] First-run prefill skips lm-head on non-final prompt tokens
+**status:** verified
+**trust:** {F:0.84, G:0.66, R:0.82}
+**context:** ml (Qwen port, exact prefill shortcut)
+**evidence:**
+- claim: "Added `Qwen35CPU.prefill_token` for prompt tokens whose logits are not needed; it runs the full layer stack and updates full-attention KV plus DeltaNet conv/SSM state, but skips output RMSNorm/lm-head."
+  source: `src/ml/gguf/qwen35_cpu.cr` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen forward state semantics, decode wave routing, or output head path changes
+- claim: "Generator prefill and prompt-cache suffix replay use `prefill_token` for non-final prompt tokens and keep `forward_top1` for the final token, preserving greedy next-token behavior."
+  source: `bin/qwen35_generate.cr`, `src/ml/gguf/qwen35_prompt_cache.cr`, and `spec/qwen35_forward_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: prompt loop, prompt-cache replay, tokenizer, or state snapshot changes
+- claim: "Correctness gate stayed green after the no-head prefill path: `15 examples, 0 failures` across Qwen forward, DeltaNet, state snapshot, and prompt-cache specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_final_specs crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: spec fixture, Qwen forward path, or Metal bridge changes
+- claim: "On prompt=64/gen=64/reps=3/warmup=1, exact first-run native prefill improved from previous `41.41 tok/s` p50 to `52.73 tok/s` p50; llama.cpp still measured `463.99 tok/s`, so this is a useful shortcut, not the final prefill architecture."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_bench_prefill_final crystal run --link-flags="build/bridge.o -framework Metal -framework Foundation -lc++" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or Qwen prefill path changes
+**note:** This is exact because intermediate prompt-token logits are unobserved in greedy prefill. The remaining prefill gap needs a layerwise/microbatch known-token engine, not more output-head trimming.

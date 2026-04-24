@@ -1121,6 +1121,33 @@ module ML::GGUF
       {logits.index(maxv).not_nil!.to_i32, maxv}
     end
 
+    # Prefill helper for prompt tokens whose logits are not needed.
+    #
+    # This is exact for autoregressive state construction: every layer still
+    # runs and updates full-attention KV plus DeltaNet conv/SSM state, but the
+    # expensive output RMSNorm/lm-head projection is skipped. Use `forward` or
+    # `forward_top1` for the final prompt token when next-token logits are
+    # required.
+    def prefill_token(weights : Qwen35Weights, token_id : Int32, pos : Int32,
+                      state : State) : Nil
+      if forward_decode_wave_routed(weights, token_id, pos, state, emit_head: false)
+        return
+      end
+
+      hp = weights.hparams
+      max_seq = state.max_seq
+      x = embedding_lookup(weights.token_embd, token_id)
+
+      weights.layers.each_with_index do |lw, il|
+        case lw
+        in Qwen35FullAttnWeights
+          x = forward_full_attn_layer(x, pos, lw, state.layers[il], hp, max_seq)
+        in Qwen35RecurrentWeights
+          x = forward_recurrent_layer(x, pos, lw, state.layers[il], hp, max_seq)
+        end
+      end
+    end
+
     # Embedding lookup for a single token id → Array(Float32)[n_embd].
     # token_embd is QuantWeight with dims [n_embd, vocab_size] (row = one embedding).
     def embedding_lookup(token_embd : QuantWeight, token_id : Int32) : Array(Float32)
@@ -1152,7 +1179,8 @@ module ML::GGUF
                                            token_id : Int32,
                                            pos : Int32,
                                            state : State,
-                                           top1 : Bool = false) : Array(Float32)?
+                                           top1 : Bool = false,
+                                           emit_head : Bool = true) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -1233,7 +1261,7 @@ module ML::GGUF
         Qwen35Metal.forward_decode_wave(
           emb, weights.layers,
           k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
-          weights.output_norm, weights.output, hp, pos, top1: top1)
+          weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head)
       {% else %}
         nil
       {% end %}
