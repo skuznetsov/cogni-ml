@@ -20,7 +20,7 @@ module ML::GGUF
     extend self
     # Keep prompt chunks large enough to avoid CPU-side boundary overhead while
     # preserving an env override for small-memory experiments.
-    DEFAULT_PREFILL_CHUNK_SIZE = 1024
+    DEFAULT_PREFILL_CHUNK_SIZE = 2048
 
     # ─────────────────────────────────────────────────────────────────────
     # Per-sequence state: KV cache for full-attn layers + SSM state for

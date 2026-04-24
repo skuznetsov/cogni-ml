@@ -355,7 +355,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness or power state changes
 **decision:** "Do not keep the double-buffered Q6_K variant; the observed effect is noise-level and p50 is slightly worse."
 
-### [LM-prefill-CHUNK-SIZE-1024] Larger default prefill chunks
+### [LM-prefill-CHUNK-SIZE-2048] Larger default prefill chunks
 **status:** verified
 **trust:** {F:0.85, G:medium, R:0.85}
 **context:** ml (Qwen35 prefill)
@@ -364,7 +364,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: local chunk sweep with `bin/qwen35_prefill_attribution.cr` for prompt sizes 64, 128, 256, 512, and 1024
   verified_at: 2026-04-24
   decay_trigger: prefill scheduler, memory budget, or full-attention chunk implementation changes
-- claim: "Changing the default chunk size to 1024 preserves the env override and passes focused forward/prompt-cache specs."
+- claim: "Changing the default chunk size to 1024 preserved the env override and passed focused forward/prompt-cache specs; later sweep raised it to 2048 for better pp2048 behavior."
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_chunk_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` -> 14 examples, 0 failures
   verified_at: 2026-04-24
   decay_trigger: Qwen35 prefill or prompt cache changes
@@ -380,6 +380,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_chunk1024 crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/benchmark_qwen_vs_llama.cr -- --prompt=256 --gen=16 --reps=3 --warmup=1`
   verified_at: 2026-04-24
   decay_trigger: benchmark harness, llama.cpp build, or power state changes
+- claim: "pp2048 sweep measured chunk2048 p50 4578.57 ms versus chunk1024 p50 4755.48 ms; pp1024 stayed within noise, chunk2048 p50 2041.48 ms versus chunk1024 p50 2038.57 ms."
+  source: local `bin/qwen35_prefill_attribution.cr` chunk sweep
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness or power state changes
 **adversary:** "Larger chunks increase peak scratch memory; keep `QWEN35_PREFILL_CHUNK_SIZE` override for smaller devices or pathological long prompts."
 
 ### [LM-prefill-LONG-SUFFIX-TOP1] Batched final chunk for long prompts
