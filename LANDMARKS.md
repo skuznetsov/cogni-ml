@@ -2977,3 +2977,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prefill batch threshold, host load, or Q4_K pair routing changes
 **note:** This is a small exact long-prefill cleanup, not a paradigm shift. It removes duplicated activation conversion for paired FFN projections but does not reduce the dominant weight traffic.
+
+### [LM-codex-REC-PROJ-SHARED-H16-FALSIFIER-1] Recurrent projection shared H16 conversion is neutral
+**status:** verified-falsifier
+**trust:** {F:0.82, G:0.48, R:0.78}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "An opt-in branch preconverted the recurrent prefill normed activation matrix to F16 once and reused it for Q5_K qkv half-output GEMM plus Q4_K gate/z half-input GEMM. The branch preserved the existing half-input arithmetic and passed focused Qwen forward/DeltaNet specs."
+  source: temporary `QWEN35_REC_PROJ_SHARED_H16=1` branch in `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: recurrent projection layout, Q5/Q4 GEMM kernels, or prefill batch routing changes
+- claim: "The branch was not a speed win at pp256: paired A/B measured default avg `485.56 ms` / p50 `485.59 ms` vs opt-in avg `485.59 ms` / p50 `485.70 ms`, wins `4/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_recproj_shared_ab256 QWEN35_Q4K_PAIR_H16_GEMM_OFF=1 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=2 --reps=8 --compare-env=QWEN35_REC_PROJ_SHARED_H16 --compare-off=1` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, power state, benchmark harness, or Q4/Q5 projection kernels change
+**note:** This reinforces the current bottleneck model: removing small activation conversions is mostly exhausted; future exact prefill gains need lower-level quantized tile throughput or elimination of work, not more conversion plumbing.
