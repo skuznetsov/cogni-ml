@@ -1,6 +1,6 @@
 module ML::BenchLoadGuard
   record ProcessLoad, pid : Int64, cpu : Float64, command : String
-  record HostLoad, busy_processes : Array(ProcessLoad), total_cpu : Float64,
+  record HostLoad, process_loads : Array(ProcessLoad), busy_processes : Array(ProcessLoad), total_cpu : Float64,
     per_process_threshold : Float64, total_threshold : Float64 do
     def busy? : Bool
       !busy_processes.empty? ||
@@ -41,6 +41,7 @@ module ML::BenchLoadGuard
              [] of ProcessLoad
            end
     HostLoad.new(
+      loads,
       busy,
       loads.sum(0.0) { |load| load.cpu },
       per_process_threshold,
@@ -71,6 +72,10 @@ module ML::BenchLoadGuard
     if host_load.total_threshold > 0.0 && host_load.total_cpu >= host_load.total_threshold
       io.printf "         Total observed CPU %.1f%% exceeds %.1f%%.\n",
         host_load.total_cpu, host_load.total_threshold
+      io.puts "         Top CPU processes:"
+      host_load.process_loads.first(5).each do |load|
+        io.printf "         pid=%d cpu=%.1f%% cmd=%s\n", load.pid, load.cpu, load.command
+      end
     end
     unless host_load.busy_processes.empty?
       io.puts "         Processes above #{host_load.per_process_threshold.round(1)}% CPU:"
