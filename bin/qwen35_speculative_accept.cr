@@ -1,9 +1,9 @@
 # Greedy speculative-decode acceptance probe for Qwen35 target/draft pairs.
 #
-# This intentionally verifies candidate tokens one-by-one with the target model.
-# It is a correctness and acceptance-rate harness, not the final batched verifier
-# speed path. The final speedup requires replacing serial verification with a
-# multi-token target verify kernel/path.
+# The `chunk` verifier processes each gamma-sized target candidate span through
+# the chunked prefill body and then emits one top1 per row. This is still not the
+# final fully batched lm-head verifier, but it measures the next exact speed step
+# after a purely serial target verifier.
 
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
@@ -21,14 +21,18 @@ tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = "The capital of France is"
 n_gen = 32
 gamma = 4
+verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk"
+trace = ENV["QWEN35_SPEC_TRACE"]? == "1"
 
 OptionParser.parse(ARGV) do |parser|
-  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--tokens N] [prompt]"
+  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--tokens N] [--verify serial|chunk] [prompt]"
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--draft PATH", "Draft GGUF path (default: Qwen3.5 0.8B Q8_0)") { |path| draft_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
   parser.on("--gamma N", "Draft candidates per cycle") { |value| gamma = value.to_i }
   parser.on("--tokens N", "Generated tokens to compare") { |value| n_gen = value.to_i }
+  parser.on("--verify MODE", "Target verifier: serial or chunk (default: chunk)") { |value| verify_mode = value }
+  parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -40,6 +44,7 @@ end
 
 raise ArgumentError.new("--gamma must be positive") unless gamma > 0
 raise ArgumentError.new("--tokens must be positive") unless n_gen > 0
+raise ArgumentError.new("--verify must be serial or chunk") unless {"serial", "chunk"}.includes?(verify_mode)
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -107,7 +112,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} n_gen=#{n_gen}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} n_gen=#{n_gen} verify=#{verify_mode}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -142,24 +147,65 @@ while generated_ids.size < n_gen
 
   correction_or_accepted = [] of Int32
   rejected = false
-  candidates.each do |cand|
-    if cand == target_next
-      generated_ids << cand
-      correction_or_accepted << cand
-      accepted += 1
-      tv0 = Time.instant
-      target_next = advance_next(target, cand, pos, target_state)
-      target_verify_ms += (Time.instant - tv0).total_milliseconds
-      pos += 1
+
+  if verify_mode == "serial"
+    candidates.each do |cand|
+      if cand == target_next
+        generated_ids << cand
+        correction_or_accepted << cand
+        accepted += 1
+        tv0 = Time.instant
+        target_next = advance_next(target, cand, pos, target_state)
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        pos += 1
+      else
+        generated_ids << target_next
+        correction_or_accepted << target_next
+        tv0 = Time.instant
+        target_next = advance_next(target, target_next, pos, target_state)
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        pos += 1
+        rejected = true
+        break
+      end
+    end
+  else
+    target_base = target_state
+    verify_state = target_base.fork
+    tv0 = Time.instant
+    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, verify_state)
+    target_verify_ms += (Time.instant - tv0).total_milliseconds
+    if trace
+      puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
+    end
+
+    expected = target_next
+    reject_at = nil.as(Int32?)
+    candidates.each_with_index do |cand, i|
+      if cand == expected
+        generated_ids << cand
+        correction_or_accepted << cand
+        accepted += 1
+        expected = target_nexts[i][0]
+      else
+        generated_ids << expected
+        correction_or_accepted << expected
+        reject_at = i
+        rejected = true
+        break
+      end
+    end
+
+    if rejected
+      tv1 = Time.instant
+      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+      target_verify_ms += (Time.instant - tv1).total_milliseconds
+      target_next = corrected[-1][0]
+      pos += correction_or_accepted.size
     else
-      generated_ids << target_next
-      correction_or_accepted << target_next
-      tv0 = Time.instant
-      target_next = advance_next(target, target_next, pos, target_state)
-      target_verify_ms += (Time.instant - tv0).total_milliseconds
-      pos += 1
-      rejected = true
-      break
+      target_state.copy_from!(verify_state)
+      target_next = target_nexts[-1][0]
+      pos += candidates.size
     end
   end
 
@@ -172,7 +218,10 @@ wall_ms = (Time.instant - wall0).total_milliseconds
 plain0 = Time.instant
 plain = greedy_sequence(target, prompt_ids, n_gen)
 plain_ms = (Time.instant - plain0).total_milliseconds
-raise "speculative output diverged from target greedy" unless plain == generated_ids
+unless plain == generated_ids
+  first_diff = plain.zip(generated_ids).index { |(a, b)| a != b } || Math.min(plain.size, generated_ids.size)
+  raise "speculative output diverged from target greedy at #{first_diff}: plain=#{plain.inspect} speculative=#{generated_ids.inspect}"
+end
 
 accept_rate = accepted.to_f64 / proposed.to_f64
 tokens_s = n_gen.to_f64 / (wall_ms / 1000.0)
@@ -180,8 +229,8 @@ plain_tokens_s = n_gen.to_f64 / (plain_ms / 1000.0)
 
 puts
 puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles}"
-puts "serial_spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s)"
+puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s)"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms"
-puts "note=serial verifier is correctness-only; expected speedup needs batched target verify"
+puts "note=chunk verifier batches target body only; expected full speedup still needs batched lm-head/topk acceptance"
 puts "generated=#{tok.decode(generated_ids).inspect}"

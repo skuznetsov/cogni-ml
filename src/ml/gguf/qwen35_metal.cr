@@ -436,15 +436,17 @@ module ML
           @@written : Hash(String, Bool) = {} of String => Bool
 
           def self.write_once(tag : String, buf : ML::MetalBuffer, data : Array(Float32)) : Nil
-            return if @@written[tag]?
+            key = "#{tag}:#{buf.handle.address}:#{buf.size}:#{data.to_unsafe.address}:#{data.size}"
+            return if @@written[key]?
             buf.write(data)
-            @@written[tag] = true
+            @@written[key] = true
           end
 
           def self.write_zero_f32_once(tag : String, buf : ML::MetalBuffer, count : Int32) : Nil
-            return if @@written[tag]?
+            key = "#{tag}:#{buf.handle.address}:#{buf.size}:zero:#{count}"
+            return if @@written[key]?
             buf.contents.as(Pointer(UInt8)).clear(count.to_i64 * sizeof(Float32))
-            @@written[tag] = true
+            @@written[key] = true
           end
 
           def self.clear : Nil

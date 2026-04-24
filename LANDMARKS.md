@@ -133,6 +133,14 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept --gamma 4 --tokens 16/24 ...`
   verified_at: 2026-04-24
   decay_trigger: draft/target model, tokenizer, decoding mode, or prompt suite changes
+- claim: "Shared Metal constant-cache writes must be keyed by buffer and source data identity, not only by a semantic tag; mixed 9B target + 0.8B draft runs can otherwise reuse stale constants after scratch/model changes."
+  source: regression `keeps chunk verifier constants model-specific across target and draft models` in `spec/qwen35_forward_spec.cr`
+  verified_at: 2026-04-24
+  decay_trigger: ConstCache or Scratch implementation changes
+- claim: "Chunking the target verifier body alone is exact after the ConstCache fix but not a speed win yet: on `def fibonacci(n):`, gamma=4/tokens=24, serial verifier reports 31.47 ms/tok and chunk verifier reports 32.97 ms/tok with the same 85.19% acceptance."
+  source: `/tmp/qwen35_speculative_accept_modes --verify serial|chunk --gamma 4 --tokens 24 "def fibonacci(n):"`
+  verified_at: 2026-04-24
+  decay_trigger: draft GEMV, target verifier, state fork/copy, or lm-head batching changes
 
 ## Graph Visualization
 

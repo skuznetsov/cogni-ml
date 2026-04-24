@@ -2,7 +2,8 @@ require "./spec_helper"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
 
-QWEN_9B_FWD = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_9B_FWD  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_08B_FWD = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
 
 describe ML::GGUF::Qwen35CPU, "full decoder forward" do
   pending!("9B model not present") unless File.exists?(QWEN_9B_FWD)
@@ -272,6 +273,66 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
         ENV.delete("QWEN35_PREFILL_LONG_SUFFIX_OFF")
       end
     end
+  end
+
+  it "chunked top1 verifier matches serial greedy target steps" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 13_i32]
+    candidates = [11751_i32, 318_i32, 279_i32, 9821_i32]
+
+    prefix_serial = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+    ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, prefix_serial)
+    prefix_chunk = prefix_serial.fork
+
+    serial = [] of {Int32, Float32}
+    candidates.each_with_index do |token_id, i|
+      serial << ML::GGUF::Qwen35CPU.forward_top1(w, token_id, prompt.size + i, prefix_serial)
+    end
+
+    chunked = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, prompt.size, prefix_chunk)
+    chunked.size.should eq(serial.size)
+    chunked.each_with_index do |(top_id, top_logit), i|
+      top_id.should eq(serial[i][0])
+      top_logit.should be_close(serial[i][1], 1e-4_f32)
+    end
+
+    next_serial = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size + candidates.size, prefix_serial)
+    next_chunk = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size + candidates.size, prefix_chunk)
+    next_chunk[0].should eq(next_serial[0])
+    next_chunk[1].should be_close(next_serial[1], 1e-4_f32)
+  end
+
+  it "keeps chunk verifier constants model-specific across target and draft models" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    target = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    draft = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = [727_i32, 73111_i32, 1393_i32, 1590_i32] # "def fibonacci(n):"
+    accepted = [198_i32, 262_i32, 413_i32, 307_i32]
+
+    # Pollute shared Metal scratch/constant caches with the smaller draft model.
+    draft_state = ML::GGUF::Qwen35CPU::State.new(draft.hparams, max_seq: 32)
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1(draft, prompt, 0, draft_state)
+    accepted.each_with_index do |token_id, i|
+      ML::GGUF::Qwen35CPU.forward_top1(draft, token_id, prompt.size + i, draft_state)
+    end
+
+    serial = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: 32)
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1(target, prompt, 0, serial)
+    accepted.each_with_index do |token_id, i|
+      ML::GGUF::Qwen35CPU.forward_top1(target, token_id, prompt.size + i, serial)
+    end
+
+    chunk = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: 32)
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1(target, prompt, 0, chunk)
+    verify = chunk.fork
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, accepted, prompt.size, verify)
+    chunk.copy_from!(verify)
+
+    serial_next = ML::GGUF::Qwen35CPU.forward_top1(target, 606_i32, prompt.size + accepted.size, serial)
+    chunk_next = ML::GGUF::Qwen35CPU.forward_top1(target, 606_i32, prompt.size + accepted.size, chunk)
+    chunk_next[0].should eq(serial_next[0])
+    chunk_next[1].should be_close(serial_next[1], 1e-4_f32)
   end
 
   it "forks decode state into independent buffers" do

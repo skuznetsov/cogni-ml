@@ -1639,6 +1639,44 @@ module ML::GGUF
       forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
     end
 
+    # Process a known token span and return the greedy next-token prediction
+    # after each consumed token. This is the exact target-verifier primitive for
+    # greedy speculative decode: candidate[i+1] is checked against result[i].
+    #
+    # The decoder body is chunked through prefill_tokens_hidden, while the
+    # lm-head top1 is still emitted per row. A future verifier can replace the
+    # per-row head projection with a batched top1 kernel without changing the
+    # speculative control flow.
+    def prefill_tokens_top1s(weights : Qwen35Weights,
+                             token_ids : Array(Int32),
+                             start_pos : Int32,
+                             state : State) : Array({Int32, Float32})
+      raise ArgumentError.new("prefill_tokens_top1s token_ids must not be empty") if token_ids.empty?
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard { prefill_tokens_top1s(weights, token_ids, start_pos, state) }
+      end
+
+      if token_ids.size == 1
+        return [forward_top1(weights, token_ids[0], start_pos, state)]
+      end
+
+      hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
+      hp = weights.hparams
+      results = Array({Int32, Float32}).new(token_ids.size)
+      token_ids.size.times do |i|
+        row = hidden[i * hp.n_embd, hp.n_embd]
+        if top1 = output_project_top1_routed(row, weights.output_norm, weights.output, hp.rms_eps)
+          results << top1
+        else
+          rms_norm!(row, weights.output_norm, hp.rms_eps)
+          logits = qmatvec_nobias(weights.output, row)
+          maxv = logits.max
+          results << {logits.index(maxv).not_nil!.to_i32, maxv}
+        end
+      end
+      results
+    end
+
     private def prefill_tokens_hidden(weights : Qwen35Weights,
                                       token_ids : Array(Int32),
                                       start_pos : Int32,
