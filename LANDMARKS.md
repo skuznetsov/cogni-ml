@@ -3394,3 +3394,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: target State.copy_from! cost or verifier implementation changes
 **note:** Keep `chunk-inplace` as the default state strategy. Removing a small target backup copy is not enough when accepted cycles become more expensive.
+
+### [LM-codex-SPEC-INITIAL-GAMMA-FALSIFIER-1] Initial gamma 5/6 is worse than gamma 4
+**status:** verified-falsifier
+**trust:** {F:0.78, G:0.50, R:0.76}
+**context:** ml (Qwen speculative scheduler tuning)
+**evidence:**
+- claim: "Initial `gamma=5` looked plausible because `def fibonacci(n):` accepts four draft tokens before rejection, but it is slower: it verifies one extra rejected row in the first cycle and regresses from `~21.0-21.5 ms/tok` at `gamma=4` to `~22.6-22.7 ms/tok`."
+  source: interleaved `/tmp/qwen35_speculative_accept_gamma --tokens 64 --gamma 4|5|6 --max-gamma 32 "def fibonacci(n):"` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: draft acceptance pattern, verifier cost, or adaptive fallback logic changes
+- claim: "Initial `gamma=6` is worse: it causes many low-gamma cycles and draft resyncs on `def fibonacci(n):` and `The quick brown fox`, measuring about `24.7-28.2 ms/tok` instead of the `gamma=4` fallback path."
+  source: same interleaved `/tmp/qwen35_speculative_accept_gamma` run on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: draft model, target model, or adaptive scheduler changes
+- claim: "High-accept prompt `The capital of France is` also prefers `gamma=4`: `gamma=4` measured about `15.75/16.11 ms/tok`, while `gamma=5` measured `16.03/16.63 ms/tok` and `gamma=6` measured `16.44/16.83 ms/tok`."
+  source: same interleaved `/tmp/qwen35_speculative_accept_gamma` run on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, verifier route, or fast-regrow schedule changes
+**note:** Keep initial `gamma=4`. The successful scheduler change is fast regrowth after gamma 8, not a larger first chunk.
