@@ -3041,3 +3041,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load guard, Metal compiler, benchmark harness, or Q4_K H16 GEMM route changes
 **note:** Correctness alone was insufficient here; this is a measured micro-optimization trap. Do not retry barrier removal unless the kernel structure or compiler behavior changes.
+
+### [LM-codex-DECODE-WAVE-CHUNK-GUARD-1] Decode wave chunk default remains 2 under guarded A/B
+**status:** verified-falsifier
+**trust:** {F:0.84, G:0.52, R:0.82}
+**context:** ml (Qwen decode wave scheduling)
+**evidence:**
+- claim: "The paired decode A/B helper now supports the same quiet-host guard options as the main benchmark harness, so wave scheduler experiments can wait for/require low background CPU load before measuring."
+  source: `bin/qwen35_ab_profile.cr --help` after release build on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness or `BenchLoadGuard` changes
+- claim: "`QWEN35_WAVE_CHUNK_LAYERS=2` remains materially better than unchunked `0`: guarded prompt64/gen64 trials measured A mean `22.848 ms/tok` vs B mean `24.183 ms/tok`, wins `6/6`, delta `-1.335 ms/tok`."
+  source: `/tmp/qwen35_ab_profile_guarded --env=QWEN35_WAVE_CHUNK_LAYERS --a=2 --b=0 --prompt=64 --gen=64 --trials=6 --warmup=1 --require-quiet --wait-quiet-ms=60000 --quiet-poll-ms=1000` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: decode wave scheduler, Metal command queue behavior, or host-load guard changes
+- claim: "Smaller/larger nearby chunking does not justify a default change: guarded `2` vs `4` was neutral (`3/6`, delta `-0.071 ms/tok`), and guarded `1` vs `2` was also neutral/noisy (`4/6`, delta `-0.066 ms/tok`)."
+  source: guarded `/tmp/qwen35_ab_profile_guarded` runs for `2/4` and `1/2` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: decode wave scheduler or benchmark harness changes
+**note:** The missing decode margin is not recovered by retuning command-buffer chunk size. Keep default `2` and look at decode compute work or output-head path next.
