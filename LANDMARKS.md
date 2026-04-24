@@ -651,6 +651,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: op attribution harness or Q5 kernel changes
 **adversary:** "Removing Q5 F32/F16 conversion is not a reliable wall-clock lever in the fused prefill wave. The temporary code was removed; revisit only with a materially different Q5 tile design or a code-variant harness showing pp64/pp256 wall improvement."
 
+### [LM-prefill-FAST-CMD-FALSIFIER] Fast command buffers do not move prefill wall time
+**status:** refuted
+**trust:** {F:0.78, G:narrow, R:0.78}
+**context:** ml (Qwen35 prefill command-buffer overhead)
+**evidence:**
+- claim: "A temporary branch added `QWEN35_PREFILL_FAST_CMD=1` and routed prefill helper/group command-buffer creation through `CommandBuffer.new(fast: true)`."
+  source: temporary local patch to `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Metal command-buffer bridge, prefill grouping, or command-buffer creation path changes
+- claim: "Correctness passed with the branch enabled: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_fastcmd_spec QWEN35_PREFILL_FAST_CMD=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or prefill command-buffer path changes
+- claim: "Paired pp64 A/B was neutral: default p50 `152.02 ms`, fast-command-buffer p50 `151.97 ms`, wins `2/8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_fastcmd_ab64 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_PREFILL_FAST_CMD`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or command-buffer bridge changes
+- claim: "Paired pp256 A/B slightly favored the current default: default p50 `490.49 ms`, fast-command-buffer p50 `490.79 ms`, wins `3/6` for default-as-first."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_fastcmd_ab256 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=6 --compare-env=QWEN35_PREFILL_FAST_CMD`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or command-buffer bridge changes
+**adversary:** "The remaining prefill gap is not command-buffer creation overhead at current grouping. The temporary code was removed; focus on weight-traffic/matmul throughput or eliminating CPU hidden round-trips structurally."
+
 ### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
 **status:** refuted
 **trust:** {F:0.78, G:narrow, R:0.74}
