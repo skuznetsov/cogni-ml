@@ -120,6 +120,9 @@
   - [x] Falsifier: removing the inner `simdgroup_barrier(mem_none)` calls from the Q4_K H16 prefill GEMM passed focused Qwen specs (`14 examples, 0 failures`) but regressed guarded pp64 attribution from baseline p50 `151.73 ms` to `154.49 ms`, so keep the barriers
   - [x] Add a guarded paired decode A/B harness for env-tuned wave experiments; guarded trials confirm `QWEN35_WAVE_CHUNK_LAYERS=2` beats unchunked `0` by `~1.34 ms/tok` (`6/6` wins), while `2` vs `4` and `1` vs `2` remain neutral/noisy, so keep default `2`
   - [x] Falsifier: writing Q4 FFN pair input as H16 directly from add+RMSNorm was exact in focused specs, but pp256 paired A/B was neutral (`506.53 ms` default vs `506.29 ms` opt-in, wins `5/10`), so the separate conversion kernel is not the current wall
+  - [x] Relaxed-load baseline after CPU-core clarification: sequential pp64 attribution remains stable at p50 `150.80 ms` / `424.39 tok/s`, pp256 at p50 `486.56 ms` / `526.14 tok/s`; matched pp64/gen64 reports native prefill `422.41 tok/s` p50 vs llama.cpp `461.35 tok/s` (`-8.44%`) and native decode `46.59 tok/s` p50 vs llama.cpp `44.38 tok/s` (`+4.98%`)
+  - [x] Falsifier: nearby decode scheduler/glue knobs do not recover the missing margin: `QWEN35_WAVE_CHUNK_LAYERS=3` is neutral vs default `2` (`4/8`, delta `+0.013 ms/tok`), `QWEN35_WAVE_FAST_CMD=1` is neutral vs off (`3/6`, delta `-0.018 ms/tok`), `QWEN35_REC_CONVSHIFT_FUSED=1` is slightly worse/noisy (`3/8`, delta `+0.025 ms/tok`), and `QWEN35_DN_POST_FUSED=1` is neutral (`3/8`, delta `-0.014 ms/tok`)
+  - [x] Falsifier: matching llama.cpp's Q6_K GEMV `NR0=2` passed focused specs but slowed decode sync profile (`25.67 ms/tok` vs `24.60 ms/tok` old binary in same sequence), so keep local `MV6_NR0=1`
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

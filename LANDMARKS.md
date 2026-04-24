@@ -3079,3 +3079,60 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, benchmark harness, or Q4 pair route changes
 **note:** This is another conversion-elimination falsifier. The branch was removed; future exact prefill wins need to reduce dominant quantized weight traffic or change the lower-level Q4/Q6 tile work, not just move the F32->H16 cast into addnorm.
+
+### [LM-codex-RELAXED-CPU-BASELINE-20260424-1] Relaxed-load baseline after CPU-core clarification
+**status:** verified-baseline
+**trust:** {F:0.76, G:0.50, R:0.74}
+**context:** ml (Qwen prefill/decode benchmark)
+**evidence:**
+- claim: "After treating one busy M2 CPU core as normal host activity rather than a hard benchmark blocker, sequential relaxed-load prefill attribution stayed consistent with the guarded baseline: pp64 p50 `150.80 ms` / `424.39 tok/s`, 10 Metal syncs, logical traffic mix `90.69%` matmul / `9.31%` conversion."
+  source: `/tmp/qwen35_prefill_attribution_relaxed --prompt=64 --warmup=2 --reps=5 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, power state, benchmark harness, or Qwen35 prefill path changes
+- claim: "Sequential relaxed pp256 prefill attribution measured p50 `486.56 ms` / `526.14 tok/s`, 10 Metal syncs, logical traffic mix `73.31%` matmul / `26.69%` conversion."
+  source: `/tmp/qwen35_prefill_attribution_relaxed --prompt=256 --warmup=1 --reps=3 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, power state, benchmark harness, or Qwen35 prefill path changes
+- claim: "Relaxed matched prompt64/gen64 benchmark measured native prefill p50 `422.41 tok/s` vs llama.cpp `461.35 tok/s` (`-8.44%`), and native decode p50 `46.59 tok/s` vs llama.cpp `44.38 tok/s` (`+4.98%`)."
+  source: `/tmp/benchmark_qwen_vs_llama_relaxed --prompt=64 --gen=64 --warmup=2 --reps=5 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, llama.cpp build/version, benchmark harness, or Qwen35 prefill/decode path changes
+**note:** Relaxed-load evidence is useful for iteration on a busy desktop but weaker than `--require-quiet` evidence. Do not use it to claim a public speedup unless a guarded rerun agrees.
+
+### [LM-codex-DECODE-GLUE-KNOBS-FALSIFIER-1] Decode scheduler/glue knobs are not the next win
+**status:** verified-falsifier
+**trust:** {F:0.76, G:0.44, R:0.74}
+**context:** ml (Qwen decode wave scheduling)
+**evidence:**
+- claim: "Changing `QWEN35_WAVE_CHUNK_LAYERS` from default `2` to `3` is neutral: paired prompt64/gen64 A/B measured A mean `23.009 ms/tok` vs B mean `22.997 ms/tok`, wins `4/8`, delta `+0.013 ms/tok`."
+  source: `/tmp/qwen35_ab_profile_guarded --env=QWEN35_WAVE_CHUNK_LAYERS --a=2 --b=3 --prompt=64 --gen=64 --trials=8 --warmup=1 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: decode wave scheduler, host load, or benchmark harness changes
+- claim: "`QWEN35_WAVE_FAST_CMD=1` remains neutral vs off on decode: paired A/B measured A mean `22.971 ms/tok` vs B mean `22.989 ms/tok`, wins `3/6`, delta `-0.018 ms/tok`."
+  source: `/tmp/qwen35_ab_profile_guarded --env=QWEN35_WAVE_FAST_CMD --a=1 --b=0 --prompt=64 --gen=64 --trials=6 --warmup=1 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Metal command-buffer behavior or benchmark harness changes
+- claim: "`QWEN35_REC_CONVSHIFT_FUSED=1` is not a decode win: paired A/B measured fused A mean `22.912 ms/tok` vs default/off B mean `22.887 ms/tok`, wins `3/8`, delta `+0.025 ms/tok`."
+  source: `/tmp/qwen35_ab_profile_guarded --env=QWEN35_REC_CONVSHIFT_FUSED --a=1 --b=0 --prompt=64 --gen=64 --trials=8 --warmup=1 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: recurrent conv-shift kernels, decode wave scheduler, or benchmark harness changes
+- claim: "`QWEN35_DN_POST_FUSED=1` is neutral in the current decode wave: paired A/B measured A mean `23.200 ms/tok` vs B mean `23.214 ms/tok`, wins `3/8`, delta `-0.014 ms/tok`."
+  source: `/tmp/qwen35_ab_profile_guarded --env=QWEN35_DN_POST_FUSED --a=1 --b=0 --prompt=64 --gen=64 --trials=8 --warmup=1 --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: DeltaNet post-fusion kernels, decode wave scheduler, or benchmark harness changes
+**note:** These measurements point back to quantized GEMV traffic. Retuning command-buffer chunks or small glue kernels is now a micro-optimization trap unless a new trace shows scheduler overhead rising again.
+
+### [LM-codex-Q6-NR2-FALSIFIER-1] Q6_K GEMV NR0=2 is slower on local decode
+**status:** verified-falsifier
+**trust:** {F:0.72, G:0.38, R:0.68}
+**context:** ml (Qwen decode kernel optimization)
+**evidence:**
+- claim: "A temporary branch changed local `MV6_NR0` from `1` to llama.cpp-style `2` in `simd_mv_q6k_f32`. Focused Qwen forward/DeltaNet specs still passed (`14 examples, 0 failures`)."
+  source: temporary `src/ml/gguf/kernels/gemm_q56k.metal` branch and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6nr2_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q6_K GEMV kernel, Metal compiler, or Qwen35 decode path changes
+- claim: "The branch slowed same-sequence decode sync profile: old binary `MV6_NR0=1` measured `24.60 ms/tok`, while new `MV6_NR0=2` measured `25.67 ms/tok`; the branch also increased encode accounting. This was not a strict interleaved A/B, so the falsifier is narrower than the guarded env-based ones."
+  source: `QWEN35_PROFILE_TOP1=1 /tmp/qwen35_sync_profile_relaxed 64 16 && QWEN35_PROFILE_TOP1=1 /tmp/qwen35_sync_profile_q6nr2 64 16` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Metal compiler, Q6_K GEMV implementation, or decode wave scheduler changes
+**note:** Keep local `MV6_NR0=1`. This is one of the cases where blindly matching llama.cpp launch geometry is worse on the M2 Max local path.
