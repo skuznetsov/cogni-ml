@@ -2,6 +2,7 @@ require "json"
 require "option_parser"
 require "../src/ml/bench_load_guard"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_weights"
 
 MODEL_PATH  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
@@ -52,6 +53,60 @@ def measure_native_prefill(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps :
     tok_s_avg: (n_prompt * 1000.0) / avg_ms,
     tok_s_p50: (n_prompt * 1000.0) / p50_ms,
   )
+end
+
+def measure_native_prefill_cached(w : ML::GGUF::Qwen35Weights,
+                                  model : String,
+                                  n_prompt : Int32,
+                                  reps : Int32,
+                                  warmup : Int32) : NativeStats
+  hp = w.hparams
+  prompt = Array(Int32).new(n_prompt) { |i| ((i * 7 + 11) % 1000).to_i32 }
+  root = File.tempname("qwen35-bench-prompt-cache")
+  Dir.mkdir_p(root)
+
+  begin
+    store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+    seeded = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
+    run_native_prefill(w, prompt, seeded)
+    model_id = ML::GGUF::Qwen35PromptCache.short_hash("bench-model\0#{model}")
+    tokenizer_id = "synthetic-token-ids-v1"
+    entry = store.save(
+      session_id: "benchmark",
+      model_id: model_id,
+      tokenizer_id: tokenizer_id,
+      prompt_text: "",
+      token_ids: prompt,
+      state: seeded,
+    )
+
+    warmup.times do
+      restored = store.restore(entry, hp)
+      raise "prompt-cache restore layer mismatch" unless restored.layers.size == hp.n_layer
+    end
+
+    times = Array(Float64).new(reps)
+    reps.times do
+      t0 = Time.instant
+      restored = store.restore(entry, hp)
+      raise "prompt-cache restore layer mismatch" unless restored.layers.size == hp.n_layer
+      times << (Time.instant - t0).total_milliseconds
+    end
+
+    sorted = times.sort
+    avg_ms = times.sum / times.size
+    p50_ms = percentile(sorted, 50)
+    p95_ms = percentile(sorted, 95)
+    NativeStats.new(
+      avg_ms: avg_ms,
+      p50_ms: p50_ms,
+      p95_ms: p95_ms,
+      tok_s_avg: (n_prompt * 1000.0) / avg_ms,
+      tok_s_p50: (n_prompt * 1000.0) / p50_ms,
+    )
+  ensure
+    FileUtils.rm_rf(root) if Dir.exists?(root)
+  end
 end
 
 def run_native_prefill(w : ML::GGUF::Qwen35Weights,
@@ -142,6 +197,7 @@ n_gpu_layers = 99
 threads = 8
 flash_attn = false
 native_decode_top1 = true
+native_prefill_cache = false
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
@@ -160,6 +216,7 @@ OptionParser.parse do |p|
   p.on("--threads=N", "llama.cpp CPU threads (default: 8)") { |v| threads = v.to_i }
   p.on("--flash-attn", "Enable flash attention in llama.cpp") { flash_attn = true }
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
+  p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
@@ -181,7 +238,11 @@ end
 
 w = ML::GGUF::Qwen35Weights.from_gguf(model)
 
-native_prefill = measure_native_prefill(w, n_prompt, reps, warmup)
+native_prefill = if native_prefill_cache
+                   measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
+                 else
+                   measure_native_prefill(w, n_prompt, reps, warmup)
+                 end
 native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_top1)
 
 llama_prefill = run_llama_bench(llama_bench, model, n_prompt, 0, reps, n_gpu_layers, threads, flash_attn)
@@ -190,7 +251,8 @@ llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers,
 puts "Qwen 3.5 9B benchmark vs llama.cpp"
 puts "model: #{model}"
 puts "llama-bench: #{llama_bench}"
-puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} native_prefill=chunked_prompt_plus_final_top1 native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
+native_prefill_mode = native_prefill_cache ? "prompt_cache_restore_after_seed" : "chunked_prompt_plus_final_top1"
+puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
 puts
 puts "Prefill"
 puts "  cogni-ml:  avg=#{native_prefill.avg_ms.round(2)} ms  p50=#{native_prefill.p50_ms.round(2)} ms  p95=#{native_prefill.p95_ms.round(2)} ms  avg=#{native_prefill.tok_s_avg.round(2)} tok/s  p50=#{native_prefill.tok_s_p50.round(2)} tok/s"

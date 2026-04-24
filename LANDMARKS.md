@@ -2827,6 +2827,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: pg_sorted_heap table AM naming, schema, or PostgreSQL shard integration changes
 **note:** This avoids repeated prompt prefill for exact hits and reduces repeated prefill for shared-prefix prompts. Live PostgreSQL execution, approximate KV recall, and layerwise prefill microbatching remain separate work.
 
+### [LM-codex-QWEN35-PROMPT-CACHE-BENCH-1] Prompt-cache restore beats llama.cpp for repeated prompts
+**status:** verified-benchmark-mode
+**trust:** {F:0.78, G:0.56, R:0.70}
+**context:** ml (Qwen 3.5 prompt-cache benchmark)
+**evidence:**
+- claim: "Added `--native-prefill-cache` to `bin/benchmark_qwen_vs_llama.cr`. The mode seeds the exact prompt cache once, then measures restoring the saved `.qkv` state as the native prefill replacement for repeated/session prompts."
+  source: `bin/benchmark_qwen_vs_llama.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, prompt-cache artifact format, or prefill state semantics changes
+- claim: "The prompt-cache spec gate still passes after adding the benchmark mode."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_cachebench_spec crystal spec spec/qwen35_prompt_cache_spec.cr --link-flags=...` -> `5 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt-cache specs, state snapshot format, or restore path changes
+- claim: "Matched pp64/gen64 cache benchmark under the same harness reports cached native prefill p50 `52.28 ms` / `1224.28 tok/s` vs llama.cpp `432.72 tok/s`, a `+182.93%` gap. Decode stayed positive at `+4.6%`."
+  source: `/tmp/benchmark_qwen_vs_llama_cache --prompt=64 --gen=64 --warmup=1 --reps=3 --native-prefill-cache --load-warning-threshold=150 --load-total-warning-threshold=500` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, disk/cache location, prompt-cache snapshot size, or llama.cpp benchmark changes
+**note:** This is the useful paradigm shift for repeated prompts and session resumes: eliminate first-run prefill by restoring exact state. It must not be compared against llama.cpp as a first-run prefill kernel win; first-run pp64 still needs lower Q4/FFN wall time.
+
 ### [LM-codex-Q56K-BATCH-GEMM-1] Q5/Q6 simdgroup batch GEMM for prefill chunks
 **status:** verified-default
 **trust:** {F:0.9, G:0.62, R:0.9}
