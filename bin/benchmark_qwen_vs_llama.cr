@@ -1,5 +1,6 @@
 require "json"
 require "option_parser"
+require "../src/ml/bench_load_guard"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
 
@@ -141,6 +142,7 @@ n_gpu_layers = 99
 threads = 8
 flash_attn = false
 native_decode_top1 = true
+load_warning_threshold = 50.0
 
 OptionParser.parse do |p|
   p.banner = "Usage: benchmark_qwen_vs_llama [options]"
@@ -154,10 +156,13 @@ OptionParser.parse do |p|
   p.on("--threads=N", "llama.cpp CPU threads (default: 8)") { |v| threads = v.to_i }
   p.on("--flash-attn", "Enable flash attention in llama.cpp") { flash_attn = true }
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
+  p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
 end
 
 raise "Model not found: #{model}" unless File.exists?(model)
 raise "llama-bench not found: #{llama_bench}" unless File.exists?(llama_bench)
+
+ML::BenchLoadGuard.warn_if_busy(load_warning_threshold)
 
 w = ML::GGUF::Qwen35Weights.from_gguf(model)
 

@@ -1,4 +1,5 @@
 require "option_parser"
+require "../src/ml/bench_load_guard"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_metal"
@@ -11,6 +12,7 @@ warmup = 1
 reps = 3
 compare_env = nil.as(String?)
 compare_off = "1"
+load_warning_threshold = 50.0
 
 OptionParser.parse do |p|
   p.banner = "Usage: qwen35_prefill_attribution [--model PATH] [--prompt N] [--warmup N] [--reps N] [--compare-env NAME]"
@@ -20,6 +22,7 @@ OptionParser.parse do |p|
   p.on("--reps=N", "Measured repetitions for wall timing (default: 3)") { |v| reps = v.to_i }
   p.on("--compare-env=NAME", "Also run A/B with NAME unset vs NAME=1") { |v| compare_env = v }
   p.on("--compare-off=VALUE", "Off value for --compare-env (default: 1)") { |v| compare_off = v }
+  p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -27,6 +30,8 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt must be positive" unless prompt_len > 0
 raise "--warmup must be non-negative" unless warmup >= 0
 raise "--reps must be positive" unless reps > 0
+
+ML::BenchLoadGuard.warn_if_busy(load_warning_threshold)
 
 def prompt_tokens(n : Int32) : Array(Int32)
   Array(Int32).new(n) { |i| ((i * 7 + 11) % 1000).to_i32 }
