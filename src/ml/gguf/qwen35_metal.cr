@@ -338,6 +338,16 @@ module ML
                 s << sprintf("    %-34s      total  %.2f MiB logical traffic\n",
                              "conversion", total_conversion_bytes / 1_048_576.0)
               end
+              unless @@matmul_weight_bytes.empty? && @@conversion_bytes.empty?
+                total_weight_bytes = @@matmul_weight_bytes.values.sum
+                total_conversion_bytes = @@conversion_bytes.values.sum
+                total_logical_bytes = total_weight_bytes + total_conversion_bytes
+                if total_logical_bytes > 0
+                  s << sprintf("  logical traffic mix: matmul %.2f%%  conversion %.2f%%\n",
+                               total_weight_bytes * 100.0 / total_logical_bytes,
+                               total_conversion_bytes * 100.0 / total_logical_bytes)
+                end
+              end
               s << sprintf("  cpu_fallback matvecs: %d\n", @@cpu_fallback)
               s << sprintf("  total metal syncs: %d\n", total_syncs)
             end
