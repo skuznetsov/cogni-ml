@@ -322,8 +322,9 @@ module ML
                 s << "  matmul shapes:\n"
                 total_weight_bytes = @@matmul_weight_bytes.values.sum
                 @@matmul_counts.keys.sort_by { |name| {-@@matmul_weight_bytes[name], name} }.each do |name|
-                  s << sprintf("    %-34s %4d calls  %.2f MiB logical weights\n",
-                               name, @@matmul_counts[name], @@matmul_weight_bytes[name] / 1_048_576.0)
+                  pct = total_weight_bytes > 0 ? @@matmul_weight_bytes[name] * 100.0 / total_weight_bytes : 0.0
+                  s << sprintf("    %-34s %4d calls  %.2f MiB logical weights  %.2f%%\n",
+                               name, @@matmul_counts[name], @@matmul_weight_bytes[name] / 1_048_576.0, pct)
                 end
                 s << sprintf("    %-34s      total  %.2f MiB logical weights\n",
                              "matmul", total_weight_bytes / 1_048_576.0)
@@ -332,8 +333,9 @@ module ML
                 s << "  conversion kernels:\n"
                 total_conversion_bytes = @@conversion_bytes.values.sum
                 @@conversion_counts.keys.sort_by { |name| {-@@conversion_bytes[name], name} }.each do |name|
-                  s << sprintf("    %-34s %4d calls  %.2f MiB logical traffic\n",
-                               name, @@conversion_counts[name], @@conversion_bytes[name] / 1_048_576.0)
+                  pct = total_conversion_bytes > 0 ? @@conversion_bytes[name] * 100.0 / total_conversion_bytes : 0.0
+                  s << sprintf("    %-34s %4d calls  %.2f MiB logical traffic  %.2f%%\n",
+                               name, @@conversion_counts[name], @@conversion_bytes[name] / 1_048_576.0, pct)
                 end
                 s << sprintf("    %-34s      total  %.2f MiB logical traffic\n",
                              "conversion", total_conversion_bytes / 1_048_576.0)
