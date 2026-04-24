@@ -376,6 +376,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: local command output
   verified_at: 2026-04-24
   decay_trigger: benchmark harness or power state changes
+- claim: "Matched pp256/gen16 comparison after the default change measured cogni-ml prefill p50 493.41 tok/s versus llama.cpp 575.71 tok/s; cogni-ml decode stayed ahead at 48.07 tok/s versus llama.cpp 45.32 tok/s."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_chunk1024 crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/benchmark_qwen_vs_llama.cr -- --prompt=256 --gen=16 --reps=3 --warmup=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, llama.cpp build, or power state changes
 **adversary:** "Larger chunks increase peak scratch memory; keep `QWEN35_PREFILL_CHUNK_SIZE` override for smaller devices or pathological long prompts."
 
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
