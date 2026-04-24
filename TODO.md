@@ -156,6 +156,7 @@
   - [x] Falsifier: switching fallback-bound low-gamma verifier cycles from `chunk-inplace` to forked `chunk` removes target backup but is not a win; high-accept regresses (`~15.8` -> `~16.0 ms/tok`) and reject prompts are neutral, so keep `chunk-inplace` default
   - [x] Falsifier: raising initial speculative `gamma` from `4` to `5` or `6` is worse under the current fast-regrow schedule; high-accept prompts slow slightly, `def fibonacci(n):` regresses (`gamma=5` verifies one extra reject row, `gamma=6` breaks into many low-gamma cycles), and partial-reject prompts lose acceptance efficiency
   - [x] Falsifier: enabling batched lm-head top1 only for large verifier chunks (`>=8/16/24/32` rows) is still slower than per-row fused top1; high-accept target verifier rises from `~552-556 ms` to `~627-675 ms`, so leave `QWEN35_HEAD_TOP1_ROWS` default-off
+  - [x] Refresh: lowering Q4_K pair H16 prefill threshold to b64 is still not a robust pp64 win; it halves FFN upgate conversion accounting but wall remains neutral/noisy (`~156.3-156.6 ms` default vs `~156.1-156.3 ms` branch under host load), so keep pair route gated at batch `>=256`
   - [ ] Next: target true batched speculative verification and lower-level Q4/Q6 kernel changes; Q8_0 draft is now closer, but exact speculative still trails plain target decode until verifier overhead is cut
 
 ## Deferred research backlog — efficient attention / long context

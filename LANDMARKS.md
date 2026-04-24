@@ -3428,3 +3428,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, output head kernel, or speculative gamma schedule changes
 **note:** Keep `QWEN35_HEAD_TOP1_ROWS` default-off. The current per-row fused top1 remains better than the available row-batched top1, even when restricted to gamma 16/32 verifier chunks.
+
+### [LM-codex-Q4-PAIR-B64-REFRESH-1] Q4 pair H16 at b64 remains neutral/noisy
+**status:** verified-falsifier
+**trust:** {F:0.68, G:0.36, R:0.62}
+**context:** ml (Qwen prefill Q4_K FFN gate/up optimization)
+**evidence:**
+- claim: "A refreshed temporary branch lowered `Q4_PAIR_H16_MIN_BATCH` from `256` to `64`, activating the shared H16 input conversion for Q4_K FFN gate/up at pp64. The route changed conversion attribution from `prefill.rec.ffn_upgate f32_to_f16 q4_gemm_input` 48 calls / `72 MiB` to `q4_pair_input` 24 calls / `36 MiB`."
+  source: temporary `src/ml/gguf/qwen35_metal.cr` branch and `/tmp/qwen35_prefill_attribution_q4pair64 --prompt=64 --warmup=1 --reps=3` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q4 pair route, conversion kernels, or prefill attribution harness changes
+- claim: "Despite lower conversion accounting, pp64 wall remained neutral/noisy under host load: current default measured p50 `156.27` and `156.55 ms`; b64 pair branch measured p50 `156.30` and `156.09 ms`. This is too small and noisy to promote, especially given earlier stronger pp64 pair regressions."
+  source: interleaved old binary `/tmp/qwen35_prefill_attribution_current2` vs temporary `/tmp/qwen35_prefill_attribution_q4pair64` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Q4 pair kernel, or prefill chunk schedule changes
+**note:** Keep `Q4_PAIR_H16_MIN_BATCH=256`. Pair conversion reuse remains useful for larger prompts but not robust enough for pp64 default.
