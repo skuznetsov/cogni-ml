@@ -506,6 +506,21 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: clean-load rerun, llama.cpp rebuild, or Q4_K b64 kernel rewrite
 **adversary:** "This is a lower-weight-traffic idea that likely lost to lower occupancy/register pressure and scheduling effects. Do not reintroduce a b64 Q4_K route without a paired benchmark harness showing both pp64 and longer prompts improve; the temporary code was removed."
 
+### [LM-prefill-PAIRED-AB-HARNESS-1] Prefill compare-env uses paired interleaving
+**status:** verified
+**trust:** {F:0.84, G:medium, R:0.82}
+**context:** ml (Qwen35 prefill benchmarking)
+**evidence:**
+- claim: "`bin/qwen35_prefill_attribution.cr --compare-env` now alternates default and alternate env settings inside each measured pair, balances pair order by trial parity, and reports pair wins."
+  source: local patch to `bin/qwen35_prefill_attribution.cr`
+  verified_at: 2026-04-24
+  decay_trigger: prefill attribution harness rewrite
+- claim: "Smoke verification completed on pp8 with `QWEN35_PREFILL_FINAL_CHUNK_OFF`: paired output reported `wins=2/2` and preserved the normal profile report."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_attr_paired crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=8 --warmup=1 --reps=2 --compare-env=QWEN35_PREFILL_FINAL_CHUNK_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: harness output format or env toggle semantics change
+**adversary:** "This does not remove the need for matched llama benchmarks before public claims; it only makes local env-toggle prefill decisions less vulnerable to block-order drift."
+
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
 **trust:** {F:0.65, G:medium, R:0.70}

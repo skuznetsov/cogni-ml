@@ -67,6 +67,43 @@ def measure_wall(w, prompt, warmup : Int32, reps : Int32) : Array(Float64)
   Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false) }
 end
 
+def measure_paired_env(w,
+                       prompt,
+                       env : String,
+                       alternate_value : String,
+                       warmup : Int32,
+                       reps : Int32) : {Array(Float64), Array(Float64)}
+  default = [] of Float64
+  alternate = [] of Float64
+
+  warmup.times do
+    set_env(env, nil)
+    run_prefill_once(w, prompt, profile: false)
+    set_env(env, alternate_value)
+    run_prefill_once(w, prompt, profile: false)
+  end
+
+  reps.times do |i|
+    if i.even?
+      set_env(env, nil)
+      a = run_prefill_once(w, prompt, profile: false)
+      set_env(env, alternate_value)
+      b = run_prefill_once(w, prompt, profile: false)
+    else
+      set_env(env, alternate_value)
+      b = run_prefill_once(w, prompt, profile: false)
+      set_env(env, nil)
+      a = run_prefill_once(w, prompt, profile: false)
+    end
+    default << a
+    alternate << b
+  end
+
+  {default, alternate}
+ensure
+  set_env(env, nil)
+end
+
 w = ML::GGUF::Qwen35Weights.from_gguf(model)
 prompt = prompt_tokens(prompt_len)
 
@@ -88,17 +125,15 @@ printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
 if env = compare_env
   old = ENV[env]?
   begin
-    set_env(env, nil)
-    on = measure_wall(w, prompt, warmup, reps)
-    set_env(env, compare_off)
-    off = measure_wall(w, prompt, warmup, reps)
+    on, off = measure_paired_env(w, prompt, env, compare_off, warmup, reps)
+    wins = on.zip(off).count { |a, b| a < b }
     puts
-    puts "A/B #{env}: default vs #{compare_off.inspect}"
+    puts "A/B #{env}: default vs #{compare_off.inspect} (paired interleaved)"
     printf "  default: avg=%.2f ms p50=%.2f ms %.2f tok/s\n",
       mean(on), percentile(on, 50), prompt_len * 1000.0 / percentile(on, 50)
-    printf "  off:     avg=%.2f ms p50=%.2f ms %.2f tok/s\n",
+    printf "  other:   avg=%.2f ms p50=%.2f ms %.2f tok/s\n",
       mean(off), percentile(off, 50), prompt_len * 1000.0 / percentile(off, 50)
-    printf "  delta default-off: %.2f ms\n", mean(on) - mean(off)
+    printf "  default-other: %.2f ms  wins=%d/%d\n", mean(on) - mean(off), wins, reps
   ensure
     set_env(env, old)
   end
