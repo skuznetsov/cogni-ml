@@ -97,6 +97,7 @@
   - [x] Add scoped matmul attribution for prefill/decode phases; pp256 confirms `prefill.rec.ffn_upgate` dominates logical weight traffic (`1296 MiB`), followed by recurrent Q5 projection (`528 MiB`) and recurrent FFN-down (`796.5 MiB` combined Q6/Q4); decode prompt64/gen4 shows the same recurrent FFN/upgate and projection dominance (`5184 MiB` and `2112 MiB`)
   - [x] Falsifier: lowering the GEMM route threshold so b8 prefill uses Q4/Q5/Q6 GEMM switches the routes correctly but slows pp8 (`140.70 ms` p50 default GEMV-at-b8 vs `158.74 ms` p50 GEMM-at-b8); keep `GEMM_BATCH_THRESHOLD=8`
   - [x] Falsifier: fusing final full-attn-last and lm-head top1 into one command buffer reduced pp64 syncs (`10` → `9`) but slowed wall reps in sequential release checks (`162.32 ms` p50 off vs `165.67 ms` p50 fused), so the removed sync is not worth the larger final command buffer
+  - [x] Falsifier: a 256-thread Q4_K batch-64 GEMM reduced nominal batch tiles but did not survive benchmark adversary; same-process attribution was slightly positive (`164.51 ms` default vs `165.41 ms` off), but matched llama benchmark regressed (`378.72 tok/s` b64 vs `394.94 tok/s` current), so the branch was removed
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

@@ -483,6 +483,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: Metal command-buffer overhead, head top1 kernel, final route, or benchmark harness changes
 **adversary:** "This is another boundary-fusion trap: removing a synchronization point is not automatically a win when it moves lm-head work into a larger command buffer and changes scheduling. The branch was removed; only this falsifier remains."
 
+### [LM-prefill-Q4-B64-GEMM-FALSIFIER] Wider Q4_K batch-64 GEMM is not a default prefill win
+**status:** refuted
+**trust:** {F:0.80, G:narrow, R:0.76}
+**context:** ml (Qwen35 prefill Q4_K GEMM)
+**evidence:**
+- claim: "A bounded exact branch added a 256-thread `simd_mm_q4k_f32_b64` kernel that covers 64 batch rows per threadgroup, so pp64 Q4_K GEMM reads each output-row weight tile once instead of once per 32-token batch tile."
+  source: temporary local patch to `src/ml/gguf/kernels/gemm_q4k.metal`, `src/ml/gguf/qwen35_metal.cr`, and `spec/qwen35_forward_spec.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K GEMM tiling, Metal compiler scheduling, or prefill chunk routing changes
+- claim: "Correctness passed with the b64 route enabled: targeted forward/DeltaNet specs returned `15 examples, 0 failures`; a fuller opt-in gate returned `34 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_b64_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_b64_gate QWEN35_Q4K_B64_GEMM=1 crystal spec ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 prefill specs or route toggles change
+- claim: "Same-process pp64 attribution was only weakly positive for b64: default b64 p50 `164.51 ms` versus b64-off p50 `165.41 ms` over 10 reps."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_b64_default_ab crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=3 --reps=10 --compare-env=QWEN35_Q4K_B64_GEMM_OFF --compare-off=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, host load, or Q4_K GEMM route changes
+- claim: "Matched llama benchmark adversary did not support promotion: b64 default measured native pp64 p50 `378.72 tok/s`, while the current b32 route with `QWEN35_Q4K_B64_GEMM_OFF=1` measured `394.94 tok/s` immediately after; decode was unchanged."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_q4b64 crystal run --release ... bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1` and same with `QWEN35_Q4K_B64_GEMM_OFF=1`
+  verified_at: 2026-04-24
+  decay_trigger: clean-load rerun, llama.cpp rebuild, or Q4_K b64 kernel rewrite
+**adversary:** "This is a lower-weight-traffic idea that likely lost to lower occupancy/register pressure and scheduling effects. Do not reintroduce a b64 Q4_K route without a paired benchmark harness showing both pp64 and longer prompts improve; the temporary code was removed."
+
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
 **trust:** {F:0.65, G:medium, R:0.70}
