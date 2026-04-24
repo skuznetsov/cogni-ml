@@ -116,6 +116,7 @@
   - [x] Add conversion-kernel attribution to the prefill profile report so future quiet runs can separate duplicated `F32<->F16` activation/output traffic from quantized weight traffic; smoke pp16 report shows per-row percentages, matmul/conversion logical traffic totals, and mix (`97.50%` matmul / `2.50%` conversion)
   - [x] Harden benchmark quiet-mode checks with both per-process and aggregate CPU thresholds (`--load-warning-threshold`, `--load-total-warning-threshold`) so noisy multi-process desktops do not silently pass `--require-quiet`; aggregate warnings now print top CPU contributors
   - [x] Add `--wait-quiet-ms` / `--quiet-poll-ms` to Qwen35 benchmark harnesses so queued A/B runs can wait for a quiet host before measuring instead of immediately aborting or recording noisy timings
+  - [x] Guarded baseline refresh: with `--require-quiet --wait-quiet-ms=60000`, pp64 attribution reports p50 `151.73 ms` / `421.80 tok/s`, traffic mix `90.69%` matmul / `9.31%` conversion; matched llama.cpp prompt64/gen64 reports native prefill `426.01 tok/s` p50 vs llama `461.90 tok/s` (`-7.77%`) and native decode `47.60 tok/s` p50 vs llama `45.35 tok/s` (`+4.96%`)
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context
@@ -161,6 +162,6 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - **Active phase:** 4 (optimization: beat llama.cpp)
 - **Active task:** 4.9 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
-- **Latest verified prefill tweak:** large-batch Q4_K FFN gate/up half-input pair conversion reuse (`QWEN35_Q4K_PAIR_H16_GEMM_OFF=1` disables it, active at batch `>=256`) on top of Q4_K half-input GEMM and Q5_K recurrent-qkv half-output conv; latest isolated pp256 A/B shows `~1.56 ms` avg / `~2.21 ms` p50 win over the off path
+- **Latest guarded benchmark:** prompt64/gen64 reps=5/warmup=2 with `--require-quiet --wait-quiet-ms=60000`: native prefill `426.01 tok/s` p50 vs llama.cpp `461.90 tok/s` (`-7.77%`), native decode `47.60 tok/s` p50 vs llama.cpp `45.35 tok/s` (`+4.96%`)
 - **Blocked:** nothing
 - **Last updated:** 2026-04-24

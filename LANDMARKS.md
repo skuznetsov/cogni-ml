@@ -3011,3 +3011,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: report formatting or conversion path changes
 **note:** This is measurement infrastructure, not a speedup. It supports the next quiet-host phase by quantifying whether a proposed conversion-elimination branch can matter before changing kernels.
+
+### [LM-codex-GUARDED-BASELINE-20260424-1] Guarded pp64 baseline after attribution/cleanup
+**status:** verified-baseline
+**trust:** {F:0.86, G:0.56, R:0.84}
+**context:** ml (Qwen prefill/decode benchmark)
+**evidence:**
+- claim: "Guarded prefill attribution for prompt=64 measured p50 `151.73 ms` / `421.80 tok/s` with 10 Metal syncs. Logical traffic was matmul `3992.53 MiB`, conversion `409.88 MiB`, mix `90.69%` matmul / `9.31%` conversion. Top logical-weight row remains `prefill.rec.ffn_upgate q4_h16_gemm` at `32.46%` of matmul traffic."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_guarded_attr_build crystal build --release bin/qwen35_prefill_attribution.cr ... && /tmp/qwen35_prefill_attribution_guarded --prompt=64 --warmup=2 --reps=5 --require-quiet --wait-quiet-ms=60000 --quiet-poll-ms=1000` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load guard, benchmark harness, Qwen35 prefill path, or Metal kernels change
+- claim: "Guarded matched prompt64/gen64 benchmark measured native prefill p50 `426.01 tok/s` vs llama.cpp `461.90 tok/s` (`-7.77%`), and native decode p50 `47.60 tok/s` vs llama.cpp `45.35 tok/s` (`+4.96%`)."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_guarded_llama_build crystal build --release bin/benchmark_qwen_vs_llama.cr ... && /tmp/benchmark_qwen_vs_llama_guarded --prompt=64 --gen=64 --warmup=2 --reps=5 --require-quiet --wait-quiet-ms=60000 --quiet-poll-ms=1000` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load guard, llama.cpp build/version, benchmark harness, or Qwen35 prefill/decode path changes
+**note:** This supersedes earlier noisy matched runs. Decode is ahead of llama.cpp by about 5%; prefill is still behind by about 8%, and attribution says the remaining exact target is quantized matmul/work elimination, not conversion cleanup.
