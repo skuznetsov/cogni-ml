@@ -3413,3 +3413,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, verifier route, or fast-regrow schedule changes
 **note:** Keep initial `gamma=4`. The successful scheduler change is fast regrowth after gamma 8, not a larger first chunk.
+
+### [LM-codex-HEAD-TOP1-ROWS-MIN-FALSIFIER-1] Batched lm-head top1 is slower even only for large chunks
+**status:** verified-falsifier
+**trust:** {F:0.76, G:0.44, R:0.74}
+**context:** ml (Qwen speculative verifier output head)
+**evidence:**
+- claim: "A temporary branch added `QWEN35_HEAD_TOP1_ROWS_MIN` so the batched lm-head top1 route was used only for verifier chunks at or above thresholds `8`, `16`, `24`, or `32`, leaving small reject chunks on the per-row fused top1 path."
+  source: temporary `src/ml/gguf/qwen35_cpu.cr` branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: output head kernels, verifier chunk schedule, or Q6_K lm-head route changes
+- claim: "Even at large thresholds, the batched route regressed high-accept exact speculative verification. Default per-row fused top1 measured target_verify about `552-556 ms`; thresholds `8/16` measured `~662-675 ms`, and thresholds `24/32` measured `~627 ms`. Wall time moved from about `15.8-16.2 ms/tok` to `17.2-17.8 ms/tok`."
+  source: `/tmp/qwen35_speculative_accept_headrowsmin --tokens 64 --gamma 4 --max-gamma 32 "The capital of France is"`, varying `QWEN35_HEAD_TOP1_ROWS_MIN`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, output head kernel, or speculative gamma schedule changes
+**note:** Keep `QWEN35_HEAD_TOP1_ROWS` default-off. The current per-row fused top1 remains better than the available row-batched top1, even when restricted to gamma 16/32 verifier chunks.
