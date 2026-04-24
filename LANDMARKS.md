@@ -3659,6 +3659,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: earlier `build/tmp/qwen35_headfull_default_ab.cr` and `/tmp/qwen35_speculative_accept_headgpu ... --verify staged` runs on 2026-04-24, downgraded after all-row parity falsifier
   verified_at: 2026-04-24
   decay_trigger: exact full-row verifier implementation or margin-guard validation
+- claim: "A follow-up attempt to switch the full-row route to f32 output plus f32 top1 reduce did not rescue exactness. Focused specs still passed (`17 examples, 0 failures`), but the live speculative harness diverged on `The capital of France is` at token 17 (`13` in plain target greedy vs `32` in the f32-output full-row route), so the temporary code was removed."
+  source: `QWEN35_HEAD_FULL_ROWS=1 /tmp/qwen35_spec_fullrows_f32_fixed --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace 'The capital of France is'` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: exact full-row verifier implementation, f32 activation input path, or margin-guard validation
 **note:** The useful next direction is not default-on F16 batched logits; it is exact guarded batching: compute fast batched candidates, detect close top1/top2 margins, and fall back to exact F32 per-row top1 for ambiguous rows, or build a batched lm-head that preserves the greedy route's precision enough to pass all-row parity.
 
 ### [LM-codex-Q56-PREFILL-F32OUT-1] Q5/Q6 prefill GEMM can skip the f16-output conversion dispatch
