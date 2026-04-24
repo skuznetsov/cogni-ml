@@ -197,6 +197,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_max32_default --tokens 64 --gamma 4`, default prompt and `def fibonacci(n):`, plus `--gamma 8 --max-gamma 32` adversary run
   verified_at: 2026-04-24
   decay_trigger: adaptive policy, prompt acceptance distribution, verifier mode, or draft model changes
+- claim: "After an early rejection that will immediately enter target-only fallback, advancing the draft state is unused exact work. Skipping that draft step (`draft_skip=1`) improved `def fibonacci(n):` paired smokes from `20.85/21.54/21.60` to `20.78/20.75/21.40 ms/tok`; the high-acceptance default prompt has `draft_skip=0` and stayed unchanged within noise."
+  source: `/tmp/qwen35_speculative_accept_skipdraft --tokens 64 --gamma 4`, with and without `QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: early-reject policy, fallback policy, draft resync semantics, or adaptive gamma changes
 
 ## Graph Visualization
 
