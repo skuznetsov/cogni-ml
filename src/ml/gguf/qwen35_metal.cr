@@ -4602,6 +4602,75 @@ module ML
           result
         end
 
+        def self.rmsnorm_project_full_top1_rows(x : Array(Float32),
+                                                rows : Int32,
+                                                norm_weight : Array(Float32),
+                                                out_qw : QuantWeight,
+                                                eps : Float32) : Array({Int32, Float32})?
+          return nil unless out_qw.type.q6_k?
+          return nil unless out_qw.in_dim % QK_K == 0
+          return nil unless rows > GEMM_BATCH_THRESHOLD
+          hidden_dim = out_qw.in_dim
+          return nil unless x.size == rows * hidden_dim
+
+          ML::Metal::Device.init!
+
+          x_buf = Scratch.get(:head_full_rows_x, x.size.to_i64 * sizeof(Float32))
+          norm_w_buf = Scratch.get(:head_full_rows_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:head_full_rows_normed, x.size.to_i64 * sizeof(Float32))
+          logits_buf = Scratch.get(:head_full_rows_logits, (rows * out_qw.out_dim).to_i64 * sizeof(Float32))
+          x_buf.write(x)
+          norm_w_buf.write(norm_weight)
+
+          out_w_buf, out_w_off = weight_slot(out_qw)
+          out_pipe = gemv_pipeline_for(out_qw)
+          return nil if out_pipe.nil?
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_rmsnorm_rows(norm_enc, x_buf, norm_w_buf, normed_buf, hidden_dim, rows, eps)
+          norm_enc.end_encoding
+
+          out_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_matmul(out_enc, out_pipe, out_qw, normed_buf, logits_buf, out_w_buf, out_w_off, out_qw.in_dim, out_qw.out_dim, rows)
+          out_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          logits = read_shared_f32(logits_buf, rows * out_qw.out_dim)
+
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+
+          result = Array({Int32, Float32}).new(rows)
+          rows.times do |r|
+            base = r * out_qw.out_dim
+            best_id = 0
+            best = logits[base]
+            i = 1
+            while i < out_qw.out_dim
+              v = logits[base + i]
+              if v > best
+                best = v
+                best_id = i
+              end
+              i += 1
+            end
+            result << {best_id.to_i32, best}
+          end
+          result
+        end
+
         # Whole-token decode wave:
         #   embedding upload -> all 32 layers on GPU with ping-pong hidden buffers
         #   -> output RMSNorm + lm_head -> logits readback
