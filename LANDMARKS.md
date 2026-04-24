@@ -209,6 +209,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_skipdraft2 --tokens 64 --gamma {3,4} [--max-gamma 16|24]`, prompts `The capital of France is`, `Once upon a time`, `The quick brown fox`, `def fibonacci(n):`, on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: adaptive gamma policy, verifier chunk implementation, prompt acceptance distribution, or draft model changes
+- claim: "The exact early-reject and gamma=1 fast paths should apply to `--verify serial` as well as chunk verifiers. Enabling them makes serial useful for partial-reject profiling (`Once upon a time` serial-fast `21.77 ms/tok` vs chunk `22.31`, `The quick brown fox` `21.77` vs chunk `22.41`) while confirming serial is still bad for high-accept prompts (`28.83` vs chunk `19.34`)."
+  source: `/tmp/qwen35_speculative_accept_serialfast --tokens 64 --gamma 4 --verify serial|chunk-inplace`, prompts `Once upon a time`, `The quick brown fox`, `def fibonacci(n):`, `The capital of France is`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: serial verifier control flow, early-reject policy, or chunk verifier performance changes
 
 ## Graph Visualization
 

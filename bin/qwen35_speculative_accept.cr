@@ -180,7 +180,7 @@ while generated_ids.size < n_gen
   rejected = false
   cycle_done = false
 
-  if early_reject_enabled && verify_mode != "serial" && draft_next != target_next
+  if early_reject_enabled && draft_next != target_next
     will_plain_fallback_after_reject = plain_fallback_enabled &&
                                        skip_draft_before_fallback_enabled &&
                                        adaptive_gamma &&
@@ -203,7 +203,7 @@ while generated_ids.size < n_gen
     rejected = true
     early_rejects += 1
     cycle_done = true
-  elsif single_accept_fast_enabled && verify_mode != "serial" && cycle_gamma == 1 && draft_next == target_next
+  elsif single_accept_fast_enabled && cycle_gamma == 1 && draft_next == target_next
     accepted_token = draft_next
     generated_ids << accepted_token
     correction_or_accepted << accepted_token
