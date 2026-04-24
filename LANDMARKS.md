@@ -2116,3 +2116,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: Metal command-buffer path, host load, or DeltaNet wrapper changes
 **note:** This is not yet an end-to-end prefill speedup because the Qwen forward path still lacks layerwise hidden-state buffers and batched full-attention/FFN plumbing. It establishes the central recurrent primitive needed for that path.
+
+### [LM-codex-RECURRENT-PREP-CHUNK-1] Recurrent prefill prep primitives are chunked on Metal
+**status:** verified-primitive
+**trust:** {F:0.84, G:0.58, R:0.80}
+**context:** ml (Qwen prefill primitive)
+**evidence:**
+- claim: "Added chunked Metal kernels for Qwen35 recurrent prep: `qwen35_recurrent_conv_shift_chunk`, `qwen35_recurrent_ab_chunk`, and `qwen35_l2_heads_chunk`, plus `Qwen35Metal.recurrent_prep_chunk` wrapper. The wrapper emits token-major Q/K/V/g/beta arrays ready for `delta_net_chunk` and updates convolution state exactly across the chunk."
+  source: `src/ml/gguf/kernels/recurrent_qwen35.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent conv layout, alpha/beta transform, L2 norm semantics, or prefill tensor layout changes
+- claim: "Correctness against repeated CPU recurrent prep passed for an 8-token Qwen35-shaped chunk: max diffs q `5.96e-08`, k `5.96e-08`, v `7.45e-09`, g `1.19e-07`, beta `1.19e-07`, conv_state `0`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_recurrent_prep_spec crystal spec spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent prep spec, CPU reference formulas, or kernel launch geometry changes
+- claim: "Full Qwen gate stayed green with the new primitives present: `17 examples, 0 failures` across forward, DeltaNet, state snapshot, and prompt-cache specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_recurrent_prep_gate crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen forward path, prompt-cache replay, or Metal bridge changes
+- claim: "Microbench comparing eight repeated single-token recurrent prep wrapper calls to one 8-token chunk call measured p50 `2.0605 ms` vs `0.3000 ms`, a `6.87x` p50 speedup for the prep primitive under current upload/readback wrappers."
+  source: temporary `/tmp` Crystal microbench run with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_recurrent_prep_bench` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Metal command-buffer path, host load, or recurrent prep wrapper changes
+**note:** Together with [LM-codex-DN-CHUNK-PRIMITIVE-1], this covers the recurrent scan core and its per-token prep. End-to-end prefill still needs batched layer hidden-state flow, SSM output/post/FFN for all chunk tokens, and full-attention layer chunking.

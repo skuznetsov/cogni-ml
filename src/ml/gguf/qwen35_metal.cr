@@ -100,10 +100,13 @@ module ML
         @@add_vec_pipeline : ML::Metal::ComputePipeline?
         @@rmsnorm_vec_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_ab_pipeline : ML::Metal::ComputePipeline?
+        @@recurrent_ab_chunk_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_shift_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_pipeline : ML::Metal::ComputePipeline?
+        @@recurrent_conv_shift_chunk_pipeline : ML::Metal::ComputePipeline?
         @@l2_heads_pipeline : ML::Metal::ComputePipeline?
+        @@l2_heads_chunk_pipeline : ML::Metal::ComputePipeline?
         @@split_qgate_pipeline : ML::Metal::ComputePipeline?
         @@rmsnorm_heads_pipeline : ML::Metal::ComputePipeline?
         @@rope_partial_pipeline : ML::Metal::ComputePipeline?
@@ -542,6 +545,12 @@ module ML
           }
         end
 
+        private def self.recurrent_ab_chunk_pipeline : ML::Metal::ComputePipeline
+          @@recurrent_ab_chunk_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_ab_chunk") {
+            ML::Metal::ComputePipeline.new("qwen35_recurrent_ab_chunk", RECURRENT_SOURCE)
+          }
+        end
+
         private def self.recurrent_conv_pipeline : ML::Metal::ComputePipeline
           @@recurrent_conv_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv") {
             ML::Metal::ComputePipeline.new("qwen35_recurrent_conv", RECURRENT_SOURCE)
@@ -560,9 +569,21 @@ module ML
           }
         end
 
+        private def self.recurrent_conv_shift_chunk_pipeline : ML::Metal::ComputePipeline
+          @@recurrent_conv_shift_chunk_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv_shift_chunk") {
+            ML::Metal::ComputePipeline.new("qwen35_recurrent_conv_shift_chunk", RECURRENT_SOURCE)
+          }
+        end
+
         private def self.l2_heads_pipeline : ML::Metal::ComputePipeline
           @@l2_heads_pipeline ||= ML::Metal::PipelineCache.get("qwen35_l2_heads") {
             ML::Metal::ComputePipeline.new("qwen35_l2_heads", RECURRENT_SOURCE)
+          }
+        end
+
+        private def self.l2_heads_chunk_pipeline : ML::Metal::ComputePipeline
+          @@l2_heads_chunk_pipeline ||= ML::Metal::PipelineCache.get("qwen35_l2_heads_chunk") {
+            ML::Metal::ComputePipeline.new("qwen35_l2_heads_chunk", RECURRENT_SOURCE)
           }
         end
 
@@ -1009,6 +1030,113 @@ module ML
             )
           end
           result
+        end
+
+        # Multi-token recurrent prep for Qwen35 prefill chunks.
+        #
+        # `qkv_mixed`, `alpha`, and `beta` are token-major outputs from the
+        # recurrent input projections. The method updates `conv_state_buf`
+        # exactly as repeated single-token `qwen35_recurrent_conv_shift` would,
+        # applies L2 normalization to Q/K heads, transforms alpha/beta into
+        # DeltaNet g/beta, and returns token-major arrays ready for
+        # `delta_net_chunk`.
+        def self.recurrent_prep_chunk(conv_state_buf : ML::MetalBuffer,
+                                      qkv_mixed : Array(Float32),
+                                      alpha : Array(Float32),
+                                      beta : Array(Float32),
+                                      ssm_conv1d : Array(Float32),
+                                      ssm_dt_bias : Array(Float32),
+                                      ssm_a : Array(Float32),
+                                      h_k : Int32, h_v : Int32, s : Int32,
+                                      conv_k : Int32,
+                                      n_tokens : Int32,
+                                      eps : Float32)
+          ML::Metal::Device.init!
+          qkv_dim = 2 * h_k * s + h_v * s
+          q_dim = h_k * s
+          v_dim = h_v * s
+          raise "recurrent_prep_chunk n_tokens must be positive" unless n_tokens > 0
+          raise "recurrent_prep_chunk qkv size mismatch" unless qkv_mixed.size == n_tokens * qkv_dim
+          raise "recurrent_prep_chunk alpha size mismatch" unless alpha.size == n_tokens * h_v
+          raise "recurrent_prep_chunk beta size mismatch" unless beta.size == n_tokens * h_v
+          raise "recurrent_prep_chunk conv1d size mismatch" unless ssm_conv1d.size == qkv_dim * conv_k
+
+          qkv_buf = Scratch.get(:rec_chunk_qkv, qkv_mixed.size.to_i64 * sizeof(Float32))
+          conv_w_buf = Scratch.get(:rec_chunk_conv_w, ssm_conv1d.size.to_i64 * sizeof(Float32))
+          q_buf = Scratch.get(:rec_chunk_q, (n_tokens * q_dim).to_i64 * sizeof(Float32))
+          k_buf = Scratch.get(:rec_chunk_k, (n_tokens * q_dim).to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:rec_chunk_v, (n_tokens * v_dim).to_i64 * sizeof(Float32))
+          alpha_buf = Scratch.get(:rec_chunk_alpha, alpha.size.to_i64 * sizeof(Float32))
+          beta_buf = Scratch.get(:rec_chunk_beta, beta.size.to_i64 * sizeof(Float32))
+          dt_bias_buf = Scratch.get(:rec_chunk_dt_bias, ssm_dt_bias.size.to_i64 * sizeof(Float32))
+          ssm_a_buf = Scratch.get(:rec_chunk_ssm_a, ssm_a.size.to_i64 * sizeof(Float32))
+          g_buf = Scratch.get(:rec_chunk_g, (n_tokens * h_v).to_i64 * sizeof(Float32))
+
+          qkv_buf.write(qkv_mixed)
+          conv_w_buf.write(ssm_conv1d)
+          alpha_buf.write(alpha)
+          beta_buf.write(beta)
+          dt_bias_buf.write(ssm_dt_bias)
+          ssm_a_buf.write(ssm_a)
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          conv_enc = ML::Metal::ComputeEncoder.new(cmd)
+          conv_enc.set_pipeline(recurrent_conv_shift_chunk_pipeline)
+          conv_enc.set_buffer(conv_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          conv_enc.set_buffer(qkv_buf,        1)
+          conv_enc.set_buffer(conv_w_buf,     2)
+          conv_enc.set_buffer(q_buf,          3, ML::Metal::BufferAccess::Write)
+          conv_enc.set_buffer(k_buf,          4, ML::Metal::BufferAccess::Write)
+          conv_enc.set_buffer(v_buf,          5, ML::Metal::BufferAccess::Write)
+          conv_enc.set_value(h_k.to_u32,      6)
+          conv_enc.set_value(h_v.to_u32,      7)
+          conv_enc.set_value(s.to_u32,        8)
+          conv_enc.set_value(conv_k.to_u32,   9)
+          conv_enc.set_value(n_tokens.to_u32, 10)
+          conv_enc.dispatch_1d(qkv_dim, 256)
+          conv_enc.end_encoding
+
+          qnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          qnorm_enc.set_pipeline(l2_heads_chunk_pipeline)
+          qnorm_enc.set_buffer(q_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          qnorm_enc.set_value(h_k.to_u32, 1)
+          qnorm_enc.set_value(s.to_u32,   2)
+          qnorm_enc.set_value(eps,        3)
+          qnorm_enc.dispatch_threadgroups({h_k, n_tokens, 1}, {32, 1, 1})
+          qnorm_enc.end_encoding
+
+          knorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          knorm_enc.set_pipeline(l2_heads_chunk_pipeline)
+          knorm_enc.set_buffer(k_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          knorm_enc.set_value(h_k.to_u32, 1)
+          knorm_enc.set_value(s.to_u32,   2)
+          knorm_enc.set_value(eps,        3)
+          knorm_enc.dispatch_threadgroups({h_k, n_tokens, 1}, {32, 1, 1})
+          knorm_enc.end_encoding
+
+          ab_enc = ML::Metal::ComputeEncoder.new(cmd)
+          ab_enc.set_pipeline(recurrent_ab_chunk_pipeline)
+          ab_enc.set_buffer(alpha_buf,   0)
+          ab_enc.set_buffer(beta_buf,    1, ML::Metal::BufferAccess::ReadWrite)
+          ab_enc.set_buffer(dt_bias_buf, 2)
+          ab_enc.set_buffer(ssm_a_buf,   3)
+          ab_enc.set_buffer(g_buf,       4, ML::Metal::BufferAccess::Write)
+          ab_enc.set_value(h_v.to_u32,       5)
+          ab_enc.set_value(n_tokens.to_u32,  6)
+          ab_enc.dispatch_1d(n_tokens * h_v, 64)
+          ab_enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+
+          {
+            read_shared_f32(q_buf, n_tokens * q_dim),
+            read_shared_f32(k_buf, n_tokens * q_dim),
+            read_shared_f32(v_buf, n_tokens * v_dim),
+            read_shared_f32(g_buf, n_tokens * h_v),
+            read_shared_f32(beta_buf, n_tokens * h_v),
+          }
         end
 
         # Fused recurrent route:
