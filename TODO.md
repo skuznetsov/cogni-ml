@@ -117,6 +117,7 @@
   - [x] Harden benchmark quiet-mode checks with both per-process and aggregate CPU thresholds (`--load-warning-threshold`, `--load-total-warning-threshold`) so noisy multi-process desktops do not silently pass `--require-quiet`; aggregate warnings now print top CPU contributors
   - [x] Add `--wait-quiet-ms` / `--quiet-poll-ms` to Qwen35 benchmark harnesses so queued A/B runs can wait for a quiet host before measuring instead of immediately aborting or recording noisy timings
   - [x] Guarded baseline refresh: with `--require-quiet --wait-quiet-ms=60000`, pp64 attribution reports p50 `151.73 ms` / `421.80 tok/s`, traffic mix `90.69%` matmul / `9.31%` conversion; matched llama.cpp prompt64/gen64 reports native prefill `426.01 tok/s` p50 vs llama `461.90 tok/s` (`-7.77%`) and native decode `47.60 tok/s` p50 vs llama `45.35 tok/s` (`+4.96%`)
+  - [x] Falsifier: removing the inner `simdgroup_barrier(mem_none)` calls from the Q4_K H16 prefill GEMM passed focused Qwen specs (`14 examples, 0 failures`) but regressed guarded pp64 attribution from baseline p50 `151.73 ms` to `154.49 ms`, so keep the barriers
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

@@ -3026,3 +3026,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load guard, llama.cpp build/version, benchmark harness, or Qwen35 prefill/decode path changes
 **note:** This supersedes earlier noisy matched runs. Decode is ahead of llama.cpp by about 5%; prefill is still behind by about 8%, and attribution says the remaining exact target is quantized matmul/work elimination, not conversion cleanup.
+
+### [LM-codex-Q4K-H16-BARRIER-FALSIFIER-1] Q4_K H16 simdgroup load barriers should stay
+**status:** verified-falsifier
+**trust:** {F:0.82, G:0.42, R:0.78}
+**context:** ml (Qwen prefill kernel optimization)
+**evidence:**
+- claim: "A temporary branch removed the three inner `simdgroup_barrier(mem_flags::mem_none)` calls around `simdgroup_load` and `simdgroup_multiply_accumulate` in `simd_mm_q4k_h16`, leaving the F32 Q4_K kernel unchanged. Focused Qwen forward/DeltaNet specs still passed."
+  source: `src/ml/gguf/kernels/gemm_q4k.metal` temporary branch and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4h16_nosgb_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K H16 GEMM kernel, Metal compiler, or simdgroup_matrix load behavior changes
+- claim: "The branch regressed guarded pp64 attribution: baseline p50 `151.73 ms` / `421.80 tok/s` versus barrier-removal p50 `154.49 ms` / `414.26 tok/s`, with the same logical traffic profile."
+  source: `/tmp/qwen35_prefill_attribution_q4h16_nosgb --prompt=64 --warmup=2 --reps=5 --require-quiet --wait-quiet-ms=60000 --quiet-poll-ms=1000` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load guard, Metal compiler, benchmark harness, or Q4_K H16 GEMM route changes
+**note:** Correctness alone was insufficient here; this is a measured micro-optimization trap. Do not retry barrier removal unless the kernel structure or compiler behavior changes.
