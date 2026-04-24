@@ -1347,7 +1347,9 @@ module ML::GGUF
         hp.n_embd.times { |i| x[t * hp.n_embd + i] = emb[i] }
       end
 
-      weights.layers.each_with_index do |lw, il|
+      il = 0
+      while il < weights.layers.size
+        lw = weights.layers[il]
         case lw
         in Qwen35FullAttnWeights
           if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
@@ -1361,8 +1363,82 @@ module ML::GGUF
             end
             x = out
           end
+          il += 1
         in Qwen35RecurrentWeights
+          if ENV["QWEN35_PREFILL_REC_RUN_OFF"]? != "1"
+            run_end = il
+            while run_end < weights.layers.size
+              break unless weights.layers[run_end].is_a?(Qwen35RecurrentWeights)
+              run_end += 1
+            end
+
+            if run_end - il > 1
+              rec_layers = [] of Qwen35RecurrentWeights
+              conv_bufs = [] of ML::MetalBuffer
+              ssm_bufs = [] of ML::MetalBuffer
+              h_k = hp.ssm_group_count
+              h_v = hp.ssm_time_step_rank
+              s = hp.ssm_state_size
+              qkv_dim = 2 * h_k * s + h_v * s
+              conv_k = hp.ssm_conv_kernel
+              supported = Qwen35Metal.available?
+
+              j = il
+              while j < run_end
+                rw = weights.layers[j].as(Qwen35RecurrentWeights)
+                supported &&= metal_qw_supported?(rw.attn_qkv_qw) &&
+                              metal_qw_supported?(rw.attn_gate_qw) &&
+                              metal_qw_supported?(rw.ssm_alpha_qw) &&
+                              metal_qw_supported?(rw.ssm_beta_qw) &&
+                              metal_qw_supported?(rw.ssm_out_qw) &&
+                              metal_qw_supported?(rw.ffn_gate_qw) &&
+                              metal_qw_supported?(rw.ffn_up_qw) &&
+                              metal_qw_supported?(rw.ffn_down_qw)
+                rec_layers << rw
+
+                lstate = state.layers[j]
+                conv_bytes = ((conv_k - 1) * qkv_dim).to_i64 * sizeof(Float32)
+                conv_buf = lstate.conv_state_buf
+                if conv_buf.nil?
+                  conv_buf = ML::MetalBuffer.new(conv_bytes)
+                  if conv_state = lstate.conv_state
+                    conv_buf.write(conv_state)
+                  else
+                    conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
+                  end
+                  lstate.conv_state_buf = conv_buf
+                end
+                conv_bufs << conv_buf
+
+                ssm_bytes = (h_v * s * s).to_i64 * sizeof(Float32)
+                ssm_buf = lstate.ssm_state_buf
+                if ssm_buf.nil?
+                  ssm_buf = ML::MetalBuffer.new(ssm_bytes)
+                  if ssm_state = lstate.ssm_state
+                    ssm_buf.write(ssm_state)
+                  else
+                    ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
+                  end
+                  lstate.ssm_state_buf = ssm_buf
+                end
+                ssm_bufs << ssm_buf
+                j += 1
+              end
+
+              if supported
+                if gpu_out = Qwen35Metal.recurrent_layer_chunk_project_many(
+                     x, conv_bufs, ssm_bufs, rec_layers,
+                     h_k, h_v, s, conv_k, n_tokens, hp.rms_eps)
+                  x = gpu_out
+                  il = run_end
+                  next
+                end
+              end
+            end
+          end
+
           x = forward_recurrent_layer_chunk(x, n_tokens, lw, state.layers[il], hp, max_seq)
+          il += 1
         end
       end
     end

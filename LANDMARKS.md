@@ -2248,3 +2248,30 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: benchmark harness, host load, llama.cpp version, or Qwen prefill path changes
 **note:** This closes the obvious state-traffic waste inside the chunked DeltaNet scan. The remaining first-run prefill gap is now more likely inter-layer host readbacks plus non-DeltaNet work than the recurrent scan kernel itself.
+
+### [LM-codex-PREFILL-RECURRENT-RUN-1] Consecutive recurrent prefill layers stay GPU-resident
+**status:** verified-default
+**trust:** {F:0.88, G:0.62, R:0.84}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "Added `Qwen35Metal.recurrent_layer_chunk_project_many` and routed consecutive recurrent layer runs through it by default; disable with `QWEN35_PREFILL_REC_RUN_OFF=1`. The primitive keeps the token-major hidden matrix on GPU across recurrent runs between full-attention layers."
+  source: `src/ml/gguf/qwen35_metal.cr` and `src/ml/gguf/qwen35_cpu.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen layer ordering, recurrent prefill chunk kernels, or hidden-buffer layout changes
+- claim: "Correctness gates pass: targeted specs `10 examples, 0 failures`; full targeted Qwen gate `26 examples, 0 failures`; full-logit A/B against `QWEN35_PREFILL_REC_RUN_OFF=1` on a 16-token prompt gives same top1 `198`, cosine `1.0`, max_abs `0.0`."
+  source: `crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`, full targeted spec command, and temporary A/B harness on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: spec fixtures, prefill routing, or Metal bridge changes
+- claim: "pp64 profile improved total syncs from `33` to `17`; profiled prefill improved from `204.45 ms` (`313.04 tok/s`) with `QWEN35_PREFILL_REC_RUN_OFF=1` to `197.98 ms` (`323.27 tok/s`) default."
+  source: temporary pp64 profile harness with and without `QWEN35_PREFILL_REC_RUN_OFF=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: host load, power state, benchmark harness, or Metal driver behavior changes
+- claim: "Matched prompt=64/gen=16/reps=3/warmup=1 benchmark measured native prefill p50 `327.54 tok/s` vs llama.cpp `459.46 tok/s`; decode remained slightly ahead at native `44.89 tok/s` vs llama.cpp `44.23 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_recrun crystal run --link-flags="build/bridge.o -framework Metal -framework Foundation -lc++" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or Qwen prefill path changes
+- claim: "A bounded `QWEN35_ROPE_ROWS_TABLE=1` experiment was correct but not a speed win: pp64 was `201.27 ms` default vs `201.73 ms` with row RoPE tables, so the branch was discarded."
+  source: temporary pp64 profile harness with and without `QWEN35_ROPE_ROWS_TABLE=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: full-attention chunk kernel rewrite or RoPE implementation changes
+**note:** This reduces orchestration/readback overhead within recurrent stretches. The remaining exact prefill gap is now the boundary between full-attention and recurrent chunks plus the first-run final-token decode included in the native benchmark.
