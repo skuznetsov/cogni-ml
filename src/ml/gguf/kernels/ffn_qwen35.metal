@@ -104,3 +104,82 @@ kernel void qwen35_rmsnorm_vec(
         out[i] = x[i] * inv_rms * weight[i];
     }
 }
+
+// Plain RMSNorm on token-major rows:
+//   out[row, i] = x[row, i] * rsqrt(mean(row^2) + eps) * weight[i]
+kernel void qwen35_rmsnorm_rows(
+    device const float* x       [[buffer(0)]],
+    device const float* weight  [[buffer(1)]],
+    device       float* out     [[buffer(2)]],
+    constant     uint&  dim     [[buffer(3)]],
+    constant     uint&  n_rows  [[buffer(4)]],
+    constant     float& eps     [[buffer(5)]],
+    uint row [[threadgroup_position_in_grid]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    if (row >= n_rows) return;
+
+    threadgroup float partial[QWEN35_VEC_TG];
+    const uint base = row * dim;
+
+    float ss = 0.0f;
+    for (uint i = tid; i < dim; i += QWEN35_VEC_TG) {
+        const float v = x[base + i];
+        ss += v * v;
+    }
+    partial[tid] = ss;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (ushort stride = QWEN35_VEC_TG / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            partial[tid] += partial[tid + stride];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    const float inv_rms = rsqrt(partial[0] / float(dim) + eps);
+    for (uint i = tid; i < dim; i += QWEN35_VEC_TG) {
+        out[base + i] = x[base + i] * inv_rms * weight[i];
+    }
+}
+
+// Residual add + RMSNorm on token-major rows.
+kernel void qwen35_add_rmsnorm_rows(
+    device const float* x       [[buffer(0)]],
+    device const float* y       [[buffer(1)]],
+    device const float* weight  [[buffer(2)]],
+    device       float* residual[[buffer(3)]],
+    device       float* normed  [[buffer(4)]],
+    constant     uint&  dim     [[buffer(5)]],
+    constant     uint&  n_rows  [[buffer(6)]],
+    constant     float& eps     [[buffer(7)]],
+    uint row [[threadgroup_position_in_grid]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    if (row >= n_rows) return;
+
+    threadgroup float partial[QWEN35_VEC_TG];
+    const uint base = row * dim;
+
+    float ss = 0.0f;
+    for (uint i = tid; i < dim; i += QWEN35_VEC_TG) {
+        const float r = x[base + i] + y[base + i];
+        ss += r * r;
+    }
+    partial[tid] = ss;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (ushort stride = QWEN35_VEC_TG / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            partial[tid] += partial[tid + stride];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    const float inv_rms = rsqrt(partial[0] / float(dim) + eps);
+    for (uint i = tid; i < dim; i += QWEN35_VEC_TG) {
+        const float r = x[base + i] + y[base + i];
+        residual[base + i] = r;
+        normed[base + i] = r * inv_rms * weight[i];
+    }
+}

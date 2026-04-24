@@ -2157,4 +2157,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=2 --warmup=1` with and without `QWEN35_PREFILL_CHUNK=1` on 2026-04-23
   verified_at: 2026-04-23
   decay_trigger: benchmark harness, host load, llama.cpp version, or prefill wave implementation changes
-**note:** This refutes the tempting CPU-layer-loop integration. The next viable prefill speed path is not more host-side chunk plumbing; it is a Metal-side chunk wave that keeps batched hidden rows and command-buffer scheduling on GPU, then adds full-attention causal chunking.
+**note:** This refuted the first CPU-layer-loop integration. It was superseded by [LM-codex-PREFILL-GPU-RECURRENT-CHUNK-1], which keeps each recurrent layer chunk GPU-resident and turns the same architectural idea into a small speed win.
+
+### [LM-codex-PREFILL-GPU-RECURRENT-CHUNK-1] GPU-resident recurrent layer chunks improve exact prefill
+**status:** verified
+**trust:** {F:0.84, G:0.60, R:0.80}
+**context:** ml (Qwen prefill optimization)
+**evidence:**
+- claim: "Added a GPU-resident recurrent layer chunk primitive: row RMSNorm, batched qkv/z/alpha/beta projections, chunked conv/L2/alpha-beta, chunked DeltaNet, chunked post norm/gate, batched ssm_out, row add+RMSNorm, batched FFN, and final add all run in one command buffer per recurrent layer chunk."
+  source: `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/kernels/ffn_qwen35.metal`, and `src/ml/gguf/kernels/delta_net.metal` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent layer kernel layout, batch GEMV semantics, or prefill chunk routing changes
+- claim: "Correctness gate passed after making recurrent chunk prefill default-on with a 64-token chunk cap: `18 examples, 0 failures` across forward, DeltaNet, state snapshot, and prompt-cache specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_gpu_chunk_fullgate crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen forward state semantics, prompt-cache replay, or chunk-size routing changes
+- claim: "On prompt=64/gen=16/reps=3/warmup=1, default GPU recurrent chunk prefill measured p50 `56.70 tok/s`; `QWEN35_PREFILL_CHUNK_OFF=1` measured p50 `52.87 tok/s`; llama.cpp measured about `463 tok/s` prefill. Decode remained ahead of llama.cpp in the same short run: p50 `47.65 tok/s` vs llama `45.07 tok/s`."
+  source: `bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1` with and without `QWEN35_PREFILL_CHUNK_OFF=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or prefill wave implementation changes
+**note:** This is still only a partial prefill win because full-attention layers are serial inside each chunk and recurrent layer outputs still return to the host between layers. The next speed step is a true Metal-side prefill wave with persistent chunk hidden buffers across layers and causal full-attention chunk kernels.

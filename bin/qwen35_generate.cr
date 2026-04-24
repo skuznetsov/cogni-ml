@@ -77,9 +77,8 @@ if prompt_cache_enabled
 end
 
 # Prefill known non-final prompt tokens through the shared helper, then run the
-# final token for next-token logits. The experimental layerwise chunk path is
-# opt-in (`QWEN35_PREFILL_CHUNK=1`) because the current CPU-orchestrated version
-# is correct but slower than the whole-token Metal wave.
+# final token for next-token logits. The recurrent chunk path is default-on;
+# set `QWEN35_PREFILL_CHUNK_OFF=1` to force the older whole-token prefill loop.
 if output_ids.empty?
   puts "\nPrefilling #{ids.size} tokens..."
   if ids.size > 1

@@ -94,11 +94,14 @@ module ML
         @@dn128_fused_post_pipeline : ML::Metal::ComputePipeline?
         @@dn128_chunk_fused_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
+        @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
         @@ffn_swiglu_pipeline : ML::Metal::ComputePipeline?
         @@add_rmsnorm_pipeline : ML::Metal::ComputePipeline?
+        @@add_rmsnorm_rows_pipeline : ML::Metal::ComputePipeline?
         @@add_vec_pipeline : ML::Metal::ComputePipeline?
         @@rmsnorm_vec_pipeline : ML::Metal::ComputePipeline?
+        @@rmsnorm_rows_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_ab_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_ab_chunk_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_pipeline : ML::Metal::ComputePipeline?
@@ -509,6 +512,12 @@ module ML
           }
         end
 
+        private def self.dn_post_chunk_pipeline : ML::Metal::ComputePipeline
+          @@dn_post_chunk_pipeline ||= ML::Metal::PipelineCache.get("delta_net_post_norm_gate_chunk") {
+            ML::Metal::ComputePipeline.new("delta_net_post_norm_gate_chunk", DELTA_NET_SOURCE)
+          }
+        end
+
         private def self.attn_pipeline : ML::Metal::ComputePipeline
           @@attn_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode") {
             ML::Metal::ComputePipeline.new("qwen35_attn_decode", ATTN_DECODE_SOURCE)
@@ -527,6 +536,12 @@ module ML
           }
         end
 
+        private def self.add_rmsnorm_rows_pipeline : ML::Metal::ComputePipeline
+          @@add_rmsnorm_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_add_rmsnorm_rows") {
+            ML::Metal::ComputePipeline.new("qwen35_add_rmsnorm_rows", FFN_SOURCE)
+          }
+        end
+
         private def self.add_vec_pipeline : ML::Metal::ComputePipeline
           @@add_vec_pipeline ||= ML::Metal::PipelineCache.get("qwen35_add_vec") {
             ML::Metal::ComputePipeline.new("qwen35_add_vec", FFN_SOURCE)
@@ -536,6 +551,12 @@ module ML
         private def self.rmsnorm_vec_pipeline : ML::Metal::ComputePipeline
           @@rmsnorm_vec_pipeline ||= ML::Metal::PipelineCache.get("qwen35_rmsnorm_vec") {
             ML::Metal::ComputePipeline.new("qwen35_rmsnorm_vec", FFN_SOURCE)
+          }
+        end
+
+        private def self.rmsnorm_rows_pipeline : ML::Metal::ComputePipeline
+          @@rmsnorm_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_rmsnorm_rows") {
+            ML::Metal::ComputePipeline.new("qwen35_rmsnorm_rows", FFN_SOURCE)
           }
         end
 
@@ -684,6 +705,44 @@ module ML
           enc.set_value(count.to_u32, 5)
           enc.set_value(eps, 6)
           enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+        end
+
+        private def self.encode_rmsnorm_rows(enc : ML::Metal::ComputeEncoder,
+                                             x_buf : ML::MetalBuffer,
+                                             weight_buf : ML::MetalBuffer,
+                                             out_buf : ML::MetalBuffer,
+                                             dim : Int32,
+                                             n_rows : Int32,
+                                             eps : Float32) : Nil
+          enc.set_pipeline(rmsnorm_rows_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(weight_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(dim.to_u32, 3)
+          enc.set_value(n_rows.to_u32, 4)
+          enc.set_value(eps, 5)
+          enc.dispatch_threadgroups({n_rows, 1, 1}, {256, 1, 1})
+        end
+
+        private def self.encode_add_rmsnorm_rows(enc : ML::Metal::ComputeEncoder,
+                                                 x_buf : ML::MetalBuffer,
+                                                 y_buf : ML::MetalBuffer,
+                                                 weight_buf : ML::MetalBuffer,
+                                                 residual_buf : ML::MetalBuffer,
+                                                 normed_buf : ML::MetalBuffer,
+                                                 dim : Int32,
+                                                 n_rows : Int32,
+                                                 eps : Float32) : Nil
+          enc.set_pipeline(add_rmsnorm_rows_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(y_buf, 1)
+          enc.set_buffer(weight_buf, 2)
+          enc.set_buffer(residual_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(normed_buf, 4, ML::Metal::BufferAccess::Write)
+          enc.set_value(dim.to_u32, 5)
+          enc.set_value(n_rows.to_u32, 6)
+          enc.set_value(eps, 7)
+          enc.dispatch_threadgroups({n_rows, 1, 1}, {256, 1, 1})
         end
 
         # Apple Silicon uses unified memory for our buffers, so hot decode
@@ -1838,6 +1897,241 @@ module ML
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
           result = read_shared_f32(out_buf, hidden_dim)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_dn(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
+        end
+
+        # Multi-token recurrent layer route for prefill chunks.
+        #
+        # Keeps the whole recurrent layer on GPU for a token-major chunk:
+        # row RMSNorm -> batched qkv/z/alpha/beta projections -> chunked
+        # conv/L2/alpha-beta -> chunked DeltaNet -> batched ssm_out ->
+        # row add+RMSNorm -> batched FFN -> final residual add.
+        #
+        # This is an exact primitive for recurrent layers. It still reads the
+        # final chunk output back because the surrounding prefill engine is not
+        # yet a full Metal-side wave.
+        def self.recurrent_layer_chunk_project(inp : Array(Float32),
+                                               conv_state_buf : ML::MetalBuffer,
+                                               ssm_state_buf : ML::MetalBuffer,
+                                               attn_norm : Array(Float32),
+                                               attn_qkv_qw : QuantWeight,
+                                               attn_gate_qw : QuantWeight,
+                                               ssm_alpha_qw : QuantWeight,
+                                               ssm_beta_qw : QuantWeight,
+                                               ssm_conv1d : Array(Float32),
+                                               ssm_dt_bias : Array(Float32),
+                                               ssm_a : Array(Float32),
+                                               ssm_norm : Array(Float32),
+                                               ssm_out_qw : QuantWeight,
+                                               post_attention_norm : Array(Float32),
+                                               ffn_gate_qw : QuantWeight,
+                                               ffn_up_qw : QuantWeight,
+                                               ffn_down_qw : QuantWeight,
+                                               h_k : Int32, h_v : Int32, s : Int32,
+                                               conv_k : Int32,
+                                               n_tokens : Int32,
+                                               eps : Float32) : Array(Float32)?
+          qkv_pipe   = gemv_pipeline_for(attn_qkv_qw)
+          gate_pipe  = gemv_pipeline_for(attn_gate_qw)
+          alpha_pipe = gemv_pipeline_for(ssm_alpha_qw)
+          beta_pipe  = gemv_pipeline_for(ssm_beta_qw)
+          out_pipe   = gemv_pipeline_for(ssm_out_qw)
+          ffn_gate_pipe = gemv_pipeline_for(ffn_gate_qw)
+          ffn_up_pipe   = gemv_pipeline_for(ffn_up_qw)
+          ffn_down_pipe = gemv_pipeline_for(ffn_down_qw)
+          return nil if qkv_pipe.nil? || gate_pipe.nil? || alpha_pipe.nil? || beta_pipe.nil? ||
+                        out_pipe.nil? || ffn_gate_pipe.nil? || ffn_up_pipe.nil? || ffn_down_pipe.nil?
+          return nil unless n_tokens > 0
+
+          ML::Metal::Device.init!
+
+          hidden_dim = attn_qkv_qw.in_dim
+          qkv_dim = 2 * h_k * s + h_v * s
+          d_inner = h_v * s
+          ffn_dim = ffn_gate_qw.out_dim
+          scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+          raise "recurrent_layer_chunk input size mismatch" unless inp.size == n_tokens * hidden_dim
+
+          inp_buf       = Scratch.get(:rec_chunk_layer_inp,       inp.size.to_i64 * sizeof(Float32))
+          norm_w_buf    = Scratch.get(:rec_chunk_layer_norm_w,    attn_norm.size.to_i64 * sizeof(Float32))
+          cur_buf       = Scratch.get(:rec_chunk_layer_cur,       inp.size.to_i64 * sizeof(Float32))
+          qkv_buf       = Scratch.get(:rec_chunk_layer_qkv,       (n_tokens * qkv_dim).to_i64 * sizeof(Float32))
+          z_buf         = Scratch.get(:rec_chunk_layer_z,         (n_tokens * d_inner).to_i64 * sizeof(Float32))
+          alpha_buf     = Scratch.get(:rec_chunk_layer_alpha,     (n_tokens * h_v).to_i64 * sizeof(Float32))
+          beta_buf      = Scratch.get(:rec_chunk_layer_beta,      (n_tokens * h_v).to_i64 * sizeof(Float32))
+          g_buf         = Scratch.get(:rec_chunk_layer_g,         (n_tokens * h_v).to_i64 * sizeof(Float32))
+          conv_w_buf    = Scratch.get(:rec_chunk_layer_conv_w,    ssm_conv1d.size.to_i64 * sizeof(Float32))
+          dt_bias_buf   = Scratch.get(:rec_chunk_layer_dt_bias,   ssm_dt_bias.size.to_i64 * sizeof(Float32))
+          ssm_a_buf     = Scratch.get(:rec_chunk_layer_ssm_a,     ssm_a.size.to_i64 * sizeof(Float32))
+          ssm_norm_buf  = Scratch.get(:rec_chunk_layer_ssm_norm,  ssm_norm.size.to_i64 * sizeof(Float32))
+          q_buf         = Scratch.get(:rec_chunk_layer_q,         (n_tokens * h_k * s).to_i64 * sizeof(Float32))
+          k_buf         = Scratch.get(:rec_chunk_layer_k,         (n_tokens * h_k * s).to_i64 * sizeof(Float32))
+          v_buf         = Scratch.get(:rec_chunk_layer_v,         (n_tokens * d_inner).to_i64 * sizeof(Float32))
+          attn_mid_buf  = Scratch.get(:rec_chunk_layer_mid,       (n_tokens * d_inner).to_i64 * sizeof(Float32))
+          attn_out_buf  = Scratch.get(:rec_chunk_layer_attn_out,  (n_tokens * ssm_out_qw.out_dim).to_i64 * sizeof(Float32))
+          post_w_buf    = Scratch.get(:rec_chunk_layer_post_w,    post_attention_norm.size.to_i64 * sizeof(Float32))
+          residual_buf  = Scratch.get(:rec_chunk_layer_residual,  inp.size.to_i64 * sizeof(Float32))
+          normed_buf    = Scratch.get(:rec_chunk_layer_normed,    inp.size.to_i64 * sizeof(Float32))
+          ffn_gate_buf  = Scratch.get(:rec_chunk_layer_ffn_gate,  (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_up_buf    = Scratch.get(:rec_chunk_layer_ffn_up,    (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_comb_buf  = Scratch.get(:rec_chunk_layer_ffn_comb,  (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_out_buf   = Scratch.get(:rec_chunk_layer_ffn_out,   (n_tokens * ffn_down_qw.out_dim).to_i64 * sizeof(Float32))
+          out_buf       = Scratch.get(:rec_chunk_layer_out,       inp.size.to_i64 * sizeof(Float32))
+
+          inp_buf.write(inp)
+          norm_w_buf.write(attn_norm)
+          conv_w_buf.write(ssm_conv1d)
+          dt_bias_buf.write(ssm_dt_bias)
+          ssm_a_buf.write(ssm_a)
+          ssm_norm_buf.write(ssm_norm)
+          post_w_buf.write(post_attention_norm)
+
+          qkv_w_buf, qkv_w_off = weight_slot(attn_qkv_qw)
+          gate_w_buf, gate_w_off = weight_slot(attn_gate_qw)
+          alpha_w_buf, alpha_w_off = weight_slot(ssm_alpha_qw)
+          beta_w_buf, beta_w_off = weight_slot(ssm_beta_qw)
+          out_w_buf, out_w_off = weight_slot(ssm_out_qw)
+          ffn_gate_w_buf, ffn_gate_w_off = weight_slot(ffn_gate_qw)
+          ffn_up_w_buf, ffn_up_w_off = weight_slot(ffn_up_qw)
+          ffn_down_w_buf, ffn_down_w_off = weight_slot(ffn_down_qw)
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_rmsnorm_rows(norm_enc, inp_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)
+          norm_enc.end_encoding
+
+          proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_gemv(proj_enc, qkv_pipe.not_nil!,   cur_buf, qkv_buf,   qkv_w_buf,   qkv_w_off,   attn_qkv_qw.in_dim,  attn_qkv_qw.out_dim,  n_tokens)
+          encode_gemv(proj_enc, gate_pipe.not_nil!,  cur_buf, z_buf,     gate_w_buf,  gate_w_off,  attn_gate_qw.in_dim, attn_gate_qw.out_dim, n_tokens)
+          encode_gemv(proj_enc, alpha_pipe.not_nil!, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, ssm_alpha_qw.in_dim, ssm_alpha_qw.out_dim, n_tokens)
+          encode_gemv(proj_enc, beta_pipe.not_nil!,  cur_buf, beta_buf,  beta_w_buf,  beta_w_off,  ssm_beta_qw.in_dim,  ssm_beta_qw.out_dim,  n_tokens)
+          proj_enc.end_encoding
+
+          conv_enc = ML::Metal::ComputeEncoder.new(cmd)
+          conv_enc.set_pipeline(recurrent_conv_shift_chunk_pipeline)
+          conv_enc.set_buffer(conv_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          conv_enc.set_buffer(qkv_buf,        1)
+          conv_enc.set_buffer(conv_w_buf,     2)
+          conv_enc.set_buffer(q_buf,          3, ML::Metal::BufferAccess::Write)
+          conv_enc.set_buffer(k_buf,          4, ML::Metal::BufferAccess::Write)
+          conv_enc.set_buffer(v_buf,          5, ML::Metal::BufferAccess::Write)
+          conv_enc.set_value(h_k.to_u32,      6)
+          conv_enc.set_value(h_v.to_u32,      7)
+          conv_enc.set_value(s.to_u32,        8)
+          conv_enc.set_value(conv_k.to_u32,   9)
+          conv_enc.set_value(n_tokens.to_u32, 10)
+          conv_enc.dispatch_1d(qkv_dim, 256)
+          conv_enc.end_encoding
+
+          qnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          qnorm_enc.set_pipeline(l2_heads_chunk_pipeline)
+          qnorm_enc.set_buffer(q_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          qnorm_enc.set_value(h_k.to_u32, 1)
+          qnorm_enc.set_value(s.to_u32,   2)
+          qnorm_enc.set_value(eps,        3)
+          qnorm_enc.dispatch_threadgroups({h_k, n_tokens, 1}, {32, 1, 1})
+          qnorm_enc.end_encoding
+
+          knorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          knorm_enc.set_pipeline(l2_heads_chunk_pipeline)
+          knorm_enc.set_buffer(k_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          knorm_enc.set_value(h_k.to_u32, 1)
+          knorm_enc.set_value(s.to_u32,   2)
+          knorm_enc.set_value(eps,        3)
+          knorm_enc.dispatch_threadgroups({h_k, n_tokens, 1}, {32, 1, 1})
+          knorm_enc.end_encoding
+
+          ab_enc = ML::Metal::ComputeEncoder.new(cmd)
+          ab_enc.set_pipeline(recurrent_ab_chunk_pipeline)
+          ab_enc.set_buffer(alpha_buf,   0)
+          ab_enc.set_buffer(beta_buf,    1, ML::Metal::BufferAccess::ReadWrite)
+          ab_enc.set_buffer(dt_bias_buf, 2)
+          ab_enc.set_buffer(ssm_a_buf,   3)
+          ab_enc.set_buffer(g_buf,       4, ML::Metal::BufferAccess::Write)
+          ab_enc.set_value(h_v.to_u32,       5)
+          ab_enc.set_value(n_tokens.to_u32,  6)
+          ab_enc.dispatch_1d(n_tokens * h_v, 64)
+          ab_enc.end_encoding
+
+          dn_enc = ML::Metal::ComputeEncoder.new(cmd)
+          dn_enc.set_pipeline(dn128_chunk_fused_pipeline)
+          dn_enc.set_buffer(ssm_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          dn_enc.set_buffer(q_buf,         1)
+          dn_enc.set_buffer(k_buf,         2)
+          dn_enc.set_buffer(v_buf,         3)
+          dn_enc.set_buffer(g_buf,         4)
+          dn_enc.set_buffer(beta_buf,      5)
+          dn_enc.set_buffer(attn_mid_buf,  6, ML::Metal::BufferAccess::Write)
+          dn_enc.set_value(h_k.to_u32,     7)
+          dn_enc.set_value(h_v.to_u32,     8)
+          dn_enc.set_value(s.to_u32,       9)
+          dn_enc.set_value(scale,         10)
+          dn_enc.set_value(n_tokens.to_u32, 11)
+          dn_enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
+          dn_enc.end_encoding
+
+          post_enc = ML::Metal::ComputeEncoder.new(cmd)
+          post_enc.set_pipeline(dn_post_chunk_pipeline)
+          post_enc.set_buffer(attn_mid_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          post_enc.set_buffer(z_buf,        1)
+          post_enc.set_buffer(ssm_norm_buf, 2)
+          post_enc.set_value(h_v.to_u32,    3)
+          post_enc.set_value(s.to_u32,      4)
+          post_enc.set_value(eps,           5)
+          post_enc.set_value(n_tokens.to_u32, 6)
+          post_enc.dispatch_threadgroups({h_v, n_tokens, 1}, {32, 1, 1})
+          post_enc.end_encoding
+
+          out_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_gemv(out_enc, out_pipe.not_nil!, attn_mid_buf, attn_out_buf, out_w_buf, out_w_off, ssm_out_qw.in_dim, ssm_out_qw.out_dim, n_tokens)
+          out_enc.end_encoding
+
+          addnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_add_rmsnorm_rows(addnorm_enc, inp_buf, attn_out_buf, post_w_buf, residual_buf, normed_buf, hidden_dim, n_tokens, eps)
+          addnorm_enc.end_encoding
+
+          ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_gemv(ffn_proj_enc, ffn_gate_pipe.not_nil!, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
+          encode_gemv(ffn_proj_enc, ffn_up_pipe.not_nil!,   normed_buf, ffn_up_buf,   ffn_up_w_buf,   ffn_up_w_off,   ffn_up_qw.in_dim,   ffn_up_qw.out_dim,   n_tokens)
+          ffn_proj_enc.end_encoding
+
+          swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+          swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
+          swiglu_enc.set_buffer(ffn_gate_buf, 0)
+          swiglu_enc.set_buffer(ffn_up_buf,   1)
+          swiglu_enc.set_buffer(ffn_comb_buf, 2, ML::Metal::BufferAccess::Write)
+          swiglu_enc.set_value((n_tokens * ffn_dim).to_u32, 3)
+          swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
+          swiglu_enc.end_encoding
+
+          ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_gemv(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+          ffn_down_enc.end_encoding
+
+          add_enc = ML::Metal::ComputeEncoder.new(cmd)
+          add_enc.set_pipeline(add_vec_pipeline)
+          add_enc.set_buffer(residual_buf, 0)
+          add_enc.set_buffer(ffn_out_buf,  1)
+          add_enc.set_buffer(out_buf,      2, ML::Metal::BufferAccess::Write)
+          add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
+          add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
+          add_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_f32(out_buf, n_tokens * hidden_dim)
           if Profile.enabled?
             t_read = Time.instant
             Profile.bump_dn(

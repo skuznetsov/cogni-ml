@@ -136,8 +136,8 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
     serial_top, serial_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prompt.last, (prompt.size - 1).to_i32, serial)
 
-    old = ENV["QWEN35_PREFILL_CHUNK"]?
-    ENV["QWEN35_PREFILL_CHUNK"] = "1"
+    old = ENV["QWEN35_PREFILL_CHUNK_OFF"]?
+    ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
     begin
       chunked = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
       ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt[0...-1], 0, chunked)
@@ -147,9 +147,9 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
       chunk_logit.should be_close(serial_logit, 1e-4_f32)
     ensure
       if old
-        ENV["QWEN35_PREFILL_CHUNK"] = old
+        ENV["QWEN35_PREFILL_CHUNK_OFF"] = old
       else
-        ENV.delete("QWEN35_PREFILL_CHUNK")
+        ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
       end
     end
   end

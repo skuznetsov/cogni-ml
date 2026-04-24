@@ -1111,12 +1111,9 @@ module ML::GGUF
                     metal_qw_supported?(lw.ffn_up_qw) &&
                     metal_qw_supported?(lw.ffn_down_qw)
         if supported
-          n_embd = hp.n_embd
-          n_ff = hp.n_ff
           h_k = hp.ssm_group_count
           h_v = hp.ssm_time_step_rank
           s = hp.ssm_state_size
-          d_inner = hp.ssm_inner_size
           qkv_dim = 2 * h_k * s + h_v * s
           conv_k = hp.ssm_conv_kernel
 
@@ -1144,39 +1141,14 @@ module ML::GGUF
             lstate.ssm_state_buf = ssm_buf
           end
 
-          cur = rms_norm_rows(inp, n_tokens, n_embd, lw.attn_norm, hp.rms_eps)
-          qkv_mixed = qmatmul_nobias(lw.attn_qkv_qw, cur, n_tokens)
-          z = qmatmul_nobias(lw.attn_gate_qw, cur, n_tokens)
-          alpha = qmatmul_nobias(lw.ssm_alpha_qw, cur, n_tokens)
-          beta = qmatmul_nobias(lw.ssm_beta_qw, cur, n_tokens)
-
-          q_conv, k_conv, v_conv, ghead, beta_sig = Qwen35Metal.recurrent_prep_chunk(
-            conv_buf, qkv_mixed, alpha, beta, lw.ssm_conv1d, lw.ssm_dt_bias, lw.ssm_a,
-            h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
-          )
-
-          scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
-          y = Qwen35Metal.delta_net_chunk(ssm_buf, q_conv, k_conv, v_conv,
-            ghead, beta_sig, h_k, h_v, s, n_tokens, scale)
-
-          n_tokens.times do |t|
-            h_v.times do |h|
-              rms_norm_slice!(y, t * d_inner + h * s, s, lw.ssm_norm, hp.rms_eps)
-            end
+          if gpu_out = Qwen35Metal.recurrent_layer_chunk_project(
+                         inp, conv_buf, ssm_buf, lw.attn_norm,
+                         lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw,
+                         lw.ssm_conv1d, lw.ssm_dt_bias, lw.ssm_a, lw.ssm_norm, lw.ssm_out_qw,
+                         lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+                         h_k, h_v, s, conv_k, n_tokens, hp.rms_eps)
+            return gpu_out
           end
-          (n_tokens * d_inner).times { |i| y[i] = y[i] * silu(z[i]) }
-
-          attn_proj = qmatmul_nobias(lw.ssm_out_qw, y, n_tokens)
-          inp_l2 = Array(Float32).new(n_tokens * n_embd) { |i| inp[i] + attn_proj[i] }
-          cur2 = rms_norm_rows(inp_l2, n_tokens, n_embd, lw.post_attention_norm, hp.rms_eps)
-
-          gate_ff = qmatmul_nobias(lw.ffn_gate_qw, cur2, n_tokens)
-          up_ff = qmatmul_nobias(lw.ffn_up_qw, cur2, n_tokens)
-          combined = Array(Float32).new(n_tokens * n_ff) do |i|
-            silu(gate_ff[i]) * up_ff[i]
-          end
-          ffn_proj = qmatmul_nobias(lw.ffn_down_qw, combined, n_tokens)
-          return Array(Float32).new(n_tokens * n_embd) { |i| inp_l2[i] + ffn_proj[i] }
         end
       end
 
@@ -1295,7 +1267,7 @@ module ML::GGUF
                        state : State) : Nil
       return if token_ids.empty?
 
-      if ENV["QWEN35_PREFILL_CHUNK"]? != "1" || token_ids.size == 1
+      if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
         token_ids.each_with_index do |token_id, i|
           prefill_token(weights, token_id, start_pos + i, state)
         end
@@ -1306,6 +1278,18 @@ module ML::GGUF
       max_seq = state.max_seq
       n_tokens = token_ids.size
       raise ArgumentError.new("prefill span exceeds max_seq") if start_pos < 0 || start_pos + n_tokens > max_seq
+
+      chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || "64").to_i
+      raise ArgumentError.new("QWEN35_PREFILL_CHUNK_SIZE must be positive") unless chunk_size > 0
+      if n_tokens > chunk_size
+        offset = 0
+        while offset < n_tokens
+          len = Math.min(chunk_size, n_tokens - offset)
+          prefill_tokens(weights, token_ids[offset, len], start_pos + offset, state)
+          offset += len
+        end
+        return
+      end
 
       x = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
       token_ids.each_with_index do |token_id, t|
