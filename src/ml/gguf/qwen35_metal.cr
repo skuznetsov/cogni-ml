@@ -673,6 +673,47 @@ module ML
           enc.dispatch_threadgroups(grid, {64, 1, 1})
         end
 
+        private def self.encode_q4k_gemm(enc : ML::Metal::ComputeEncoder,
+                                         x_buf : ML::MetalBuffer,
+                                         out_buf : ML::MetalBuffer,
+                                         w_buf : ML::MetalBuffer,
+                                         w_offset : Int64,
+                                         in_dim : Int32,
+                                         out_dim : Int32,
+                                         batch : Int32) : Nil
+          enc.set_pipeline(mm_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32,  3)
+          enc.set_value(out_dim.to_u32, 4)
+          enc.set_value(batch.to_u32,   5)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          grid = {
+            (batch   + MM_NR1 - 1) // MM_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
+        private def self.encode_matmul(enc : ML::Metal::ComputeEncoder,
+                                       gemv_pipeline : ML::Metal::ComputePipeline,
+                                       qw : QuantWeight,
+                                       x_buf : ML::MetalBuffer,
+                                       out_buf : ML::MetalBuffer,
+                                       w_buf : ML::MetalBuffer,
+                                       w_offset : Int64,
+                                       in_dim : Int32,
+                                       out_dim : Int32,
+                                       batch : Int32) : Nil
+          if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD
+            encode_q4k_gemm(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          else
+            encode_gemv(enc, gemv_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          end
+        end
+
         private def self.encode_rmsnorm_vec(enc : ML::Metal::ComputeEncoder,
                                             x_buf : ML::MetalBuffer,
                                             weight_buf : ML::MetalBuffer,
@@ -2011,10 +2052,10 @@ module ML
           norm_enc.end_encoding
 
           proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_gemv(proj_enc, qkv_pipe.not_nil!,   cur_buf, qkv_buf,   qkv_w_buf,   qkv_w_off,   attn_qkv_qw.in_dim,  attn_qkv_qw.out_dim,  n_tokens)
-          encode_gemv(proj_enc, gate_pipe.not_nil!,  cur_buf, z_buf,     gate_w_buf,  gate_w_off,  attn_gate_qw.in_dim, attn_gate_qw.out_dim, n_tokens)
-          encode_gemv(proj_enc, alpha_pipe.not_nil!, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, ssm_alpha_qw.in_dim, ssm_alpha_qw.out_dim, n_tokens)
-          encode_gemv(proj_enc, beta_pipe.not_nil!,  cur_buf, beta_buf,  beta_w_buf,  beta_w_off,  ssm_beta_qw.in_dim,  ssm_beta_qw.out_dim,  n_tokens)
+          encode_matmul(proj_enc, qkv_pipe.not_nil!,   attn_qkv_qw,  cur_buf, qkv_buf,   qkv_w_buf,   qkv_w_off,   attn_qkv_qw.in_dim,  attn_qkv_qw.out_dim,  n_tokens)
+          encode_matmul(proj_enc, gate_pipe.not_nil!,  attn_gate_qw, cur_buf, z_buf,     gate_w_buf,  gate_w_off,  attn_gate_qw.in_dim, attn_gate_qw.out_dim, n_tokens)
+          encode_matmul(proj_enc, alpha_pipe.not_nil!, ssm_alpha_qw, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, ssm_alpha_qw.in_dim, ssm_alpha_qw.out_dim, n_tokens)
+          encode_matmul(proj_enc, beta_pipe.not_nil!,  ssm_beta_qw,  cur_buf, beta_buf,  beta_w_buf,  beta_w_off,  ssm_beta_qw.in_dim,  ssm_beta_qw.out_dim,  n_tokens)
           proj_enc.end_encoding
 
           conv_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -2093,7 +2134,7 @@ module ML
           post_enc.end_encoding
 
           out_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_gemv(out_enc, out_pipe.not_nil!, attn_mid_buf, attn_out_buf, out_w_buf, out_w_off, ssm_out_qw.in_dim, ssm_out_qw.out_dim, n_tokens)
+          encode_matmul(out_enc, out_pipe.not_nil!, ssm_out_qw, attn_mid_buf, attn_out_buf, out_w_buf, out_w_off, ssm_out_qw.in_dim, ssm_out_qw.out_dim, n_tokens)
           out_enc.end_encoding
 
           addnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -2101,8 +2142,8 @@ module ML
           addnorm_enc.end_encoding
 
           ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_gemv(ffn_proj_enc, ffn_gate_pipe.not_nil!, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
-          encode_gemv(ffn_proj_enc, ffn_up_pipe.not_nil!,   normed_buf, ffn_up_buf,   ffn_up_w_buf,   ffn_up_w_off,   ffn_up_qw.in_dim,   ffn_up_qw.out_dim,   n_tokens)
+          encode_matmul(ffn_proj_enc, ffn_gate_pipe.not_nil!, ffn_gate_qw, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
+          encode_matmul(ffn_proj_enc, ffn_up_pipe.not_nil!,   ffn_up_qw,   normed_buf, ffn_up_buf,   ffn_up_w_buf,   ffn_up_w_off,   ffn_up_qw.in_dim,   ffn_up_qw.out_dim,   n_tokens)
           ffn_proj_enc.end_encoding
 
           swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -2115,7 +2156,7 @@ module ML
           swiglu_enc.end_encoding
 
           ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_gemv(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+          encode_matmul(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
           ffn_down_enc.end_encoding
 
           add_enc = ML::Metal::ComputeEncoder.new(cmd)

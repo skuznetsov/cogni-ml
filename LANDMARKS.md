@@ -222,6 +222,24 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-22
   decay_trigger: N/A
 
+### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
+**status:** verified
+**trust:** {F:0.9, G:medium, R:0.9}
+**context:** ml (Qwen prefill)
+**evidence:**
+- claim: "GPU-resident recurrent prefill chunks should route Q4_K projections through `simd_mm_q4k_f32` when `batch > GEMM_BATCH_THRESHOLD`; Q5/Q6 and small batches remain on existing GEMV routes."
+  source: `src/ml/gguf/qwen35_metal.cr` encoder selection in `recurrent_layer_chunk_project`
+  verified_at: 2026-04-23
+  decay_trigger: recurrent prefill encoder or Q4_K GEMM kernel rewritten
+- claim: "Correctness gates passed after routing Q4_K chunk projections to GEMM."
+  source: `crystal spec spec/qwen35_metal_spec.cr ...` => 8 examples, 0 failures; `crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` => 18 examples, 0 failures
+  verified_at: 2026-04-23
+  decay_trigger: model forward path or state snapshot format changes
+- claim: "pp64 benchmark improved from prior GPU recurrent chunk p50 `56.70 tok/s` to `70.38 tok/s`; decode remains ahead of llama.cpp by `5.81%` on gen16 in the same harness."
+  source: `bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1`
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, model file, power state, or llama.cpp HEAD changes
+
 ### [LM-claude-BASELINE-1] llama.cpp HEAD 9B tok/s reference
 **status:** verified
 **trust:** {F:0.95, G:narrow, R:0.9}

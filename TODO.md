@@ -74,6 +74,7 @@
   - [x] Experimental CPU-orchestrated layerwise recurrent chunk path (`QWEN35_PREFILL_CHUNK=1`) with correctness gate
   - [x] Falsifier: CPU-orchestrated chunking is slower than current whole-token Metal decode wave; keep default off
   - [x] GPU-resident recurrent layer chunk primitive; default-on prefill chunking improves pp64 p50 from `52.87 tok/s` to `56.70 tok/s`
+  - [x] Reuse Q4_K simdgroup-matrix GEMM inside GPU-resident recurrent prefill chunks; pp64 p50 improves from `56.70 tok/s` to `70.38 tok/s`
   - [ ] Next: implement a Metal-side prefill wave that keeps hidden rows, recurrent chunk scans, post/FFN, and full-attn chunking inside command buffers
 
 ## Phase 5 — Scale to 27B
