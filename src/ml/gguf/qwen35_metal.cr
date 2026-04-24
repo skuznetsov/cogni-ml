@@ -865,8 +865,8 @@ module ML
                                               in_dim : Int32,
                                               out_dim : Int32,
                                               batch : Int32) : Nil
-          x16_buf = Scratch.get("mm56_x16_#{w_offset}_#{in_dim}_#{batch}", (batch * in_dim).to_i64 * 2_i64)
-          out16_buf = Scratch.get("mm56_out16_#{w_offset}_#{out_dim}_#{batch}", (batch * out_dim).to_i64 * 2_i64)
+          x16_buf = Scratch.get(:mm56_x16, (batch * in_dim).to_i64 * 2_i64)
+          out16_buf = Scratch.get(:mm56_out16, (batch * out_dim).to_i64 * 2_i64)
           bias_buf = Scratch.get("mm56_bias_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
           ConstCache.write_zero_f32_once("mm56_bias_#{out_dim}", bias_buf, out_dim)
 
