@@ -33,7 +33,7 @@ module ML
       MV_Q5_NR0             =  1
       MV_Q6_NSG             =  2
       MV_Q6_NR0             =  1
-      MV_Q8_NSG             =  2
+      MV_Q8_NSG             =  4
       MV_Q8_NR0             =  1
       HEAD_TOP1_ROWS_PER_TG = 12
 
@@ -868,6 +868,15 @@ module ML
           end
         end
 
+        private def self.gemv_threads_per_tg_for(pipeline : ML::Metal::ComputePipeline) : Int32
+          case pipeline
+          when .same?(mv8_pipeline), .same?(mv8_top1_tiles_pipeline)
+            MV_Q8_NSG * 32
+          else
+            64
+          end
+        end
+
         private def self.gemv_profile_quant(pipeline : ML::Metal::ComputePipeline) : {String, Int32, Int32}
           case pipeline
           when .same?(mv5_pipeline)
@@ -906,7 +915,7 @@ module ML
           enc.set_value(batch.to_u32,   5)
           rows_per_tg = gemv_rows_per_tg_for(pipeline)
           grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, batch, 1}
-          enc.dispatch_threadgroups(grid, {64, 1, 1})
+          enc.dispatch_threadgroups(grid, {gemv_threads_per_tg_for(pipeline), 1, 1})
         end
 
         private def self.encode_gemv_input_offset(enc : ML::Metal::ComputeEncoder,
@@ -926,7 +935,7 @@ module ML
           enc.set_value(out_dim.to_u32, 4)
           enc.set_value(1_u32,          5)
           rows_per_tg = gemv_rows_per_tg_for(pipeline)
-          enc.dispatch_threadgroups({(out_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}, {64, 1, 1})
+          enc.dispatch_threadgroups({(out_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}, {gemv_threads_per_tg_for(pipeline), 1, 1})
         end
 
         private def self.encode_q4k_gemm(enc : ML::Metal::ComputeEncoder,
@@ -4399,7 +4408,7 @@ module ML
           head_top1_enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
           head_top1_enc.set_value(out_qw.in_dim.to_u32, 4)
           head_top1_enc.set_value(out_qw.out_dim.to_u32, 5)
-          head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {64, 1, 1})
+          head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {out_qw.type.q8_0? ? MV_Q8_NSG * 32 : 64, 1, 1})
           head_top1_enc.end_encoding
 
           reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -5025,7 +5034,7 @@ module ML
                   head_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
                   head_top1_enc.set_value(output_qw.in_dim.to_u32, 4)
                   head_top1_enc.set_value(output_qw.out_dim.to_u32, 5)
-                  head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {64, 1, 1})
+                  head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {output_qw.type.q8_0? ? MV_Q8_NSG * 32 : 64, 1, 1})
                   head_top1_enc.end_encoding
 
                   reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)

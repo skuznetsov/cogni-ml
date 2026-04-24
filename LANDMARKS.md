@@ -149,6 +149,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_inplace --verify serial|chunk|chunk-inplace --gamma 4 --tokens 24 "def fibonacci(n):"`
   verified_at: 2026-04-24
   decay_trigger: state fork/copy, draft GEMV, acceptance, or verifier rollback strategy changes
+- claim: "Q8_0 draft GEMV row parallelism `MV_Q8_NSG=4` is the best tested setting after dispatch-width hardening: NSG=2 gives ~8.88-9.07 ms/tok, NSG=4 gives ~8.36-8.38 ms/tok, NSG=8 gives ~8.78-8.80 ms/tok, and NSG=16/32 regress."
+  source: rebuild sweep of `bin/qwen35_sync_profile.cr` on Qwen3.5-0.8B-Q8_0 with `QWEN35_PROFILE_TOP1=1`, prefill64/decode64
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 GEMV kernel, top1 dispatch, or Metal scheduler changes
 
 ## Graph Visualization
 

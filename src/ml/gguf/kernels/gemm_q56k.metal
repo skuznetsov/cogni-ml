@@ -24,7 +24,7 @@ struct block_q8_0_56 {
     int8_t qs[32];
 };
 
-constant short MV8_NSG = 2;
+constant short MV8_NSG = 4;
 constant short MV8_NR0 = 1;
 
 kernel void simd_mv_q8_0_f32(
@@ -88,7 +88,7 @@ kernel void simd_mv_q8_0_top1_tiles_f32(
     float best = -INFINITY;
     uint best_id = 0;
 
-    for (short tile_row = 0; tile_row < MV8_TOP_ROWS_PER_TG / MV8_NSG; ++tile_row) {
+    for (short tile_row = 0; tile_row < (MV8_TOP_ROWS_PER_TG + MV8_NSG - 1) / MV8_NSG; ++tile_row) {
         const uint row_id = tgpig.x * MV8_TOP_ROWS_PER_TG + tile_row * MV8_NSG + sgitg;
         if (row_id >= out_dim) continue;
 
