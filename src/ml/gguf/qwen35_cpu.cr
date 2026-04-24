@@ -20,7 +20,20 @@ module ML::GGUF
     extend self
     # Keep prompt chunks large enough to avoid CPU-side boundary overhead while
     # preserving an env override for small-memory experiments.
-    DEFAULT_PREFILL_CHUNK_SIZE = 4096
+    FALLBACK_PREFILL_CHUNK_SIZE = 4096
+    GIB                         = 1024_u64 * 1024_u64 * 1024_u64
+    @@default_prefill_chunk_size : Int32?
+
+    def prefill_chunk_size_for_memory(total_bytes : UInt64?) : Int32
+      return FALLBACK_PREFILL_CHUNK_SIZE unless bytes = total_bytes
+      return 8192 if bytes >= 48_u64 * GIB
+      return 4096 if bytes >= 24_u64 * GIB
+      2048
+    end
+
+    def default_prefill_chunk_size : Int32
+      @@default_prefill_chunk_size ||= prefill_chunk_size_for_memory(physical_memory_bytes?)
+    end
 
     # ─────────────────────────────────────────────────────────────────────
     # Per-sequence state: KV cache for full-attn layers + SSM state for
@@ -89,6 +102,37 @@ module ML::GGUF
         dst_buf.copy_from(src_buf, src_buf.size)
         dst_buf
       end
+    end
+
+    private def physical_memory_bytes? : UInt64?
+      {% if flag?(:darwin) %}
+        command_u64?("sysctl", ["-n", "hw.memsize"])
+      {% elsif flag?(:freebsd) %}
+        command_u64?("sysctl", ["-n", "hw.physmem"]) || command_u64?("sysctl", ["-n", "hw.realmem"])
+      {% elsif flag?(:linux) %}
+        if File.exists?("/proc/meminfo")
+          File.each_line("/proc/meminfo") do |line|
+            next unless line.starts_with?("MemTotal:")
+            parts = line.split
+            if parts.size >= 2 && (kb = parts[1].to_u64?)
+              return kb * 1024_u64
+            end
+          end
+        end
+        nil
+      {% else %}
+        nil
+      {% end %}
+    end
+
+    private def command_u64?(cmd : String, args : Array(String)) : UInt64?
+      output = IO::Memory.new
+      error = IO::Memory.new
+      status = Process.run(cmd, args, output: output, error: error)
+      return nil unless status.success?
+      output.to_s.strip.to_u64?
+    rescue
+      nil
     end
 
     class State
@@ -1516,7 +1560,7 @@ module ML::GGUF
       if ENV["QWEN35_PREFILL_FINAL_CHUNK_OFF"]? != "1" &&
          ENV["QWEN35_PREFILL_CHUNK_OFF"]? != "1" &&
          token_ids.size > 1
-        chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || DEFAULT_PREFILL_CHUNK_SIZE.to_s).to_i
+        chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || default_prefill_chunk_size.to_s).to_i
         if token_ids.size > chunk_size
           if ENV["QWEN35_PREFILL_LONG_SUFFIX_OFF"]? != "1"
             prefix_len = token_ids.size - chunk_size
@@ -1591,7 +1635,7 @@ module ML::GGUF
       n_tokens = token_ids.size
       raise ArgumentError.new("prefill span exceeds max_seq") if start_pos < 0 || start_pos + n_tokens > max_seq
 
-      chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || DEFAULT_PREFILL_CHUNK_SIZE.to_s).to_i
+      chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || default_prefill_chunk_size.to_s).to_i
       raise ArgumentError.new("QWEN35_PREFILL_CHUNK_SIZE must be positive") unless chunk_size > 0
       if n_tokens > chunk_size
         offset = 0

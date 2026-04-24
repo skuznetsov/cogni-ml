@@ -92,6 +92,7 @@
   - [x] Batch the final long-prompt suffix instead of falling back to single-token final decode when prompt exceeds chunk size; pp2048 A/B improves from `4987.29 ms` p50 off to `4750.20 ms` default
   - [x] Raise default prefill chunk size again from `1024` to `2048`; pp2048 p50 improves from `4755.48 ms` at chunk 1024 to `4578.57 ms` at chunk 2048, while pp1024 is unchanged within noise
   - [x] Raise default prefill chunk size from `2048` to `4096` for long prompts; pp4096 one-shot p50 improves from `11862.78 ms` at chunk 2048 to `11524.63 ms` at chunk 4096
+  - [x] Make default prefill chunk size memory-aware; 64GB M2 Max selects `8192` and pp8192 one-shot A/B improves from `35219.27 ms` at chunk 4096 to `33981.42 ms` default, while smaller systems fall back to `4096`/`2048`
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Phase 5 — Scale to 27B

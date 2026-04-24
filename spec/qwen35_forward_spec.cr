@@ -7,6 +7,14 @@ QWEN_9B_FWD = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5
 describe ML::GGUF::Qwen35CPU, "full decoder forward" do
   pending!("9B model not present") unless File.exists?(QWEN_9B_FWD)
 
+  it "chooses prefill chunk defaults from physical memory size" do
+    gib = ML::GGUF::Qwen35CPU::GIB
+    ML::GGUF::Qwen35CPU.prefill_chunk_size_for_memory(nil).should eq(4096)
+    ML::GGUF::Qwen35CPU.prefill_chunk_size_for_memory(16_u64 * gib).should eq(2048)
+    ML::GGUF::Qwen35CPU.prefill_chunk_size_for_memory(24_u64 * gib).should eq(4096)
+    ML::GGUF::Qwen35CPU.prefill_chunk_size_for_memory(48_u64 * gib).should eq(8192)
+  end
+
   it "produces finite logits at pos=0 for token 0" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams
