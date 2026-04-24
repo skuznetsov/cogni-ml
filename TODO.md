@@ -96,6 +96,7 @@
   - [x] Add grouped command-buffer attribution for fused prefill waves; pp256 shows all `full+rec` groups are nearly flat (`~61.2-61.7 ms` wait) and `rec0-2` is smaller (`~46.4 ms`), so there is no single pathological layer group to attack
   - [x] Add scoped matmul attribution for prefill/decode phases; pp256 confirms `prefill.rec.ffn_upgate` dominates logical weight traffic (`1296 MiB`), followed by recurrent Q5 projection (`528 MiB`) and recurrent FFN-down (`796.5 MiB` combined Q6/Q4); decode prompt64/gen4 shows the same recurrent FFN/upgate and projection dominance (`5184 MiB` and `2112 MiB`)
   - [x] Falsifier: lowering the GEMM route threshold so b8 prefill uses Q4/Q5/Q6 GEMM switches the routes correctly but slows pp8 (`140.70 ms` p50 default GEMV-at-b8 vs `158.74 ms` p50 GEMM-at-b8); keep `GEMM_BATCH_THRESHOLD=8`
+  - [x] Falsifier: fusing final full-attn-last and lm-head top1 into one command buffer reduced pp64 syncs (`10` → `9`) but slowed wall reps in sequential release checks (`162.32 ms` p50 off vs `165.67 ms` p50 fused), so the removed sync is not worth the larger final command buffer
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

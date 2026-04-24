@@ -464,6 +464,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: GEMM kernels, GEMV kernels, prefill routing, benchmark harness, or power state changes
 **adversary:** "This was a narrow, noisy local falsifier, but the effect direction was large enough to reject lowering the default threshold now. The temporary runtime override was removed to avoid adding env lookup overhead in the encode path."
 
+### [LM-prefill-FINAL-TOP1-FUSE-FALSIFIER] Final full-attn-last plus top1 fusion saves a sync but slows pp64
+**status:** refuted
+**trust:** {F:0.82, G:narrow, R:0.78}
+**context:** ml (Qwen35 prefill final-layer/head boundary)
+**evidence:**
+- claim: "A bounded exact branch encoded final full-attn-last output RMSNorm and fused lm-head top1 into the same command buffer as `full_attn_layer_chunk_project_last`, reducing pp64 total Metal syncs from 10 to 9."
+  source: temporary local patch to `src/ml/gguf/qwen35_metal.cr` and `src/ml/gguf/qwen35_cpu.cr`; `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=4 --reps=12`
+  verified_at: 2026-04-24
+  decay_trigger: final full-attn-last route, head top1 kernel, or command-buffer scheduler changes
+- claim: "Focused forward/prompt-cache specs passed with the branch before benchmarking."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_full_last_top1_spec2 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` -> 16 examples, 0 failures
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 final prefill route changes
+- claim: "Sequential release pp64 checks refuted promotion: in reverse-order A/B, old path measured p50 `162.32 ms`, while fused final-top1 measured p50 `165.67 ms` despite using one fewer sync."
+  source: `QWEN35_FINAL_FULL_LAST_TOP1_OFF=1 ... bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=4 --reps=12`, then default branch with the same command/cache
+  verified_at: 2026-04-24
+  decay_trigger: Metal command-buffer overhead, head top1 kernel, final route, or benchmark harness changes
+**adversary:** "This is another boundary-fusion trap: removing a synchronization point is not automatically a win when it moves lm-head work into a larger command buffer and changes scheduling. The branch was removed; only this falsifier remains."
+
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
 **trust:** {F:0.65, G:medium, R:0.70}
