@@ -182,6 +182,44 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "final full-attention last-row prefill matches the full final-layer fallback" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32, 279_i32, 9821_i32, 13_i32]
+
+    old_chunk = ENV["QWEN35_PREFILL_CHUNK_OFF"]?
+    old_final = ENV["QWEN35_FINAL_FULL_LAST_OFF"]?
+    ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+    begin
+      fast = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV.delete("QWEN35_FINAL_FULL_LAST_OFF")
+      fast_top, fast_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, fast)
+      fast_next_top, fast_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, fast)
+
+      fallback = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV["QWEN35_FINAL_FULL_LAST_OFF"] = "1"
+      fallback_top, fallback_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, fallback)
+      fallback_next_top, fallback_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, fallback)
+
+      fast_top.should eq(fallback_top)
+      fast_logit.should be_close(fallback_logit, 1e-4_f32)
+      fast_next_top.should eq(fallback_next_top)
+      fast_next_logit.should be_close(fallback_next_logit, 1e-4_f32)
+    ensure
+      if old_chunk
+        ENV["QWEN35_PREFILL_CHUNK_OFF"] = old_chunk
+      else
+        ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+      end
+
+      if old_final
+        ENV["QWEN35_FINAL_FULL_LAST_OFF"] = old_final
+      else
+        ENV.delete("QWEN35_FINAL_FULL_LAST_OFF")
+      end
+    end
+  end
+
   it "forks decode state into independent buffers" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams

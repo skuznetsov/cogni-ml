@@ -294,6 +294,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, power state, or kernel implementation changes
 **decision:** "Do not retry the same dual-accumulator Q4_K SwiGLU GEMM shape; if revisited, change the frame to a lower-register design or fused down-projection tiling."
 
+### [LM-prefill-FINAL-FULL-LAST-1] Final full-attention last-row prefill
+**status:** verified
+**trust:** {F:0.9, G:narrow, R:0.85}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "For `prefill_tokens_top1`, the final decoder layer only needs K/V cache updates for all prompt rows and the last row hidden state for logits; non-final output rows from the final layer are not future state."
+  source: Qwen35 autoregressive state model and implementation in `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-24
+  decay_trigger: prompt cache starts storing final hidden rows or downstream consumers require all final layer outputs
+- claim: "`Qwen35Metal.full_attn_layer_chunk_project_last` projects K/V for the whole final-layer chunk, writes final-layer K/V cache, then computes Q/attention/FFN output only for the final prompt row."
+  source: `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: full-attn cache layout or residual/FFN ordering changes
+- claim: "Correctness gate passed: targeted qwen35 specs -> 28 examples, 0 failures."
+  source: `crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 forward path changes
+- claim: "A/B with `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=8 --compare-env=QWEN35_FINAL_FULL_LAST_OFF` measured default avg 170.01 ms / p50 170.00 ms versus off avg 174.88 ms / p50 173.86 ms."
+  source: local command output
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness or power state changes
+**adversary:** "The branch must choose fallback before mutating state through layers 0..30; a discarded earlier A/B violated that and was invalid."
+
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified
 **trust:** {F:0.9, G:medium, R:0.9}

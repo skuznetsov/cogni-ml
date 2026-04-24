@@ -85,6 +85,7 @@
   - [x] Add prefill attribution harness and matmul shape counters; pp64 shows FFN up/gate Q4_K dominates logical weight traffic (`1728 MiB`), Q6/Q4 FFN-down follows (`1062 MiB` combined), and Q5/Q6 batch GEMM is mandatory (`~170 ms` default vs `~367 ms` with `QWEN35_Q56K_BATCH_GEMM_OFF=1`)
   - [x] In-place SwiGLU staging for chunked prefill FFN paths; exact aliasing path passes specs and small pp64 A/B improves default by `~0.48 ms` vs `QWEN35_SWIGLU_INPLACE_OFF=1`
   - [x] Falsifier: dual Q4_K gate/up+SwiGLU GEMM reduced dispatch count but was slower at pp64 (`174.78 ms` default vs `168.65 ms` off), likely from register pressure and extra barriers
+  - [x] Specialize final full-attention prefill layer for last-row logits; final layer still writes all K/V but computes attention+FFN only for the final row, improving pp64 A/B from `173.86 ms` off to `170.00 ms` default
   - [ ] Next: attack FFN weight traffic directly (exact fused up/gate+SwiGLU/down memory staging first; speculative/sparsity only behind eval harness)
 
 ## Phase 5 — Scale to 27B

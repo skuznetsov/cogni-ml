@@ -677,6 +677,56 @@ module ML::GGUF
       {% end %}
     end
 
+    private def final_full_attn_layer_chunk_last_routed(inp : Array(Float32),
+                                                        n_tokens : Int32,
+                                                        start_pos : Int32,
+                                                        lstate : LayerState,
+                                                        lw : Qwen35FullAttnWeights,
+                                                        hp : Qwen35Hparams,
+                                                        max_seq : Int32) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_FINAL_FULL_LAST_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        supported = metal_qw_supported?(lw.attn_q_qw) &&
+                    metal_qw_supported?(lw.attn_k_qw) &&
+                    metal_qw_supported?(lw.attn_v_qw) &&
+                    metal_qw_supported?(lw.attn_output_qw) &&
+                    metal_qw_supported?(lw.ffn_gate_qw) &&
+                    metal_qw_supported?(lw.ffn_up_qw) &&
+                    metal_qw_supported?(lw.ffn_down_qw)
+        return nil unless supported
+
+        kv_dim = hp.head_dim * hp.n_head_kv
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        k_buf = lstate.k_cache_buf
+        v_buf = lstate.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.v_cache_buf = v_buf
+        end
+
+        scale = (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32
+        Qwen35Metal.full_attn_layer_chunk_project_last(
+          inp,
+          lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw,
+          lw.attn_norm, lw.attn_q_norm, lw.attn_k_norm, lw.attn_output_qw,
+          k_buf, v_buf,
+          lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+          start_pos, n_tokens,
+          hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
+          hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
     private def full_attn_then_recurrent_chunk_project_many_routed(inp : Array(Float32),
                                                                    n_tokens : Int32,
                                                                    start_pos : Int32,
@@ -1469,6 +1519,28 @@ module ML::GGUF
           return forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
         end
 
+        if ENV["QWEN35_FINAL_FULL_LAST_OFF"]? != "1" &&
+           (last_layer = weights.layers[-1].as?(Qwen35FullAttnWeights)) &&
+           metal_qw_supported?(last_layer.attn_q_qw) &&
+           metal_qw_supported?(last_layer.attn_k_qw) &&
+           metal_qw_supported?(last_layer.attn_v_qw) &&
+           metal_qw_supported?(last_layer.attn_output_qw) &&
+           metal_qw_supported?(last_layer.ffn_gate_qw) &&
+           metal_qw_supported?(last_layer.ffn_up_qw) &&
+           metal_qw_supported?(last_layer.ffn_down_qw)
+          x_before_last = prefill_tokens_hidden(weights, token_ids, start_pos, state, stop_layer: weights.layers.size - 1)
+          if last = final_full_attn_layer_chunk_last_routed(x_before_last, token_ids.size, start_pos, state.layers[-1], last_layer, weights.hparams, state.max_seq)
+            hp = weights.hparams
+            if top1 = output_project_top1_routed(last, weights.output_norm, weights.output, hp.rms_eps)
+              return top1
+            end
+            rms_norm!(last, weights.output_norm, hp.rms_eps)
+            logits = qmatvec_nobias(weights.output, last)
+            maxv = logits.max
+            return {logits.index(maxv).not_nil!.to_i32, maxv}
+          end
+        end
+
         x = prefill_tokens_hidden(weights, token_ids, start_pos, state)
         hp = weights.hparams
         last = x[(token_ids.size - 1) * hp.n_embd, hp.n_embd]
@@ -1490,7 +1562,8 @@ module ML::GGUF
     private def prefill_tokens_hidden(weights : Qwen35Weights,
                                       token_ids : Array(Int32),
                                       start_pos : Int32,
-                                      state : State) : Array(Float32)
+                                      state : State,
+                                      stop_layer : Int32? = nil) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
 
       if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
@@ -1515,7 +1588,7 @@ module ML::GGUF
         x = nil.as(Array(Float32)?)
         while offset < n_tokens
           len = Math.min(chunk_size, n_tokens - offset)
-          x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state)
+          x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state, stop_layer: stop_layer)
           offset += len
         end
         return x.not_nil!
@@ -1528,7 +1601,8 @@ module ML::GGUF
       end
 
       il = 0
-      while il < weights.layers.size
+      layer_limit = stop_layer || weights.layers.size
+      while il < layer_limit
         lw = weights.layers[il]
         case lw
         in Qwen35FullAttnWeights
