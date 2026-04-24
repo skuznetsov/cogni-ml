@@ -30,6 +30,20 @@ module ML::BenchLoadGuard
 
   def self.warn_if_busy(threshold_pct : Float64, io : IO = STDERR) : Nil
     busy = busy_processes(threshold_pct)
+    report_busy(busy, threshold_pct, io)
+  end
+
+  def self.require_quiet!(threshold_pct : Float64, io : IO = STDERR) : Nil
+    busy = busy_processes(threshold_pct)
+    return if busy.empty?
+
+    report_busy(busy, threshold_pct, io)
+    raise "benchmark host is not quiet; lower load or pass --load-warning-threshold=0 to bypass"
+  end
+
+  private def self.report_busy(busy : Array(ProcessLoad),
+                               threshold_pct : Float64,
+                               io : IO) : Nil
     return if busy.empty?
 
     io.puts "WARNING: host CPU load may contaminate benchmark results."
