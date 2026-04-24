@@ -1,9 +1,9 @@
 # Greedy speculative-decode acceptance probe for Qwen35 target/draft pairs.
 #
-# The `chunk` verifier processes each gamma-sized target candidate span through
-# the chunked prefill body and then emits one top1 per row. This is still not the
-# final fully batched lm-head verifier, but it measures the next exact speed step
-# after a purely serial target verifier.
+# The chunk verifiers process each gamma-sized target candidate span through the
+# chunked prefill body and then emit one top1 per row. This is still not the
+# final fully batched verifier, but it measures exact speed steps after a purely
+# serial target verifier.
 
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
@@ -21,17 +21,17 @@ tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = "The capital of France is"
 n_gen = 32
 gamma = 4
-verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk"
+verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace"
 trace = ENV["QWEN35_SPEC_TRACE"]? == "1"
 
 OptionParser.parse(ARGV) do |parser|
-  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--tokens N] [--verify serial|chunk] [prompt]"
+  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--draft PATH", "Draft GGUF path (default: Qwen3.5 0.8B Q8_0)") { |path| draft_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
   parser.on("--gamma N", "Draft candidates per cycle") { |value| gamma = value.to_i }
   parser.on("--tokens N", "Generated tokens to compare") { |value| n_gen = value.to_i }
-  parser.on("--verify MODE", "Target verifier: serial or chunk (default: chunk)") { |value| verify_mode = value }
+  parser.on("--verify MODE", "Target verifier: serial, chunk, or chunk-inplace (default: chunk-inplace)") { |value| verify_mode = value }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -44,7 +44,7 @@ end
 
 raise ArgumentError.new("--gamma must be positive") unless gamma > 0
 raise ArgumentError.new("--tokens must be positive") unless n_gen > 0
-raise ArgumentError.new("--verify must be serial or chunk") unless {"serial", "chunk"}.includes?(verify_mode)
+raise ArgumentError.new("--verify must be serial, chunk, or chunk-inplace") unless {"serial", "chunk", "chunk-inplace"}.includes?(verify_mode)
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -169,7 +169,7 @@ while generated_ids.size < n_gen
         break
       end
     end
-  else
+  elsif verify_mode == "chunk"
     target_base = target_state
     verify_state = target_base.fork
     tv0 = Time.instant
@@ -207,6 +207,41 @@ while generated_ids.size < n_gen
       target_next = target_nexts[-1][0]
       pos += candidates.size
     end
+  else
+    backup_state = target_state.fork
+    tv0 = Time.instant
+    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, target_state)
+    target_verify_ms += (Time.instant - tv0).total_milliseconds
+    if trace
+      puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
+    end
+
+    expected = target_next
+    candidates.each_with_index do |cand, i|
+      if cand == expected
+        generated_ids << cand
+        correction_or_accepted << cand
+        accepted += 1
+        expected = target_nexts[i][0]
+      else
+        generated_ids << expected
+        correction_or_accepted << expected
+        rejected = true
+        break
+      end
+    end
+
+    if rejected
+      target_state.copy_from!(backup_state)
+      tv1 = Time.instant
+      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+      target_verify_ms += (Time.instant - tv1).total_milliseconds
+      target_next = corrected[-1][0]
+      pos += correction_or_accepted.size
+    else
+      target_next = target_nexts[-1][0]
+      pos += candidates.size
+    end
   end
 
   if rejected
@@ -232,5 +267,5 @@ puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{prop
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s)"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms"
-puts "note=chunk verifier batches target body only; expected full speedup still needs batched lm-head/topk acceptance"
+puts "note=exact speculative probe; speedup still needs lower draft cost and/or verifier rollback overhead removal"
 puts "generated=#{tok.decode(generated_ids).inspect}"

@@ -145,6 +145,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_batched_head2 --verify chunk --gamma 4 --tokens 24 "def fibonacci(n):"` with and without `QWEN35_HEAD_TOP1_ROWS=1`
   verified_at: 2026-04-24
   decay_trigger: batched top1 kernel retuned, gamma changes, or verifier state-copy overhead removed
+- claim: "`chunk-inplace` exact verifier avoids copy-back on fully accepted cycles and is the fastest current verifier mode, but still not a net speedup: serial 29.09 ms/tok, copy-back chunk 29.13 ms/tok, chunk-inplace 28.36 ms/tok, plain target 21.91 ms/tok on the same gamma=4/tokens=24 prompt."
+  source: `/tmp/qwen35_speculative_accept_inplace --verify serial|chunk|chunk-inplace --gamma 4 --tokens 24 "def fibonacci(n):"`
+  verified_at: 2026-04-24
+  decay_trigger: state fork/copy, draft GEMV, acceptance, or verifier rollback strategy changes
 
 ## Graph Visualization
 
