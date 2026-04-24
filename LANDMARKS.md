@@ -165,6 +165,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8_dual_specacc crystal run bin/qwen35_speculative_accept.cr --link-flags=... -- --tokens 32 --gamma 4`, `QWEN35_Q8_DUAL_GEMV_OFF=1` vs default
   verified_at: 2026-04-24
   decay_trigger: draft speed, verifier mode, acceptance, or target decode changes
+- claim: "Preallocating and reusing speculative rollback states removes repeated fork allocations in the harness and exposes rollback copy cost. On the default prompt at gamma=4/tokens=32, `chunk-inplace` improved from `23.83 ms/tok` to `22.66 ms/tok`; remaining measured backup copies were about `16.0 ms` target and `5.1 ms` draft over 8 cycles."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_prealloc crystal run bin/qwen35_speculative_accept.cr --link-flags=... -- --tokens 32 --gamma 4`
+  verified_at: 2026-04-24
+  decay_trigger: speculative state layout, backup strategy, or harness timing changes
+- claim: "High-acceptance speculative decode is already a potential exact win when gamma is large enough: default prompt gamma=16/tokens=64 measured `15.67 ms/tok` speculative versus `22.24 ms/tok` plain target, but the same gamma on `def fibonacci(n):` fell to `43.25 ms/tok` because acceptance dropped to `51.35%` and draft resync cost rose."
+  source: `bin/qwen35_speculative_accept.cr --tokens 64 --gamma 16` on default prompt and `def fibonacci(n):`
+  verified_at: 2026-04-24
+  decay_trigger: draft model, acceptance distribution, verifier chunking, or resync strategy changes
+- claim: "Opt-in adaptive gamma with conservative two-full-cycle growth helps high-acceptance prompts but is not sufficient for rejection-heavy prompts: default prompt `--adaptive --gamma 4 --max-gamma 16` measured `19.35 ms/tok` versus plain `21.84`, while `def fibonacci(n):` measured `35.31 ms/tok` versus plain `21.90`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_adaptive2 crystal run bin/qwen35_speculative_accept.cr --link-flags=... -- --tokens 64 --gamma 4 --max-gamma 16 --adaptive`
+  verified_at: 2026-04-24
+  decay_trigger: adaptive policy, acceptance predictor, verifier, or resync strategy changes
 
 ## Graph Visualization
 

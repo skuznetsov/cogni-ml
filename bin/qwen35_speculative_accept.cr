@@ -21,15 +21,19 @@ tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = "The capital of France is"
 n_gen = 32
 gamma = 4
+adaptive_gamma = ENV["QWEN35_SPEC_ADAPTIVE"]? == "1"
+max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "16").to_i
 verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace"
 trace = ENV["QWEN35_SPEC_TRACE"]? == "1"
 
 OptionParser.parse(ARGV) do |parser|
-  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
+  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--draft PATH", "Draft GGUF path (default: Qwen3.5 0.8B Q8_0)") { |path| draft_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
   parser.on("--gamma N", "Draft candidates per cycle") { |value| gamma = value.to_i }
+  parser.on("--max-gamma N", "Maximum adaptive draft candidates per cycle (default: 16)") { |value| max_gamma = value.to_i }
+  parser.on("--adaptive", "Adapt gamma: double after fully accepted cycles, halve after rejection") { adaptive_gamma = true }
   parser.on("--tokens N", "Generated tokens to compare") { |value| n_gen = value.to_i }
   parser.on("--verify MODE", "Target verifier: serial, chunk, or chunk-inplace (default: chunk-inplace)") { |value| verify_mode = value }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
@@ -43,6 +47,8 @@ OptionParser.parse(ARGV) do |parser|
 end
 
 raise ArgumentError.new("--gamma must be positive") unless gamma > 0
+raise ArgumentError.new("--max-gamma must be positive") unless max_gamma > 0
+max_gamma = Math.max(max_gamma, gamma)
 raise ArgumentError.new("--tokens must be positive") unless n_gen > 0
 raise ArgumentError.new("--verify must be serial, chunk, or chunk-inplace") unless {"serial", "chunk", "chunk-inplace"}.includes?(verify_mode)
 
@@ -112,11 +118,13 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} n_gen=#{n_gen} verify=#{verify_mode}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} n_gen=#{n_gen} verify=#{verify_mode}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
 draft_state = ML::GGUF::Qwen35CPU::State.new(draft.hparams, max_seq: max_seq)
+target_backup_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
+draft_cycle_base = ML::GGUF::Qwen35CPU::State.new(draft.hparams, max_seq: max_seq)
 
 target_next = prefill_next(target, prompt_ids, target_state)
 draft_next = prefill_next(draft, prompt_ids, draft_state)
@@ -128,16 +136,28 @@ proposed = 0
 cycles = 0
 target_verify_ms = 0.0
 draft_ms = 0.0
+target_backup_ms = 0.0
+draft_backup_ms = 0.0
+draft_resync_ms = 0.0
+current_gamma = gamma
+full_accept_streak = 0
+gamma_sum = 0
+gamma_max_seen = 0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
   cycles += 1
   cycle_start_pos = pos
-  cycle_draft_base = draft_state.fork
+  cycle_gamma = adaptive_gamma ? current_gamma : gamma
+  gamma_sum += cycle_gamma
+  gamma_max_seen = Math.max(gamma_max_seen, cycle_gamma)
+  tdb0 = Time.instant
+  draft_cycle_base.copy_from!(draft_state)
+  draft_backup_ms += (Time.instant - tdb0).total_milliseconds
   candidates = [] of Int32
 
   td0 = Time.instant
-  gamma.times do |i|
+  cycle_gamma.times do |i|
     break if generated_ids.size + candidates.size >= n_gen
     candidates << draft_next
     draft_next = advance_next(draft, draft_next, pos + i, draft_state)
@@ -208,7 +228,9 @@ while generated_ids.size < n_gen
       pos += candidates.size
     end
   else
-    backup_state = target_state.fork
+    tb0 = Time.instant
+    target_backup_state.copy_from!(target_state)
+    target_backup_ms += (Time.instant - tb0).total_milliseconds
     tv0 = Time.instant
     target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, target_state)
     target_verify_ms += (Time.instant - tv0).total_milliseconds
@@ -232,7 +254,7 @@ while generated_ids.size < n_gen
     end
 
     if rejected
-      target_state.copy_from!(backup_state)
+      target_state.copy_from!(target_backup_state)
       tv1 = Time.instant
       corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
       target_verify_ms += (Time.instant - tv1).total_milliseconds
@@ -245,7 +267,22 @@ while generated_ids.size < n_gen
   end
 
   if rejected
-    draft_state, draft_next = resync_draft(draft, cycle_draft_base, correction_or_accepted, cycle_start_pos)
+    tr0 = Time.instant
+    draft_state, draft_next = resync_draft(draft, draft_cycle_base, correction_or_accepted, cycle_start_pos)
+    draft_resync_ms += (Time.instant - tr0).total_milliseconds
+  end
+
+  if adaptive_gamma
+    if rejected
+      full_accept_streak = 0
+      current_gamma = Math.max(1, current_gamma // 2)
+    elsif candidates.size == cycle_gamma && current_gamma < max_gamma
+      full_accept_streak += 1
+      if full_accept_streak >= 2
+        current_gamma = Math.min(max_gamma, current_gamma * 2)
+        full_accept_streak = 0
+      end
+    end
   end
 end
 wall_ms = (Time.instant - wall0).total_milliseconds
@@ -264,8 +301,9 @@ plain_tokens_s = n_gen.to_f64 / (plain_ms / 1000.0)
 
 puts
 puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles}"
+puts "gamma_stats avg=#{(gamma_sum.to_f64 / cycles.to_f64).round(2)} max_seen=#{gamma_max_seen} final=#{current_gamma}"
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s)"
-puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms"
+puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
 puts "note=exact speculative probe; speedup still needs lower draft cost and/or verifier rollback overhead removal"
 puts "generated=#{tok.decode(generated_ids).inspect}"

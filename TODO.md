@@ -134,6 +134,8 @@
   - [x] Retune Q8_0 draft GEMV row parallelism from `MV_Q8_NSG=2` to `4` and make Q8 top1 dispatch width follow the Q8 simdgroup count; 0.8B Q8_0 draft decode improves from `~8.88-9.07 ms/tok` to `~8.36-8.38 ms/tok`, while `NSG=8/16/32` are slower or unstable
   - [x] After Q8_0 `NSG=4`, exact speculative `chunk-inplace` on `def fibonacci(n):` improves from `28.36 ms/tok` to `27.70 ms/tok` at the same `85.19%` acceptance, but still trails plain target decode (`21.96 ms/tok`)
   - [x] Add exact Q8_0 FFN gate/up dual GEMV for the 0.8B draft decode wave; it halves FFN-upgate dispatch count and improves interleaved draft decode from `8.54/8.85 ms/tok` with `QWEN35_Q8_DUAL_GEMV_OFF=1` to `8.44/8.51 ms/tok` default, while speculative `chunk-inplace` smoke improves draft time `231.0` -> `223.2 ms` over 32 generated tokens
+  - [x] Remove repeated speculative harness rollback allocations by reusing preallocated target/draft backup states and report rollback timing; default prompt `gamma=4/tokens=32` improves from `23.83` to `22.66 ms/tok`, and `gamma=16/tokens=64` proves the high-acceptance path can beat plain target (`15.67` vs `22.24 ms/tok`)
+  - [x] Add opt-in adaptive gamma (`--adaptive`, `--max-gamma`) as an exploration harness; it helps high-acceptance prompts (`19.35 ms/tok` vs plain `21.84` with conservative growth) but still loses on rejection-heavy `def fibonacci(n):`, so production speculative needs acceptance prediction or a cheaper early-reject verifier
   - [ ] Next: target true batched speculative verification and lower-level Q4/Q6 kernel changes; Q8_0 draft is now closer, but exact speculative still trails plain target decode until verifier overhead is cut
 
 ## Deferred research backlog — efficient attention / long context
