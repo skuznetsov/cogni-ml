@@ -336,6 +336,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness or power state changes
 **decision:** "Do not keep or retry direct SwiGLU-to-F16 staging as a default optimization; activation staging removal is smaller than its scheduling/conversion overhead on pp64."
 
+### [LM-prefill-Q6-DB-GEMM-FALSIFIER] Q6_K double-buffered GEMM
+**status:** refuted
+**trust:** {F:0.8, G:narrow, R:0.85}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "A Q6_K batch GEMM variant can mirror the Q5_K double-buffered K-tile schedule and preserve forward correctness."
+  source: temporary `simd_mm_q6k_db` route in `src/ml/gguf/kernels/gemm_mm.metal` and `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q6_K GEMM kernel or prefill route changes
+- claim: "Focused correctness smoke passed while the route was enabled: `spec/qwen35_forward_spec.cr` -> 9 examples, 0 failures."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6db_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"`
+  verified_at: 2026-04-24
+  decay_trigger: Q6_K GEMM kernel or forward path changes
+- claim: "Repeated pp64 A/B with `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=3 --reps=16 --compare-env=QWEN35_Q6K_DB_GEMM_OFF` measured default avg 168.22 ms / p50 168.81 ms versus off avg 168.25 ms / p50 168.62 ms."
+  source: local command output
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness or power state changes
+**decision:** "Do not keep the double-buffered Q6_K variant; the observed effect is noise-level and p50 is slightly worse."
+
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified
 **trust:** {F:0.9, G:medium, R:0.9}
