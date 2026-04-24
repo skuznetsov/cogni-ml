@@ -27,6 +27,7 @@ max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "16").to_i
 verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace"
 trace = ENV["QWEN35_SPEC_TRACE"]? == "1"
 early_reject_enabled = ENV["QWEN35_SPEC_EARLY_REJECT_OFF"]? != "1"
+single_accept_fast_enabled = ENV["QWEN35_SPEC_SINGLE_FAST_OFF"]? != "1"
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
@@ -122,7 +123,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} early_reject=#{early_reject_enabled} n_gen=#{n_gen} verify=#{verify_mode}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} n_gen=#{n_gen} verify=#{verify_mode}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -149,6 +150,7 @@ adaptive_growth_allowed = true
 gamma_sum = 0
 gamma_max_seen = 0
 early_rejects = 0
+single_accept_fast = 0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
@@ -160,6 +162,7 @@ while generated_ids.size < n_gen
   correction_or_accepted = [] of Int32
   candidates = [] of Int32
   rejected = false
+  cycle_done = false
 
   if early_reject_enabled && verify_mode != "serial" && draft_next != target_next
     generated_ids << target_next
@@ -174,9 +177,26 @@ while generated_ids.size < n_gen
     pos += 1
     rejected = true
     early_rejects += 1
+    cycle_done = true
+  elsif single_accept_fast_enabled && verify_mode != "serial" && cycle_gamma == 1 && draft_next == target_next
+    accepted_token = draft_next
+    generated_ids << accepted_token
+    correction_or_accepted << accepted_token
+    accepted += 1
+    proposed += 1
+    td0 = Time.instant
+    draft_next = advance_next(draft, accepted_token, pos, draft_state)
+    draft_ms += (Time.instant - td0).total_milliseconds
+    tv0 = Time.instant
+    target_next = advance_next(target, accepted_token, pos, target_state)
+    target_verify_ms += (Time.instant - tv0).total_milliseconds
+    pos += 1
+    single_accept_fast += 1
+    rejected = false
+    cycle_done = true
   end
 
-  unless rejected
+  unless cycle_done
     tdb0 = Time.instant
     draft_cycle_base.copy_from!(draft_state)
     draft_backup_ms += (Time.instant - tdb0).total_milliseconds
@@ -325,7 +345,7 @@ plain_tokens_s = n_gen.to_f64 / (plain_ms / 1000.0)
 
 puts
 puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles}"
-puts "gamma_stats avg=#{(gamma_sum.to_f64 / cycles.to_f64).round(2)} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects}"
+puts "gamma_stats avg=#{(gamma_sum.to_f64 / cycles.to_f64).round(2)} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects} single_fast=#{single_accept_fast}"
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s)"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"

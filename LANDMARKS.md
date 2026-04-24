@@ -185,6 +185,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_adaptive_default --tokens 64 --gamma 4 [--no-adaptive]`, default prompt and `def fibonacci(n):`
   verified_at: 2026-04-24
   decay_trigger: adaptive policy, prompt acceptance distribution, verifier mode, or draft model changes
+- claim: "A gamma=1 accepted-token fast path is an exact win once adaptive has fallen to one candidate: if `draft_next == target_next`, the harness can advance target and draft directly without target/draft rollback backups or chunk verifier. On `def fibonacci(n):`, interleaved A/B improved from `27.93/32.02 ms/tok` with `QWEN35_SPEC_SINGLE_FAST_OFF=1` to `27.61/26.72 ms/tok` default; `single_fast=24` and backup timing roughly halved."
+  source: `/tmp/qwen35_speculative_accept_single_fast_ab --tokens 64 --gamma 4 "def fibonacci(n):"`, interleaved `QWEN35_SPEC_SINGLE_FAST_OFF=1` vs default
+  verified_at: 2026-04-24
+  decay_trigger: adaptive policy, verifier control flow, target_next semantics, or draft model changes
 
 ## Graph Visualization
 
