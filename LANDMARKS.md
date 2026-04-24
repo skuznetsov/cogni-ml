@@ -205,6 +205,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/Users/sergey/SrcArchives/AI/llama.cpp/build/bin/llama-quantize Qwen3.5-0.8B-Q8_0.gguf Qwen3.5-0.8B-Q4_K_M.local.gguf Q4_K_M` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: availability of F16/BF16 0.8B source GGUF, separately downloaded Q4 draft, or llama.cpp requantization policy changes
+- claim: "Initial `gamma=3` is a useful opt-in but not a safe default: repeated high-acceptance runs improved from about `19.40 ms/tok` at gamma4 to `18.28-18.40`, and mixed partial-reject prompts improved (`Once upon a time` `21.56` vs gamma4 `22.42`), but `def fibonacci(n):` regressed to `22.74 ms/tok`. `--max-gamma 16/24` with initial gamma4 did not reproduce the high-accept gain."
+  source: `/tmp/qwen35_speculative_accept_skipdraft2 --tokens 64 --gamma {3,4} [--max-gamma 16|24]`, prompts `The capital of France is`, `Once upon a time`, `The quick brown fox`, `def fibonacci(n):`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: adaptive gamma policy, verifier chunk implementation, prompt acceptance distribution, or draft model changes
 
 ## Graph Visualization
 
