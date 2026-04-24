@@ -627,6 +627,56 @@ module ML::GGUF
       {% end %}
     end
 
+    private def full_attn_layer_chunk_project_routed(inp : Array(Float32),
+                                                     n_tokens : Int32,
+                                                     start_pos : Int32,
+                                                     lstate : LayerState,
+                                                     lw : Qwen35FullAttnWeights,
+                                                     hp : Qwen35Hparams,
+                                                     max_seq : Int32) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        supported = metal_qw_supported?(lw.attn_q_qw) &&
+                    metal_qw_supported?(lw.attn_k_qw) &&
+                    metal_qw_supported?(lw.attn_v_qw) &&
+                    metal_qw_supported?(lw.attn_output_qw) &&
+                    metal_qw_supported?(lw.ffn_gate_qw) &&
+                    metal_qw_supported?(lw.ffn_up_qw) &&
+                    metal_qw_supported?(lw.ffn_down_qw)
+        return nil unless supported
+
+        kv_dim = hp.head_dim * hp.n_head_kv
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        k_buf = lstate.k_cache_buf
+        v_buf = lstate.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.v_cache_buf = v_buf
+        end
+
+        scale = (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32
+        return Qwen35Metal.full_attn_layer_chunk_project(
+          inp,
+          lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw,
+          lw.attn_norm, lw.attn_q_norm, lw.attn_k_norm, lw.attn_output_qw,
+          k_buf, v_buf,
+          lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+          start_pos, n_tokens,
+          hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
+          hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
     # Full-attention GPU route:
     #   qkv projections -> split/norm/rope -> kv write -> attn -> out proj
     private def full_attn_project_routed(lstate : LayerState,
@@ -1142,11 +1192,11 @@ module ML::GGUF
           end
 
           if gpu_out = Qwen35Metal.recurrent_layer_chunk_project(
-                         inp, conv_buf, ssm_buf, lw.attn_norm,
-                         lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw,
-                         lw.ssm_conv1d, lw.ssm_dt_bias, lw.ssm_a, lw.ssm_norm, lw.ssm_out_qw,
-                         lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
-                         h_k, h_v, s, conv_k, n_tokens, hp.rms_eps)
+               inp, conv_buf, ssm_buf, lw.attn_norm,
+               lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw,
+               lw.ssm_conv1d, lw.ssm_dt_bias, lw.ssm_a, lw.ssm_norm, lw.ssm_out_qw,
+               lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+               h_k, h_v, s, conv_k, n_tokens, hp.rms_eps)
             return gpu_out
           end
         end
@@ -1300,13 +1350,17 @@ module ML::GGUF
       weights.layers.each_with_index do |lw, il|
         case lw
         in Qwen35FullAttnWeights
-          out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
-          n_tokens.times do |t|
-            row = x[t * hp.n_embd, hp.n_embd]
-            y = forward_full_attn_layer(row, start_pos + t, lw, state.layers[il], hp, max_seq)
-            hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
+          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
+            x = gpu_out
+          else
+            out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+            n_tokens.times do |t|
+              row = x[t * hp.n_embd, hp.n_embd]
+              y = forward_full_attn_layer(row, start_pos + t, lw, state.layers[il], hp, max_seq)
+              hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
+            end
+            x = out
           end
-          x = out
         in Qwen35RecurrentWeights
           x = forward_recurrent_layer_chunk(x, n_tokens, lw, state.layers[il], hp, max_seq)
         end

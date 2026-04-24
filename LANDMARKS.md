@@ -240,6 +240,24 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-23
   decay_trigger: benchmark harness, model file, power state, or llama.cpp HEAD changes
 
+### [LM-codex-prefill-fullattn-chunk] Full-attention prefill chunks on Metal
+**status:** verified
+**trust:** {F:0.9, G:medium, R:0.9}
+**context:** ml (Qwen prefill)
+**evidence:**
+- claim: "Full-attention prompt rows can be processed as an exact causal chunk by projecting Q/K/V for all rows, writing chunk K/V to the position-major cache, then letting row `t` attend only to `0..start_pos+t`."
+  source: `qwen35_split_qgate_rows`, `qwen35_rmsnorm_heads_rows`, `qwen35_rope_partial_rows`, `qwen35_kv_write_rows`, `qwen35_attn_decode_rows` in `src/ml/gguf/kernels/fullattn_qwen35.metal`
+  verified_at: 2026-04-23
+  decay_trigger: full-attention kernel layout or KV cache layout changes
+- claim: "Default full-attn prefill chunk matches serial fallback closely on a 16-token full-logit A/B."
+  source: temporary A/B harness: same top1 `30`, cosine `0.9999999977579328`, max_abs `0.001364708`
+  verified_at: 2026-04-23
+  decay_trigger: Qwen forward numerics, kernel layout, or fallback path changes
+- claim: "Full-attn chunking reduces profile `attn` syncs from 504 to 8 and pp64 p50 improves to `143.18 tok/s`; decode remains ahead of llama.cpp by `6.65%` on gen16."
+  source: `bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1`
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, model file, power state, or llama.cpp HEAD changes
+
 ### [LM-claude-BASELINE-1] llama.cpp HEAD 9B tok/s reference
 **status:** verified
 **trust:** {F:0.95, G:narrow, R:0.9}
