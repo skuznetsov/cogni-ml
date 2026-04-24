@@ -3291,3 +3291,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, Q8_0 GEMV kernel, Metal compiler, or draft model quantization changes
 **note:** Do not re-add mixed-size Q8 recurrent `qkv + gate` dual GEMV as a default path without a different kernel design. Saving dispatch/input reads was outweighed by lower occupancy/register pressure, matching the earlier Q4 dual-GEMV failure pattern.
+
+### [LM-codex-Q8-ALPHA-BETA-DUAL-GEMV-1] Q8_0 alpha/beta dual GEMV improves draft decode
+**status:** verified
+**trust:** {F:0.82, G:0.46, R:0.78}
+**context:** ml (Qwen speculative draft decode kernel optimization)
+**evidence:**
+- claim: "The Qwen3.5 0.8B Q8_0 recurrent `alpha` and `beta` projections have matching input/output dimensions and can reuse the existing exact `simd_mv_q8_0_dual_f32` kernel without a new Metal kernel. The route is guarded by `QWEN35_Q8_ALPHA_BETA_DUAL_GEMV_OFF=1` and also respects the broader `QWEN35_Q8_DUAL_GEMV_OFF=1`."
+  source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 dual GEMV kernel, recurrent projection layout, or draft model quantization changes
+- claim: "Correctness checks passed after enabling the route: focused Qwen forward specs reported `13 examples, 0 failures`; Metal quantized matmul specs reported `9 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8ab_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8ab_metal_spec crystal spec spec/qwen35_metal_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: spec fixtures, Qwen35 route selection, or Metal bridge changes
+- claim: "In a 64-token Qwen3.5 0.8B Q8_0 draft sync profile, default alpha/beta dual routing improved wall time from `561.6 ms` and `569.6 ms` off (`8.77` and `8.90 ms/tok`) to `544.3 ms` and `539.7 ms` default (`8.51` and `8.43 ms/tok`). Recurrent projection encode accounting dropped from `13.24/15.94 ms` to `9.80/9.78 ms` over 1152 calls."
+  source: interleaved `QWEN35_Q8_ALPHA_BETA_DUAL_GEMV_OFF=1` vs default with `QWEN35_MODEL=...Qwen3.5-0.8B-Q8_0.gguf QWEN35_PROFILE_TOP1=1 /tmp/qwen35_sync_profile_q8ab 64 64` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Metal compiler, Q8_0 GEMV kernels, or decode wave scheduler changes
+- claim: "Speculative harness smokes stayed exact across high-accept and rejection prompts. The gain is mostly visible in draft-only profiles; end-to-end speculative wall is dominated by target verification/fallback on many prompts."
+  source: `/tmp/qwen35_speculative_accept_q8ab --tokens 64 --gamma 4 --max-gamma 32` on prompts `The capital of France is`, `def fibonacci(n):`, `Once upon a time`, and `The quick brown fox` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative scheduler, target verifier, or draft model changes
+**note:** This is a small exact draft-kernel win. It does not change the main conclusion: the next large speculative gain needs lower target verifier cost or a much faster draft, not more mixed-size dual GEMV fusions.

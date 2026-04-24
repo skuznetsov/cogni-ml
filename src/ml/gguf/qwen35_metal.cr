@@ -1340,6 +1340,10 @@ module ML
           ENV["QWEN35_Q8_DUAL_GEMV_OFF"]? != "1"
         end
 
+        private def self.q8_alpha_beta_dual_gemv_enabled? : Bool
+          q8_dual_gemv_enabled? && ENV["QWEN35_Q8_ALPHA_BETA_DUAL_GEMV_OFF"]? != "1"
+        end
+
         private def self.q8_dual_gemv_candidate?(gate_qw : QuantWeight,
                                                  up_qw : QuantWeight,
                                                  batch : Int32 = 1) : Bool
@@ -1347,6 +1351,15 @@ module ML
             gate_qw.type.q8_0? && up_qw.type.q8_0? &&
             gate_qw.in_dim == up_qw.in_dim &&
             gate_qw.out_dim == up_qw.out_dim
+        end
+
+        private def self.q8_alpha_beta_dual_gemv_candidate?(alpha_qw : QuantWeight,
+                                                            beta_qw : QuantWeight,
+                                                            batch : Int32 = 1) : Bool
+          q8_alpha_beta_dual_gemv_enabled? && batch == 1 &&
+            alpha_qw.type.q8_0? && beta_qw.type.q8_0? &&
+            alpha_qw.in_dim == beta_qw.in_dim &&
+            alpha_qw.out_dim == beta_qw.out_dim
         end
 
         private def self.q4_pair_h16_gemm_candidate?(gate_qw : QuantWeight,
@@ -2354,8 +2367,14 @@ module ML
           proj_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_gemv(proj_enc, qkv_pipe.not_nil!,   cur_buf, qkv_buf,   qkv_w_buf,   qkv_w_off,   attn_qkv_qw.in_dim,  attn_qkv_qw.out_dim)
           encode_gemv(proj_enc, gate_pipe.not_nil!,  cur_buf, z_buf,     gate_w_buf,  gate_w_off,  attn_gate_qw.in_dim, attn_gate_qw.out_dim)
-          encode_gemv(proj_enc, alpha_pipe.not_nil!, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, ssm_alpha_qw.in_dim, ssm_alpha_qw.out_dim)
-          encode_gemv(proj_enc, beta_pipe.not_nil!,  cur_buf, beta_buf,  beta_w_buf,  beta_w_off,  ssm_beta_qw.in_dim,  ssm_beta_qw.out_dim)
+          if q8_alpha_beta_dual_gemv_candidate?(ssm_alpha_qw, ssm_beta_qw)
+            encode_gemv_q8_dual(proj_enc, cur_buf, alpha_buf, beta_buf,
+              alpha_w_buf, alpha_w_off, beta_w_buf, beta_w_off,
+              ssm_alpha_qw.in_dim, ssm_alpha_qw.out_dim)
+          else
+            encode_gemv(proj_enc, alpha_pipe.not_nil!, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, ssm_alpha_qw.in_dim, ssm_alpha_qw.out_dim)
+            encode_gemv(proj_enc, beta_pipe.not_nil!,  cur_buf, beta_buf,  beta_w_buf,  beta_w_off,  ssm_beta_qw.in_dim,  ssm_beta_qw.out_dim)
+          end
           proj_enc.end_encoding
 
           conv_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -4899,8 +4918,14 @@ module ML
                   proj_enc = ML::Metal::ComputeEncoder.new(cmd)
                   encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, pre_norm_buf, rec_qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim)
                   encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, pre_norm_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim)
-                  encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, pre_norm_buf, alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim)
-                  encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, pre_norm_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim)
+                  if q8_alpha_beta_dual_gemv_candidate?(lw.ssm_alpha_qw, lw.ssm_beta_qw)
+                    encode_gemv_q8_dual(proj_enc, pre_norm_buf, alpha_buf, beta_buf,
+                      alpha_w_buf, alpha_w_off, beta_w_buf, beta_w_off,
+                      lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim)
+                  else
+                    encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, pre_norm_buf, alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim)
+                    encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, pre_norm_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim)
+                  end
                   proj_enc.end_encoding
                 end
 
