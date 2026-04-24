@@ -193,6 +193,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_fallback_final --tokens 64 --gamma 4`, default prompt and `def fibonacci(n):`
   verified_at: 2026-04-24
   decay_trigger: fallback policy, adaptive policy, prompt acceptance distribution, verifier mode, or draft model changes
+- claim: "Adaptive `max_gamma=32` is a better default than 16 for high-acceptance prompts while preserving the rejection-heavy fallback behavior. With initial `gamma=4`, the default prompt measured `19.11 ms/tok` versus plain target `21.96`, while `def fibonacci(n):` still fell back after rejection and measured `21.21 ms/tok` versus plain target `21.94`. Starting at `gamma=8` was rejected because it improved high-acceptance speed but regressed `def fibonacci(n):` to `26.56 ms/tok`."
+  source: `/tmp/qwen35_speculative_accept_max32_default --tokens 64 --gamma 4`, default prompt and `def fibonacci(n):`, plus `--gamma 8 --max-gamma 32` adversary run
+  verified_at: 2026-04-24
+  decay_trigger: adaptive policy, prompt acceptance distribution, verifier mode, or draft model changes
 
 ## Graph Visualization
 
