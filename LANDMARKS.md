@@ -3314,3 +3314,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: speculative scheduler, target verifier, or draft model changes
 **note:** This is a small exact draft-kernel win. It does not change the main conclusion: the next large speculative gain needs lower target verifier cost or a much faster draft, not more mixed-size dual GEMV fusions.
+
+### [LM-codex-SPEC-DRAFT-BACKUP-SKIP-1] Skip unused draft backup before target-only fallback
+**status:** verified
+**trust:** {F:0.78, G:0.44, R:0.74}
+**context:** ml (Qwen speculative scheduler cleanup)
+**evidence:**
+- claim: "When adaptive speculative decoding has no regrow and `current_gamma // 2` would fall to the target-only fallback threshold, any rejection in the current chunk will skip draft resync. In that case the pre-candidate `draft_cycle_base.copy_from!` is unused and can be skipped exactly."
+  source: `bin/qwen35_speculative_accept.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative adaptive fallback policy, draft resync policy, or rollback state model changes
+- claim: "The harness now reports `draft_backup_skip` and has a guard raise if a resync path is reached after a skipped draft backup."
+  source: `bin/qwen35_speculative_accept.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative harness reporting or control-flow changes
+- claim: "Exact output stayed matched to greedy target in A/B smokes for `The capital of France is`, `def fibonacci(n):`, and `Once upon a time`. On partial-reject prompts the default path reports `draft_backup_skip=1` and `draft_backup=0.0 ms`; `Once upon a time` improved from about `22.50 ms/tok` off to `22.36 ms/tok` default in two sequential pairs."
+  source: interleaved `QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF=1` vs default with `/tmp/qwen35_speculative_accept_draft_backup --tokens 64 --gamma 4 --max-gamma 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, speculative scheduler, or target/draft model changes
+**note:** This is a small exact cleanup, not the main speculative breakthrough. It removes known-dead state copying on fallback-bound cycles; target verification remains the dominant cost.
