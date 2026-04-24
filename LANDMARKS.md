@@ -181,6 +181,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_early_final --tokens 64 --gamma 4 "def fibonacci(n):"`, `QWEN35_SPEC_EARLY_REJECT_OFF=1` vs default
   verified_at: 2026-04-24
   decay_trigger: speculative verifier control flow, target_next semantics, or rejection distribution changes
+- claim: "Rejection-aware adaptive gamma is now the better harness default than fixed gamma=4 on measured prompts. In the same built harness, default prompt improved from fixed `23.39 ms/tok` to adaptive `19.30 ms/tok`; `def fibonacci(n):` improved from fixed `29.59 ms/tok` to adaptive `28.60 ms/tok`. Fixed gamma remains available through `--no-adaptive` or `QWEN35_SPEC_ADAPTIVE=0`."
+  source: `/tmp/qwen35_speculative_accept_adaptive_default --tokens 64 --gamma 4 [--no-adaptive]`, default prompt and `def fibonacci(n):`
+  verified_at: 2026-04-24
+  decay_trigger: adaptive policy, prompt acceptance distribution, verifier mode, or draft model changes
 
 ## Graph Visualization
 

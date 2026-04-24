@@ -21,7 +21,7 @@ tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = "The capital of France is"
 n_gen = 32
 gamma = 4
-adaptive_gamma = ENV["QWEN35_SPEC_ADAPTIVE"]? == "1"
+adaptive_gamma = ENV["QWEN35_SPEC_ADAPTIVE"]? != "0"
 adaptive_regrow = ENV["QWEN35_SPEC_ADAPTIVE_REGROW"]? == "1"
 max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "16").to_i
 verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace"
@@ -29,13 +29,14 @@ trace = ENV["QWEN35_SPEC_TRACE"]? == "1"
 early_reject_enabled = ENV["QWEN35_SPEC_EARLY_REJECT_OFF"]? != "1"
 
 OptionParser.parse(ARGV) do |parser|
-  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
+  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--draft PATH", "Draft GGUF path (default: Qwen3.5 0.8B Q8_0)") { |path| draft_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
   parser.on("--gamma N", "Draft candidates per cycle") { |value| gamma = value.to_i }
   parser.on("--max-gamma N", "Maximum adaptive draft candidates per cycle (default: 16)") { |value| max_gamma = value.to_i }
-  parser.on("--adaptive", "Adapt gamma: double after fully accepted cycles, halve after rejection") { adaptive_gamma = true }
+  parser.on("--adaptive", "Adapt gamma: double after fully accepted cycles, halve after rejection (default)") { adaptive_gamma = true }
+  parser.on("--no-adaptive", "Use fixed --gamma for every speculative cycle") { adaptive_gamma = false }
   parser.on("--tokens N", "Generated tokens to compare") { |value| n_gen = value.to_i }
   parser.on("--verify MODE", "Target verifier: serial, chunk, or chunk-inplace (default: chunk-inplace)") { |value| verify_mode = value }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
