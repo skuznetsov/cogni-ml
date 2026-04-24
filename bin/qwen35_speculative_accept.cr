@@ -33,7 +33,7 @@ plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to_i
 skip_draft_before_fallback_enabled = ENV["QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF"]? != "1"
 
 OptionParser.parse(ARGV) do |parser|
-  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace] [prompt]"
+  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace|hybrid] [prompt]"
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--draft PATH", "Draft GGUF path (default: Qwen3.5 0.8B Q8_0)") { |path| draft_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
@@ -42,7 +42,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--adaptive", "Adapt gamma: double after fully accepted cycles, halve after rejection (default)") { adaptive_gamma = true }
   parser.on("--no-adaptive", "Use fixed --gamma for every speculative cycle") { adaptive_gamma = false }
   parser.on("--tokens N", "Generated tokens to compare") { |value| n_gen = value.to_i }
-  parser.on("--verify MODE", "Target verifier: serial, chunk, or chunk-inplace (default: chunk-inplace)") { |value| verify_mode = value }
+  parser.on("--verify MODE", "Target verifier: serial, chunk, chunk-inplace, or hybrid (default: chunk-inplace)") { |value| verify_mode = value }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -58,7 +58,7 @@ raise ArgumentError.new("--max-gamma must be positive") unless max_gamma > 0
 max_gamma = Math.max(max_gamma, gamma)
 raise ArgumentError.new("QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive") unless plain_fallback_gamma > 0
 raise ArgumentError.new("--tokens must be positive") unless n_gen > 0
-raise ArgumentError.new("--verify must be serial, chunk, or chunk-inplace") unless {"serial", "chunk", "chunk-inplace"}.includes?(verify_mode)
+raise ArgumentError.new("--verify must be serial, chunk, chunk-inplace, or hybrid") unless {"serial", "chunk", "chunk-inplace", "hybrid"}.includes?(verify_mode)
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -235,7 +235,7 @@ while generated_ids.size < n_gen
     draft_ms += (Time.instant - td0).total_milliseconds
     proposed += candidates.size
 
-    if verify_mode == "serial"
+    if verify_mode == "serial" || (verify_mode == "hybrid" && cycles == 1)
       candidates.each do |cand|
         if cand == target_next
           generated_ids << cand

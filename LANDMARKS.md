@@ -213,6 +213,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_serialfast --tokens 64 --gamma 4 --verify serial|chunk-inplace`, prompts `Once upon a time`, `The quick brown fox`, `def fibonacci(n):`, `The capital of France is`, on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: serial verifier control flow, early-reject policy, or chunk verifier performance changes
+- claim: "Opt-in `--verify hybrid` uses serial verification for the first speculative cycle and chunk-inplace afterwards. It helps first-cycle partial-reject prompts (`Once upon a time` `21.44 ms/tok` vs chunk `22.47`, `The quick brown fox` `21.73` vs `22.49`) but is not a default because high-acceptance prompt slightly regresses (`19.32` vs `19.08`) and `def fibonacci(n):` regresses (`21.68` vs `21.50`)."
+  source: `/tmp/qwen35_speculative_accept_hybrid --tokens 64 --gamma 4 --verify hybrid|chunk-inplace`, prompts `The capital of France is`, `Once upon a time`, `The quick brown fox`, `def fibonacci(n):`, `Today I want to`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: verifier mode policy, serial verifier performance, chunk verifier performance, or prompt acceptance distribution changes
 
 ## Graph Visualization
 
