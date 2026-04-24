@@ -96,6 +96,13 @@
   - [x] Add grouped command-buffer attribution for fused prefill waves; pp256 shows all `full+rec` groups are nearly flat (`~61.2-61.7 ms` wait) and `rec0-2` is smaller (`~46.4 ms`), so there is no single pathological layer group to attack
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
+## Deferred research backlog — efficient attention / long context
+
+- [ ] **R.1** FlashAttention-style exact full-attention prefill kernel for Qwen35 full-attn layers; first add intra-group phase attribution and only implement if `full.attn` is material at pp2048+.
+- [ ] **R.2** DeepSeek Sparse Attention / NSA-style indexer experiment; requires calibration + sparse adaptation, not an exact drop-in for existing Qwen weights.
+- [ ] **R.3** Linear-attention replacement track; treat as new architecture or distillation/continued-training project, not an inference-only optimization.
+- [ ] **R.4** Training-free long-context inference hacks under eval gates: attention sinks / sliding window, SnapKV/H2O-like KV retention, and KV quantization. Keep all default-off until LongBench/RULER/top-logit drift evidence exists.
+
 ## Phase 5 — Scale to 27B
 
 - [ ] **5.1** Run all tests on 27B Q4_K_M

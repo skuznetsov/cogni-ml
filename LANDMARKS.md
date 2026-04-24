@@ -419,7 +419,34 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=3` and repeat with `--reps=2`
   verified_at: 2026-04-24
   decay_trigger: benchmark harness, kernel route, or power state changes
-**adversary:** "This refutes a single bad layer-group hypothesis for pp256 only; it does not prove the same for very long prompts or identify intra-group phase timing. The next exact optimization should either remove repeated cross-group CPU materialization or improve the repeated Q4/Q6 GEMM kernels."
+- claim: "A fresh pp2048 profile changed the group shape: the initial recurrent-only `rec0-2` group waited `901.24 ms`, while `full+rec` groups waited around `584-605 ms`; this points at recurrent-only chunk work scaling differently for long chunks."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_current_prefill_pp2048 crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_prefill_attribution.cr -- --prompt=2048 --warmup=0 --reps=1`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, chunk size, kernel route, or power state changes
+**adversary:** "This refutes a single bad layer-group hypothesis for pp256, but pp2048 shows one long-context outlier (`rec0-2`). The next exact optimization should first add intra-group phase attribution before changing kernels."
+
+### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
+**status:** proposed
+**trust:** {F:0.65, G:medium, R:0.70}
+**context:** ml (Qwen35 long-context research)
+**evidence:**
+- claim: "FlashAttention is an exact IO-aware implementation strategy for softmax attention, so it can be applied without retraining if a Qwen35 full-attention phase is proven to dominate long-context prefill."
+  source: FlashAttention paper (`https://arxiv.org/abs/2205.14135`) and current Qwen35 full-attn/recurrent split in `LANDMARKS.md`
+  verified_at: 2026-04-24
+  decay_trigger: full-attention kernel or profiling evidence changes
+- claim: "DeepSeek Sparse Attention / NSA-style DSA is not an exact drop-in for Qwen35 weights: the paper introduces a lightning indexer and token selection through continued training."
+  source: DeepSeek-V3.2 paper (`https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/main/assets/paper.pdf`)
+  verified_at: 2026-04-24
+  decay_trigger: DSA implementation details or Qwen sparse adaptation experiments change
+- claim: "Linear attention changes the attention math and should be treated as a new architecture or distillation/continued-training branch rather than a runtime-only patch."
+  source: Linear Transformers paper (`https://proceedings.mlr.press/v119/katharopoulos20a.html`)
+  verified_at: 2026-04-24
+  decay_trigger: exact linear-attention equivalence proof or successful Qwen distillation changes this
+- claim: "Training-free long-context hacks exist but are approximate: attention sinks / StreamingLLM, SnapKV/H2O-like retention, and KV quantization should stay behind eval gates."
+  source: StreamingLLM (`https://arxiv.org/abs/2309.17453`), SnapKV (`https://arxiv.org/abs/2404.14469`), H2O (`https://proceedings.neurips.cc/paper_files/paper/2023/file/6ceefa7b15572587b78ecfcebb2827f8-Paper-Conference.pdf`)
+  verified_at: 2026-04-24
+  decay_trigger: local eval harness or quality measurements change
+**adversary:** "These are not the immediate Qwen35/M2 Max bottleneck until profiling proves attention dominates. Current prefill attribution points to repeated FFN/GEMM traffic, while decode already has whole-token GPU residency."
 
 ### [LM-prefill-LONG-SUFFIX-TOP1] Batched final chunk for long prompts
 **status:** verified
@@ -1023,6 +1050,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `bin/qwen35_sync_profile.cr` 2026-04-23
   verified_at: 2026-04-23
   decay_trigger: thermal state / profiling conditions changed
+- claim: "A fresh top1 decode profile after prefill work measured 8 decode-wave syncs over 8 tokens, `164.53 ms` GPU wait, and `24.05 ms/tok` wall at prompt=64/gen=8."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_current_decode_profile QWEN35_PROFILE_TOP1=1 crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_sync_profile.cr -- 64 8`
+  verified_at: 2026-04-24
+  decay_trigger: thermal state, power state, decode wave route, or profiling conditions changed
 **note:** This completes the obvious orchestration optimization. The remaining gap to llama.cpp is now mostly kernel efficiency and long-context attention cost, not CPU/GPU boundary churn.
 
 ### [LM-codex-QWEN-VS-LLAMA-1] Matched 64/64 benchmark shows decode gap is now moderate
