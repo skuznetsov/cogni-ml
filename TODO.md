@@ -88,6 +88,7 @@
   - [x] Specialize final full-attention prefill layer for last-row logits; final layer still writes all K/V but computes attention+FFN only for the final row, improving pp64 A/B from `173.86 ms` off to `170.00 ms` default
   - [x] Falsifier: direct SwiGLU-to-F16 activation staging for Q6 FFN-down was exact in focused specs but slower at pp64 (`170.02 ms` default vs `167.52 ms` off), so activation staging is not the current wall
   - [x] Falsifier: double-buffered Q6_K GEMM compiled and passed focused forward specs, but pp64 A/B was neutral (`168.22 ms` default vs `168.25 ms` off; p50 slightly worse), so Q6 barriers are not the next leverage point
+  - [x] Raise default prefill chunk size from `64` to `1024`; pp256 A/B improves from `711.92 ms` p50 at chunk 64 to `522.76 ms` p50 default, while pp64 is unchanged within noise
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Phase 5 — Scale to 27B

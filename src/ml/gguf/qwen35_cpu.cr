@@ -18,6 +18,9 @@ require "./qwen35_metal"
 module ML::GGUF
   module Qwen35CPU
     extend self
+    # Keep prompt chunks large enough to avoid CPU-side boundary overhead while
+    # preserving an env override for small-memory experiments.
+    DEFAULT_PREFILL_CHUNK_SIZE = 1024
 
     # ─────────────────────────────────────────────────────────────────────
     # Per-sequence state: KV cache for full-attn layers + SSM state for
@@ -1513,7 +1516,7 @@ module ML::GGUF
       if ENV["QWEN35_PREFILL_FINAL_CHUNK_OFF"]? != "1" &&
          ENV["QWEN35_PREFILL_CHUNK_OFF"]? != "1" &&
          token_ids.size > 1
-        chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || "64").to_i
+        chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || DEFAULT_PREFILL_CHUNK_SIZE.to_s).to_i
         if token_ids.size > chunk_size
           prefill_tokens(weights, token_ids[0...-1], start_pos, state)
           return forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
@@ -1581,7 +1584,7 @@ module ML::GGUF
       n_tokens = token_ids.size
       raise ArgumentError.new("prefill span exceeds max_seq") if start_pos < 0 || start_pos + n_tokens > max_seq
 
-      chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || "64").to_i
+      chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || DEFAULT_PREFILL_CHUNK_SIZE.to_s).to_i
       raise ArgumentError.new("QWEN35_PREFILL_CHUNK_SIZE must be positive") unless chunk_size > 0
       if n_tokens > chunk_size
         offset = 0
