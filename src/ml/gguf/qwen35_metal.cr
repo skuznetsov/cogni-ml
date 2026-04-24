@@ -1004,9 +1004,10 @@ module ML
         # through the bridge's gs_buffer_read copy helper.
         private def self.read_shared_f32(buf : ML::MetalBuffer, count : Int32) : Array(Float32)
           ptr = buf.contents.as(Pointer(Float32))
-          result = Array(Float32).new(count, 0.0_f32)
-          Slice.new(result.to_unsafe, count).copy_from(Slice.new(ptr, count))
-          result
+          Array(Float32).build(count) do |dst|
+            Slice.new(dst, count).copy_from(Slice.new(ptr, count))
+            count
+          end
         end
 
         private def self.write_shared_f16(buf : ML::MetalBuffer, values : Array(Float32)) : Nil
