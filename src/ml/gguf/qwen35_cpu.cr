@@ -28,7 +28,7 @@ module ML::GGUF
       # k_cache[pos * kv_dim + h * head_dim + d], same for v.
       property k_cache : Array(Float32)?
       property v_cache : Array(Float32)?
-      property position : Int32 = 0  # number of cached tokens
+      property position : Int32 = 0 # number of cached tokens
 
       # GPU-resident KV cache. Same layout as k_cache/v_cache (position-
       # major). When Metal is available the full-attn path writes K/V
@@ -42,6 +42,7 @@ module ML::GGUF
       #   for the 1D conv (padded with zeros at start).
       # ssm_state: [num_v_heads, head_v_dim, head_k_dim] — the matrix-valued recurrent state.
       property conv_state : Array(Float32)?
+      property conv_state_buf : ML::MetalBuffer?
       property ssm_state : Array(Float32)?
 
       # GPU-resident SSM state. Kept in parallel to the CPU `ssm_state`
@@ -53,6 +54,38 @@ module ML::GGUF
 
       def initialize
       end
+
+      # Deep-copy per-layer decode state. This is the minimal primitive
+      # needed by exact speculative verification: each branch must mutate
+      # its own KV/SSM buffers, not alias the parent sequence.
+      def fork : LayerState
+        copy = LayerState.new
+        copy.copy_from!(self)
+        copy
+      end
+
+      def copy_from!(src : LayerState) : Nil
+        @position = src.position
+        @k_cache = src.k_cache.try(&.dup)
+        @v_cache = src.v_cache.try(&.dup)
+        @conv_state = src.conv_state.try(&.dup)
+        @ssm_state = src.ssm_state.try(&.dup)
+        @k_cache_buf = copy_buffer_from!(@k_cache_buf, src.k_cache_buf)
+        @v_cache_buf = copy_buffer_from!(@v_cache_buf, src.v_cache_buf)
+        @conv_state_buf = copy_buffer_from!(@conv_state_buf, src.conv_state_buf)
+        @ssm_state_buf = copy_buffer_from!(@ssm_state_buf, src.ssm_state_buf)
+      end
+
+      private def copy_buffer_from!(dst : ML::MetalBuffer?, src : ML::MetalBuffer?) : ML::MetalBuffer?
+        return nil unless src_buf = src
+
+        dst_buf = dst
+        if dst_buf.nil? || dst_buf.size != src_buf.size || dst_buf.storage_mode != src_buf.storage_mode
+          dst_buf = ML::MetalBuffer.new(src_buf.size, src_buf.storage_mode)
+        end
+        dst_buf.copy_from(src_buf, src_buf.size)
+        dst_buf
+      end
     end
 
     class State
@@ -61,6 +94,22 @@ module ML::GGUF
 
       def initialize(hp : Qwen35Hparams, @max_seq : Int32 = 1024)
         @layers = Array(LayerState).new(hp.n_layer) { LayerState.new }
+      end
+
+      protected def initialize(@layers : Array(LayerState), @max_seq : Int32)
+      end
+
+      def fork : State
+        State.new(@layers.map(&.fork), @max_seq)
+      end
+
+      def copy_from!(src : State) : Nil
+        raise ArgumentError.new("max_seq mismatch: #{@max_seq} != #{src.max_seq}") unless @max_seq == src.max_seq
+        raise ArgumentError.new("layer count mismatch: #{@layers.size} != #{src.layers.size}") unless @layers.size == src.layers.size
+
+        @layers.each_with_index do |layer, i|
+          layer.copy_from!(src.layers[i])
+        end
       end
     end
 
@@ -174,6 +223,14 @@ module ML::GGUF
     METAL_QK_MIN_OUT = 256
     METAL_QK_MIN_IN  = 256
 
+    private def metal_qw_supported?(qw : QuantWeight) : Bool
+      qw.type.q4_k? || qw.type.q5_k? || qw.type.q6_k?
+    end
+
+    private def metal_qw_eligible?(qw : QuantWeight) : Bool
+      qw.out_dim >= METAL_QK_MIN_OUT && qw.in_dim >= METAL_QK_MIN_IN
+    end
+
     # DeltaNet / GatedDeltaRule state-update + output, shared between the
     # CPU path and the Metal spec reference. `state` and `y` are written
     # in place. `ghead` is the per-head decay multiplier (i.e. caller
@@ -189,9 +246,9 @@ module ML::GGUF
                         scale : Float32) : Nil
       h_v.times do |h|
         k_head = h % h_k
-        q_off  = k_head * s
-        k_off  = k_head * s
-        v_off  = h * s
+        q_off = k_head * s
+        k_off = k_head * s
+        v_off = h * s
         st_base = h * s * s
         gh = ghead[h]
         bh = beta[h]
@@ -227,13 +284,13 @@ module ML::GGUF
     # State persists across decode steps on whichever backend owns it:
     # Array(Float32) for CPU, MetalBuffer for GPU — never both at once.
     private def delta_net_step_routed(lstate : LayerState,
-                                       q_conv : Array(Float32),
-                                       k_conv : Array(Float32),
-                                       v_conv : Array(Float32),
-                                       ghead : Array(Float32),
-                                       beta : Array(Float32),
-                                       h_k : Int32, h_v : Int32, s : Int32,
-                                       scale : Float32) : Array(Float32)
+                                      q_conv : Array(Float32),
+                                      k_conv : Array(Float32),
+                                      v_conv : Array(Float32),
+                                      ghead : Array(Float32),
+                                      beta : Array(Float32),
+                                      h_k : Int32, h_v : Int32, s : Int32,
+                                      scale : Float32) : Array(Float32)
       {% unless flag?(:cpu_only) %}
         if Qwen35Metal.available?
           bytes = (h_v * s * s).to_i64 * sizeof(Float32)
@@ -244,15 +301,158 @@ module ML::GGUF
             lstate.ssm_state_buf = state_buf
           end
           return Qwen35Metal.delta_net_step(state_buf, q_conv, k_conv, v_conv,
-                                             ghead, beta, h_k, h_v, s, scale)
+            ghead, beta, h_k, h_v, s, scale)
         end
       {% end %}
 
       state = lstate.ssm_state ||= Array(Float32).new(h_v * s * s, 0.0_f32)
-      y     = Array(Float32).new(h_v * s, 0.0_f32)
+      y = Array(Float32).new(h_v * s, 0.0_f32)
       delta_net_step!(state, q_conv, k_conv, v_conv, ghead, beta, y,
-                       h_k, h_v, s, scale)
+        h_k, h_v, s, scale)
       y
+    end
+
+    # Recurrent Metal fast path:
+    #   delta_net_step -> RMSNorm(y)*silu(z) -> ssm_out projection
+    # in one command buffer. Returns nil when disabled or unsupported.
+    private def delta_net_project_routed(lstate : LayerState,
+                                         q_conv : Array(Float32),
+                                         k_conv : Array(Float32),
+                                         v_conv : Array(Float32),
+                                         ghead : Array(Float32),
+                                         beta : Array(Float32),
+                                         z : Array(Float32),
+                                         ssm_norm : Array(Float32),
+                                         out_qw : QuantWeight,
+                                         h_k : Int32, h_v : Int32, s : Int32,
+                                         scale : Float32,
+                                         eps : Float32) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_DN_FUSE_OFF"]? == "1"
+        return nil unless out_qw.type.q4_k? || out_qw.type.q5_k? || out_qw.type.q6_k?
+        return nil unless Qwen35Metal.available?
+
+        bytes = (h_v * s * s).to_i64 * sizeof(Float32)
+        state_buf = lstate.ssm_state_buf
+        if state_buf.nil?
+          state_buf = ML::MetalBuffer.new(bytes)
+          state_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.ssm_state_buf = state_buf
+        end
+        return Qwen35Metal.delta_net_project(
+          state_buf,
+          q_conv, k_conv, v_conv, ghead, beta, z, ssm_norm, out_qw,
+          h_k, h_v, s, scale, eps,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
+    private def recurrent_attn_project_routed(lstate : LayerState,
+                                              cur : Array(Float32),
+                                              lw : Qwen35RecurrentWeights,
+                                              hp : Qwen35Hparams) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_RECURRENT_FUSE_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        return nil unless metal_qw_supported?(lw.attn_qkv_qw) &&
+                          metal_qw_supported?(lw.attn_gate_qw) &&
+                          metal_qw_supported?(lw.ssm_alpha_qw) &&
+                          metal_qw_supported?(lw.ssm_beta_qw) &&
+                          metal_qw_supported?(lw.ssm_out_qw)
+
+        qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
+        conv_bytes = ((hp.ssm_conv_kernel - 1) * qkv_dim).to_i64 * sizeof(Float32)
+        conv_buf = lstate.conv_state_buf
+        if conv_buf.nil?
+          conv_buf = ML::MetalBuffer.new(conv_bytes)
+          conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
+          lstate.conv_state_buf = conv_buf
+        end
+
+        ssm_bytes = (hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size).to_i64 * sizeof(Float32)
+        ssm_buf = lstate.ssm_state_buf
+        if ssm_buf.nil?
+          ssm_buf = ML::MetalBuffer.new(ssm_bytes)
+          ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
+          lstate.ssm_state_buf = ssm_buf
+        end
+
+        return Qwen35Metal.recurrent_attn_project(
+          cur, conv_buf, ssm_buf,
+          lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw,
+          lw.ssm_conv1d, lw.ssm_dt_bias, lw.ssm_a, lw.ssm_norm, lw.ssm_out_qw,
+          hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size, hp.ssm_conv_kernel, hp.rms_eps,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
+    # Fused recurrent-layer GPU route:
+    #   recurrent attention -> residual add + post-attn RMSNorm -> FFN -> residual add
+    private def recurrent_layer_project_routed(inpSA : Array(Float32),
+                                               cur : Array(Float32),
+                                               lstate : LayerState,
+                                               lw : Qwen35RecurrentWeights,
+                                               hp : Qwen35Hparams) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_RECURRENT_LAYER_FUSE_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        supported = metal_qw_supported?(lw.attn_qkv_qw) &&
+                    metal_qw_supported?(lw.attn_gate_qw) &&
+                    metal_qw_supported?(lw.ssm_alpha_qw) &&
+                    metal_qw_supported?(lw.ssm_beta_qw) &&
+                    metal_qw_supported?(lw.ssm_out_qw) &&
+                    metal_qw_supported?(lw.ffn_gate_qw) &&
+                    metal_qw_supported?(lw.ffn_up_qw) &&
+                    metal_qw_supported?(lw.ffn_down_qw)
+        return nil unless supported
+
+        qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
+        conv_bytes = ((hp.ssm_conv_kernel - 1) * qkv_dim).to_i64 * sizeof(Float32)
+        conv_buf = lstate.conv_state_buf
+        if conv_buf.nil?
+          conv_buf = ML::MetalBuffer.new(conv_bytes)
+          conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
+          lstate.conv_state_buf = conv_buf
+        end
+
+        ssm_bytes = (hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size).to_i64 * sizeof(Float32)
+        ssm_buf = lstate.ssm_state_buf
+        if ssm_buf.nil?
+          ssm_buf = ML::MetalBuffer.new(ssm_bytes)
+          ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
+          lstate.ssm_state_buf = ssm_buf
+        end
+
+        return Qwen35Metal.recurrent_layer_project(
+          inpSA, cur, conv_buf, ssm_buf,
+          lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw,
+          lw.ssm_conv1d, lw.ssm_dt_bias, lw.ssm_a, lw.ssm_norm, lw.ssm_out_qw,
+          lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+          hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size, hp.ssm_conv_kernel, hp.rms_eps,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
+    # Fused FFN route on Metal:
+    #   gate_proj + up_proj -> swiglu -> down_proj
+    private def ffn_project_routed(x : Array(Float32),
+                                   gate_qw : QuantWeight,
+                                   up_qw : QuantWeight,
+                                   down_qw : QuantWeight) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_FFN_FUSE_OFF"]? == "1"
+        return nil unless metal_qw_supported?(gate_qw) && metal_qw_supported?(up_qw) && metal_qw_supported?(down_qw)
+        return nil unless Qwen35Metal.available?
+        return Qwen35Metal.ffn_project(x, gate_qw, up_qw, down_qw)
+      {% else %}
+        nil
+      {% end %}
     end
 
     # Append K, V to the layer's KV cache at `pos` and run gated GQA
@@ -262,14 +462,14 @@ module ML::GGUF
     # dot-product / softmax / V-weighted-sum + sigmoid(gate) multiply.
     # Returns gated attention output of length `n_head * head_dim`.
     private def attn_decode_routed(lstate : LayerState,
-                                    q : Array(Float32), gate : Array(Float32),
-                                    k : Array(Float32), v : Array(Float32),
-                                    pos : Int32, n_head : Int32, n_head_kv : Int32,
-                                    head_dim : Int32, heads_per_group : Int32,
-                                    kv_dim : Int32, max_seq : Int32,
-                                    scale : Float32) : Array(Float32)
+                                   q : Array(Float32), gate : Array(Float32),
+                                   k : Array(Float32), v : Array(Float32),
+                                   pos : Int32, n_head : Int32, n_head_kv : Int32,
+                                   head_dim : Int32, heads_per_group : Int32,
+                                   kv_dim : Int32, max_seq : Int32,
+                                   scale : Float32) : Array(Float32)
       q_dim = n_head * head_dim
-      base  = pos * kv_dim
+      base = pos * kv_dim
 
       {% unless flag?(:cpu_only) %}
         if Qwen35Metal.available? && ENV["QWEN35_ATTN_CPU"]? != "1"
@@ -293,8 +493,8 @@ module ML::GGUF
             v_ptr[i] = v[i]
           end
           return Qwen35Metal.attn_decode(q, gate, k_buf, v_buf,
-                                          pos, n_head, n_head_kv, head_dim,
-                                          heads_per_group, scale)
+            pos, n_head, n_head_kv, head_dim,
+            heads_per_group, scale)
         end
       {% end %}
 
@@ -308,7 +508,7 @@ module ML::GGUF
       attn_o = Array(Float32).new(q_dim, 0.0_f32)
       scores = Array(Float32).new(pos + 1, 0.0_f32)
       n_head.times do |h|
-        kv_h  = h // heads_per_group
+        kv_h = h // heads_per_group
         q_off = h * head_dim
         (pos + 1).times do |p|
           k_off = p * kv_dim + kv_h * head_dim
@@ -328,6 +528,150 @@ module ML::GGUF
       attn_o
     end
 
+    # Same routing as `attn_decode_routed`, but keeps the attention output on
+    # GPU and immediately runs the output projection there. This is an
+    # optimization-only path for full-attention decode; CPU fallback remains
+    # the source of truth.
+    private def attn_decode_project_routed(lstate : LayerState,
+                                           q : Array(Float32), gate : Array(Float32),
+                                           k : Array(Float32), v : Array(Float32),
+                                           out_qw : QuantWeight,
+                                           pos : Int32, n_head : Int32, n_head_kv : Int32,
+                                           head_dim : Int32, heads_per_group : Int32,
+                                           kv_dim : Int32, max_seq : Int32,
+                                           scale : Float32) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_ATTN_CPU"]? == "1"
+        return nil if ENV["QWEN35_ATTN_FUSE_OFF"]? == "1"
+        return nil unless out_qw.type.q4_k? || out_qw.type.q5_k? || out_qw.type.q6_k?
+        return nil unless Qwen35Metal.available?
+
+        base = pos * kv_dim
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        k_buf = lstate.k_cache_buf
+        v_buf = lstate.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.v_cache_buf = v_buf
+        end
+        k_ptr = k_buf.contents.as(Pointer(Float32)) + base
+        v_ptr = v_buf.contents.as(Pointer(Float32)) + base
+        kv_dim.times do |i|
+          k_ptr[i] = k[i]
+          v_ptr[i] = v[i]
+        end
+        return Qwen35Metal.attn_decode_project(
+          q, gate, k_buf, v_buf, out_qw,
+          pos, n_head, n_head_kv, head_dim, heads_per_group, scale,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
+    # Full-attention GPU route:
+    #   qkv projections -> split/norm/rope -> kv write -> attn -> out proj
+    private def full_attn_layer_project_routed(inpSA : Array(Float32),
+                                               cur : Array(Float32),
+                                               lstate : LayerState,
+                                               lw : Qwen35FullAttnWeights,
+                                               hp : Qwen35Hparams,
+                                               pos : Int32,
+                                               heads_per_group : Int32,
+                                               kv_dim : Int32,
+                                               max_seq : Int32) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_FULL_LAYER_FUSE_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        supported = metal_qw_supported?(lw.attn_q_qw) &&
+                    metal_qw_supported?(lw.attn_k_qw) &&
+                    metal_qw_supported?(lw.attn_v_qw) &&
+                    metal_qw_supported?(lw.attn_output_qw) &&
+                    metal_qw_supported?(lw.ffn_gate_qw) &&
+                    metal_qw_supported?(lw.ffn_up_qw) &&
+                    metal_qw_supported?(lw.ffn_down_qw)
+        return nil unless supported
+
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        k_buf = lstate.k_cache_buf
+        v_buf = lstate.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.v_cache_buf = v_buf
+        end
+
+        scale = (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32
+        return Qwen35Metal.full_attn_layer_project(
+          inpSA, cur,
+          lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw,
+          lw.attn_q_norm, lw.attn_k_norm, lw.attn_output_qw,
+          k_buf, v_buf,
+          lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+          pos, hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
+          heads_per_group, hp.rope_freq_base, hp.rms_eps, scale,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
+    # Full-attention GPU route:
+    #   qkv projections -> split/norm/rope -> kv write -> attn -> out proj
+    private def full_attn_project_routed(lstate : LayerState,
+                                         cur : Array(Float32),
+                                         lw : Qwen35FullAttnWeights,
+                                         hp : Qwen35Hparams,
+                                         pos : Int32,
+                                         heads_per_group : Int32,
+                                         kv_dim : Int32,
+                                         max_seq : Int32,
+                                         scale : Float32) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_FULL_ATTN_FUSE_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        return nil unless metal_qw_supported?(lw.attn_q_qw) &&
+                          metal_qw_supported?(lw.attn_k_qw) &&
+                          metal_qw_supported?(lw.attn_v_qw) &&
+                          metal_qw_supported?(lw.attn_output_qw)
+
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        k_buf = lstate.k_cache_buf
+        v_buf = lstate.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.v_cache_buf = v_buf
+        end
+
+        return Qwen35Metal.full_attn_project(
+          cur,
+          lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw,
+          lw.attn_q_norm, lw.attn_k_norm, lw.attn_output_qw,
+          k_buf, v_buf, pos, hp.n_head, hp.n_head_kv, hp.head_dim,
+          hp.rope_dim_count, heads_per_group, hp.rope_freq_base, scale,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
     # Try to run a GEMV (batch=1) on Metal if the type is supported and
     # the op is large enough. Returns `nil` if the call should fall back
     # to CPU.
@@ -335,7 +679,7 @@ module ML::GGUF
       {% if flag?(:cpu_only) %}
         nil
       {% else %}
-        if qw.out_dim < METAL_QK_MIN_OUT || qw.in_dim < METAL_QK_MIN_IN
+        unless metal_qw_eligible?(qw)
           Qwen35Metal::Profile.bump_cpu_fallback
           return nil
         end
@@ -349,21 +693,35 @@ module ML::GGUF
 
     # Batched matvec — runs all qws against the same input in ONE Metal
     # command buffer (one commit+wait, one readback of all outputs).
-    # Falls back to per-qw `qmatvec_nobias` when any qw can't hit Metal
-    # (below size threshold or unsupported type).
+    # Mixed batches are split: large eligible qws stay batched on Metal,
+    # while genuinely tiny qws (e.g. alpha/beta) fall back to CPU only
+    # for those slots.
     def qmatvec_many(qws : Array(QuantWeight), x : Array(Float32)) : Array(Array(Float32))
       return [] of Array(Float32) if qws.empty?
+      results = Array(Array(Float32)?).new(qws.size, nil)
       {% unless flag?(:cpu_only) %}
         if ENV["QWEN35_BATCH_OFF"]? != "1"
-          all_eligible = qws.all? { |qw| qw.out_dim >= METAL_QK_MIN_OUT && qw.in_dim >= METAL_QK_MIN_IN }
-          if all_eligible && Qwen35Metal.available?
-            if results = Qwen35Metal.matmul_many(qws, x)
-              return results
+          eligible_idx = Array(Int32).new
+          eligible_qws = Array(QuantWeight).new
+          qws.each_with_index do |qw, i|
+            if metal_qw_supported?(qw)
+              eligible_idx << i.to_i32
+              eligible_qws << qw
+            end
+          end
+          if !eligible_qws.empty? && Qwen35Metal.available?
+            if gpu_results = Qwen35Metal.matmul_many(eligible_qws, x)
+              eligible_idx.each_with_index do |orig_i, gpu_i|
+                results[orig_i] = gpu_results[gpu_i]
+              end
             end
           end
         end
       {% end %}
-      qws.map { |qw| qmatvec_nobias(qw, x) }
+      qws.each_with_index do |qw, i|
+        results[i] ||= qmatvec_nobias(qw, x)
+      end
+      results.map(&.not_nil!)
     end
 
     # Quantized matvec — wrapper that routes to QuantMatmul for a single row.
@@ -388,6 +746,20 @@ module ML::GGUF
         zero = Array(Float32).new(qw.out_dim, 0.0_f32)
         QuantMatmul.matmul_add(x, 1, qw.in_dim, qw.raw, qw.type, qw.out_dim, zero)
       end
+    end
+
+    private def output_project_routed(x : Array(Float32),
+                                      norm_weight : Array(Float32),
+                                      out_qw : QuantWeight,
+                                      eps : Float32) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_HEAD_FUSE_OFF"]? == "1"
+        return nil unless metal_qw_supported?(out_qw)
+        return nil unless Qwen35Metal.available?
+        Qwen35Metal.rmsnorm_project(x, norm_weight, out_qw, eps)
+      {% else %}
+        nil
+      {% end %}
     end
 
     # ─────────────────────────────────────────────────────────────────────
@@ -419,80 +791,96 @@ module ML::GGUF
     #
     # Returns the new hidden state (Array(Float32) size n_embd).
     def forward_full_attn_layer(inpSA : Array(Float32), pos : Int32,
-                                 lw : Qwen35FullAttnWeights,
-                                 lstate : LayerState,
-                                 hp : Qwen35Hparams,
-                                 max_seq : Int32) : Array(Float32)
-      n_embd     = hp.n_embd
-      n_head     = hp.n_head
-      n_head_kv  = hp.n_head_kv
-      head_dim   = hp.head_dim
-      n_ff       = hp.n_ff
-      kv_dim     = head_dim * n_head_kv
-      q_dim      = head_dim * n_head
+                                lw : Qwen35FullAttnWeights,
+                                lstate : LayerState,
+                                hp : Qwen35Hparams,
+                                max_seq : Int32) : Array(Float32)
+      n_embd = hp.n_embd
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv
+      head_dim = hp.head_dim
+      n_ff = hp.n_ff
+      kv_dim = head_dim * n_head_kv
+      q_dim = head_dim * n_head
       heads_per_group = n_head // n_head_kv
 
       # 1. attn_norm
       cur = rms_norm(inpSA, lw.attn_norm, hp.rms_eps)
 
-      # 2-4. Batched Q+gate/K/V projections (all from same `cur` → one sync)
-      qkv_outs = qmatvec_many([lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw], cur)
-      q_full = qkv_outs[0]  # [2 * head_dim * n_head]
-      k      = qkv_outs[1]  # [head_dim * n_head_kv]
-      v      = qkv_outs[2]  # [head_dim * n_head_kv]
+      scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+      fused_layer = full_attn_layer_project_routed(inpSA, cur, lstate, lw, hp, pos, heads_per_group, kv_dim, max_seq)
+      return fused_layer if fused_layer
 
-      # 3. Split Q and gate (interleaved per head: [Q_h0, gate_h0, Q_h1, gate_h1, ...])
-      q    = Array(Float32).new(q_dim, 0.0_f32)
-      gate = Array(Float32).new(q_dim, 0.0_f32)
-      n_head.times do |h|
-        src_base = h * 2 * head_dim
-        dst_base = h * head_dim
-        head_dim.times do |d|
-          q[dst_base + d]    = q_full[src_base + d]
-          gate[dst_base + d] = q_full[src_base + head_dim + d]
+      attn_out = full_attn_project_routed(
+        lstate, cur, lw, hp, pos, heads_per_group, kv_dim, max_seq, scale,
+      )
+      unless attn_out
+        # 2-4. Batched Q+gate/K/V projections (all from same `cur` → one sync)
+        qkv_outs = qmatvec_many([lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw], cur)
+        q_full = qkv_outs[0] # [2 * head_dim * n_head]
+        k = qkv_outs[1]      # [head_dim * n_head_kv]
+        v = qkv_outs[2]      # [head_dim * n_head_kv]
+
+        # 3. Split Q and gate (interleaved per head: [Q_h0, gate_h0, Q_h1, gate_h1, ...])
+        q = Array(Float32).new(q_dim, 0.0_f32)
+        gate = Array(Float32).new(q_dim, 0.0_f32)
+        n_head.times do |h|
+          src_base = h * 2 * head_dim
+          dst_base = h * head_dim
+          head_dim.times do |d|
+            q[dst_base + d] = q_full[src_base + d]
+            gate[dst_base + d] = q_full[src_base + head_dim + d]
+          end
+        end
+
+        # 5. Per-head RMSNorm on Q and K (shared weights across heads)
+        n_head.times do |h|
+          rms_norm_slice!(q, h * head_dim, head_dim, lw.attn_q_norm, hp.rms_eps)
+        end
+        n_head_kv.times do |h|
+          rms_norm_slice!(k, h * head_dim, head_dim, lw.attn_k_norm, hp.rms_eps)
+        end
+
+        # 6. M-RoPE partial on first rope_dim_count dims of each Q and K head
+        n_head.times do |h|
+          rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+        end
+        n_head_kv.times do |h|
+          rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+        end
+
+        # 7. Append K, V to cache at current position + 8-9. GQA attention + gate.
+        attn_out = attn_decode_project_routed(
+          lstate, q, gate, k, v, lw.attn_output_qw,
+          pos, n_head, n_head_kv, head_dim, heads_per_group, kv_dim, max_seq, scale,
+        )
+        unless attn_out
+          attn_o = attn_decode_routed(lstate, q, gate, k, v, pos, n_head, n_head_kv,
+            head_dim, heads_per_group, kv_dim, max_seq, scale)
+          # 10. Output projection
+          attn_out = qmatvec_nobias(lw.attn_output_qw, attn_o) # [n_embd]
         end
       end
 
-      # 5. Per-head RMSNorm on Q and K (shared weights across heads)
-      n_head.times do |h|
-        rms_norm_slice!(q, h * head_dim, head_dim, lw.attn_q_norm, hp.rms_eps)
-      end
-      n_head_kv.times do |h|
-        rms_norm_slice!(k, h * head_dim, head_dim, lw.attn_k_norm, hp.rms_eps)
-      end
-
-      # 6. M-RoPE partial on first rope_dim_count dims of each Q and K head
-      n_head.times do |h|
-        rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
-      end
-      n_head_kv.times do |h|
-        rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
-      end
-
-      # 7. Append K, V to cache at current position + 8-9. GQA attention + gate.
-      scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
-      attn_o = attn_decode_routed(lstate, q, gate, k, v, pos, n_head, n_head_kv,
-                                   head_dim, heads_per_group, kv_dim, max_seq, scale)
-
-      # 10. Output projection
-      attn_out = qmatvec_nobias(lw.attn_output_qw, attn_o)  # [n_embd]
-
       # 11. Residual
-      inpL2 = Array(Float32).new(n_embd) { |i| inpSA[i] + attn_out[i] }
+      inpL2 = Array(Float32).new(n_embd) { |i| inpSA[i] + attn_out.not_nil![i] }
 
       # 12. post_attention_norm
       cur2 = rms_norm(inpL2, lw.post_attention_norm, hp.rms_eps)
 
-      # 13. SwiGLU FFN (batched gate+up, same `cur2` input → one sync)
-      gu = qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], cur2)
-      gate_ff = gu[0]  # [n_ff]
-      up_ff   = gu[1]  # [n_ff]
-      silu!(gate_ff)
-      combined = Array(Float32).new(n_ff) { |i| gate_ff[i] * up_ff[i] }
-      ffn_out = qmatvec_nobias(lw.ffn_down_qw, combined)  # [n_embd]
+      # 13. SwiGLU FFN
+      ffn_out = ffn_project_routed(cur2, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw)
+      unless ffn_out
+        gu = qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], cur2)
+        gate_ff = gu[0] # [n_ff]
+        up_ff = gu[1]   # [n_ff]
+        silu!(gate_ff)
+        combined = Array(Float32).new(n_ff) { |i| gate_ff[i] * up_ff[i] }
+        ffn_out = qmatvec_nobias(lw.ffn_down_qw, combined) # [n_embd]
+      end
 
       # 14. Residual
-      Array(Float32).new(n_embd) { |i| inpL2[i] + ffn_out[i] }
+      Array(Float32).new(n_embd) { |i| inpL2[i] + ffn_out.not_nil![i] }
     end
 
     # ─────────────────────────────────────────────────────────────────────
@@ -539,115 +927,130 @@ module ML::GGUF
     # Conv state layout in lstate.conv_state (Array(Float32)):
     #   conv[t * qkv_dim + ch]  (time-major, channels minor)
     def forward_recurrent_layer(inpSA : Array(Float32), _pos : Int32,
-                                 lw : Qwen35RecurrentWeights,
-                                 lstate : LayerState,
-                                 hp : Qwen35Hparams,
-                                 _max_seq : Int32) : Array(Float32)
-      n_embd     = hp.n_embd
-      n_ff       = hp.n_ff
-      h_k        = hp.ssm_group_count         # num_k_heads
-      h_v        = hp.ssm_time_step_rank      # num_v_heads
-      s_k        = hp.ssm_state_size          # head_k_dim
-      s_v        = hp.ssm_state_size          # head_v_dim (same per qwen35)
-      d_inner    = hp.ssm_inner_size          # H_v * S_v
-      qkv_dim    = 2 * h_k * s_k + h_v * s_v
-      conv_k     = hp.ssm_conv_kernel         # typically 4
+                                lw : Qwen35RecurrentWeights,
+                                lstate : LayerState,
+                                hp : Qwen35Hparams,
+                                _max_seq : Int32) : Array(Float32)
+      n_embd = hp.n_embd
+      n_ff = hp.n_ff
+      h_k = hp.ssm_group_count    # num_k_heads
+      h_v = hp.ssm_time_step_rank # num_v_heads
+      s_k = hp.ssm_state_size     # head_k_dim
+      s_v = hp.ssm_state_size     # head_v_dim (same per qwen35)
+      d_inner = hp.ssm_inner_size # H_v * S_v
+      qkv_dim = 2 * h_k * s_k + h_v * s_v
+      conv_k = hp.ssm_conv_kernel # typically 4
       heads_per_k = h_v // h_k
 
       # 1. attn_norm
       cur = rms_norm(inpSA, lw.attn_norm, hp.rms_eps)
 
-      # 2-4. Batched qkv/gate/alpha/beta projections (all from same `cur` → one sync)
-      proj = qmatvec_many([lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw], cur)
-      qkv_mixed = proj[0]  # [qkv_dim]
-      z         = proj[1]  # [d_inner = h_v * s_v]
-      alpha     = proj[2]  # [h_v]
-      beta      = proj[3]  # [h_v]
-      h_v.times { |i| beta[i] = sigmoid(beta[i]) }
+      fused_layer = recurrent_layer_project_routed(inpSA, cur, lstate, lw, hp)
+      return fused_layer if fused_layer
 
-      # 5. gate per head (g[h] = softplus(alpha[h] + ssm_dt_bias[h]) * ssm_a[h])
-      # ssm_a is pre-transformed (-A_log.exp() in llama.cpp), multiply directly
-      g = Array(Float32).new(h_v) do |i|
-        xi = alpha[i] + lw.ssm_dt_bias[i]
-        sp = xi > 20.0_f32 ? xi : Math.log(1.0_f32 + Math.exp(xi)).to_f32
-        sp * lw.ssm_a[i]
-      end
+      attn_out = recurrent_attn_project_routed(lstate, cur, lw, hp)
+      unless attn_out
+        # 2-4. Batched qkv/gate/alpha/beta projections (all from same `cur` → one sync)
+        proj = qmatvec_many([lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw], cur)
+        qkv_mixed = proj[0] # [qkv_dim]
+        z = proj[1]         # [d_inner = h_v * s_v]
+        alpha = proj[2]     # [h_v]
+        beta = proj[3]      # [h_v]
+        h_v.times { |i| beta[i] = sigmoid(beta[i]) }
 
-      # 6. Conv state (lazy alloc). Layout: conv[t*qkv_dim + ch], t in 0..K-2 (K=conv_k)
-      conv_state = lstate.conv_state ||= Array(Float32).new((conv_k - 1) * qkv_dim, 0.0_f32)
-
-      # 7. Convolution output for current token.
-      # GGUF ssm_conv1d dims=[K, qkv_dim] with dims[0]=K innermost → layout is conv1d[ch*K + t].
-      # conv_state is OUR internal buffer (layout [t*qkv_dim + ch]) — unchanged.
-      #    conv_out[ch] = sum_{k=0}^{K-2} conv_state[k*qkv_dim+ch] * conv1d[ch*K + k]
-      #                 + qkv_mixed[ch]                          * conv1d[ch*K + (K-1)]
-      conv_out = Array(Float32).new(qkv_dim) do |ch|
-        acc = 0.0_f32
-        w_base = ch * conv_k
-        (conv_k - 1).times do |t|
-          acc += conv_state[t * qkv_dim + ch] * lw.ssm_conv1d[w_base + t]
+        # 5. gate per head (g[h] = softplus(alpha[h] + ssm_dt_bias[h]) * ssm_a[h])
+        # ssm_a is pre-transformed (-A_log.exp() in llama.cpp), multiply directly
+        g = Array(Float32).new(h_v) do |i|
+          xi = alpha[i] + lw.ssm_dt_bias[i]
+          sp = xi > 20.0_f32 ? xi : Math.log(1.0_f32 + Math.exp(xi)).to_f32
+          sp * lw.ssm_a[i]
         end
-        acc += qkv_mixed[ch] * lw.ssm_conv1d[w_base + (conv_k - 1)]
-        acc
+
+        # 6. Conv state (lazy alloc). Layout: conv[t*qkv_dim + ch], t in 0..K-2 (K=conv_k)
+        conv_state = lstate.conv_state ||= Array(Float32).new((conv_k - 1) * qkv_dim, 0.0_f32)
+
+        # 7. Convolution output for current token.
+        # GGUF ssm_conv1d dims=[K, qkv_dim] with dims[0]=K innermost → layout is conv1d[ch*K + t].
+        # conv_state is OUR internal buffer (layout [t*qkv_dim + ch]) — unchanged.
+        #    conv_out[ch] = sum_{k=0}^{K-2} conv_state[k*qkv_dim+ch] * conv1d[ch*K + k]
+        #                 + qkv_mixed[ch]                          * conv1d[ch*K + (K-1)]
+        conv_out = Array(Float32).new(qkv_dim) do |ch|
+          acc = 0.0_f32
+          w_base = ch * conv_k
+          (conv_k - 1).times do |t|
+            acc += conv_state[t * qkv_dim + ch] * lw.ssm_conv1d[w_base + t]
+          end
+          acc += qkv_mixed[ch] * lw.ssm_conv1d[w_base + (conv_k - 1)]
+          acc
+        end
+
+        # 8. Update conv_state: shift window. new_state[t] = old_state[t+1], last = qkv_mixed
+        (conv_k - 2).times do |t|
+          src_off = (t + 1) * qkv_dim
+          dst_off = t * qkv_dim
+          qkv_dim.times { |ch| conv_state[dst_off + ch] = conv_state[src_off + ch] }
+        end
+        last_off = (conv_k - 2) * qkv_dim
+        qkv_dim.times { |ch| conv_state[last_off + ch] = qkv_mixed[ch] }
+
+        # 9. SiLU on conv output
+        silu!(conv_out)
+
+        # 10. Split conv_out into q, k, v
+        q_conv = Array(Float32).new(h_k * s_k) { |i| conv_out[i] }
+        k_conv = Array(Float32).new(h_k * s_k) { |i| conv_out[h_k * s_k + i] }
+        v_conv = Array(Float32).new(h_v * s_v) { |i| conv_out[2 * h_k * s_k + i] }
+
+        # 11. L2-norm each S_k-slice of q_conv and k_conv
+        h_k.times do |h|
+          l2_norm_slice!(q_conv, h * s_k, s_k, hp.rms_eps)
+          l2_norm_slice!(k_conv, h * s_k, s_k, hp.rms_eps)
+        end
+
+        # 12. Delta rule state update + output computation
+        scale = (1.0 / Math.sqrt(s_k.to_f64)).to_f32
+        # Convert g[h] to ghead = exp(g[h]) inline; kernel and reference share
+        # `delta_net_step!` below, which expects the already-exp'd decay.
+        ghead = Array(Float32).new(h_v) { |h| Math.exp(g[h].to_f64).to_f32 }
+
+        attn_out = delta_net_project_routed(
+          lstate, q_conv, k_conv, v_conv, ghead, beta, z,
+          lw.ssm_norm, lw.ssm_out_qw, h_k, h_v, s_k, scale, hp.rms_eps,
+        )
+        unless attn_out
+          y = delta_net_step_routed(lstate, q_conv, k_conv, v_conv, ghead, beta,
+            h_k, h_v, s_k, scale)
+
+          # 13. Gated RMSNorm: norm[h,d] = RMSNorm_per_head(y[h,:], ssm_norm) * silu(z[h,d])
+          h_v.times do |h|
+            rms_norm_slice!(y, h * s_v, s_v, lw.ssm_norm, hp.rms_eps)
+          end
+          (h_v * s_v).times { |i| y[i] = y[i] * silu(z[i]) }
+
+          # 14. Output projection (ssm_out)
+          attn_out = qmatvec_nobias(lw.ssm_out_qw, y) # [n_embd]
+        end
       end
-
-      # 8. Update conv_state: shift window. new_state[t] = old_state[t+1], last = qkv_mixed
-      (conv_k - 2).times do |t|
-        src_off = (t + 1) * qkv_dim
-        dst_off = t * qkv_dim
-        qkv_dim.times { |ch| conv_state[dst_off + ch] = conv_state[src_off + ch] }
-      end
-      last_off = (conv_k - 2) * qkv_dim
-      qkv_dim.times { |ch| conv_state[last_off + ch] = qkv_mixed[ch] }
-
-      # 9. SiLU on conv output
-      silu!(conv_out)
-
-      # 10. Split conv_out into q, k, v
-      q_conv = Array(Float32).new(h_k * s_k) { |i| conv_out[i] }
-      k_conv = Array(Float32).new(h_k * s_k) { |i| conv_out[h_k * s_k + i] }
-      v_conv = Array(Float32).new(h_v * s_v) { |i| conv_out[2 * h_k * s_k + i] }
-
-      # 11. L2-norm each S_k-slice of q_conv and k_conv
-      h_k.times do |h|
-        l2_norm_slice!(q_conv, h * s_k, s_k, hp.rms_eps)
-        l2_norm_slice!(k_conv, h * s_k, s_k, hp.rms_eps)
-      end
-
-      # 12. Delta rule state update + output computation
-      scale = (1.0 / Math.sqrt(s_k.to_f64)).to_f32
-      # Convert g[h] to ghead = exp(g[h]) inline; kernel and reference share
-      # `delta_net_step!` below, which expects the already-exp'd decay.
-      ghead = Array(Float32).new(h_v) { |h| Math.exp(g[h].to_f64).to_f32 }
-
-      y = delta_net_step_routed(lstate, q_conv, k_conv, v_conv, ghead, beta,
-                                  h_k, h_v, s_k, scale)
-
-      # 13. Gated RMSNorm: norm[h,d] = RMSNorm_per_head(y[h,:], ssm_norm) * silu(z[h,d])
-      h_v.times do |h|
-        rms_norm_slice!(y, h * s_v, s_v, lw.ssm_norm, hp.rms_eps)
-      end
-      (h_v * s_v).times { |i| y[i] = y[i] * silu(z[i]) }
-
-      # 14. Output projection (ssm_out)
-      attn_out = qmatvec_nobias(lw.ssm_out_qw, y)  # [n_embd]
 
       # 15. Residual 1
-      inpL2 = Array(Float32).new(n_embd) { |i| inpSA[i] + attn_out[i] }
+      inpL2 = Array(Float32).new(n_embd) { |i| inpSA[i] + attn_out.not_nil![i] }
 
       # 16. Post-attention norm
       cur2 = rms_norm(inpL2, lw.post_attention_norm, hp.rms_eps)
 
-      # 17. SwiGLU FFN (batched gate+up, same `cur2` input → one sync)
-      gu = qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], cur2)
-      gate_ff = gu[0]
-      up_ff   = gu[1]
-      silu!(gate_ff)
-      combined = Array(Float32).new(n_ff) { |i| gate_ff[i] * up_ff[i] }
-      ffn_out = qmatvec_nobias(lw.ffn_down_qw, combined)
+      # 17. SwiGLU FFN
+      ffn_out = ffn_project_routed(cur2, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw)
+      unless ffn_out
+        gu = qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], cur2)
+        gate_ff = gu[0]
+        up_ff = gu[1]
+        silu!(gate_ff)
+        combined = Array(Float32).new(n_ff) { |i| gate_ff[i] * up_ff[i] }
+        ffn_out = qmatvec_nobias(lw.ffn_down_qw, combined)
+      end
 
       # 18. Residual 2
-      Array(Float32).new(n_embd) { |i| inpL2[i] + ffn_out[i] }
+      Array(Float32).new(n_embd) { |i| inpL2[i] + ffn_out.not_nil![i] }
     end
 
     # ─────────────────────────────────────────────────────────────────────
@@ -673,6 +1076,10 @@ module ML::GGUF
     # current impl but reserved for future fused paths).
     def forward(weights : Qwen35Weights, token_id : Int32, pos : Int32,
                 state : State) : Array(Float32)
+      if logits = forward_decode_wave_routed(weights, token_id, pos, state)
+        return logits
+      end
+
       hp = weights.hparams
       max_seq = state.max_seq
 
@@ -687,8 +1094,31 @@ module ML::GGUF
         end
       end
 
-      rms_norm!(x, weights.output_norm, hp.rms_eps)
-      qmatvec_nobias(weights.output, x)
+      if logits = output_project_routed(x, weights.output_norm, weights.output, hp.rms_eps)
+        logits
+      else
+        rms_norm!(x, weights.output_norm, hp.rms_eps)
+        qmatvec_nobias(weights.output, x)
+      end
+    end
+
+    # Greedy decode helper. By default, the Metal wave path avoids
+    # materializing full lm-head logits and returns only top-1. Set
+    # `QWEN35_HEAD_TOP1_FUSED=0` to force the full-logit fallback.
+    def forward_top1(weights : Qwen35Weights, token_id : Int32, pos : Int32,
+                     state : State) : {Int32, Float32}
+      if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true)
+        if packed.size == 2
+          return {packed[0].to_i32, packed[1]}
+        end
+
+        maxv = packed.max
+        return {packed.index(maxv).not_nil!.to_i32, maxv}
+      end
+
+      logits = forward(weights, token_id, pos, state)
+      maxv = logits.max
+      {logits.index(maxv).not_nil!.to_i32, maxv}
     end
 
     # Embedding lookup for a single token id → Array(Float32)[n_embd].
@@ -706,16 +1136,107 @@ module ML::GGUF
         raise "embedding: n_embd #{n_embd} not divisible by 256 for K-quant"
       end
       row_bytes = case
-                  when t.f32?     then n_embd * 4
-                  when t.f16?     then n_embd * 2
-                  when t.q4_k?    then (n_embd // 256) * 144
-                  when t.q5_k?    then (n_embd // 256) * 176
-                  when t.q6_k?    then (n_embd // 256) * 210
-                  else raise "embedding: unsupported quant type #{t.name}"
+                  when t.f32?  then n_embd * 4
+                  when t.f16?  then n_embd * 2
+                  when t.q4_k? then (n_embd // 256) * 144
+                  when t.q5_k? then (n_embd // 256) * 176
+                  when t.q6_k? then (n_embd // 256) * 210
+                  else              raise "embedding: unsupported quant type #{t.name}"
                   end
       offset = token_id.to_i64 * row_bytes.to_i64
       row_slice = Bytes.new(token_embd.raw.to_unsafe + offset, row_bytes, read_only: true)
       Dequant.dequantize(row_slice, t, n_embd)
+    end
+
+    private def forward_decode_wave_routed(weights : Qwen35Weights,
+                                           token_id : Int32,
+                                           pos : Int32,
+                                           state : State,
+                                           top1 : Bool = false) : Array(Float32)?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        return nil unless metal_qw_supported?(weights.output)
+
+        weights.layers.each do |lw|
+          supported = case lw
+                      in Qwen35FullAttnWeights
+                        metal_qw_supported?(lw.attn_q_qw) &&
+                          metal_qw_supported?(lw.attn_k_qw) &&
+                          metal_qw_supported?(lw.attn_v_qw) &&
+                          metal_qw_supported?(lw.attn_output_qw) &&
+                          metal_qw_supported?(lw.ffn_gate_qw) &&
+                          metal_qw_supported?(lw.ffn_up_qw) &&
+                          metal_qw_supported?(lw.ffn_down_qw)
+                      in Qwen35RecurrentWeights
+                        metal_qw_supported?(lw.attn_qkv_qw) &&
+                          metal_qw_supported?(lw.attn_gate_qw) &&
+                          metal_qw_supported?(lw.ssm_alpha_qw) &&
+                          metal_qw_supported?(lw.ssm_beta_qw) &&
+                          metal_qw_supported?(lw.ssm_out_qw) &&
+                          metal_qw_supported?(lw.ffn_gate_qw) &&
+                          metal_qw_supported?(lw.ffn_up_qw) &&
+                          metal_qw_supported?(lw.ffn_down_qw)
+                      end
+          return nil unless supported
+        end
+
+        hp = weights.hparams
+        max_seq = state.max_seq
+        kv_dim = hp.head_dim * hp.n_head_kv
+        qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
+
+        k_cache_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
+        v_cache_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
+        conv_state_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
+        ssm_state_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
+
+        weights.layers.each_with_index do |lw, il|
+          case lw
+          in Qwen35FullAttnWeights
+            bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+            k_buf = state.layers[il].k_cache_buf
+            if k_buf.nil?
+              k_buf = ML::MetalBuffer.new(bytes)
+              k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+              state.layers[il].k_cache_buf = k_buf
+            end
+            v_buf = state.layers[il].v_cache_buf
+            if v_buf.nil?
+              v_buf = ML::MetalBuffer.new(bytes)
+              v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+              state.layers[il].v_cache_buf = v_buf
+            end
+            k_cache_bufs[il] = k_buf
+            v_cache_bufs[il] = v_buf
+          in Qwen35RecurrentWeights
+            conv_bytes = ((hp.ssm_conv_kernel - 1) * qkv_dim).to_i64 * sizeof(Float32)
+            conv_buf = state.layers[il].conv_state_buf
+            if conv_buf.nil?
+              conv_buf = ML::MetalBuffer.new(conv_bytes)
+              conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
+              state.layers[il].conv_state_buf = conv_buf
+            end
+            ssm_bytes = (hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size).to_i64 * sizeof(Float32)
+            ssm_buf = state.layers[il].ssm_state_buf
+            if ssm_buf.nil?
+              ssm_buf = ML::MetalBuffer.new(ssm_bytes)
+              ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
+              state.layers[il].ssm_state_buf = ssm_buf
+            end
+            conv_state_bufs[il] = conv_buf
+            ssm_state_bufs[il] = ssm_buf
+          end
+        end
+
+        emb = embedding_lookup(weights.token_embd, token_id)
+        Qwen35Metal.forward_decode_wave(
+          emb, weights.layers,
+          k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
+          weights.output_norm, weights.output, hp, pos, top1: top1)
+      {% else %}
+        nil
+      {% end %}
     end
   end
 end

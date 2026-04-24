@@ -18,6 +18,14 @@ describe ML::GGUF::Qwen35CPU, "DeltaNet recurrent layer forward" do
     end
   end
 
+  conv_state_as_array = ->(ls : ML::GGUF::Qwen35CPU::LayerState, expected_size : Int32) do
+    if buf = ls.conv_state_buf
+      buf.read(expected_size)
+    else
+      ls.conv_state.not_nil!
+    end
+  end
+
   it "runs blk.0 (first recurrent layer) on embedding of token 0" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_DN)
     hp = w.hparams
@@ -33,10 +41,11 @@ describe ML::GGUF::Qwen35CPU, "DeltaNet recurrent layer forward" do
     out.all? { |v| v.finite? }.should be_true
 
     # conv_state and ssm_state should have been allocated and (at least partially) written
-    cs = state.layers[0].conv_state.not_nil!
     expected_ss_size = hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size
+    expected_cs_size = (hp.ssm_conv_kernel - 1) * (2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size)
+    cs = conv_state_as_array.call(state.layers[0], expected_cs_size)
     ss = ssm_state_as_array.call(state.layers[0], expected_ss_size)
-    cs.size.should eq((hp.ssm_conv_kernel - 1) * (2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size))
+    cs.size.should eq(expected_cs_size)
     ss.size.should eq(expected_ss_size)
 
     # First token wrote qkv_mixed into conv_state slot 2 (the "current" row). Slots 0,1 still zero.
@@ -66,8 +75,8 @@ describe ML::GGUF::Qwen35CPU, "DeltaNet recurrent layer forward" do
     out1.all? { |v| v.finite? }.should be_true
 
     # out1 state is different from out0, obviously — but also: conv_state has shifted
-    cs = state.layers[0].conv_state.not_nil!
     kv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
+    cs = conv_state_as_array.call(state.layers[0], (hp.ssm_conv_kernel - 1) * kv_dim)
     # After 2 tokens: slot 0 still zero (pos -2 never existed), slot 1 = token 0, slot 2 = token 1
     (0...kv_dim).count { |i| cs[i] != 0.0_f32 }.should eq(0)
     (kv_dim...2*kv_dim).count { |i| cs[i] != 0.0_f32 }.should be > kv_dim // 10

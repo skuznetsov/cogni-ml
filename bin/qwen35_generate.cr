@@ -1,12 +1,13 @@
-# Greedy generation demo for Qwen 3.5 9B (CPU reference).
+# Greedy generation demo for Qwen 3.5 9B.
 #
 # Usage:
 #   crystal run bin/qwen35_generate.cr -- "Your prompt here" [n_tokens]
 #
-# This is the slow reference path. Each token takes minutes on CPU.
-# Phase 2 will bring Metal acceleration.
+# Uses the native Metal wave path when available; set
+# `QWEN35_DECODE_WAVE_OFF=1` for the slow CPU reference path.
 
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
 
@@ -15,6 +16,16 @@ LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-to
 
 prompt = ARGV[0]? || "The capital of France is"
 n_gen  = (ARGV[1]? || "8").to_i
+prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
+
+def cache_model_id(path : String) : String
+  info = File.info(path)
+  ML::GGUF::Qwen35PromptCache.short_hash("model\0#{path}\0#{info.size}\0#{info.modification_time.to_unix}")
+end
+
+def cache_tokenizer_id(model_id : String, tok : ML::GGUF::Qwen35Tokenizer) : String
+  ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
+end
 
 puts "Loading model and weights..."
 t0 = Time.instant
@@ -32,24 +43,69 @@ puts "Prompt decoded: #{tok.decode(ids).inspect}"
 
 max_seq = ids.size + n_gen + 8
 state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+cache_store = nil.as(ML::GGUF::Qwen35PromptCache::Store?)
+cache_model = ""
+cache_tokenizer = ""
 
 output_ids = [] of Int32
 pos = 0
 
-# Prefill: run forward on each prompt token sequentially
-puts "\nPrefilling #{ids.size} tokens..."
-ids.each_with_index do |tid, i|
-  tstart = Time.instant
-  logits = ML::GGUF::Qwen35CPU.forward(w, tid, pos, state)
-  dt = (Time.instant - tstart).total_seconds
-  STDOUT << "  token #{i+1}/#{ids.size} id=#{tid} took #{dt.round(2)}s\n"
-  STDOUT.flush
-  if i == ids.size - 1
-    # Sample next token from last prefill logit
-    top = logits.index(logits.max).not_nil!
-    output_ids << top.to_i32
+if prompt_cache_enabled
+  cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
+  cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
+  cache_model = cache_model_id(MODEL_PATH)
+  cache_tokenizer = cache_tokenizer_id(cache_model, tok)
+  max_prefix_len = ids.size > 0 ? ids.size - 1 : 0
+
+  if max_prefix_len > 0 && (hit = cache_store.not_nil!.lookup_longest_prefix(cache_model, cache_tokenizer, ids, max_prefix_len: max_prefix_len))
+    tstart = Time.instant
+    replay = cache_store.not_nil!.restore_and_replay_suffix(hit, w, ids)
+    dt = (Time.instant - tstart).total_seconds
+    state = replay.state
+    pos = ids.size
+    if top = replay.next_token_id
+      output_ids << top
+      STDOUT << "\nPrompt cache hit: reused #{replay.reused_prefix_len}/#{ids.size} prompt tokens, replayed #{replay.replayed_tokens}, restore+replay took #{dt.round(3)}s\n"
+    else
+      STDOUT << "\nPrompt cache hit had no suffix logits; falling back to normal prefill\n"
+      pos = 0
+      state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+    end
+  else
+    STDOUT << "\nPrompt cache miss (root=#{cache_root})\n"
   end
-  pos += 1
+end
+
+# Prefill: run forward on each prompt token sequentially
+if output_ids.empty?
+  puts "\nPrefilling #{ids.size} tokens..."
+  ids.each_with_index do |tid, i|
+    if prompt_cache_enabled && i == ids.size - 1 && i > 0
+      prefix_ids = ids.first(i)
+      preview = ENV["QWEN35_PROMPT_CACHE_PREVIEW"]? == "1" ? tok.decode(prefix_ids) : nil
+      saved = cache_store.not_nil!.save(
+        session_id: ENV["QWEN35_SESSION_ID"]? || "default",
+        turn_id: ENV["QWEN35_TURN_ID"]?,
+        model_id: cache_model,
+        tokenizer_id: cache_tokenizer,
+        prompt_text: "",
+        token_ids: prefix_ids,
+        state: state,
+        prompt_preview: preview,
+      )
+      STDOUT << "  saved prompt-cache prefix #{prefix_ids.size} tokens sha=#{saved.artifact_sha256[0, 12]}\n"
+    end
+
+    tstart = Time.instant
+    top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, tid, pos, state)
+    dt = (Time.instant - tstart).total_seconds
+    STDOUT << "  token #{i+1}/#{ids.size} id=#{tid} took #{dt.round(2)}s\n"
+    STDOUT.flush
+    if i == ids.size - 1
+      output_ids << top.to_i32
+    end
+    pos += 1
+  end
 end
 
 # Decode loop
@@ -57,9 +113,8 @@ puts "\nGenerating #{n_gen} tokens greedily..."
 (n_gen - 1).times do |g_i|
   prev = output_ids.last
   tstart = Time.instant
-  logits = ML::GGUF::Qwen35CPU.forward(w, prev, pos, state)
+  top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
   dt = (Time.instant - tstart).total_seconds
-  top = logits.index(logits.max).not_nil!.to_i32
   piece = tok.decode_single(top)
   STDOUT << "  gen #{g_i+1}/#{n_gen} pos=#{pos} id=#{top} piece=#{piece.inspect} took #{dt.round(2)}s\n"
   STDOUT.flush

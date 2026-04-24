@@ -558,10 +558,1504 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `Qwen35Metal::Scratch.get(tag, bytes)` — `{Symbol, Int64}`-keyed Hash lookup; miss allocates `ML::MetalBuffer.new` and inserts; `ENV["QWEN35_SCRATCH_OFF"]="1"` bypasses.
 - `MANY_SLOT_TAGS` array of 8 per-slot tags for `matmul_many` output buffers (must not alias within one encoder).
 - Replaced 10 call-site `MetalBuffer.new` allocations: attn_decode(3), delta_net_step(6), matmul_gemv_buf(2), matmul_q4k_gemm_buf(2), matmul_many(1 x + N out).
+
+### [LM-codex-DN-FUSE-1] Recurrent post-processing fused on GPU
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, decode optimization after Phase 3b)
+**target:** remove the extra recurrent-layer round-trip `delta_net_step -> CPU RMSNorm*SiLU -> ssm_out matvec`.
+**evidence:**
+- claim: "Added fused recurrent Metal route: `delta_net_step -> delta_net_post_norm_gate -> ssm_out GEMV` in one command buffer, with CPU fallback preserved behind `QWEN35_DN_FUSE_OFF=1`."
+  source: `src/ml/gguf/kernels/delta_net.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-23
+  decay_trigger: delta_net kernel glue or recurrent forward path changes
+- claim: "Correctness preserved: `spec/qwen35_delta_net_spec.cr` passes (`y` cos=1.0, max|Δ|=1.21e-8; `state` cos=1.0, max|Δ|=2.98e-8) and `spec/qwen35_deltanet_spec.cr` passes (2 examples, 0 failures)."
+  source: targeted specs on 2026-04-23 with Metal bridge linked
+  verified_at: 2026-04-23
+  decay_trigger: recurrent route modified
+- claim: "Warm A/B on `bin/qwen35_sync_profile.cr` (prefill=5, decode=5) improved wall time from 246.66 ms/tok (`QWEN35_DN_FUSE_OFF=1`) to 239.34 ms/tok (default), saving 7.32 ms/tok (~3.0%)."
+  source: `crystal run bin/qwen35_sync_profile.cr --link-flags=\".../build/bridge.o ...\" -- 5 5` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed materially
+- claim: "Metal sync count dropped from 885 to 765 over 5 decode tokens (24 fewer syncs/token), and GEMV calls dropped from 725 to 605, matching one removed `ssm_out` round-trip per recurrent layer."
+  source: same warm A/B profile run
+  verified_at: 2026-04-23
+  decay_trigger: profiler accounting changed
+**architecture:**
+- `kernels/delta_net.metal`: new `delta_net_post_norm_gate` kernel computes per-head RMSNorm in place on the DeltaNet output and multiplies by `silu(z)`.
+- `qwen35_metal.cr`: new `dn_post_pipeline`; new `delta_net_project(...)` entrypoint encodes three kernels in one command buffer: DeltaNet step, post-norm gate, `ssm_out` GEMV.
+- `qwen35_cpu.cr`: `forward_recurrent_layer` now prefers the fused route and falls back to the previous CPU post-processing path when disabled or unsupported.
+**builds_on:** [LM-claude-PHASE3b-VERIFIED]
+**unblocks:** [Phase 4.1: larger decode-wave fusion, Phase 4.4: move remaining CPU fallback ops to GPU]
+**note:** This was the right class of optimization but not the final lever. Saving ~7.3 ms/tok is meaningful and proves recurrent post-processing was still paying a real sync tax, yet decode remains far from the 14.1 ms/tok M2 Max bandwidth floor. The next likely gains are broader per-token command-buffer fusion and eliminating the remaining 240 CPU fallback matvecs over 5 tokens.
+
+### [LM-codex-BATCH-SPLIT-1] Mixed qmatvec batches keep large projections on Metal
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, recurrent projection batching)
+**evidence:**
+- claim: "Changed `qmatvec_many` from all-or-nothing routing to mixed routing: supported qweights are batched on Metal, only unsupported/disabled slots fall back."
+  source: `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-23
+  decay_trigger: qmatvec routing changed
+- claim: "Escalated batched routing to include the small recurrent `alpha` / `beta` projections too when they ride in the same Metal batch; `cpu_fallback matvecs` dropped from 240 to 0 over 5 decode tokens."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: batching heuristics changed
+- claim: "Wall decode improved from ~239 ms/tok (pre-change profile) to ~139–156 ms/tok, then stabilized much lower after follow-up fusions."
+  source: same profile sequence on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: later optimizations supersede
+**note:** The hidden bug was not 'big projections go CPU' but 'big projections lose batching because tiny projections poison `all_eligible`'. Fixing that unlocked the later, larger wins.
+
+### [LM-codex-FFN-FUSE-1] SwiGLU FFN fused on GPU for all layers
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, Phase 4 decode optimization)
+**evidence:**
+- claim: "Added `qwen35_swiglu_mul` Metal kernel and fused route `gate_proj + up_proj -> swiglu -> down_proj` in one command buffer for both full-attn and recurrent layers."
+  source: `src/ml/gguf/kernels/ffn_qwen35.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-23
+  decay_trigger: FFN route modified
+- claim: "End-to-end correctness preserved: `spec/qwen35_fullattn_spec.cr`, `spec/qwen35_deltanet_spec.cr`, and `spec/qwen35_forward_spec.cr` all pass; forward top token remains 198 with logit ≈11.423701."
+  source: targeted specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: FFN kernels or layer glue changed
+- claim: "Profile after FFN fusion: total metal syncs 485 over 5 tokens, warm decode ≈95.68 ms/tok."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+**note:** This was the first clear structural win after the mixed-batch routing fix: removing one FFN round-trip per layer pays on all 32 layers.
+
+### [LM-codex-READ-SHARED-1] Hot-path results read from unified memory directly
+**status:** verified
+**trust:** {F:0.85, G:0.7, R:0.8}
+**context:** ml (Apple Silicon unified-memory optimization)
+**evidence:**
+- claim: "Replaced hot `gs_buffer_read` calls in `Qwen35Metal` with direct `contents` copies from unified-memory MTLBuffers."
+  source: `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-23
+  decay_trigger: MetalBuffer read path refactored
+- claim: "On warm sync-profile, `gemv read` dropped to ~1.23 ms over 5 tokens and wall decode reached ~95.68 ms/tok."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+**note:** Another direct application of the unified-memory lesson from the mmap work: avoid crossing the bridge when the bytes are already CPU-visible.
+
+### [LM-codex-RECURRENT-PREP-1] Recurrent conv/L2 prep moved to GPU and fused into DeltaNet wave
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, recurrent layers dominate decode)
+**evidence:**
+- claim: "Added GPU recurrent-prep kernels (`qwen35_recurrent_ab`, `qwen35_recurrent_conv`, `qwen35_recurrent_shift`, `qwen35_l2_heads`) and new fused route from recurrent projections through conv/L2 into DeltaNet."
+  source: `src/ml/gguf/kernels/recurrent_qwen35.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-23
+  decay_trigger: recurrent kernels or route changed
+- claim: "Then fused recurrent-prep and DeltaNet/project into a single GPU wave, cutting total metal syncs from 485 to 365 over 5 tokens."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent command-buffer structure changed
+- claim: "Warm sync-profile reached 58.43 ms/tok; phase profile reached 60.5 ms total forward with recurrent layers down to 42.5 ms total (1.77 ms/layer)."
+  source: `bin/qwen35_sync_profile.cr`, `bin/qwen35_phase_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+- claim: "Recurrent layer correctness preserved: `spec/qwen35_deltanet_spec.cr` passes after adapting it to read `conv_state_buf` / `ssm_state_buf`."
+  source: `spec/qwen35_deltanet_spec.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: spec or recurrent route changed
+**note:** This was the biggest win of the session. The remaining path is now much closer to a 'one sync per semantic chunk' design, though still far from the single-wave ideal needed to approach the M2 Max bandwidth floor.
 - `upload_weights` (test-only path) intentionally left unchanged — called once, not per token.
 **builds_on:** [LM-claude-PHASE4.1a-VERIFIED]
 **insight:** Predicted 500 allocs × ~10 μs = 5 ms/tok. Measured 9.6 ms — the extra likely comes from `finalize` / ARC release work on the old buffers, which amortizes outside Metal timing but shows up in wall clock. Thermal throttling above ~100 ms/tok swamped the signal; cool-trial filtering was necessary to extract a clean measurement.
 
+### [LM-codex-FULLATTN-PREP-1] Full-attention prep/output fused on GPU
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.9}
+**context:** ml (Qwen port, full-attention decode)
+**evidence:**
+- claim: "Added `qwen35_split_qgate`, `qwen35_rmsnorm_heads`, `qwen35_rope_partial`, and `qwen35_kv_write` kernels plus `Qwen35Metal.full_attn_project`, so decode full-attn now runs `q/k/v -> split/norm/rope -> KV write -> attention -> out proj` in one GPU wave."
+  source: `src/ml/gguf/kernels/fullattn_qwen35.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-23
+  decay_trigger: full-attn kernels or route changed
+- claim: "Correctness preserved: `spec/qwen35_fullattn_spec.cr` and `spec/qwen35_forward_spec.cr` pass; forward top token remains 198 with logit ≈11.4237."
+  source: targeted specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: full-attn math or routing changed
+- claim: "A/B sync profile improved from 55.53 ms/tok and 365 syncs (fuse off) to 51.71 ms/tok and 325 syncs (fuse on) over 5 decode tokens."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+**note:** This removed one per-full-attn-layer round-trip but did not change the session's main bottleneck; recurrent layers still dominated after this step.
+
+### [LM-codex-RECURRENT-LAYER-FUSE-1] Recurrent layers fused through FFN and residuals
+**status:** verified
+**trust:** {F:0.92, G:0.75, R:0.92}
+**context:** ml (Qwen port, dominant decode hotspot)
+**evidence:**
+- claim: "Added generic vector kernels `qwen35_add_rmsnorm` and `qwen35_add_vec`, then extended the recurrent GPU route to keep `inp -> recurrent attention -> residual add + post-attn RMSNorm -> SwiGLU FFN -> residual add` in one command buffer."
+  source: `src/ml/gguf/kernels/ffn_qwen35.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-23
+  decay_trigger: recurrent layer route or vector kernels changed
+- claim: "Correctness preserved: `spec/qwen35_deltanet_spec.cr`, `spec/qwen35_delta_net_spec.cr`, and `spec/qwen35_forward_spec.cr` pass; forward top token remains 198 with logit ≈11.423702."
+  source: targeted specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent layer math changed
+- claim: "A/B sync profile improved from 64.92 ms/tok and 325 syncs (recurrent-layer fuse off) to 39.62 ms/tok and 205 syncs (recurrent-layer fuse on) over 5 decode tokens."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+- claim: "Phase profile with the fused recurrent layer reached ~40.4 ms total forward; recurrent layers dropped to ~27.4 ms total (1.14 ms/layer)."
+  source: `bin/qwen35_phase_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+**note:** This was the decisive structural win after the earlier prep fusions. It eliminated the separate FFN round-trip on all 24 recurrent layers.
+
+### [LM-codex-FULL-LAYER-FUSE-1] Full-attention layers fused through FFN and residuals
+**status:** verified
+**trust:** {F:0.9, G:0.7, R:0.88}
+**context:** ml (Qwen port, finishing per-layer glue removal)
+**evidence:**
+- claim: "Extended the full-attn GPU route to keep `inp -> full-attn -> residual add + post-attn RMSNorm -> SwiGLU FFN -> residual add` in one command buffer."
+  source: `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-23
+  decay_trigger: full-attn layer route changed
+- claim: "Correctness preserved: `spec/qwen35_fullattn_spec.cr`, `spec/qwen35_forward_spec.cr`, `spec/qwen35_deltanet_spec.cr`, and `spec/qwen35_delta_net_spec.cr` all pass."
+  source: targeted specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: full-attn layer math changed
+- claim: "Best current profile after recurrent + full-attn layer fusion reached ~39.6–40.5 ms/tok with 165 total Metal syncs over 5 decode tokens."
+  source: `bin/qwen35_sync_profile.cr`, `bin/qwen35_phase_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+- claim: "At this point syncs equal one round-trip per layer plus the output head: 165 syncs / 5 tokens = 33 syncs/token = 32 layers + 1 head."
+  source: arithmetic on sync-profile counts
+  verified_at: 2026-04-23
+  decay_trigger: decoder scheduling changes
+**note:** This likely exhausts the easy per-layer fusion space. The next ceiling is cross-layer residency of the hidden state, not another local fusion.
+
+### [LM-codex-NEXT-BOTTLENECK-1] Remaining structural ceiling is layer-to-layer CPU round-trip
+**status:** verified
+**trust:** {F:0.88, G:0.8, R:0.9}
+**context:** ml (Qwen port, next optimization branch)
+**evidence:**
+- claim: "After the current fusions, the hidden state still returns to CPU after every layer because `forward_*_layer` APIs return `Array(Float32)` and the decoder loop feeds the next layer from CPU-owned activations."
+  source: `src/ml/gguf/qwen35_cpu.cr`, `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-23
+  decay_trigger: decoder loop rewritten for GPU-resident activations
+- claim: "The profile signature confirms this: 33 syncs/token remain (32 layers + output head), so orchestration cost is now dominated by layer boundaries rather than intra-layer glue."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: compute-graph / decoder-wave scheduling implemented
+**note:** The next serious optimization is TODO 4.4 in spirit: ping-pong hidden-state buffers across the whole decoder token wave and read back only the final logits.
+
+### [LM-codex-DECODE-WAVE-1] Whole-token decode wave removes per-layer round-trips
+**status:** verified
+**trust:** {F:0.92, G:0.75, R:0.92}
+**context:** ml (Qwen port, decoder scheduling)
+**evidence:**
+- claim: "Added a GPU-resident decode route that uploads the embedding once, keeps hidden activations on GPU across all 32 layers with ping-pong buffers, and reads back only final logits."
+  source: `src/ml/gguf/qwen35_cpu.cr`, `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-23
+  decay_trigger: decoder routing or layer kernels changed
+- claim: "Correctness preserved vs the previous layer-by-layer path: first-token A/B gives top token 198 on both paths, cosine ≈ 1.0, max diff ≈ 1.24e-5; targeted Qwen specs still pass."
+  source: local A/B check + `spec/qwen35_forward_spec.cr`, `spec/qwen35_fullattn_spec.cr`, `spec/qwen35_deltanet_spec.cr`, `spec/qwen35_delta_net_spec.cr`
+  verified_at: 2026-04-23
+  decay_trigger: wave path math or buffer residency changes
+- claim: "Sync profile dropped from 165 total Metal syncs over 5 decode tokens on the fused layer-by-layer path to 5 syncs over 5 tokens on the decode-wave path."
+  source: `bin/qwen35_sync_profile.cr` with and without `QWEN35_DECODE_WAVE_OFF=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling conditions changed
+- claim: "Short warm decode improved from ~34.6 ms/tok (layer-by-layer fused path) to ~27.0-29.0 ms/tok on the decode-wave path; longer 20-token run measured ~29.95 ms/tok."
+  source: `bin/qwen35_sync_profile.cr` 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal state / profiling conditions changed
+**note:** This completes the obvious orchestration optimization. The remaining gap to llama.cpp is now mostly kernel efficiency and long-context attention cost, not CPU/GPU boundary churn.
+
+### [LM-codex-QWEN-VS-LLAMA-1] Matched 64/64 benchmark shows decode gap is now moderate
+**status:** verified
+**trust:** {F:0.9, G:0.8, R:0.92}
+**context:** ml (Qwen port, benchmarking discipline)
+**evidence:**
+- claim: "Added a dedicated harness `bin/benchmark_qwen_vs_llama.cr` that measures cogni-ml and local `llama-bench` under matched `pp/tg` settings."
+  source: `bin/benchmark_qwen_vs_llama.cr`
+  verified_at: 2026-04-23
+  decay_trigger: harness logic or benchmark settings changed
+- claim: "On `64/64`, decode measured `cogni-ml p50 ≈ 33.31 tok/s` vs `llama.cpp avg ≈ 39.49 tok/s`, a gap of about `-15.66%`."
+  source: `crystal run bin/benchmark_qwen_vs_llama.cr -- --reps=3 --warmup=1 --prompt=64 --gen=64` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave path or local llama.cpp build changed
+- claim: "The same harness reports prefill at `~33 tok/s` vs `~447 tok/s`, but this is not an apples-to-apples prefill comparison yet because cogni-ml still performs prompt ingestion as repeated decode steps rather than a true batched prefill path."
+  source: same harness run + code inspection of `Qwen35CPU.forward`
+  verified_at: 2026-04-23
+  decay_trigger: true Qwen prefill path implemented
+**note:** This is the right current framing: decode is now close enough for kernel work to matter directly; prefill remains a separate engineering problem, not a fair speed comparison today.
+
+### [LM-codex-Q5K-DISPATCH-1] Q5_K decode kernel was under-dispatched relative to llama.cpp
+**status:** verified
+**trust:** {F:0.9, G:0.82, R:0.92}
+**context:** ml (Qwen port, recurrent decode kernels)
+**evidence:**
+- claim: "Our Q5_K GEMV path was using `NR0=2` semantics everywhere, but llama.cpp Metal uses `N_R0_Q5_K=1` while keeping `N_SG_Q5_K=2`."
+  source: `src/ml/gguf/kernels/gemm_q56k.metal`, `src/ml/gguf/qwen35_metal.cr`, `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-impl.h`
+  verified_at: 2026-04-23
+  decay_trigger: GEMV tiling changed again
+- claim: "Fixing the Q5_K kernel constant to `MV5_NR0=1` and making Crystal-side grid sizing pipeline-aware improved the recurrent `attn_qkv` microbench from `~0.733 ms` to `~0.643 ms` for `4096 -> 8192`."
+  source: local `tmp_q5_micro.cr` microbench on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q5_K kernel or dispatch wrapper changes
+- claim: "After the fix, targeted Qwen specs still pass and the decode-wave sync profile improved to `~27.96 ms/tok` on a `20/20` run (`~28.74 ms/tok` on `5/5`)."
+  source: `spec/qwen35_forward_spec.cr`, `spec/qwen35_fullattn_spec.cr`, `spec/qwen35_deltanet_spec.cr`, `spec/qwen35_delta_net_spec.cr`, `bin/qwen35_sync_profile.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: decode-wave kernels or profiling conditions changed
+**note:** The main verified win in this branch is the Q5_K dispatch correction, not a broad GEMV retune.
+
+### [LM-codex-DELTANET-128-REFUTE-1] 128-thread DeltaNet rewrite is falsified and should stay reverted
+**status:** refuted
+**trust:** {F:0.93, G:0.75, R:0.94}
+**context:** ml (Qwen port, recurrent kernel experiments)
+**evidence:**
+- claim: "A rewrite of `delta_net_step` that tried to use `128` threads per head and stripe rows across four simdgroups produced incorrect output: only rows `0,4,8,...` were written, and `spec/qwen35_delta_net_spec.cr` dropped to `y cos ≈ 0.497`."
+  source: local debug repro `tmp_delta_debug.cr` + `spec/qwen35_delta_net_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: the experiment is retried with a different indexing model
+- claim: "The branch was reverted and the previous one-simdgroup DeltaNet kernel restored; correctness returned immediately (`7 examples, 0 failures`)."
+  source: targeted Qwen specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet kernel changed again
+**note:** Do not retry this exact frame. If DeltaNet is revisited, first prove the simdgroup/threadgroup indexing model with a minimal probe kernel before touching recurrence math again.
+
+### [LM-codex-DELTANET-128-V2-1] Corrected 128-thread DeltaNet path is now the default decode path
+**status:** verified
+**trust:** {F:0.92, G:0.78, R:0.90}
+**context:** ml (Qwen port, recurrent kernel experiments)
+**evidence:**
+- claim: "The earlier `rows 0,4,8,...` failure was not caused by Metal simdgroup indexing or row-striping itself. Minimal probes for `simdgroup_index_in_threadgroup`, row ownership, and per-row `float4` read/modify/write all behaved correctly."
+  source: local probes `tmp_metal_simd_probe.cr`, `tmp_metal_row_probe.cr`, `tmp_metal_row_math_probe.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: N/A
+- claim: "A standalone `delta_net_step_128_probe` using four simdgroups per head matched the CPU reference at machine precision (`y_cos≈1.0`, `s_cos≈1.0`, `max|Δ|≈1e-8`)."
+  source: local probe `tmp_delta128_probe.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: the kernel shape is modified
+- claim: "In a direct kernel microbench on Qwen 9B shapes (`h_k=16`, `h_v=32`, `s=128`), the corrected 128-thread kernel was materially faster than the 32-thread kernel (`avg 0.5239 ms` vs `1.0199 ms`, `p50 0.3742 ms` vs `1.0235 ms`)."
+  source: local `tmp_delta_microbench.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: kernel math or dispatch changes
+- claim: "A narrow runtime toggle (`QWEN35_DN_128`) enabled apples-to-apples A/B testing. With the same built `qwen35_sync_profile` binary, decode improved from `28.33 -> 24.77 ms/tok` mean on `5/5` runs and from `30.60 -> 25.80 ms/tok` mean on `20/20` runs."
+  source: built `/tmp/qwen35_sync_profile_bench` with repeated local runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: decode-wave scheduler or recurrent kernels change
+- claim: "On the matched `64/64` benchmark against local `llama.cpp`, decode improved from `32.04 tok/s` (`-21.73%` vs llama) to `39.10 tok/s` (`-4.06%` vs llama). Prefill also improved from `31.78` to `37.91 tok/s`, though that comparison remains structurally unfair because cogni-ml still ingests prompt tokens as repeated decode."
+  source: built `/tmp/benchmark_qwen_vs_llama` with `--reps=3 --warmup=1 --prompt=64 --gen=64` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness or decode path changes
+- claim: "The 128-thread variant is now the default path, with `QWEN35_DN_128=0` preserving the old 32-thread fallback; targeted Qwen specs stay green in both modes."
+  source: `src/ml/gguf/qwen35_metal.cr`, `spec/qwen35_forward_spec.cr`, `spec/qwen35_fullattn_spec.cr`, `spec/qwen35_deltanet_spec.cr`, `spec/qwen35_delta_net_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet dispatch logic changes
+**note:** This is now a verified product win for decode, not just a kernel-only lead. The gap to `llama.cpp` on matched decode shrank to about `4%`, so the next work should attack the remaining recurrent/full-layer overhead rather than revisit DeltaNet threadgroup math.
+
+### [LM-codex-RECURRENT-MICROFUSE-REFUTE-1] Two small recurrent micro-fusions did not improve decode and were reverted
+**status:** refuted
+**trust:** {F:0.86, G:0.72, R:0.88}
+**context:** ml (Qwen port, recurrent kernel experiments)
+**evidence:**
+- claim: "Fusing `recurrent_shift` into `recurrent_conv` looked structurally safe but regressed end-to-end decode badly (`~48 ms/tok` on repeated `20/20` sync-profile runs), so it was reverted."
+  source: local patch + `bin/qwen35_sync_profile.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent conv/state update design changes substantially
+- claim: "Fusing the separate Q/K L2-norm kernels into one `qk-norm` kernel preserved correctness but did not improve decode (`~28.36 ms/tok` vs prior `~27.86 ms/tok` on `5/5`), so it was reverted."
+  source: local patch + `bin/qwen35_sync_profile.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent norm scheduling changes substantially
+**note:** Current evidence says the next recurrent win is unlikely to come from tiny encoder-count reductions. Focus on larger arithmetic kernels or a better-validated DeltaNet redesign.
+
+### [LM-codex-VECRMS-SG-REFUTE-1] Simdgroup-first vector RMSNorm reductions were not a robust decode win
+**status:** refuted
+**trust:** {F:0.89, G:0.70, R:0.87}
+**context:** ml (Qwen port, vector norm kernels)
+**evidence:**
+- claim: "Alternative `qwen35_rmsnorm_vec` / `qwen35_add_rmsnorm` kernels that used simdgroup-first reductions preserved correctness (`7 examples, 0 failures`) but only gave mixed performance signals."
+  source: local toggle experiment `QWEN35_VEC_RMS_SG=1` with targeted Qwen specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: vector RMSNorm kernel shape changes
+- claim: "On the same built `qwen35_sync_profile` binary, `20/20` improved (`25.94 -> 25.16 ms/tok`) but `64/64` was effectively flat (`26.05 -> 26.06 ms/tok`) and short `5/5` runs were noisy."
+  source: built `/tmp/qwen35_sync_profile_vecsg` with repeated local runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: decode workload or RMSNorm kernel changes
+- claim: "A matched `64/64` benchmark against `llama.cpp` was too thermally noisy to support promotion; native decode moved only slightly (`40.41 -> 41.24 tok/s`) while llama.cpp varied widely between runs."
+  source: built `/tmp/benchmark_qwen_vs_llama_vecsg` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh benchmark under calmer conditions
+**note:** This path was reverted. The reduction strategy may still be viable later, but current evidence is too weak and inconsistent to justify extra kernel complexity.
+
+### [LM-codex-Q6WIDE-REFUTE-1] Wider Q6_K GEMV threadgroups did not improve end-to-end decode
+**status:** refuted
+**trust:** {F:0.90, G:0.76, R:0.90}
+**context:** ml (Qwen port, Q6_K decode kernels)
+**evidence:**
+- claim: "A bounded constant search on real Qwen weights found that `Q6_K` variants with different `(NSG, NR0)` trade off differently by shape: `NSG=4, NR0=2` helped recurrent `ffn_down`, while `NSG=1, NR0=4` helped the huge `lm_head` microbench."
+  source: local `tmp_q6_variant_bench.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q6_K kernel math changes
+- claim: "Promoting the most plausible global compromise (`NSG=4, NR0=2`) behind `QWEN35_Q6_WIDE=1` preserved correctness (`7 examples, 0 failures`) but did not improve decode on the same built `qwen35_sync_profile` binary."
+  source: `spec/qwen35_forward_spec.cr`, `spec/qwen35_fullattn_spec.cr`, `spec/qwen35_deltanet_spec.cr`, `spec/qwen35_delta_net_spec.cr`, plus built `/tmp/qwen35_sync_profile_q6wide` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: dispatch wrapper or benchmark workload changes
+- claim: "Matched native-only runs were flat or slightly worse: `5/5` mean `24.93 -> 25.22 ms/tok`, `20/20` mean `25.53 -> 25.79 ms/tok`, `64/64` mean `27.47 -> 27.52 ms/tok`."
+  source: repeated `/tmp/qwen35_sync_profile_q6wide` runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh rerun after broader decode-path changes
+**note:** This experiment was reverted. A single global Q6_K tiling choice is too blunt; future Q6_K work should be shape-aware or path-specific, not a repo-wide constant flip.
+
+### [LM-codex-RECURRENT-PROJ-MAP-1] Current recurrent decode is dominated by a small set of repeated projections
+**status:** verified
+**trust:** {F:0.87, G:0.74, R:0.88}
+**context:** ml (Qwen port, recurrent decode hotspots)
+**evidence:**
+- claim: "For one representative recurrent layer in Qwen 3.5 9B, the large routed projections are: `attn_qkv=Q5_K 4096->8192`, `attn_gate=Q4_K 4096->4096`, `ssm_out=Q4_K 4096->4096`, `ffn_gate=Q4_K 4096->12288`, `ffn_up=Q4_K 4096->12288`, `ffn_down=Q6_K 12288->4096`."
+  source: local `tmp_recurrent_proj_bench.cr` type dump on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: model file or layer routing changes
+- claim: "Production-route microbenches on those recurrent projections show the main repeated costs cluster around `attn_qkv` (`~0.66 ms`), the fused FFN pair `ffn_gate_up_many` (`~0.74 ms` for both together), and `ffn_down` (`~0.56 ms`), with `attn_gate`/`ssm_out` somewhat smaller."
+  source: local `tmp_recurrent_proj_bench.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: GEMV batching or projection routing changes
+**note:** The next likely win is not another broad Q6_K retune; it is more likely in the recurrent FFN / projection bundle, especially the repeated Q4_K `ffn_gate/up` + Q6_K `ffn_down` path.
+
+### [LM-codex-FFN-INPLACE-REFUTE-1] In-place SwiGLU buffer reuse looked good in microbench but did not improve decode
+**status:** refuted
+**trust:** {F:0.90, G:0.76, R:0.89}
+**context:** ml (Qwen port, FFN bundle experiments)
+**evidence:**
+- claim: "A standalone recurrent FFN bundle microbench using real Qwen weights showed a strong local win when reusing `ffn_up` as the SwiGLU output buffer instead of writing to a separate `ffn_comb` buffer (`1.1716 -> 0.9323 ms`)."
+  source: local `tmp_ffn_bundle_bench.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: FFN kernel or buffer schedule changes
+- claim: "A narrow production toggle (`QWEN35_FFN_INPLACE=1`) preserved correctness (`7 examples, 0 failures`) but did not produce a robust decode win on the same built `qwen35_sync_profile` binary."
+  source: targeted Qwen specs plus built `/tmp/qwen35_sync_profile_ffn` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: decode-wave FFN schedule changes
+- claim: "Strict native-only `64/64` runs refuted the optimization: baseline mean `26.16 ms/tok` vs in-place mean `26.45 ms/tok`, despite one looser `64/64` two-run sample looking slightly better."
+  source: repeated `/tmp/qwen35_sync_profile_ffn` runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh rerun after other FFN-path changes
+**note:** This was reverted. The gap between local bundle microbench and decode-level behavior suggests the next FFN win has to cut more than one scratch-buffer hop or reduce an actual kernel/dispatch bottleneck, not just alias a buffer.
+
+### [LM-codex-WAVE-REC-PACK-REFUTE-1] Collapsing recurrent wave work into fewer compute encoders was not a decode win
+**status:** refuted
+**trust:** {F:0.90, G:0.74, R:0.88}
+**context:** ml (Qwen port, decode-wave scheduling)
+**evidence:**
+- claim: "A bounded wave-path experiment packed each recurrent layer into fewer compute encoders (`recurrent chain` + `FFN chain`) behind `QWEN35_WAVE_REC_PACK=1`, while preserving correctness (`7 examples, 0 failures`)."
+  source: local toggle experiment with `spec/qwen35_forward_spec.cr`, `spec/qwen35_fullattn_spec.cr`, `spec/qwen35_deltanet_spec.cr`, and `spec/qwen35_delta_net_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent wave-path scheduling changes substantially
+- claim: "Short `5/5` runs looked mildly better (`25.07 -> 24.74 ms/tok` mean), but the stricter native-only falsifiers were worse: `20/20` mean `25.28 -> 25.40 ms/tok`, `64/64` mean `27.82 -> 28.40 ms/tok` on the same built binary."
+  source: repeated `/tmp/qwen35_sync_profile_wavepack` runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh rerun after larger command-buffer or kernel changes
+- claim: "After reverting the experiment, targeted specs were green again and a fresh local `20/20` rerun gave `27.15 ms/tok`, which is noisier/slower than the earlier `~25.3 ms/tok` anchor and therefore should not be promoted as a new headline benchmark."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wavepack_revert crystal spec ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wavepack_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: calm thermal rerun or broader decode-path changes
+**note:** This path was reverted. Fewer compute encoders per recurrent layer are not automatically better; the next win likely needs kernel-level work or a more targeted reduction in recurrent arithmetic cost, not encoder-count reduction by itself.
+
+### [LM-codex-REC1D-TG-REFUTE-1] Smaller recurrent `conv/shift` threadgroups were not a robust decode win
+**status:** refuted
+**trust:** {F:0.89, G:0.72, R:0.88}
+**context:** ml (Qwen port, recurrent arithmetic dispatch)
+**evidence:**
+- claim: "A narrow dispatch-only experiment exposed `QWEN35_REC_1D_TG={64,128,256}` for recurrent `conv`/`shift` kernels without changing math, and correctness stayed green (`7 examples, 0 failures`)."
+  source: local toggle experiment with targeted Qwen specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent kernel shape or dispatch changes
+- claim: "Initial native-only runs suggested `128` might slightly help `20/20` and `64/64`, but the stricter alternating falsifier showed the signal was not robust: `20/20` mean `24.50 -> 24.20 ms/tok`, while `64/64` was effectively flat-to-worse (`27.00 -> 27.08 ms/tok`)."
+  source: repeated `/tmp/qwen35_sync_profile_rec1d` runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh rerun after recurrent kernel rewrites
+- claim: "After reverting the dispatch toggle, targeted specs were green and a fresh `20/20` rerun returned to `24.80 ms/tok`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_rec1d_revert crystal spec ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_rec1d_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or broader decode changes
+**note:** This path was reverted. The remaining recurrent gap is unlikely to be solved by a blind threadgroup-size tweak for `conv`/`shift`; the next credible win probably needs either a true recurrent-kernel rewrite or a more targeted projection-side improvement.
+
+### [LM-codex-REC-CONV4-REFUTE-1] A vectorized `recurrent_conv4` rewrite changed logits and was rejected
+**status:** refuted
+**trust:** {F:0.93, G:0.78, R:0.93}
+**context:** ml (Qwen port, recurrent arithmetic kernels)
+**evidence:**
+- claim: "A bounded rewrite introduced `qwen35_recurrent_conv4`, where each thread computed 4 adjacent channels, behind `QWEN35_REC_CONV4=1`."
+  source: local patch to `src/ml/gguf/kernels/recurrent_qwen35.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future conv-kernel redesign
+- claim: "The existing targeted specs did not fail immediately, but an explicit forward check showed the regression clearly: baseline `top=198 logit=11.423705`, conv4 `top=318 logit=16.414322` for the same token-0 forward pass."
+  source: local `tmp_qwen35_conv4_check.cr` A/B run with `QWEN35_REC_CONV4=0/1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: prompt/model/output-path changes
+- claim: "After reverting the conv4 branch and strengthening `spec/qwen35_forward_spec.cr` to assert `top=198` and `logit≈11.423705`, targeted specs were green again and a fresh `20/20` rerun gave `24.40 ms/tok`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conv4_revert crystal spec ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conv4_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: when the golden forward expectation changes intentionally
+**note:** This branch was reverted. The useful outcome was not a speed win but a stronger guardrail: `qwen35_forward_spec` now catches semantic regressions that previously slipped through.
+
+### [LM-codex-REC-CONV4-CORRECT-REFUTE-1] A corrected `recurrent_conv4` rewrite preserved logits but still did not speed up decode
+**status:** refuted
+**trust:** {F:0.92, G:0.78, R:0.91}
+**context:** ml (Qwen port, recurrent arithmetic kernels)
+**evidence:**
+- claim: "A second bounded `qwen35_recurrent_conv4` attempt fixed the weight-layout bug by gathering channel-major `conv1d` weights with stride `conv_k`, and explicit forward A/B matched again: `top=198 logit=11.423705` in both modes."
+  source: local `tmp_qwen35_conv4_check.cr` A/B run with corrected conv4 on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future conv-kernel rewrite
+- claim: "With `QWEN35_REC_CONV4=1`, the strengthened targeted specs stayed green (`7 examples, 0 failures`)."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conv4_fixed_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Strict native-only decode A/B on `/tmp/qwen35_sync_profile_conv4_fixed` refuted the optimization: `5/5` mean `22.81 -> 22.98 ms/tok`, `20/20` mean `24.18 -> 24.76 ms/tok`, `64/64` mean `26.09 -> 26.12 ms/tok`."
+  source: repeated `/tmp/qwen35_sync_profile_conv4_fixed` runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: broader recurrent kernel changes
+- claim: "After reverting the corrected conv4 branch, targeted specs were green and a fresh `20/20` rerun returned to `24.47 ms/tok`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conv4_fixed_revert crystal spec ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_conv4_fixed_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or larger decode-path changes
+**note:** This second branch was also reverted. The idea is now falsified in both forms: the naive vectorized rewrite was wrong, and the corrected one was correct but not faster.
+
+### [LM-codex-REC-STAGE-BENCH-1] Fused recurrent stage timing is much lower than the sum of old standalone projection microbenches
+**status:** verified
+**trust:** {F:0.88, G:0.75, R:0.89}
+**context:** ml (Qwen port, recurrent hotpath prioritization)
+**evidence:**
+- claim: "On the current fused GPU helpers with real Qwen 3.5 9B weights, `recurrent_attn_project` measured about `0.8685 ms` avg / `0.8678 ms` p50, and full `recurrent_layer_project` about `1.4164 ms` avg / `1.6725 ms` p50."
+  source: local `tmp_recurrent_stage_bench.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent helper rewrites or wider decode-path changes
+- claim: "These numbers are much lower than the older sum of standalone single-op projection microbenches, which means those isolated per-op timings are not a faithful proxy for in-wave prioritization."
+  source: comparison of `tmp_recurrent_stage_bench.cr` with prior local `tmp_recurrent_proj_bench.cr` landmark data on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh per-op microbench methodology or helper-route changes
+**note:** The next optimization branch should prioritize measurements that stay inside the fused recurrent route or the full decode wave, rather than relying on standalone per-op microbenches alone.
+
+### [LM-codex-Q6-HEAD-REFUTE-1] A head-only `Q6_K` wide pipeline did not survive stricter falsification
+**status:** refuted
+**trust:** {F:0.91, G:0.77, R:0.90}
+**context:** ml (Qwen port, output head / Q6_K decode)
+**evidence:**
+- claim: "A bounded output-head-only experiment added a separate `Q6_K` GEMV pipeline for the huge `lm_head` shape (`QWEN35_Q6_HEAD=1`) and preserved correctness (`7 examples, 0 failures`)."
+  source: local patch to `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr`, plus targeted specs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output-head routing changes
+- claim: "Initial decode runs looked promising on shorter workloads (`20/20` mean `24.43 -> 23.84 ms/tok`), but long-context `64/64` A/B was consistently worse (`26.86 -> 27.16 ms/tok`)."
+  source: repeated `/tmp/qwen35_sync_profile_q6head` runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh rerun after decode-path changes
+- claim: "A direct `rmsnorm_project` microbench for the head path failed the hypothesis: baseline `2.8742 ms` avg / `2.5436 ms` p50 versus head-wide `2.9280 ms` avg / `2.5420 ms` p50."
+  source: local `tmp_q6_head_bench.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output-head kernel rewrite
+- claim: "After reverting the branch, targeted specs were green and a fresh `20/20` rerun gave `23.78 ms/tok`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6head_revert crystal spec ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6head_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or broader decode changes
+**note:** This branch was reverted. The isolated head microbench falsified the supposed shape-specific win, so future Q6_K work should focus on a genuinely different kernel strategy rather than dispatch constants alone.
+
+### [LM-codex-DN-AB-FUSE-REFUTE-1] Folding `recurrent_ab` into DeltaNet did not produce a robust decode win
+**status:** refuted
+**trust:** {F:0.90, G:0.78, R:0.91}
+**context:** ml (Qwen port, recurrent DeltaNet scheduling)
+**evidence:**
+- claim: "A bounded branch fused `recurrent_ab` into DeltaNet by adding `delta_net_step_ab` / `delta_net_step_ab_128`, wiring raw `alpha/beta + dt_bias + ssm_a` directly into the recurrent DeltaNet callsites under `QWEN35_DN_AB_FUSE=1`."
+  source: local patches to `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future DeltaNet kernel redesign
+- claim: "The branch preserved correctness under the strengthened Qwen gate: `QWEN35_DN_AB_FUSE=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with `top token id=198` and `logit=11.423705`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_ab_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched native-only decode A/B on one built `/tmp/qwen35_sync_profile_dn_ab` binary did not support promotion: `5/5` mean `22.95 -> 23.90 ms/tok`, `20/20` mean `24.08 -> 23.77 ms/tok`, `64/64` mean `25.58 -> 25.56 ms/tok`."
+  source: alternating local runs of `/tmp/qwen35_sync_profile_dn_ab` with `QWEN35_DN_AB_FUSE=0/1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wider recurrent or decode-wave changes
+- claim: "After reverting the branch, the fused kernels and toggle path were removed, targeted specs were green again, and a fresh `20/20` rerun gave `24.93 ms/tok`."
+  source: `rg -n \"dn_ab|delta_net_step_ab\" ...` returning no matches, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_ab_revert_spec crystal spec ...`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_ab_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or broader decode changes
+**note:** This branch was correctness-safe but not performance-robust. Removing one recurrent helper dispatch was not enough; future DeltaNet work should target a more structural arithmetic or residency win, not this specific fuse.
+
+### [LM-codex-DN-QKNORM-REFUTE-1] Folding recurrent Q/K L2 normalization into DeltaNet was correctness-safe but not faster
+**status:** refuted
+**trust:** {F:0.91, G:0.79, R:0.91}
+**context:** ml (Qwen port, recurrent DeltaNet / QK normalization)
+**evidence:**
+- claim: "A bounded branch added `delta_net_step_qknorm` / `delta_net_step_qknorm_128` and a narrow `QWEN35_DN_QKNORM=1` toggle, so recurrent DeltaNet could compute per-head Q/K L2 normalization internally and skip the standalone `qwen35_l2_heads` kernels."
+  source: local patches to `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future DeltaNet or recurrent normalization redesign
+- claim: "The branch preserved correctness under the strengthened Qwen gate: `QWEN35_DN_QKNORM=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with `top token id=198` and `logit=11.423705`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_qknorm_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Initial matched decode A/B on one built `/tmp/qwen35_sync_profile_dn_qknorm` binary looked only marginally positive (`5/5` mean `23.15 -> 22.69 ms/tok`, `20/20` mean `23.74 -> 23.67 ms/tok`, `64/64` mean `25.36 -> 25.27 ms/tok`)."
+  source: alternating local runs of `/tmp/qwen35_sync_profile_dn_qknorm` with `QWEN35_DN_QKNORM=0/1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wider recurrent or decode-wave changes
+- claim: "A stricter alternating falsifier refuted the branch: `20/20` mean `23.570 -> 23.625 ms/tok`, `64/64` mean `25.422 -> 25.788 ms/tok`."
+  source: second alternating local A/B run of `/tmp/qwen35_sync_profile_dn_qknorm` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: broader recurrent or decode-path changes
+- claim: "After reverting the branch, the qknorm-specific kernels and toggle path were removed, targeted specs were green again, and a fresh `20/20` rerun gave `24.36 ms/tok`."
+  source: `rg -n \"qknorm|delta_net_step_qknorm\" ...` returning no matches, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_qknorm_revert_spec crystal spec ...`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_qknorm_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or broader decode changes
+**note:** This branch was also reverted. Removing two recurrent normalization kernels inside a single decode wave was not enough; the remaining gap is not explained by these standalone L2-normalization passes.
+
+### [LM-codex-REC-SPLIT-BENCH-2] Recurrent FFN and recurrent-attention helpers are now roughly the same size
+**status:** verified
+**trust:** {F:0.87, G:0.76, R:0.88}
+**context:** ml (Qwen port, recurrent hotpath prioritization)
+**evidence:**
+- claim: "On the current production path with real Qwen 3.5 9B weights, standalone helper timings on one recurrent layer were `recurrent_attn_project avg=0.8890 ms p50=0.8797`, `ffn_project avg=0.9346 ms p50=0.9331`, and `recurrent_layer_project avg=1.6926 ms p50=1.6904`."
+  source: local `tmp_qwen35_recurrent_split_bench.cr` run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent or FFN helper rewrites
+- claim: "The measured `recurrent_layer_project - recurrent_attn_project` gap was about `0.8036 ms`, which is close to the standalone `ffn_project` cost. This means recurrent FFN is no longer a minor tail; it is effectively co-dominant with recurrent attention in the helper path."
+  source: same local `tmp_qwen35_recurrent_split_bench.cr` run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: helper-route restructuring or wider decode changes
+**note:** The next bounded structural branch should target FFN projection math, not only recurrent-attention glue. The most credible candidate is a fused or otherwise more structural optimization around `gate/up/down`, rather than another small scheduler tweak.
+
+### [LM-codex-FULL-SPLIT-BENCH-1] Full-attention FFN is also co-dominant with full-attention helper cost
+**status:** verified
+**trust:** {F:0.87, G:0.77, R:0.88}
+**context:** ml (Qwen port, shared FFN prioritization)
+**evidence:**
+- claim: "On the current production path with real Qwen 3.5 9B weights, standalone helper timings on one full-attention layer were `full_attn_project avg=0.7005 ms p50=0.6959`, `ffn_project avg=0.9365 ms p50=0.9340`, and `full_attn_layer_project avg=1.4991 ms p50=1.5041`."
+  source: local `tmp_qwen35_full_split_bench.cr` run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: full-attention or FFN helper rewrites
+- claim: "The measured `full_attn_layer_project - full_attn_project` gap was about `0.7986 ms`, again close to the standalone `ffn_project` cost. This means FFN is not just a recurrent-side issue; it is a shared hotspot across both layer families."
+  source: same local `tmp_qwen35_full_split_bench.cr` run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: helper-route restructuring or wider decode changes
+**note:** Together with `LM-codex-REC-SPLIT-BENCH-2`, this shifts the next credible optimization target to a shared FFN projection-math branch. Another recurrent-only or full-attention-only glue tweak is less likely to move end-to-end decode meaningfully.
+
+### [LM-codex-FFN-Q4PAIR-REFUTE-1] A fused Q4_K gate/up pair projection had a local helper win but failed decode-level promotion
+**status:** refuted
+**trust:** {F:0.91, G:0.79, R:0.90}
+**context:** ml (Qwen port, shared FFN projection math)
+**evidence:**
+- claim: "A bounded shared FFN branch added `simd_mv_q4k_pair_f32` and wired it behind `QWEN35_FFN_Q4PAIR=1` for Q4_K `gate/up` pairs with matching `4096->12288` shape in both recurrent and full-attention FFN paths."
+  source: local patches to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future FFN projection rewrite
+- claim: "The branch preserved correctness under the strengthened Qwen gate: `QWEN35_FFN_Q4PAIR=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with `top token id=198` and `logit=11.423705`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_q4pair_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Initial decode A/B on one built `/tmp/qwen35_sync_profile_ffn_q4pair` binary was mildly positive across all workloads: `5/5` mean `24.413 -> 24.313 ms/tok`, `20/20` mean `25.023 -> 24.803 ms/tok`, `64/64` mean `26.720 -> 26.485 ms/tok`."
+  source: initial alternating local runs of `/tmp/qwen35_sync_profile_ffn_q4pair` with `QWEN35_FFN_Q4PAIR=0/1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: broader decode-path changes
+- claim: "A stricter alternating falsifier refuted the decode claim: `20/20` mean `24.962 -> 24.723 ms/tok`, but `64/64` mean `27.645 -> 28.008 ms/tok`."
+  source: second alternating local A/B run of `/tmp/qwen35_sync_profile_ffn_q4pair` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: broader decode or thermal conditions
+- claim: "Helper-level evidence did show a local effect on the full-attention FFN helper (`full avg 0.9418 -> 0.8935 ms`), but that did not survive end-to-end decode promotion."
+  source: local `tmp_qwen35_ffn_pair_helper_bench.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: FFN helper rewrites
+- claim: "After reverting the branch, the q4pair-specific kernel and toggle path were removed, targeted specs were green again, and a fresh `20/20` rerun gave `24.10 ms/tok`."
+  source: `rg -n \"q4pair|simd_mv_q4k_pair_f32|QWEN35_FFN_Q4PAIR\" ...` returning no matches, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_q4pair_revert_spec crystal spec ...`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_q4pair_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or wider decode changes
+**note:** This branch was reverted. Sharing `gate/up` y-loads inside a pair kernel was a real local helper improvement, but not a robust decode win, especially at `64/64`. That suggests the remaining FFN cost is not solved by this level of local Q4_K pairing alone.
+
+### [LM-codex-FFN-DOWN-FUSE-REFUTE-1] Fusing SwiGLU with Q6_K down-projection was correctness-safe but consistently slower
+**status:** refuted
+**trust:** {F:0.92, G:0.81, R:0.92}
+**context:** ml (Qwen port, shared FFN structural branch)
+**evidence:**
+- claim: "A bounded shared FFN branch added `simd_mv_q6k_swiglu_f32` and wired it behind `QWEN35_FFN_DOWN_FUSE=1` to compute `ffn_down(W_q6k @ (silu(gate) * up))` without the standalone `swiglu` dispatch and `ffn_comb` buffer."
+  source: local patches to `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future FFN projection rewrite
+- claim: "The branch preserved correctness under the strengthened Qwen gate: `QWEN35_FFN_DOWN_FUSE=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with `top token id=198` and `logit=11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_downfuse_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched native-only decode A/B on one built `/tmp/qwen35_sync_profile_ffn_downfuse` binary refuted the branch immediately: `5/5` mean `23.117 -> 24.730 ms/tok`, `20/20` mean `23.813 -> 25.380 ms/tok`, and `64/64` mean `25.230 -> 27.060 ms/tok`."
+  source: alternating local runs of `/tmp/qwen35_sync_profile_ffn_downfuse` with `QWEN35_FFN_DOWN_FUSE` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: broader FFN or decode-path changes
+- claim: "After reverting the branch, the q6-swiglu kernel and toggle path were removed, targeted specs were green again, and a fresh `20/20` rerun gave `24.12 ms/tok`."
+  source: `rg -n \"QWEN35_FFN_DOWN_FUSE|simd_mv_q6k_swiglu_f32|mv6_swiglu|q6_swiglu_down|can_use_ffn_down_fuse\" ...` returning no matches, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_downfuse_revert_spec crystal spec ...`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_downfuse_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or wider decode changes
+**note:** This branch was reverted. Eliminating the explicit `swiglu` dispatch and `ffn_comb` buffer looked structurally promising, but on the actual decode wave it slowed all tested workloads. The remaining FFN cost is not dominated by this local down-projection glue.
+
+### [LM-codex-INTERLAYER-NORM-REFUTE-1] Precomputing next-layer RMSNorm at the FFN residual boundary did not produce a robust decode win
+**status:** refuted
+**trust:** {F:0.90, G:0.82, R:0.89}
+**context:** ml (Qwen port, decode-wave inter-layer boundary optimization)
+**evidence:**
+- claim: "A bounded decode-wave branch added `QWEN35_INTERLAYER_NORM=1`, replacing the end-of-layer `add_vec` plus the next layer's initial `rmsnorm_vec` with one `add_rmsnorm` that wrote both the next hidden state and its next-layer normalized view."
+  source: local patch to `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wider decode-wave restructuring
+- claim: "The branch preserved correctness under the strengthened Qwen gate: `QWEN35_INTERLAYER_NORM=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with `top token id=198` and `logit=11.423705`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_interlayer_norm_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Initial matched native-only A/B on one built `/tmp/qwen35_sync_profile_interlayer_norm` binary was mixed and small: `5/5` mean `22.980 -> 22.890 ms/tok`, `20/20` mean `23.580 -> 23.620 ms/tok`, `64/64` mean `25.400 -> 25.225 ms/tok`."
+  source: first alternating local runs of `/tmp/qwen35_sync_profile_interlayer_norm` with `QWEN35_INTERLAYER_NORM` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: broader decode-path changes
+- claim: "A stricter alternating falsifier still did not make the result robust: `20/20` mean `23.810 -> 23.655 ms/tok`, while `64/64` mean `25.843 -> 25.483 ms/tok` depended on a single slow OFF outlier; the medians do not support a clean promotion."
+  source: second alternating local A/B run of `/tmp/qwen35_sync_profile_interlayer_norm` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wider decode or thermal conditions
+- claim: "After reverting the branch, the toggle path was removed, targeted specs were green again, and a fresh `20/20` rerun gave `24.62 ms/tok`."
+  source: `rg -n \"QWEN35_INTERLAYER_NORM|pre_norm_ready|next_layer_norm_buf\" ...` returning no matches, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_interlayer_norm_revert_spec crystal spec ...`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_interlayer_norm_revert_sync crystal run bin/qwen35_sync_profile.cr -- ... -- 20 20` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or wider decode changes
+**note:** This branch was reverted. The idea was structurally stronger than simple encoder packing because it eliminated an actual inter-layer `add + rmsnorm` boundary, but the measured effect remained too small and too noise-sensitive to keep.
+
+### [LM-codex-FFN-SPLIT-BENCH-1] In the current production FFN helper, `gate/up` and `down` are already comparable
+**status:** verified
+**trust:** {F:0.86, G:0.79, R:0.88}
+**context:** ml (Qwen port, shared FFN prioritization after multiple refutations)
+**evidence:**
+- claim: "On a temporary local split-bench using real Qwen 3.5 9B weights and the current production Metal path, recurrent FFN measured `whole_ffn avg=1.2924 ms`, `gate_up_proj avg=0.7495 ms`, `down_proj avg=0.5590 ms`."
+  source: local `tmp_qwen35_ffn_split_bench.cr` run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: FFN helper or GEMV routing changes
+- claim: "The same split on a full-attention FFN measured `whole_ffn avg=0.9620 ms`, `gate_up_proj avg=0.6557 ms`, `down_proj avg=0.5365 ms`."
+  source: same local `tmp_qwen35_ffn_split_bench.cr` run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: FFN helper or GEMV routing changes
+- claim: "The measured `proj+down` totals (`1.3086 ms` recurrent, `1.1922 ms` full) sit close to the whole-helper timings, so the remaining FFN cost is not hiding in a tiny glue kernel; it is split across both projection sides."
+  source: same local `tmp_qwen35_ffn_split_bench.cr` run on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: FFN helper scheduling changes
+**note:** This makes the recent refutations coherent: `Q4_K gate/up pairing` and `Q6_K down fusion` each targeted only one side of a shared cost center. The next credible FFN branch probably needs a more radical shared projection rewrite or a different bottleneck family entirely, not another one-sided local tweak.
+
+### [LM-codex-DN-FUSED-EXACT-1] Fused DeltaNet update/output removes one dense state pass and improves decode
+**status:** verified
+**trust:** {F:0.93, G:0.82, R:0.91}
+**context:** ml (Qwen port, recurrent arithmetic algorithm rewrite)
+**evidence:**
+- claim: "Added `delta_net_step_128_fused`, an algebraic rewrite of the 128-thread DeltaNet kernel. It computes `sk = dot(old_state * g, K)`, then writes `new_state = old_state * g + K * delt` while accumulating `out = dot(new_state, Q) * scale`, avoiding the separate materialized decay pass and final output read pass."
+  source: local patch to `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future DeltaNet kernel redesign
+- claim: "Correctness preserved under direct DeltaNet and strengthened Qwen gates: default fused path returned `7 examples, 0 failures`, with `top token id=198`, `logit=11.423705`, DeltaNet `y cos=1.0`, and state max diff about `3.17e-08`; fallback `QWEN35_DN_FUSED=0` also passed DeltaNet/recurrent specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_fused_default_spec crystal spec ...` and `QWEN35_DN_FUSED=0 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_fused_fallback_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Initial matched A/B on one built `/tmp/qwen35_sync_profile_dn_fused` binary was positive across all workloads: `5/5` mean `24.720 -> 23.250 ms/tok`, `20/20` mean `25.233 -> 24.023 ms/tok`, and `64/64` mean `26.140 -> 25.120 ms/tok`."
+  source: alternating local runs of `/tmp/qwen35_sync_profile_dn_fused` with `QWEN35_DN_FUSED` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or wider recurrent changes
+- claim: "A stricter alternating falsifier confirmed the win: `20/20` median `23.735 -> 22.330 ms/tok` and `64/64` median `25.280 -> 24.130 ms/tok`."
+  source: second alternating local A/B run of `/tmp/qwen35_sync_profile_dn_fused` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or wider recurrent changes
+- claim: "The fused kernel is now the default path; `QWEN35_DN_FUSED=0` preserves the previous 128-thread kernel fallback."
+  source: `src/ml/gguf/qwen35_metal.cr` default path on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet pipeline routing changes
+- claim: "Fresh matched `64/64` benchmark after promotion measured decode `cogni-ml p50=42.38 tok/s` vs `llama.cpp avg=45.12 tok/s`, gap `-6.08%`. This is not a win over llama.cpp yet, but it improves the same harness shape from the prior `-8.04%` run."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_vs_llama_dn_fused crystal run bin/benchmark_qwen_vs_llama.cr -- ... --reps=3 --warmup=1 --prompt=64 --gen=64` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh benchmark rerun or benchmark harness change
+**note:** This is the useful kind of paradigm shift for this path: exact algebraic reassociation with the same weights and state, not an approximation. It reduces recurrent memory traffic without accepting quality loss.
+
+### [LM-codex-DN-SINGLEPASS-REFUTE-1] Keeping per-lane DeltaNet row vectors in registers was correctness-safe but slower
+**status:** refuted
+**trust:** {F:0.90, G:0.78, R:0.88}
+**context:** ml (Qwen port, recurrent kernel algorithm rewrite)
+**evidence:**
+- claim: "A bounded `delta_net_step_128_singlepass` experiment kept each lane's old row, K, and Q float4 in registers across the simd reduction, then wrote `new_state` and `out` without the second row/K reload."
+  source: local temporary patch to `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future DeltaNet kernel redesign or compiler codegen change
+- claim: "Correctness was preserved under direct DeltaNet and strengthened Qwen gates: `QWEN35_DN_SINGLEPASS=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with `top token id=198`, `logit=11.423705`, DeltaNet `y cos=1.0`, and state max diff about `3.17e-08`."
+  source: `QWEN35_DN_SINGLEPASS=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_single_qwen crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched native-only decode A/B on one built `/tmp/qwen35_sync_profile_dn_single` binary refuted the branch: `64/64` mean `25.400 -> 25.546 ms/tok` with wins `2/5`, and `20/20` mean `22.784 -> 26.916 ms/tok` with wins `0/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_dn_single` with `QWEN35_DN_SINGLEPASS=0/1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or wider recurrent changes
+- claim: "After reverting the branch, default strengthened Qwen specs stayed green: `7 examples, 0 failures`, with `top token id=198` and `logit=11.423705`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_single_revert_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+**note:** This branch was removed. The exact math was sound, but the register-pressure/codegen tradeoff lost to the two-pass fused kernel on the actual decode path. Avoid retrying this shape unless Metal compiler behavior or the row/head layout changes.
+
+### [LM-codex-Q6-NR1-1] Q6_K one-row-per-simdgroup is a small release-build decode win on M2 Max
+**status:** verified
+**trust:** {F:0.89, G:0.72, R:0.86}
+**context:** ml (Qwen port, Q6_K decode kernels)
+**evidence:**
+- claim: "Changed Q6_K GEMV tiling from `MV6_NR0=2` to `MV6_NR0=1` while keeping `MV6_NSG=2`, and mirrored the Crystal dispatch constants."
+  source: local patch to `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q6_K kernel or dispatch rewrite
+- claim: "Correctness stayed green across Q4/Q5/Q6 Metal specs and the strengthened Qwen gates: `13 examples, 0 failures`, with Qwen top token `198` and logit `11.423705`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6nr1_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release-build A/B on separate NR2/NR1 binaries showed a small decode win: `64/64` mean `24.060 -> 23.870 ms/tok` with NR1 wins `3/5`, and `20/20` mean `22.504 -> 22.452 ms/tok` with NR1 wins `3/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q6nr2` and `/tmp/qwen35_sync_profile_q6nr1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or Q6 kernel rewrite
+- claim: "A fresh release `64/64` benchmark after promotion measured decode `cogni-ml p50=44.36 tok/s` vs `llama.cpp avg=43.89 tok/s`, gap `+1.07%`, but llama variance was high (`stddev=4.48 tok/s`). A stricter repeat with `reps=5,warmup=2` still led (`40.33` vs `35.22 tok/s`) but was clearly affected by machine drift."
+  source: `/tmp/benchmark_qwen_vs_llama_q6nr1_release --reps=3 --warmup=1 --prompt=64 --gen=64` and `--reps=5 --warmup=2 --prompt=64 --gen=64` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fresh benchmark rerun under stable thermal conditions or llama.cpp rebuild
+**note:** Keep the claim narrow. The internal NR2-vs-NR1 A/B is reliable enough to promote the tiling change; the external llama.cpp lead is promising but not stable enough yet to call the project `>10% faster than llama.cpp`.
+
+### [LM-codex-Q4-NR1-REFUTE-1] Q4_K one-row-per-simdgroup preserved correctness but slowed decode
+**status:** refuted
+**trust:** {F:0.91, G:0.77, R:0.91}
+**context:** ml (Qwen port, Q4_K decode kernels)
+**evidence:**
+- claim: "A bounded Q4_K tiling experiment changed `MV_NR0/MV_Q4_NR0` from `2` to `1` while keeping `MV_NSG/MV_Q4_NSG=2`."
+  source: local temporary patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K decode kernel rewrite
+- claim: "Correctness stayed green across Q4/Q5/Q6 Metal specs and the strengthened Qwen gates: `13 examples, 0 failures`, with Qwen top token `198` and logit `11.423705`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4nr1_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release-build A/B on separate NR2/NR1 binaries refuted the change: `64/64` mean `23.894 -> 25.252 ms/tok`, NR1 wins `0/5`; `20/20` mean `22.282 -> 23.202 ms/tok`, NR1 wins `0/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q4nr2` and `/tmp/qwen35_sync_profile_q4nr1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or Q4 kernel rewrite
+- claim: "The branch was reverted; Q4_K remains at `MV_NR0/MV_Q4_NR0=2`."
+  source: `rg -n \"MV_NR0|MV_Q4_NR0\" src/ml/gguf/kernels/gemm_q4k.metal src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future Q4_K tiling change
+**note:** Unlike Q6_K, Q4_K benefits strongly from amortizing input loads over two output rows. Do not retry the Q4 NR1 shape unless the Q4 kernel itself changes materially.
+
+### [LM-codex-AB-Q4PAIR-REFUTE-1] Pairing recurrent alpha/beta Q4_K projections did not improve decode
+**status:** refuted
+**trust:** {F:0.89, G:0.76, R:0.88}
+**context:** ml (Qwen port, recurrent projection micro-fusion)
+**evidence:**
+- claim: "A bounded experiment added an opt-in `simd_mv_q4k_pair_f32` kernel for same-shaped recurrent `ssm_alpha`/`ssm_beta` projections (`4096->32`) to share input reads and remove one Q4 dispatch per recurrent layer."
+  source: local temporary patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent projection scheduling rewrite
+- claim: "Correctness stayed green under the strengthened Qwen gates: `QWEN35_AB_PAIR=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with Qwen top token `198` and logit `11.423705`."
+  source: `QWEN35_AB_PAIR=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_abpair_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release env-toggle A/B on one built `/tmp/qwen35_sync_profile_abpair` binary refuted promotion: `64/64` mean `27.182 -> 27.604 ms/tok` with pair wins `2/5`; `20/20` mean `25.640 -> 25.474 ms/tok` but median slightly regressed and pair wins were only `2/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_abpair` with `QWEN35_AB_PAIR` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or recurrent projection rewrite
+- claim: "The branch was removed; no `AB_PAIR`, `ab_pair`, `q4_pair`, or `simd_mv_q4k_pair` code remains, and default strengthened Qwen specs are green."
+  source: `rg -n \"AB_PAIR|ab_pair|q4_pair|simd_mv_q4k_pair\" src/ml/gguf`, plus `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_abpair_revert_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future recurrent projection rewrite
+**note:** This is another micro-fusion trap: removing one small dispatch inside the wave did not overcome extra codegen/register pressure. Future alpha/beta work should be part of a larger recurrent projection rewrite, not a standalone pair kernel.
+
+### [LM-codex-ROPE-TABLE-REFUTE-1] Per-token RoPE cos/sin table avoided transcendentals but did not improve decode
+**status:** refuted
+**trust:** {F:0.89, G:0.74, R:0.88}
+**context:** ml (Qwen port, full-attention RoPE)
+**evidence:**
+- claim: "A bounded decode-wave experiment added an opt-in `qwen35_rope_partial_table` kernel that used per-token CPU-computed cos/sin tables instead of recomputing `pow/cos/sin` inside every Q/K head and full-attention layer."
+  source: local temporary patch to `src/ml/gguf/kernels/fullattn_qwen35.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: full-attention RoPE scheduling rewrite
+- claim: "Correctness stayed green under the strict token/logit gate: `QWEN35_ROPE_TABLE=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `3 examples, 0 failures`, with Qwen top token `198` and logit `11.423705`."
+  source: `QWEN35_ROPE_TABLE=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_rope_table_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release env-toggle A/B on one built `/tmp/qwen35_sync_profile_rope_table` binary refuted promotion: `64/64` mean `26.624 -> 26.944 ms/tok` with table wins `1/5`; `20/20` mean `25.540 -> 26.080 ms/tok` with table wins `2/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_rope_table` with `QWEN35_ROPE_TABLE` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or full-attention rewrite
+- claim: "The branch was removed; default Qwen forward/DeltaNet specs stayed green."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_rope_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future RoPE code changes
+**note:** At this scale, avoiding GPU transcendentals was not enough to overcome CPU table construction/upload and extra buffer reads. A future RoPE optimization should fuse RoPE into a larger Q/K path rather than add a standalone table.
+
+### [LM-codex-DN-POST-FUSED-1] Fusing DeltaNet output with recurrent post RMSNorm removes one recurrent dispatch
+**status:** verified
+**trust:** {F:0.90, G:0.78, R:0.86}
+**context:** ml (Qwen port, recurrent arithmetic/kernel fusion)
+**evidence:**
+- claim: "Added `delta_net_step_128_fused_post`, which computes the fused DeltaNet step and then applies per-head RMSNorm plus `silu(z)` inside the same threadgroup, removing the separate `delta_net_post_norm_gate` dispatch and avoiding a global intermediate read/write."
+  source: local patch to `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet or recurrent post-processing rewrite
+- claim: "Correctness stayed green under the strengthened Qwen gates with fused post enabled: `7 examples, 0 failures`, top token `198`, logit `11.423702`; default-on and fallback `QWEN35_DN_POST_FUSED=0` both pass."
+  source: `QWEN35_DN_POST_FUSED=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_post_fused_spec crystal spec ...`, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_post_default_spec crystal spec ...`, and `QWEN35_DN_POST_FUSED=0 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_post_fallback_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Initial paired release A/B on one built `/tmp/qwen35_sync_profile_dn_post_fused` binary was positive but modest: `64/64` mean `26.998 -> 26.560 ms/tok`, `20/20` mean `24.134 -> 23.828 ms/tok`, both with fused wins `3/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_dn_post_fused` with `QWEN35_DN_POST_FUSED` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or recurrent kernel changes
+- claim: "A stricter alternating repeat kept the result positive but narrow: `64/64` median `28.620 -> 28.175 ms/tok`; `20/20` median `27.305 -> 27.300 ms/tok`."
+  source: second paired local A/B run of `/tmp/qwen35_sync_profile_dn_post_fused` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or recurrent kernel changes
+- claim: "The fused-post path is now default-on; `QWEN35_DN_POST_FUSED=0` preserves the previous separate post-kernel path."
+  source: `src/ml/gguf/qwen35_metal.cr` default routing on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: DeltaNet pipeline routing changes
+**note:** This is a small but structurally sound exact fusion. Treat external llama.cpp measurements from the same period as noisy because both native and llama throughput drifted heavily under machine load.
+
+### [LM-codex-FFN-SWIGLU-INPLACE-REFUTE-1] Reusing `ffn_up` as SwiGLU output was not a robust wave-level win
+**status:** refuted
+**trust:** {F:0.88, G:0.75, R:0.88}
+**context:** ml (Qwen port, FFN memory traffic)
+**evidence:**
+- claim: "A bounded decode-wave experiment made `qwen35_swiglu_mul` write into `ffn_up_buf` and fed that buffer directly into `ffn_down`, avoiding the separate `ffn_comb_buf` write/read for the active wave path."
+  source: local temporary patch to `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: FFN wave rewrite
+- claim: "Correctness stayed green under the strict token/logit gate: `QWEN35_FFN_SWIGLU_INPLACE=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `3 examples, 0 failures`, with top token `198` and logit `11.423702`."
+  source: `QWEN35_FFN_SWIGLU_INPLACE=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_swiglu_inplace_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release env-toggle A/B on one built `/tmp/qwen35_sync_profile_swiglu_inplace` binary was mixed: `64/64` mean `25.068 -> 24.924 ms/tok` with wins `4/5`, but `20/20` mean `22.944 -> 23.054 ms/tok` with wins `2/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_swiglu_inplace` with `QWEN35_FFN_SWIGLU_INPLACE` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or FFN wave changes
+- claim: "The branch was removed; no `SWIGLU_INPLACE` code remains, and default forward/DeltaNet specs stayed green."
+  source: `rg -n \"SWIGLU_INPLACE|swiglu_inplace\" src/ml/gguf`, plus `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_swiglu_inplace_revert_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future FFN wave rewrite
+**note:** The old standalone helper microbench did not predict wave-level promotion. Future FFN work needs a deeper fused projection strategy or a better profiler, not another isolated buffer-alias tweak.
+
+### [LM-codex-FFN-Q4-SWIGLU-PAIR-REFUTE-1] Fusing Q4 gate/up projection with SwiGLU was slower in the decode wave
+**status:** refuted
+**trust:** {F:0.89, G:0.75, R:0.88}
+**context:** ml (Qwen port, FFN projection fusion)
+**evidence:**
+- claim: "A bounded decode-wave experiment added an opt-in `simd_mv_q4k_swiglu_pair_f32` kernel and `QWEN35_FFN_Q4_SWIGLU_PAIR=1`, computing Q4 gate and up projections plus `silu(gate) * up` into the FFN combine buffer."
+  source: local temporary patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future Q4 decode kernel rewrite
+- claim: "Correctness stayed green under the strict token/logit gate: `QWEN35_FFN_Q4_SWIGLU_PAIR=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `3 examples, 0 failures`, with top token `198` and logit `11.423702`."
+  source: `QWEN35_FFN_Q4_SWIGLU_PAIR=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4_swiglu_pair_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release env-toggle A/B on one built `/tmp/qwen35_sync_profile_q4_swiglu_pair` binary refuted promotion: `64/64` mean `25.570 -> 26.154 ms/tok` with fused wins `0/5`; `20/20` medians `25.330 -> 26.080 ms/tok` with fused wins `1/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q4_swiglu_pair` with `QWEN35_FFN_Q4_SWIGLU_PAIR` unset/set on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or FFN/Q4 kernel rewrite
+- claim: "The branch was removed; no `QWEN35_FFN_Q4_SWIGLU_PAIR` or `simd_mv_q4k_swiglu_pair_f32` code remains, and default forward/DeltaNet specs stayed green."
+  source: `rg -n "SWIGLU_PAIR|swiglu_pair|q4_swiglu_pair|simd_mv_q4k_swiglu_pair" src/ml/gguf spec bin`, plus `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4_swiglu_pair_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future FFN/Q4 wave rewrite
+**note:** The branch is an explicit `LOCAL_OPTIMIZATION`/`MICRO_OPTIMIZATION_TRAP` example: exact arithmetic and fewer logical buffers did not compensate for doubled per-row Q4 work and worse kernel pressure. Avoid one-off paired Q4 projection kernels unless a local microbench shows a large win before wave integration.
+
+### [LM-codex-DN-DOT-REUSE-REFUTE-1] Reusing DeltaNet dot products was exact but did not improve long decode
+**status:** refuted
+**trust:** {F:0.90, G:0.76, R:0.88}
+**context:** ml (Qwen port, DeltaNet algebra rewrite)
+**evidence:**
+- claim: "A bounded opt-in branch added `delta_net_step_128_fused_post_dot` behind `QWEN35_DN_POST_DOT=1`, using the identity `dot(old*g + K*delt, Q) = g*dot(old,Q) + dot(K,Q)*delt` to avoid the second state-row dot against Q."
+  source: local temporary patch to `src/ml/gguf/kernels/delta_net.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future DeltaNet kernel redesign
+- claim: "Correctness stayed green under the strict gate: `QWEN35_DN_POST_DOT=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` returned `7 examples, 0 failures`, with top token `198` and logit `11.423703`."
+  source: `QWEN35_DN_POST_DOT=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_post_dot_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release env-toggle A/B on one built `/tmp/qwen35_sync_profile_dn_post_dot` binary refuted promotion: `20/20` mean `23.16 -> 23.05 ms/tok` was within noise with wins `2/5` plus one tie, while `64/64` mean `24.44 -> 24.71 ms/tok` regressed with wins `1/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_dn_post_dot` with `QWEN35_DN_POST_DOT=0/1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or DeltaNet kernel rewrite
+- claim: "The branch was removed; no `QWEN35_DN_POST_DOT` or `delta_net_step_128_fused_post_dot` code remains, and default strengthened Qwen specs stayed green."
+  source: `rg -n "DN_POST_DOT|fused_post_dot|delta_net_step_128_fused_post_dot" src/ml/gguf spec bin`, plus `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_post_dot_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future DeltaNet code changes
+**note:** The algebra was exact, but moving work from the second output dot into the first pass plus extra `K·Q` setup did not survive wave-level timing. Future DeltaNet work needs either a larger state-residency change or shape-specific GPU profiling, not this dot-reuse formula.
+
+### [LM-codex-Q5-NR2-REFUTE-1] Q5_K two-rows-per-simdgroup helps short decode but regresses the 64-token target
+**status:** refuted
+**trust:** {F:0.88, G:0.74, R:0.87}
+**context:** ml (Qwen port, Q5_K decode kernels)
+**evidence:**
+- claim: "A bounded branch changed Q5_K GEMV tiling from `MV5_NR0=1` to `MV5_NR0=2` in both the Metal kernel and Crystal dispatch constants."
+  source: local temporary patch to `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q5_K kernel or dispatch rewrite
+- claim: "Correctness stayed green under the strengthened Qwen gates: `7 examples, 0 failures`, top token `198`, logit `11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5nr2_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Paired release A/B against separate `q5nr1` and `q5nr2` binaries was mixed: `20/20` mean `24.17 -> 23.66 ms/tok` with NR2 wins `5/5`, but target `64/64` mean `24.91 -> 25.15 ms/tok` regressed with NR2 wins only `2/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q5nr1` and `/tmp/qwen35_sync_profile_q5nr2` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or Q5 kernel rewrite
+- claim: "The branch was reverted to `MV5_NR0=1`; strengthened Qwen specs stayed green."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q5nr1_final_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future Q5 tiling changes
+**note:** Q5_K NR2 may be useful for very short interactive loops, but the active target is 64-token decode / llama-bench parity. Keep NR1 unless the benchmark target changes or the Q5 kernel is redesigned.
+
+### [LM-codex-TOP1-READBACK-REFUTE-1] GPU top-1 logits reduction did not beat full unified-memory logits readback
+**status:** refuted
+**trust:** {F:0.88, G:0.72, R:0.86}
+**context:** ml (Qwen port, decode readback/sampling)
+**evidence:**
+- claim: "A bounded opt-in branch added a `qwen35_argmax_f32` Metal kernel and a `forward_top1`/`QWEN35_PROFILE_TOP1=1` profile route that read back only top token id and logit instead of the full `248320`-float logits vector."
+  source: local temporary patch to `src/ml/gguf/kernels/ffn_qwen35.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`, `bin/qwen35_sync_profile.cr`, and `spec/qwen35_forward_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output head or sampling rewrite
+- claim: "Correctness matched the full-logits top-1 route and kept the strengthened DeltaNet gate green: `4 examples, 0 failures`, top token `198`, logit `11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_top1_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "Matched release env-toggle A/B on one built `/tmp/qwen35_sync_profile_top1` binary refuted promotion: `20/20` was noisy and small (`24.70 -> 24.47 ms/tok`), while target `64/64` regressed (`27.07 -> at least 27.52 ms/tok`, with the last top1 run at `29.01 ms/tok`)."
+  source: paired local runs of `/tmp/qwen35_sync_profile_top1` with `QWEN35_PROFILE_TOP1=0/1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or argmax/readback implementation rewrite
+- claim: "The branch was removed; no `QWEN35_PROFILE_TOP1`, `forward_top1`, or `qwen35_argmax_f32` code remains, and strengthened Qwen specs stayed green."
+  source: `rg -n "QWEN35_PROFILE_TOP1|forward_top1|qwen35_argmax_f32|argmax_pipeline|wave_top_id|top1:" src/ml/gguf spec bin`, plus `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_top1_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future sampling or output-head route changes
+**note:** On this unified-memory path, full logits readback is not the dominant remaining bottleneck. A future sampling optimization should be fused into the output head or avoid materializing full logits altogether; adding a standalone argmax pass after full logits is a local-optimization trap.
+
+### [LM-codex-Q6-NSG4-REFUTE-1] Q6_K four-simdgroup threadgroups were correctness-safe but not a stable target-workload win
+**status:** refuted
+**trust:** {F:0.87, G:0.72, R:0.84}
+**context:** ml (Qwen port, Q6_K decode kernels)
+**evidence:**
+- claim: "A bounded compile-time branch changed Q6_K GEMV from `MV6_NSG=2` to `MV6_NSG=4` at `MV6_NR0=1`, with matching Crystal dispatch constants and a temporary per-quant threadgroup-size helper."
+  source: local temporary patch to `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q6_K kernel or dispatch rewrite
+- claim: "The first attempt failed the strict top-token gate (`198 -> 220`) because the dispatch still launched 64 threads while the kernel expected 4 simdgroups. After matching threadgroup size to 128, correctness returned green: `7 examples, 0 failures`, top token `198`, logit `11.423702`."
+  source: failed `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6nsg4_spec crystal spec ...`, then passing `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6nsg4_spec2 crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q6 dispatch-shape changes
+- claim: "Initial paired release A/B was noisy and only weakly positive on `64/64` (`33.81 -> 33.23 ms/tok`, wins `4/5`) while `20/20` was effectively tied (`29.77 -> 29.79 ms/tok`)."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q6nsg2` and `/tmp/qwen35_sync_profile_q6nsg4` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or Q6 kernel rewrite
+- claim: "A second `64/64` repeat refuted promotion: excluding one obvious scheduler outlier (`3184.90 ms/tok`), NSG4 had no stable advantage and often regressed."
+  source: additional paired local runs of `/tmp/qwen35_sync_profile_q6nsg2` and `/tmp/qwen35_sync_profile_q6nsg4` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: controlled thermal rerun or Q6 kernel rewrite
+- claim: "The branch was reverted to `MV6_NSG=2`; no `MV6_NSG=4`, `MV_Q6_NSG=4`, or temporary `gemv_threads_per_tg_for` code remains, and targeted specs stayed green."
+  source: `rg -n "MV6_NSG = 4|MV_Q6_NSG = 4|gemv_threads_per_tg_for" src/ml/gguf`, plus `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q6nsg4_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: future Q6 tiling changes
+**note:** Q6 dispatch shape is sensitive enough that mismatched host/kernel constants can silently corrupt logits. Future tiling experiments must keep launch shape tied to kernel constants and require strict token/logit specs before timing.
+
+### [LM-codex-Q6-HEAD-TOP1-FUSED-1] Fused Q6 lm-head top1 avoids full logits materialization for greedy decode
+**status:** verified
+**trust:** {F:0.90, G:0.70, R:0.86}
+**context:** ml (Qwen port, output head / greedy decode)
+**evidence:**
+- claim: "Added an opt-in fused greedy output-head path: `simd_mv_q6k_top1_tiles_f32` computes Q6_K lm-head dot products and emits per-tile maxima without writing full vocab logits; `qwen35_top1_reduce_tiles` reduces those tile maxima to one token id/logit. The path is enabled by using `QWEN35_HEAD_TOP1_FUSED=1` with `Qwen35CPU.forward_top1` or `QWEN35_PROFILE_TOP1=1` in `bin/qwen35_sync_profile.cr`."
+  source: local patch to `src/ml/gguf/kernels/gemm_q56k.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`, `bin/qwen35_sync_profile.cr`, and `spec/qwen35_forward_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output head, Q6_K kernel, or sampling route rewrite
+- claim: "Correctness matched full logits top-1 under the strengthened Qwen gate; final rows12 spec run returned `8 examples, 0 failures`, top token `198`, logit `11.423702`, and DeltaNet max state diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_head_top1_rows12_final_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden changes intentionally
+- claim: "AC-power paired release A/B on one built `/tmp/qwen35_sync_profile_head_top1` binary showed a robust short-decode win: `20/20` mean `22.13 -> 21.46 ms/tok`, fused wins `5/5`."
+  source: paired local runs with `QWEN35_PROFILE_TOP1=0 QWEN35_HEAD_TOP1_FUSED=0` vs `QWEN35_PROFILE_TOP1=1 QWEN35_HEAD_TOP1_FUSED=1` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: thermal rerun or output-head changes
+- claim: "AC-power `64/64` data was positive but modest: first paired run mean `24.09 -> 23.96 ms/tok`, median `23.64 -> 23.41`; repeat median improved about `25.13 -> 24.89 ms/tok` with fused wins `4/6`."
+  source: paired local runs and repeat of `/tmp/qwen35_sync_profile_head_top1` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: fixed benchmark harness rerun
+- claim: "The original `bin/qwen35_sync_profile.cr` allocated `State(max_seq: 64)` regardless of workload, so `64/64` measurements wrote KV positions past the allocated cache after the warm-up token. The harness now allocates `prefill + n_runs + 2`, and corrected AC `64/64` data remains positive: mean `25.63 -> 24.88 ms/tok`, median `25.61 -> 24.99 ms/tok`, fused wins `5/5`."
+  source: local fix to `bin/qwen35_sync_profile.cr`, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_sync_maxseq_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`, and paired runs of `/tmp/qwen35_sync_profile_head_top1_fixed` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness or output-head changes
+- claim: "A bounded tile-size search kept `MV6_TOP_ROWS_PER_TG=12`: rows12 beat rows16 on corrected AC `64/64` in mean latency (`24.07 -> 23.61 ms/tok`, wins `4/5`), while rows32 was noisier and worse than rows16."
+  source: paired local runs of `/tmp/qwen35_sync_profile_head_top1_rows12`, `/tmp/qwen35_sync_profile_head_top1_rows16`, and `/tmp/qwen35_sync_profile_head_top1_rows32` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output-head tile-size retune
+- claim: "Corrected AC `64/64` comparison against the full lm-head path showed rows12 fused top1 as a repeatable but insufficient win: mean `23.85 -> 23.22 ms/tok`, fused wins `5/5`. On `0/128`, fused rows12 averaged about `22.77 ms/tok` (`43.9 tok/s`) versus fresh llama.cpp `tg128 = 45.85 +/- 0.96 tok/s`; do not claim llama.cpp parity yet."
+  source: paired local runs of `/tmp/qwen35_sync_profile_head_top1_rows12` on AC power and `~/SrcArchives/AI/llama.cpp/build/bin/llama-bench -m ... -pg 64,64 -fa 0 -ngl 99 -r 5 -o md` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, power state, llama.cpp build/model, or output-head changes
+**note:** This is an opt-in greedy-decode optimization, not a replacement for full-logits `forward` and not yet a public llama.cpp-beating claim. It is structurally different from the refuted standalone argmax branch because it avoids materializing full logits in the first place. Treat pre-fix `64/64` sync-profile numbers as stale because the KV cache was undersized.
+
+### [LM-codex-WAVE-CHUNK-CMD-1] Chunking decode wave command buffers overlaps CPU encoding with GPU execution
+**status:** verified
+**trust:** {F:0.86, G:0.68, R:0.78}
+**context:** ml (Qwen port, Metal decode scheduling)
+**evidence:**
+- claim: "The wave decode path now uses fast command buffers by default and splits the 32-layer decode wave into 4-layer command-buffer chunks by default. `QWEN35_WAVE_FAST_CMD=0` disables unretained-reference command buffers; `QWEN35_WAVE_CHUNK_LAYERS=0` disables chunking."
+  source: local patch to `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Metal command-buffer wrapper or wave scheduler rewrite
+- claim: "Correctness stayed green with default chunk4 scheduling: strengthened Qwen specs returned `8 examples, 0 failures`, top token `198`, logit `11.423702`, and DeltaNet max state diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wave_chunk4_final_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: forward golden or wave scheduler changes
+- claim: "AC-power tile search showed chunking was a large scheduler win before later background-load drift: `0/32` quick scan improved `22.20 -> 21.12 ms/tok` at chunk4, and paired `64/64` improved mean `24.27 -> 23.22 ms/tok`, chunk4 wins `5/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_wave_chunk` with `QWEN35_WAVE_CHUNK_LAYERS=0/4`, `QWEN35_PROFILE_TOP1=1`, and `QWEN35_HEAD_TOP1_FUSED=1` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: power state, background load, or command-buffer scheduling changes
+- claim: "Later absolute timings degraded under visible host load (`WindowServer`, iTerm, Codex, Chrome, Claude), so keep the relative A/B result but do not use the late absolute numbers for public llama.cpp comparisons."
+  source: `ps -Ao pid,pcpu,pmem,comm | sort -k2 -nr | head -20`, plus late reruns on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: clean-load rerun
+- claim: "A later rebuilt chunk scan on the current top1 wave path showed chunk2 as a possible lead in the first low-drift pass (`22.49 ms/tok` for chunk2 vs `22.65 ms/tok` for chunk4 on `64/32`), and a paired but thermally drifting run had chunk2 win `4/6` after the first two trials. This was not promoted because `ps` showed `/tmp/cv2_system_fd_fix` at ~99% CPU and WindowServer at ~43% during the late runs."
+  source: `/tmp/qwen35_sync_profile_current` scans with `QWEN35_WAVE_CHUNK_LAYERS=0/1/2/3/4/5/6/8/16/32` and paired `2/4` runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: quiet-load rerun or wave scheduler changes
+- claim: "After stopping the contaminating `/tmp/cv2_system_fd_fix` process, a paired `chunk2/chunk4` rerun still did not justify promotion: chunk4 won `6/8` paired trials on `64/32`, although absolute timings remained UI-load sensitive."
+  source: paired local runs of `/tmp/qwen35_sync_profile_current` with `QWEN35_WAVE_CHUNK_LAYERS=2/4`, `QWEN35_PROFILE_TOP1=1`, and `QWEN35_HEAD_TOP1_FUSED=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: quiet-load rerun or wave scheduler changes
+**note:** This branch is a scheduling/frame-shift win rather than a math-kernel win. It reduces idle GPU time by committing earlier chunks while the CPU encodes later chunks; it should be rebenchmarked under a quiet desktop before making public speed claims. Keep chunk4 as the default until a clean paired run justifies changing it.
+
+### [LM-codex-Q4-NSG4-REFUTE-1] Q4_K four-simdgroup threadgroups corrupt the strict Qwen top-token gate
+**status:** refuted
+**trust:** {F:0.88, G:0.70, R:0.86}
+**context:** ml (Qwen port, Q4_K decode kernels)
+**evidence:**
+- claim: "Operator mix shows Q4_K dominates decode MACs (`6.30B` counted dense-equivalent MACs across decode operators), especially FFN `4096->12288` gate/up projections (`3.22B`)."
+  source: temporary local weight-mix script over `Qwen35Weights` on `Qwen3.5-9B-Q4_K_M.gguf` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: model quantization, operator list, or Qwen routing changes
+- claim: "A bounded exact-semantics branch changed Q4_K GEMV from `MV_NSG/MV_Q4_NSG=2` to `4` while keeping `NR0=2`."
+  source: temporary patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K kernel rewrite
+- claim: "The branch failed the strict correctness gate immediately: forward top token changed from `198` to `3140` under `spec/qwen35_forward_spec.cr`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4nsg4_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K launch-shape or kernel rewrite
+- claim: "The branch was reverted; targeted specs returned green with top token `198`, logit `11.423702`, and DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4nsg4_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K launch-shape changes
+**note:** Q4_K remains the right bottleneck family, but simdgroup-count changes are not a free launch-geometry knob: the kernel's per-simdgroup row mapping and host dispatch must preserve exact coverage. Do not retry NSG4 without a real kernel rewrite and a token/logit spec first.
+
+### [LM-codex-Q4-NSG1-REFUTE-1] Q4_K one-simdgroup threadgroups are correctness-safe but much slower
+**status:** refuted
+**trust:** {F:0.88, G:0.72, R:0.87}
+**context:** ml (Qwen port, Q4_K decode kernels)
+**evidence:**
+- claim: "A bounded exact branch changed Q4_K GEMV from `MV_NSG/MV_Q4_NSG=2` to `1` while keeping `NR0=2`."
+  source: temporary patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K kernel or launch-shape rewrite
+- claim: "Correctness passed under the strict gate: top token `198`, logit `11.423702`, DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4nsg1_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K kernel rewrite
+- claim: "Release A/B on AC power refuted promotion: `64/64` mean regressed from about `23.19 ms/tok` to `28.87 ms/tok`, baseline wins `3/3`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q4nsg2` and `/tmp/qwen35_sync_profile_q4nsg1` with `QWEN35_PROFILE_TOP1=1` and `QWEN35_HEAD_TOP1_FUSED=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K kernel rewrite or clean-load rerun
+- claim: "The branch was reverted; targeted specs returned green with top token `198`, logit `11.423702`, and DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4nsg1_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K launch-shape changes
+**note:** The llama-compatible `NSG=2, NR0=2` shape remains the local optimum among the narrow Q4 launch-shape probes tried so far. Further Q4 gains need a real kernel rewrite, not just threadgroup geometry.
+
+### [LM-codex-Q4-NR4-REFUTE-1] Q4_K four-rows-per-simdgroup is correctness-safe but not a decode win
+**status:** refuted
+**trust:** {F:0.88, G:0.72, R:0.87}
+**context:** ml (Qwen port, Q4_K decode kernels)
+**evidence:**
+- claim: "A bounded exact branch changed Q4_K GEMV from `MV_NR0/MV_Q4_NR0=2` to `4` while keeping `NSG=2`."
+  source: temporary patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K kernel or launch-shape rewrite
+- claim: "Correctness passed under the strict gate: top token `198`, logit `11.423702`, DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4nr4_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K kernel rewrite
+- claim: "Release A/B on AC power refuted promotion: `64/64` mean regressed from about `23.60 ms/tok` to `23.86 ms/tok`, with NR4 wins only `2/5`."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q4nr2_baseline` and `/tmp/qwen35_sync_profile_q4nr4` with `QWEN35_PROFILE_TOP1=1` and `QWEN35_HEAD_TOP1_FUSED=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K kernel rewrite or clean-load rerun
+- claim: "The branch was reverted; targeted specs returned green with top token `198`, logit `11.423702`, and DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4nr4_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4_K launch-shape changes
+**note:** Together with the earlier NR1, NSG1, and NSG4 refutations, this closes the simple Q4 launch-geometry search. Further Q4 improvements need a different kernel algorithm or prefill/batched path, not constant tuning.
+
+### [LM-codex-WAVE-ENCODE-BUDGET-1] Current decode-wave encode overhead bounds ICB/replay ROI
+**status:** verified
+**trust:** {F:0.86, G:0.70, R:0.84}
+**context:** ml (Qwen port, Metal command scheduling)
+**evidence:**
+- claim: "On the current decode-wave top1 path, `64/64` profile reports wave encode overhead around `40.85 ms` over 64 measured tokens, about `0.64 ms/tok`; wait time dominates at `1414.76 ms`."
+  source: `QWEN35_PROFILE_TOP1=1 QWEN35_HEAD_TOP1_FUSED=1 /tmp/qwen35_sync_profile_q4nr2_baseline 64 64` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave scheduler, command-buffer bridge, or profiling code changes
+- claim: "Chunking still helps by reducing GPU wait/idle despite slightly more encode work: on a `64/32` profile, chunk0 had encode `50.48 ms`, wait `744.71 ms`, wall `25.00 ms/tok`; chunk4 had encode `53.14 ms`, wait `668.61 ms`, wall `22.72 ms/tok`."
+  source: paired `QWEN35_WAVE_CHUNK_LAYERS=0/4` profile runs on `/tmp/qwen35_sync_profile_q4nr2_baseline` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: scheduler or host-load changes
+**note:** ICB/replay remains a plausible low-risk engineering task, but the measured ceiling is sub-millisecond per token on the current path. It cannot close the main gap by itself; kernel efficiency or batched/speculative verification has higher upside.
+
+### [LM-codex-WAVE-OUTPUT-SCRATCH-SPLIT-REFUTE-1] Branching output scratch allocation does not improve greedy decode
+**status:** refuted
+**trust:** {F:0.86, G:0.66, R:0.84}
+**context:** ml (Qwen port, decode-wave scratch management)
+**evidence:**
+- claim: "A bounded branch allocated either full-logits scratch or top1 scratch in `forward_decode_wave`, instead of looking up both sets unconditionally."
+  source: temporary patch to `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave scratch management rewrite
+- claim: "Correctness stayed green under the strengthened gate: `8 examples, 0 failures`, top token `198`, logit `11.423702`, DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_output_scratch_split_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_fullattn_spec.cr spec/qwen35_deltanet_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave output path changes
+- claim: "Release A/B on AC power did not justify promotion: split won only `2/5` and mean latency was essentially worse/noisy (`~24.50 -> ~24.61 ms/tok`)."
+  source: paired local runs of `/tmp/qwen35_sync_profile_q4nr2_baseline` and `/tmp/qwen35_sync_profile_output_scratch_split` with `QWEN35_PROFILE_TOP1=1` and `QWEN35_HEAD_TOP1_FUSED=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: clean-load rerun or scratch pool rewrite
+- claim: "The branch was reverted; targeted specs returned green with top token `198`, logit `11.423702`, and DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_output_scratch_split_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave output path changes
+**note:** The unconditional scratch lookups are not a measurable bottleneck; the branch/nilable overhead can erase the tiny saved work.
+
+### [LM-codex-OP-ATTRIBUTION-1] Standalone operator attribution ranks Q4 FFN projections as the main exact kernel target
+**status:** verified
+**trust:** {F:0.86, G:0.72, R:0.84}
+**context:** ml (Qwen port, bottleneck attribution)
+**evidence:**
+- claim: "Added `bin/qwen35_op_attribution.cr`, a release-build microbench that groups real Qwen3.5 9B decode matvec operators by `(quant_type, in_dim, out_dim)`, measures standalone `Qwen35Metal.matmul` p50 latency, and reports `calls_per_token * p50_ms` as a ranking signal."
+  source: `bin/qwen35_op_attribution.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: operator list, Qwen routing, or Metal matmul path changes
+- claim: "Current standalone attribution top shapes are Q4_K `4096->12288` FFN gate/up (`64` calls, p50 `0.400 ms`, weighted `25.592`), Q4_K `4096->4096` recurrent gate/out (`56` calls, weighted `11.107`), Q4_K `4096->32` alpha/beta (`48` calls, weighted `7.640`), and Q5_K `4096->8192` recurrent qkv (`24` calls, weighted `5.497`)."
+  source: `/tmp/qwen35_op_attribution --runs=7 --warmup=3` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: kernel rewrite, power state, or benchmark harness changes
+- claim: "The local LM Studio cache has Qwen3.5 9B, Qwen3.6 27B, and Qwen3.5 35B-A3B GGUFs, but no Qwen 0.5B draft model; speculative decode would require acquiring a draft model and building a batched verifier path."
+  source: `find ~/.cache/lm-studio/models -maxdepth 4 -iname '*Qwen*gguf' -o -iname '*Qwen*.gguf'` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: local model cache changes
+**note:** The reported weighted total is not token latency because each shape is measured as a standalone matmul; it intentionally overweights dispatch overhead for tiny projections. Use it to rank kernel families, not as a perf accounting model. This makes the next exact target Q4 FFN `4096->12288`, unless we pivot to speculative decode infrastructure.
+
+### [LM-codex-BATCHED-VERIFY-MATMUL-1] Current matmul kernels scale well for batched verifier shapes
+**status:** verified
+**trust:** {F:0.84, G:0.66, R:0.82}
+**context:** ml (Qwen port, speculative decode prerequisites)
+**evidence:**
+- claim: "`bin/qwen35_op_attribution.cr` now supports `--batch=N`, reporting whole-batch p50, per-row p50, and per-row weighted shape rankings."
+  source: `bin/qwen35_op_attribution.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: attribution harness or Metal matmul path changes
+- claim: "For the dominant Q4_K FFN `4096->12288` shape, standalone per-row p50 improved from `0.642 ms` at batch1 to `0.064 ms` at batch16; Q4_K `4096->4096` improved from `0.211 ms` to `0.025 ms`; Q5_K `4096->8192` improved from `0.240 ms` to `0.091 ms`."
+  source: `/tmp/qwen35_op_attribution --runs=9 --warmup=5 --batch=1 --limit=5` and `--batch=16 --limit=5` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: matmul kernels, power state, or benchmark harness changes
+**note:** This does not mean full batched verification is implemented: attention, recurrent state branching, KV/SSM state handling, and batched wave scheduling are still missing. It does show the dominant matmul kernels are not the blocker for a speculative verifier; the blocker is sequence/state orchestration.
+
+### [LM-codex-HEAD-TOP1-ROWS10-14-REFUTE-1] Q6 lm-head top1 rows10/rows14 are correctness-safe but not stable wins
+**status:** refuted
+**trust:** {F:0.82, G:0.62, R:0.76}
+**context:** ml (Qwen port, output head / greedy decode)
+**evidence:**
+- claim: "A bounded tile-size branch tested `MV6_TOP_ROWS_PER_TG` / `HEAD_TOP1_ROWS_PER_TG` at `10` and `14` around the current rows12 default."
+  source: temporary patches to `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output-head top1 kernel rewrite
+- claim: "Both rows10 and rows14 preserved the strict top-token gate: top token `198`, logit `11.423702`, DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_head_rows10_spec crystal spec ...` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_head_rows14_spec crystal spec ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output-head top1 kernel rewrite
+- claim: "AC release A/B did not produce a stable win: rows14 won the first interleaved run, rows12 won the third, and all absolute timings drifted upward during the test."
+  source: interleaved local runs of `/tmp/qwen35_sync_profile_head_rows10`, `/tmp/qwen35_sync_profile_head_rows12_baseline`, and `/tmp/qwen35_sync_profile_head_rows14` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: quiet-load rerun or output-head rewrite
+- claim: "The branch was reverted to rows12; targeted specs returned green with top token `198`, logit `11.423702`, and DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_head_rows_retune_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output-head top1 retune
+**note:** Keep rows12 until a quiet-load retune shows a repeatable improvement. Rows10/14 are safe but not promoted.
+
+### [LM-codex-QWEN-STATE-FORK-1] Decode state can be deep-copied for exact speculative branches
+**status:** verified
+**trust:** {F:0.86, G:0.72, R:0.84}
+**context:** ml (Qwen port, speculative decode prerequisites)
+**evidence:**
+- claim: "`Qwen35CPU::State#fork`, `State#copy_from!`, `LayerState#fork`, and `LayerState#copy_from!` deep-copy CPU arrays and GPU-resident KV/conv/SSM `MetalBuffer`s using `MetalBuffer#copy_from`, preserving `max_seq` and per-layer `position`."
+  source: `src/ml/gguf/qwen35_cpu.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen state layout or Metal buffer ownership changes
+- claim: "A focused forward spec verifies two forked branches and one restored branch produce the same next-token top1/logit from the same parent state, that cloned Metal buffers have distinct handles and identical sizes, and that mutating the parent buffer does not alter the forked buffer."
+  source: `spec/qwen35_forward_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: speculative state branching or wave scheduling rewrite
+- claim: "Targeted Qwen forward spec passed with the strengthened gate: `4 examples, 0 failures`; top token `198`, logit `11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_state_restore_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: compiler, model weights, Qwen forward route, or Metal buffer copy changes
+- claim: "After one decoded token at `max_seq=32`, full `State#fork` measured p50 `4.220 ms`, while `copy_from!` restore into preallocated buffers measured p50 `1.046 ms`."
+  source: temporary local release probes `tmp_qwen_fork_bench.cr` and `tmp_qwen_restore_bench.cr` on AC power on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: state size, buffer-copy implementation, or power/load changes
+**note:** This is infrastructure, not a speed win by itself. It removes a blocker for exact speculative verification; naive per-candidate fork is too expensive, but preallocated restore is cheap enough to use as a rollback primitive while building a batched verifier.
+
+### [LM-codex-DUAL-Q4-FFN-REFUTE-1] Fusing FFN gate/up Q4 GEMV into one kernel is slower
+**status:** refuted
+**trust:** {F:0.82, G:0.66, R:0.78}
+**context:** ml (Qwen port, Q4 FFN kernel optimization)
+**evidence:**
+- claim: "A bounded branch added `simd_mv_q4k_dual_f32` and routed FFN gate/up Q4 projections through one dispatch when both matrices shared shape and input."
+  source: temporary patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4 GEMV kernel rewrite
+- claim: "Correctness was preserved under targeted checks: `5 examples, 0 failures`; top token `198`, logit `11.423702`; DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dual_q4_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4 FFN route changes
+- claim: "AC A/B on `/tmp/qwen35_sync_profile_dual_q4 64 32` showed the dual kernel slower: fallback wait `~688-692 ms` over 32 tokens, dual wait `~704-706 ms` over 32 tokens."
+  source: interleaved local runs with `QWEN35_DUAL_Q4_FFN=0` vs default on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: quiet-load rerun or Q4 GEMV compiler behavior changes
+- claim: "The branch was reverted; targeted specs returned green with top token `198`, logit `11.423702`, and DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dual_q4_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q4 FFN route changes
+**note:** Sharing input loads did not beat the extra register pressure/occupancy cost. Do not retry this shape as a simple dual-row kernel; any future FFN work needs a different frame, such as true batched/speculative GEMM or approximate activation sparsity with evals.
+
+### [LM-codex-AB-PROFILE-1] In-process paired A/B harness reduces scheduler-noise false positives
+**status:** verified
+**trust:** {F:0.84, G:0.72, R:0.82}
+**context:** ml (Qwen port, performance measurement)
+**evidence:**
+- claim: "Added `bin/qwen35_ab_profile.cr`, an in-process paired A/B harness that loads the model once, builds one base prefill state, forks that state per trial/config, alternates A/B order, and reports per-token latency plus paired wins."
+  source: `bin/qwen35_ab_profile.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness changes
+- claim: "The harness avoids the shell-loop false positives caused by model reloads, pipeline compile, and external scheduler drift; it was validated by rerunning `QWEN35_WAVE_CHUNK_LAYERS=2/4`, where chunk4 still won `3/4` in the first short run and later `3/5`/`4/5` depending on run."
+  source: `/tmp/qwen35_ab_profile --env=QWEN35_WAVE_CHUNK_LAYERS --a=2 --b=4 --prompt=64 --gen=16 --trials=4 --warmup=1` and later short runs on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: harness or state-fork semantics changes
+- claim: "Existing exact toggles measured with the corrected harness: `QWEN35_DN_FUSED=1` is a real win over `0` (`~1.33 ms/tok`, wins `5/5`); `QWEN35_DN_POST_FUSED=1` is a small win (`~0.09 ms/tok`, wins `4/5`); `QWEN35_WAVE_FAST_CMD=1` is effectively noise (`~0.017 ms/tok`, wins `3/5`)."
+  source: sequential `/tmp/qwen35_ab_profile` runs with `--prompt=64 --gen=12 --trials=5 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: toggle implementation or benchmark harness changes
+**note:** Use this harness for noisy local optimization decisions. Avoid parallel benchmark runs; they contaminate unified-memory/GPU scheduling and create fake regressions or wins.
+
+### [LM-codex-TOP1-FALLBACK-FIX-1] `forward_top1` now handles non-fused full-logit fallback correctly
+**status:** verified
+**trust:** {F:0.90, G:0.82, R:0.88}
+**context:** ml (Qwen port, greedy decode correctness)
+**evidence:**
+- claim: "`Qwen35CPU.forward_top1` previously assumed any wave result for `top1: true` was packed `[id, logit]`; when `QWEN35_HEAD_TOP1_FUSED=0`, the wave route materialized full logits, so the helper could misinterpret logits as a packed top1 pair."
+  source: inspection of `src/ml/gguf/qwen35_cpu.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: greedy decode helper rewrite
+- claim: "The helper now checks `packed.size == 2`; otherwise it computes argmax over the full-logit vector returned by the wave path."
+  source: `src/ml/gguf/qwen35_cpu.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave top1 return format changes
+- claim: "Added a spec that disables fused top1 and verifies `forward_top1` matches full-logit argmax; targeted forward specs pass: `5 examples, 0 failures`, top token `198`, logit `11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_top1_fallback_spec crystal spec spec/qwen35_forward_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: greedy decode helper or strict top-token gate changes
+**note:** This was found while hardening the perf harness. It is a correctness fix, not a speed win.
+
+### [LM-codex-WAVE-TRACE-1] Wave trace confirms recurrent layers dominate encode orchestration too
+**status:** verified
+**trust:** {F:0.84, G:0.68, R:0.82}
+**context:** ml (Qwen port, wave profiling)
+**evidence:**
+- claim: "Added lightweight wave encode tracing to `Qwen35Metal::Profile`: when profiling is enabled, it now records counts and CPU encode time for named wave sections."
+  source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave scheduler or profiling module changes
+- claim: "Added `bin/qwen35_wave_trace_profile.cr`, a focused profile tool for top1/full-logits wave runs."
+  source: `bin/qwen35_wave_trace_profile.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiling script changes
+- claim: "A `64/16` top1 wave trace measured wall `22.75 ms/tok`, wave wait `341.53 ms`, and encode trace `rec.layer 384 calls / 14.62 ms`, `full.layer 128 calls / 4.93 ms`, `head 16 calls / 0.18 ms`."
+  source: `/tmp/qwen35_wave_trace_profile --prefill=64 --decode=16` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave instrumentation, model route, or host-load changes
+- claim: "Targeted correctness specs stayed green after instrumentation: `6 examples, 0 failures`; top token `198`, logit `11.423702`; DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wave_trace_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen forward or profiling changes
+**note:** This trace measures CPU encode/orchestration time, not per-kernel GPU time. It still confirms the shape of the bottleneck: recurrent layers dominate both semantic work and encode volume; output-head encode is no longer meaningful.
+
 ## Future Landmarks (TBD)
 
 - [LM-claude-SOTA-1] DeltaNet/GatedDeltaRule SoTA harvest (before Фаза 3b)
+
+### [LM-codex-WAVE-FINE-TRACE-1] Fine-grained wave encode attribution separates orchestration from GPU work
+**status:** verified
+**trust:** {F:0.82, G:0.66, R:0.80}
+**context:** ml (Qwen port, performance measurement)
+**evidence:**
+- claim: "Expanded `Qwen35Metal::Profile.trace` labels inside the whole-token wave path to split full-attn, recurrent, and head encode sections into norm/projection/attention/DeltaNet/FFN/add buckets."
+  source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: wave scheduler refactor
+- claim: "Targeted correctness stayed green after instrumentation: `6 examples, 0 failures`; top token `198`, logit `11.423702`; DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_fine_trace_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen forward or profiling changes
+- claim: "A `64/16` top1 wave trace showed CPU encode sections are only milliseconds across the whole run, while GPU wait dominates; the trace is useful for orchestration hygiene but not sufficient to identify GPU kernel bottlenecks."
+  source: `/tmp/qwen35_wave_trace_profile_current --prefill=64 --decode=16` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: profiler or workload changes
+**note:** Treat encode trace as a dispatch/orchestration attribution, not a kernel-time profiler. For kernel choices, keep using paired A/B or operator microbenchmarks.
+
+### [LM-codex-CONVSHIFT-FUSION-REFUTE-1] Recurrent conv+shift exact fusion did not show a reliable speed win
+**status:** refuted-for-default
+**trust:** {F:0.78, G:0.55, R:0.74}
+**context:** ml (Qwen port, recurrent layer fusion)
+**evidence:**
+- claim: "Added an exact `qwen35_recurrent_conv_shift` Metal kernel and a `QWEN35_REC_CONVSHIFT_FUSED=1` wave-path toggle; the default remains off because the measured result was neutral/noisy."
+  source: `src/ml/gguf/kernels/recurrent_qwen35.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent conv/state layout changes
+- claim: "Correctness with the fused kernel code present stayed green: `6 examples, 0 failures`; top token `198`, logit `11.423702`; DeltaNet state max diff about `3.17e-08`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_convshift_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: recurrent kernel changes
+- claim: "Paired A/B with prompt=64/gen=32/trials=8 gave fused wins `5/8` but mean delta `-0.058 ms/tok` (A=split, B=fused), so the evidence does not justify enabling it by default."
+  source: `/tmp/qwen35_ab_profile_convshift --env=QWEN35_REC_CONVSHIFT_FUSED --a=0 --b=1 --prompt=64 --gen=32 --trials=8 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: quieter rerun or recurrent kernel rewrite
+**note:** This is an exact optimization candidate, but current evidence says dispatch-count reduction here is not the bottleneck. Do not spend more time on simple conv+shift fusion unless a GPU kernel profiler contradicts this.
+
+### [LM-codex-TOP1-DEFAULT-1] Greedy Qwen path uses fused top1 by default
+**status:** verified
+**trust:** {F:0.86, G:0.76, R:0.84}
+**context:** ml (Qwen port, greedy decode)
+**evidence:**
+- claim: "Changed `QWEN35_HEAD_TOP1_FUSED` semantics so fused top1 is enabled by default for `forward_top1`; setting `QWEN35_HEAD_TOP1_FUSED=0` still forces the full-logit fallback."
+  source: `src/ml/gguf/qwen35_metal.cr` and `src/ml/gguf/qwen35_cpu.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: greedy decode helper or lm-head path changes
+- claim: "Paired A/B showed fused top1 is a real decode win for greedy path: `QWEN35_HEAD_TOP1_FUSED=1` beat `0` in `5/5` trials, mean improvement about `0.512 ms/tok` for prompt=64/gen=16."
+  source: `/tmp/qwen35_ab_profile_convshift --env=QWEN35_HEAD_TOP1_FUSED --a=0 --b=1 --prompt=64 --gen=16 --trials=5 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: lm-head kernel changes
+- claim: "Updated `bin/qwen35_generate.cr` to use `forward_top1` for greedy prefill/decode; smoke run generated `The capital of France is Paris` with post-compile token latencies around `0.02s` on the 5-token prompt."
+  source: `/tmp/qwen35_generate_check "The capital of France is" 1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: generation script or tokenizer changes
+- claim: "Updated `bin/benchmark_qwen_vs_llama.cr` to measure native decode as top1 by default, with `--native-full-logits` preserving the old full-logit measurement. A small `8/8` smoke benchmark completed successfully."
+  source: `/tmp/benchmark_qwen_vs_llama_check --prompt=8 --gen=8 --reps=1 --warmup=0` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness changes
+**note:** This is exact for greedy decode only. Do not use it to claim arbitrary-temperature sampling speed; full logits are still required for general sampling.
+
+### [LM-codex-PREFILL-GAP-1] Qwen prefill is currently sequential decode, not optimized prefill
+**status:** verified
+**trust:** {F:0.88, G:0.78, R:0.84}
+**context:** ml (Qwen port, prefill performance)
+**evidence:**
+- claim: "`benchmark_qwen_vs_llama.cr` measures native prefill by looping `prompt.each_with_index { forward(single token) }`; there is no Qwen-specific layerwise/batched prefill engine in the current path."
+  source: `bin/benchmark_qwen_vs_llama.cr` and `src/ml/gguf/qwen35_cpu.cr` inspection on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen prefill API or benchmark rewrite
+- claim: "Fresh local `64/8` benchmark measured native prefill p50 `1445.35 ms` = `44.28 tok/s`, while llama.cpp prefill was `448.63 tok/s`; native decode top1 was roughly competitive at `45.56 tok/s` vs llama.cpp `43.63 tok/s`."
+  source: `/tmp/benchmark_qwen_vs_llama_prefill_check --prompt=64 --gen=8 --reps=3 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or prefill path changes
+- claim: "Changing sequential prompt processing from full logits each token to top1 each token did not materially improve 64-token prompt throughput: both stayed around `43.6 tok/s`."
+  source: `/tmp/qwen35_prefill_modes 64 3` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: output head or top1 path changes
+**note:** The main prefill problem is not output-head materialization; it is that native prefill has not crossed from token-by-token decode to layerwise sequence/batch processing.
+
+### [LM-codex-MICROBATCH-LOWERBOUND-1] Batch matmul attribution supports known-token microbatch as the next breakthrough
+**status:** verified-lower-bound
+**trust:** {F:0.82, G:0.68, R:0.80}
+**context:** ml (Qwen port, microbatch/speculative verifier)
+**evidence:**
+- claim: "Standalone shape attribution shows Qwen projection matmuls have large per-row speedups when processed as a batch: top weighted shapes total `88.29 ms` at batch=1, `12.92 ms` at batch=32, and `9.81 ms` at batch=64."
+  source: `/tmp/qwen35_op_attr --batch=1/32/64 --warmup=2 --runs=5..7 --limit=10` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: matmul kernel route or op attribution harness changes
+- claim: "The current Qwen wrapper only routes `Q4_K` batch>8 through the Q4 GEMM path; `Q5_K` and `Q6_K` still use GEMV for batch inputs, despite `gemm_mm.metal` containing `simd_mm_q5k` and `simd_mm_q6k` kernels used elsewhere in the repo."
+  source: `src/ml/gguf/qwen35_metal.cr` and `src/ml/gguf/kernels/gemm_mm.metal` inspection on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen matmul routing changes
+**note:** These are standalone matmul lower bounds, not full prefill latency predictions. They justify the paradigm shift, but a correct implementation must handle recurrent state scan and avoid fake parallelism.
+
+### [LM-codex-QWEN35-PROMPT-CACHE-1] Exact prompt-prefix restore is implemented through `.qkv` artifacts
+**status:** verified
+**trust:** {F:0.86, G:0.72, R:0.84}
+**context:** ml (Qwen 3.5 prompt cache, state save/load)
+**evidence:**
+- claim: "`Qwen35StateSnapshot` captures and restores full-attention KV buffers plus DeltaNet conv/SSM state, preserving layer positions and active storage owner bytes."
+  source: `src/ml/gguf/qwen35_state_snapshot.cr` and `spec/qwen35_state_snapshot_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen state layout, MetalBuffer ownership, or recurrent/full-attention state changes
+- claim: "The `.qkv` artifact format is fail-closed for SHA mismatch and corrupt/trailing bytes; exact restore preserves next-token top1 and full-logit cosine within the current tolerance on the 9B prompt fixture."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prompt_cache_spec2 crystal spec spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` -> `6 examples, 0 failures` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: artifact version, snapshot codec, or restore path changes
+- claim: "`Qwen35PromptCache::Store` provides local JSONL manifest lookup by exact `(model_id, tokenizer_id, prompt_hash, prefix_len)`, by session, and by longest compatible token-prefix hash; restore validates SHA before loading artifacts."
+  source: `src/ml/gguf/qwen35_prompt_cache.cr` and `spec/qwen35_prompt_cache_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: prompt-hash scheme, manifest schema, or PG metadata adapter changes
+- claim: "Longest-prefix restore plus exact suffix replay matches live full prefill on the 9B prompt fixture."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefix_all crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` -> `14 examples, 0 failures` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: token-hash scheme, replay helper, or Qwen forward state semantics changes
+- claim: "`bin/qwen35_generate.cr` can use the prompt cache when `QWEN35_PROMPT_CACHE=1`; it stores the state before the last prompt token and, on a later run, restores the 4/5-token prefix for `The capital of France is`, replays 1 token, and generates token `11751` (`Paris`)."
+  source: `/tmp/qwen35_generate_cache_check "The capital of France is" 1` run twice with `QWEN35_PROMPT_CACHE_ROOT=/tmp/cogni_ml_qwen35_generate_cache_check` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: generator prompt loop, tokenizer, or cache metadata changes
+- claim: "The pg_sorted_heap metadata adapter is dependency-free in core: it generates the `USING sorted_heap` schema, parameterized upsert SQL, and rejects unsafe SQL identifiers."
+  source: `docs/sql/qwen35_prompt_cache_pg_sorted_heap.sql`, `src/ml/gguf/qwen35_prompt_cache.cr`, and `spec/qwen35_prompt_cache_spec.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: pg_sorted_heap table AM naming, schema, or PostgreSQL shard integration changes
+**note:** This avoids repeated prompt prefill for exact hits and reduces repeated prefill for shared-prefix prompts. Live PostgreSQL execution, approximate KV recall, and layerwise prefill microbatching remain separate work.
+
+### [LM-codex-Q56K-BATCH-GEMM-1] Q5/Q6 simdgroup batch GEMM exists but is opt-in, not default
+**status:** verified-opt-in
+**trust:** {F:0.78, G:0.56, R:0.76}
+**context:** ml (Qwen matmul routing, prefill/microbatch groundwork)
+**evidence:**
+- claim: "Added Qwen access to existing `simd_mm_q5k`/`simd_mm_q6k` kernels through an opt-in `QWEN35_Q56K_BATCH_GEMM=1` route; default Q5/Q6 batch routing remains GEMV because the standalone Q5 batch kernel timing was not a win."
+  source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q5/Q6 matrix-matrix kernel rewrite or benchmark retune
+- claim: "Correctness of opt-in Q5/Q6 batch GEMM against CPU reference passed: `spec/qwen35_metal_spec.cr` -> `8 examples, 0 failures`; Q5 batch=16 cosine `1.0`, max delta `0.00337`; Q6 batch=16 cosine `1.0`, max delta `0.00489`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56_gemm_spec2 crystal spec spec/qwen35_metal_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: quant kernel or tolerance changes
+- claim: "Default Qwen correctness gate stayed green with Q5/Q6 batch GEMM disabled by default: `13 examples, 0 failures`; top token `198`, logit `11.423702`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_final_qwen_gate crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen default matmul routing changes
+**note:** This is groundwork, not a default speedup. Before enabling, benchmark against Q5/Q6 batched GEMV on identical warmed shapes; current Q5 simdgroup batch path is suspiciously slow.
+
+### [LM-codex-QWEN35-BENCH-20260423-1] First-run prefill is still the major gap; decode currently beats llama.cpp
+**status:** verified-benchmark
+**trust:** {F:0.82, G:0.62, R:0.78}
+**context:** ml (Qwen benchmark vs llama.cpp)
+**evidence:**
+- claim: "On prompt=64/gen=64/reps=3/warmup=1, current native first-run prefill measured `41.41 tok/s` p50 while llama.cpp measured `437.92 tok/s`; gap `-90.54%`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_bench_current_6464 crystal run --link-flags="build/bridge.o -framework Metal -framework Foundation -lc++" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=64 --reps=3 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or Qwen prefill path changes
+- claim: "On the same prompt=64/gen=64 run, native greedy decode measured `41.71 tok/s` p50 while llama.cpp measured `35.23 tok/s`; gap `+18.4%`."
+  source: same benchmark command on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or decode path changes
+- claim: "Shorter prompt=64/gen=16/reps=3/warmup=1 showed the same shape: native prefill `41.58 tok/s` p50 vs llama.cpp `434.41 tok/s`; native decode `42.91 tok/s` p50 vs llama.cpp `40.09 tok/s`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_bench_current crystal run --link-flags="build/bridge.o -framework Metal -framework Foundation -lc++" bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, host load, llama.cpp version, or decode/prefill path changes
+**note:** Prompt-cache optimizes repeated/shared-prefix prompts, not the first-run prefill measured here. First-run prefill still needs a real layerwise/microbatch implementation.

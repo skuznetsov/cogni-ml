@@ -53,10 +53,12 @@
 
 ## Phase 3.5 — State save/load
 
-- [ ] **3.5.1** Serialize: KV-buffers (full-attn layers) + Mamba-state (SSM layers) + metadata
-- [ ] **3.5.2** Deserialize / restore
-- [ ] **3.5.3** Routed restore (per experiments 2A/2B pattern)
-- [ ] **3.5.4** Correctness: bit-identical full restore on 9B
+- [x] **3.5.1** Serialize: KV-buffers (full-attn layers) + DeltaNet recurrent state (conv + SSM) + metadata
+- [x] **3.5.2** Deserialize / restore
+- [x] **3.5.3** Prompt KV cache: exact lookup by session/hash, artifact restore, fail-closed artifact hash/model checks
+- [x] **3.5.4** pg_sorted_heap metadata adapter for prompt KV cache (external artifact path + sorted session/hash index)
+- [x] **3.5.5** Correctness: exact top1 + full-logit close restore on 9B
+- [x] **3.5.6** Longest-prefix prompt cache: token-hash prefix lookup + exact suffix replay
 
 ## Phase 4 — Optimization: beat llama.cpp
 

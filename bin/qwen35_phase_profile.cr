@@ -7,6 +7,9 @@ require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_metal"
 
+# Keep the diagnostic phase split on the layer-by-layer path.
+ENV["QWEN35_DECODE_WAVE_OFF"] ||= "1"
+
 MODEL_PATH = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
 w = ML::GGUF::Qwen35Weights.from_gguf(MODEL_PATH)
@@ -25,10 +28,10 @@ ML::GGUF::Qwen35CPU.forward(w, 11751_i32, 5, state)
 
 n_runs = 5
 total_full = 0.0
-total_rec  = 0.0
+total_rec = 0.0
 total_head = 0.0
-total_emb  = 0.0
-total_all  = 0.0
+total_emb = 0.0
+total_all = 0.0
 # Per-layer accumulators for layer 0..n_layer-1 (breakdown across one run)
 
 n_layer = hp.n_layer
@@ -52,7 +55,7 @@ n_runs.times do |r|
       total_full += (Time.instant - t0).total_milliseconds
     in ML::GGUF::Qwen35RecurrentWeights
       x = ML::GGUF::Qwen35CPU.forward_recurrent_layer(x, pos, lw, state.layers[il], hp, state.max_seq)
-      total_rec  += (Time.instant - t0).total_milliseconds
+      total_rec += (Time.instant - t0).total_milliseconds
     end
   end
 
@@ -66,15 +69,15 @@ end
 
 n = n_runs.to_f
 printf "Averages over %d decode steps (pos starting at %d):\n", n_runs, base_pos
-printf "  total forward:    %.1f ms\n",                         total_all  / n
-printf "  embedding:        %.2f ms\n",                         total_emb  / n
+printf "  total forward:    %.1f ms\n", total_all / n
+printf "  embedding:        %.2f ms\n", total_emb / n
 printf "  full_attn layers (8 total):   %.1f ms  (%.2f ms/layer)\n",
   total_full / n, total_full / n / 8
 printf "  recurrent layers (24 total):  %.1f ms  (%.2f ms/layer)\n",
-  total_rec  / n, total_rec  / n / 24
-printf "  output (rmsnorm + lm_head):   %.1f ms\n",              total_head / n
+  total_rec / n, total_rec / n / 24
+printf "  output (rmsnorm + lm_head):   %.1f ms\n", total_head / n
 printf "\n"
 printf "Allocation:\n"
 printf "  full_attn share:  %5.1f%%\n", 100 * total_full / total_all
-printf "  recurrent share:  %5.1f%%\n", 100 * total_rec  / total_all
+printf "  recurrent share:  %5.1f%%\n", 100 * total_rec / total_all
 printf "  head share:       %5.1f%%\n", 100 * total_head / total_all

@@ -142,6 +142,38 @@ describe ML::GGUF::Qwen35Metal do
     cos.should be >= 0.9999
   end
 
+  it "matmul_q5k GEMM (batch=16) matches CPU reference" do
+    w_raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_9B_METAL, "blk.0.attn_qkv.weight", ML::GGUF::TensorType::Q5_K)
+    batch = 16
+    rng = Random.new(111)
+    x = Array(Float32).new(batch * in_dim) { rng.rand(-1.0_f32..1.0_f32) }
+    zero_bias = Array(Float32).new(out_dim, 0.0_f32)
+
+    old = ENV["QWEN35_Q56K_BATCH_GEMM"]?
+    ENV["QWEN35_Q56K_BATCH_GEMM"] = "1"
+    t0 = Time.instant
+    begin
+      gpu = ML::GGUF::Qwen35Metal.matmul_q5k(x, w_raw, in_dim, out_dim, batch)
+    ensure
+      if old
+        ENV["QWEN35_Q56K_BATCH_GEMM"] = old
+      else
+        ENV.delete("QWEN35_Q56K_BATCH_GEMM")
+      end
+    end
+    dt_gpu = Time.instant - t0
+    t0 = Time.instant
+    cpu = ML::GGUF::QuantMatmul.matmul_add(x, batch, in_dim, w_raw, ML::GGUF::TensorType::Q5_K, out_dim, zero_bias)
+    dt_cpu = Time.instant - t0
+
+    cos = cosine(gpu, cpu)
+    diff = max_abs_diff(gpu, cpu)
+    puts "  [metal_q5k_gemm] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
+    puts "  [metal_q5k_gemm] cos=#{cos.round(6)}, max|Δ|=#{diff}  (batch=#{batch}, #{in_dim}→#{out_dim})"
+    cos.should be >= 0.999
+  end
+
   it "matmul_q6k GEMV matches CPU reference (ffn_down)" do
     w_raw, in_dim, out_dim = quant_tensor_bytes(
       QWEN_9B_METAL, "blk.0.ffn_down.weight", ML::GGUF::TensorType::Q6_K)
@@ -161,6 +193,38 @@ describe ML::GGUF::Qwen35Metal do
     puts "  [metal_q6k_gemv] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
     puts "  [metal_q6k_gemv] cos=#{cos.round(6)}, max|Δ|=#{diff}  (#{in_dim}→#{out_dim})"
     cos.should be >= 0.9999
+  end
+
+  it "matmul_q6k GEMM (batch=16) matches CPU reference" do
+    w_raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_9B_METAL, "blk.0.ffn_down.weight", ML::GGUF::TensorType::Q6_K)
+    batch = 16
+    rng = Random.new(113)
+    x = Array(Float32).new(batch * in_dim) { rng.rand(-1.0_f32..1.0_f32) }
+    zero_bias = Array(Float32).new(out_dim, 0.0_f32)
+
+    old = ENV["QWEN35_Q56K_BATCH_GEMM"]?
+    ENV["QWEN35_Q56K_BATCH_GEMM"] = "1"
+    t0 = Time.instant
+    begin
+      gpu = ML::GGUF::Qwen35Metal.matmul_q6k(x, w_raw, in_dim, out_dim, batch)
+    ensure
+      if old
+        ENV["QWEN35_Q56K_BATCH_GEMM"] = old
+      else
+        ENV.delete("QWEN35_Q56K_BATCH_GEMM")
+      end
+    end
+    dt_gpu = Time.instant - t0
+    t0 = Time.instant
+    cpu = ML::GGUF::QuantMatmul.matmul_add(x, batch, in_dim, w_raw, ML::GGUF::TensorType::Q6_K, out_dim, zero_bias)
+    dt_cpu = Time.instant - t0
+
+    cos = cosine(gpu, cpu)
+    diff = max_abs_diff(gpu, cpu)
+    puts "  [metal_q6k_gemm] GPU: #{dt_gpu.total_milliseconds.round(1)} ms, CPU: #{dt_cpu.total_milliseconds.round(1)} ms"
+    puts "  [metal_q6k_gemm] cos=#{cos.round(6)}, max|Δ|=#{diff}  (batch=#{batch}, #{in_dim}→#{out_dim})"
+    cos.should be >= 0.999
   end
 
   it "matmul_q6k GEMV matches CPU on lm_head shape (4096→248320)" do
