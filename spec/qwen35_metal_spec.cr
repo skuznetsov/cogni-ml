@@ -150,16 +150,16 @@ describe ML::GGUF::Qwen35Metal do
     x = Array(Float32).new(batch * in_dim) { rng.rand(-1.0_f32..1.0_f32) }
     zero_bias = Array(Float32).new(out_dim, 0.0_f32)
 
-    old = ENV["QWEN35_Q56K_BATCH_GEMM"]?
-    ENV["QWEN35_Q56K_BATCH_GEMM"] = "1"
+    old = ENV["QWEN35_Q56K_BATCH_GEMM_OFF"]?
+    ENV.delete("QWEN35_Q56K_BATCH_GEMM_OFF")
     t0 = Time.instant
     begin
       gpu = ML::GGUF::Qwen35Metal.matmul_q5k(x, w_raw, in_dim, out_dim, batch)
     ensure
       if old
-        ENV["QWEN35_Q56K_BATCH_GEMM"] = old
+        ENV["QWEN35_Q56K_BATCH_GEMM_OFF"] = old
       else
-        ENV.delete("QWEN35_Q56K_BATCH_GEMM")
+        ENV.delete("QWEN35_Q56K_BATCH_GEMM_OFF")
       end
     end
     dt_gpu = Time.instant - t0
@@ -203,16 +203,16 @@ describe ML::GGUF::Qwen35Metal do
     x = Array(Float32).new(batch * in_dim) { rng.rand(-1.0_f32..1.0_f32) }
     zero_bias = Array(Float32).new(out_dim, 0.0_f32)
 
-    old = ENV["QWEN35_Q56K_BATCH_GEMM"]?
-    ENV["QWEN35_Q56K_BATCH_GEMM"] = "1"
+    old = ENV["QWEN35_Q56K_BATCH_GEMM_OFF"]?
+    ENV.delete("QWEN35_Q56K_BATCH_GEMM_OFF")
     t0 = Time.instant
     begin
       gpu = ML::GGUF::Qwen35Metal.matmul_q6k(x, w_raw, in_dim, out_dim, batch)
     ensure
       if old
-        ENV["QWEN35_Q56K_BATCH_GEMM"] = old
+        ENV["QWEN35_Q56K_BATCH_GEMM_OFF"] = old
       else
-        ENV.delete("QWEN35_Q56K_BATCH_GEMM")
+        ENV.delete("QWEN35_Q56K_BATCH_GEMM_OFF")
       end
     end
     dt_gpu = Time.instant - t0

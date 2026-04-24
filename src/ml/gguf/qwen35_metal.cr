@@ -96,6 +96,8 @@ module ML
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
+        @@f32_to_f16_pipeline : ML::Metal::ComputePipeline?
+        @@f16_to_f32_pipeline : ML::Metal::ComputePipeline?
         @@ffn_swiglu_pipeline : ML::Metal::ComputePipeline?
         @@add_rmsnorm_pipeline : ML::Metal::ComputePipeline?
         @@add_rmsnorm_rows_pipeline : ML::Metal::ComputePipeline?
@@ -529,6 +531,18 @@ module ML
           }
         end
 
+        private def self.f32_to_f16_pipeline : ML::Metal::ComputePipeline
+          @@f32_to_f16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_f32_to_f16") {
+            ML::Metal::ComputePipeline.new("qwen35_f32_to_f16", FFN_SOURCE)
+          }
+        end
+
+        private def self.f16_to_f32_pipeline : ML::Metal::ComputePipeline
+          @@f16_to_f32_pipeline ||= ML::Metal::PipelineCache.get("qwen35_f16_to_f32") {
+            ML::Metal::ComputePipeline.new("qwen35_f16_to_f32", FFN_SOURCE)
+          }
+        end
+
         private def self.ffn_swiglu_pipeline : ML::Metal::ComputePipeline
           @@ffn_swiglu_pipeline ||= ML::Metal::PipelineCache.get("qwen35_swiglu_mul") {
             ML::Metal::ComputePipeline.new("qwen35_swiglu_mul", FFN_SOURCE)
@@ -732,6 +746,50 @@ module ML
           enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
         end
 
+        private def self.encode_q56k_gemm_f32(enc : ML::Metal::ComputeEncoder,
+                                              pipeline : ML::Metal::ComputePipeline,
+                                              x_buf : ML::MetalBuffer,
+                                              out_buf : ML::MetalBuffer,
+                                              w_buf : ML::MetalBuffer,
+                                              w_offset : Int64,
+                                              in_dim : Int32,
+                                              out_dim : Int32,
+                                              batch : Int32) : Nil
+          x16_buf = Scratch.get("mm56_x16_#{w_offset}_#{in_dim}_#{batch}", (batch * in_dim).to_i64 * 2_i64)
+          out16_buf = Scratch.get("mm56_out16_#{w_offset}_#{out_dim}_#{batch}", (batch * out_dim).to_i64 * 2_i64)
+          bias_buf = Scratch.get("mm56_bias_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
+          ConstCache.write_once("mm56_bias_#{out_dim}", bias_buf, Array(Float32).new(out_dim, 0.0_f32))
+
+          enc.set_pipeline(f32_to_f16_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
+          enc.set_value((batch * in_dim).to_u32, 2)
+          enc.dispatch_1d(batch * in_dim, 256)
+
+          enc.set_pipeline(pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x16_buf, 1)
+          enc.set_buffer(bias_buf, 2)
+          enc.set_buffer(out16_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 4)
+          enc.set_value(out_dim.to_u32, 5)
+          enc.set_value(batch.to_u32, 6)
+          enc.set_value(0_u32, 7)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          grid = {
+            (batch   + MM_NR1 - 1) // MM_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+
+          enc.set_pipeline(f16_to_f32_pipeline)
+          enc.set_buffer(out16_buf, 0)
+          enc.set_buffer(out_buf, 1, ML::Metal::BufferAccess::Write)
+          enc.set_value((batch * out_dim).to_u32, 2)
+          enc.dispatch_1d(batch * out_dim, 256)
+        end
+
         private def self.encode_matmul(enc : ML::Metal::ComputeEncoder,
                                        gemv_pipeline : ML::Metal::ComputePipeline,
                                        qw : QuantWeight,
@@ -744,6 +802,10 @@ module ML
                                        batch : Int32) : Nil
           if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD
             encode_q4k_gemm(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          elsif q56_batch_gemm_enabled? && qw.type.q5_k? && batch > GEMM_BATCH_THRESHOLD
+            encode_q56k_gemm_f32(enc, mm5_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
+            encode_q56k_gemm_f32(enc, mm6_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           else
             encode_gemv(enc, gemv_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           end
@@ -858,7 +920,7 @@ module ML
         end
 
         private def self.q56_batch_gemm_enabled? : Bool
-          ENV["QWEN35_Q56K_BATCH_GEMM"]? == "1"
+          ENV["QWEN35_Q56K_BATCH_GEMM_OFF"]? != "1"
         end
 
         private def self.read_shared_top1(id_buf : ML::MetalBuffer, value_buf : ML::MetalBuffer) : Array(Float32)

@@ -2058,12 +2058,12 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: pg_sorted_heap table AM naming, schema, or PostgreSQL shard integration changes
 **note:** This avoids repeated prompt prefill for exact hits and reduces repeated prefill for shared-prefix prompts. Live PostgreSQL execution, approximate KV recall, and layerwise prefill microbatching remain separate work.
 
-### [LM-codex-Q56K-BATCH-GEMM-1] Q5/Q6 simdgroup batch GEMM exists but is opt-in, not default
-**status:** verified-opt-in
-**trust:** {F:0.78, G:0.56, R:0.76}
-**context:** ml (Qwen matmul routing, prefill/microbatch groundwork)
+### [LM-codex-Q56K-BATCH-GEMM-1] Q5/Q6 simdgroup batch GEMM for prefill chunks
+**status:** verified-default
+**trust:** {F:0.9, G:0.62, R:0.9}
+**context:** ml (Qwen matmul routing, prefill/microbatch)
 **evidence:**
-- claim: "Added Qwen access to existing `simd_mm_q5k`/`simd_mm_q6k` kernels through an opt-in `QWEN35_Q56K_BATCH_GEMM=1` route; default Q5/Q6 batch routing remains GEMV because the standalone Q5 batch kernel timing was not a win."
+- claim: "Historical baseline: Qwen access to existing `simd_mm_q5k`/`simd_mm_q6k` kernels was initially opt-in via `QWEN35_Q56K_BATCH_GEMM=1`; default routing stayed GEMV until chunk-level profiling showed the route is beneficial inside prefill command buffers."
   source: `src/ml/gguf/qwen35_metal.cr` on 2026-04-23
   verified_at: 2026-04-23
   decay_trigger: Q5/Q6 matrix-matrix kernel rewrite or benchmark retune
@@ -2075,7 +2075,19 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_final_qwen_gate crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` on 2026-04-23
   verified_at: 2026-04-23
   decay_trigger: Qwen default matmul routing changes
-**note:** This is groundwork, not a default speedup. Before enabling, benchmark against Q5/Q6 batched GEMV on identical warmed shapes; current Q5 simdgroup batch path is suspiciously slow.
+- claim: "Q5/Q6 batch GEMM is now default-on for Qwen chunked prefill with GPU-side F32->F16 input conversion and F16->F32 output conversion; disable with `QWEN35_Q56K_BATCH_GEMM_OFF=1`."
+  source: `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/kernels/ffn_qwen35.metal` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Q5/Q6 matrix-matrix kernel rewrite, conversion kernel rewrite, or precision policy change
+- claim: "Default correctness gates pass with Q5/Q6 batch GEMM enabled: `26 examples, 0 failures`; A/B full-logit harness against old default on 16 tokens gave same top1 `30`, cosine `0.9999999901126796`, max_abs `0.003421545`."
+  source: `crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr ...` and temporary A/B harness on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: Qwen default matmul routing changes
+- claim: "pp64 benchmark improved from `143.18 tok/s` p50 to `278.50 tok/s` p50; decode remains ahead of llama.cpp by `6.96%` in the same prompt=64/gen=16 harness."
+  source: `bin/benchmark_qwen_vs_llama.cr -- --prompt=64 --gen=16 --reps=3 --warmup=1` on 2026-04-23
+  verified_at: 2026-04-23
+  decay_trigger: benchmark harness, power state, model file, or llama.cpp HEAD changes
+**note:** The older opt-in evidence is retained as history; the current default route is guarded by `QWEN35_Q56K_BATCH_GEMM_OFF=1`.
 
 ### [LM-codex-QWEN35-BENCH-20260423-1] First-run prefill is still the major gap; decode currently beats llama.cpp
 **status:** verified-benchmark

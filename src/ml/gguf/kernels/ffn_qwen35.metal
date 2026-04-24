@@ -3,6 +3,26 @@ using namespace metal;
 
 constant ushort QWEN35_VEC_TG = 256;
 
+kernel void qwen35_f32_to_f16(
+    device const float* src   [[buffer(0)]],
+    device       half*  dst   [[buffer(1)]],
+    constant     uint&  count [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count) return;
+    dst[gid] = half(src[gid]);
+}
+
+kernel void qwen35_f16_to_f32(
+    device const half* src    [[buffer(0)]],
+    device       float* dst   [[buffer(1)]],
+    constant     uint& count  [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count) return;
+    dst[gid] = float(src[gid]);
+}
+
 // Elementwise SwiGLU combine:
 //   out[i] = silu(gate[i]) * up[i]
 kernel void qwen35_swiglu_mul(
