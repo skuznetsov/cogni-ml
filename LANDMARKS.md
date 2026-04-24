@@ -426,6 +426,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   adversary_update: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_current_prefill_pp2048_warm crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_prefill_attribution.cr -- --prompt=2048 --warmup=1 --reps=1` -> warm profile wall `4560.86 ms`, wall rep `4547.89 ms`, `rec0-2` wait `344.42 ms`.
 **adversary:** "This refutes a single bad layer-group hypothesis for pp256 and refutes the cold pp2048 recurrent-outlier hypothesis. The next exact optimization should first add intra-group phase attribution before changing kernels."
 
+### [LM-prefill-SCOPED-MATMUL-ATTRIBUTION-1] Scoped prefill/decode matmul attribution
+**status:** verified
+**trust:** {F:0.86, G:medium, R:0.82}
+**context:** ml (Qwen35 prefill/decode attribution)
+**evidence:**
+- claim: "`Qwen35Metal::Profile` now maintains a trace scope stack and prefixes matmul shape counters with the active decode or prefill phase, without double-counting `encode_matmul` GEMV fallback."
+  source: `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Profile instrumentation, `encode_matmul`, or wave/prefill scheduling changes
+- claim: "Focused forward/prompt-cache specs pass after scoped attribution instrumentation."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_scoped_profile_spec2 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` -> 16 examples, 0 failures
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 Metal/profile code changes
+- claim: "A pp256 prefill profile attributes logical weight traffic by phase: `prefill.rec.ffn_upgate q4_gemm Q4_K 4096x12288 b256` is largest at 48 calls / 1296.00 MiB; recurrent Q5 projection is 24 calls / 528.00 MiB; recurrent FFN-down totals 796.50 MiB across Q6/Q4 routes."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_scoped_prefill_pp256b crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=1`
+  verified_at: 2026-04-24
+  decay_trigger: prefill chunk size, matmul route, profile code, kernel route, or power state changes
+- claim: "A prompt64/gen4 top1 decode profile attributes logical weight traffic by phase: recurrent FFN up/gate is largest at 192 calls / 5184.00 MiB, recurrent Q5 projection is 96 calls / 2112.00 MiB, and recurrent FFN-down totals 3186.00 MiB across Q6/Q4 routes."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_scoped_decode_b QWEN35_PROFILE_TOP1=1 crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_sync_profile.cr -- 64 4`
+  verified_at: 2026-04-24
+  decay_trigger: decode wave scheduling, matmul route, profile code, kernel route, or power state changes
+**adversary:** "This is logical weight-traffic attribution, not per-kernel GPU-time attribution. It is sufficient to rank exact next targets: recurrent FFN up/gate and recurrent projection traffic dominate both prefill and decode. It does not justify attention rewrites yet because `full.attn` encode/wait remains small in these profiles."
+
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
 **trust:** {F:0.65, G:medium, R:0.70}

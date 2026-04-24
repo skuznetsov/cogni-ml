@@ -94,6 +94,7 @@
   - [x] Raise default prefill chunk size from `2048` to `4096` for long prompts; pp4096 one-shot p50 improves from `11862.78 ms` at chunk 2048 to `11524.63 ms` at chunk 4096
   - [x] Make default prefill chunk size memory-aware; 64GB M2 Max selects `8192` and pp8192 one-shot A/B improves from `35219.27 ms` at chunk 4096 to `33981.42 ms` default, while smaller systems fall back to `4096`/`2048`
   - [x] Add grouped command-buffer attribution for fused prefill waves; pp256 shows all `full+rec` groups are nearly flat (`~61.2-61.7 ms` wait) and `rec0-2` is smaller (`~46.4 ms`), so there is no single pathological layer group to attack
+  - [x] Add scoped matmul attribution for prefill/decode phases; pp256 confirms `prefill.rec.ffn_upgate` dominates logical weight traffic (`1296 MiB`), followed by recurrent Q5 projection (`528 MiB`) and recurrent FFN-down (`796.5 MiB` combined Q6/Q4); decode prompt64/gen4 shows the same recurrent FFN/upgate and projection dominance (`5184 MiB` and `2112 MiB`)
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context
