@@ -962,6 +962,10 @@ module ML
           ENV["QWEN35_Q56K_BATCH_GEMM_OFF"]? != "1"
         end
 
+        private def self.swiglu_inplace_enabled? : Bool
+          ENV["QWEN35_SWIGLU_INPLACE_OFF"]? != "1"
+        end
+
         private def self.read_shared_top1(id_buf : ML::MetalBuffer, value_buf : ML::MetalBuffer) : Array(Float32)
           id = id_buf.contents.as(Pointer(UInt32)).value
           value = value_buf.contents.as(Pointer(Float32)).value
@@ -2524,16 +2528,17 @@ module ML
             ffn_proj_enc.end_encoding
 
             swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+            ffn_act_buf = swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
             swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
             swiglu_enc.set_buffer(ffn_gate_buf, 0)
             swiglu_enc.set_buffer(ffn_up_buf, 1)
-            swiglu_enc.set_buffer(ffn_comb_buf, 2, ML::Metal::BufferAccess::Write)
+            swiglu_enc.set_buffer(ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
             swiglu_enc.set_value((n_tokens * ffn_dim).to_u32, 3)
             swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
             swiglu_enc.end_encoding
 
             ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-            encode_matmul(ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
+            encode_matmul(ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, ffn_act_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
             ffn_down_enc.end_encoding
 
             add_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -3174,16 +3179,17 @@ module ML
           ffn_proj_enc.end_encoding
 
           swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+          ffn_act_buf = swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
           swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
           swiglu_enc.set_buffer(ffn_gate_buf, 0)
           swiglu_enc.set_buffer(ffn_up_buf, 1)
-          swiglu_enc.set_buffer(ffn_comb_buf, 2, ML::Metal::BufferAccess::Write)
+          swiglu_enc.set_buffer(ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
           swiglu_enc.set_value((n_tokens * ffn_dim).to_u32, 3)
           swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
           swiglu_enc.end_encoding
 
           ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_matmul(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+          encode_matmul(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_act_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
           ffn_down_enc.end_encoding
 
           add_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -3454,16 +3460,17 @@ module ML
           full_ffn_proj_enc.end_encoding
 
           full_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+          full_ffn_act_buf = swiglu_inplace_enabled? ? full_ffn_up_buf : full_ffn_comb_buf
           full_swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
           full_swiglu_enc.set_buffer(full_ffn_gate_buf, 0)
           full_swiglu_enc.set_buffer(full_ffn_up_buf, 1)
-          full_swiglu_enc.set_buffer(full_ffn_comb_buf, 2, ML::Metal::BufferAccess::Write)
+          full_swiglu_enc.set_buffer(full_ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
           full_swiglu_enc.set_value((n_tokens * full_ffn_dim).to_u32, 3)
           full_swiglu_enc.dispatch_1d(n_tokens * full_ffn_dim, 256)
           full_swiglu_enc.end_encoding
 
           full_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_matmul(full_ffn_down_enc, full_ffn_down_pipe.not_nil!, ffn_down_qw, full_ffn_comb_buf, full_ffn_out_buf, full_ffn_down_w_buf, full_ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+          encode_matmul(full_ffn_down_enc, full_ffn_down_pipe.not_nil!, ffn_down_qw, full_ffn_act_buf, full_ffn_out_buf, full_ffn_down_w_buf, full_ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
           full_ffn_down_enc.end_encoding
 
           full_add_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -3607,16 +3614,17 @@ module ML
             rec_ffn_proj_enc.end_encoding
 
             rec_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+            rec_ffn_act_buf = swiglu_inplace_enabled? ? rec_ffn_up_buf : rec_ffn_comb_buf
             rec_swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
             rec_swiglu_enc.set_buffer(rec_ffn_gate_buf, 0)
             rec_swiglu_enc.set_buffer(rec_ffn_up_buf, 1)
-            rec_swiglu_enc.set_buffer(rec_ffn_comb_buf, 2, ML::Metal::BufferAccess::Write)
+            rec_swiglu_enc.set_buffer(rec_ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
             rec_swiglu_enc.set_value((n_tokens * rec_ffn_dim).to_u32, 3)
             rec_swiglu_enc.dispatch_1d(n_tokens * rec_ffn_dim, 256)
             rec_swiglu_enc.end_encoding
 
             rec_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-            encode_matmul(rec_ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, rec_ffn_comb_buf, rec_ffn_out_buf, rec_ffn_down_w_buf, rec_ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
+            encode_matmul(rec_ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, rec_ffn_act_buf, rec_ffn_out_buf, rec_ffn_down_w_buf, rec_ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
             rec_ffn_down_enc.end_encoding
 
             rec_add_enc = ML::Metal::ComputeEncoder.new(cmd)

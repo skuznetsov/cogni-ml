@@ -260,6 +260,25 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: Q5/Q6 kernels or benchmark environment changes
 **decision:** "Next exact optimization should target FFN traffic/staging first; more Q5/Q6 fallback experimentation is refuted for pp64."
 
+### [LM-prefill-SWIGLU-INPLACE-1] In-place SwiGLU staging for chunked prefill
+**status:** verified
+**trust:** {F:0.85, G:narrow, R:0.85}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "Chunked prefill FFN paths can write `silu(gate) * up` back into the up buffer and feed that buffer to FFN-down; the Metal elementwise kernel is index-local, so this aliasing is exact."
+  source: `src/ml/gguf/kernels/ffn_qwen35.metal`, `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: SwiGLU kernel indexing or FFN buffer ownership changes
+- claim: "Correctness gate passed after enabling the in-place default: qwen35 targeted specs -> 27 examples, 0 failures."
+  source: `crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"`
+  verified_at: 2026-04-24
+  decay_trigger: prefill FFN path changes
+- claim: "A/B with `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=6 --compare-env=QWEN35_SWIGLU_INPLACE_OFF` measured default avg 170.98 ms vs off avg 171.47 ms."
+  source: local command output
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness or power state changes
+**adversary:** "Effect size is tiny; keep `QWEN35_SWIGLU_INPLACE_OFF=1` fallback and do not treat this as attacking the dominant weight-read wall."
+
 ### [LM-codex-prefill-q4k-gemm] Q4_K GEMM inside recurrent prefill chunks
 **status:** verified
 **trust:** {F:0.9, G:medium, R:0.9}
