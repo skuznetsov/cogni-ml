@@ -419,11 +419,12 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=3` and repeat with `--reps=2`
   verified_at: 2026-04-24
   decay_trigger: benchmark harness, kernel route, or power state changes
-- claim: "A fresh pp2048 profile changed the group shape: the initial recurrent-only `rec0-2` group waited `901.24 ms`, while `full+rec` groups waited around `584-605 ms`; this points at recurrent-only chunk work scaling differently for long chunks."
+- claim: "A cold pp2048 profile initially showed `rec0-2` as an apparent outlier (`901.24 ms` wait), but a warm run refuted that interpretation: `rec0-2` dropped to `344.42 ms`, while `full+rec` groups waited around `562-568 ms`."
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_current_prefill_pp2048 crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_prefill_attribution.cr -- --prompt=2048 --warmup=0 --reps=1`
   verified_at: 2026-04-24
   decay_trigger: benchmark harness, chunk size, kernel route, or power state changes
-**adversary:** "This refutes a single bad layer-group hypothesis for pp256, but pp2048 shows one long-context outlier (`rec0-2`). The next exact optimization should first add intra-group phase attribution before changing kernels."
+  adversary_update: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_current_prefill_pp2048_warm crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_prefill_attribution.cr -- --prompt=2048 --warmup=1 --reps=1` -> warm profile wall `4560.86 ms`, wall rep `4547.89 ms`, `rec0-2` wait `344.42 ms`.
+**adversary:** "This refutes a single bad layer-group hypothesis for pp256 and refutes the cold pp2048 recurrent-outlier hypothesis. The next exact optimization should first add intra-group phase attribution before changing kernels."
 
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
