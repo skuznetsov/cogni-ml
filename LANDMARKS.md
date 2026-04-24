@@ -398,6 +398,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, memory pressure, or power state changes
 **adversary:** "Larger chunks increase peak scratch memory; memory-aware default uses 8192 only at >=48 GiB, 4096 at >=24 GiB, and 2048 below that; `QWEN35_PREFILL_CHUNK_SIZE` remains an override."
 
+### [LM-prefill-GROUP-ATTRIBUTION-1] Fused prefill group timing
+**status:** verified
+**trust:** {F:0.82, G:medium, R:0.80}
+**context:** ml (Qwen35 prefill)
+**evidence:**
+- claim: "`Qwen35Metal::Profile` now reports per grouped command-buffer labels for the fused recurrent run and full-attention-plus-recurrent waves, including encode/wait/read timing."
+  source: `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/qwen35_cpu.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Profile instrumentation or prefill scheduler changes
+- claim: "Focused forward/prompt-cache specs passed after adding group labels."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_group_profile_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` -> 16 examples, 0 failures
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 prefill/profile code changes
+- claim: "Full targeted Qwen gate passed after group-attribution instrumentation."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_group_profile_gate crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\"` -> 30 examples, 0 failures
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 Metal/profile code changes
+- claim: "Two pp256 profile runs show no layer-group outlier: all seven `full+rec` groups wait around `61.2-61.7 ms`, while the initial recurrent-only `rec0-2` group waits around `46.4 ms`."
+  source: `bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=1 --reps=3` and repeat with `--reps=2`
+  verified_at: 2026-04-24
+  decay_trigger: benchmark harness, kernel route, or power state changes
+**adversary:** "This refutes a single bad layer-group hypothesis for pp256 only; it does not prove the same for very long prompts or identify intra-group phase timing. The next exact optimization should either remove repeated cross-group CPU materialization or improve the repeated Q4/Q6 GEMM kernels."
+
 ### [LM-prefill-LONG-SUFFIX-TOP1] Batched final chunk for long prompts
 **status:** verified
 **trust:** {F:0.85, G:medium, R:0.85}

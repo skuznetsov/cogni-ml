@@ -150,6 +150,10 @@ module ML
           @@wave_read_ns   = 0_i64
           @@trace_counts = Hash(String, Int64).new(0_i64)
           @@trace_ns = Hash(String, Int64).new(0_i64)
+          @@group_counts = Hash(String, Int64).new(0_i64)
+          @@group_encode_ns = Hash(String, Int64).new(0_i64)
+          @@group_wait_ns = Hash(String, Int64).new(0_i64)
+          @@group_read_ns = Hash(String, Int64).new(0_i64)
           @@matmul_counts = Hash(String, Int64).new(0_i64)
           @@matmul_weight_bytes = Hash(String, Int64).new(0_i64)
 
@@ -168,6 +172,10 @@ module ML
             @@wave_encode_ns = @@wave_wait_ns = @@wave_read_ns = 0_i64
             @@trace_counts.clear
             @@trace_ns.clear
+            @@group_counts.clear
+            @@group_encode_ns.clear
+            @@group_wait_ns.clear
+            @@group_read_ns.clear
             @@matmul_counts.clear
             @@matmul_weight_bytes.clear
           end
@@ -209,6 +217,14 @@ module ML
             @@wave_encode_ns += encode_ns
             @@wave_wait_ns   += wait_ns
             @@wave_read_ns   += read_ns
+          end
+
+          def self.bump_group(label : String, encode_ns : Int64, wait_ns : Int64, read_ns : Int64) : Nil
+            return unless @@enabled
+            @@group_counts[label] += 1
+            @@group_encode_ns[label] += encode_ns
+            @@group_wait_ns[label] += wait_ns
+            @@group_read_ns[label] += read_ns
           end
 
           def self.bump_cpu_fallback : Nil
@@ -257,6 +273,16 @@ module ML
                 @@trace_counts.keys.sort_by { |name| -@@trace_ns[name] }.each do |name|
                   s << sprintf("    %-18s %4d calls  %.2f ms\n",
                                name, @@trace_counts[name], @@trace_ns[name] / 1_000_000.0)
+                end
+              end
+              unless @@group_counts.empty?
+                s << "  grouped command buffers:\n"
+                @@group_counts.keys.sort_by { |name| {-@@group_wait_ns[name], name} }.each do |name|
+                  s << sprintf("    %-18s %4d calls  encode %.2f ms  wait %.2f ms  read %.2f ms\n",
+                               name, @@group_counts[name],
+                               @@group_encode_ns[name] / 1_000_000.0,
+                               @@group_wait_ns[name] / 1_000_000.0,
+                               @@group_read_ns[name] / 1_000_000.0)
                 end
               end
               unless @@matmul_counts.empty?
@@ -2367,7 +2393,8 @@ module ML
                                                     h_k : Int32, h_v : Int32, s : Int32,
                                                     conv_k : Int32,
                                                     n_tokens : Int32,
-                                                    eps : Float32) : Array(Float32)?
+                                                    eps : Float32,
+                                                    profile_label : String = "rec_chunk_many") : Array(Float32)?
           return nil unless n_tokens > 0
           return nil if layers.empty?
 
@@ -2580,11 +2607,11 @@ module ML
           result = read_shared_f32(src_buf, n_tokens * hidden_dim)
           if Profile.enabled?
             t_read = Time.instant
-            Profile.bump_dn(
-              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
-              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
-              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
-            )
+            encode_ns = (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64
+            wait_ns = (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64
+            read_ns = (t_read - t_wait.not_nil!).total_nanoseconds.to_i64
+            Profile.bump_dn(encode_ns, wait_ns, read_ns)
+            Profile.bump_group(profile_label, encode_ns, wait_ns, read_ns)
           end
           result
         end
@@ -3516,7 +3543,8 @@ module ML
                                                              h_k : Int32,
                                                              h_v : Int32,
                                                              s : Int32,
-                                                             conv_k : Int32) : Array(Float32)?
+                                                             conv_k : Int32,
+                                                             profile_label : String = "full_rec_chunk_many") : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -3910,11 +3938,11 @@ module ML
           result = read_shared_f32(src_buf, n_tokens * hidden_dim)
           if Profile.enabled?
             t_read = Time.instant
-            Profile.bump_dn(
-              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
-              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
-              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
-            )
+            encode_ns = (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64
+            wait_ns = (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64
+            read_ns = (t_read - t_wait.not_nil!).total_nanoseconds.to_i64
+            Profile.bump_dn(encode_ns, wait_ns, read_ns)
+            Profile.bump_group(profile_label, encode_ns, wait_ns, read_ns)
           end
           result
         end

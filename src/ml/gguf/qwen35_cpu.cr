@@ -886,7 +886,8 @@ module ML::GGUF
           start_pos, n_tokens,
           hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
           hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
-          conv_bufs, ssm_bufs, rec_layers, h_k, h_v, s, conv_k)
+          conv_bufs, ssm_bufs, rec_layers, h_k, h_v, s, conv_k,
+          "full#{il}+rec#{run_start}-#{run_end - 1}")
         out ? {out, run_end} : nil
       {% else %}
         nil
@@ -1740,7 +1741,8 @@ module ML::GGUF
               if supported
                 if gpu_out = Qwen35Metal.recurrent_layer_chunk_project_many(
                      x, conv_bufs, ssm_bufs, rec_layers,
-                     h_k, h_v, s, conv_k, n_tokens, hp.rms_eps)
+                     h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
+                     "rec#{il}-#{run_end - 1}")
                   x = gpu_out
                   il = run_end
                   next
