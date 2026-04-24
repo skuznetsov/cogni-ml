@@ -159,6 +159,7 @@
   - [x] Refresh: lowering Q4_K pair H16 prefill threshold to b64 is still not a robust pp64 win; it halves FFN upgate conversion accounting but wall remains neutral/noisy (`~156.3-156.6 ms` default vs `~156.1-156.3 ms` branch under host load), so keep pair route gated at batch `>=256`
   - [x] Falsifier: switching Q5_K batch GEMM from the current double-buffered schedule to a llama-style single-buffer schedule is exact but slower on pp64; focused specs pass (`22 examples, 0 failures`), but paired A/B loses (`159.99 ms` default vs `161.55 ms` single-buffer p50, default wins `7/8`), so keep Q5 double-buffering
   - [x] Falsifier: skipping full-attention KV copies in speculative target rollback is exact but not faster; focused rollback spec passed, yet high-accept smoke stayed neutral/slightly worse (`16.30 ms/tok` skip-KV vs `16.20 ms/tok` full backup) and `target_backup` remained `10.6 ms`, showing rollback cost is recurrent state buffers rather than KV
+  - [x] Falsifier: Q8_0 GEMV shared-X threadgroup staging is exact but slower for the 0.8B draft; the focused Q8 GEMV spec worsened (`~1.9 ms` -> `24.3 ms`) and draft decode regressed from `8.26` to `9.18 ms/tok`, so current Q8 speed is not limited by repeated x loads
   - [ ] Next: target true batched speculative verification and lower-level Q4/Q6 kernel changes; Q8_0 draft is now closer, but exact speculative still trails plain target decode until verifier overhead is cut
 
 ## Deferred research backlog — efficient attention / long context

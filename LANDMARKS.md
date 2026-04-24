@@ -3481,3 +3481,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, state buffer sizes, or backup implementation changes
 **note:** Do not spend more time on KV-only rollback copies for current short-context speculative decode. The remaining rollback cost is recurrent conv/SSM state, while the larger wall remains target verification plus draft generation.
+
+### [LM-codex-Q8-SHARED-X-FALSIFIER-1] Q8_0 GEMV is not improved by threadgroup x staging
+**status:** verified-falsifier
+**trust:** {F:0.78, G:0.44, R:0.76}
+**context:** ml (Qwen 0.8B Q8_0 draft GEMV optimization)
+**evidence:**
+- claim: "A temporary opt-in branch added `simd_mv_q8_0_shared_x_f32`, loading each token activation vector into threadgroup memory once per threadgroup so the four Q8 simdgroups could share x reads."
+  source: temporary `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 GEMV kernel rewrite, threadgroup memory behavior, or M2 Max compiler change
+- claim: "The shared-X branch was numerically exact in focused specs: `QWEN35_Q8_SHARED_X_GEMV=1 crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags=...` passed `22 examples, 0 failures`; Q8_0 GEMV cosine stayed `1.0`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8shared_spec QWEN35_Q8_SHARED_X_GEMV=1 crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 spec fixtures or GEMV kernel change
+- claim: "The branch was substantially slower. Focused Q8_0 GEMV spec time worsened from roughly `1.9 ms` current to `24.3 ms` with shared-X, and Qwen3.5 0.8B Q8_0 draft sync profile regressed from `528.4 ms` / `8.26 ms/tok` current to `587.5 ms` / `9.18 ms/tok` with shared-X."
+  source: `QWEN35_PROFILE_TOP1=1 bin/qwen35_sync_profile.cr -- --model Qwen3.5-0.8B-Q8_0.gguf 64 64`, with and without `QWEN35_Q8_SHARED_X_GEMV=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Q8_0 launch shape, or Metal compiler change
+**note:** Do not retry simple threadgroup staging for Q8_0 x reads. The added load loop/barrier costs more than repeated cached x loads; future Q8 gains need a different dot-product algorithm or fewer GEMV calls.
