@@ -2606,6 +2606,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dual_q4_revert_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...` on 2026-04-23
   verified_at: 2026-04-23
   decay_trigger: Q4 FFN route changes
+- claim: "A 2026-04-24 re-check reproduced the falsifier with the current decode wave: focused forward spec stayed green (`13 examples, 0 failures`), but paired A/B lost `0.367 ms/tok` with dual Q4 enabled (`23.152` vs separate-GEMV `22.785 ms/tok`, wins `0/6`)."
+  source: `/tmp/qwen35_ab_profile_q4dual --env QWEN35_Q4_DUAL_GEMV_OFF --a '<unset>' --b 1 --prompt 64 --gen 24 --trials 6 --warmup 1`
+  verified_at: 2026-04-24
+  decay_trigger: Q4 GEMV kernel rewrite, Metal compiler, decode wave scheduler, or FFN route changes
 **note:** Sharing input loads did not beat the extra register pressure/occupancy cost. Do not retry this shape as a simple dual-row kernel; any future FFN work needs a different frame, such as true batched/speculative GEMM or approximate activation sparsity with evals.
 
 ### [LM-codex-AB-PROFILE-1] In-process paired A/B harness reduces scheduler-noise false positives
