@@ -449,6 +449,21 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: decode wave scheduling, matmul route, profile code, kernel route, or power state changes
 **adversary:** "This is logical weight-traffic attribution, not per-kernel GPU-time attribution. It is sufficient to rank exact next targets: recurrent FFN up/gate and recurrent projection traffic dominate both prefill and decode. It does not justify attention rewrites yet because `full.attn` encode/wait remains small in these profiles."
 
+### [LM-prefill-B8-GEMM-THRESHOLD-FALSIFIER] Batch-8 prefill should stay on GEMV
+**status:** refuted
+**trust:** {F:0.78, G:narrow, R:0.74}
+**context:** ml (Qwen35 prefill matmul routing)
+**evidence:**
+- claim: "A bounded runtime override experiment changed the effective GEMM route threshold from `batch > 8` to `batch > 7`, causing b8 prefill projection routes to switch from `gemv` to `q4_gemm`/`q5_gemm`/`q6_gemm`."
+  source: temporary local patch to `src/ml/gguf/qwen35_metal.cr`, verified by `bin/qwen35_prefill_attribution.cr -- --prompt=8 --warmup=3 --reps=8`
+  verified_at: 2026-04-24
+  decay_trigger: GEMM kernels, GEMV kernels, or prefill routing changes
+- claim: "The b8 GEMM route was slower in the pp8 attribution run: default `GEMM_BATCH_THRESHOLD=8` measured p50 `140.70 ms`; threshold `7` measured p50 `158.74 ms`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_threshold_ab crystal run --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++\" bin/qwen35_prefill_attribution.cr -- --prompt=8 --warmup=3 --reps=8`, repeated with `QWEN35_GEMM_BATCH_THRESHOLD=7`
+  verified_at: 2026-04-24
+  decay_trigger: GEMM kernels, GEMV kernels, prefill routing, benchmark harness, or power state changes
+**adversary:** "This was a narrow, noisy local falsifier, but the effect direction was large enough to reject lowering the default threshold now. The temporary runtime override was removed to avoid adding env lookup overhead in the encode path."
+
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
 **trust:** {F:0.65, G:medium, R:0.70}
