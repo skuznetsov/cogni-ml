@@ -100,6 +100,7 @@
   - [x] Falsifier: fusing final full-attn-last and lm-head top1 into one command buffer reduced pp64 syncs (`10` → `9`) but slowed wall reps in sequential release checks (`162.32 ms` p50 off vs `165.67 ms` p50 fused), so the removed sync is not worth the larger final command buffer
   - [x] Falsifier: a 256-thread Q4_K batch-64 GEMM reduced nominal batch tiles but did not survive benchmark adversary; same-process attribution was slightly positive (`164.51 ms` default vs `165.41 ms` off), but matched llama benchmark regressed (`378.72 tok/s` b64 vs `394.94 tok/s` current), so the branch was removed
   - [x] Falsifier: direct Q56_K FFN-down half-output add avoided an explicit `f16_to_f32` buffer but was neutral at pp64 (`167.22 ms` default vs `167.30 ms` branch p50, wins `4/8`), so conversion removal is not enough leverage
+  - [x] Falsifier: llama.cpp-style single-buffer Q4_K GEMM with Q4-only `6144` byte threadgroup memory passed focused specs and improved standalone `4096x12288 b64` op attribution (`3.171 ms` → `2.975 ms`), but pp64 wall regressed (`167.39 ms` default p50 vs `176.01 ms` branch p50), so it is not a default prefill win
   - [ ] Next: attack FFN weight traffic only with lower-level Q4/Q6 tile changes or eliminate work; speculative/sparsity only behind eval harness
 
 ## Deferred research backlog — efficient attention / long context

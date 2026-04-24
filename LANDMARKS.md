@@ -540,6 +540,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: benchmark harness, host load, or Q56 FFN-down route changes
 **adversary:** "The conversion kernel/output buffer is not a material wall at pp64; the branch was removed. Future Q56 work needs to change matmul throughput or eliminate work, not only fold the final conversion."
 
+### [LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER] Single-buffer Q4_K GEMM is not a default prefill win
+**status:** refuted
+**trust:** {F:0.78, G:narrow, R:0.74}
+**context:** ml (Qwen35 prefill Q4_K GEMM)
+**evidence:**
+- claim: "A bounded exact branch changed `simd_mm_q4k_f32` from the current double-buffered 2-tile threadgroup layout to a llama.cpp-style single-buffer loop and used Q4-only `6144` byte threadgroup memory."
+  source: temporary local patch to `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr`
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K GEMM loop, threadgroup memory, or Metal compiler scheduling changes
+- claim: "Correctness passed with the branch: focused forward/DeltaNet specs returned `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4single6144_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr ...`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen35 correctness specs or Q4_K kernel routing changes
+- claim: "Standalone op attribution showed a narrow Q4_K up/gate micro-win: `4096x12288 b64` p50 improved from default `3.171 ms` to single-buffer `2.975 ms`."
+  source: `bin/qwen35_op_attribution.cr -- --batch=64 --warmup=3 --runs=7 --limit=6` on default and temporary branch
+  verified_at: 2026-04-24
+  decay_trigger: op attribution harness, host load, or Q4_K kernel changes
+- claim: "End-to-end pp64 attribution did not support promotion: default p50 was `167.39 ms`, while the single-buffer/Q4-6144 branch measured `176.01 ms` p50 under the same warmup/reps shape."
+  source: `bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=2 --reps=6` on default and temporary branch
+  verified_at: 2026-04-24
+  decay_trigger: clean-load rerun, paired code-variant harness, or command-buffer scheduling changes
+**adversary:** "This is a microbench-vs-wall mismatch: the dominant standalone Q4 shape got faster, but the fused prefill wave became slower. Do not promote the single-buffer route without a code-variant A/B harness that shows pp64 and long-prompt wall improve; the temporary code was removed."
+
 ### [LM-attention-RESEARCH-BACKLOG-1] Efficient attention options for Qwen35
 **status:** proposed
 **trust:** {F:0.65, G:medium, R:0.70}
