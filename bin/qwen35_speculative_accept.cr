@@ -22,6 +22,7 @@ prompt = "The capital of France is"
 n_gen = 32
 gamma = 4
 adaptive_gamma = ENV["QWEN35_SPEC_ADAPTIVE"]? == "1"
+adaptive_regrow = ENV["QWEN35_SPEC_ADAPTIVE_REGROW"]? == "1"
 max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "16").to_i
 verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace"
 trace = ENV["QWEN35_SPEC_TRACE"]? == "1"
@@ -120,7 +121,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} early_reject=#{early_reject_enabled} n_gen=#{n_gen} verify=#{verify_mode}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} early_reject=#{early_reject_enabled} n_gen=#{n_gen} verify=#{verify_mode}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -143,6 +144,7 @@ draft_backup_ms = 0.0
 draft_resync_ms = 0.0
 current_gamma = gamma
 full_accept_streak = 0
+adaptive_growth_allowed = true
 gamma_sum = 0
 gamma_max_seen = 0
 early_rejects = 0
@@ -295,8 +297,9 @@ while generated_ids.size < n_gen
   if adaptive_gamma
     if rejected
       full_accept_streak = 0
+      adaptive_growth_allowed = false unless adaptive_regrow
       current_gamma = Math.max(1, current_gamma // 2)
-    elsif candidates.size == cycle_gamma && current_gamma < max_gamma
+    elsif adaptive_growth_allowed && candidates.size == cycle_gamma && current_gamma < max_gamma
       full_accept_streak += 1
       if full_accept_streak >= 2
         current_gamma = Math.min(max_gamma, current_gamma * 2)
