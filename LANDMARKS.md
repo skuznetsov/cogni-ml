@@ -4595,6 +4595,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Prefer factor-basis compression over naive dense row-basis compression for the next Metal cost gate. It preserves the exact algebraic property needed for rank-stable prefix scan while avoiding explicit dense compose products in the proof formulation.
 **adversary:** This is still a CPU algebra proof. The basis-selection/elimination step may be awkward or too serial on GPU; a Metal microbench must prove the cost before production replay integration.
 
+### [LM-codex-DELTANET-FACTOR-BASIS-GPU-SERIAL-FALSIFIER-1] GPU-serial factor-basis compression is far too slow
+**status:** refuted implementation branch
+**trust:** {F:0.80, G:0.44, R:0.78}
+**context:** ml (Qwen35 long prefill / DeltaNet associative summaries / compact-factor compression)
+**evidence:**
+- claim: "A single-thread Metal factor-basis compression kernel can represent the compressed outer-product sum correctly when it stores the reduced basis as the output left factors. At `s=128`, factors `32/64/128`, `max_gpu_delta` versus the original dense outer sum was about `2.7e-7/7.7e-7/2.1e-6`."
+  source: `bin/qwen35_deltanet_factor_basis_compress_micro.cr`; `/tmp/qwen35_deltanet_factor_basis_compress_micro --s=128 --factors=32|64|128 --runs=3 --warmup=1` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: factor-basis compression kernel or numerical tolerance changes
+- claim: "The same direct GPU-serial basis-selection/elimination path is orders of magnitude too slow: p50 was `~47.9 ms` for 32 factors, `~189.4 ms` for 64, and `~755.1 ms` for 128. This is far above the synthetic rowwise baselines for pp1024/pp2048."
+  source: same factor-basis compression microbench on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: GPU compression algorithm redesign, parallel basis selection, or hardware/compiler changes
+**decision:** Do not implement DeltaNet prefix scan using GPU-serial factor-basis compression. The algebra remains valid, but the implementation path must avoid serial elimination on GPU, avoid dense row-basis products, or be abandoned in favor of other long-prefill levers.
+**adversary:** This refutes the direct one-thread Metal algorithm only. A parallel blocked elimination, deterministic fixed basis, or different rank-stable compact formulation could still be viable, but it requires a new design and a fresh cost gate.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
