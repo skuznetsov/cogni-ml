@@ -763,6 +763,57 @@ private def top1(v : Array(Float32)) : Int32
   best.to_i32
 end
 
+private def top_k_indices(v : Array(Float32), k : Int32) : Array(Int32)
+  best_i = Array(Int32).new(k, -1)
+  best_v = Array(Float32).new(k, -Float32::INFINITY)
+  v.each_with_index do |x, i|
+    next if x <= best_v[-1]
+
+    slot = k - 1
+    while slot > 0 && x > best_v[slot - 1]
+      best_v[slot] = best_v[slot - 1]
+      best_i[slot] = best_i[slot - 1]
+      slot -= 1
+    end
+    best_v[slot] = x
+    best_i[slot] = i.to_i32
+  end
+  best_i
+end
+
+private def top1_margin(v : Array(Float32)) : Float64
+  best = -Float32::INFINITY
+  second = -Float32::INFINITY
+  v.each do |x|
+    if x > best
+      second = best
+      best = x
+    elsif x > second
+      second = x
+    end
+  end
+  (best - second).to_f64
+end
+
+private def softmax_kl(exact : Array(Float32), approx : Array(Float32)) : Float64
+  max_exact = exact.max
+  max_approx = approx.max
+  sum_exact = 0.0
+  sum_approx = 0.0
+  exact.each { |x| sum_exact += Math.exp((x - max_exact).to_f64) }
+  approx.each { |x| sum_approx += Math.exp((x - max_approx).to_f64) }
+  log_z_exact = max_exact.to_f64 + Math.log(sum_exact)
+  log_z_approx = max_approx.to_f64 + Math.log(sum_approx)
+  kl = 0.0
+  exact.size.times do |i|
+    log_p = exact[i].to_f64 - log_z_exact
+    log_q = approx[i].to_f64 - log_z_approx
+    p = Math.exp(log_p)
+    kl += p * (log_p - log_q)
+  end
+  kl
+end
+
 private def max_abs_delta(a : Array(Float32), b : Array(Float32)) : Float64
   max = 0.0
   a.size.times do |i|
@@ -814,13 +865,17 @@ private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
                                    layer_bases : LayerBasisMap,
                                    rank : Int32,
                                    calib_count : Int32,
-                                   fallback_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, approx_steps: Int32, fallback_steps: Int32)
+                                   fallback_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_steps: Int32, fallback_steps: Int32)
   exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
   approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
   lr_states = {} of Int32 => LowRankState
   cosines = [] of Float64
+  kls = [] of Float64
   max_delta = 0.0
   top_matches = 0
+  top5_hits = 0
+  min_margin = Float64::INFINITY
+  confident_mismatches = 0
   compared = 0
 
   token_ids.each_with_index do |token_id, pos|
@@ -834,17 +889,32 @@ private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
     cosines << c
     d = max_abs_delta(exact, approx)
     max_delta = d if d > max_delta
-    top_matches += 1 if top1(exact) == top1(approx)
+    exact_top1 = top1(exact)
+    approx_top1 = top1(approx)
+    exact_margin = top1_margin(exact)
+    min_margin = exact_margin if exact_margin < min_margin
+    if exact_top1 == approx_top1
+      top_matches += 1
+    elsif exact_margin >= 0.5
+      confident_mismatches += 1
+    end
+    top5_hits += 1 if top_k_indices(approx, 5).includes?(exact_top1)
+    kls << softmax_kl(exact, approx)
     compared += 1
   end
 
   {
-    mean_cos:       cosines.sum / cosines.size,
-    min_cos:        cosines.min,
-    max_delta:      max_delta,
-    top1_match:     100.0 * top_matches / compared,
-    approx_steps:   lr_states.values.sum(&.approx_steps),
-    fallback_steps: lr_states.values.sum(&.fallback_steps),
+    mean_cos:             cosines.sum / cosines.size,
+    min_cos:              cosines.min,
+    max_delta:            max_delta,
+    top1_match:           100.0 * top_matches / compared,
+    top5_hit:             100.0 * top5_hits / compared,
+    mean_kl:              kls.sum / kls.size,
+    max_kl:               kls.max,
+    min_margin:           min_margin,
+    confident_mismatches: confident_mismatches,
+    approx_steps:         lr_states.values.sum(&.approx_steps),
+    fallback_steps:       lr_states.values.sum(&.fallback_steps),
   }
 end
 
@@ -944,7 +1014,7 @@ if rank = simulate_logit_rank
     total_steps = logit[:approx_steps] + logit[:fallback_steps]
     approx_rate = total_steps > 0 ? (100.0 * logit[:approx_steps] / total_steps) : 0.0
     fallback_note = simulate_fallback_threshold ? " fallback_threshold=#{simulate_fallback_threshold} approx_rate=#{approx_rate.round(2)}%" : ""
-    puts "logit_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}% approx_steps=#{logit[:approx_steps]} fallback_steps=#{logit[:fallback_steps]}#{fallback_note}"
+    puts "logit_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}% top5_hit=#{logit[:top5_hit].round(2)}% mean_kl=#{logit[:mean_kl].round(8)} max_kl=#{logit[:max_kl].round(8)} min_margin=#{logit[:min_margin].round(6)} confident_mismatches=#{logit[:confident_mismatches]} approx_steps=#{logit[:approx_steps]} fallback_steps=#{logit[:fallback_steps]}#{fallback_note}"
   end
 end
 

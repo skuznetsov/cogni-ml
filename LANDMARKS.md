@@ -4752,8 +4752,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_deltanet_fixed_basis_probe_policy --simulate-fallback-threshold=0.8 --simulate-logits-rank=24 --simulate-logits-layers=0,2|0,2,4 --prompt=<varied|mixed-code adversary>` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: residual metric, fallback state handling, prompt suite, rank/calibration policy, or eval metrics change
-**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. Residual-gated fallback is the first plausible policy shape; Metal implementation should wait until a broader prompt/top-k/KL/logit-margin gate passes.
-**adversary:** The policy gate is still not a full eval harness. Top1 over prompt-token logits can miss degradation in sampled generation, and fallback approximate-rate varies strongly by prompt (`~29-67%` in checked cases). Layer1 remains a caution case. Do not turn this on by default or publish a speedup claim before broader eval and a real Metal cost model.
+- claim: "The policy probe now reports `top5_hit`, `mean_kl`, `max_kl`, `min_margin`, and confident mismatches. On a four-prompt smoke (`varied`, `adversary_code`, `math_symbolic`, `dialogue_json`), aggressive `layers=0,2,4/th=0.8` keeps `top5_hit=100%` and `confident_mismatches=0`, but top1 drops to `91.67%` on math/dialogue. The exact margins on those prompts are small (`min_margin 0.058` and `0.0018`), so these are not high-confidence flips but still block strict top1-safe claims."
+  source: `/tmp/qwen35_policy_prompts.sh` using `/tmp/qwen35_deltanet_fixed_basis_probe_metrics --simulate-logits-layers=0,2,4 --simulate-fallback-threshold=0.8` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, logit metrics, margin threshold, fallback policy, or layer selection changes
+- claim: "The best strict-top1 smoke found so far is `layers=0,4/th=0.5`: all four prompts kept `top1_match=100%`, `top5_hit=100%`, `confident_mismatches=0`, and `max_kl <= 0.00305`. The cost is low approximate coverage: `approx_rate` was `0%` on varied, `14.58%` on adversary_code, `10.42%` on math_symbolic, and `4.17%` on dialogue_json."
+  source: `/tmp/qwen35_policy_pair04.sh` using `/tmp/qwen35_deltanet_fixed_basis_probe_metrics --simulate-logits-layers=0,4 --simulate-fallback-threshold=0.5` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, residual threshold policy, layer choice, or rank/calibration changes
+**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. Residual-gated fallback is the first plausible policy shape, but the current strict-top1-safe policy has low coverage; aggressive policies should be margin-aware and evaluated on generation, not just prompt-token logits.
+**adversary:** The policy gate is still not a full eval harness. Top1 over prompt-token logits can miss degradation in sampled generation, top5/KL can look healthy while exact top1 flips at tiny margins, and fallback approximate-rate varies strongly by prompt (`0-67%` in checked cases). Layer1 remains a caution case. Do not turn this on by default or publish a speedup claim before broader eval and a real Metal cost model.
 
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
