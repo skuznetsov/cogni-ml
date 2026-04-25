@@ -4958,3 +4958,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: Q4_K GEMM kernel, op-attribution harness, or Metal compiler changes
 **decision:** Do not add per-subblock nibble lookup/precompute inside the current Q4_K GEMM. The saved multiply is outweighed by extra local storage/register pressure and indexing. Full F16 weight expansion remains separately refuted by traffic cost; the current compressed arithmetic dequant path is the better local design.
 **adversary:** The op-attribution run had unrelated Q5/Q6 outliers, so the conclusion is scoped to same-run Q4 shape comparisons before/after reverting. This does not refute a fundamentally different Q4 kernel or load-time prepack that changes tile ownership; it refutes the obvious lookup-table variant inside the current simdgroup-matrix GEMM.
+
+### [LM-codex-SPEC-EARLY-REJECT-RESYNC-FALSIFIER-1] Higher speculative acceptance can be slower than fail-cheap early rejects
+**status:** verified-falsifier
+**trust:** {F:0.72, G:0.34, R:0.74}
+**context:** ml (Qwen35 practical CLI / neural speculative scheduler)
+**evidence:**
+- claim: "A temporary `qwen35_generate` patch resynchronized the Q8_0 draft by advancing it on the corrected target token immediately after an early reject when target-only fallback was disabled. The patch preserved exact generated token IDs on tested prompts."
+  source: A/B using `/tmp/qwen35_generate_old` built from `HEAD:bin/qwen35_generate.cr` and `/tmp/qwen35_generate_resync` built from the temporary patch, with `QWEN35_DECODE_POLICY=speculative QWEN35_SPEC_PLAIN_FALLBACK_OFF=1 QWEN35_QUIET=1` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: speculative scheduler, draft model, prompt distribution, or fallback policy changes
+- claim: "On `def fibonacci(n):` for 32 generated tokens, resync increased acceptance from `4/32` (`12.5%`) to `31/32` (`96.88%`) but slowed wall from `756.2 ms` / `23.63 ms/tok` to `875.6 ms` / `27.36 ms/tok`."
+  source: same A/B run on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: draft speed, verifier speed, or prompt output changes
+- claim: "On `Once upon a time` for 32 generated tokens, resync increased acceptance from `5/32` (`15.62%`) to `21/32` (`65.62%`) but slowed wall from `896.5 ms` / `28.02 ms/tok` to `1057.4 ms` / `33.04 ms/tok`."
+  source: same A/B run on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: draft speed, verifier speed, or prompt output changes
+**decision:** Do not resynchronize the draft merely to improve acceptance rate after low-confidence early rejects. Under fallback-off/adversarial prompts, the current fail-cheap behavior can be faster because it avoids paying Q8_0 draft cycles that do not reduce target work enough. Optimize objective latency, not acceptance percentage.
+**adversary:** This is scoped to practical CLI neural speculation with the current 0.8B Q8_0 draft and fallback-off tests. It does not refute resync after chunk rejections where accepted prefixes must be preserved, nor does it refute future faster drafts. It does warn that acceptance-rate gains need wall-time A/B before promotion.
