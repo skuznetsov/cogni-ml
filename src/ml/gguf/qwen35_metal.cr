@@ -1494,6 +1494,10 @@ module ML
           ENV["QWEN35_PREFILL_FFN_DOWN_ADD_FUSED"]? == "1"
         end
 
+        private def self.prefill_phase_profile_enabled? : Bool
+          ENV["QWEN35_PREFILL_PHASE_PROFILE"]? == "1"
+        end
+
         private def self.small_q4_gemv_enabled? : Bool
           ENV["QWEN35_SMALL_Q4_GEMV_OFF"]? != "1"
         end
@@ -4294,6 +4298,8 @@ module ML
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
+          phase_profile = prefill_phase_profile_enabled? && Profile.enabled?
+          phase_t0 = Time.instant
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_rmsnorm_rows(norm_enc, inp_buf, full_norm_w_buf, full_cur_buf, hidden_dim, n_tokens, eps)
@@ -4451,6 +4457,19 @@ module ML
             full_add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
             full_add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
             full_add_enc.end_encoding
+          end
+
+          if phase_profile
+            phase_tenc = Time.instant
+            cmd.commit
+            cmd.wait
+            phase_twait = Time.instant
+            Profile.bump_group("#{profile_label}.full",
+              (phase_tenc - phase_t0).total_nanoseconds.to_i64,
+              (phase_twait - phase_tenc).total_nanoseconds.to_i64,
+              0_i64)
+            cmd = ML::Metal::CommandBuffer.new
+            phase_t0 = Time.instant
           end
 
           src_buf = full_out_buf
@@ -4657,6 +4676,27 @@ module ML
             end
 
             src_buf, dst_buf = dst_buf, src_buf
+
+            if phase_profile
+              phase_tenc = Time.instant
+              cmd.commit
+              cmd.wait
+              phase_twait = Time.instant
+              Profile.bump_group("#{profile_label}.rec#{local_i}",
+                (phase_tenc - phase_t0).total_nanoseconds.to_i64,
+                (phase_twait - phase_tenc).total_nanoseconds.to_i64,
+                0_i64)
+              cmd = ML::Metal::CommandBuffer.new
+              phase_t0 = Time.instant
+            end
+          end
+
+          if phase_profile
+            t_read0 = Time.instant
+            result = read_shared_f32(src_buf, n_tokens * hidden_dim)
+            t_read = Time.instant
+            Profile.bump_group("#{profile_label}.read", 0_i64, 0_i64, (t_read - t_read0).total_nanoseconds.to_i64)
+            return result
           end
 
           t_enc = Time.instant if Profile.enabled?

@@ -4886,3 +4886,27 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: n-gram rejection policy, prompt output, or guarded verifier behavior changes
 **decision:** Keep guarded full-row verification opt-in for neural chunks, but fail-closed around n-gram verifier chunks in both practical and research harnesses. The speed cost on high-repeat n-gram paths is acceptable because exactness is the stronger invariant.
 **adversary:** The final harness equality check remains the strongest guard. This change does not prove guarded full-row is broadly exact; it only prevents a known risky composition with partial n-gram rejection.
+
+### [LM-codex-PREFILL-PHASE-PROFILE-1] Full+recurrent prefill groups have no hidden single bad phase
+**status:** implemented attribution tool and verified finding
+**trust:** {F:0.78, G:0.46, R:0.78}
+**context:** ml (Qwen35 prefill grouped wave attribution)
+**evidence:**
+- claim: "Added `QWEN35_PREFILL_PHASE_PROFILE=1`, an attribution-only mode for `full_attn_plus_recurrent_many`. It inserts command-buffer boundaries after the full-attention layer and after each recurrent layer, then records synthetic group labels like `full7+rec8-10.full` and `.rec0/.rec1/.rec2`."
+  source: `src/ml/gguf/qwen35_metal.cr`, implemented on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: full+recurrent group scheduling, profile reporting, or command-buffer boundaries change
+- claim: "Correctness/build gates passed after adding the profiler mode: `bin/qwen35_prefill_attribution.cr` release build succeeded and focused Qwen forward specs passed `14 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_phase_profile_build crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_prefill_attribution.cr -o /tmp/qwen35_prefill_attribution_phase`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_phase_profile_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Qwen forward specs or profile build path changes
+- claim: "A pp64 prepared phase profile shows each fused `full+rec` group is almost exactly four similar phases. Full-attention phases measured about `4.39-4.46 ms`; recurrent phases measured about `4.50-4.61 ms`; no single hidden full/rec phase explains the remaining prefill gap."
+  source: `QWEN35_PREFILL_PHASE_PROFILE=1 /tmp/qwen35_prefill_attribution_phase --prompt=64 --warmup=1 --reps=1 --prepare-state --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, grouped wave structure, or phase split instrumentation changes
+- claim: "Default env-off profile remains on the normal route and stays around the current prepared baseline: pp64 wall reps p50 `142.96 ms` / `447.69 tok/s`, with grouped waits around `17.40-17.47 ms` for `full+rec` groups and `13.78 ms` for `rec0-2`."
+  source: `/tmp/qwen35_prefill_attribution_phase --prompt=64 --warmup=1 --reps=3 --prepare-state --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prefill profile route, host load, or grouped wave scheduling changes
+**decision:** Do not spend time trying to reshuffle group boundaries as the next prefill optimization. The grouped wave is balanced; the remaining first-run gap needs reducing per-layer work, especially recurrent/full FFN/projection cost, or a true algorithmic DeltaNet/prefill change.
+**adversary:** Phase profiling changes command-buffer boundaries and therefore should not be used as a speed benchmark. It is only a localization tool. Fine-grained kernel overlap inside the unsplit command buffer is not proven absent, but the flat split-phase result argues against a single pathological hidden phase.
