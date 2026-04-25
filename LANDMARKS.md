@@ -4491,5 +4491,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/benchmark_qwen_vs_llama_prepare_state --prompt=64 --gen=64 --reps=3 --warmup=1 --native-prefill-prepare-state --load-warning-threshold=0 --load-total-warning-threshold=0` and the same command without `--native-prefill-prepare-state` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: host load, llama.cpp build, benchmark mode, or state preparation semantics changes
+- claim: "`qwen35_generate` now uses eager Metal state preparation by default for the target state and neural-speculative draft/backup states; `QWEN35_PREPARE_STATE_OFF=1` restores lazy state-buffer allocation for A/B."
+  source: `bin/qwen35_generate.cr`, implemented and smoke-tested on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: CLI state lifecycle, prompt-cache restore path, or speculative state management changes
 **decision:** Keep default first-run semantics unchanged, but expose prepared-state latency as an explicit server/session mode. This is not a kernel speedup; it is a timing-boundary and product-latency optimization for callers that can create a session before prompt ingest.
 **adversary:** This must not be marketed as making cold state+prefill cheaper end-to-end. The allocation/zeroing work still exists; it is moved before the latency-sensitive prefill measurement. It is nevertheless useful and comparable to systems that initialize KV/recurrent cache before timing prompt ingest.

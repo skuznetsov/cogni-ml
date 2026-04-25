@@ -59,6 +59,7 @@ ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
+prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
 raise "QWEN35_NGRAM_MIN must be positive" unless ngram_min > 0
@@ -148,6 +149,7 @@ puts "Prompt decoded: #{tok.decode(ids).inspect}"
 
 max_seq = ids.size + n_gen + 8
 state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
 cache_store = nil.as(ML::GGUF::Qwen35PromptCache::Store?)
 cache_model = ""
 cache_tokenizer = ""
@@ -175,6 +177,7 @@ if prompt_cache_enabled
       STDOUT << "\nPrompt cache hit had no suffix logits; falling back to normal prefill\n"
       pos = 0
       state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
     end
   else
     STDOUT << "\nPrompt cache miss (root=#{cache_root})\n"
@@ -240,9 +243,12 @@ if speculative_decode_enabled && !output_ids.empty?
   target_next = output_ids.pop
   draft_weights = draft.not_nil!
   draft_state = ML::GGUF::Qwen35CPU::State.new(draft_weights.hparams, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(draft_state, draft_weights.hparams) if prepare_state_metal
   draft_next = prefill_next(draft_weights, ids, draft_state)
   target_backup_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
   draft_cycle_base = ML::GGUF::Qwen35CPU::State.new(draft_weights.hparams, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(target_backup_state, hp) if prepare_state_metal
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(draft_cycle_base, draft_weights.hparams) if prepare_state_metal
 
   current_gamma = spec_gamma
   full_accept_streak = 0
