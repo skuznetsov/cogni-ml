@@ -238,8 +238,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 **note:** This is a fair session-style measurement and attribution tool, not a first-run prefill kernel optimization. It shows allocation/state setup costs are measurable but not the remaining breakthrough lever.
 
 ### [LM-WBA-FFN-DIAMOND-1] Qwen35 WBA should move from group waves to operator diamonds
-**status:** active hypothesis with one falsified sub-branch
-**trust:** {F:0.75, G:medium, R:0.8}
+**status:** narrowed hypothesis; naive prefill output-tile streaming refuted
+**trust:** {F:0.82, G:medium, R:0.82}
 **context:** ml (WBA/LTP performance)
 **evidence:**
 - claim: "Qwen35 already uses WBA-style wave scheduling: full decode wave, recurrent prefill runs, and full-attention-plus-recurrent groups. The next useful WBA level is algebraic operator diamonds, not merely more command-buffer grouping."
@@ -254,7 +254,15 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `QWEN35_DECODE_SWIGLU_INPLACE=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_wba_decode_optin_on_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...`; `/tmp/qwen35_ab_profile_wba2 --env=QWEN35_DECODE_SWIGLU_INPLACE --a='<unset>' --b=1 --prompt=64 --gen=32 --trials=8 --warmup=1`
   verified_at: 2026-04-24
   decay_trigger: decode wave, SwiGLU kernel, FFN-down GEMV, or host load changes
-**decision:** Keep decode in-place SwiGLU default-off as a research knob. Do not count it as the WBA breakthrough; next branch should prototype true tile-streamed FFN or batched speculative verifier.
+- claim: "A naive no-activation-store prefill FFN diamond that streams by `ffn_down` output tiles is refuted by recompute budget. For layer-0 Q4/Q4/Q6 at b64, current measured p50s are `pair=1.861 ms`, `swiglu=0.172 ms`, `down=1.179 ms`, and whole `chain=2.876 ms`; with 64 output tiles, recomputing gate/up per tile gives a lower floor of `~120.47 ms` for the same layer (`~41.9x` current). At b256, current `chain=9.508 ms` vs `~392.52 ms` recompute floor (`~41.3x`)."
+  source: temporary `/tmp/qwen35_ffn_diamond_budget.cr`, built with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_budget crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" tmp/qwen35_ffn_diamond_budget.cr -o /tmp/qwen35_ffn_diamond_budget`; run with `BATCH=64 RUNS=9 WARMUP=3` and `BATCH=256 RUNS=5 WARMUP=2` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_H16 pair route, Q6 f32-output GEMM, FFN dimensions, or a new non-output-tile diamond formulation
+- claim: "If Q4 gate/up and Q6 down algorithms stay unchanged, the direct materialization-only bound is small: isolated `SwiGLU` p50 is `0.172 ms` at b64 and `0.228 ms` at b256 for one layer. This does not justify a large production rewrite by itself."
+  source: same FFN diamond budget microbench on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: activation kernel, buffer format, or down-input conversion policy changes
+**decision:** Keep decode in-place SwiGLU default-off as a research knob. Do not implement the naive prefill FFN tile-streaming diamond. A future FFN WBA branch needs a different algebraic/dataflow idea that computes activations once and shares them across many `ffn_down` output rows without full materialization; otherwise prioritize batched speculative verifier, Q4/Q6 kernel redesign, or DeltaNet scan work.
 
 ### [LM-SPEC-VERIFY-ROWS-1] Large speculative verifier chunks should use exact row-batched top1
 **status:** verified
