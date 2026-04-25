@@ -4441,3 +4441,19 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: compact-B construction fused with replay/apply, rowwise kernel changes, or a new associative scan formulation
 **decision:** Add a default-off research backlog item before touching production kernels: prove tiny-shape equivalence against serial `delta_net_step!`, estimate `s=128` work for pp64/pp256/pp1024/pp2048, and only then prototype compact summaries and a Metal block size `8` or `16` path.
 **adversary:** This is unlikely to help decode (`T=1`) and may not help short pp64 prefill. Dense summaries are now kept only as a long-prefill GPU baseline; compact summaries remain mathematically valid but the current multi-dispatch implementation is not a speed path. Do not replace the existing rowwise kernel unless a future design fuses compact-`B` construction with replay/apply or finds a different parallel scan formulation that beats `delta_net_chunk_128_rowwise` in a full A/B.
+
+### [LM-codex-Q4-F16-PREPACK-FALSIFIER-1] Full-F16 expansion is slower than compressed Q4_H16 for the hot FFN prefill shape
+**status:** refuted optimization branch
+**trust:** {F:0.72, G:0.50, R:0.76}
+**context:** ml (Qwen35 prefill / Q4_K GEMM / LTP-WBA)
+**evidence:**
+- claim: "For the hot Q4_K FFN gate/up shape `4096x12288`, the current compressed Q4_H16 kernel is faster than a synthetic full-F16 expanded-weight GEMM at tested prefill batch sizes. Measured p50 wait times were b64 `1.401 ms` Q4_H16 vs `1.927 ms` F16, b128 `2.413 ms` vs `3.731 ms`, and b256 `3.132 ms` vs `6.872 ms`."
+  source: `/tmp/qwen35_q4_wait_micro.cr` and `/tmp/qwen35_f16_prepack_micro.cr`, built with `crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` and run at `BATCH=64,128,256 RUNS=7 WARMUP=2` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_H16 kernel, F16 GEMM kernel, Metal compiler, or batch tiling changes
+- claim: "Standalone attribution with readback still shows the same direction: `Q4_K 4096x12288 b64` measured `3.133 ms` p50 through `Qwen35Metal.matmul`, while the no-readback F16 synthetic path measured about `1.95 ms`; after removing the readback mismatch with the Q4 wait-only microbench, compressed Q4_H16 is the faster route."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_op_attr crystal run --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_op_attribution.cr -- --batch=64 --warmup=2 --runs=7 --limit=8` and the wait-only microbench above
+  verified_at: 2026-04-25
+  decay_trigger: attribution harness, readback behavior, or scratch-buffer route changes
+**decision:** Do not spend the next production pass on full-F16 predequantized FFN weights. If a prepack branch is revisited, it should preserve compressed/blocked Q4 layout or fuse downstream FFN work; expanding the hot weights to F16 loses on memory traffic before integration overhead is counted.
+**adversary:** The F16 microbench is synthetic and uses the current generic `simd_mm_f16` kernel, so this does not formally rule out a hand-tuned F16 GEMM. It does rule out the cheap "predequantize Q4 weights to full F16 and reuse existing F16 GEMM" path as a plausible short-term win.
