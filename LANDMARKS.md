@@ -3884,3 +3884,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt output, rejection replay, verifier path, or n-gram defaults change
 **note:** This makes the repeated-text n-gram speed path usable from the practical demo without making it a default universal decode strategy. Keep it opt-in until a broader prompt suite confirms the fail-closed policy does not create unacceptable overhead.
+
+### [LM-codex-HEAD-TOP1-ROWS-AUTO-REPAIR-1] Thresholded row-batched verifier top1 is active by default again
+**status:** verified-feature-with-caveat
+**trust:** {F:0.80, G:0.42, R:0.76}
+**context:** ml (Qwen speculative verifier output head)
+**evidence:**
+- claim: "The source had a stale outer env gate in `prefill_tokens_top1s`: `output_project_top1s_routed` had the intended `rows >= QWEN35_HEAD_TOP1_ROWS_MIN` policy, but it was only called when `QWEN35_HEAD_TOP1_ROWS=1` or full-row research mode was set. Removing the outer gate makes the routed helper's threshold and `QWEN35_HEAD_TOP1_ROWS_OFF=1` escape hatch effective."
+  source: `src/ml/gguf/qwen35_cpu.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: output-head routing, verifier chunk policy, or env gate changes
+- claim: "Focused Qwen forward and DeltaNet specs pass after the routing change."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_headrows_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` returning `17 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Qwen specs, Metal kernels, or verifier route changes
+- claim: "Current high-accept smoke on `The capital of France is` shows the default thresholded route faster than rows-off: one direct A/B was `16.67 ms/tok` default versus `17.0 ms/tok` with `QWEN35_HEAD_TOP1_ROWS_OFF=1`; a four-pair noisy sequence had default wins/near-ties in all pairs (`16.43 vs 16.90`, `16.62 vs 16.95`, `19.82 vs 19.84`, `21.93 vs 22.16`)."
+  source: `/tmp/qwen35_speculative_accept_headrows_default --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` interleaved with `QWEN35_HEAD_TOP1_ROWS_OFF=1` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, draft speed, output-head kernel, or adaptive gamma schedule changes
+- claim: "Reject-sensitive adversary prompts stayed exact in the same harness; `def fibonacci(n):` used one gamma-4 verifier cycle then target fallback (`22.46 ms/tok`), and `The quick brown fox` stayed exact while falling back after the first partial chunk (`23.62 ms/tok`)."
+  source: `/tmp/qwen35_speculative_accept_headrows_default --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "def fibonacci(n):"` and `"The quick brown fox"` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, adaptive gamma policy, or rows-min threshold changes
+**note:** This repairs a routing inconsistency, not a new universal verifier architecture. It helps large accepted verifier chunks and should stay guarded by `QWEN35_HEAD_TOP1_ROWS_MIN=8`; earlier falsifiers still argue against full-row F16 top1 and against lowering the threshold to 4.

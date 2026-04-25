@@ -1685,8 +1685,7 @@ module ML::GGUF
 
       hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
       hp = weights.hparams
-      if (ENV["QWEN35_HEAD_FULL_ROWS"]? == "1" || ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1") &&
-         (top1s = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps))
+      if top1s = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
         return top1s
       end
 
