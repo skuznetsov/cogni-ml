@@ -12,9 +12,10 @@ target_path = ENV["QWEN35_TARGET"]? || DEFAULT_TARGET
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = "The capital of France is"
 n_gen = 64
-gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "16").to_i
+gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 max_ngram = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
 min_ngram = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
+recursive_ngram = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 check_plain = ENV["QWEN35_NGRAM_CHECK_PLAIN"]? != "0"
 
 OptionParser.parse(ARGV) do |parser|
@@ -22,9 +23,10 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
   parser.on("--tokens N", "Generated tokens to compare (default: 64)") { |value| n_gen = value.to_i }
-  parser.on("--gamma N", "Maximum n-gram draft candidates per verifier chunk (default: env QWEN35_NGRAM_GAMMA or 16)") { |value| gamma = value.to_i }
+  parser.on("--gamma N", "Maximum n-gram draft candidates per verifier chunk (default: env QWEN35_NGRAM_GAMMA or 32)") { |value| gamma = value.to_i }
   parser.on("--min-ngram N", "Minimum suffix match length before drafting (default: env QWEN35_NGRAM_MIN or 6)") { |value| min_ngram = value.to_i }
   parser.on("--max-ngram N", "Maximum suffix match length to search (default: env QWEN35_NGRAM_MAX or 8)") { |value| max_ngram = value.to_i }
+  parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through the draft scratch history") { recursive_ngram = false }
   parser.on("--no-check", "Skip plain greedy replay/equality check") { check_plain = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -88,7 +90,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{weights.hparams.n_layer} dim=#{weights.hparams.n_embd} vocab=#{weights.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} n_gen=#{n_gen}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} recursive_ngram=#{recursive_ngram} n_gen=#{n_gen}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -107,7 +109,7 @@ target_backup_ms = 0.0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
-  candidates = ML::GGUF::NgramDraft.candidates(history, Math.min(gamma, n_gen - generated_ids.size), max_ngram, min_ngram)
+  candidates = ML::GGUF::NgramDraft.candidates(history, Math.min(gamma, n_gen - generated_ids.size), max_ngram, min_ngram, recursive: recursive_ngram)
 
   if candidates.empty?
     generated_ids << target_next

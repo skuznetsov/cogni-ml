@@ -5,12 +5,30 @@ module ML::GGUF
     def candidates(history : Array(Int32),
                    gamma : Int32,
                    max_ngram : Int32,
-                   min_ngram : Int32) : Array(Int32)
+                   min_ngram : Int32,
+                   recursive : Bool = false) : Array(Int32)
       raise ArgumentError.new("gamma must be positive") unless gamma > 0
       raise ArgumentError.new("min_ngram must be positive") unless min_ngram > 0
       raise ArgumentError.new("max_ngram must be >= min_ngram") unless max_ngram >= min_ngram
       return [] of Int32 if history.empty?
 
+      return candidates_once(history, gamma, max_ngram, min_ngram) unless recursive
+
+      scratch = history.dup
+      result = [] of Int32
+      while result.size < gamma
+        chunk = candidates_once(scratch, gamma - result.size, max_ngram, min_ngram)
+        break if chunk.empty?
+        result.concat(chunk)
+        scratch.concat(chunk)
+      end
+      result
+    end
+
+    private def candidates_once(history : Array(Int32),
+                                gamma : Int32,
+                                max_ngram : Int32,
+                                min_ngram : Int32) : Array(Int32)
       max_len = Math.min(max_ngram, history.size)
       max_len.downto(min_ngram) do |n|
         suffix_start = history.size - n

@@ -12,6 +12,11 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.candidates(history, gamma: 2, max_ngram: 4, min_ngram: 3).should eq([13, 14])
   end
 
+  it "can recursively extend candidates through its own scratch history" do
+    history = [1, 2, 3, 4, 1, 2]
+    ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 2, min_ngram: 2, recursive: true).should eq([3, 4, 1, 2])
+  end
+
   it "ignores weak short repeats below the minimum length" do
     history = [1, 2, 3, 4, 2, 3]
     ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 3, min_ngram: 3).should eq([] of Int32)

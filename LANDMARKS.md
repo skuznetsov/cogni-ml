@@ -3820,4 +3820,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `src/ml/gguf/ngram_draft.cr`, `spec/ngram_draft_spec.cr`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ngram_spec crystal spec spec/ngram_draft_spec.cr` returning `4 examples, 0 failures` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: n-gram candidate semantics or spec fixtures change
+- claim: "Recursive n-gram extension lets the draft append accepted-looking candidates into scratch history and continue proposing up to `gamma=32`, while target verification still preserves exact greedy output."
+  source: `src/ml/gguf/ngram_draft.cr`, `bin/qwen35_ngram_speculative.cr`, and `spec/ngram_draft_spec.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: recursive n-gram semantics or verifier control flow changes
+- claim: "On `The capital of France is`, recursive n-gram extension with `gamma=32` reduced verifier cycles from non-recursive `7` to `2` and improved the smoke from about `17.46 ms/tok` to about `9.0 ms/tok`, with `55/55` candidates accepted and exact-check replay enabled."
+  source: `/tmp/qwen35_ngram_speculative_rec --tokens 64 --gamma 32 --min-ngram 6 'The capital of France is'` with and without `--no-recursive-ngram` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt output, n-gram defaults, or target verifier speed changes
+- claim: "Adversary prompts did not show the weak-repeat failure mode with the default `min_ngram=6`: `def fibonacci(n):` and `Once upon a time` proposed no candidates, while `The quick brown fox` remained exact and near plain target speed."
+  source: same `/tmp/qwen35_ngram_speculative_rec` adversary grid on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, n-gram defaults, or acceptance policy changes
 **note:** This is a paradigm shift rather than a universal decode win: it helps repeated/generated-template text and should eventually be composed with neural draft speculative decode as a cheap first-choice draft, but it is not a replacement for a faster learned draft on arbitrary prompts.
