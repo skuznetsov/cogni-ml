@@ -205,7 +205,8 @@
   - [x] Port the harness gamma=1 accepted-token fast path into `qwen35_generate` (`QWEN35_SPEC_SINGLE_FAST_OFF=1` disables). The practical CLI now bypasses rollback backup and chunk verification when `draft_next == target_next` at `gamma=1`, preserving exact token IDs; default target-only fallback means the path is mostly an A/B/control win for fallback-off speculative runs rather than a default speed lever.
   - [x] Add practical CLI neural verifier selection (`QWEN35_SPEC_VERIFY=chunk-inplace|hybrid|serial`). Default remains `chunk-inplace`; opt-in `hybrid` verifies the first speculative cycle serially and then returns to chunking, improving first-cycle partial-reject smokes (`Once upon a time` `22.84/23.06 -> 22.48/22.11 ms/tok`, `The quick brown fox` `22.86/22.85 -> 22.12/22.22`) while regressing high-accept prompts (`The capital of France is` `16.33/16.40 -> 16.94/16.72`).
   - [x] Falsifier: a Q8_0 mixed dual GEMV for unequal recurrent draft projections (`qkv 1024x6144` + `gate 1024x2048`) reduced `rec.proj` encode time but regressed 0.8B draft wall (`~7.39-7.47 ms/tok` separate vs `~7.62-7.70` mixed), so the temporary kernel/route was removed. Dispatch fusion alone is not enough for this Q8 projection shape.
-  - [ ] Next: target deeper batched speculative verification, FFN tile-streaming WBA diamond, and lower-level Q4/Q6 tile-prepack/kernel changes; Q8_0 draft is now closer, but exact speculative still trails plain target decode until verifier overhead is cut
+  - [ ] Next: target deeper batched speculative verification, FFN tile-streaming WBA diamond, lower-level Q4/Q6 tile-prepack/kernel changes, and DeltaNet associative block-scan research; Q8_0 draft is now closer, but exact speculative still trails plain target decode until verifier overhead is cut
+  - [x] Save the RetNet-to-DeltaNet parallelization frame: the old CogniFusion RetNet trick works because `h_t = A*h_{t-1}+u_t` has cheap diagonal/scalar powers, while Qwen35 DeltaNet has `S_t = g_t*S_{t-1}*(I - beta_t*K_t*K_t^T) + beta_t*V_t*K_t^T`. This is still an associative affine transform over state, but naive dense block summaries would be too expensive; the viable research path is compact low-rank/WY-style block summaries plus per-block serial replay, not direct `conv1d/cumsum`.
 
 ## Deferred research backlog — efficient attention / long context
 
@@ -214,6 +215,11 @@
 - [ ] **R.2** DeepSeek Sparse Attention / NSA-style indexer experiment; requires calibration + sparse adaptation, not an exact drop-in for existing Qwen weights.
 - [ ] **R.3** Linear-attention replacement track; treat as new architecture or distillation/continued-training project, not an inference-only optimization.
 - [ ] **R.4** Training-free long-context inference hacks under eval gates: attention sinks / sliding window, SnapKV/H2O-like KV retention, and KV quantization. Keep all default-off until LongBench/RULER/top-logit drift evidence exists.
+- [ ] **R.5** Exact DeltaNet associative block-scan prototype for long prefill.
+  - [x] First prove equivalence on tiny CPU shapes (`s=8`) against the serial `delta_net_step!` recurrence: `spec/qwen35_deltanet_affine_scan_spec.cr` verifies both composed affine final state and block-prefix replay intermediate outputs (`2 examples, 0 failures`).
+  - [ ] Estimate work for `s=128` and prompt lengths `64/256/1024/2048`; only continue if the model predicts at least `1.5x` DeltaNet-scan speedup at pp256+.
+  - [ ] Prototype compact block summaries using the rank-1 structure of `I - beta*K*K^T`; avoid materializing dense `128x128` transition products unless a microbench proves it is cheap.
+  - [ ] If the CPU proof and work model pass, build a default-off Metal prototype with block size `8` or `16`, and compare against the current `delta_net_chunk_128_rowwise` route.
 
 ## Phase 5 — Scale to 27B
 

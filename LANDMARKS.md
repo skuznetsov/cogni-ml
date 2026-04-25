@@ -4319,3 +4319,31 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: Q8 kernel, threadgroup shape, Metal scheduler, or host load changes
 **note:** Do not retry dispatch-only mixed fusion for this Q8 projection shape without a different kernel design. The next draft win needs better per-row throughput or less memory traffic, not just merging two unequal GEMV dispatches.
+
+### [LM-codex-DELTANET-ASSOCIATIVE-SCAN-PLAN-1] DeltaNet may admit a RetNet-style block scan, but not the cheap RetNet formula
+**status:** active research hypothesis
+**trust:** {F:0.72, G:0.46, R:0.68}
+**context:** ml (Qwen prefill / recurrent scan / LTP-WBA)
+**evidence:**
+- claim: "The old CogniFusion RetNet parallelization applies to a first-order linear recurrence `h_t = A*h_{t-1}+u_t`, where `A` is cheap to exponentiate or convolve over the sequence. That is why the prior `cumsum`/`conv1d`/cached-power frame was practical."
+  source: `../../ML/cognifusion_llm/cogni_fusion_model.py` classes `MPSOptimisedParallelRetentionLogic` and `ParallelRetentionLogic`, inspected on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: old CogniFusion reference changes or a different RetNet formulation becomes the comparison target
+- claim: "Qwen35 DeltaNet is also affine over its recurrent state, but with a token-dependent rank-1 transition: `S_t = g_t*S_{t-1}*(I - beta_t*K_t*K_t^T) + beta_t*V_t*K_t^T` after aligning row/column convention with the current kernel. Affine transform composition is associative, so a block prefix-scan is mathematically plausible."
+  source: `src/ml/gguf/qwen35_cpu.cr` `delta_net_step!` and `src/ml/gguf/kernels/delta_net.metal` `delta_net_chunk_128_rowwise`, inspected on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: DeltaNet recurrence semantics, Q/K/V layout, or beta/g decay computation changes
+- claim: "A naive dense block-summary scan is likely too expensive at Qwen35 shape `s=128`: transition summaries become dense `128x128` matrices per head, and composition would add matrix-matrix or matrix-state work that can exceed the current rowwise serial scan."
+  source: algebraic work estimate from the same recurrence and the current `delta_net_chunk_128_rowwise` implementation, 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: new Metal microbench showing dense summary composition is cheap enough
+- claim: "The viable exact research path is a compact low-rank/WY-style block summary exploiting the rank-1 form of `I - beta*K*K^T`, plus serial replay inside blocks after a prefix scan over block summaries."
+  source: synthesis from current DeltaNet rank-1 transition structure and prior RetNet parallel-scan pattern, 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: CPU proof disproves equivalence, rank growth becomes unbounded in practice, or work model predicts no pp256+ win
+- claim: "A tiny-shape CPU spec now proves the algebraic checkpoint: composed affine transforms match serial DeltaNet final state, and block-prefix replay reproduces serial intermediate outputs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_affine_scan crystal spec spec/qwen35_deltanet_affine_scan_spec.cr` -> `2 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: affine proof spec, DeltaNet recurrence, or row/column convention changes
+**decision:** Add a default-off research backlog item before touching production kernels: prove tiny-shape equivalence against serial `delta_net_step!`, estimate `s=128` work for pp64/pp256/pp1024/pp2048, and only then prototype a Metal block size `8` or `16` path.
+**adversary:** This is unlikely to help decode (`T=1`) and may not help short pp64 prefill. Its best target is long prefill where the current DeltaNet token scan dominates. Do not replace the existing rowwise kernel without a CPU proof, exactness specs, and an A/B against `delta_net_chunk_128_rowwise`.
