@@ -266,4 +266,49 @@ describe "Qwen35 DeltaNet affine block scan algebra" do
     BlockScan.max_abs_delta(dense.a, dense_a).should be < 1.0e-8
     BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-8
   end
+
+  it "replays block outputs through adjoint transformed queries" do
+    s = 8
+    scale = 1.0 / Math.sqrt(s.to_f64)
+    rng = Random.new(0xAD501_u64)
+    state = random_state(rng, s)
+    inputs = random_inputs(rng, 10, s)
+
+    serial_state, serial_y = BlockScan.replay_block(state, inputs, scale)
+    adjoint_state, adjoint_y = BlockScan.adjoint_replay_block(state, inputs, scale)
+
+    BlockScan.max_abs_delta(serial_state, adjoint_state).should be < 1.0e-10
+    adjoint_y.size.should eq(serial_y.size)
+    serial_y.each_with_index do |row, t|
+      row.each_with_index do |v, d|
+        (v - adjoint_y[t][d]).abs.should be < 1.0e-10
+      end
+    end
+  end
+
+  it "supports block-prefix adjoint replay for intermediate outputs" do
+    s = 8
+    block_size = 4
+    scale = 1.0 / Math.sqrt(s.to_f64)
+    rng = Random.new(0xAD502_u64)
+    initial = random_state(rng, s)
+    inputs = random_inputs(rng, 16, s)
+
+    serial_state, serial_y = BlockScan.replay_block(initial, inputs, scale)
+
+    prefix_state = initial
+    replay_y = [] of Array(Float64)
+    inputs.each_slice(block_size) do |block|
+      prefix_state, block_y = BlockScan.adjoint_replay_block(prefix_state, block, scale)
+      replay_y.concat(block_y)
+    end
+
+    BlockScan.max_abs_delta(serial_state, prefix_state).should be < 1.0e-10
+    replay_y.size.should eq(serial_y.size)
+    replay_y.each_with_index do |row, t|
+      row.each_with_index do |v, d|
+        (v - serial_y[t][d]).abs.should be < 1.0e-10
+      end
+    end
+  end
 end

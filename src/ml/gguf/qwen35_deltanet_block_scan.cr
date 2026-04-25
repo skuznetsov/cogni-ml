@@ -59,6 +59,15 @@ module ML
         end
       end
 
+      struct AdjointOutputTerm
+        getter transformed_q : Array(Float64)
+        getter additive : Array(Float64)
+
+        def initialize(@transformed_q : Array(Float64),
+                       @additive : Array(Float64))
+        end
+      end
+
       def self.zeros(rows : Int32, cols : Int32) : Matrix
         Array.new(rows) { Array.new(cols, 0.0) }
       end
@@ -168,6 +177,16 @@ module ML
           acc = 0.0
           v.size.times { |i| acc += v[i] * m[i][j] }
           out[j] = acc
+        end
+        out
+      end
+
+      def self.matvec(m : Matrix, v : Array(Float64)) : Array(Float64)
+        out = Array.new(m.size, 0.0)
+        m.each_with_index do |row, i|
+          acc = 0.0
+          row.size.times { |j| acc += row[j] * v[j] }
+          out[i] = acc
         end
         out
       end
@@ -449,6 +468,56 @@ module ML
           end
         end
         out
+      end
+
+      def self.apply_compact_b_to_vec(lefts : Array(Array(Float64)),
+                                      rights : Array(Array(Float64)),
+                                      v : Array(Float64)) : Array(Float64)
+        raise ArgumentError.new("compact B factors size mismatch") unless lefts.size == rights.size
+        out = Array.new(v.size, 0.0)
+        lefts.each_with_index do |left, idx|
+          coeff = vec_dot(rights[idx], v)
+          left.size.times { |i| out[i] += left[i] * coeff }
+        end
+        out
+      end
+
+      def self.adjoint_output_terms_for_block(inputs : Array(DeltaInputs)) : Array(AdjointOutputTerm)
+        raise ArgumentError.new("inputs must not be empty") if inputs.empty?
+
+        terms = [] of AdjointOutputTerm
+        prefix = [] of DeltaInputs
+        inputs.each do |inp|
+          prefix << inp
+          summary = fully_compact_summary_for_block(prefix)
+          dense_a = dense_a_from_transition(summary.transition, inp.q.size)
+          terms << AdjointOutputTerm.new(
+            matvec(dense_a, inp.q),
+            apply_compact_b_to_vec(summary.b_lefts, summary.b_rights, inp.q)
+          )
+        end
+        terms
+      end
+
+      def self.adjoint_replay_outputs(state : Matrix,
+                                      terms : Array(AdjointOutputTerm),
+                                      scale : Float64) : Array(Array(Float64))
+        terms.map do |term|
+          Array.new(state.size) do |row|
+            (vec_dot(state[row], term.transformed_q) + term.additive[row]) * scale
+          end
+        end
+      end
+
+      def self.adjoint_replay_block(state : Matrix,
+                                    inputs : Array(DeltaInputs),
+                                    scale : Float64) : Tuple(Matrix, Array(Array(Float64)))
+        terms = adjoint_output_terms_for_block(inputs)
+        summary = fully_compact_summary_for_block(inputs)
+        {
+          apply_fully_compact(state, summary),
+          adjoint_replay_outputs(state, terms, scale),
+        }
       end
 
       def self.compose_compact(first : CompactDeltaSummary, second : CompactDeltaSummary) : CompactDeltaSummary

@@ -4631,6 +4631,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Execute in this order: (1) CPU proof for adjoint/query-side replay; (2) if promising, Metal replay microbench; (3) otherwise test tiled/MMA compose or fixed-basis residual probe. Do not production-wire summaries until full prefix+replay beats rowwise on pp1024+.
 **adversary:** This is a roadmap, not a verified speedup. The adjoint transform may only move cost from serial replay to expensive transformed-query/additive-term construction, and fixed-basis compression may fail residual checks on real prompts.
 
+### [LM-codex-DELTANET-ADJOINT-REPLAY-1] Query-side block replay is algebraically exact
+**status:** verified CPU algebra gate
+**trust:** {F:0.86, G:0.60, R:0.84}
+**context:** ml (Qwen35 long prefill / DeltaNet summaries / adjoint replay)
+**evidence:**
+- claim: "For a block prefix `S_t = S_start*A_prefix_t + B_prefix_t`, each output can be rewritten exactly as `y_t = (S_start*(A_prefix_t*q_t) + B_prefix_t*q_t) * scale`. The CPU helper `adjoint_replay_block` computes transformed queries and additive output terms and reproduces serial block outputs and final state."
+  source: `src/ml/gguf/qwen35_deltanet_block_scan.cr`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_adjoint_replay crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `18 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: DeltaNet recurrence, row/column convention, adjoint helper implementation, or output scaling changes
+- claim: "The block-prefix adjoint replay spec also reproduces intermediate outputs across multiple chunks, not just one final state, so the transformation is suitable as a candidate replacement for serial replay inside a block-scan route."
+  source: `spec/qwen35_deltanet_affine_scan_spec.cr`, same spec command on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: block-prefix replay semantics or chunk boundary handling changes
+**decision:** Keep adjoint replay as the next exact performance branch. The immediate next gate is cost: transformed-query/additive-term construction plus `S_start @ transformed_Q` must beat `delta_net_chunk_128_rowwise` on synthetic `s=128` before production integration.
+**adversary:** The proof implementation is intentionally dense/inefficient and may only move work rather than remove it. It proves equivalence; it does not prove the transformed terms can be built cheaply on Metal.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
