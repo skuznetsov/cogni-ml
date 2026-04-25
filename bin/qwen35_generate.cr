@@ -50,6 +50,7 @@ spec_plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to
 spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
 spec_bootstrap_gamma = (ENV["QWEN35_SPEC_BOOTSTRAP_GAMMA"]? || "0").to_i
+spec_single_fast_enabled = ENV["QWEN35_SPEC_SINGLE_FAST_OFF"]? != "1"
 spec_skip_draft_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF"]? != "1"
 spec_skip_draft_backup_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF"]? != "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
@@ -229,7 +230,7 @@ end
 if speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
-  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma}"
+  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma} single_fast=#{spec_single_fast_enabled}"
 
   decode_t0 = Time.instant
   target_next = output_ids.pop
@@ -247,6 +248,7 @@ if speculative_decode_enabled && !output_ids.empty?
   cycles = 0
   plain_fallback_steps = 0
   early_rejects = 0
+  single_fast = 0
   target_verify_ms = 0.0
   draft_ms = 0.0
   draft_resync_ms = 0.0
@@ -295,6 +297,28 @@ if speculative_decode_enabled && !output_ids.empty?
       draft_resync_skips += 1 if will_plain_fallback_after_reject
       if trace_steps
         STDOUT << "  spec cycle=#{cycles} early_reject emitted=1 gamma=#{current_gamma}\n"
+        STDOUT.flush
+      end
+    elsif spec_single_fast_enabled && cycle_gamma == 1 && draft_next == target_next
+      emitted = draft_next
+      candidates << emitted
+      output_ids << emitted
+      correction_or_accepted << emitted
+      accepted += 1
+      proposed += 1
+
+      tstart = Time.instant
+      draft_next = advance_next(draft_weights, emitted, pos, draft_state)
+      draft_ms += (Time.instant - tstart).total_milliseconds
+
+      tstart = Time.instant
+      target_next = advance_next(w, emitted, pos, state)
+      target_verify_ms += (Time.instant - tstart).total_milliseconds
+
+      pos += 1
+      single_fast += 1
+      if trace_steps
+        STDOUT << "  spec cycle=#{cycles} single_fast emitted=1 gamma=#{current_gamma}\n"
         STDOUT.flush
       end
     else
@@ -391,7 +415,7 @@ if speculative_decode_enabled && !output_ids.empty?
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = proposed > 0 ? (accepted.to_f64 * 100.0 / proposed.to_f64) : 0.0
-  STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
+  STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
   puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"

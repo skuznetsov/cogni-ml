@@ -4262,3 +4262,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt outputs, decode policy, or CLI logging changes
 **note:** This is benchmark/CLI hygiene, not a kernel-speed claim. Use trace-off for cleaner practical timing and logs.
+
+### [LM-codex-GENERATE-SPEC-SINGLE-FAST-1] qwen35_generate has gamma=1 accepted-token fast path
+**status:** verified-feature
+**trust:** {F:0.82, G:0.42, R:0.76}
+**context:** ml (Qwen CLI / neural speculative decode)
+**evidence:**
+- claim: "`qwen35_generate` now has the same exact gamma=1 accepted-token fast path as the speculative harness: when `cycle_gamma == 1` and `draft_next == target_next`, it advances target and draft directly instead of taking a draft backup, target backup, and chunk verifier path."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: neural speculative scheduler or state semantics changes
+- claim: "The fast path is controlled by `QWEN35_SPEC_SINGLE_FAST_OFF=1` and is reported in the speculative summary as `single_fast=N`."
+  source: `bin/qwen35_generate.cr` and `README.md` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: CLI env parsing or output format changes
+- claim: "Fallback-off parity on `Once upon a time` at 32 generated tokens produced identical token IDs with the fast path on and off; the smoke hit `single_fast=1`. Wall timing was neutral/noisy (`27.94/27.95 ms/tok` on vs `27.81/28.12 ms/tok` off), so this is a correctness-preserving control/overhead cleanup rather than a measured default speed win."
+  source: Python parity/A-B script over `/tmp/qwen35_generate_singlefast "Once upon a time" 32` with `QWEN35_DECODE_POLICY=speculative QWEN35_SPEC_PLAIN_FALLBACK_OFF=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt acceptance, fallback policy, or draft model changes
+**note:** Default target-only fallback usually exits speculation before gamma=1 accepted cycles matter. Keep this path because it aligns the practical CLI with the harness and removes avoidable work in fallback-off/adversarial experiments, but do not count it as a default performance breakthrough.
