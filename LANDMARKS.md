@@ -4320,6 +4320,29 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: Q8 kernel, threadgroup shape, Metal scheduler, or host load changes
 **note:** Do not retry dispatch-only mixed fusion for this Q8 projection shape without a different kernel design. The next draft win needs better per-row throughput or less memory traffic, not just merging two unequal GEMV dispatches.
 
+### [LM-codex-QWEN35-REC-PROJ-SHARED-H16-1] Recurrent prefill projection can share one H16 input between Q5 qkv and Q4 gate
+**status:** verified default-on exact micro-optimization
+**trust:** {F:0.86, G:0.54, R:0.82}
+**context:** ml (Qwen35 prefill / Metal conversion traffic / WBA)
+**evidence:**
+- claim: "The recurrent prefill projection path now converts the normalized hidden chunk to H16 once, then feeds the same H16 input to the Q5 qkv half-output GEMM and the Q4 gate GEMM. This removes one duplicate `4096*b` F32->F16 conversion per recurrent layer without changing quantized weights or arithmetic kernels."
+  source: `src/ml/gguf/qwen35_metal.cr` shared-H16 route guarded by `QWEN35_REC_PROJ_SHARED_H16_OFF=1`, implemented on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: recurrent prefill projection routing, Q5 h16 conv route, Q4 h16 GEMM route, or scratch-buffer ownership changes
+- claim: "Focused correctness still passes after the route change."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_shared_h16_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` -> `23 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: focused specs, Metal kernels, or Qwen35 forward route changes
+- claim: "Fresh attribution shows the optimization reduces profiled conversion traffic and is not a short-prefill regression: pp64 conversion traffic fell from `385.50 MiB` to `349.50 MiB`, with paired A/B `150.45 ms` default vs `150.55 ms` off (`4/8` wins)."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_shared_h16_ab64 crystal run --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=1 --reps=8 --compare-env=QWEN35_REC_PROJ_SHARED_H16_OFF --compare-off=1 --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, benchmark harness, or prefill route changes
+- claim: "Longer prompt A/B is small-positive but not a breakthrough: pp256 measured `483.28 ms` default vs `484.48 ms` off (`4/6` wins), and pp1024 measured `1916.54 ms` default vs `1917.83 ms` off (`3/3` wins)."
+  source: `qwen35_prefill_attribution.cr` paired A/B at pp256 and pp1024 with `QWEN35_REC_PROJ_SHARED_H16_OFF=1` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, benchmark harness, prompt length policy, or projection route changes
+**adversary:** This is an exact traffic cleanup, not the next 10% prefill breakthrough. It helps the conversion-pressure direction found in pp1024 attribution, but the wall delta is around `0.1-1.3 ms` in current measurements; the larger remaining levers are still FFN tile-streaming/prepack and speculative verifier batching.
+
 ### [LM-codex-DELTANET-ASSOCIATIVE-SCAN-PLAN-1] DeltaNet may admit a RetNet-style block scan, but not the cheap RetNet formula
 **status:** active research hypothesis
 **trust:** {F:0.72, G:0.46, R:0.68}

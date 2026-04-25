@@ -142,6 +142,7 @@ Useful Qwen environment switches:
 | `QWEN35_HEAD_FULL_ROWS_MARGIN=0.25` | Margin threshold for the guarded full-row verifier route. Higher is safer but falls back more often. |
 | `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1` | Disable decode-wave FFN-down residual-add fusion for Q4/Q6 target and Q8 draft experiments. |
 | `QWEN35_Q4K_PAIR_H16_MIN_BATCH=256` | Tune the prefill Q4 gate/up shared H16 conversion threshold; `64` and `128` were not robust pp64/pp128 wins locally. |
+| `QWEN35_REC_PROJ_SHARED_H16_OFF=1` | Disable the exact recurrent prefill projection optimization that shares one H16 input conversion between Q5 qkv and Q4 gate GEMMs. |
 | `QWEN35_PREFILL_CHUNK_OFF=1` | Force older non-chunked prefill path. |
 | `QWEN35_DECODE_WAVE_OFF=1` | Force older non-wave decode path. |
 
