@@ -4611,6 +4611,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Do not implement DeltaNet prefix scan using GPU-serial factor-basis compression. The algebra remains valid, but the implementation path must avoid serial elimination on GPU, avoid dense row-basis products, or be abandoned in favor of other long-prefill levers.
 **adversary:** This refutes the direct one-thread Metal algorithm only. A parallel blocked elimination, deterministic fixed basis, or different rank-stable compact formulation could still be viable, but it requires a new design and a fresh cost gate.
 
+### [LM-codex-DELTANET-SUMMARY-ROADMAP-1] Post-falsifier exact summary-scan roadmap
+**status:** proposed roadmap checkpoint
+**trust:** {F:0.62, G:0.54, R:0.66}
+**context:** ml (Qwen35 long prefill / DeltaNet summaries / exact scan research)
+**evidence:**
+- claim: "After the dense row-basis compose and GPU-serial factor compression falsifiers, the summary branch remains alive only through formulations that avoid both dense `128x128` products on the prefix path and serial GPU elimination."
+  source: `LM-codex-DELTANET-ROW-BASIS-COMPOSE-FALSIFIER-1` and `LM-codex-DELTANET-FACTOR-BASIS-GPU-SERIAL-FALSIFIER-1`, reviewed on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: tiled/MMA compose benchmark, parallel compression design, or full prefix+replay prototype changes the cost model
+- claim: "The highest-priority exact branch is adjoint/query-side block replay: for a block prefix `S_t = S_start*A_prefix_t + B_prefix_t`, outputs can be rewritten as `y_t = S_start*(A_prefix_t*q_t) + B_prefix_t*q_t`. If proven and cheap, this can turn per-block replay outputs into a GEMM-like operation over transformed queries."
+  source: algebraic synthesis from current `Qwen35DeltaNetBlockScan` recurrence and replay formulas, 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: CPU proof refutes output equivalence or Metal replay microbench loses to rowwise
+- claim: "Lookup/precomputed tables do not solve unseen prompt prefill because `K/V/g/beta` and compression pivots are hidden-state/context dependent. Exact lookup remains useful for prompt/session cache and repeated prefixes, not for first-time rank-stable scan."
+  source: reasoning against current Qwen35 recurrent projection pipeline and prompt-cache requirements, 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: new deterministic basis/residual-check probe on real Qwen K vectors or prompt-cache implementation changes
+**decision:** Execute in this order: (1) CPU proof for adjoint/query-side replay; (2) if promising, Metal replay microbench; (3) otherwise test tiled/MMA compose or fixed-basis residual probe. Do not production-wire summaries until full prefix+replay beats rowwise on pp1024+.
+**adversary:** This is a roadmap, not a verified speedup. The adjoint transform may only move cost from serial replay to expensive transformed-query/additive-term construction, and fixed-basis compression may fail residual checks on real prompts.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
