@@ -4862,3 +4862,27 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: Q4 pair-H16 route or benchmark harness changes
 **decision:** Keep `Q4_PAIR_H16_MIN_BATCH = 64`. The threshold32 branch does not recover the remaining first-run prefill gap and should not be promoted without a new kernel/dataflow change.
 **adversary:** This is a narrow threshold sweep on synthetic token prompts under prepared-state timing; it does not refute the Q4 pair-H16 route itself, only lowering its activation threshold below `64`.
+
+### [LM-codex-SPEC-NGRAM-GUARD-DISABLE-1] N-gram verifier chunks disable guarded full-row top1 in the research harness
+**status:** implemented safety hardening
+**trust:** {F:0.82, G:0.50, R:0.82}
+**context:** ml (Qwen speculative n-gram verifier exactness)
+**evidence:**
+- claim: "`bin/qwen35_speculative_accept.cr` now mirrors the practical generator's fail-closed policy: n-gram verifier chunks temporarily remove `QWEN35_HEAD_FULL_ROWS_GUARDED`, then restore the env after verification. Neural speculative chunks can still use the guarded full-row route."
+  source: `bin/qwen35_speculative_accept.cr` `with_guarded_full_rows_disabled` around n-gram `prefill_tokens_top1s` calls, implemented on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: speculative harness n-gram control flow, guarded full-row verifier policy, or prompt-cache/n-gram composition changes
+- claim: "The harness still builds and focused Qwen forward specs pass after the safety change."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_ngram_guard crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_speculative_accept.cr -o /tmp/qwen35_speculative_accept_ngram_guard`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_ngram_guard_spec crystal spec spec/qwen35_forward_spec.cr --link-flags=...` -> `14 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Qwen forward specs or harness compile path changes
+- claim: "With `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, high-repeat n-gram+neural smoke stays exact and fast: `The capital of France is` generated 64 tokens at `9.90 ms/tok`, accepted `64/64`, and n-gram accepted `48/48`."
+  source: `QWEN35_HEAD_FULL_ROWS_GUARDED=1 QWEN35_HEAD_FULL_ROWS_GUARD_TRACE=1 /tmp/qwen35_speculative_accept_ngram_guard --tokens 64 --gamma 4 --max-gamma 32 --ngram "The capital of France is"` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, prompt output, n-gram defaults, or verifier route changes
+- claim: "A partial-repeat adversary smoke stays exact and disables n-gram after the first reject: `The quick brown fox` generated 64 tokens at `20.14 ms/tok`, n-gram accepted `18/32`, and `disabled=true`."
+  source: same built harness with `--ngram "The quick brown fox"` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: n-gram rejection policy, prompt output, or guarded verifier behavior changes
+**decision:** Keep guarded full-row verification opt-in for neural chunks, but fail-closed around n-gram verifier chunks in both practical and research harnesses. The speed cost on high-repeat n-gram paths is acceptable because exactness is the stronger invariant.
+**adversary:** The final harness equality check remains the strongest guard. This change does not prove guarded full-row is broadly exact; it only prevents a known risky composition with partial n-gram rejection.

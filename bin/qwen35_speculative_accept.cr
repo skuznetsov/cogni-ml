@@ -138,6 +138,18 @@ def resync_draft!(weights : ML::GGUF::Qwen35Weights,
   next_id
 end
 
+def with_guarded_full_rows_disabled(&)
+  old_guard = ENV["QWEN35_HEAD_FULL_ROWS_GUARDED"]?
+  ENV.delete("QWEN35_HEAD_FULL_ROWS_GUARDED")
+  yield
+ensure
+  if old_guard
+    ENV["QWEN35_HEAD_FULL_ROWS_GUARDED"] = old_guard
+  else
+    ENV.delete("QWEN35_HEAD_FULL_ROWS_GUARDED")
+  end
+end
+
 puts "Loading tokenizer and models..."
 t0 = Time.instant
 tok = load_tokenizer(target_path, tokenizer_bin)
@@ -223,7 +235,9 @@ while generated_ids.size < n_gen
       target_backup_state.copy_from!(target_state)
       target_backup_ms += (Time.instant - tb0).total_milliseconds
       tv0 = Time.instant
-      target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, ngram_candidates, cycle_start_pos, target_state)
+      target_nexts = with_guarded_full_rows_disabled do
+        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, ngram_candidates, cycle_start_pos, target_state)
+      end
       target_verify_ms += (Time.instant - tv0).total_milliseconds
       if trace
         puts "ngram_cycle=#{ngram_cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{ngram_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -250,7 +264,9 @@ while generated_ids.size < n_gen
         ngram_disabled = true if ngram_disable_after_reject
         target_state.copy_from!(target_backup_state)
         tv1 = Time.instant
-        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+        corrected = with_guarded_full_rows_disabled do
+          ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+        end
         target_verify_ms += (Time.instant - tv1).total_milliseconds
         target_next = corrected[-1][0]
         pos += correction_or_accepted.size
