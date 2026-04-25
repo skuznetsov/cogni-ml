@@ -4647,6 +4647,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Keep adjoint replay as the next exact performance branch. The immediate next gate is cost: transformed-query/additive-term construction plus `S_start @ transformed_Q` must beat `delta_net_chunk_128_rowwise` on synthetic `s=128` before production integration.
 **adversary:** The proof implementation is intentionally dense/inefficient and may only move work rather than remove it. It proves equivalence; it does not prove the transformed terms can be built cheaply on Metal.
 
+### [LM-codex-DELTANET-ADJOINT-OUTPUT-METAL-1] Adjoint output replay lower-bound beats rowwise on synthetic chunks
+**status:** verified lower-bound gate
+**trust:** {F:0.76, G:0.42, R:0.76}
+**context:** ml (Qwen35 long prefill / DeltaNet summaries / adjoint replay)
+**evidence:**
+- claim: "With transformed queries and additive output terms precomputed, a Metal adjoint output replay kernel reproduces serial DeltaNet outputs within f32 drift (`max_output_delta ~8.5e-8`)."
+  source: `bin/qwen35_deltanet_adjoint_replay_micro.cr`; `/tmp/qwen35_deltanet_adjoint_replay_micro --s=128 --tokens=4|8|16|32 --runs=10 --warmup=2` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: adjoint output kernel, transformed-term layout, or DeltaNet output formula changes
+- claim: "The output-only lower-bound is faster than the synthetic rowwise chunk in checked shapes. A stable rerun measured tokens `16/32` adjoint output p50 `~0.232/0.213 ms` vs rowwise p50 `~0.316/0.301 ms`."
+  source: `/tmp/qwen35_deltanet_adjoint_replay_micro --s=128 --tokens=16|32 --runs=20 --warmup=4` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: rowwise kernel, host load, adjoint kernel tiling, or transformed-term construction changes
+**decision:** Continue to the transformed-term construction gate. The output replay lower-bound is positive enough to justify measuring full adjoint replay, but it is not an integration result because term construction and final-state prefix scan are excluded.
+**adversary:** This lower-bound can easily disappear if transformed-query/additive construction is expensive. It also compares a synthetic one-head shape, not the full recurrent layer pipeline.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
