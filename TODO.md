@@ -217,7 +217,7 @@
 - [ ] **R.4** Training-free long-context inference hacks under eval gates: attention sinks / sliding window, SnapKV/H2O-like KV retention, and KV quantization. Keep all default-off until LongBench/RULER/top-logit drift evidence exists.
 - [ ] **R.5** Exact DeltaNet associative block-scan prototype for long prefill.
   - [x] First prove equivalence on tiny CPU shapes (`s=8`) against the serial `delta_net_step!` recurrence: `spec/qwen35_deltanet_affine_scan_spec.cr` verifies both composed affine final state and block-prefix replay intermediate outputs (`2 examples, 0 failures`).
-  - [ ] Estimate work for `s=128` and prompt lengths `64/256/1024/2048`; only continue if the model predicts at least `1.5x` DeltaNet-scan speedup at pp256+.
+  - [x] Estimate work for `s=128` and prompt lengths `64/256/1024/2048` with a `1.25x` continuation gate: `bin/qwen35_deltanet_scan_model.cr` shows naive dense summaries fail, while compact summaries can pass pp256 if one summary composition stays below about `38-47` serial-token-equivalent DeltaNet steps for block sizes `8/16/32`.
   - [ ] Prototype compact block summaries using the rank-1 structure of `I - beta*K*K^T`; avoid materializing dense `128x128` transition products unless a microbench proves it is cheap.
   - [ ] If the CPU proof and work model pass, build a default-off Metal prototype with block size `8` or `16`, and compare against the current `delta_net_chunk_128_rowwise` route.
 

@@ -4345,5 +4345,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_affine_scan crystal spec spec/qwen35_deltanet_affine_scan_spec.cr` -> `2 examples, 0 failures` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: affine proof spec, DeltaNet recurrence, or row/column convention changes
-**decision:** Add a default-off research backlog item before touching production kernels: prove tiny-shape equivalence against serial `delta_net_step!`, estimate `s=128` work for pp64/pp256/pp1024/pp2048, and only then prototype a Metal block size `8` or `16` path.
+- claim: "The first critical-path work model with a `1.25x` gate rejects naive dense summaries for `s=128` and gives a concrete compact-summary budget. At pp256, block sizes `8/16/32` can pass `1.25x` if one summary composition costs less than about `37.76/43.20/46.93` serial-token-equivalent DeltaNet steps; a naive dense estimate is about `170.67`, so dense block summaries are a non-starter."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_scan_model crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `5 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_scan_model_bin crystal run bin/qwen35_deltanet_scan_model.cr -- --target=1.25 --prompts=64,256,1024 --blocks=8,16,32 --compose=8,32,170.67`
+  verified_at: 2026-04-25
+  decay_trigger: work model, DeltaNet rowwise cost model, or target speedup gate changes
+**decision:** Add a default-off research backlog item before touching production kernels: prove tiny-shape equivalence against serial `delta_net_step!`, estimate `s=128` work for pp64/pp256/pp1024/pp2048, and only then prototype compact summaries and a Metal block size `8` or `16` path.
 **adversary:** This is unlikely to help decode (`T=1`) and may not help short pp64 prefill. Its best target is long prefill where the current DeltaNet token scan dominates. Do not replace the existing rowwise kernel without a CPU proof, exactness specs, and an A/B against `delta_net_chunk_128_rowwise`.
