@@ -289,11 +289,15 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_spec_accept --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: draft model quantization/kernel speed, verifier policy, host load, or bootstrap policy changes
+- claim: "A Q8_0 tied-head top1 tile retune from `MV8_TOP_ROWS_PER_TG=12` to `8` is refuted despite draft-only speed. Repeated 64-token draft sync profiles improved from rows12 `~7.65-7.74 ms/tok` to rows8 `~7.31-7.44 ms/tok`, but the end-to-end exact speculative harness diverged from target greedy at token 5 on high-accept `The capital of France is`. The source was reverted to `12`."
+  source: temporary `src/ml/gguf/kernels/gemm_q56k.metal` constant sweep, `/tmp/qwen35_sync_profile_q8_toprows_{8,12}`, and `/tmp/qwen35_spec_accept_toprows8 --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q8_0 top1 kernel, speculative verifier exactness checks, or margin/argmax tie policy changes
 - claim: "Partial-reject prompts remain protected by early fallback rather than helped by neural speculation. `The quick brown fox` accepted `3/4` in the first cycle, then used `60` plain fallback steps and measured `22.33 ms/tok` speculative vs `22.11 ms/tok` plain target; overhead was only one draft/verify cycle but there is no speedup."
   source: `/tmp/qwen35_spec_accept --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The quick brown fox"` with the same env on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: draft acceptance behavior, fallback policy, or prompt distribution changes
-**decision:** Keep full-row F16 GEMM top1 default-off due exactness risk, but enable exact tile-reduce row-batched top1 for chunks at or above the WBA threshold. The next neural speculative speed lever is draft-side cost/quality (for example Q4/F16 source availability, Q8 kernel improvements, or fewer draft steps), not another small verifier-only tweak.
+**decision:** Keep full-row F16 GEMM top1 default-off due exactness risk, but enable exact tile-reduce row-batched top1 for chunks at or above the WBA threshold. The next neural speculative speed lever is draft-side cost/quality (for example Q4/F16 source availability, Q8 kernel improvements, or fewer draft steps), not another small verifier-only tweak. Q8 top1 retunes must pass end-to-end speculative parity, not only draft sync-profile speed.
 
 ## Graph Visualization
 
