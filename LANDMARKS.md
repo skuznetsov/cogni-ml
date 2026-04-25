@@ -281,7 +281,19 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: prompt suite with `def fibonacci(n):`, `Once upon a time`, and `The quick brown fox`; all reported `max_seen=4` and `plain_fallback` after the first cycle
   verified_at: 2026-04-24
   decay_trigger: adaptive gamma or fallback policy changes
-**decision:** Keep full-row F16 GEMM top1 default-off due exactness risk, but enable exact tile-reduce row-batched top1 for chunks at or above the WBA threshold.
+- claim: "`bin/qwen35_speculative_accept.cr` now matches `qwen35_generate` by preparing target/draft/backup Metal state buffers before prompt/decode timing unless `QWEN35_PREPARE_STATE_OFF=1` is set. This removes lazy first-touch allocation from speculative attribution and reports `prepare_state=true|false` in the run header."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_accept_prepare crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_speculative_accept.cr -o /tmp/qwen35_spec_accept_prepare`; prepared and lazy smokes on `The capital of France is` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: speculative harness state lifecycle or `prepare_state_metal!` semantics changes
+- claim: "Fresh neural speculative attribution shows the high-accept path is now draft-dominated. With `QWEN35_SPEC_BOOTSTRAP_GAMMA=32 QWEN35_HEAD_FULL_ROWS_GUARDED=1`, 64 tokens of `The capital of France is` measured `11.49 ms/tok` (`87.04 tok/s`, `100%` accepted), with `draft=451.3 ms`, `target_verify=274.6 ms`, `target_backup=7.1 ms`, and `draft_backup=2.4 ms`."
+  source: `/tmp/qwen35_spec_accept --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The capital of France is"` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: draft model quantization/kernel speed, verifier policy, host load, or bootstrap policy changes
+- claim: "Partial-reject prompts remain protected by early fallback rather than helped by neural speculation. `The quick brown fox` accepted `3/4` in the first cycle, then used `60` plain fallback steps and measured `22.33 ms/tok` speculative vs `22.11 ms/tok` plain target; overhead was only one draft/verify cycle but there is no speedup."
+  source: `/tmp/qwen35_spec_accept --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The quick brown fox"` with the same env on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: draft acceptance behavior, fallback policy, or prompt distribution changes
+**decision:** Keep full-row F16 GEMM top1 default-off due exactness risk, but enable exact tile-reduce row-batched top1 for chunks at or above the WBA threshold. The next neural speculative speed lever is draft-side cost/quality (for example Q4/F16 source availability, Q8 kernel improvements, or fewer draft steps), not another small verifier-only tweak.
 
 ## Graph Visualization
 
