@@ -813,3 +813,69 @@ kernel void qwen35_top1_reduce_f16_rows(
         top_value[row] = group_best;
     }
 }
+
+static inline void qwen35_update_top2(float v,
+                                      uint id,
+                                      thread float &best,
+                                      thread uint &best_id,
+                                      thread float &second,
+                                      thread uint &second_id)
+{
+    if (v > best || (v == best && id < best_id)) {
+        second = best;
+        second_id = best_id;
+        best = v;
+        best_id = id;
+    } else if (id != best_id && (v > second || (v == second && id < second_id))) {
+        second = v;
+        second_id = id;
+    }
+}
+
+kernel void qwen35_top2_reduce_f16_rows(
+    device const half* logits        [[buffer(0)]],
+    device       uint* top_id        [[buffer(1)]],
+    device       float* top_value    [[buffer(2)]],
+    device       uint* second_id     [[buffer(3)]],
+    device       float* second_value [[buffer(4)]],
+    constant     uint& out_dim       [[buffer(5)]],
+    uint row [[threadgroup_position_in_grid]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float local_best_values[256];
+    threadgroup uint  local_best_ids[256];
+    threadgroup float local_second_values[256];
+    threadgroup uint  local_second_ids[256];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+    float second = -INFINITY;
+    uint second_id_local = 0;
+    const uint base = row * out_dim;
+    for (uint i = tid; i < out_dim; i += 256) {
+        qwen35_update_top2(float(logits[base + i]), i, best, best_id, second, second_id_local);
+    }
+
+    local_best_values[tid] = best;
+    local_best_ids[tid] = best_id;
+    local_second_values[tid] = second;
+    local_second_ids[tid] = second_id_local;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid == 0) {
+        float group_best = -INFINITY;
+        uint group_best_id = 0;
+        float group_second = -INFINITY;
+        uint group_second_id = 0;
+        for (uint i = 0; i < 256; ++i) {
+            qwen35_update_top2(local_best_values[i], local_best_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+            qwen35_update_top2(local_second_values[i], local_second_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+        }
+        top_id[row] = group_best_id;
+        top_value[row] = group_best;
+        second_id[row] = group_second_id;
+        second_value[row] = group_second;
+    }
+}

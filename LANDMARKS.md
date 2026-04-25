@@ -3984,3 +3984,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, DeltaNet post kernel, or Metal compiler scheduling changes
 **note:** This falsifies a local post-kernel cache optimization, not DeltaNet as a target. The next exact recurrent lever needs a larger boundary change: either fuse DeltaNet output generation with post-normalization at a scan-compatible granularity, or replace the serial scan with a parallel/chunked associative formulation.
+
+### [LM-codex-SPEC-GUARDED-FULL-ROWS-1] Guarded full-row verifier accelerates wide accepted speculative chunks, default-off
+**status:** verified-opt-in-feature-with-caveat
+**trust:** {F:0.78, G:0.36, R:0.72}
+**context:** ml (Qwen speculative verifier output head)
+**evidence:**
+- claim: "Added `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, a default-off verifier route that runs the fast full-row Q6/F16 lm-head path for large chunks, reduces top1/top2 per row, and falls back through exact row-batched fused top1 for rows whose F16 top1-top2 margin is below `QWEN35_HEAD_FULL_ROWS_MARGIN` (default `0.25`)."
+  source: `src/ml/gguf/qwen35_cpu.cr`, `src/ml/gguf/qwen35_metal.cr`, and `src/ml/gguf/kernels/gemm_q56k.metal` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: output-head kernels, Q6_K GEMM precision, speculative verifier route, or margin policy changes
+- claim: "Default exactness remains intact after adding the opt-in route. Focused Qwen forward specs passed with default env and with `QWEN35_HEAD_FULL_ROWS_GUARDED=1 QWEN35_HEAD_FULL_ROWS_MARGIN=0.05`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_guarded_fullrows crystal spec spec/qwen35_forward_spec.cr --link-flags=...` and `QWEN35_HEAD_FULL_ROWS_GUARDED=1 QWEN35_HEAD_FULL_ROWS_MARGIN=0.05 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_guarded_fullrows_optin crystal spec spec/qwen35_forward_spec.cr --link-flags=...`, both returning `14 examples, 0 failures`
+  verified_at: 2026-04-24
+  decay_trigger: Qwen specs, Metal kernels, or verifier route changes
+- claim: "Exact speculative harness smokes stayed aligned with plain greedy target output on high-accept and rejection prompts. `The capital of France is` used guarded rows16/rows32 chunks with zero fallback rows at margin `0.25` and measured `14.32 ms/tok`; `def fibonacci(n):` and `The quick brown fox` stayed exact and mostly bypassed the guarded path after early rejection/fallback."
+  source: `/tmp/qwen35_speculative_accept_guarded --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace`, with `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, on prompts `The capital of France is`, `def fibonacci(n):`, and `The quick brown fox` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, host load, speculative scheduler, or margin policy changes
+- claim: "Paired high-accept A/B was noisy but favorable: neural-only guard won `3/4` pairs (default avg `1178.1 ms`, guarded avg `1126.2 ms`), and n-gram+neural guard won `4/4` pairs (default avg `762.5 ms`, guarded avg `672.0 ms`)."
+  source: Python interleaved shell harness over `/tmp/qwen35_speculative_accept_guarded`, `tokens=64`, `gamma=4`, `max_gamma=32`, margin `0.05`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt mix, verifier chunk sizes, or Q6 full-row kernel changes
+**note:** This deliberately does not default the route on. It is a useful upper-bound/opt-in speed path for accepted large chunks, but the accepted fast rows rely on a margin guard over an F16 full-row GEMM, not a formally exact argmax proof. Keep the final greedy-output equality check in the harness when using it for research.

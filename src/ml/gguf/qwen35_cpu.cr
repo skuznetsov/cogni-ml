@@ -1106,6 +1106,11 @@ module ML::GGUF
         return nil if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
         return nil unless metal_qw_supported?(out_qw)
         return nil unless Qwen35Metal.available?
+        if ENV["QWEN35_HEAD_FULL_ROWS_GUARDED"]? == "1" && ENV["QWEN35_HEAD_FULL_ROWS_OFF"]? != "1"
+          if top1s = Qwen35Metal.rmsnorm_project_full_top1_rows_guarded(x, rows, norm_weight, out_qw, eps)
+            return top1s
+          end
+        end
         if ENV["QWEN35_HEAD_FULL_ROWS"]? == "1" && ENV["QWEN35_HEAD_FULL_ROWS_OFF"]? != "1"
           if top1s = Qwen35Metal.rmsnorm_project_full_top1_rows(x, rows, norm_weight, out_qw, eps)
             return top1s

@@ -108,6 +108,7 @@ module ML
         @@top1_reduce_tiles_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_tiles_batch_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
+        @@top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
         @@dn_pipeline   : ML::Metal::ComputePipeline?
         @@dn128_pipeline : ML::Metal::ComputePipeline?
         @@dn128_fused_pipeline : ML::Metal::ComputePipeline?
@@ -650,6 +651,12 @@ module ML
         private def self.top1_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline
           @@top1_reduce_f16_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top1_reduce_f16_rows") {
             ML::Metal::ComputePipeline.new("qwen35_top1_reduce_f16_rows", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline
+          @@top2_reduce_f16_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top2_reduce_f16_rows") {
+            ML::Metal::ComputePipeline.new("qwen35_top2_reduce_f16_rows", GEMM_Q56K_SOURCE)
           }
         end
 
@@ -1542,6 +1549,20 @@ module ML
           values = value_buf.contents.as(Pointer(Float32))
           Array({Int32, Float32}).new(rows) do |i|
             {ids[i].to_i32, values[i]}
+          end
+        end
+
+        private def self.read_shared_top2_rows(top_id_buf : ML::MetalBuffer,
+                                               top_value_buf : ML::MetalBuffer,
+                                               second_id_buf : ML::MetalBuffer,
+                                               second_value_buf : ML::MetalBuffer,
+                                               rows : Int32) : Array({Int32, Float32, Int32, Float32})
+          top_ids = top_id_buf.contents.as(Pointer(UInt32))
+          top_values = top_value_buf.contents.as(Pointer(Float32))
+          second_ids = second_id_buf.contents.as(Pointer(UInt32))
+          second_values = second_value_buf.contents.as(Pointer(Float32))
+          Array({Int32, Float32, Int32, Float32}).new(rows) do |i|
+            {top_ids[i].to_i32, top_values[i], second_ids[i].to_i32, second_values[i]}
           end
         end
 
@@ -4787,6 +4808,129 @@ module ML
               (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
             )
           end
+          result
+        end
+
+        def self.rmsnorm_project_full_top1_rows_guarded(x : Array(Float32),
+                                                        rows : Int32,
+                                                        norm_weight : Array(Float32),
+                                                        out_qw : QuantWeight,
+                                                        eps : Float32) : Array({Int32, Float32})?
+          return nil unless out_qw.type.q6_k?
+          return nil unless out_qw.in_dim % QK_K == 0
+          return nil unless rows > GEMM_BATCH_THRESHOLD
+          hidden_dim = out_qw.in_dim
+          return nil unless x.size == rows * hidden_dim
+
+          margin = (ENV["QWEN35_HEAD_FULL_ROWS_MARGIN"]? || "0.25").to_f32
+          return nil if margin < 0.0_f32
+
+          ML::Metal::Device.init!
+
+          x_buf = Scratch.get(:head_full_rows_guard_x, x.size.to_i64 * sizeof(Float32))
+          norm_w_buf = Scratch.get(:head_full_rows_guard_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:head_full_rows_guard_normed, x.size.to_i64 * sizeof(Float32))
+          normed16_buf = Scratch.get(:head_full_rows_guard_normed16, x.size.to_i64 * 2_i64)
+          bias_buf = Scratch.get("head_full_rows_guard_bias_#{out_qw.out_dim}", out_qw.out_dim.to_i64 * sizeof(Float32))
+          logits16_buf = Scratch.get(:head_full_rows_guard_logits16, (rows * out_qw.out_dim).to_i64 * 2_i64)
+          top1_id_buf = Scratch.get(:head_full_rows_guard_id, rows.to_i64 * sizeof(UInt32))
+          top1_value_buf = Scratch.get(:head_full_rows_guard_value, rows.to_i64 * sizeof(Float32))
+          second_id_buf = Scratch.get(:head_full_rows_guard_second_id, rows.to_i64 * sizeof(UInt32))
+          second_value_buf = Scratch.get(:head_full_rows_guard_second_value, rows.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+          norm_w_buf.write(norm_weight)
+          ConstCache.write_zero_f32_once("head_full_rows_guard_bias_#{out_qw.out_dim}", bias_buf, out_qw.out_dim)
+
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_rmsnorm_rows(norm_enc, x_buf, norm_w_buf, normed_buf, hidden_dim, rows, eps)
+          norm_enc.end_encoding
+
+          out_enc = ML::Metal::ComputeEncoder.new(cmd)
+          Profile.bump_matmul_shape("q6_gemm_top2_guard #{out_qw.type.name} #{out_qw.in_dim}x#{out_qw.out_dim} b#{rows}", out_qw.raw.size.to_i64)
+          Profile.bump_conversion("f32_to_f16 q56_gemm_input_guard #{out_qw.in_dim} b#{rows}", (rows * out_qw.in_dim).to_i64 * 6_i64)
+          out_enc.set_pipeline(f32_to_f16_pipeline)
+          out_enc.set_buffer(normed_buf, 0)
+          out_enc.set_buffer(normed16_buf, 1, ML::Metal::BufferAccess::Write)
+          out_enc.set_value((rows * out_qw.in_dim).to_u32, 2)
+          out_enc.dispatch_1d(rows * out_qw.in_dim, 256)
+
+          out_enc.set_pipeline(mm6_pipeline)
+          out_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          out_enc.set_buffer(normed16_buf, 1)
+          out_enc.set_buffer(bias_buf, 2)
+          out_enc.set_buffer(logits16_buf, 3, ML::Metal::BufferAccess::Write)
+          out_enc.set_value(out_qw.in_dim.to_u32, 4)
+          out_enc.set_value(out_qw.out_dim.to_u32, 5)
+          out_enc.set_value(rows.to_u32, 6)
+          out_enc.set_value(0_u32, 7)
+          out_enc.set_threadgroup_memory(MM_SHMEM, 0)
+          out_enc.dispatch_threadgroups({
+            (rows + MM_NR1 - 1) // MM_NR1,
+            (out_qw.out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }, {MM_TG, 1, 1})
+          out_enc.end_encoding
+
+          reduce_enc = ML::Metal::ComputeEncoder.new(cmd)
+          reduce_enc.set_pipeline(top2_reduce_f16_rows_pipeline)
+          reduce_enc.set_buffer(logits16_buf, 0)
+          reduce_enc.set_buffer(top1_id_buf, 1, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_buffer(top1_value_buf, 2, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_buffer(second_id_buf, 3, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_buffer(second_value_buf, 4, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_value(out_qw.out_dim.to_u32, 5)
+          reduce_enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+          reduce_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+
+          top2s = read_shared_top2_rows(top1_id_buf, top1_value_buf, second_id_buf, second_value_buf, rows)
+          result = Array({Int32, Float32}).new(rows) { |i| {top2s[i][0], top2s[i][1]} }
+
+          fallback_rows = [] of Int32
+          top2s.each_with_index do |(_, top_value, _, second_value), i|
+            fallback_rows << i.to_i32 if top_value - second_value < margin
+          end
+
+          if !fallback_rows.empty?
+            fallback_x = Array(Float32).new(fallback_rows.size * hidden_dim, 0.0_f32)
+            fallback_rows.each_with_index do |row, compact_row|
+              src_offset = row * hidden_dim
+              dst_offset = compact_row * hidden_dim
+              hidden_dim.times do |j|
+                fallback_x[dst_offset + j] = x[src_offset + j]
+              end
+            end
+            if exact = rmsnorm_project_top1_rows(fallback_x, fallback_rows.size.to_i32, norm_weight, out_qw, eps)
+              fallback_rows.each_with_index do |row, compact_row|
+                result[row] = exact[compact_row]
+              end
+            else
+              return nil
+            end
+          end
+
+          if ENV["QWEN35_HEAD_FULL_ROWS_GUARD_TRACE"]? == "1"
+            STDERR.puts "head_full_rows_guard rows=#{rows} fallback=#{fallback_rows.size} margin=#{margin}"
+          end
+
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+
           result
         end
 

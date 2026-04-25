@@ -110,6 +110,8 @@ Useful Qwen environment switches:
 | `QWEN35_NGRAM_MAX=8` | Maximum suffix length to search for n-gram drafting. |
 | `QWEN35_NGRAM_RECURSIVE_OFF=1` | Disable recursive n-gram extension through scratch history. |
 | `QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF=1` | Exploration mode: keep trying n-gram chunks after first rejection. |
+| `QWEN35_HEAD_FULL_ROWS_GUARDED=1` | Experimental speculative-verifier accelerator for large accepted chunks; uses a margin guard and exact fallback for low-margin rows. |
+| `QWEN35_HEAD_FULL_ROWS_MARGIN=0.25` | Margin threshold for the guarded full-row verifier route. Higher is safer but falls back more often. |
 | `QWEN35_PREFILL_CHUNK_OFF=1` | Force older non-chunked prefill path. |
 | `QWEN35_DECODE_WAVE_OFF=1` | Force older non-wave decode path. |
 
@@ -251,12 +253,15 @@ Fresh local speculative smoke, same M2 Max 64GB and Qwen 3.5 9B target:
 | Neural draft, `The capital of France is` | 15.38 ms/tok, 65.01 tok/s | 21.98 ms/tok, 45.49 tok/s | 100% accepted, 64/64 candidates |
 | Neural draft, `def fibonacci(n):` | 21.06 ms/tok, 47.48 tok/s | 21.71 ms/tok, 46.07 tok/s | falls back after rejection; small but safe win |
 | N-gram + neural, `The capital of France is` | 10.10 ms/tok, 98.98 tok/s | 21.91 ms/tok, 45.64 tok/s | repeated-text path, 48/48 n-gram candidates accepted |
+| Experimental guarded full-row verifier + neural, `The capital of France is` | 14.32 ms/tok, 69.82 tok/s | 22.36 ms/tok, 44.73 tok/s | `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, 0 fallback rows in this run |
+| Experimental guarded full-row verifier + n-gram + neural, `The capital of France is` | 9.20 ms/tok, 108.64 tok/s | noisy target run | `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, 48/48 n-gram candidates accepted |
 
 Speculative decode caveats:
 
 - The speculative paths are exact greedy verification paths, not approximate sampling shortcuts.
 - Neural speculative speed depends on draft acceptance. High-accept prompts are faster; rejection-heavy prompts quickly fall back to plain target decode.
 - N-gram speculation is a workload-specialized path for repeated/generated-template text. It is intentionally fail-closed after a rejected n-gram chunk by default.
+- `QWEN35_HEAD_FULL_ROWS_GUARDED=1` is still an experimental research switch. The harness checks final output against plain greedy target output, but the route is not broad-defaulted because it relies on a full-row F16 top1 margin guard.
 - These numbers are effective decode throughput after prompt prefill; they do not make first-run prefill faster.
 
 ## Native Metal Embeddings
