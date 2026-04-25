@@ -5018,3 +5018,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: op-attribution harness, Q5/Q6 kernels, or host load changes
 **decision:** Keep the inner simdgroup barriers in Q5/Q6 f32-output GEMM. Like the earlier Q4 barrier-removal falsifier, removing synchronization does not translate into faster simdgroup-matrix execution on M2 Max.
 **adversary:** The focused spec timings include host/runtime noise, but both spec and op-attribution moved in the wrong direction. This refutes only the simple barrier-removal branch, not a redesigned Q5/Q6 tile schedule.
+
+### [LM-codex-SPEC-SWEEP-HARNESS-1] Speculative policies need multi-prompt wall-time sweeps
+**status:** implemented measurement harness
+**trust:** {F:0.78, G:0.48, R:0.78}
+**context:** ml (Qwen35 speculative decode / benchmark harness)
+**evidence:**
+- claim: "`bin/qwen35_speculative_sweep.cr` runs a compiled `qwen35_speculative_accept` runner across named policies and prompts, then parses `spec_wall`, `plain_target_wall`, acceptance, cycle count, and gamma stats into per-prompt rows and policy averages."
+  source: `bin/qwen35_speculative_sweep.cr`, implemented on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: speculative harness output format or policy env names change
+- claim: "The sweep driver builds without warnings/errors, and the speculative runner builds with Metal linkage."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_sweep_build crystal build --release bin/qwen35_speculative_sweep.cr -o /tmp/qwen35_speculative_sweep`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_spec_sweep_runner crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_speculative_accept.cr -o /tmp/qwen35_speculative_accept_sweep` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Crystal compiler, runner dependencies, or Metal bridge linkage changes
+- claim: "Smoke sweep over two prompts and two policies completed and ranked default ahead of hybrid on average: default `21.69 ms/tok`, `1.251x` speedup vs plain target; hybrid `23.48 ms/tok`, `1.148x` speedup."
+  source: `/tmp/qwen35_speculative_sweep --runner /tmp/qwen35_speculative_accept_sweep --tokens 8 --policies default,hybrid --only-prompts "The capital of France is|def fibonacci(n):"` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt outputs, host load, policy defaults, or speculative scheduler changes
+**decision:** Use this sweep before promoting speculative policy changes. Single-prompt wins and acceptance-rate improvements are insufficient; policy changes must improve average wall-time across high-accept and rejection-sensitive prompts without breaking exact greedy parity in the underlying runner.
+**adversary:** The smoke uses only 8 generated tokens and two prompts to keep the check cheap. It validates the harness and catches gross policy mistakes, but production claims still need longer runs, more prompts, and quiet-host controls.
