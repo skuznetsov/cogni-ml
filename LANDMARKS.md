@@ -4300,3 +4300,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, prompt acceptance distribution, verifier implementation, or fallback policy changes
 **note:** Do not make `hybrid` default without a reliable first-cycle rejection predictor. It is useful as an exact opt-in for partial-reject workloads and as evidence that verifier-policy selection, not more generic scheduler glue, is still a lever.
+
+### [LM-codex-Q8-MIXED-DUAL-GEMV-FALSIFIER-1] Unequal-output Q8 dual GEMV is not a draft win
+**status:** falsified-no-code-retained
+**trust:** {F:0.78, G:0.42, R:0.74}
+**context:** ml (Qwen speculative draft / Q8 kernels)
+**evidence:**
+- claim: "A temporary exact kernel fused the 0.8B recurrent draft `attn_qkv` and `attn_gate` Q8_0 GEMVs into one mixed dual dispatch, covering unequal output sizes `1024x6144` and `1024x2048` with the same normalized input."
+  source: temporary local patch to `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q8 kernel design or recurrent projection layout changes
+- claim: "Focused verifier spec still passed after the temporary kernel route."
+  source: `/tmp/qwen35_forward_spec_q8mixed --location spec/qwen35_forward_spec.cr:377` -> `1 examples, 0 failures`
+  verified_at: 2026-04-24
+  decay_trigger: Q8 kernel route or verifier spec changes
+- claim: "Despite lower `rec.proj` encode time, wall regressed in the 0.8B draft profile: default mixed measured `7.62/7.66/7.70 ms/tok`, while `QWEN35_Q8_MIXED_DUAL_GEMV_OFF=1` measured `7.47/7.39/7.39 ms/tok` over interleaved 64-prefill/32-decode runs."
+  source: `/tmp/qwen35_sync_profile_q8mixed --model Qwen3.5-0.8B-Q8_0.gguf 64 32` interleaved with and without `QWEN35_Q8_MIXED_DUAL_GEMV_OFF=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q8 kernel, threadgroup shape, Metal scheduler, or host load changes
+**note:** Do not retry dispatch-only mixed fusion for this Q8 projection shape without a different kernel design. The next draft win needs better per-row throughput or less memory traffic, not just merging two unequal GEMV dispatches.
