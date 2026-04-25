@@ -196,16 +196,18 @@ Fresh local M2 Max 64GB snapshot, Qwen 3.5 9B Q4_K_M, llama.cpp `llama-bench`, `
 
 | Mode | cogni-ml | llama.cpp | Gap |
 |---|---:|---:|---:|
-| First-run prefill | 406.21 tok/s p50 | 436.62 tok/s avg | -6.96% |
-| Prefill with preallocated state | 427.40 tok/s p50 | 436.15 tok/s avg | -2.01% |
-| Prompt-cache restore | 1264.99 tok/s p50 | 437.55 tok/s avg | +189.11% |
-| Decode top1 | 39.89 tok/s p50 | 39.75 tok/s avg | +0.34% |
+| First-run prefill | 419.32 tok/s p50 | 458.16 tok/s avg | -8.48% |
+| Prefill with preallocated state | 436.49 tok/s p50 | 432.55 tok/s avg | +0.91% |
+| Prompt-cache restore | 1303.17 tok/s p50 | 411.23 tok/s avg | +216.90% |
+| Plain greedy decode, run A | 46.33 tok/s p50 | 38.77 tok/s avg | +19.51% |
+| Plain greedy decode, run B | 39.21 tok/s p50 | 39.56 tok/s avg | -0.88% |
 
 Notes:
 
 - The table is a local engineering snapshot, not a lab-clean public benchmark.
+- First-run prefill is still behind llama.cpp on this machine. The native wins currently come from state reuse, prompt-cache restore, and exact speculative decode.
 - `--native-prefill-cache` measures exact restore of a previously computed prompt state; it is not a first-run prefill replacement.
-- Desktop CPU/GPU load can move short decode numbers by several percent. Use `--require-quiet` for comparisons that matter.
+- Short decode runs are noisy on a desktop system. The two plain decode rows above are intentionally both shown: treat plain decode as parity-to-faster, not as a stable public margin without a quiet rerun.
 
 ### Speculative Decode Harnesses
 
@@ -241,6 +243,21 @@ crystal build --release --no-debug \
 ```
 
 Both harnesses replay/check exact greedy target output by default unless their CLI explicitly says otherwise.
+
+Fresh local speculative smoke, same M2 Max 64GB and Qwen 3.5 9B target:
+
+| Mode / prompt | Effective speed | Plain target | Notes |
+|---|---:|---:|---|
+| Neural draft, `The capital of France is` | 15.38 ms/tok, 65.01 tok/s | 21.98 ms/tok, 45.49 tok/s | 100% accepted, 64/64 candidates |
+| Neural draft, `def fibonacci(n):` | 21.06 ms/tok, 47.48 tok/s | 21.71 ms/tok, 46.07 tok/s | falls back after rejection; small but safe win |
+| N-gram + neural, `The capital of France is` | 10.10 ms/tok, 98.98 tok/s | 21.91 ms/tok, 45.64 tok/s | repeated-text path, 48/48 n-gram candidates accepted |
+
+Speculative decode caveats:
+
+- The speculative paths are exact greedy verification paths, not approximate sampling shortcuts.
+- Neural speculative speed depends on draft acceptance. High-accept prompts are faster; rejection-heavy prompts quickly fall back to plain target decode.
+- N-gram speculation is a workload-specialized path for repeated/generated-template text. It is intentionally fail-closed after a rejected n-gram chunk by default.
+- These numbers are effective decode throughput after prompt prefill; they do not make first-run prefill faster.
 
 ## Native Metal Embeddings
 
