@@ -3779,3 +3779,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: future draft approximation feature work
 **note:** Approximate drafts are still a valid exact-speculative paradigm, but layer truncation is too destructive for this 0.8B model. Future work should try a separately quantized smaller/faster full draft, n-gram/cache draft, or trained early-exit/draft head rather than naively skipping transformer layers.
+
+### [LM-codex-TOP1-ROWS-MIN4-REFUTE-1] Lowering verifier row-batch threshold to 4 is not a safe default
+**status:** refuted
+**trust:** {F:0.62, G:0.34, R:0.56}
+**context:** ml (Qwen speculative target verifier)
+**evidence:**
+- claim: "A bounded env-only smoke tested `QWEN35_HEAD_TOP1_ROWS_MIN=4` against the current default threshold `8`, with no source changes."
+  source: `/tmp/qwen35_speculative_accept_probe --tokens 64 ...` with and without `QWEN35_HEAD_TOP1_ROWS_MIN=4` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, output-head top1 kernel, or speculative verifier schedule changes
+- claim: "The four-prompt run was noisy but adversarially mixed: `def fibonacci(n):` improved in that run (`32.61 -> 30.91 ms/tok`), while high-accept `The capital of France is` regressed (`19.58 -> 22.60 ms/tok`) and `The quick brown fox` regressed (`31.08 -> 33.63 ms/tok`)."
+  source: same env-only smoke on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: quiet rerun, changed gamma policy, or top1 rows kernel rewrite
+**note:** Keep `QWEN35_HEAD_TOP1_ROWS_MIN=8`. A lower threshold can help a rejection-heavy first chunk under some load, but it is not robust enough to trade away high-accept speed.
