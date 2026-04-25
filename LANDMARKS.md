@@ -3832,4 +3832,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: same `/tmp/qwen35_ngram_speculative_rec` adversary grid on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: prompt distribution, n-gram defaults, or acceptance policy changes
+- claim: "The n-gram harness now disables further n-gram drafting after the first rejected n-gram chunk by default, with `--keep-ngram-after-reject` / `QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF=1` as the exploration escape hatch."
+  source: `bin/qwen35_ngram_speculative.cr` and `/tmp/qwen35_ngram_disable` A/B on `The quick brown fox` and high-repeat/no-repeat prompts on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: n-gram rejection policy, prompt distribution, or target verifier behavior changes
 **note:** This is a paradigm shift rather than a universal decode win: it helps repeated/generated-template text and should eventually be composed with neural draft speculative decode as a cheap first-choice draft, but it is not a replacement for a faster learned draft on arbitrary prompts.
