@@ -4353,5 +4353,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dense_checkpoint crystal run bin/qwen35_deltanet_dense_scan_cpu.cr -- --s=16 --tokens=64 --block=16 --runs=3` and `--s=32 --tokens=128 --block=32 --runs=2` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: dense baseline implementation, CPU compiler, or block summary algorithm changes
+- claim: "The block-scan algebra is now a reusable module instead of duplicated spec/harness code: `ML::GGUF::Qwen35DeltaNetBlockScan` owns serial step, affine transform, composition, replay, and compact additive-summary formulas. The proof spec and dense CPU baseline both use it."
+  source: `src/ml/gguf/qwen35_deltanet_block_scan.cr`, `spec/qwen35_deltanet_affine_scan_spec.cr`, and `bin/qwen35_deltanet_dense_scan_cpu.cr`; verified by `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_blockscan_refactor crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `6 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: block-scan module, proof spec, or dense baseline changes
 **decision:** Add a default-off research backlog item before touching production kernels: prove tiny-shape equivalence against serial `delta_net_step!`, estimate `s=128` work for pp64/pp256/pp1024/pp2048, and only then prototype compact summaries and a Metal block size `8` or `16` path.
 **adversary:** This is unlikely to help decode (`T=1`) and may not help short pp64 prefill. Dense summaries are now kept only as a long-prefill GPU baseline; compact summaries remain the pp256+ path. Do not replace the existing rowwise kernel without a CPU proof, exactness specs, and an A/B against `delta_net_chunk_128_rowwise`.

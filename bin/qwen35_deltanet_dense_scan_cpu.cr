@@ -1,133 +1,10 @@
 #!/usr/bin/env crystal
 
 require "option_parser"
+require "../src/ml/gguf/qwen35_deltanet_block_scan"
 
-alias Matrix = Array(Array(Float64))
-
-struct DeltaInputs
-  getter k : Array(Float64)
-  getter v : Array(Float64)
-  getter q : Array(Float64)
-  getter g : Float64
-  getter beta : Float64
-
-  def initialize(@k : Array(Float64), @v : Array(Float64), @q : Array(Float64),
-                 @g : Float64, @beta : Float64)
-  end
-end
-
-struct AffineDelta
-  getter a : Matrix
-  getter b : Matrix
-
-  def initialize(@a : Matrix, @b : Matrix)
-  end
-end
-
-private def zeros(rows : Int32, cols : Int32) : Matrix
-  Array.new(rows) { Array.new(cols, 0.0) }
-end
-
-private def identity(n : Int32) : Matrix
-  m = zeros(n, n)
-  n.times { |i| m[i][i] = 1.0 }
-  m
-end
-
-private def matmul(a : Matrix, b : Matrix) : Matrix
-  rows = a.size
-  mid = b.size
-  cols = b[0].size
-  out = zeros(rows, cols)
-  rows.times do |i|
-    cols.times do |j|
-      acc = 0.0
-      mid.times { |k| acc += a[i][k] * b[k][j] }
-      out[i][j] = acc
-    end
-  end
-  out
-end
-
-private def matadd(a : Matrix, b : Matrix) : Matrix
-  rows = a.size
-  cols = a[0].size
-  out = zeros(rows, cols)
-  rows.times do |i|
-    cols.times { |j| out[i][j] = a[i][j] + b[i][j] }
-  end
-  out
-end
-
-private def dot(a : Array(Float64), b : Array(Float64)) : Float64
-  acc = 0.0
-  a.size.times { |i| acc += a[i] * b[i] }
-  acc
-end
-
-private def max_abs_delta(a : Matrix, b : Matrix) : Float64
-  max = 0.0
-  a.size.times do |i|
-    a[i].size.times do |j|
-      d = (a[i][j] - b[i][j]).abs
-      max = d if d > max
-    end
-  end
-  max
-end
-
-private def serial_delta_step(state : Matrix, inp : DeltaInputs, scale : Float64) : Tuple(Matrix, Array(Float64))
-  s = state.size
-  next_state = zeros(s, s)
-  y = Array.new(s, 0.0)
-
-  s.times do |d2|
-    decayed = Array.new(s, 0.0)
-    s.times { |d1| decayed[d1] = state[d2][d1] * inp.g }
-
-    sk = dot(decayed, inp.k)
-    delt = inp.beta * (inp.v[d2] - sk)
-
-    s.times { |d1| next_state[d2][d1] = decayed[d1] + inp.k[d1] * delt }
-    y[d2] = dot(next_state[d2], inp.q) * scale
-  end
-
-  {next_state, y}
-end
-
-private def affine_for(inp : DeltaInputs) : AffineDelta
-  s = inp.k.size
-  a = identity(s)
-  s.times do |i|
-    s.times do |j|
-      a[i][j] = inp.g * (a[i][j] - inp.beta * inp.k[i] * inp.k[j])
-    end
-  end
-
-  b = zeros(s, s)
-  s.times do |d2|
-    s.times { |d1| b[d2][d1] = inp.beta * inp.v[d2] * inp.k[d1] }
-  end
-
-  AffineDelta.new(a, b)
-end
-
-private def compose(first : AffineDelta, second : AffineDelta) : AffineDelta
-  AffineDelta.new(
-    matmul(first.a, second.a),
-    matadd(matmul(first.b, second.a), second.b)
-  )
-end
-
-private def apply_affine(state : Matrix, tr : AffineDelta) : Matrix
-  matadd(matmul(state, tr.a), tr.b)
-end
-
-private def replay_block(state : Matrix, inputs : Array(DeltaInputs), scale : Float64) : Matrix
-  cur = state
-  inputs.each { |inp| cur, _ = serial_delta_step(cur, inp, scale) }
-  cur
-end
+alias BlockScan = ML::GGUF::Qwen35DeltaNetBlockScan
+alias DeltaInputs = ML::GGUF::Qwen35DeltaNetBlockScan::DeltaInputs
 
 private def elapsed_ms(&)
   t0 = Time.instant
@@ -177,17 +54,15 @@ dense_ms = [] of Float64
 max_delta = 0.0
 
 runs.times do
-  sm, serial_state = elapsed_ms { replay_block(initial, inputs, scale) }
+  sm, serial_state = elapsed_ms { BlockScan.replay_final_state(initial, inputs, scale) }
   dm, dense_state = elapsed_ms do
-    summaries = blocks.map do |block|
-      block.map { |inp| affine_for(inp) }.reduce { |acc, tr| compose(acc, tr) }
-    end
+    summaries = blocks.map { |block| BlockScan.compose_all(block) }
 
     prefix_state = initial
     blocks.each_with_index do |block, i|
-      replayed = replay_block(prefix_state, block, scale)
-      prefix_state = apply_affine(prefix_state, summaries[i])
-      d = max_abs_delta(replayed, prefix_state)
+      replayed = BlockScan.replay_final_state(prefix_state, block, scale)
+      prefix_state = BlockScan.apply_affine(prefix_state, summaries[i])
+      d = BlockScan.max_abs_delta(replayed, prefix_state)
       raise "block replay mismatch #{d}" if d > 1.0e-8
     end
     prefix_state
@@ -195,7 +70,7 @@ runs.times do
 
   serial_ms << sm
   dense_ms << dm
-  d = max_abs_delta(serial_state, dense_state)
+  d = BlockScan.max_abs_delta(serial_state, dense_state)
   max_delta = d if d > max_delta
 end
 
