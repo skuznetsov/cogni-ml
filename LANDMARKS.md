@@ -4523,6 +4523,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Keep the compact-B LTP/WBA kernel in research microbenches as a real subkernel win. Do not wire the single-block compact path into prefill. The next valid exact experiment is a multi-block Metal prototype: build summaries for all blocks in parallel, prefix-compose summaries, then replay blocks in parallel; this targets critical-path reduction across long prompts rather than a single-block local speedup.
 **adversary:** The compact-B win alone does not prove end-to-end prefill speedup. It removes the previous compact-B bottleneck, but prefix composition, scanned initial states, replay outputs, and post-processing still need full A/B against pp256/pp1024/pp2048.
 
+### [LM-codex-DELTANET-MULTIBLOCK-SUMMARY-GATE-1] Multi-block summary build is promising only with rank-stable prefix scan
+**status:** verified research gate / not production integrated
+**trust:** {F:0.78, G:0.54, R:0.76}
+**context:** ml (Qwen35 long prefill / DeltaNet associative summaries)
+**evidence:**
+- claim: "The compact summary-build kernels now support independent multi-block construction. At `s=128`, block `16`, blocks `1/4/16/64`, compact `A+B` summary-build p50 measured about `0.315/0.342/0.338/0.235 ms`, with `max_right_blocks_tg_delta <= ~5.4e-8`, `max_a_u_blocks_delta <= ~9.7e-8`, `max_a_v_blocks_delta <= ~7.5e-9`, and `max_a_gamma_blocks_delta <= ~1.0e-7`."
+  source: `/tmp/qwen35_deltanet_compact_b_metal_micro_blocks2 --s=128 --block=16 --blocks=1|4|16|64 --runs=7 --warmup=2` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact summary-build kernels, Metal compiler, or block size changes
+- claim: "The same synthetic run compared against the current rowwise chunk baseline. Summary-build only loses for blocks `1/4` (`summary_vs_rowwise ~0.69/0.87`) but wins for blocks `16/64` (`~1.47x/~3.37x`). This makes summary-build viable for long prefill only, not pp64/pp256 production integration by itself."
+  source: same multi-block microbench on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: rowwise kernel, synthetic harness, host load, or summary-build implementation changes
+- claim: "Rank-growth modeling shows uncapped compact prefix composition is a dead end: at block `16`, uncapped pp1024/pp2048 critical-path speedups are `~0.28x/~0.14x` because rank grows along the tree up to `1024/2048`. An optimistic exact rank cap at `128` changes pp1024/pp2048 to `~1.71x/~2.66x`, while pp256 remains below target at `~0.99x`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_scan_model_rank crystal run bin/qwen35_deltanet_scan_model.cr -- --prompts=256,1024,2048 --blocks=16 --compose=32 --rank-growth`; focused spec `spec/qwen35_deltanet_scan_model_spec.cr` returned `4 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: scan model, compact composition algorithm, rank compression design, or measured rowwise cost changes
+**decision:** Continue DeltaNet summary research only if the next branch has exact rank compression to `<=s` or a different rank-stable prefix formulation. A plain compact prefix tree with growing rank should not be implemented. Target pp1024+ first; pp256 is unlikely to pass the `1.25x` gate even under the optimistic cap.
+**adversary:** The multi-block summary-build comparison excludes prefix scan, replay, output generation, and post-processing. It is a necessary gate, not an end-to-end speedup claim. The rank-cap model is optimistic because it does not price the exact compression kernel.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}

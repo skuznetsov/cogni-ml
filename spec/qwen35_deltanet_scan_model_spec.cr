@@ -27,4 +27,14 @@ describe ML::GGUF::Qwen35DeltaNetScanModel do
     est.scan_levels.should eq(2)
     est.speedup.should be < 1.25
   end
+
+  it "shows compact prefix scan needs rank compression on long prompts" do
+    model = ML::GGUF::Qwen35DeltaNetScanModel
+    uncapped = model.rank_growth_estimate(1024, 16, 128, nil)
+    capped = model.rank_growth_estimate(1024, 16, 128, 128)
+
+    uncapped.max_rank_on_path.should eq(1024)
+    uncapped.speedup.should be < 1.0
+    capped.speedup.should be > 1.25
+  end
 end

@@ -11,6 +11,18 @@ module ML
         scan_levels : Int32,
         max_compose_for_target : Float64
 
+      record RankGrowthEstimate,
+        prompt_tokens : Int32,
+        block_size : Int32,
+        state_size : Int32,
+        rank_cap : Int32?,
+        serial_depth : Float64,
+        parallel_depth : Float64,
+        compose_depth : Float64,
+        speedup : Float64,
+        scan_levels : Int32,
+        max_rank_on_path : Int32
+
       # A serial DeltaNet chunk has a true dependency chain of one recurrent
       # update per token. A block-scan path keeps serial work inside each block,
       # then pays a prefix-scan over block summaries, then replays each block
@@ -59,6 +71,53 @@ module ML
         raise ArgumentError.new("s must be positive") unless s > 0
 
         4.0 * s.to_f64 / 3.0
+      end
+
+      # Critical-path model for a compact prefix scan where composing two
+      # summaries of rank r1/r2 costs O(r1*r2*s). Without exact rank
+      # compression, rank doubles at every tree level and this quickly
+      # dominates the serial DeltaNet scan. With rank_cap=s, this is an
+      # optimistic model for an exact basis-compression path; it does not
+      # include the compression kernel cost.
+      def self.rank_growth_estimate(prompt_tokens : Int32,
+                                    block_size : Int32,
+                                    state_size : Int32 = 128,
+                                    rank_cap : Int32? = nil) : RankGrowthEstimate
+        raise ArgumentError.new("prompt_tokens must be positive") unless prompt_tokens > 0
+        raise ArgumentError.new("block_size must be positive") unless block_size > 0
+        raise ArgumentError.new("state_size must be positive") unless state_size > 0
+        raise ArgumentError.new("rank_cap must be positive") if rank_cap && rank_cap.not_nil! <= 0
+
+        n_blocks = ceil_div(prompt_tokens, block_size)
+        levels = ceil_log2(n_blocks)
+        rank = block_size
+        max_rank = rank
+        compose = 0.0
+
+        levels.times do
+          effective_rank = rank_cap ? Math.min(rank, rank_cap.not_nil!) : rank
+          # Two vector-dot/axpy style transformations dominate compact
+          # transition + compact-B composition. Normalize against one serial
+          # rowwise token step (~3*s*s lane work), matching the existing model.
+          compose += 4.0 * effective_rank.to_f64 * effective_rank.to_f64 / (3.0 * state_size.to_f64)
+          rank *= 2
+          max_rank = rank if rank > max_rank
+        end
+
+        serial = prompt_tokens.to_f64
+        parallel = (2 * block_size).to_f64 + compose
+        RankGrowthEstimate.new(
+          prompt_tokens: prompt_tokens,
+          block_size: block_size,
+          state_size: state_size,
+          rank_cap: rank_cap,
+          serial_depth: serial,
+          parallel_depth: parallel,
+          compose_depth: compose,
+          speedup: serial / parallel,
+          scan_levels: levels,
+          max_rank_on_path: max_rank,
+        )
       end
 
       def self.ceil_div(a : Int32, b : Int32) : Int32
