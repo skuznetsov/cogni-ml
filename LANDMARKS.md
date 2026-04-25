@@ -5024,7 +5024,7 @@ Rich landmarks include full State/Relations/Evidence structure.
 **trust:** {F:0.78, G:0.48, R:0.78}
 **context:** ml (Qwen35 speculative decode / benchmark harness)
 **evidence:**
-- claim: "`bin/qwen35_speculative_sweep.cr` runs a compiled `qwen35_speculative_accept` runner across named policies and prompts, then parses `spec_wall`, `plain_target_wall`, acceptance, cycle count, and gamma stats into per-prompt rows and policy averages."
+- claim: "`bin/qwen35_speculative_sweep.cr` runs a compiled `qwen35_speculative_accept` runner across named policies and prompts, then parses `spec_wall`, `plain_target_wall`, acceptance, cycle count, and gamma stats into per-prompt rows and policy averages. Policies are interleaved inside each prompt/repetition block to reduce host-drift bias."
   source: `bin/qwen35_speculative_sweep.cr`, implemented on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: speculative harness output format or policy env names change
@@ -5036,5 +5036,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_sweep --runner /tmp/qwen35_speculative_accept_sweep --tokens 8 --policies default,hybrid --only-prompts "The capital of France is|def fibonacci(n):"` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: prompt outputs, host load, policy defaults, or speculative scheduler changes
+- claim: "After switching to interleaved order and adding no-guard policy variants, a cheap repeated smoke ranked default and n-gram near parity while bootstrap32 lagged: default `21.20 ms/tok`, `1.274x`; ngram `21.22 ms/tok`, `1.267x`; bootstrap32 `22.39 ms/tok`, `1.213x`."
+  source: `/tmp/qwen35_speculative_sweep_interleave --runner /tmp/qwen35_speculative_accept_sweep --tokens 8 --reps 2 --policies default,bootstrap32,ngram --only-prompts "The capital of France is|def fibonacci(n):"` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, policy defaults, prompt outputs, or sweep ordering changes
 **decision:** Use this sweep before promoting speculative policy changes. Single-prompt wins and acceptance-rate improvements are insufficient; policy changes must improve average wall-time across high-accept and rejection-sensitive prompts without breaking exact greedy parity in the underlying runner.
-**adversary:** The smoke uses only 8 generated tokens and two prompts to keep the check cheap. It validates the harness and catches gross policy mistakes, but production claims still need longer runs, more prompts, and quiet-host controls.
+**adversary:** The smoke uses only 8 generated tokens and two prompts to keep the check cheap. It validates the harness and catches gross policy mistakes, but production claims still need longer runs, more prompts, quiet-host controls, and interleaved order because policy-major ordering showed visible host-drift bias.

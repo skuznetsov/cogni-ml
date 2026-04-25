@@ -8,7 +8,8 @@
 #   crystal run bin/qwen35_speculative_sweep.cr -- --runner /tmp/qwen35_speculative_accept
 #
 # This is intentionally a measurement driver. It does not load models itself and
-# does not change inference semantics.
+# does not change inference semantics. Policies are interleaved inside each
+# prompt/repetition block to reduce host-drift bias.
 
 require "option_parser"
 
@@ -40,7 +41,7 @@ prompts = [
   "The quick brown fox",
   "def fibonacci(n):",
 ]
-policy_names = ["default", "guard", "bootstrap32_guard", "hybrid", "ngram_guard"]
+policy_names = ["default", "guard", "bootstrap32", "bootstrap32_guard", "hybrid", "ngram", "ngram_guard"]
 extra_args = [] of String
 
 OptionParser.parse(ARGV) do |p|
@@ -50,7 +51,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--gamma N", "Initial speculative gamma (default: 4)") { |v| gamma = v.to_i }
   p.on("--max-gamma N", "Maximum adaptive gamma (default: 32)") { |v| max_gamma = v.to_i }
   p.on("--reps N", "Repeat each policy/prompt this many times (default: 1)") { |v| reps = v.to_i }
-  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32_guard,hybrid,ngram_guard") do |v|
+  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_guard,hybrid,ngram,ngram_guard") do |v|
     policy_names = v.split(',').map(&.strip).reject(&.empty?)
   end
   p.on("--prompt TEXT", "Add one prompt; can be passed multiple times") { |v| prompts << v }
@@ -76,10 +77,12 @@ policies = {
   "guard"   => Policy.new("guard", [] of String, {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
+  "bootstrap32"       => Policy.new("bootstrap32", ["--bootstrap-gamma", "32"], {} of String => String),
   "bootstrap32_guard" => Policy.new("bootstrap32_guard", ["--bootstrap-gamma", "32"], {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
   "hybrid"      => Policy.new("hybrid", ["--verify", "hybrid"], {} of String => String),
+  "ngram"       => Policy.new("ngram", ["--ngram"], {} of String => String),
   "ngram_guard" => Policy.new("ngram_guard", ["--ngram"], {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
@@ -153,9 +156,11 @@ end
 
 results = [] of RunResult
 
-selected.each do |policy|
+# Interleave policies inside each prompt/rep block so host drift affects the
+# candidates more evenly than a policy-major run order.
+reps.times do
   prompts.each do |prompt|
-    reps.times do
+    selected.each do |policy|
       result = run_one(runner, policy, prompt, tokens, gamma, max_gamma, extra_args)
       results << result
       unless result.ok
