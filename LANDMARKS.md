@@ -4700,8 +4700,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 **adversary:** This does not refute a true MMA/simdgroup-matrix compose or a different rank-stable formulation. It refutes only the straightforward 16x16 tiled dense compose path against the current synthetic rowwise budget.
 
 ### [LM-codex-DELTANET-FIXED-K-BASIS-PROBE-1] Real K vectors do not support a simple fixed-basis exact shortcut
-**status:** refuted/narrowed research branch
-**trust:** {F:0.70, G:0.40, R:0.72}
+**status:** exact shortcut refuted; approximate projected-DeltaNet branch reopened
+**trust:** {F:0.74, G:0.42, R:0.76}
 **context:** ml (Qwen35 long prefill / DeltaNet summaries / fixed basis compression)
 **evidence:**
 - claim: "A real-Qwen probe can collect normalized DeltaNet `K` vectors before a recurrent layer and test held-out residuals against a fixed per-head basis built from earlier calibration tokens. The probe uses the real Qwen3.5-9B Q4_K_M weights, llama-tokenized prompt text, recurrent qkv projection, convolution, SiLU, and K L2 normalization."
@@ -4720,8 +4720,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_deltanet_fixed_basis_probe2 --tokens=128 --calib-tokens=64 --layer=0 --ranks=16,32,48,64 --thresholds=0.05,0.1,0.2,0.35,0.5 --prompt=<varied>` and layer1 `--tokens=64 --calib-tokens=32 --ranks=16,24,32`, on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: prompt suite, basis algorithm, layer choice, residual threshold policy, or eval harness changes
-**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. The residuals are too large for an exact shortcut and would require approximation plus an eval harness, not the current exact-performance phase.
-**adversary:** This uses greedy modified Gram-Schmidt, not optimal PCA/SVD, and only two early recurrent layers/prompts were checked. A learned/adaptive basis might reduce residuals, but that becomes approximate inference unless a strict residual fallback is added and measured. The layer0 pass-rate tail is worth preserving as a future eval-gated approximate mode candidate, but it is not sufficient for the current exact-speed phase.
+- claim: "PCA/power-iteration bases improve the fixed-basis residual profile modestly but do not turn residual into an exact shortcut. For layer0 rank32, PCA improves mean/p50 residual from `0.484/0.517` to `0.461/0.488`; for layer1 rank24, from `0.606/0.608` to `0.572/0.573`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_pca --basis=greedy|pca --pca-iters=32 ...` on layer0/layer1, 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: PCA implementation, prompt suite, basis algorithm, or layer choice changes
+- claim: "Residual norm is too pessimistic as a usefulness metric: projected-K DeltaNet drift can be tiny even when K residuals are large. With PCA rank `16/24`, layers `1/2/4` on varied prompts measured `y_rmse` around `8.5e-5..1.26e-4` and `state_rmse` around `0.0014..0.0017`, while K residual p50 stayed around `0.49..0.65`. Layer0 is risky: rank `16/32/48` measured `y_rmse ~0.0060/0.0048/0.0042` and state max around `9`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_pca --simulate-delta --basis=pca --pca-iters=32 --tokens=96 --calib-tokens=48 --layer=0 ...`; layer1/2/4 short runs on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: projected-K simulation, layer prompts, recurrent state formula, or eval metrics change
+**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: if `K≈B c`, then state can be represented as `M B^T` with shape `128 x rank`, and outputs use `M*(B^T q)`. This could reduce DeltaNet state work by about `rank/128` on layers where projected-K drift stays small.
+**adversary:** The projected-K drift check is still layer-local, not full-model logit drift. Layer0 looks unsafe under the same approximation, so a production design needs per-layer gating or exact fallback plus an eval harness before any speed claim.
 
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
