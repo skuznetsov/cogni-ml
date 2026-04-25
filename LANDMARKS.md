@@ -3965,3 +3965,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: Q4_K batch GEMM output-store strategy, Metal simdgroup_matrix capabilities, or prefill add routing changes
 **note:** This is useful as an opt-in falsifier harness and future Q6 experiment hook, not a current speed win. The WBA/LTP lesson is that simply folding the residual write is too local for prefill; the remaining exact opportunity is a larger FFN tile-streaming diamond or a lower-level Q4/Q6 tile algorithm that reduces dominant weight/activation traffic.
+
+### [LM-codex-DN-POST-LOCAL-Y-FALSIFIER-1] Local-caching DeltaNet post values is not the recurrent prefill breakthrough
+**status:** falsified-removed
+**trust:** {F:0.78, G:0.44, R:0.72}
+**context:** ml (Qwen prefill DeltaNet / recurrent WBA)
+**evidence:**
+- claim: "The current prefill wall is still dominated by grouped recurrent/DeltaNet command buffers: prompt64 profile reported `dn wait 141.49 ms` inside `153.92 ms` profiled wall, while the grouped `full+rec` waits were flat around `17.92-18.63 ms` and `rec0-2` was `13.32 ms`."
+  source: `/tmp/qwen35_prefill_attribution_wba_final --prompt=64 --warmup=1 --reps=3 --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prefill grouping, DeltaNet kernels, benchmark harness, or host load changes
+- claim: "Caching each lane's four `Y[d]` values in `delta_net_post_norm_gate` and `delta_net_post_norm_gate_chunk` is correctness-safe in focused Metal specs but does not improve wall time."
+  source: temporary patch to `src/ml/gguf/kernels/delta_net.metal`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_post_delta_escalated crystal spec spec/qwen35_delta_net_spec.cr --link-flags=...` returned `3 examples, 0 failures`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_dn_post_forward_escalated crystal spec spec/qwen35_forward_spec.cr --link-flags=...` returned `14 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: DeltaNet post kernel implementation, Metal compiler behavior, or spec coverage changes
+- claim: "The local-cache patch regressed prompt64 and was neutral at prompt256: old pp64 p50 `152.56 ms` versus patched `155.71 ms`; old pp256 p50 `492.55 ms` versus patched `492.23 ms`. The patch was removed before commit."
+  source: old `/tmp/qwen35_prefill_attribution_wba_final` versus patched `/tmp/qwen35_prefill_attribution_dnpost_new`, both run with `--warmup=1 --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, DeltaNet post kernel, or Metal compiler scheduling changes
+**note:** This falsifies a local post-kernel cache optimization, not DeltaNet as a target. The next exact recurrent lever needs a larger boundary change: either fuse DeltaNet output generation with post-normalization at a scan-compatible granularity, or replace the serial scan with a parallel/chunked associative formulation.
