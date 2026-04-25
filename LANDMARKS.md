@@ -4228,3 +4228,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt outputs, draft acceptance, or fallback scheduler changes
 **note:** This is an experimental-control feature, not a default speed win. Use it to reproduce harness fallback-off comparisons inside the practical CLI.
+
+### [LM-codex-GENERATE-NGRAM-LAZY-BACKUP-1] qwen35_generate allocates n-gram rollback backup lazily
+**status:** verified-small-cleanup
+**trust:** {F:0.82, G:0.54, R:0.76}
+**context:** ml (Qwen CLI / n-gram speculative decode)
+**evidence:**
+- claim: "`qwen35_generate` now allocates the n-gram verifier rollback `State` only after an n-gram candidate chunk exists, instead of allocating it at the start of every n-gram/auto decode run."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: n-gram verifier rollback policy or state allocation semantics change
+- claim: "Token parity still matches greedy for `QWEN35_DECODE_POLICY=auto` and `QWEN35_DECODE_POLICY=ngram` on `The capital of France is`, `The quick brown fox`, and `def fibonacci(n):` at 32 generated tokens."
+  source: Python parity script over `/tmp/qwen35_generate_lazybackup PROMPT 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt outputs, n-gram verifier route, or state rollback semantics change
+- claim: "Wall timing on the 32-token smoke is neutral/noisy, so this should be treated as allocation/overhead hygiene rather than a measured tok/s win."
+  source: same `/tmp/qwen35_generate_lazybackup` parity smoke on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt mix, or CLI timing changes
+**note:** This removes avoidable work from no-candidate auto/ngram runs without changing candidate behavior. It is not a breakthrough path.

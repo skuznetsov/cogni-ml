@@ -396,7 +396,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
   ngram_accepted = 0
   ngram_proposed = 0
   plain_steps = 0
-  backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  backup = nil.as(ML::GGUF::Qwen35CPU::State?)
 
   while output_ids.size < n_gen
     remaining = n_gen - output_ids.size
@@ -422,7 +422,8 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
     ngram_cycles += 1
     ngram_proposed += candidates.size
-    backup.copy_from!(state)
+    backup ||= ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+    backup.not_nil!.copy_from!(state)
     tstart = Time.instant
     target_nexts = with_guarded_full_rows_disabled do
       ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, pos, state)
@@ -452,7 +453,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
     if rejected
       ngram_disabled = true if ngram_disable_after_reject
-      state.copy_from!(backup)
+      state.copy_from!(backup.not_nil!)
       corrected = with_guarded_full_rows_disabled do
         ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, accepted_or_corrected, pos, state)
       end
