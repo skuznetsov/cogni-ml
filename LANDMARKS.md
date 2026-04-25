@@ -4499,6 +4499,30 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Do not spend the next production pass on full-F16 predequantized FFN weights. If a prepack branch is revisited, it should preserve compressed/blocked Q4 layout or fuse downstream FFN work; expanding the hot weights to F16 loses on memory traffic before integration overhead is counted.
 **adversary:** The F16 microbench is synthetic and uses the current generic `simd_mm_f16` kernel, so this does not formally rule out a hand-tuned F16 GEMM. It does rule out the cheap "predequantize Q4 weights to full F16 and reuse existing F16 GEMM" path as a plausible short-term win.
 
+### [LM-codex-DELTANET-COMPACT-B-LTP-WBA-1] Compact-B summary construction benefits from LTP/WBA, but single-block apply fusion is not enough
+**status:** partial verified optimization / production not integrated
+**trust:** {F:0.76, G:0.48, R:0.74}
+**context:** ml (Qwen35 long prefill / DeltaNet associative summaries / LTP-WBA)
+**evidence:**
+- claim: "A threadgroup-wide compact-`B` right-factor kernel parallelizes the `s=128` vector recurrence across the width dimension and stays exact within f32 drift. In a formatted rerun at block `16`, scalar compact-B measured p50 `~2.179 ms`, while the threadgroup/LTP-WBA route measured p50 `~0.302 ms` (`~7.22x`), with `max_right_tg_delta ~3.24e-8`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_compact_b_tg_fmt crystal run --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_deltanet_compact_b_metal_micro.cr -- --s=128 --block=16 --runs=6 --warmup=2` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact-B kernel, Metal compiler, block size, or summary algebra changes
+- claim: "A short block sweep also showed the same direction: block `8/16/32` threadgroup compact-B p50 was about `0.269/0.202/0.273 ms`, improving over scalar by about `4.8x/6.2x/11.3x` in that run."
+  source: `for b in 8 16 32; do ... bin/qwen35_deltanet_compact_b_metal_micro.cr -- --s=128 --block=$b --runs=6 --warmup=2; done` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, compact-B kernel, or block-size policy changes
+- claim: "The full single-block compact lower-bound remains insufficient for production integration. With threadgroup compact-B and the existing two-dispatch `coeffs + apply`, block `16` measured compact p50 `~0.422-0.714 ms` versus rowwise `~0.277-0.516 ms` across reruns; it is exact within f32 drift but does not robustly beat `delta_net_chunk_128_rowwise`, and compact still computes final state only."
+  source: `bin/qwen35_deltanet_compact_vs_rowwise_micro.cr -- --s=128 --block=16 --runs=10|20 --warmup=3|4` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: rowwise kernel, compact lower-bound harness, or multi-block prototype changes
+- claim: "A row-threadgroup `coeffs+apply` fusion was exact but did not produce a robust lower-bound win; block `16` stayed around `~0.424-0.515 ms` in tested runs. Recomputing coefficient reductions inside each row-threadgroup is not the right single-block apply fusion."
+  source: `QWEN35_COMPACT_APPLY_ROW_TG=1 ... bin/qwen35_deltanet_compact_vs_rowwise_micro.cr -- --s=128 --block=16 --runs=10|20 --warmup=3|4` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact apply kernel redesign, Metal compiler, or a full multi-block implementation
+**decision:** Keep the compact-B LTP/WBA kernel in research microbenches as a real subkernel win. Do not wire the single-block compact path into prefill. The next valid exact experiment is a multi-block Metal prototype: build summaries for all blocks in parallel, prefix-compose summaries, then replay blocks in parallel; this targets critical-path reduction across long prompts rather than a single-block local speedup.
+**adversary:** The compact-B win alone does not prove end-to-end prefill speedup. It removes the previous compact-B bottleneck, but prefix composition, scanned initial states, replay outputs, and post-processing still need full A/B against pp256/pp1024/pp2048.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}

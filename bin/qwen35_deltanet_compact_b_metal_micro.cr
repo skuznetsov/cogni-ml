@@ -48,6 +48,51 @@ kernel void compact_b_build_rights(
         rights[i * s + d] = r[d];
     }
 }
+
+kernel void compact_b_build_rights_tg(
+    device const float* k      [[buffer(0)]],
+    device const float* beta   [[buffer(1)]],
+    device const float* g      [[buffer(2)]],
+    device       float* rights [[buffer(3)]],
+    constant     uint&  s      [[buffer(4)]],
+    constant     uint&  rank   [[buffer(5)]],
+    uint3 tg [[threadgroup_position_in_grid]],
+    uint  tid [[thread_index_in_threadgroup]])
+{
+    const uint i = tg.x;
+    if (i >= rank || s > MAX_S) return;
+
+    threadgroup float r[MAX_S];
+    threadgroup float partial[MAX_S];
+
+    if (tid < s) {
+        r[tid] = beta[i] * k[i * s + tid];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint t = i + 1; t < rank; ++t) {
+        partial[tid] = (tid < s) ? (r[tid] * k[t * s + tid]) : 0.0f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint stride = MAX_S >> 1; stride > 0; stride >>= 1) {
+            if (tid < stride) {
+                partial[tid] += partial[tid + stride];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        const float scale = -beta[t] * partial[0];
+        const float gt = g[t];
+        if (tid < s) {
+            r[tid] = gt * (r[tid] + scale * k[t * s + tid]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tid < s) {
+        rights[i * s + tid] = r[tid];
+    }
+}
 METAL
 
 private def elapsed_ms(&)
@@ -120,43 +165,70 @@ k_buf = ML::MetalBuffer.from_array(flatten_vecs_f32(k))
 beta_buf = ML::MetalBuffer.from_array(beta)
 g_buf = ML::MetalBuffer.from_array(g)
 rights_buf = ML::MetalBuffer.new((block * s).to_i64 * sizeof(Float32))
+rights_tg_buf = ML::MetalBuffer.new((block * s).to_i64 * sizeof(Float32))
 
 pipe = ML::Metal::ComputePipeline.new("compact_b_build_rights", SOURCE)
+tg_pipe = ML::Metal::ComputePipeline.new("compact_b_build_rights_tg", SOURCE)
 s_u = s.to_u32
 rank_u = block.to_u32
 
-run_once = -> do
+run_once = ->(out_buf : ML::MetalBuffer) do
   ML::Metal::Dispatch.execute(pipe) do |enc|
     enc.set_buffer(k_buf, 0)
     enc.set_buffer(beta_buf, 1)
     enc.set_buffer(g_buf, 2)
-    enc.set_buffer(rights_buf, 3)
+    enc.set_buffer(out_buf, 3)
     enc.set_value(s_u, 4)
     enc.set_value(rank_u, 5)
     enc.dispatch({block, 1, 1}, {Math.min(block, 64), 1, 1})
   end
 end
 
-warmup.times { run_once.call }
+run_tg_once = -> do
+  ML::Metal::Dispatch.execute(tg_pipe) do |enc|
+    enc.set_buffer(k_buf, 0)
+    enc.set_buffer(beta_buf, 1)
+    enc.set_buffer(g_buf, 2)
+    enc.set_buffer(rights_tg_buf, 3)
+    enc.set_value(s_u, 4)
+    enc.set_value(rank_u, 5)
+    enc.dispatch_threadgroups({block, 1, 1}, {128, 1, 1})
+  end
+end
+
+warmup.times { run_once.call(rights_buf); run_tg_once.call }
 gpu_rights = rights_buf.read(block * s)
+gpu_rights_tg = rights_tg_buf.read(block * s)
 max_right = max_abs_delta_vec(cpu_summary.b_rights, gpu_rights)
+max_right_tg = max_abs_delta_vec(cpu_summary.b_rights, gpu_rights_tg)
 
 metal_ms = [] of Float64
+metal_tg_ms = [] of Float64
 runs.times do
-  ms, _ = elapsed_ms { run_once.call }
+  ms, _ = elapsed_ms { run_once.call(rights_buf) }
   metal_ms << ms
+  tg_ms, _ = elapsed_ms { run_tg_once.call }
+  metal_tg_ms << tg_ms
 end
 metal_avg = metal_ms.sum / metal_ms.size
 metal_sorted = metal_ms.sort
 metal_p50 = metal_sorted[metal_sorted.size // 2]
+metal_tg_avg = metal_tg_ms.sum / metal_tg_ms.size
+metal_tg_sorted = metal_tg_ms.sort
+metal_tg_p50 = metal_tg_sorted[metal_tg_sorted.size // 2]
 
 cpu_ms, _ = elapsed_ms { BlockScan.compact_summary_for_block(inputs) }
 
 puts "Qwen35 DeltaNet compact-B Metal right-factor microbench"
 puts "s=#{s} block=#{block} rank=#{block} runs=#{runs} warmup=#{warmup}"
 puts "max_right_delta=#{max_right}"
+puts "max_right_tg_delta=#{max_right_tg}"
 puts "metal_avg_ms=#{metal_avg.round(4)}"
 puts "metal_p50_ms=#{metal_p50.round(4)}"
+puts "metal_tg_avg_ms=#{metal_tg_avg.round(4)}"
+puts "metal_tg_p50_ms=#{metal_tg_p50.round(4)}"
+puts "tg_vs_scalar=#{(metal_p50 / metal_tg_p50).round(3)}"
 puts "cpu_compact_summary_ms=#{cpu_ms.round(4)}"
 puts "speedup_vs_cpu_summary=#{(cpu_ms / metal_p50).round(3)}"
+puts "tg_speedup_vs_cpu_summary=#{(cpu_ms / metal_tg_p50).round(3)}"
 puts "note=synthetic compact-B right-factor construction only; excludes compact-A build, prefix scan, replay, and prefill integration."

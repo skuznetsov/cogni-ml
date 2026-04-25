@@ -14,6 +14,7 @@ SOURCE = <<-METAL
 #include <metal_stdlib>
 using namespace metal;
 #define MAX_S 128
+#define MAX_RANK 64
 
 kernel void compact_a_dot_coeffs(
     device const float* k     [[buffer(0)]],
@@ -82,6 +83,40 @@ kernel void compact_b_build_rights(
     for (uint d = 0; d < s; ++d) rights[i * s + d] = r[d];
 }
 
+kernel void compact_b_build_rights_tg(
+    device const float* k      [[buffer(0)]],
+    device const float* beta   [[buffer(1)]],
+    device const float* g      [[buffer(2)]],
+    device       float* rights [[buffer(3)]],
+    constant     uint&  s      [[buffer(4)]],
+    constant     uint&  rank   [[buffer(5)]],
+    uint3 tg [[threadgroup_position_in_grid]],
+    uint  tid [[thread_index_in_threadgroup]])
+{
+    const uint i = tg.x;
+    if (i >= rank || s > MAX_S) return;
+    threadgroup float r[MAX_S];
+    threadgroup float partial[MAX_S];
+
+    if (tid < s) r[tid] = beta[i] * k[i * s + tid];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint t = i + 1; t < rank; ++t) {
+        partial[tid] = (tid < s) ? (r[tid] * k[t * s + tid]) : 0.0f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = MAX_S >> 1; stride > 0; stride >>= 1) {
+            if (tid < stride) partial[tid] += partial[tid + stride];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        const float scale = -beta[t] * partial[0];
+        const float gt = g[t];
+        if (tid < s) r[tid] = gt * (r[tid] + scale * k[t * s + tid]);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tid < s) rights[i * s + tid] = r[tid];
+}
+
 kernel void compact_transition_coeffs(
     device const float* state  [[buffer(0)]],
     device const float* u_cols [[buffer(1)]],
@@ -118,6 +153,46 @@ kernel void compact_summary_apply(
     acc *= gamma_p[0];
     for (uint r = 0; r < rank; ++r) acc += b_lefts[r * s + row] * b_rights[r * s + col];
     out[row * s + col] = acc;
+}
+
+kernel void compact_summary_apply_row_tg(
+    device const float* state    [[buffer(0)]],
+    device const float* u_cols   [[buffer(1)]],
+    device const float* v_cols   [[buffer(2)]],
+    device const float* b_lefts  [[buffer(3)]],
+    device const float* b_rights [[buffer(4)]],
+    device       float* out      [[buffer(5)]],
+    device const float* gamma_p  [[buffer(6)]],
+    constant     uint&  s        [[buffer(7)]],
+    constant     uint&  rank     [[buffer(8)]],
+    uint3 tg [[threadgroup_position_in_grid]],
+    uint  tid [[thread_index_in_threadgroup]])
+{
+    const uint row = tg.x;
+    const uint col = tid;
+    if (row >= s || s > MAX_S || rank > MAX_RANK) return;
+
+    threadgroup float partial[MAX_S];
+    threadgroup float coeff[MAX_RANK];
+
+    for (uint r = 0; r < rank; ++r) {
+        partial[tid] = (tid < s) ? (state[row * s + tid] * u_cols[r * s + tid]) : 0.0f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = MAX_S >> 1; stride > 0; stride >>= 1) {
+            if (tid < stride) partial[tid] += partial[tid + stride];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if (tid == 0) coeff[r] = partial[0];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (col < s) {
+        float acc = state[row * s + col];
+        for (uint r = 0; r < rank; ++r) acc += coeff[r] * v_cols[r * s + col];
+        acc *= gamma_p[0];
+        for (uint r = 0; r < rank; ++r) acc += b_lefts[r * s + row] * b_rights[r * s + col];
+        out[row * s + col] = acc;
+    }
 }
 METAL
 
@@ -211,10 +286,15 @@ out_buf = ML::MetalBuffer.new((s * s).to_i64 * sizeof(Float32))
 pa_dot = ML::Metal::ComputePipeline.new("compact_a_dot_coeffs", SOURCE)
 pa_build = ML::Metal::ComputePipeline.new("compact_a_build_factors", SOURCE)
 pb_build = ML::Metal::ComputePipeline.new("compact_b_build_rights", SOURCE)
+pb_build_tg = ML::Metal::ComputePipeline.new("compact_b_build_rights_tg", SOURCE)
 pcoeff = ML::Metal::ComputePipeline.new("compact_transition_coeffs", SOURCE)
 papply = ML::Metal::ComputePipeline.new("compact_summary_apply", SOURCE)
+papply_row_tg = ML::Metal::ComputePipeline.new("compact_summary_apply_row_tg", SOURCE)
 s_u = s.to_u32
 rank_u = block.to_u32
+
+use_tg_b = ENV["QWEN35_COMPACT_B_SCALAR"]? != "1"
+use_tg_apply = ENV["QWEN35_COMPACT_APPLY_ROW_TG"]? == "1"
 
 run_compact = -> do
   ML::Metal::Dispatch.execute_sequence do |cmd|
@@ -234,26 +314,40 @@ run_compact = -> do
     enc.end_encoding
 
     enc = ML::Metal::ComputeEncoder.new(cmd)
-    enc.set_pipeline(pb_build)
+    enc.set_pipeline(use_tg_b ? pb_build_tg : pb_build)
     enc.set_buffer(k_buf, 0); enc.set_buffer(beta_buf, 1); enc.set_buffer(g_buf, 2); enc.set_buffer(br_buf, 3)
     enc.set_value(s_u, 4); enc.set_value(rank_u, 5)
-    enc.dispatch({block, 1, 1}, {Math.min(block, 64), 1, 1})
+    if use_tg_b
+      enc.dispatch_threadgroups({block, 1, 1}, {128, 1, 1})
+    else
+      enc.dispatch({block, 1, 1}, {Math.min(block, 64), 1, 1})
+    end
     enc.end_encoding
 
-    enc = ML::Metal::ComputeEncoder.new(cmd)
-    enc.set_pipeline(pcoeff)
-    enc.set_buffer(state_buf, 0); enc.set_buffer(u_buf, 1); enc.set_buffer(coeff_apply_buf, 2)
-    enc.set_value(s_u, 3); enc.set_value(rank_u, 4)
-    enc.dispatch({s, block, 1}, {16, 16, 1})
-    enc.end_encoding
+    if use_tg_apply
+      enc = ML::Metal::ComputeEncoder.new(cmd)
+      enc.set_pipeline(papply_row_tg)
+      enc.set_buffer(state_buf, 0); enc.set_buffer(u_buf, 1); enc.set_buffer(v_buf, 2)
+      enc.set_buffer(v_in_buf, 3); enc.set_buffer(br_buf, 4); enc.set_buffer(out_buf, 5); enc.set_buffer(gamma_buf, 6)
+      enc.set_value(s_u, 7); enc.set_value(rank_u, 8)
+      enc.dispatch_threadgroups({s, 1, 1}, {128, 1, 1})
+      enc.end_encoding
+    else
+      enc = ML::Metal::ComputeEncoder.new(cmd)
+      enc.set_pipeline(pcoeff)
+      enc.set_buffer(state_buf, 0); enc.set_buffer(u_buf, 1); enc.set_buffer(coeff_apply_buf, 2)
+      enc.set_value(s_u, 3); enc.set_value(rank_u, 4)
+      enc.dispatch({s, block, 1}, {16, 16, 1})
+      enc.end_encoding
 
-    enc = ML::Metal::ComputeEncoder.new(cmd)
-    enc.set_pipeline(papply)
-    enc.set_buffer(state_buf, 0); enc.set_buffer(coeff_apply_buf, 1); enc.set_buffer(v_buf, 2)
-    enc.set_buffer(v_in_buf, 3); enc.set_buffer(br_buf, 4); enc.set_buffer(out_buf, 5); enc.set_buffer(gamma_buf, 6)
-    enc.set_value(s_u, 7); enc.set_value(rank_u, 8)
-    enc.dispatch({s, s, 1}, {16, 16, 1})
-    enc.end_encoding
+      enc = ML::Metal::ComputeEncoder.new(cmd)
+      enc.set_pipeline(papply)
+      enc.set_buffer(state_buf, 0); enc.set_buffer(coeff_apply_buf, 1); enc.set_buffer(v_buf, 2)
+      enc.set_buffer(v_in_buf, 3); enc.set_buffer(br_buf, 4); enc.set_buffer(out_buf, 5); enc.set_buffer(gamma_buf, 6)
+      enc.set_value(s_u, 7); enc.set_value(rank_u, 8)
+      enc.dispatch({s, s, 1}, {16, 16, 1})
+      enc.end_encoding
+    end
   end
 end
 
@@ -297,6 +391,8 @@ rowwise_p50 = rowwise_ms.sort[rowwise_ms.size // 2]
 
 puts "Qwen35 DeltaNet compact full lower-bound vs rowwise microbench"
 puts "s=#{s} block=#{block} runs=#{runs} warmup=#{warmup}"
+puts "compact_b_kernel=#{use_tg_b ? "threadgroup" : "scalar"}"
+puts "compact_apply_kernel=#{use_tg_apply ? "row_threadgroup" : "two_dispatch_2d"}"
 puts "compact_delta_vs_cpu=#{compact_delta}"
 puts "rowwise_delta_vs_cpu=#{rowwise_delta}"
 puts "compact_p50_ms=#{compact_p50.round(4)}"
