@@ -4091,3 +4091,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt mix, draft cost, n-gram policy, or verifier performance changes
 **note:** Keep the modes separate in the practical CLI for now: use n-gram for repeated/template text, neural speculative for longer high-accept non-repeated text, and guarded full-row verifier only on neural speculative chunks.
+
+### [LM-codex-GENERATE-DECODE-POLICY-1] qwen35_generate has explicit decode-mode policy
+**status:** verified-feature
+**trust:** {F:0.84, G:0.48, R:0.80}
+**context:** ml (Qwen CLI / decode policy)
+**evidence:**
+- claim: "`qwen35_generate` now accepts `QWEN35_DECODE_POLICY=greedy|ngram|speculative|auto`. Explicit policy overrides legacy mode envs; `auto` currently maps to the exact fail-closed n-gram path instead of composing n-gram and neural speculative state machines."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: generation CLI control flow, speculative mode composition, or n-gram verifier semantics change
+- claim: "Legacy ambiguous mode selection now fails before model load: setting both `QWEN35_SPECULATIVE_DECODE=1` and `QWEN35_NGRAM_DECODE=1` without an explicit policy exits with `QWEN35_SPECULATIVE_DECODE and QWEN35_NGRAM_DECODE are mutually exclusive`; invalid `QWEN35_DECODE_POLICY` values also fail before model load."
+  source: `/tmp/qwen35_generate_policy` fail-fast smoke commands on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: env parsing or CLI startup behavior changes
+- claim: "Real CLI parity checks with `QWEN35_DECODE_POLICY=auto QWEN35_HEAD_FULL_ROWS_GUARDED=1` match greedy generated token IDs for `The capital of France is`, `The quick brown fox`, and `def fibonacci(n):` at 32 generated tokens. The same smoke measured auto at `10.40`, `16.79`, and `20.83 ms/tok` respectively versus greedy `19.73`, `20.20`, and `19.77 ms/tok`."
+  source: Python parity script over `/tmp/qwen35_generate_policy PROMPT 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt output drift, n-gram policy, guarded verifier interaction, or host load changes
+**note:** This is a policy-safety cleanup rather than a new kernel win. Neural speculative stays opt-in; automatic neural selection needs a reliable acceptance/cost predictor before it is safe.

@@ -19,14 +19,34 @@ LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-to
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
-speculative_decode_enabled = ENV["QWEN35_SPECULATIVE_DECODE"]? == "1" || ENV.has_key?("QWEN35_DRAFT_MODEL")
+decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
+unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
+  raise "QWEN35_DECODE_POLICY must be greedy, ngram, speculative, or auto"
+end
+legacy_speculative_decode_enabled = ENV["QWEN35_SPECULATIVE_DECODE"]? == "1" || ENV.has_key?("QWEN35_DRAFT_MODEL")
+legacy_ngram_decode_enabled = ENV["QWEN35_NGRAM_DECODE"]? == "1"
+if decode_policy.empty? && legacy_speculative_decode_enabled && legacy_ngram_decode_enabled
+  raise "QWEN35_SPECULATIVE_DECODE and QWEN35_NGRAM_DECODE are mutually exclusive; set QWEN35_DECODE_POLICY=ngram or speculative"
+end
+speculative_decode_enabled = false
+ngram_decode_enabled = false
+case decode_policy
+when "greedy"
+  # Explicit policy overrides legacy env toggles.
+when "ngram", "auto"
+  ngram_decode_enabled = true
+when "speculative"
+  speculative_decode_enabled = true
+else
+  speculative_decode_enabled = legacy_speculative_decode_enabled
+  ngram_decode_enabled = legacy_ngram_decode_enabled
+end
 draft_model_path = ENV["QWEN35_DRAFT_MODEL"]? || DRAFT_MODEL_PATH
 spec_gamma = (ENV["QWEN35_SPEC_GAMMA"]? || "4").to_i
 spec_max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "32").to_i
 spec_plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to_i
 spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
-ngram_decode_enabled = ENV["QWEN35_NGRAM_DECODE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i

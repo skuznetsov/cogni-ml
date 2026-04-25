@@ -90,6 +90,12 @@ Enable exact n-gram speculative decode for repeated text:
 QWEN35_NGRAM_DECODE=1 ./build/qwen35_generate "The capital of France is" 64
 ```
 
+Use the conservative automatic decode policy:
+
+```sh
+QWEN35_DECODE_POLICY=auto ./build/qwen35_generate "The capital of France is" 64
+```
+
 Enable exact neural speculative decode with the Qwen 3.5 0.8B draft:
 
 ```sh
@@ -112,6 +118,7 @@ Useful Qwen environment switches:
 |---|---|
 | `QWEN35_PROMPT_CACHE=1` | Enable exact prompt-state cache lookup/save in `qwen35_generate`. |
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
+| `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` currently chooses the exact fail-closed n-gram path; explicit policy overrides legacy mode envs. |
 | `QWEN35_NGRAM_DECODE=1` | Enable exact n-gram speculative decode in `qwen35_generate`. |
 | `QWEN35_NGRAM_GAMMA=32` | Maximum n-gram verifier chunk size. |
 | `QWEN35_NGRAM_MIN=6` | Minimum repeated suffix length before n-gram drafting. |
