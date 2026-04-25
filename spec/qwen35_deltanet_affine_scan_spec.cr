@@ -124,6 +124,39 @@ private def apply_affine(state : Matrix, tr : AffineDelta) : Matrix
   matadd(matmul(state, tr.a), tr.b)
 end
 
+private def vec_matmul(v : Array(Float64), m : Matrix) : Array(Float64)
+  cols = m[0].size
+  out = Array.new(cols, 0.0)
+  cols.times do |j|
+    acc = 0.0
+    v.size.times { |i| acc += v[i] * m[i][j] }
+    out[j] = acc
+  end
+  out
+end
+
+private def dense_low_rank_b_for_block(inputs : Array(DeltaInputs)) : Matrix
+  s = inputs[0].k.size
+  suffix = identity(s)
+  transformed_keys = Array(Array(Float64)).new(inputs.size) { Array.new(s, 0.0) }
+
+  (inputs.size - 1).downto(0) do |i|
+    inp = inputs[i]
+    transformed_keys[i] = vec_matmul(inp.k, suffix).map { |x| x * inp.beta }
+    suffix = matmul(affine_for(inp).a, suffix)
+  end
+
+  b = zeros(s, s)
+  inputs.each_with_index do |inp, t|
+    s.times do |d2|
+      s.times do |d1|
+        b[d2][d1] += inp.v[d2] * transformed_keys[t][d1]
+      end
+    end
+  end
+  b
+end
+
 private def replay_block(state : Matrix, inputs : Array(DeltaInputs), scale : Float64) : Tuple(Matrix, Array(Array(Float64)))
   ys = [] of Array(Float64)
   cur = state
@@ -206,5 +239,25 @@ describe "Qwen35 DeltaNet affine block scan algebra" do
         (v - serial_y[i][j]).abs.should be < 1.0e-10
       end
     end
+  end
+
+  it "represents the block additive term as low-rank transformed V/K factors" do
+    s = 8
+    block_size = 4
+    rng = Random.new(0x10B10C_u64)
+    inputs = Array.new(block_size) do
+      DeltaInputs.new(
+        Array.new(s) { ((rng.next_float - 0.5) * 0.5) },
+        Array.new(s) { ((rng.next_float - 0.5) * 0.5) },
+        Array.new(s) { ((rng.next_float - 0.5) * 0.5) },
+        0.88 + 0.10 * rng.next_float,
+        rng.next_float
+      )
+    end
+
+    dense_block = inputs.map { |inp| affine_for(inp) }.reduce { |acc, tr| compose(acc, tr) }
+    compact_b = dense_low_rank_b_for_block(inputs)
+
+    max_abs_delta(dense_block.b, compact_b).should be < 1.0e-10
   end
 end
