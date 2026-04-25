@@ -1497,6 +1497,10 @@ module ML
           ENV["QWEN35_Q4K_PAIR_H16_GEMM_OFF"]? != "1"
         end
 
+        private def self.q4_pair_h16_min_batch : Int32
+          (ENV["QWEN35_Q4K_PAIR_H16_MIN_BATCH"]? || Q4_PAIR_H16_MIN_BATCH.to_s).to_i32
+        end
+
         private def self.q8_dual_gemv_enabled? : Bool
           ENV["QWEN35_Q8_DUAL_GEMV_OFF"]? != "1"
         end
@@ -1540,7 +1544,7 @@ module ML
                                                      up_qw : QuantWeight,
                                                      batch : Int32) : Bool
           q4_pair_h16_gemm_enabled? && q4_h16_gemm_enabled? &&
-            batch >= Q4_PAIR_H16_MIN_BATCH &&
+            batch >= q4_pair_h16_min_batch &&
             gate_qw.type.q4_k? && up_qw.type.q4_k? &&
             gate_qw.in_dim == up_qw.in_dim &&
             gate_qw.out_dim == up_qw.out_dim

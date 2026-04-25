@@ -4030,3 +4030,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, draft model, speculative scheduler, or target verifier cost changes
 **note:** This is a real exact draft-kernel cleanup, but it is not a speculative breakthrough by itself. It reduces draft wave overhead; high-accept end-to-end decode now needs verifier-side gains or a smaller/faster draft to expose more of the benefit.
+
+### [LM-codex-Q4-PAIR-H16-THRESHOLD-128-FALSIFIER-1] Q4 pair-H16 prefill threshold 128 is neutral, keep default 256
+**status:** falsified-default-unchanged
+**trust:** {F:0.76, G:0.40, R:0.72}
+**context:** ml (Qwen prefill Q4 conversion reuse)
+**evidence:**
+- claim: "Added `QWEN35_Q4K_PAIR_H16_MIN_BATCH` as an experiment knob while keeping the default threshold at `256`."
+  source: `src/ml/gguf/qwen35_metal.cr` and `README.md` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prefill Q4 gate/up route, Q4 H16 GEMM conversion path, or chunk-size policy changes
+- claim: "A temporary default threshold of `128` activated shared Q4 H16 input conversion at pp128 and pp256 while leaving pp64 off. pp128 was neutral (`default-other: -0.01 ms`, wins `3/6`), pp64 was noise (`-0.77 ms`, wins `5/6` even though route stayed off), and pp256 preserved the known positive signal (`-1.53 ms`, wins `5/6`)."
+  source: `/tmp/qwen35_prefill_attribution_pair128 --prompt=64/128/256 --warmup=1 --reps=6 --compare-env=QWEN35_Q4K_PAIR_H16_GEMM_OFF --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, Q4 pair route, or prompt-length mix changes
+**note:** This closes the untested threshold gap without changing default behavior. Use `QWEN35_Q4K_PAIR_H16_MIN_BATCH=128` only for controlled sweeps; it is not a current first-run pp64/pp128 breakthrough.
