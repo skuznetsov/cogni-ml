@@ -4998,3 +4998,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: Q4_K GEMM kernel, op-attribution harness, or host load changes
 **decision:** Keep the current Q4_K dequant helper using float `dl/ml` expressions and one final half rounding into `half4x4`. Half arithmetic does not recover the prefill gap and weakens numeric margin.
 **adversary:** This is a narrow helper-level refutation. It does not rule out a new Q4 tile layout or prepacked scale representation; it only rejects lowering arithmetic precision inside the current helper.
+
+### [LM-codex-Q56-GEMM-BARRIER-FALSIFIER-1] Q5/Q6 f32-output GEMM still needs inner simdgroup barriers
+**status:** verified-falsifier
+**trust:** {F:0.74, G:0.40, R:0.76}
+**context:** ml (Qwen35 Q5_K/Q6_K prefill GEMM / simdgroup barriers)
+**evidence:**
+- claim: "A temporary patch removed the three inner `simdgroup_barrier(mem_none)` calls from `simd_mm_q5k_f32out`, `simd_mm_q6k_f32out`, and `simd_mm_q6k_f32out_add`. Focused Qwen Metal/forward specs still passed."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q56_nobar_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` -> `23 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q5/Q6 GEMM kernel, Metal compiler, or simdgroup matrix scheduling changes
+- claim: "The barrier-free patch caused large focused spec timing regressions in the batch GEMM checks: `metal_q5k_gemm` reported `176.8 ms` and `metal_q6k_gemm` `45.1 ms`, far above normal adjacent runs."
+  source: same focused spec output on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: spec timing stability, host load, or Q5/Q6 kernel changes
+- claim: "Hot-shape attribution also worsened the relevant Q5/Q6 prefill shapes: Q6_K `12288x4096 b64` measured `0.897 ms`, and Q5_K `4096x8192 b64` measured `0.503 ms`, versus current baselines around `0.757 ms` and `0.414 ms`."
+  source: `/tmp/qwen35_op_attribution_q56_nobar --batch=64 --warmup=2 --runs=9 --limit=6` on 2026-04-25, compared with adjacent current op-attribution runs
+  verified_at: 2026-04-25
+  decay_trigger: op-attribution harness, Q5/Q6 kernels, or host load changes
+**decision:** Keep the inner simdgroup barriers in Q5/Q6 f32-output GEMM. Like the earlier Q4 barrier-removal falsifier, removing synchronization does not translate into faster simdgroup-matrix execution on M2 Max.
+**adversary:** The focused spec timings include host/runtime noise, but both spec and op-attribution moved in the wrong direction. This refutes only the simple barrier-removal branch, not a redesigned Q5/Q6 tile schedule.
