@@ -51,6 +51,7 @@ spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
 spec_bootstrap_gamma = (ENV["QWEN35_SPEC_BOOTSTRAP_GAMMA"]? || "0").to_i
 spec_single_fast_enabled = ENV["QWEN35_SPEC_SINGLE_FAST_OFF"]? != "1"
+spec_verify_mode = (ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace").downcase
 spec_skip_draft_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF"]? != "1"
 spec_skip_draft_backup_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF"]? != "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
@@ -68,6 +69,9 @@ raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fall
 raise "QWEN35_SPEC_FULL_ACCEPT_STREAK must be positive" unless spec_full_accept_streak > 0
 raise "QWEN35_SPEC_FAST_REGROW_MIN_GAMMA must be non-negative" unless spec_fast_regrow_min_gamma >= 0
 raise "QWEN35_SPEC_BOOTSTRAP_GAMMA must be non-negative" unless spec_bootstrap_gamma >= 0
+unless spec_verify_mode == "chunk-inplace" || spec_verify_mode == "hybrid" || spec_verify_mode == "serial"
+  raise "QWEN35_SPEC_VERIFY must be chunk-inplace, hybrid, or serial"
+end
 spec_max_gamma = Math.max(spec_max_gamma, spec_gamma)
 
 def cache_model_id(path : String) : String
@@ -230,7 +234,7 @@ end
 if speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
-  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma} single_fast=#{spec_single_fast_enabled}"
+  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma} single_fast=#{spec_single_fast_enabled} verify=#{spec_verify_mode}"
 
   decode_t0 = Time.instant
   target_next = output_ids.pop
@@ -339,33 +343,65 @@ if speculative_decode_enabled && !output_ids.empty?
       draft_ms += (Time.instant - tstart).total_milliseconds
       proposed += candidates.size
 
-      target_backup_state.copy_from!(state)
-      tstart = Time.instant
-      target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, cycle_start_pos, state)
-      target_verify_ms += (Time.instant - tstart).total_milliseconds
-
-      expected = target_next
-      candidates.each_with_index do |cand, i|
-        if cand == expected
-          output_ids << cand
-          correction_or_accepted << cand
-          accepted += 1
-          expected = target_nexts[i][0]
-          break if cand == tok.eos_id
-        else
-          output_ids << expected
-          correction_or_accepted << expected
-          rejected = true
-          break
+      serial_verify = spec_verify_mode == "serial" || (spec_verify_mode == "hybrid" && cycles == 1)
+      if serial_verify
+        candidates.each do |cand|
+          if cand == target_next
+            output_ids << cand
+            correction_or_accepted << cand
+            accepted += 1
+            tstart = Time.instant
+            target_next = advance_next(w, cand, pos, state)
+            target_verify_ms += (Time.instant - tstart).total_milliseconds
+            pos += 1
+            break if cand == tok.eos_id
+          else
+            expected = target_next
+            output_ids << expected
+            correction_or_accepted << expected
+            tstart = Time.instant
+            target_next = advance_next(w, expected, pos, state)
+            target_verify_ms += (Time.instant - tstart).total_milliseconds
+            pos += 1
+            rejected = true
+            break
+          end
         end
+      else
+        target_backup_state.copy_from!(state)
+        tstart = Time.instant
+        target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, cycle_start_pos, state)
+        target_verify_ms += (Time.instant - tstart).total_milliseconds
+
+        expected = target_next
+        candidates.each_with_index do |cand, i|
+          if cand == expected
+            output_ids << cand
+            correction_or_accepted << cand
+            accepted += 1
+            expected = target_nexts[i][0]
+            break if cand == tok.eos_id
+          else
+            output_ids << expected
+            correction_or_accepted << expected
+            rejected = true
+            break
+          end
+        end
+
+        if rejected
+          state.copy_from!(target_backup_state)
+          tstart = Time.instant
+          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, correction_or_accepted, cycle_start_pos, state)
+          target_verify_ms += (Time.instant - tstart).total_milliseconds
+          target_next = corrected[-1][0]
+        else
+          target_next = target_nexts[correction_or_accepted.size - 1][0]
+        end
+        pos += correction_or_accepted.size
       end
 
       if rejected
-        state.copy_from!(target_backup_state)
-        tstart = Time.instant
-        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, correction_or_accepted, cycle_start_pos, state)
-        target_verify_ms += (Time.instant - tstart).total_milliseconds
-        target_next = corrected[-1][0]
         will_plain_fallback_after_reject = spec_plain_fallback_enabled &&
                                            spec_skip_draft_before_fallback &&
                                            Math.max(1, current_gamma // 2) <= spec_plain_fallback_gamma
@@ -377,10 +413,7 @@ if speculative_decode_enabled && !output_ids.empty?
           draft_next = resync_draft!(draft_weights, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
           draft_resync_ms += (Time.instant - tstart).total_milliseconds
         end
-      else
-        target_next = target_nexts[correction_or_accepted.size - 1][0]
       end
-      pos += correction_or_accepted.size
 
       if trace_steps
         STDOUT << "  spec cycle=#{cycles} accepted=#{accepted}/#{proposed} emitted=#{correction_or_accepted.size} gamma=#{current_gamma} rejected=#{rejected}\n"

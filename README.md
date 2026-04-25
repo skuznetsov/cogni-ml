@@ -135,6 +135,7 @@ Useful Qwen environment switches:
 | `QWEN35_SPEC_PLAIN_FALLBACK_GAMMA=2` | Gamma threshold at or below which rejected neural speculative decode falls back to target-only generation. |
 | `QWEN35_SPEC_BOOTSTRAP_GAMMA=N` | Default-off neural speculative jump after a fully accepted initial chunk. Can help 100%-accept runs; may regress prompts that reject after an accepted prefix. |
 | `QWEN35_SPEC_SINGLE_FAST_OFF=1` | Disable the exact gamma=1 accepted-token fast path in neural speculative decode. Mostly useful when target-only fallback is disabled for A/B experiments. |
+| `QWEN35_SPEC_VERIFY=chunk-inplace\|hybrid\|serial` | Choose neural speculative verifier strategy. Default `chunk-inplace` is best for high-accept prompts; `hybrid` can help first-cycle partial-reject prompts. |
 | `QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF=1` | Disable the exact optimization that skips draft resync work when a rejection is guaranteed to enter target-only fallback. |
 | `QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF=1` | Disable the matching draft-backup skip before fallback-bound speculative chunks. |
 | `QWEN35_HEAD_FULL_ROWS_GUARDED=1` | Experimental speculative-verifier accelerator for large accepted chunks; uses a margin guard and exact fallback for low-margin rows. |

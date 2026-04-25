@@ -4281,3 +4281,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, prompt acceptance, fallback policy, or draft model changes
 **note:** Default target-only fallback usually exits speculation before gamma=1 accepted cycles matter. Keep this path because it aligns the practical CLI with the harness and removes avoidable work in fallback-off/adversarial experiments, but do not count it as a default performance breakthrough.
+
+### [LM-codex-GENERATE-SPEC-VERIFY-MODE-1] qwen35_generate exposes exact neural verifier modes
+**status:** verified-feature
+**trust:** {F:0.84, G:0.52, R:0.78}
+**context:** ml (Qwen CLI / neural speculative decode)
+**evidence:**
+- claim: "`qwen35_generate` now accepts `QWEN35_SPEC_VERIFY=chunk-inplace|hybrid|serial`. The default remains `chunk-inplace`; `hybrid` verifies only the first speculative cycle serially and then uses chunk-inplace; `serial` is a slow exact diagnostic mode."
+  source: `bin/qwen35_generate.cr` and `README.md` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: neural speculative verifier control flow changes
+- claim: "Generated token IDs matched greedy for `chunk-inplace`, `hybrid`, and `serial` on `The capital of France is`, `Once upon a time`, and `def fibonacci(n):` at 16 generated tokens."
+  source: Python parity script over `/tmp/qwen35_generate_verify PROMPT 16` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt outputs, verifier modes, tokenizer, or model file changes
+- claim: "In practical 64-token CLI smokes, `hybrid` helps first-cycle partial-reject prompts by avoiding the chunk rollback path: `Once upon a time` improved from `22.84/23.06` to `22.48/22.11 ms/tok`, and `The quick brown fox` from `22.86/22.85` to `22.12/22.22`. The same mode regresses a high-accept prompt: `The capital of France is` moved from `16.33/16.40` to `16.94/16.72 ms/tok`."
+  source: interleaved practical CLI smoke with `/tmp/qwen35_generate_verify PROMPT 64`, default vs `QWEN35_SPEC_VERIFY=hybrid`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt acceptance distribution, verifier implementation, or fallback policy changes
+**note:** Do not make `hybrid` default without a reliable first-cycle rejection predictor. It is useful as an exact opt-in for partial-reject workloads and as evidence that verifier-policy selection, not more generic scheduler glue, is still a lever.
