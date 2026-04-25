@@ -4716,8 +4716,12 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_deltanet_fixed_basis_probe --tokens=64 --calib-tokens=32 --layer=1 --ranks=8,16,24,32 --prompt=<varied technical prompt>` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: prompt suite, basis algorithm, layer choice, or prior-layer execution route changes
+- claim: "Residual pass-rate reporting exposes a possible approximate/fallback niche but not an exact shortcut. Layer0 rank64 passes residual thresholds `0.05/0.1/0.2/0.35/0.5` for `5.47/13.28/30.47/53.12/82.62%` of held-out head/token vectors; layer1 rank32 passes the same thresholds for only `0/0/0.39/7.23/41.41%`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe2 --tokens=128 --calib-tokens=64 --layer=0 --ranks=16,32,48,64 --thresholds=0.05,0.1,0.2,0.35,0.5 --prompt=<varied>` and layer1 `--tokens=64 --calib-tokens=32 --ranks=16,24,32`, on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, basis algorithm, layer choice, residual threshold policy, or eval harness changes
 **decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. The residuals are too large for an exact shortcut and would require approximation plus an eval harness, not the current exact-performance phase.
-**adversary:** This uses greedy modified Gram-Schmidt, not optimal PCA/SVD, and only two early recurrent layers/prompts were checked. A learned/adaptive basis might reduce residuals, but that becomes approximate inference unless a strict residual fallback is added and measured.
+**adversary:** This uses greedy modified Gram-Schmidt, not optimal PCA/SVD, and only two early recurrent layers/prompts were checked. A learned/adaptive basis might reduce residuals, but that becomes approximate inference unless a strict residual fallback is added and measured. The layer0 pass-rate tail is worth preserving as a future eval-gated approximate mode candidate, but it is not sufficient for the current exact-speed phase.
 
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch

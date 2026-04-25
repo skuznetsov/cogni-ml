@@ -129,6 +129,7 @@ tokens_limit = 96
 calib_tokens = 32
 layer_index = 0
 ranks = [8, 16, 32, 64, 96, 128]
+thresholds = [0.05, 0.10, 0.20, 0.35, 0.50]
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST]"
@@ -139,6 +140,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--calib-tokens=N", "Tokens used to build the fixed basis") { |v| calib_tokens = v.to_i }
   p.on("--layer=N", "Recurrent layer index to probe (default: 0)") { |v| layer_index = v.to_i }
   p.on("--ranks=LIST", "Comma-separated ranks") { |v| ranks = v.split(',').map(&.to_i) }
+  p.on("--thresholds=LIST", "Comma-separated residual thresholds for pass-rate reporting") { |v| thresholds = v.split(',').map(&.to_f) }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -170,6 +172,7 @@ puts "model=#{File.basename(model)}"
 puts "layer=#{layer_index} token_vectors=#{token_ids.size} calib_tokens=#{calib_count} heldout_tokens=#{token_ids.size - calib_count}"
 puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.join(',')}"
 puts "basis=per-head greedy modified Gram-Schmidt over first calib_tokens; reports held-out L2 residual for normalized K vectors"
+puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
 
 ranks.each do |rank|
   all_residuals = [] of Float64
@@ -186,5 +189,9 @@ ranks.each do |rank|
   p90 = sorted[(sorted.size * 90 // 100).clamp(0, sorted.size - 1)]
   p99 = sorted[(sorted.size * 99 // 100).clamp(0, sorted.size - 1)]
   max = sorted[-1]
-  puts "rank=#{rank} mean_residual=#{mean.round(6)} p50=#{p50.round(6)} p90=#{p90.round(6)} p99=#{p99.round(6)} max=#{max.round(6)}"
+  pass = thresholds.map do |threshold|
+    passed = all_residuals.count { |r| r <= threshold }
+    "#{threshold.round(4)}:#{(100.0 * passed / all_residuals.size).round(2)}%"
+  end
+  puts "rank=#{rank} mean_residual=#{mean.round(6)} p50=#{p50.round(6)} p90=#{p90.round(6)} p99=#{p99.round(6)} max=#{max.round(6)} pass_rates=#{pass.join(',')}"
 end
