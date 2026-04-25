@@ -4760,8 +4760,20 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_policy_pair04.sh` using `/tmp/qwen35_deltanet_fixed_basis_probe_metrics --simulate-logits-layers=0,4 --simulate-fallback-threshold=0.5` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: prompt suite, residual threshold policy, layer choice, or rank/calibration changes
-**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. Residual-gated fallback is the first plausible policy shape, but the current strict-top1-safe policy has low coverage; aggressive policies should be margin-aware and evaluated on generation, not just prompt-token logits.
-**adversary:** The policy gate is still not a full eval harness. Top1 over prompt-token logits can miss degradation in sampled generation, top5/KL can look healthy while exact top1 flips at tiny margins, and fallback approximate-rate varies strongly by prompt (`0-67%` in checked cases). Layer1 remains a caution case. Do not turn this on by default or publish a speedup claim before broader eval and a real Metal cost model.
+- claim: "A teacher-forced exact-greedy generation drift gate is now available via `--simulate-generate=N`. It feeds the exact greedy trajectory to both exact and approximate states, compares next-token logits for each generated token, and reports the same top1/top5/KL/margin metrics plus exact/approx greedy token IDs."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_gen --simulate-generate=16 ...` built from `bin/qwen35_deltanet_fixed_basis_probe.cr` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: generation gate implementation, state update route, prompt suite, or decode policy changes
+- claim: "The generation gate weakens the projected-K speed case. Prompt-safe `layers=0,4/th=0.5` still flips one low-margin greedy token on math and dialogue prompts (`93.75%` top1 over 16 generated tokens), while aggressive `layers=0,2,4/th=0.8` gets only `75..93.75%` generation top1 across the four-prompt smoke despite `top5=100%` and no confident mismatches."
+  source: `/tmp/qwen35_generation_gate.sh` using strict `0,4/th=0.5` and aggressive `0,2,4/th=0.8` policies on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, generation length, margin threshold, or residual fallback policy changes
+- claim: "A stricter `layers=0,4/th=0.35` restores 16-token generation top1 on the four-prompt smoke, but approximate coverage is too low to justify Metal work: `approx_rate` was `0%` on varied, `3.75%` on adversary_code, `5.0%` on math_symbolic, and `1.25%` on dialogue_json."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_gen --simulate-logits-layers=0,4 --simulate-fallback-threshold=0.35 --simulate-generate=16 --prompt=<four prompt smoke>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, fallback threshold, layer choice, rank/calibration, or generation length changes
+**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Preserve projected-K low-rank as a research branch, but do not implement the strict policy in Metal: generation-safe coverage is currently only `0..5%`. Any future approximate path must be margin-aware and evaluated on generation quality, not just prompt-token logits.
+**adversary:** The generation gate is still teacher-forced on the exact greedy trajectory, not a full dual-generation eval or benchmark. It is nevertheless a stronger falsifier than prompt-token logits and currently argues against spending production Metal time on projected-K low-rank. Layer1 remains a caution case. Do not turn this on by default or publish a speedup claim.
 
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch

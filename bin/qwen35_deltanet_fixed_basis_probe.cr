@@ -918,6 +918,82 @@ private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
   }
 end
 
+private def simulate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
+                                   prompt_ids : Array(Int32),
+                                   gen_tokens : Int32,
+                                   layer_bases : LayerBasisMap,
+                                   rank : Int32,
+                                   calib_count : Int32,
+                                   fallback_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_steps: Int32, fallback_steps: Int32, exact_ids: Array(Int32), approx_ids: Array(Int32))
+  exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + gen_tokens + 2)
+  approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + gen_tokens + 2)
+  lr_states = {} of Int32 => LowRankState
+  exact_logits = [] of Float32
+  approx_logits = [] of Float32
+
+  prompt_ids.each_with_index do |token_id, pos|
+    exact_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, exact_state,
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, false)
+    approx_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, approx_state,
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, true)
+  end
+
+  cosines = [] of Float64
+  kls = [] of Float64
+  max_delta = 0.0
+  top_matches = 0
+  top5_hits = 0
+  min_margin = Float64::INFINITY
+  confident_mismatches = 0
+  exact_ids = [] of Int32
+  approx_ids = [] of Int32
+
+  gen_tokens.times do |step|
+    exact_top1 = top1(exact_logits)
+    approx_top1 = top1(approx_logits)
+    exact_ids << exact_top1
+    approx_ids << approx_top1
+
+    c = cosine(exact_logits, approx_logits)
+    cosines << c
+    d = max_abs_delta(exact_logits, approx_logits)
+    max_delta = d if d > max_delta
+    exact_margin = top1_margin(exact_logits)
+    min_margin = exact_margin if exact_margin < min_margin
+    if exact_top1 == approx_top1
+      top_matches += 1
+    elsif exact_margin >= 0.5
+      confident_mismatches += 1
+    end
+    top5_hits += 1 if top_k_indices(approx_logits, 5).includes?(exact_top1)
+    kls << softmax_kl(exact_logits, approx_logits)
+
+    pos = prompt_ids.size + step
+    # Teacher-forced on the exact greedy trajectory. This isolates policy drift
+    # from cascading different-token hidden-state divergence.
+    exact_logits = logits_with_lowrank_policy(weights, exact_top1, pos.to_i32, exact_state,
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, false)
+    approx_logits = logits_with_lowrank_policy(weights, exact_top1, pos.to_i32, approx_state,
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, true)
+  end
+
+  {
+    mean_cos:             cosines.sum / cosines.size,
+    min_cos:              cosines.min,
+    max_delta:            max_delta,
+    top1_match:           100.0 * top_matches / gen_tokens,
+    top5_hit:             100.0 * top5_hits / gen_tokens,
+    mean_kl:              kls.sum / kls.size,
+    max_kl:               kls.max,
+    min_margin:           min_margin,
+    confident_mismatches: confident_mismatches,
+    approx_steps:         lr_states.values.sum(&.approx_steps),
+    fallback_steps:       lr_states.values.sum(&.fallback_steps),
+    exact_ids:            exact_ids,
+    approx_ids:           approx_ids,
+  }
+end
+
 private def parse_int_list(value : String) : Array(Int32)
   value.split(',').map(&.strip).reject(&.empty?).map(&.to_i)
 end
@@ -937,6 +1013,7 @@ simulate_lowrank = false
 simulate_logit_rank : Int32? = nil
 simulate_logit_layers = [] of Int32
 simulate_fallback_threshold : Float64? = nil
+simulate_generate_tokens = 0
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
@@ -955,6 +1032,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
   p.on("--simulate-logits-layers=LIST", "Comma-separated recurrent layers to approximate together during the logit drift gate") { |v| simulate_logit_layers = parse_int_list(v) }
   p.on("--simulate-fallback-threshold=F", "Fallback to exact DeltaNet step when max per-head K residual exceeds F") { |v| simulate_fallback_threshold = v.to_f64 }
+  p.on("--simulate-generate=N", "Run teacher-forced exact-greedy generation drift gate for N decode tokens") { |v| simulate_generate_tokens = v.to_i }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -1015,6 +1093,13 @@ if rank = simulate_logit_rank
     approx_rate = total_steps > 0 ? (100.0 * logit[:approx_steps] / total_steps) : 0.0
     fallback_note = simulate_fallback_threshold ? " fallback_threshold=#{simulate_fallback_threshold} approx_rate=#{approx_rate.round(2)}%" : ""
     puts "logit_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}% top5_hit=#{logit[:top5_hit].round(2)}% mean_kl=#{logit[:mean_kl].round(8)} max_kl=#{logit[:max_kl].round(8)} min_margin=#{logit[:min_margin].round(6)} confident_mismatches=#{logit[:confident_mismatches]} approx_steps=#{logit[:approx_steps]} fallback_steps=#{logit[:fallback_steps]}#{fallback_note}"
+
+    if simulate_generate_tokens > 0
+      gen = simulate_greedy_policy(weights, token_ids, simulate_generate_tokens, layer_bases, rank, calib_count, simulate_fallback_threshold)
+      gen_total_steps = gen[:approx_steps] + gen[:fallback_steps]
+      gen_approx_rate = gen_total_steps > 0 ? (100.0 * gen[:approx_steps] / gen_total_steps) : 0.0
+      puts "greedy_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gen_tokens=#{simulate_generate_tokens} mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} max_delta=#{gen[:max_delta].round(6)} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_steps=#{gen[:approx_steps]} fallback_steps=#{gen[:fallback_steps]} approx_rate=#{gen_approx_rate.round(2)}% exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
+    end
   end
 end
 
