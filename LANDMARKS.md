@@ -4910,3 +4910,31 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: prefill profile route, host load, or grouped wave scheduling changes
 **decision:** Do not spend time trying to reshuffle group boundaries as the next prefill optimization. The grouped wave is balanced; the remaining first-run gap needs reducing per-layer work, especially recurrent/full FFN/projection cost, or a true algorithmic DeltaNet/prefill change.
 **adversary:** Phase profiling changes command-buffer boundaries and therefore should not be used as a speed benchmark. It is only a localization tool. Fine-grained kernel overlap inside the unsplit command buffer is not proven absent, but the flat split-phase result argues against a single pathological hidden phase.
+
+### [LM-codex-DELTANET-COMPACT-SUMMARY-FALSIFIER-1] Compact DeltaNet summaries are not a near-term prefill win
+**status:** verified-falsifier
+**trust:** {F:0.76, G:0.42, R:0.78}
+**context:** ml (Qwen35 DeltaNet associative summaries / prefill)
+**evidence:**
+- claim: "The existing exact DeltaNet affine/compact summary algebra still passes focused regression specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_deltanet_summary_spec crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` -> `18 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: DeltaNet algebra helpers, scan model, or compact-summary representation changes
+- claim: "The compact final-state lower-bound path is slower than the current rowwise `delta_net_chunk` path even though compact computes only final state while rowwise also computes per-token outputs: block8 compact `0.3375 ms` vs rowwise `0.2665 ms`; block16 compact `0.4396 ms` vs rowwise `0.2831 ms`; block32 compact `0.3536 ms` vs rowwise `0.2636 ms`."
+  source: `/tmp/qwen35_deltanet_compact_vs_rowwise_micro --block=8/16/32 --runs=20 --warmup=3` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact summary kernels, rowwise DeltaNet kernel, Metal compiler behavior, or benchmark harness changes
+- claim: "The alternative row-threadgroup compact apply kernel is not a rescue: block8 compact `0.3368 ms` vs rowwise `0.2645 ms`; block16 compact `0.4440 ms` vs rowwise `0.2859 ms`; block32 compact `0.3852 ms` vs rowwise `0.2933 ms`."
+  source: `QWEN35_COMPACT_APPLY_ROW_TG=1 /tmp/qwen35_deltanet_compact_vs_rowwise_micro --block=8/16/32 --runs=20 --warmup=3` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact apply kernel design or dispatch geometry changes
+- claim: "Row-basis composition itself is exact and tileable, but not sufficient to justify integration: pairs4 tiled p50 `0.2455 ms`, pairs16 tiled p50 `0.2748 ms`, pairs32 tiled p50 `0.6124 ms`, with deltas around `9.31e-10`."
+  source: `/tmp/qwen35_deltanet_row_basis_compose_micro --pairs=4/16/32 --runs=20 --warmup=3` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: row-basis summary layout or composition kernel changes
+- claim: "The critical-path model still permits block-scan speedups only if compose cost is low enough. For pp64, max compose for 1.25x is only `~9.6-11.7` token-equivalent steps at block8/16, while dense s128 compose is `170.67`; rank-growth without compression fails medium prompts."
+  source: `crystal run bin/qwen35_deltanet_scan_model.cr -- --prompts=64,256,1024,2048 --blocks=8,16,32 --rank-growth` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: scan model assumptions, real kernel measurements, or prompt-length target changes
+**decision:** Do not integrate the current compact-summary path into first-run prefill. It fails the cheapest lower-bound gate; a production block-scan would add prefix-scan, replay, per-token outputs, and more state plumbing. Keep the algebra/specs as research scaffolding, but the next exact prefill work should target lower-level Q4/Q5/Q6 matmul/projection cost or a materially different DeltaNet scan representation.
+**adversary:** This does not refute all associative DeltaNet scans. It refutes the current exact compact/final-state path and naive row-basis composition as a near-term integration route. A future path could still win for long prompts if it maintains bounded rank, fuses summary build/compose/replay, and avoids extra global-memory traffic.
