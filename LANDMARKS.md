@@ -4744,8 +4744,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_deltanet_fixed_basis_probe_logit --simulate-logits-rank=24|32 --prompt=<mixed code adversary>` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: prompt suite, rank/calibration policy, layer1 behavior, or cumulative multi-layer gate changes
-**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. The next gate is policy search plus cumulative multi-layer logit drift, not Metal implementation yet.
-**adversary:** The single-layer logit gate is not a full eval harness and can pass one prompt while failing another. Layer1 is the current caution case. A production design needs per-layer/rank/fallback policy and a broader prompt/top-logit drift suite before any speed claim.
+- claim: "A cumulative multi-layer projected-K policy gate now compares exact and approximate logits using the same scalar reference for targeted layers. With `rank24/calib24`, `layers=0,2` and `layers=0,2,4` keep `100%` top1 on the varied prompt, but both drop to `95.83%` on the mixed-code adversary without fallback."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_policy --simulate-logits-rank=24 --simulate-logits-layers=0,2|0,2,4 --basis=pca --tokens=48 --calib-tokens=24 --prompt=<varied|mixed-code adversary>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: cumulative policy gate, exact-reference route, prompt suite, fallback policy, or layer selection changes
+- claim: "Residual-gated fallback can recover the adversary prompt at a measurable approximate-step rate. With threshold `0.8`, `layers=0,2` measured `mean_cos=0.99971942`, `top1_match=100%`, and `approx_rate=29.17%`; `layers=0,2,4` measured `mean_cos=0.99880781`, `top1_match=100%`, and `approx_rate=36.11%`. On the varied prompt the same threshold kept `100%` top1 with `66.67%` approximate steps for `0,2` and `58.33%` for `0,2,4`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_policy --simulate-fallback-threshold=0.8 --simulate-logits-rank=24 --simulate-logits-layers=0,2|0,2,4 --prompt=<varied|mixed-code adversary>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: residual metric, fallback state handling, prompt suite, rank/calibration policy, or eval metrics change
+**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. Residual-gated fallback is the first plausible policy shape; Metal implementation should wait until a broader prompt/top-k/KL/logit-margin gate passes.
+**adversary:** The policy gate is still not a full eval harness. Top1 over prompt-token logits can miss degradation in sampled generation, and fallback approximate-rate varies strongly by prompt (`~29-67%` in checked cases). Layer1 remains a caution case. Do not turn this on by default or publish a speedup claim before broader eval and a real Metal cost model.
 
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch

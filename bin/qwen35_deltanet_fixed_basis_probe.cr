@@ -11,6 +11,9 @@ DEFAULT_TOKENIZER = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tok
 DEFAULT_PROMPT    = "The quick brown fox jumps over the lazy dog. Describe this scene in detail, then explain how weather, geometry, and memory interact in a compact machine learning runtime. " \
                     "Use precise technical language and include several short code-like phrases so the token stream is varied."
 
+private alias BasisSet = Array(Array(Array(Float64)))
+private alias LayerBasisMap = Hash(Int32, BasisSet)
+
 private struct RecurrentSample
   getter q : Array(Float32)
   getter k : Array(Float32)
@@ -24,7 +27,10 @@ end
 
 private class LowRankState
   property initialized : Bool = false
+  property full_state_current : Bool = true
   property m : Array(Float32) = [] of Float32
+  property approx_steps : Int32 = 0
+  property fallback_steps : Int32 = 0
 end
 
 private def softplus(x : Float32) : Float32
@@ -289,6 +295,29 @@ private def project_with_basis(v : Array(Float32), offset : Int32,
     s.times { |d| projected[d] += coeff * b[d] }
   end
   s.times { |d| v[offset + d] = projected[d].to_f32 }
+end
+
+private def residual_norm_f32(v : Array(Float32), offset : Int32,
+                              basis : Array(Array(Float64)), rank : Int32) : Float64
+  limit = Math.min(rank, basis.size)
+  s = basis[0].size
+  residual = Array.new(s) { |d| v[offset + d].to_f64 }
+  limit.times do |i|
+    b = basis[i]
+    coeff = dot(residual, b)
+    s.times { |d| residual[d] -= coeff * b[d] }
+  end
+  Math.sqrt(dot(residual, residual))
+end
+
+private def max_k_residual(k_conv : Array(Float32), bases : BasisSet, rank : Int32,
+                           h_k : Int32, s : Int32) : Float64
+  max = 0.0
+  h_k.times do |h|
+    residual = residual_norm_f32(k_conv, h * s, bases[h], rank)
+    max = residual if residual > max
+  end
+  max
 end
 
 private def delta_stats(exact : Array(Float32), approx : Array(Float32)) : Tuple(Float64, Float64)
@@ -559,9 +588,10 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
                                         lw : ML::GGUF::Qwen35RecurrentWeights,
                                         lstate : ML::GGUF::Qwen35CPU::LayerState,
                                         hp : ML::GGUF::Qwen35Hparams,
-                                        bases : Array(Array(Array(Float64))),
+                                        bases : BasisSet,
                                         rank : Int32,
-                                        lr_state : LowRankState) : Array(Float32)
+                                        lr_state : LowRankState,
+                                        fallback_threshold : Float64? = nil) : Array(Float32)
   h_k = hp.ssm_group_count
   h_v = hp.ssm_time_step_rank
   s = hp.ssm_state_size
@@ -569,8 +599,9 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
   conv_k = hp.ssm_conv_kernel
 
   unless lr_state.initialized
-    full_state = lstate.ssm_state || Array(Float32).new(h_v * s * s, 0.0_f32)
+    full_state = lstate.ssm_state ||= Array(Float32).new(h_v * s * s, 0.0_f32)
     lr_state.m = project_full_state_to_lowrank(full_state, bases, rank, h_k, h_v, s)
+    lr_state.full_state_current = true
     lr_state.initialized = true
   end
 
@@ -608,8 +639,25 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
 
   y = Array(Float32).new(h_v * s, 0.0_f32)
   scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
-  lowrank_projected_delta_step!(lr_state.m, RecurrentSample.new(q_conv, k_conv, v_conv, ghead, beta),
-    bases, rank, y, h_k, h_v, s, scale)
+  fallback = false
+  if threshold = fallback_threshold
+    fallback = max_k_residual(k_conv, bases, rank, h_k, s) > threshold
+  end
+  if fallback
+    unless lr_state.full_state_current
+      lstate.ssm_state = reconstruct_lowrank_state(lr_state.m, bases, rank, h_k, h_v, s)
+    end
+    state = lstate.ssm_state.not_nil!
+    ML::GGUF::Qwen35CPU.delta_net_step!(state, q_conv, k_conv, v_conv, ghead, beta, y, h_k, h_v, s, scale)
+    lr_state.m = project_full_state_to_lowrank(state, bases, rank, h_k, h_v, s)
+    lr_state.full_state_current = true
+    lr_state.fallback_steps += 1
+  else
+    lowrank_projected_delta_step!(lr_state.m, RecurrentSample.new(q_conv, k_conv, v_conv, ghead, beta),
+      bases, rank, y, h_k, h_v, s, scale)
+    lr_state.full_state_current = false
+    lr_state.approx_steps += 1
+  end
   h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y, h * s, s, lw.ssm_norm, hp.rms_eps) }
   (h_v * s).times { |i| y[i] = y[i] * ML::GGUF::Qwen35CPU.silu(z[i]) }
   attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y)
@@ -644,6 +692,39 @@ private def logits_with_target_layer(weights : ML::GGUF::Qwen35Weights,
       if il == target_layer
         x = if approximate && pos >= calib_count
               recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state.not_nil!)
+            else
+              recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
+            end
+      else
+        x = ML::GGUF::Qwen35CPU.forward_recurrent_layer(x, pos, layer, state.layers[il], hp, state.max_seq)
+      end
+    end
+  end
+  x = ML::GGUF::Qwen35CPU.rms_norm(x, weights.output_norm, hp.rms_eps)
+  ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
+end
+
+private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
+                                       token_id : Int32,
+                                       pos : Int32,
+                                       state : ML::GGUF::Qwen35CPU::State,
+                                       layer_bases : LayerBasisMap,
+                                       rank : Int32,
+                                       calib_count : Int32,
+                                       lr_states : Hash(Int32, LowRankState),
+                                       fallback_threshold : Float64?,
+                                       approximate : Bool) : Array(Float32)
+  hp = weights.hparams
+  x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+  weights.layers.each_with_index do |layer, il|
+    case layer
+    in ML::GGUF::Qwen35FullAttnWeights
+      x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(x, pos, layer, state.layers[il], hp, state.max_seq)
+    in ML::GGUF::Qwen35RecurrentWeights
+      if bases = layer_bases[il]?
+        x = if approximate && pos >= calib_count
+              lr_state = lr_states[il] ||= LowRankState.new
+              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state, fallback_threshold)
             else
               recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
             end
@@ -728,6 +809,49 @@ private def simulate_logits(weights : ML::GGUF::Qwen35Weights,
   }
 end
 
+private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
+                                   token_ids : Array(Int32),
+                                   layer_bases : LayerBasisMap,
+                                   rank : Int32,
+                                   calib_count : Int32,
+                                   fallback_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, approx_steps: Int32, fallback_steps: Int32)
+  exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
+  approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
+  lr_states = {} of Int32 => LowRankState
+  cosines = [] of Float64
+  max_delta = 0.0
+  top_matches = 0
+  compared = 0
+
+  token_ids.each_with_index do |token_id, pos|
+    exact = logits_with_lowrank_policy(weights, token_id, pos.to_i32, exact_state,
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, false)
+    approx = logits_with_lowrank_policy(weights, token_id, pos.to_i32, approx_state,
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, true)
+    next if pos < calib_count
+
+    c = cosine(exact, approx)
+    cosines << c
+    d = max_abs_delta(exact, approx)
+    max_delta = d if d > max_delta
+    top_matches += 1 if top1(exact) == top1(approx)
+    compared += 1
+  end
+
+  {
+    mean_cos:       cosines.sum / cosines.size,
+    min_cos:        cosines.min,
+    max_delta:      max_delta,
+    top1_match:     100.0 * top_matches / compared,
+    approx_steps:   lr_states.values.sum(&.approx_steps),
+    fallback_steps: lr_states.values.sum(&.fallback_steps),
+  }
+end
+
+private def parse_int_list(value : String) : Array(Int32)
+  value.split(',').map(&.strip).reject(&.empty?).map(&.to_i)
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = DEFAULT_PROMPT
@@ -741,6 +865,8 @@ pca_iters = 24
 simulate_delta = false
 simulate_lowrank = false
 simulate_logit_rank : Int32? = nil
+simulate_logit_layers = [] of Int32
+simulate_fallback_threshold : Float64? = nil
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
@@ -757,6 +883,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-delta", "Also simulate projected-K DeltaNet output/state drift") { simulate_delta = true }
   p.on("--simulate-lowrank", "Also prove low-rank M*B^T recurrence against full projected-K recurrence") { simulate_lowrank = true }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
+  p.on("--simulate-logits-layers=LIST", "Comma-separated recurrent layers to approximate together during the logit drift gate") { |v| simulate_logit_layers = parse_int_list(v) }
+  p.on("--simulate-fallback-threshold=F", "Fallback to exact DeltaNet step when max per-head K residual exceeds F") { |v| simulate_fallback_threshold = v.to_f64 }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -782,6 +910,9 @@ weights = ML::GGUF::Qwen35Weights.from_gguf(model)
 per_head = recurrent_k_vectors_for_prompt(weights, token_ids, layer_index)
 samples = (simulate_delta || simulate_lowrank) ? recurrent_samples_for_prompt(weights, token_ids, layer_index) : [] of RecurrentSample
 max_rank = ranks.max
+if rank = simulate_logit_rank
+  max_rank = Math.max(max_rank, rank)
+end
 calib_count = Math.min(calib_tokens, token_ids.size - 1)
 raise "need at least one held-out token" unless calib_count > 0 && calib_count < token_ids.size
 
@@ -795,8 +926,26 @@ puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
 bases = per_head.map { |vectors| build_basis(vectors[0, calib_count], max_rank, basis_mode, pca_iters) }
 
 if rank = simulate_logit_rank
-  logit = simulate_logits(weights, token_ids, layer_index, bases, rank, calib_count)
-  puts "logit_drift rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}%"
+  if simulate_logit_layers.empty?
+    logit = simulate_logits(weights, token_ids, layer_index, bases, rank, calib_count)
+    puts "logit_drift rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}%"
+  else
+    layer_bases = {} of Int32 => BasisSet
+    simulate_logit_layers.uniq.each do |il|
+      layer_bases[il] = if il == layer_index
+                          bases
+                        else
+                          recurrent_k_vectors_for_prompt(weights, token_ids, il).map do |vectors|
+                            build_basis(vectors[0, calib_count], max_rank, basis_mode, pca_iters)
+                          end
+                        end
+    end
+    logit = simulate_logits_policy(weights, token_ids, layer_bases, rank, calib_count, simulate_fallback_threshold)
+    total_steps = logit[:approx_steps] + logit[:fallback_steps]
+    approx_rate = total_steps > 0 ? (100.0 * logit[:approx_steps] / total_steps) : 0.0
+    fallback_note = simulate_fallback_threshold ? " fallback_threshold=#{simulate_fallback_threshold} approx_rate=#{approx_rate.round(2)}%" : ""
+    puts "logit_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}% approx_steps=#{logit[:approx_steps]} fallback_steps=#{logit[:fallback_steps]}#{fallback_note}"
+  end
 end
 
 ranks.each do |rank|
