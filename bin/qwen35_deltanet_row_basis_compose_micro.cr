@@ -42,6 +42,57 @@ kernel void row_basis_compose_pairs(
     d_out[idx] = d1[idx] + d2[idx] + d_prod;
     b_out[idx] = b2[idx] + g2 * (b1[idx] + b_prod);
 }
+
+kernel void row_basis_compose_pairs_tiled(
+    device const float* d1    [[buffer(0)]],
+    device const float* d2    [[buffer(1)]],
+    device const float* b1    [[buffer(2)]],
+    device const float* b2    [[buffer(3)]],
+    device const float* gamma2 [[buffer(4)]],
+    device       float* d_out [[buffer(5)]],
+    device       float* b_out [[buffer(6)]],
+    constant     uint&  s     [[buffer(7)]],
+    constant     uint&  pairs [[buffer(8)]],
+    uint3 gid [[thread_position_in_grid]],
+    uint3 tid3 [[thread_position_in_threadgroup]])
+{
+    const uint2 tid = uint2(tid3.x, tid3.y);
+    const uint col = gid.x;
+    const uint row = gid.y;
+    const uint p = gid.z;
+    if (p >= pairs || s > MAX_S) return;
+
+    threadgroup float d1_tile[16][16];
+    threadgroup float b1_tile[16][16];
+    threadgroup float d2_tile[16][16];
+
+    const uint base = p * s * s;
+    float d_prod = 0.0f;
+    float b_prod = 0.0f;
+
+    for (uint k0 = 0; k0 < s; k0 += 16) {
+        const uint k_col = k0 + tid.x;
+        const uint k_row = k0 + tid.y;
+
+        d1_tile[tid.y][tid.x] = (row < s && k_col < s) ? d1[base + row * s + k_col] : 0.0f;
+        b1_tile[tid.y][tid.x] = (row < s && k_col < s) ? b1[base + row * s + k_col] : 0.0f;
+        d2_tile[tid.y][tid.x] = (k_row < s && col < s) ? d2[base + k_row * s + col] : 0.0f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint kk = 0; kk < 16; ++kk) {
+            d_prod += d1_tile[tid.y][kk] * d2_tile[kk][tid.x];
+            b_prod += b1_tile[tid.y][kk] * d2_tile[kk][tid.x];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (row >= s || col >= s) return;
+
+    const uint idx = base + row * s + col;
+    const float g2 = gamma2[p];
+    d_out[idx] = d1[idx] + d2[idx] + d_prod;
+    b_out[idx] = b2[idx] + g2 * (b1[idx] + b_prod);
+}
 METAL
 
 private def elapsed_ms(&)
@@ -115,11 +166,14 @@ b2_buf = ML::MetalBuffer.from_array(b2)
 gamma2_buf = ML::MetalBuffer.from_array(gamma2)
 d_out_buf = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
 b_out_buf = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
+d_tiled_buf = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
+b_tiled_buf = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
 pipe = ML::Metal::ComputePipeline.new("row_basis_compose_pairs", SOURCE)
+tiled_pipe = ML::Metal::ComputePipeline.new("row_basis_compose_pairs_tiled", SOURCE)
 s_u = s.to_u32
 pairs_u = pairs.to_u32
 
-run_once = -> do
+run_scalar = -> do
   ML::Metal::Dispatch.execute(pipe) do |enc|
     enc.set_buffer(d1_buf, 0)
     enc.set_buffer(d2_buf, 1)
@@ -134,26 +188,57 @@ run_once = -> do
   end
 end
 
-warmup.times { run_once.call }
+run_tiled = -> do
+  ML::Metal::Dispatch.execute(tiled_pipe) do |enc|
+    enc.set_buffer(d1_buf, 0)
+    enc.set_buffer(d2_buf, 1)
+    enc.set_buffer(b1_buf, 2)
+    enc.set_buffer(b2_buf, 3)
+    enc.set_buffer(gamma2_buf, 4)
+    enc.set_buffer(d_tiled_buf, 5)
+    enc.set_buffer(b_tiled_buf, 6)
+    enc.set_value(s_u, 7)
+    enc.set_value(pairs_u, 8)
+    enc.dispatch({s, s, pairs}, {16, 16, 1})
+  end
+end
+
+warmup.times { run_scalar.call; run_tiled.call }
 gpu_d = d_out_buf.read(s * s)
 gpu_b = b_out_buf.read(s * s)
+gpu_td = d_tiled_buf.read(s * s)
+gpu_tb = b_tiled_buf.read(s * s)
 max_d = max_abs_delta(cpu_d0, gpu_d, s * s)
 max_b = max_abs_delta(cpu_b0, gpu_b, s * s)
+max_td = max_abs_delta(cpu_d0, gpu_td, s * s)
+max_tb = max_abs_delta(cpu_b0, gpu_tb, s * s)
 
-times = [] of Float64
+scalar_times = [] of Float64
+tiled_times = [] of Float64
 runs.times do
-  ms, _ = elapsed_ms { run_once.call }
-  times << ms
+  ms, _ = elapsed_ms { run_scalar.call }
+  scalar_times << ms
+  ms2, _ = elapsed_ms { run_tiled.call }
+  tiled_times << ms2
 end
-sorted = times.sort
-p50 = sorted[sorted.size // 2]
-avg = times.sum / times.size
+scalar_sorted = scalar_times.sort
+tiled_sorted = tiled_times.sort
+scalar_p50 = scalar_sorted[scalar_sorted.size // 2]
+tiled_p50 = tiled_sorted[tiled_sorted.size // 2]
+scalar_avg = scalar_times.sum / scalar_times.size
+tiled_avg = tiled_times.sum / tiled_times.size
 
 puts "Qwen35 DeltaNet row-basis summary compose microbench"
 puts "s=#{s} pairs=#{pairs} runs=#{runs} warmup=#{warmup}"
 puts "max_d_delta=#{max_d}"
 puts "max_b_delta=#{max_b}"
-puts "compose_avg_ms=#{avg.round(4)}"
-puts "compose_p50_ms=#{p50.round(4)}"
-puts "compose_per_pair_p50_ms=#{(p50 / pairs).round(6)}"
+puts "max_tiled_d_delta=#{max_td}"
+puts "max_tiled_b_delta=#{max_tb}"
+puts "scalar_compose_avg_ms=#{scalar_avg.round(4)}"
+puts "scalar_compose_p50_ms=#{scalar_p50.round(4)}"
+puts "scalar_per_pair_p50_ms=#{(scalar_p50 / pairs).round(6)}"
+puts "tiled_compose_avg_ms=#{tiled_avg.round(4)}"
+puts "tiled_compose_p50_ms=#{tiled_p50.round(4)}"
+puts "tiled_per_pair_p50_ms=#{(tiled_p50 / pairs).round(6)}"
+puts "tiled_vs_scalar=#{(scalar_p50 / tiled_p50).round(4)}"
 puts "note=one prefix-scan level over row-basis summaries; computes D_out=D1+D2+D1*D2 and B_out=B2+gamma2*B1*(I+D2)."

@@ -4679,6 +4679,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Do not wire this adjoint replay path into production prefill. It is still useful as an exact algebraic lens and could help a future verifier/output-only branch, but it does not beat the current rowwise chunk when term construction is paid.
 **adversary:** The benchmark still excludes final-state prefix scan, so a production full path would be worse unless another branch reuses transformed terms or eliminates separate state update work. The refutation is for the current reverse-threadgroup/full-output formulation, not for all possible associative DeltaNet scans.
 
+### [LM-codex-DELTANET-ROW-BASIS-TILED-COMPOSE-1] Tiled dense row-basis compose helps but remains below the scan gate
+**status:** refuted/narrowed implementation branch
+**trust:** {F:0.78, G:0.48, R:0.78}
+**context:** ml (Qwen35 long prefill / DeltaNet summaries / row-basis compose)
+**evidence:**
+- claim: "A 16x16 threadgroup-tiled row-basis compose kernel remains exact within f32 drift for the existing dense row-basis formulas `D_out=D1+D2+D1*D2` and `B_out=B2+gamma2*B1*(I+D2)`."
+  source: `bin/qwen35_deltanet_row_basis_compose_micro.cr`; `/tmp/qwen35_deltanet_row_basis_compose_micro_tiled --s=128 --pairs=1|2|4|8|16|32|64|128 --runs=50 --warmup=8` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: row-basis compose kernel, summary representation, or Metal compiler changes
+- claim: "Threadgroup tiling improves scalar dense compose by about `1.28-1.79x` across the tested pair counts, with p50 examples: pairs `32` scalar `0.859 ms` vs tiled `0.579 ms`; pairs `64` scalar `0.904 ms` vs tiled `0.563 ms`; pairs `128` scalar `1.337 ms` vs tiled `0.746 ms`."
+  source: same microbench run on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, compose kernel tiling, or pair-count distribution changes
+- claim: "Even after tiling, dense row-basis prefix compose is still too expensive for the current long-prefill scan budget. Summing tiled prefix levels estimates about `1.88 ms` for pp1024-like `64` blocks and `2.44 ms` for pp2048-like `128` blocks, above the prior synthetic rowwise baselines of about `0.79/1.24 ms`, before replay and production integration costs."
+  source: derived from the same pairs p50s and prior `LM-codex-DELTANET-ROW-BASIS-COMPOSE-FALSIFIER-1` rowwise baselines
+  verified_at: 2026-04-25
+  decay_trigger: rowwise baseline, block size, prefix-scan schedule, or a larger compose algorithm redesign
+**decision:** Keep the tiled kernel in the research microbench as evidence, but do not build production scan on dense row-basis compose. Ordinary LTP/threadgroup tiling improves the constant factor; it does not change the unfavorable dense-product budget.
+**adversary:** This does not refute a true MMA/simdgroup-matrix compose or a different rank-stable formulation. It refutes only the straightforward 16x16 tiled dense compose path against the current synthetic rowwise budget.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
