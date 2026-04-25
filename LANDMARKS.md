@@ -3857,3 +3857,30 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: future target-seed or staged n-gram verifier work
 **note:** This is a paradigm shift rather than a universal decode win: it helps repeated/generated-template text and should eventually be composed with neural draft speculative decode as a cheap first-choice draft, but it is not a replacement for a faster learned draft on arbitrary prompts.
+
+### [LM-codex-NGRAM-GENERATE-CLI-1] Practical generation CLI has opt-in exact n-gram speculative decode
+**status:** verified-feature-with-caveat
+**trust:** {F:0.78, G:0.38, R:0.74}
+**context:** ml (Qwen decode, generation CLI, non-neural draft)
+**evidence:**
+- claim: "`bin/qwen35_generate.cr` now has an opt-in `QWEN35_NGRAM_DECODE=1` path that uses `ML::GGUF::NgramDraft` candidates, verifies them with the exact target `prefill_tokens_top1s` path, restores/replays corrected tokens on rejection, and disables further n-gram drafting after the first rejection by default."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: generation decode loop, n-gram draft semantics, or target verifier semantics change
+- claim: "The generation CLI still builds after adding the n-gram path."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ngram_generate_build crystal build --release --no-debug --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_generate.cr -o /tmp/qwen35_generate_ngram` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Crystal compiler, Metal bridge, or Qwen source changes
+- claim: "Focused n-gram draft specs still pass after reusing the primitive from the CLI."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ngram_generate_spec crystal spec spec/ngram_draft_spec.cr` returning `5 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: n-gram primitive or spec fixtures change
+- claim: "On `The capital of France is`, `QWEN35_NGRAM_DECODE=1 /tmp/qwen35_generate_ngram ... 64` produced exactly the same generated token IDs as the default greedy CLI path and reported `accepted=55/55`, `cycles=2`, `plain_steps=9`, `disabled=false`."
+  source: `/tmp/qwen35_generate_ngram "The capital of France is" 64` compared with `QWEN35_NGRAM_DECODE=1 /tmp/qwen35_generate_ngram "The capital of France is" 64` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt output, verifier path, or n-gram defaults change
+- claim: "On adversary `The quick brown fox`, the opt-in n-gram CLI path also produced exactly the same generated token IDs as default greedy, accepted the first partial repeat chunk only partly (`18/32`), then disabled further n-gram drafting (`disabled=true`)."
+  source: `/tmp/qwen35_generate_ngram "The quick brown fox" 64` compared with `QWEN35_NGRAM_DECODE=1 /tmp/qwen35_generate_ngram "The quick brown fox" 64` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt output, rejection replay, verifier path, or n-gram defaults change
+**note:** This makes the repeated-text n-gram speed path usable from the practical demo without making it a default universal decode strategy. Keep it opt-in until a broader prompt suite confirms the fail-closed policy does not create unacceptable overhead.
