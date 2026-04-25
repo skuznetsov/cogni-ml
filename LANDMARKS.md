@@ -402,10 +402,19 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `ggml-metal.metal:10077`
   verified_at: 2026-04-22
   decay_trigger: N/A
+- claim: "A 2026-04-25 refresh found llama.cpp still using the same `kernel_mul_mm` tile family for Q4_K prefill: `NR0=64`, `NR1=32`, `NK=32`, 4 simdgroups, `simdgroup_multiply_accumulate`; no separate hidden Q4_K prefill MMA algorithm was found."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal.metal:9305-9645,10077`
+  verified_at: 2026-04-25
+  decay_trigger: llama.cpp ggml-metal Q4_K matmul rewrite or Apple tensor path adoption
+- claim: "Local Q4_H16 prefill keeps the same output tile geometry but preconverts F32 activations to H16 once per matmul instead of inside each output tile; prepared-state pp64 A/B remains positive: `145.99 ms` default vs `148.07 ms` with `QWEN35_Q4K_H16_GEMM_OFF=1`, `6/6` wins."
+  source: `src/ml/gguf/kernels/gemm_q4k.metal:278-620` and `/tmp/qwen35_q4_h16_prepared_ab.log`
+  verified_at: 2026-04-25
+  decay_trigger: Q4_K GEMM route, H16 conversion policy, or benchmark harness changes
 - claim: "kernel_mul_mv_q4_K_f32 (GEMV for decode, batch=1) at ggml-metal.metal:7716-7824. N_R0_Q4_K template for row-parallelism."
   source: `ggml-metal.metal:7716-7824`
   verified_at: 2026-04-22
   decay_trigger: N/A
+**decision:** Do not spend another branch copying llama.cpp's Q4_K prefill tile shape; the remaining exact levers are lower-level Q4/Q6 redesigns with a new proof, FFN tile-streaming WBA, batched speculative verification, or DeltaNet scan work.
 
 ### [LM-prefill-FR-FUSION-1] Full-attention to recurrent boundary fusion
 **status:** verified

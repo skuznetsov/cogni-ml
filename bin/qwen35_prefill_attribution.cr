@@ -12,6 +12,7 @@ warmup = 1
 reps = 3
 compare_env = nil.as(String?)
 compare_off = "1"
+compare_off_set = false
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
@@ -25,8 +26,8 @@ OptionParser.parse do |p|
   p.on("--prompt=N", "Prompt tokens for prefill attribution (default: 64)") { |v| prompt_len = v.to_i }
   p.on("--warmup=N", "Warmup runs before profiling (default: 1)") { |v| warmup = v.to_i }
   p.on("--reps=N", "Measured repetitions for wall timing (default: 3)") { |v| reps = v.to_i }
-  p.on("--compare-env=NAME", "Also run A/B with NAME unset vs NAME=1") { |v| compare_env = v }
-  p.on("--compare-off=VALUE", "Off value for --compare-env (default: 1)") { |v| compare_off = v }
+  p.on("--compare-env=NAME", "Also run A/B with NAME unset vs NAME=VALUE; NAME=VALUE is accepted") { |v| compare_env = v }
+  p.on("--compare-off=VALUE", "Off value for --compare-env (default: 1)") { |v| compare_off = v; compare_off_set = true }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
@@ -42,6 +43,15 @@ raise "--warmup must be non-negative" unless warmup >= 0
 raise "--reps must be positive" unless reps > 0
 raise "--wait-quiet-ms must be non-negative" unless wait_quiet_ms >= 0
 raise "--quiet-poll-ms must be positive" unless quiet_poll_ms > 0
+if env = compare_env
+  if env.includes?("=")
+    name, value = env.split("=", 2)
+    compare_env = name
+    compare_off = value unless compare_off_set
+  end
+  raise "--compare-env name must not be empty" if compare_env.try(&.empty?)
+  raise "--compare-env name is invalid: #{compare_env}" unless compare_env.not_nil!.matches?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+end
 
 ML::BenchLoadGuard.wait_until_quiet!(load_warning_threshold, load_total_warning_threshold, wait_quiet_ms, quiet_poll_ms)
 if require_quiet
