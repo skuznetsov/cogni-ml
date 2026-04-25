@@ -4842,3 +4842,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: host load, Q8_0 dispatch geometry, or a new kernel that exploits block-major locality differently
 **decision:** Do not add load-time Q8_0 block-major prepacking for the current draft kernels. The layout transform costs memory and loader complexity without a meaningful single-token GEMV lower-bound gain. Future Q8 work should target a different dot-product algorithm or fewer GEMV calls, not a standalone block-layout transpose.
 **adversary:** This falsifies only the tested block-major layout under the current row-per-simdgroup GEMV shape. It does not rule out a larger kernel rewrite that changes row ownership, batches multiple tokens, or combines multiple projections in a way that reuses block-major bytes differently.
+
+### [LM-codex-Q4-PAIR-H16-THRESHOLD32-FALSIFIER-1] Lowering Q4 pair-H16 threshold below 64 is neutral
+**status:** verified-falsifier
+**trust:** {F:0.70, G:0.34, R:0.72}
+**context:** ml (Qwen35 prefill Q4 FFN gate/up shared H16 conversion)
+**evidence:**
+- claim: "A fresh prepared-state A/B tested lowering `QWEN35_Q4K_PAIR_H16_MIN_BATCH` from the current default `64` to `32` for short prefill prompts."
+  source: `/tmp/qwen35_prefill_attribution_current --prompt=32/64/128 --warmup=1 --reps=6 --prepare-state --compare-env=QWEN35_Q4K_PAIR_H16_MIN_BATCH=32 --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4 pair-H16 route, prefill batch thresholds, or host-load profile changes
+- claim: "Threshold `32` was neutral at pp32 and pp64: pp32 default `92.42 ms` vs threshold32 `92.40 ms` with default wins `2/6`; pp64 default `142.95 ms` vs threshold32 `142.87 ms` with default wins `1/6`."
+  source: same A/B run on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4 pair-H16 route or benchmark harness changes
+- claim: "Threshold `32` slightly worsened pp128: default `256.28 ms` vs threshold32 `256.50 ms`, with default wins `5/6`."
+  source: same A/B run on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4 pair-H16 route or benchmark harness changes
+**decision:** Keep `Q4_PAIR_H16_MIN_BATCH = 64`. The threshold32 branch does not recover the remaining first-run prefill gap and should not be promoted without a new kernel/dataflow change.
+**adversary:** This is a narrow threshold sweep on synthetic token prompts under prepared-state timing; it does not refute the Q4 pair-H16 route itself, only lowering its activation threshold below `64`.
