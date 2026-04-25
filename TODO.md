@@ -83,6 +83,7 @@
   - [x] Fast-path full Q4_K GEMM output tiles with direct simdgroup stores; pp64 p50 improves from `358.44 tok/s` to `373.80 tok/s`
   - [x] Fuse full-attention chunk boundaries into following recurrent runs; total pp64 syncs drop from `17` to `10`, warm profile improves `177.20 ms` → `172.53 ms` (small/noisy but positive paired A/B)
   - [x] Add prefill attribution harness and matmul shape counters; pp64 shows FFN up/gate Q4_K dominates logical weight traffic (`1728 MiB`), Q6/Q4 FFN-down follows (`1062 MiB` combined), and Q5/Q6 batch GEMM is mandatory (`~170 ms` default vs `~367 ms` with `QWEN35_Q56K_BATCH_GEMM_OFF=1`)
+  - [x] Add `--prepare-state` to the prefill attribution harness so kernel/profile work can measure prepared-state prompt ingest separately from lazy first-touch state allocation; pp64 prepared profile measured `142.31 ms` p50 / `449.72 tok/s` with the same hot-shape mix.
   - [x] In-place SwiGLU staging for chunked prefill FFN paths; exact aliasing path passes specs and small pp64 A/B improves default by `~0.48 ms` vs `QWEN35_SWIGLU_INPLACE_OFF=1`
   - [x] Falsifier: dual Q4_K gate/up+SwiGLU GEMM reduced dispatch count but was slower at pp64 (`174.78 ms` default vs `168.65 ms` off), likely from register pressure and extra barriers
   - [x] Specialize final full-attention prefill layer for last-row logits; final layer still writes all K/V but computes attention+FFN only for the final row, improving pp64 A/B from `173.86 ms` off to `170.00 ms` default

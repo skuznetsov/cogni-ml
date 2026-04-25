@@ -17,9 +17,10 @@ load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
 quiet_poll_ms = 1000
 require_quiet = false
+prepare_state = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_prefill_attribution [--model PATH] [--prompt N] [--warmup N] [--reps N] [--compare-env NAME]"
+  p.banner = "Usage: qwen35_prefill_attribution [--model PATH] [--prompt N] [--warmup N] [--reps N] [--compare-env NAME] [--prepare-state]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--prompt=N", "Prompt tokens for prefill attribution (default: 64)") { |v| prompt_len = v.to_i }
   p.on("--warmup=N", "Warmup runs before profiling (default: 1)") { |v| warmup = v.to_i }
@@ -31,6 +32,7 @@ OptionParser.parse do |p|
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
   p.on("--quiet-poll-ms=N", "Polling interval for --wait-quiet-ms (default: 1000)") { |v| quiet_poll_ms = v.to_i }
   p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
+  p.on("--prepare-state", "Prepare fresh Metal state buffers before each timed prefill") { prepare_state = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -54,8 +56,10 @@ end
 
 def run_prefill_once(w : ML::GGUF::Qwen35Weights,
                      prompt : Array(Int32),
-                     profile : Bool) : Float64
+                     profile : Bool,
+                     prepare_state : Bool) : Float64
   state = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: prompt.size + 4)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(state, w.hparams) if prepare_state
   ML::GGUF::Qwen35Metal::Profile.reset if profile
   ML::GGUF::Qwen35Metal::Profile.enable! if profile
   t0 = Time.instant
@@ -82,9 +86,9 @@ def set_env(name : String, value : String?) : Nil
   end
 end
 
-def measure_wall(w, prompt, warmup : Int32, reps : Int32) : Array(Float64)
-  warmup.times { run_prefill_once(w, prompt, profile: false) }
-  Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false) }
+def measure_wall(w, prompt, warmup : Int32, reps : Int32, prepare_state : Bool) : Array(Float64)
+  warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
+  Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
 end
 
 def measure_paired_env(w,
@@ -92,28 +96,29 @@ def measure_paired_env(w,
                        env : String,
                        alternate_value : String,
                        warmup : Int32,
-                       reps : Int32) : {Array(Float64), Array(Float64)}
+                       reps : Int32,
+                       prepare_state : Bool) : {Array(Float64), Array(Float64)}
   default = [] of Float64
   alternate = [] of Float64
 
   warmup.times do
     set_env(env, nil)
-    run_prefill_once(w, prompt, profile: false)
+    run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
     set_env(env, alternate_value)
-    run_prefill_once(w, prompt, profile: false)
+    run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
   end
 
   reps.times do |i|
     if i.even?
       set_env(env, nil)
-      a = run_prefill_once(w, prompt, profile: false)
+      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
       set_env(env, alternate_value)
-      b = run_prefill_once(w, prompt, profile: false)
+      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
     else
       set_env(env, alternate_value)
-      b = run_prefill_once(w, prompt, profile: false)
+      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
       set_env(env, nil)
-      a = run_prefill_once(w, prompt, profile: false)
+      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
     end
     default << a
     alternate << b
@@ -129,15 +134,15 @@ prompt = prompt_tokens(prompt_len)
 
 puts "Qwen35 prefill attribution"
 puts "model=#{model}"
-puts "prompt=#{prompt_len} warmup=#{warmup} reps=#{reps}"
+puts "prompt=#{prompt_len} warmup=#{warmup} reps=#{reps} prepare_state=#{prepare_state}"
 
-warmup.times { run_prefill_once(w, prompt, profile: false) }
-profile_ms = run_prefill_once(w, prompt, profile: true)
+warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
+profile_ms = run_prefill_once(w, prompt, profile: true, prepare_state: prepare_state)
 puts
 print ML::GGUF::Qwen35Metal::Profile.report_io
 printf "  profiled wall: %.2f ms  %.2f tok/s\n", profile_ms, prompt_len * 1000.0 / profile_ms
 
-times = Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false) }
+times = Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
 printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
   mean(times), percentile(times, 50), percentile(times, 90),
   prompt_len * 1000.0 / percentile(times, 50)
@@ -145,7 +150,7 @@ printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
 if env = compare_env
   old = ENV[env]?
   begin
-    on, off = measure_paired_env(w, prompt, env, compare_off, warmup, reps)
+    on, off = measure_paired_env(w, prompt, env, compare_off, warmup, reps, prepare_state)
     wins = on.zip(off).count { |a, b| a < b }
     puts
     puts "A/B #{env}: default vs #{compare_off.inspect} (paired interleaved)"

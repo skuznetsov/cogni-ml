@@ -4495,5 +4495,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `bin/qwen35_generate.cr`, implemented and smoke-tested on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: CLI state lifecycle, prompt-cache restore path, or speculative state management changes
+- claim: "`qwen35_prefill_attribution --prepare-state` now measures the same prepared-state boundary for operator/profile work. Current pp64 prepared profile is `142.31 ms` p50 / `449.72 tok/s`, with matmul/conversion traffic still dominated by Q4 FFN up/gate and recurrent projection/down paths."
+  source: `/tmp/qwen35_prefill_attribution_prepare --prompt=64 --warmup=1 --reps=3 --prepare-state --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: attribution harness, prepared-state code, or prefill route changes
 **decision:** Keep default first-run semantics unchanged, but expose prepared-state latency as an explicit server/session mode. This is not a kernel speedup; it is a timing-boundary and product-latency optimization for callers that can create a session before prompt ingest.
 **adversary:** This must not be marketed as making cold state+prefill cheaper end-to-end. The allocation/zeroing work still exists; it is moved before the latency-sensitive prefill measurement. It is nevertheless useful and comparable to systems that initialize KV/recurrent cache before timing prompt ingest.
