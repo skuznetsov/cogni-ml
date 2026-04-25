@@ -301,6 +301,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_spec_accept --tokens 64 --gamma 4 --max-gamma 32 --verify chunk-inplace "The quick brown fox"` with the same env on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: draft acceptance behavior, fallback policy, or prompt distribution changes
+- claim: "Raising `QWEN35_SPEC_PLAIN_FALLBACK_GAMMA` from default `2` to `8` is useful as an opt-in companion for bootstrap/high-accept tuning but not robust enough as a default. With `bootstrap_gamma=16`, `fallback_gamma=8` recovered the rejection prompt from `~24.5 ms/tok` to `~21.38 ms/tok` by avoiding post-reject resync, while preserving high-accept around `~15.37 ms/tok`. Without bootstrap, adjacent default-vs-old runs were neutral/noisy and high-accept even regressed in one run (`17.67` vs `17.50 ms/tok`)."
+  source: `/tmp/qwen35_speculative_accept_probe` and `/tmp/qwen35_speculative_accept_fg8` sweeps over `The capital of France is` and `def fibonacci(n):` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: speculative fallback policy, bootstrap policy, host load, or draft/verifier speed changes
 **decision:** Keep full-row F16 GEMM top1 default-off due exactness risk, but enable exact tile-reduce row-batched top1 for chunks at or above the WBA threshold. The next neural speculative speed lever is draft-side cost/quality (for example Q4/F16 source availability, Q8 kernel improvements, or fewer draft steps), not another small verifier-only tweak. Q8 top1 retunes must pass end-to-end speculative parity, not only draft sync-profile speed; Q8 FFN activation fusion must beat wall time, not only remove trace rows.
 
 ## Graph Visualization
