@@ -4110,3 +4110,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt output drift, n-gram policy, guarded verifier interaction, or host load changes
 **note:** This is a policy-safety cleanup rather than a new kernel win. Neural speculative stays opt-in; automatic neural selection needs a reliable acceptance/cost predictor before it is safe.
+
+### [LM-codex-FINAL-FULL-LAST-FFN-ADD-FALSIFIER-1] Final full-attn prefill path should keep separate FFN-down add
+**status:** falsified-no-code-retained
+**trust:** {F:0.80, G:0.36, R:0.76}
+**context:** ml (Qwen prefill WBA / final full-attention layer)
+**evidence:**
+- claim: "A temporary branch extended the existing exact FFN-down residual-add GEMV path into `full_attn_layer_chunk_project_last`, replacing the final full-attention prefill/top1 path's separate `ffn_down` plus `add_vec` with `encode_matmul_add` for batch 1."
+  source: temporary local patch to `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: final full-attention prefill route, GEMV-add kernels, or FFN residual semantics change
+- claim: "Correctness checks passed with the temporary fusion: focused Qwen forward and Metal specs returned `23 examples, 0 failures`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_final_ffn_add crystal spec spec/qwen35_forward_spec.cr spec/qwen35_metal_spec.cr --link-flags=...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: specs, Metal kernels, or Qwen prefill route changes
+- claim: "The pp64 prefill wall did not improve. Paired A/B with `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1` favored the old separate route: fused default avg `150.64 ms`, old route avg `150.45 ms`, fused wins `3/8`."
+  source: `/tmp/qwen35_prefill_attr_finalffn --prompt=64 --warmup=1 --reps=8 --compare-env=QWEN35_FFN_DOWN_ADD_FUSED_OFF --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, final prefill path, or GEMV-add occupancy changes
+**note:** This is another local-WBA falsifier: removing one tiny add dispatch is not enough when the alternate GEMV-add form changes kernel balance. Do not re-add this exact patch without a different lower-level kernel design.
