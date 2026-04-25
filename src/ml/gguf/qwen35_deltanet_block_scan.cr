@@ -227,6 +227,77 @@ module ML
         {lefts, rights}
       end
 
+      private def self.reduce_with_left_basis(v : Array(Float64),
+                                              reduced_basis : Array(Array(Float64)),
+                                              combos : Array(Array(Float64)),
+                                              pivots : Array(Int32)) : Tuple(Array(Float64), Array(Float64))
+        residual = v.dup
+        coeff = Array.new(reduced_basis.size, 0.0)
+
+        reduced_basis.each_with_index do |basis_vec, idx|
+          factor = residual[pivots[idx]]
+          next if factor == 0.0
+
+          basis_vec.size.times { |d| residual[d] -= factor * basis_vec[d] }
+          combos[idx].each_with_index { |c, j| coeff[j] += factor * c }
+        end
+
+        {coeff, residual}
+      end
+
+      def self.compress_outer_factors_left_basis(lefts : Array(Array(Float64)),
+                                                 rights : Array(Array(Float64)),
+                                                 eps : Float64 = 1.0e-10) : Tuple(Array(Array(Float64)), Array(Array(Float64)))
+        raise ArgumentError.new("outer factors size mismatch") unless lefts.size == rights.size
+        return {[] of Array(Float64), [] of Array(Float64)} if lefts.empty?
+
+        s = lefts[0].size
+        basis_lefts = [] of Array(Float64)
+        reduced_basis = [] of Array(Float64)
+        combos = [] of Array(Float64)
+        pivots = [] of Int32
+
+        lefts.each do |left|
+          coeff, residual = reduce_with_left_basis(left, reduced_basis, combos, pivots)
+          pivot = 0
+          pivot_abs = 0.0
+          residual.each_with_index do |v, i|
+            av = v.abs
+            if av > pivot_abs
+              pivot_abs = av
+              pivot = i
+            end
+          end
+          next if pivot_abs <= eps
+
+          pivot_value = residual[pivot]
+          reduced = residual.map { |v| v / pivot_value }
+          combos.each { |combo| combo << 0.0 }
+          new_combo = Array.new(basis_lefts.size + 1, 0.0)
+          coeff.each_with_index { |c, i| new_combo[i] = -c / pivot_value }
+          new_combo[basis_lefts.size] = 1.0 / pivot_value
+
+          basis_lefts << left
+          reduced_basis << reduced
+          combos << new_combo
+          pivots << pivot
+        end
+
+        basis_rights = Array.new(basis_lefts.size) { Array.new(rights[0].size, 0.0) }
+        lefts.each_with_index do |left, idx|
+          coeff, residual = reduce_with_left_basis(left, reduced_basis, combos, pivots)
+          max_residual = residual.reduce(0.0) { |max, v| v.abs > max ? v.abs : max }
+          raise "left basis compression residual #{max_residual} exceeds eps #{eps}" if max_residual > eps * 16
+
+          right = rights[idx]
+          coeff.each_with_index do |c, basis_idx|
+            right.size.times { |d| basis_rights[basis_idx][d] += c * right[d] }
+          end
+        end
+
+        {basis_lefts, basis_rights}
+      end
+
       def self.compress_transition_row_basis(tr : CompactTransition, s : Int32) : CompactTransition
         raise ArgumentError.new("cannot row-compress a zero-gamma transition") if tr.gamma == 0.0
 
@@ -405,10 +476,29 @@ module ML
         FullyCompactDeltaSummary.new(transition, b_lefts, b_rights)
       end
 
+      def self.compress_transition_factor_basis(tr : CompactTransition,
+                                                eps : Float64 = 1.0e-10) : CompactTransition
+        u_cols, v_cols = compress_outer_factors_left_basis(tr.u_cols, tr.v_cols, eps)
+        CompactTransition.new(tr.gamma, u_cols, v_cols)
+      end
+
+      def self.compress_fully_compact_factor_basis(summary : FullyCompactDeltaSummary,
+                                                   eps : Float64 = 1.0e-10) : FullyCompactDeltaSummary
+        transition = compress_transition_factor_basis(summary.transition, eps)
+        b_lefts, b_rights = compress_outer_factors_left_basis(summary.b_lefts, summary.b_rights, eps)
+        FullyCompactDeltaSummary.new(transition, b_lefts, b_rights)
+      end
+
       def self.compose_fully_compact_compressed(first : FullyCompactDeltaSummary,
                                                 second : FullyCompactDeltaSummary,
                                                 s : Int32) : FullyCompactDeltaSummary
         compress_fully_compact_row_basis(compose_fully_compact(first, second), s)
+      end
+
+      def self.compose_fully_compact_factor_compressed(first : FullyCompactDeltaSummary,
+                                                       second : FullyCompactDeltaSummary,
+                                                       eps : Float64 = 1.0e-10) : FullyCompactDeltaSummary
+        compress_fully_compact_factor_basis(compose_fully_compact(first, second), eps)
       end
 
       def self.replay_block(state : Matrix, inputs : Array(DeltaInputs), scale : Float64) : Tuple(Matrix, Array(Array(Float64)))

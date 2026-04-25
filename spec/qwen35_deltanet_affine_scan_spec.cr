@@ -219,4 +219,51 @@ describe "Qwen35 DeltaNet affine block scan algebra" do
     BlockScan.max_abs_delta(dense.a, dense_a).should be < 1.0e-10
     BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
   end
+
+  it "compresses compact factors by left-basis without materializing dense matrices" do
+    s = 8
+    rng = Random.new(0xFAC70B_u64)
+    state = random_state(rng, s)
+    inputs = random_inputs(rng, 24, s)
+
+    dense = BlockScan.compose_all(inputs)
+    full = BlockScan.fully_compact_summary_for_block(inputs)
+    compressed = BlockScan.compress_fully_compact_factor_basis(full)
+
+    compressed.transition.u_cols.size.should be <= s
+    compressed.b_lefts.size.should be <= s
+
+    dense_a = BlockScan.dense_a_from_transition(compressed.transition, s)
+    dense_out = BlockScan.apply_affine(state, dense)
+    compact_out = BlockScan.apply_fully_compact(state, compressed)
+
+    BlockScan.max_abs_delta(dense.a, dense_a).should be < 1.0e-8
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-8
+  end
+
+  it "keeps prefix composition rank-capped with factor-basis compression" do
+    s = 8
+    block_size = 4
+    rng = Random.new(0xC0FFEE_u64)
+    state = random_state(rng, s)
+    inputs = random_inputs(rng, 48, s)
+    blocks = inputs.each_slice(block_size).to_a
+
+    dense = blocks.map { |block| BlockScan.compose_all(block) }
+      .reduce { |acc, tr| BlockScan.compose(acc, tr) }
+    compressed = blocks.map { |block| BlockScan.fully_compact_summary_for_block(block) }
+      .reduce do |acc, summary|
+        BlockScan.compose_fully_compact_factor_compressed(acc, summary)
+      end
+
+    compressed.transition.u_cols.size.should be <= s
+    compressed.b_lefts.size.should be <= s
+
+    dense_a = BlockScan.dense_a_from_transition(compressed.transition, s)
+    dense_out = BlockScan.apply_affine(state, dense)
+    compact_out = BlockScan.apply_fully_compact(state, compressed)
+
+    BlockScan.max_abs_delta(dense.a, dense_a).should be < 1.0e-8
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-8
+  end
 end

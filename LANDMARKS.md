@@ -4579,6 +4579,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Do not implement production DeltaNet scan using this naive dense row-basis prefix compose kernel. The summary-scan branch now needs either a rank-stable compact-factor compose that avoids dense `128x128` products, or a much faster tiled/MMA F32 compose primitive whose full prefix+replay path beats rowwise.
 **adversary:** This refutes the current scalar-per-output compose kernel, not the algebraic idea. A hand-tuned F32 tiled GEMM or a different exact compact formulation could change the cost gate, but it must be measured before integration.
 
+### [LM-codex-DELTANET-FACTOR-BASIS-COMPRESSION-1] Compact factors can be rank-capped exactly without dense row-basis products
+**status:** verified CPU algebra gate
+**trust:** {F:0.84, G:0.58, R:0.82}
+**context:** ml (Qwen35 long prefill / DeltaNet associative summaries / compact-factor compression)
+**evidence:**
+- claim: "Fully compact DeltaNet summaries can be compressed exactly by left-factor basis selection without materializing dense `s x s` transition/additive matrices. The algorithm chooses independent left factors and accumulates the corresponding right factors, preserving the represented outer-product sum while capping rank at `<=s`."
+  source: `src/ml/gguf/qwen35_deltanet_block_scan.cr`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_factor_basis_all crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `16 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: factor compression algorithm, compact summary representation, or DeltaNet recurrence changes
+- claim: "Compressing after each fully compact prefix composition with factor-basis compression keeps transition and additive ranks `<=s` while matching dense affine composition and applied state in randomized focused specs."
+  source: `spec/qwen35_deltanet_affine_scan_spec.cr`, same spec command on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compose_fully_compact_factor_compressed implementation or numerical tolerance changes
+**decision:** Prefer factor-basis compression over naive dense row-basis compression for the next Metal cost gate. It preserves the exact algebraic property needed for rank-stable prefix scan while avoiding explicit dense compose products in the proof formulation.
+**adversary:** This is still a CPU algebra proof. The basis-selection/elimination step may be awkward or too serial on GPU; a Metal microbench must prove the cost before production replay integration.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
