@@ -4247,3 +4247,18 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, prompt mix, or CLI timing changes
 **note:** This removes avoidable work from no-candidate auto/ngram runs without changing candidate behavior. It is not a breakthrough path.
+
+### [LM-codex-GENERATE-TRACE-OFF-1] qwen35_generate can suppress per-step trace output
+**status:** verified-feature
+**trust:** {F:0.82, G:0.62, R:0.78}
+**context:** ml (Qwen CLI / benchmark hygiene)
+**evidence:**
+- claim: "`qwen35_generate` now accepts `QWEN35_TRACE_STEPS_OFF=1` or `QWEN35_QUIET=1` to suppress per-token/per-cycle trace lines while keeping mode headers, summaries, generated token IDs, generated text, and full output."
+  source: `bin/qwen35_generate.cr` and `README.md` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: CLI output format or generation loop logging changes
+- claim: "Trace-off parity matches baseline token IDs for greedy, auto n-gram, and neural speculative modes on `The capital of France is`, `The quick brown fox`, and `def fibonacci(n):` at 32 generated tokens; the smoke also confirmed no `gen`, `spec cycle`, or `ngram cycle` trace lines were printed."
+  source: Python parity script over `/tmp/qwen35_generate_quiet PROMPT 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt outputs, decode policy, or CLI logging changes
+**note:** This is benchmark/CLI hygiene, not a kernel-speed claim. Use trace-off for cleaner practical timing and logs.

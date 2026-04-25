@@ -19,6 +19,7 @@ LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-to
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
+trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
   raise "QWEN35_DECODE_POLICY must be greedy, ngram, speculative, or auto"
@@ -260,8 +261,10 @@ if speculative_decode_enabled && !output_ids.empty?
       target_verify_ms += (Time.instant - tstart).total_milliseconds
       output_ids << emitted
       piece = tok.decode_single(emitted)
-      STDOUT << "  gen #{output_ids.size}/#{n_gen} pos=#{pos} id=#{emitted} piece=#{piece.inspect} mode=target-fallback\n"
-      STDOUT.flush
+      if trace_steps
+        STDOUT << "  gen #{output_ids.size}/#{n_gen} pos=#{pos} id=#{emitted} piece=#{piece.inspect} mode=target-fallback\n"
+        STDOUT.flush
+      end
       pos += 1
       plain_fallback_steps += 1
       break if emitted == tok.eos_id
@@ -290,8 +293,10 @@ if speculative_decode_enabled && !output_ids.empty?
       rejected = true
       early_rejects += 1
       draft_resync_skips += 1 if will_plain_fallback_after_reject
-      STDOUT << "  spec cycle=#{cycles} early_reject emitted=1 gamma=#{current_gamma}\n"
-      STDOUT.flush
+      if trace_steps
+        STDOUT << "  spec cycle=#{cycles} early_reject emitted=1 gamma=#{current_gamma}\n"
+        STDOUT.flush
+      end
     else
       tstart = Time.instant
       skip_draft_backup_for_fallback = spec_plain_fallback_enabled &&
@@ -353,8 +358,10 @@ if speculative_decode_enabled && !output_ids.empty?
       end
       pos += correction_or_accepted.size
 
-      STDOUT << "  spec cycle=#{cycles} accepted=#{accepted}/#{proposed} emitted=#{correction_or_accepted.size} gamma=#{current_gamma} rejected=#{rejected}\n"
-      STDOUT.flush
+      if trace_steps
+        STDOUT << "  spec cycle=#{cycles} accepted=#{accepted}/#{proposed} emitted=#{correction_or_accepted.size} gamma=#{current_gamma} rejected=#{rejected}\n"
+        STDOUT.flush
+      end
     end
 
     if rejected
@@ -412,8 +419,10 @@ elsif ngram_decode_enabled && !output_ids.empty?
       history << emitted
       next_id = top
       piece = tok.decode_single(emitted)
-      STDOUT << "  gen #{output_ids.size}/#{n_gen} pos=#{pos} id=#{emitted} piece=#{piece.inspect} mode=plain took #{dt.round(2)}s\n"
-      STDOUT.flush
+      if trace_steps
+        STDOUT << "  gen #{output_ids.size}/#{n_gen} pos=#{pos} id=#{emitted} piece=#{piece.inspect} mode=plain took #{dt.round(2)}s\n"
+        STDOUT.flush
+      end
       pos += 1
       plain_steps += 1
       break if emitted == tok.eos_id
@@ -464,8 +473,10 @@ elsif ngram_decode_enabled && !output_ids.empty?
       pos += accepted_or_corrected.size
     end
 
-    STDOUT << "  ngram cycle=#{ngram_cycles} accepted=#{ngram_accepted}/#{ngram_proposed} emitted=#{accepted_or_corrected.size} pos=#{pos} rejected=#{rejected} took=#{dt.round(2)}s\n"
-    STDOUT.flush
+    if trace_steps
+      STDOUT << "  ngram cycle=#{ngram_cycles} accepted=#{ngram_accepted}/#{ngram_proposed} emitted=#{accepted_or_corrected.size} pos=#{pos} rejected=#{rejected} took=#{dt.round(2)}s\n"
+      STDOUT.flush
+    end
     break if output_ids.last? == tok.eos_id
   end
 
@@ -481,8 +492,10 @@ else
     top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     dt = (Time.instant - tstart).total_seconds
     piece = tok.decode_single(top)
-    STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos} id=#{top} piece=#{piece.inspect} took #{dt.round(2)}s\n"
-    STDOUT.flush
+    if trace_steps
+      STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos} id=#{top} piece=#{piece.inspect} took #{dt.round(2)}s\n"
+      STDOUT.flush
+    end
     output_ids << top
     pos += 1
     break if top == tok.eos_id
