@@ -3848,4 +3848,12 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_speculative_accept_ngram --tokens 64 --ngram ...` adversary grid on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: prompt distribution, n-gram defaults, or fallback policy changes
+- claim: "A target-only seed experiment before the first n-gram match was rejected. It improved high-repeat `The capital of France is` to about `8.85 ms/tok`, but `The quick brown fox` diverged from greedy at token 31; disabling row-batched top1 for the n-gram chunk did not fix the divergence."
+  source: temporary local `bin/qwen35_speculative_accept.cr` branch and `/tmp/qwen35_speculative_accept_ngram_seed_exact --tokens 64 --ngram 'The quick brown fox'` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: exact verifier implementation, n-gram staging policy, or target-seed algorithm changes
+- claim: "No target-seed code was retained after the falsifier; the committed n-gram front-runner still waits for neural/normal generation to create a repeated suffix before proposing n-gram chunks."
+  source: `git diff -- bin/qwen35_speculative_accept.cr` after reverting the temporary target-seed branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: future target-seed or staged n-gram verifier work
 **note:** This is a paradigm shift rather than a universal decode win: it helps repeated/generated-template text and should eventually be composed with neural draft speculative decode as a cheap first-choice draft, but it is not a replacement for a faster learned draft on arbitrary prompts.
