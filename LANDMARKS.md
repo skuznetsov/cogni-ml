@@ -4699,6 +4699,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Keep the tiled kernel in the research microbench as evidence, but do not build production scan on dense row-basis compose. Ordinary LTP/threadgroup tiling improves the constant factor; it does not change the unfavorable dense-product budget.
 **adversary:** This does not refute a true MMA/simdgroup-matrix compose or a different rank-stable formulation. It refutes only the straightforward 16x16 tiled dense compose path against the current synthetic rowwise budget.
 
+### [LM-codex-DELTANET-FIXED-K-BASIS-PROBE-1] Real K vectors do not support a simple fixed-basis exact shortcut
+**status:** refuted/narrowed research branch
+**trust:** {F:0.70, G:0.40, R:0.72}
+**context:** ml (Qwen35 long prefill / DeltaNet summaries / fixed basis compression)
+**evidence:**
+- claim: "A real-Qwen probe can collect normalized DeltaNet `K` vectors before a recurrent layer and test held-out residuals against a fixed per-head basis built from earlier calibration tokens. The probe uses the real Qwen3.5-9B Q4_K_M weights, llama-tokenized prompt text, recurrent qkv projection, convolution, SiLU, and K L2 normalization."
+  source: `bin/qwen35_deltanet_fixed_basis_probe.cr`; built with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_fixed_basis crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_deltanet_fixed_basis_probe` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: K-vector collection path, recurrent layer implementation, tokenizer, or model weights change
+- claim: "For layer0 on a varied 128-token prompt with 64 calibration tokens, held-out residuals remain large even at high greedy-basis rank: rank `8/16/32/48/64` mean residuals were `0.723/0.620/0.484/0.399/0.322`, with rank64 p50 `0.332`, p90 `0.546`, and max `0.877`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe --tokens=128 --calib-tokens=64 --layer=0 --ranks=8,16,32,48,64 --prompt=<varied technical prompt>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, basis algorithm, layer choice, or hidden-state route changes
+- claim: "For layer1 on a varied 64-token prompt with 32 calibration tokens, held-out residuals are worse: rank `8/16/24/32` mean residuals were `0.782/0.679/0.606/0.533`, with rank32 p50 `0.532` and p90 `0.711`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe --tokens=64 --calib-tokens=32 --layer=1 --ranks=8,16,24,32 --prompt=<varied technical prompt>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, basis algorithm, layer choice, or prior-layer execution route changes
+**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. The residuals are too large for an exact shortcut and would require approximation plus an eval harness, not the current exact-performance phase.
+**adversary:** This uses greedy modified Gram-Schmidt, not optimal PCA/SVD, and only two early recurrent layers/prompts were checked. A learned/adaptive basis might reduce residuals, but that becomes approximate inference unless a strict residual fallback is added and measured.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
