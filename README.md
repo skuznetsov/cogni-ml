@@ -225,15 +225,16 @@ Additional benchmark modes:
 ./build/benchmark_qwen_vs_llama --native-prefill-cache
 ```
 
-Fresh local M2 Max 64GB snapshot, Qwen 3.5 9B Q4_K_M, llama.cpp `llama-bench`, `prompt=64`, `gen=64`, `reps=3`, `warmup=1`, flash-attention off:
+Fresh local M2 Max 64GB relaxed-load snapshot after the shared-H16 recurrent projection cleanup, Qwen 3.5 9B Q4_K_M, llama.cpp `llama-bench`, `prompt=64`, `gen=64`, `reps=3`, `warmup=1`, flash-attention off:
 
 | Mode | cogni-ml | llama.cpp | Gap |
 |---|---:|---:|---:|
-| First-run prefill | 419.32 tok/s p50 | 458.16 tok/s avg | -8.48% |
-| Prefill with preallocated state | 436.49 tok/s p50 | 432.55 tok/s avg | +0.91% |
-| Prompt-cache restore | 1303.17 tok/s p50 | 411.23 tok/s avg | +216.90% |
-| Plain greedy decode, run A | 46.33 tok/s p50 | 38.77 tok/s avg | +19.51% |
-| Plain greedy decode, run B | 39.21 tok/s p50 | 39.56 tok/s avg | -0.88% |
+| First-run prefill | 426.79 tok/s p50 | 459.43 tok/s avg | -7.10% |
+| Prefill with preallocated state | 448.60 tok/s p50 | 465.91 tok/s avg | -3.71% |
+| Prompt-cache restore | 1350.65 tok/s p50 | 465.80 tok/s avg | +189.97% |
+| Plain greedy decode, first-run bench | 48.70 tok/s p50 | 46.62 tok/s avg | +4.47% |
+| Plain greedy decode, preallocated bench | 48.51 tok/s p50 | 46.63 tok/s avg | +4.05% |
+| Plain greedy decode, prompt-cache bench | 48.52 tok/s p50 | 46.58 tok/s avg | +4.18% |
 
 Notes:
 

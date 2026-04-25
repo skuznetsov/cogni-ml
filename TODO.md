@@ -267,5 +267,6 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - **Active task:** 4.9 (true layerwise/microbatch prefill)
 - **Baseline (llama.cpp 86db42e97):** 9B Q4_K_M pp64=458 / tg64=43.5 tok/s (FA=0) → targets ≥504 / ≥48
 - **Latest guarded benchmark:** prompt64/gen64 reps=5/warmup=2 with `--require-quiet --wait-quiet-ms=60000`: native prefill `426.01 tok/s` p50 vs llama.cpp `461.90 tok/s` (`-7.77%`), native decode `47.60 tok/s` p50 vs llama.cpp `45.35 tok/s` (`+4.96%`)
+- **Latest relaxed-load benchmark after shared-H16 recurrent projection cleanup:** prompt64/gen64 reps=3/warmup=1: first-run native prefill `426.79 tok/s` p50 vs llama.cpp `459.43 tok/s` (`-7.10%`), preallocated-state prefill `448.60 tok/s` vs llama.cpp `465.91 tok/s` (`-3.71%`), prompt-cache restore `1350.65 tok/s` vs llama.cpp `465.80 tok/s` (`+189.97%`), and native decode remains ahead by `+4.05..4.47%`.
 - **Blocked:** nothing
 - **Last updated:** 2026-04-24
