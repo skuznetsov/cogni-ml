@@ -4978,3 +4978,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: draft speed, verifier speed, or prompt output changes
 **decision:** Do not resynchronize the draft merely to improve acceptance rate after low-confidence early rejects. Under fallback-off/adversarial prompts, the current fail-cheap behavior can be faster because it avoids paying Q8_0 draft cycles that do not reduce target work enough. Optimize objective latency, not acceptance percentage.
 **adversary:** This is scoped to practical CLI neural speculation with the current 0.8B Q8_0 draft and fallback-off tests. It does not refute resync after chunk rejections where accepted prefixes must be preserved, nor does it refute future faster drafts. It does warn that acceptance-rate gains need wall-time A/B before promotion.
+
+### [LM-codex-Q4K-HALF-DEQUANT-FALSIFIER-1] Q4_K half-arithmetic dequant is neutral and less numerically robust
+**status:** verified-falsifier
+**trust:** {F:0.72, G:0.36, R:0.74}
+**context:** ml (Qwen35 Q4_K GEMM / dequant arithmetic)
+**evidence:**
+- claim: "A temporary `dequantize_q4_K_fn` variant using half `dl/ml` and half multiply/subtract still passed focused Qwen Metal/forward specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4_halfarith_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` -> `23 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_K dequantization, spec thresholds, or Metal compiler changes
+- claim: "The half-arithmetic variant increased the focused `metal_q4k_gemm` max difference to `0.0012678653`, compared with the usual float-expression helper around `0.0004899502` in adjacent spec runs."
+  source: same spec output on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_K test data, dequant helper, or spec thresholds change
+- claim: "Hot-shape attribution was neutral on the dominant Q4 shape and worse on the smaller one: Q4_K `4096x12288 b64` measured `3.032 ms` with half arithmetic vs `3.067 ms` after reverting, while Q4_K `4096x4096 b64` measured `0.164 ms` vs `0.147 ms` after reverting."
+  source: `/tmp/qwen35_op_attribution_q4_halfarith --batch=64 --warmup=2 --runs=9 --limit=4` and `/tmp/qwen35_op_attribution_q4_halfarith_revert --batch=64 --warmup=2 --runs=9 --limit=4` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_K GEMM kernel, op-attribution harness, or host load changes
+**decision:** Keep the current Q4_K dequant helper using float `dl/ml` expressions and one final half rounding into `half4x4`. Half arithmetic does not recover the prefill gap and weakens numeric margin.
+**adversary:** This is a narrow helper-level refutation. It does not rule out a new Q4 tile layout or prepacked scale representation; it only rejects lowering arithmetic precision inside the current helper.
