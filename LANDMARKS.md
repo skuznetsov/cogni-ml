@@ -4938,3 +4938,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: scan model assumptions, real kernel measurements, or prompt-length target changes
 **decision:** Do not integrate the current compact-summary path into first-run prefill. It fails the cheapest lower-bound gate; a production block-scan would add prefix-scan, replay, per-token outputs, and more state plumbing. Keep the algebra/specs as research scaffolding, but the next exact prefill work should target lower-level Q4/Q5/Q6 matmul/projection cost or a materially different DeltaNet scan representation.
 **adversary:** This does not refute all associative DeltaNet scans. It refutes the current exact compact/final-state path and naive row-basis composition as a near-term integration route. A future path could still win for long prompts if it maintains bounded rank, fuses summary build/compose/replay, and avoids extra global-memory traffic.
+
+### [LM-codex-Q4K-DEQUANT-LUT-FALSIFIER-1] Q4_K per-subblock lookup tables slow the current GEMM
+**status:** verified-falsifier
+**trust:** {F:0.74, G:0.38, R:0.76}
+**context:** ml (Qwen35 Q4_K GEMM / lookup-table precompute)
+**evidence:**
+- claim: "A temporary Q4_K `dequantize_q4_K_fn` variant that builds a 16-entry half lookup table per sub-block preserved the arithmetic contract for focused tests."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q4_lut_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` -> `23 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_K dequantization, test corpus, or Metal compiler behavior changes
+- claim: "The LUT variant made the dominant Q4 prefill shape slower: Q4_K `4096x12288 b64` measured `3.748 ms` p50 with the LUT, while the immediately reverted current arithmetic path measured `1.600 ms` p50 under the same op-attribution harness."
+  source: `/tmp/qwen35_op_attribution_q4_lut --batch=64 --warmup=2 --runs=9 --limit=4` and `/tmp/qwen35_op_attribution_q4_revert --batch=64 --warmup=2 --runs=9 --limit=4` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_K GEMM kernel, op-attribution harness, or Metal compiler changes
+- claim: "The smaller Q4_K `4096x4096 b64` shape also worsened with the LUT: `0.753 ms` p50 with lookup vs `0.661 ms` after reverting."
+  source: same op-attribution runs on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_K GEMM kernel, op-attribution harness, or Metal compiler changes
+**decision:** Do not add per-subblock nibble lookup/precompute inside the current Q4_K GEMM. The saved multiply is outweighed by extra local storage/register pressure and indexing. Full F16 weight expansion remains separately refuted by traffic cost; the current compressed arithmetic dequant path is the better local design.
+**adversary:** The op-attribution run had unrelated Q5/Q6 outliers, so the conclusion is scoped to same-run Q4 shape comparisons before/after reverting. This does not refute a fundamentally different Q4 kernel or load-time prepack that changes tile ownership; it refutes the obvious lookup-table variant inside the current simdgroup-matrix GEMM.
