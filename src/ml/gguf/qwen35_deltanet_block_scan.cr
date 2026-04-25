@@ -208,6 +208,57 @@ module ML
         a
       end
 
+      def self.row_basis_factors(m : Matrix) : Tuple(Array(Array(Float64)), Array(Array(Float64)))
+        rows = m.size
+        cols = m[0].size
+        lefts = [] of Array(Float64)
+        rights = [] of Array(Float64)
+
+        rows.times do |i|
+          next if m[i].all? { |x| x == 0.0 }
+
+          left = Array.new(rows, 0.0)
+          left[i] = 1.0
+          right = Array.new(cols) { |j| m[i][j] }
+          lefts << left
+          rights << right
+        end
+
+        {lefts, rights}
+      end
+
+      def self.compress_transition_row_basis(tr : CompactTransition, s : Int32) : CompactTransition
+        raise ArgumentError.new("cannot row-compress a zero-gamma transition") if tr.gamma == 0.0
+
+        dense_a = dense_a_from_transition(tr, s)
+        delta = zeros(s, s)
+        s.times do |i|
+          s.times do |j|
+            delta[i][j] = dense_a[i][j] / tr.gamma
+          end
+          delta[i][i] -= 1.0
+        end
+
+        u_cols, v_cols = row_basis_factors(delta)
+        CompactTransition.new(tr.gamma, u_cols, v_cols)
+      end
+
+      def self.compress_b_row_basis(lefts : Array(Array(Float64)),
+                                    rights : Array(Array(Float64)),
+                                    s : Int32) : Tuple(Array(Array(Float64)), Array(Array(Float64)))
+        dense = zeros(s, s)
+        lefts.each_with_index do |left, idx|
+          right = rights[idx]
+          s.times do |i|
+            s.times do |j|
+              dense[i][j] += left[i] * right[j]
+            end
+          end
+        end
+
+        row_basis_factors(dense)
+      end
+
       def self.compact_transition_for_block(inputs : Array(DeltaInputs)) : CompactTransition
         raise ArgumentError.new("inputs must not be empty") if inputs.empty?
 
@@ -346,6 +397,18 @@ module ML
           first.b_lefts + second.b_lefts,
           transformed_rights + second.b_rights
         )
+      end
+
+      def self.compress_fully_compact_row_basis(summary : FullyCompactDeltaSummary, s : Int32) : FullyCompactDeltaSummary
+        transition = compress_transition_row_basis(summary.transition, s)
+        b_lefts, b_rights = compress_b_row_basis(summary.b_lefts, summary.b_rights, s)
+        FullyCompactDeltaSummary.new(transition, b_lefts, b_rights)
+      end
+
+      def self.compose_fully_compact_compressed(first : FullyCompactDeltaSummary,
+                                                second : FullyCompactDeltaSummary,
+                                                s : Int32) : FullyCompactDeltaSummary
+        compress_fully_compact_row_basis(compose_fully_compact(first, second), s)
       end
 
       def self.replay_block(state : Matrix, inputs : Array(DeltaInputs), scale : Float64) : Tuple(Matrix, Array(Array(Float64)))

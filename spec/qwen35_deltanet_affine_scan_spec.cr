@@ -170,4 +170,53 @@ describe "Qwen35 DeltaNet affine block scan algebra" do
     )).should be < 1.0e-10
     BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
   end
+
+  it "compresses fully compact summaries to row-basis rank <= state size exactly" do
+    s = 8
+    rng = Random.new(0xC0FE55_u64)
+    state = random_state(rng, s)
+    inputs = random_inputs(rng, 16, s)
+
+    dense = BlockScan.compose_all(inputs)
+    full = BlockScan.fully_compact_summary_for_block(inputs)
+    compressed = BlockScan.compress_fully_compact_row_basis(full, s)
+
+    compressed.transition.u_cols.size.should be <= s
+    compressed.transition.v_cols.size.should be <= s
+    compressed.b_lefts.size.should be <= s
+    compressed.b_rights.size.should be <= s
+
+    dense_a = BlockScan.dense_a_from_transition(compressed.transition, s)
+    dense_out = BlockScan.apply_affine(state, dense)
+    compact_out = BlockScan.apply_fully_compact(state, compressed)
+
+    BlockScan.max_abs_delta(dense.a, dense_a).should be < 1.0e-10
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
+  end
+
+  it "keeps prefix composition rank-capped when compressing after each compose" do
+    s = 8
+    block_size = 4
+    rng = Random.new(0xC0A9E_u64)
+    state = random_state(rng, s)
+    inputs = random_inputs(rng, 32, s)
+    blocks = inputs.each_slice(block_size).to_a
+
+    dense = blocks.map { |block| BlockScan.compose_all(block) }
+      .reduce { |acc, tr| BlockScan.compose(acc, tr) }
+    compressed = blocks.map { |block| BlockScan.fully_compact_summary_for_block(block) }
+      .reduce do |acc, summary|
+        BlockScan.compose_fully_compact_compressed(acc, summary, s)
+      end
+
+    compressed.transition.u_cols.size.should be <= s
+    compressed.b_lefts.size.should be <= s
+
+    dense_a = BlockScan.dense_a_from_transition(compressed.transition, s)
+    dense_out = BlockScan.apply_affine(state, dense)
+    compact_out = BlockScan.apply_fully_compact(state, compressed)
+
+    BlockScan.max_abs_delta(dense.a, dense_a).should be < 1.0e-10
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
+  end
 end

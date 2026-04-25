@@ -4543,6 +4543,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Continue DeltaNet summary research only if the next branch has exact rank compression to `<=s` or a different rank-stable prefix formulation. A plain compact prefix tree with growing rank should not be implemented. Target pp1024+ first; pp256 is unlikely to pass the `1.25x` gate even under the optimistic cap.
 **adversary:** The multi-block summary-build comparison excludes prefix scan, replay, output generation, and post-processing. It is a necessary gate, not an end-to-end speedup claim. The rank-cap model is optimistic because it does not price the exact compression kernel.
 
+### [LM-codex-DELTANET-ROW-BASIS-COMPRESSION-1] Fully compact summaries can be exact rank-capped with row-basis factors
+**status:** verified CPU algebra gate
+**trust:** {F:0.86, G:0.62, R:0.84}
+**context:** ml (Qwen35 long prefill / DeltaNet associative summaries / rank compression)
+**evidence:**
+- claim: "A fully compact DeltaNet summary can be compressed exactly to row-basis factors with transition rank and additive-B rank `<= s`. The proof path computes dense `A/gamma - I` and dense `B`, then refactors each nonzero row as `e_i outer row_i`; applying the compressed summary matches dense affine application within `1e-10` on focused randomized specs."
+  source: `src/ml/gguf/qwen35_deltanet_block_scan.cr`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_rank_compress crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `14 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact summary algebra, row/column convention, or DeltaNet recurrence changes
+- claim: "Compressing after each fully compact prefix composition keeps rank capped over multiple blocks while preserving the final dense `A` and applied state. The regression spec composes 8 blocks of size 4 at `s=8` and verifies transition/B application against dense affine composition."
+  source: `spec/qwen35_deltanet_affine_scan_spec.cr`, same spec command on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compose_fully_compact_compressed implementation or compression method changes
+**decision:** The prior rank-growth blocker is algebraically removable, so the DeltaNet summary-scan branch stays alive for pp1024+. The next falsifier is cost, not correctness: a Metal compression/prefix prototype must show row-basis compression plus replay is cheaper than the saved rowwise serial scan.
+**adversary:** The CPU proof materializes dense `s x s` matrices and uses row-basis rank exactly `<=s`, not a cheap GPU implementation. It proves exactness and rank stability only; it does not prove the compression kernel is fast enough.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
