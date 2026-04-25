@@ -4357,5 +4357,13 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `src/ml/gguf/qwen35_deltanet_block_scan.cr`, `spec/qwen35_deltanet_affine_scan_spec.cr`, and `bin/qwen35_deltanet_dense_scan_cpu.cr`; verified by `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_blockscan_refactor crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `6 examples, 0 failures` on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: block-scan module, proof spec, or dense baseline changes
+- claim: "Compact block summaries now avoid materializing dense `B`: `CompactDeltaSummary` stores dense `A` plus low-rank `B` factors, supports exact apply, and supports exact composition by transforming the first summary's right factors through the second summary's `A`. Focused specs cover compact apply and compact composition against dense affine composition."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_compact_scan crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `8 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact summary representation, composition formula, or DeltaNet recurrence changes
+- claim: "Sequential CPU compact-summary baseline is still slower than serial but faster than dense-summary CPU on checked shapes: `s=16,tokens=64,block=16` measured compact `~8.41 ms` vs dense `~12.96 ms` and serial `~1.09 ms`; `s=32,tokens=128,block=32` measured compact `~108.38 ms` vs prior dense `~184 ms`. Storage is not favorable on tiny shapes with large blocks, but for Qwen `s=128`, dense-A plus low-rank-B storage is favorable for block sizes below `64`."
+  source: `bin/qwen35_deltanet_compact_scan_cpu.cr` and `bin/qwen35_deltanet_dense_scan_cpu.cr` smokes on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compact baseline implementation, storage model, or benchmark rerun
 **decision:** Add a default-off research backlog item before touching production kernels: prove tiny-shape equivalence against serial `delta_net_step!`, estimate `s=128` work for pp64/pp256/pp1024/pp2048, and only then prototype compact summaries and a Metal block size `8` or `16` path.
 **adversary:** This is unlikely to help decode (`T=1`) and may not help short pp64 prefill. Dense summaries are now kept only as a long-prefill GPU baseline; compact summaries remain the pp256+ path. Do not replace the existing rowwise kernel without a CPU proof, exactness specs, and an A/B against `delta_net_chunk_128_rowwise`.

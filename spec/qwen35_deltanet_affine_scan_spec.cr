@@ -83,4 +83,39 @@ describe "Qwen35 DeltaNet affine block scan algebra" do
 
     BlockScan.max_abs_delta(dense_block.b, compact_b).should be < 1.0e-10
   end
+
+  it "applies compact summaries without materializing dense B" do
+    s = 8
+    rng = Random.new(0xC0A9AC7_u64)
+    state = random_state(rng, s)
+    inputs = random_inputs(rng, 6, s)
+
+    dense_block = BlockScan.compose_all(inputs)
+    compact = BlockScan.compact_summary_for_block(inputs)
+
+    dense_out = BlockScan.apply_affine(state, dense_block)
+    compact_out = BlockScan.apply_compact(state, compact)
+
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
+  end
+
+  it "composes compact summaries without materializing dense B" do
+    s = 8
+    rng = Random.new(0xC04C7_u64)
+    state = random_state(rng, s)
+    first = random_inputs(rng, 4, s)
+    second = random_inputs(rng, 5, s)
+
+    dense = BlockScan.compose(BlockScan.compose_all(first), BlockScan.compose_all(second))
+    compact = BlockScan.compose_compact(
+      BlockScan.compact_summary_for_block(first),
+      BlockScan.compact_summary_for_block(second)
+    )
+
+    dense_out = BlockScan.apply_affine(state, dense)
+    compact_out = BlockScan.apply_compact(state, compact)
+
+    BlockScan.max_abs_delta(dense.b, BlockScan.dense_b_from_compact(compact)).should be < 1.0e-10
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
+  end
 end

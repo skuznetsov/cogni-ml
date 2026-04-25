@@ -23,6 +23,18 @@ module ML
         end
       end
 
+      struct CompactDeltaSummary
+        getter a : Matrix
+        getter b_lefts : Array(Array(Float64))
+        getter b_rights : Array(Array(Float64))
+
+        def initialize(@a : Matrix,
+                       @b_lefts : Array(Array(Float64)),
+                       @b_rights : Array(Array(Float64)))
+          raise ArgumentError.new("compact B factors size mismatch") unless @b_lefts.size == @b_rights.size
+        end
+      end
+
       def self.zeros(rows : Int32, cols : Int32) : Matrix
         Array.new(rows) { Array.new(cols, 0.0) }
       end
@@ -137,25 +149,62 @@ module ML
       end
 
       def self.dense_low_rank_b_for_block(inputs : Array(DeltaInputs)) : Matrix
+        dense_b_from_compact(compact_summary_for_block(inputs))
+      end
+
+      def self.compact_summary_for_block(inputs : Array(DeltaInputs)) : CompactDeltaSummary
+        raise ArgumentError.new("inputs must not be empty") if inputs.empty?
+
         s = inputs[0].k.size
         suffix = identity(s)
-        transformed_keys = Array(Array(Float64)).new(inputs.size) { Array.new(s, 0.0) }
+        lefts = Array(Array(Float64)).new(inputs.size) { Array.new(s, 0.0) }
+        rights = Array(Array(Float64)).new(inputs.size) { Array.new(s, 0.0) }
 
         (inputs.size - 1).downto(0) do |i|
           inp = inputs[i]
-          transformed_keys[i] = vec_matmul(inp.k, suffix).map { |x| x * inp.beta }
+          lefts[i] = inp.v
+          rights[i] = vec_matmul(inp.k, suffix).map { |x| x * inp.beta }
           suffix = matmul(affine_for(inp).a, suffix)
         end
 
+        CompactDeltaSummary.new(suffix, lefts, rights)
+      end
+
+      def self.dense_b_from_compact(summary : CompactDeltaSummary) : Matrix
+        s = summary.a.size
         b = zeros(s, s)
-        inputs.each_with_index do |inp, t|
+        summary.b_lefts.each_with_index do |left, idx|
+          right = summary.b_rights[idx]
           s.times do |d2|
             s.times do |d1|
-              b[d2][d1] += inp.v[d2] * transformed_keys[t][d1]
+              b[d2][d1] += left[d2] * right[d1]
             end
           end
         end
         b
+      end
+
+      def self.apply_compact(state : Matrix, summary : CompactDeltaSummary) : Matrix
+        out = matmul(state, summary.a)
+        s = out.size
+        summary.b_lefts.each_with_index do |left, idx|
+          right = summary.b_rights[idx]
+          s.times do |d2|
+            s.times do |d1|
+              out[d2][d1] += left[d2] * right[d1]
+            end
+          end
+        end
+        out
+      end
+
+      def self.compose_compact(first : CompactDeltaSummary, second : CompactDeltaSummary) : CompactDeltaSummary
+        transformed_rights = first.b_rights.map { |right| vec_matmul(right, second.a) }
+        CompactDeltaSummary.new(
+          matmul(first.a, second.a),
+          first.b_lefts + second.b_lefts,
+          transformed_rights + second.b_rights
+        )
       end
 
       def self.replay_block(state : Matrix, inputs : Array(DeltaInputs), scale : Float64) : Tuple(Matrix, Array(Array(Float64)))
