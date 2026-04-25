@@ -3816,4 +3816,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_ngram_speculative2 --tokens 64 'def fibonacci(n):'` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: prompt output, n-gram defaults, or fallback policy changes
+- claim: "The suffix matcher was extracted to reusable `ML::GGUF::NgramDraft` with focused specs for no-match, longest-suffix, weak-repeat rejection, and parameter validation."
+  source: `src/ml/gguf/ngram_draft.cr`, `spec/ngram_draft_spec.cr`, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ngram_spec crystal spec spec/ngram_draft_spec.cr` returning `4 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: n-gram candidate semantics or spec fixtures change
 **note:** This is a paradigm shift rather than a universal decode win: it helps repeated/generated-template text and should eventually be composed with neural draft speculative decode as a cheap first-choice draft, but it is not a replacement for a faster learned draft on arbitrary prompts.

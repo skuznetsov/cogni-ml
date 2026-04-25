@@ -1,5 +1,6 @@
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 require "option_parser"
@@ -61,41 +62,6 @@ def advance_next(weights : ML::GGUF::Qwen35Weights,
   top.to_i32
 end
 
-def ngram_candidates(history : Array(Int32),
-                     gamma : Int32,
-                     max_ngram : Int32,
-                     min_ngram : Int32) : Array(Int32)
-  return [] of Int32 if history.empty?
-
-  max_len = Math.min(max_ngram, history.size)
-  max_len.downto(min_ngram) do |n|
-    suffix_start = history.size - n
-    i = history.size - n - 1
-    while i >= 0
-      matched = true
-      n.times do |j|
-        if history[i + j] != history[suffix_start + j]
-          matched = false
-          break
-        end
-      end
-
-      if matched && i + n < history.size
-        result = [] of Int32
-        k = i + n
-        while k < history.size && result.size < gamma
-          result << history[k]
-          k += 1
-        end
-        return result unless result.empty?
-      end
-      i -= 1
-    end
-  end
-
-  [] of Int32
-end
-
 def greedy_sequence(weights : ML::GGUF::Qwen35Weights,
                     prompt_ids : Array(Int32),
                     n_gen : Int32,
@@ -141,7 +107,7 @@ target_backup_ms = 0.0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
-  candidates = ngram_candidates(history, Math.min(gamma, n_gen - generated_ids.size), max_ngram, min_ngram)
+  candidates = ML::GGUF::NgramDraft.candidates(history, Math.min(gamma, n_gen - generated_ids.size), max_ngram, min_ngram)
 
   if candidates.empty?
     generated_ids << target_next
