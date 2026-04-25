@@ -96,6 +96,7 @@ module ML
         @@mm6_pipeline  : ML::Metal::ComputePipeline?
         @@mm5_f32out_pipeline : ML::Metal::ComputePipeline?
         @@mm6_f32out_pipeline : ML::Metal::ComputePipeline?
+        @@mm6_f32out_add_pipeline : ML::Metal::ComputePipeline?
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_add_pipeline : ML::Metal::ComputePipeline?
@@ -577,6 +578,12 @@ module ML
         private def self.mm6_f32out_pipeline : ML::Metal::ComputePipeline
           @@mm6_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q6k_f32out") {
             ML::Metal::ComputePipeline.new("simd_mm_q6k_f32out", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm6_f32out_add_pipeline : ML::Metal::ComputePipeline
+          @@mm6_f32out_add_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q6k_f32out_add") {
+            ML::Metal::ComputePipeline.new("simd_mm_q6k_f32out_add", GEMM_MM_SOURCE)
           }
         end
 
@@ -1188,6 +1195,42 @@ module ML
           enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
         end
 
+        private def self.encode_q56k_gemm_f32_add(enc : ML::Metal::ComputeEncoder,
+                                                  pipeline : ML::Metal::ComputePipeline,
+                                                  x_buf : ML::MetalBuffer,
+                                                  residual_buf : ML::MetalBuffer,
+                                                  out_buf : ML::MetalBuffer,
+                                                  w_buf : ML::MetalBuffer,
+                                                  w_offset : Int64,
+                                                  in_dim : Int32,
+                                                  out_dim : Int32,
+                                                  batch : Int32) : Nil
+          x16_buf = Scratch.get(:mm56_x16, (batch * in_dim).to_i64 * 2_i64)
+
+          Profile.bump_conversion("f32_to_f16 q56_gemm_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
+          enc.set_pipeline(f32_to_f16_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
+          enc.set_value((batch * in_dim).to_u32, 2)
+          enc.dispatch_1d(batch * in_dim, 256)
+
+          enc.set_pipeline(pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x16_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(out_dim.to_u32, 4)
+          enc.set_value(batch.to_u32, 5)
+          enc.set_buffer(residual_buf, 6)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          grid = {
+            (batch   + MM_NR1 - 1) // MM_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
         private def self.encode_q56k_gemm_h16(enc : ML::Metal::ComputeEncoder,
                                               pipeline : ML::Metal::ComputePipeline,
                                               x_buf : ML::MetalBuffer,
@@ -1262,6 +1305,36 @@ module ML
           else
             encode_gemv(enc, gemv_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false)
           end
+        end
+
+        private def self.encode_matmul_add(enc : ML::Metal::ComputeEncoder,
+                                           gemv_pipeline : ML::Metal::ComputePipeline,
+                                           qw : QuantWeight,
+                                           x_buf : ML::MetalBuffer,
+                                           residual_buf : ML::MetalBuffer,
+                                           out_buf : ML::MetalBuffer,
+                                           w_buf : ML::MetalBuffer,
+                                           w_offset : Int64,
+                                           in_dim : Int32,
+                                           out_dim : Int32,
+                                           batch : Int32) : Bool
+          route = if q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
+                    "q6_gemm_add"
+                  elsif batch <= GEMM_BATCH_THRESHOLD && (add_pipe = gemv_add_pipeline_for(qw))
+                    "gemv_add"
+                  else
+                    return false
+                  end
+          Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
+
+          if q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
+            encode_q56k_gemm_f32_add(enc, mm6_f32out_add_pipeline, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          elsif batch <= GEMM_BATCH_THRESHOLD && (add_pipe = gemv_add_pipeline_for(qw))
+            encode_gemv_add(enc, add_pipe, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false)
+          else
+            return false
+          end
+          true
         end
 
         private def self.encode_rmsnorm_vec(enc : ML::Metal::ComputeEncoder,
@@ -1387,6 +1460,10 @@ module ML
 
         private def self.ffn_down_add_fused_enabled? : Bool
           ENV["QWEN35_FFN_DOWN_ADD_FUSED_OFF"]? != "1"
+        end
+
+        private def self.prefill_ffn_down_add_fused_enabled? : Bool
+          ENV["QWEN35_PREFILL_FFN_DOWN_ADD_FUSED"]? == "1"
         end
 
         private def self.small_q4_gemv_enabled? : Bool
@@ -2807,18 +2884,27 @@ module ML
           swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
           swiglu_enc.end_encoding
 
-          ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_matmul(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
-          ffn_down_enc.end_encoding
+          fused_down_add = false
+          if prefill_ffn_down_add_fused_enabled?
+            ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+            fused_down_add = encode_matmul_add(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_comb_buf, residual_buf, out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+            ffn_down_enc.end_encoding
+          end
 
-          add_enc = ML::Metal::ComputeEncoder.new(cmd)
-          add_enc.set_pipeline(add_vec_pipeline)
-          add_enc.set_buffer(residual_buf, 0)
-          add_enc.set_buffer(ffn_out_buf,  1)
-          add_enc.set_buffer(out_buf,      2, ML::Metal::BufferAccess::Write)
-          add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
-          add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
-          add_enc.end_encoding
+          unless fused_down_add
+            ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+            encode_matmul(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+            ffn_down_enc.end_encoding
+
+            add_enc = ML::Metal::ComputeEncoder.new(cmd)
+            add_enc.set_pipeline(add_vec_pipeline)
+            add_enc.set_buffer(residual_buf, 0)
+            add_enc.set_buffer(ffn_out_buf,  1)
+            add_enc.set_buffer(out_buf,      2, ML::Metal::BufferAccess::Write)
+            add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
+            add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
+            add_enc.end_encoding
+          end
 
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
@@ -3061,20 +3147,31 @@ module ML
             swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
             swiglu_enc.end_encoding
 
-            Profile.trace("prefill.rec.ffn_down") do
-              ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-              encode_matmul(ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, ffn_act_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
-              ffn_down_enc.end_encoding
+            fused_down_add = false
+            if prefill_ffn_down_add_fused_enabled?
+              Profile.trace("prefill.rec.ffn_down_add") do
+                ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+                fused_down_add = encode_matmul_add(ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, ffn_act_buf, residual_buf, dst_buf, ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
+                ffn_down_enc.end_encoding
+              end
             end
 
-            add_enc = ML::Metal::ComputeEncoder.new(cmd)
-            add_enc.set_pipeline(add_vec_pipeline)
-            add_enc.set_buffer(residual_buf, 0)
-            add_enc.set_buffer(ffn_out_buf, 1)
-            add_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
-            add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
-            add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
-            add_enc.end_encoding
+            unless fused_down_add
+              Profile.trace("prefill.rec.ffn_down") do
+                ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+                encode_matmul(ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, ffn_act_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
+                ffn_down_enc.end_encoding
+              end
+
+              add_enc = ML::Metal::ComputeEncoder.new(cmd)
+              add_enc.set_pipeline(add_vec_pipeline)
+              add_enc.set_buffer(residual_buf, 0)
+              add_enc.set_buffer(ffn_out_buf, 1)
+              add_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
+              add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
+              add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
+              add_enc.end_encoding
+            end
 
             src_buf, dst_buf = dst_buf, src_buf
           end
@@ -4264,20 +4361,31 @@ module ML
           full_swiglu_enc.dispatch_1d(n_tokens * full_ffn_dim, 256)
           full_swiglu_enc.end_encoding
 
-          Profile.trace("prefill.full.ffn_down") do
-            full_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-            encode_matmul(full_ffn_down_enc, full_ffn_down_pipe.not_nil!, ffn_down_qw, full_ffn_act_buf, full_ffn_out_buf, full_ffn_down_w_buf, full_ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
-            full_ffn_down_enc.end_encoding
+          fused_down_add = false
+          if prefill_ffn_down_add_fused_enabled?
+            Profile.trace("prefill.full.ffn_down_add") do
+              full_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+              fused_down_add = encode_matmul_add(full_ffn_down_enc, full_ffn_down_pipe.not_nil!, ffn_down_qw, full_ffn_act_buf, full_residual_buf, full_out_buf, full_ffn_down_w_buf, full_ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+              full_ffn_down_enc.end_encoding
+            end
           end
 
-          full_add_enc = ML::Metal::ComputeEncoder.new(cmd)
-          full_add_enc.set_pipeline(add_vec_pipeline)
-          full_add_enc.set_buffer(full_residual_buf, 0)
-          full_add_enc.set_buffer(full_ffn_out_buf, 1)
-          full_add_enc.set_buffer(full_out_buf, 2, ML::Metal::BufferAccess::Write)
-          full_add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
-          full_add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
-          full_add_enc.end_encoding
+          unless fused_down_add
+            Profile.trace("prefill.full.ffn_down") do
+              full_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+              encode_matmul(full_ffn_down_enc, full_ffn_down_pipe.not_nil!, ffn_down_qw, full_ffn_act_buf, full_ffn_out_buf, full_ffn_down_w_buf, full_ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+              full_ffn_down_enc.end_encoding
+            end
+
+            full_add_enc = ML::Metal::ComputeEncoder.new(cmd)
+            full_add_enc.set_pipeline(add_vec_pipeline)
+            full_add_enc.set_buffer(full_residual_buf, 0)
+            full_add_enc.set_buffer(full_ffn_out_buf, 1)
+            full_add_enc.set_buffer(full_out_buf, 2, ML::Metal::BufferAccess::Write)
+            full_add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
+            full_add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
+            full_add_enc.end_encoding
+          end
 
           src_buf = full_out_buf
           dst_buf = rec_dst_buf
@@ -4440,20 +4548,31 @@ module ML
             rec_swiglu_enc.dispatch_1d(n_tokens * rec_ffn_dim, 256)
             rec_swiglu_enc.end_encoding
 
-            Profile.trace("prefill.rec.ffn_down") do
-              rec_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-              encode_matmul(rec_ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, rec_ffn_act_buf, rec_ffn_out_buf, rec_ffn_down_w_buf, rec_ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
-              rec_ffn_down_enc.end_encoding
+            fused_down_add = false
+            if prefill_ffn_down_add_fused_enabled?
+              Profile.trace("prefill.rec.ffn_down_add") do
+                rec_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+                fused_down_add = encode_matmul_add(rec_ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, rec_ffn_act_buf, rec_residual_buf, dst_buf, rec_ffn_down_w_buf, rec_ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
+                rec_ffn_down_enc.end_encoding
+              end
             end
 
-            rec_add_enc = ML::Metal::ComputeEncoder.new(cmd)
-            rec_add_enc.set_pipeline(add_vec_pipeline)
-            rec_add_enc.set_buffer(rec_residual_buf, 0)
-            rec_add_enc.set_buffer(rec_ffn_out_buf, 1)
-            rec_add_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
-            rec_add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
-            rec_add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
-            rec_add_enc.end_encoding
+            unless fused_down_add
+              Profile.trace("prefill.rec.ffn_down") do
+                rec_ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+                encode_matmul(rec_ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, lw.ffn_down_qw, rec_ffn_act_buf, rec_ffn_out_buf, rec_ffn_down_w_buf, rec_ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim, n_tokens)
+                rec_ffn_down_enc.end_encoding
+              end
+
+              rec_add_enc = ML::Metal::ComputeEncoder.new(cmd)
+              rec_add_enc.set_pipeline(add_vec_pipeline)
+              rec_add_enc.set_buffer(rec_residual_buf, 0)
+              rec_add_enc.set_buffer(rec_ffn_out_buf, 1)
+              rec_add_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
+              rec_add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
+              rec_add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
+              rec_add_enc.end_encoding
+            end
 
             src_buf, dst_buf = dst_buf, src_buf
           end

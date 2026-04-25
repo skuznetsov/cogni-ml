@@ -3934,3 +3934,34 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: quiet rerun, host load, or decode wave route changes
 **note:** This is a small exact WBA sub-diamond, not the full tile-streamed FFN breakthrough. It removes a dispatch and one residual/output buffer pass, but the real large lever remains avoiding or reusing FFN activation/down traffic across the whole `gate/up -> SwiGLU -> down -> residual` diamond.
+
+### [LM-codex-PREFILL-FFN-DOWN-ADD-WBA-1] Prefill FFN-down residual-add fusion is correctness-safe but not default-worthy
+**status:** falsified-default-off-feature
+**trust:** {F:0.84, G:0.48, R:0.78}
+**context:** ml (Qwen prefill WBA / FFN diamond)
+**evidence:**
+- claim: "A Q6_K batch-GEMM prefill route can fold the residual add into the FFN-down output write while preserving the prior Q6 f32-output numeric contract by rounding the accumulator through `half` before adding. The route is opt-in with `QWEN35_PREFILL_FFN_DOWN_ADD_FUSED=1`; default remains the old separate FFN-down plus add path."
+  source: `src/ml/gguf/kernels/gemm_mm.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q6_K prefill GEMM output precision, prefill chunk routing, or FFN residual semantics change
+- claim: "Default prefill route correctness still passes the focused Qwen Metal/forward/DeltaNet specs after adding the opt-in route."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_wba_default crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` returning `26 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: specs, Metal kernels, or Qwen35 prefill path changes
+- claim: "The opt-in prefill FFN-down-add route also passes focused forward specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_wba_optin QWEN35_PREFILL_FFN_DOWN_ADD_FUSED=1 crystal spec spec/qwen35_forward_spec.cr --link-flags=...` returning `14 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: specs, Metal kernels, or Qwen35 prefill path changes
+- claim: "Paired prefill A/B rejects default-on at prompt64: default measured avg `160.72 ms`, p50 `162.31 ms`; opt-in measured avg `163.81 ms`, p50 `164.02 ms`; default won `8/8` pairs."
+  source: `/tmp/qwen35_prefill_attribution_wba_final --prompt=64 --warmup=1 --reps=8 --compare-env=QWEN35_PREFILL_FFN_DOWN_ADD_FUSED --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prefill grouping, Q6_K add kernel, or benchmark harness changes
+- claim: "Prompt256 A/B was not strong enough to override the prompt64 regression: default measured avg `537.37 ms`, p50 `537.40 ms`; opt-in measured avg `533.29 ms`, p50 `533.72 ms`; opt-in won `4/6` pairs."
+  source: `/tmp/qwen35_prefill_attribution_wba_final --prompt=256 --warmup=1 --reps=6 --compare-env=QWEN35_PREFILL_FFN_DOWN_ADD_FUSED --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt length, prefill grouping, or benchmark harness changes
+- claim: "Q4_K batch-add variants were explicitly rejected for now: direct `simdgroup_matrix` add is not supported by the Metal matrix type, and the cooperative-store fallback lost the existing direct simdgroup-store advantage. An accidental batch-Q4-to-GEMV add route was caught as a catastrophic regression before defaulting."
+  source: local prefill WBA experiment on 2026-04-24; pp64 cooperative Q4+Q6 was neutral (`158.77 ms` default vs `159.29 ms` branch), and the accidental Q4 GEMV route regressed pp64 (`409.88 ms` opt-in vs `297.55 ms` off) plus pp256 (`1429.69 ms` opt-in vs `927.95 ms` off)
+  verified_at: 2026-04-24
+  decay_trigger: Q4_K batch GEMM output-store strategy, Metal simdgroup_matrix capabilities, or prefill add routing changes
+**note:** This is useful as an opt-in falsifier harness and future Q6 experiment hook, not a current speed win. The WBA/LTP lesson is that simply folding the residual write is too local for prefill; the remaining exact opportunity is a larger FFN tile-streaming diamond or a lower-level Q4/Q6 tile algorithm that reduces dominant weight/activation traffic.
