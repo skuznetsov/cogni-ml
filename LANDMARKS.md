@@ -3794,3 +3794,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: quiet rerun, changed gamma policy, or top1 rows kernel rewrite
 **note:** Keep `QWEN35_HEAD_TOP1_ROWS_MIN=8`. A lower threshold can help a rejection-heavy first chunk under some load, but it is not robust enough to trade away high-accept speed.
+
+### [LM-codex-NGRAM-SPEC-HARNESS-1] N-gram/cache draft is an exact speculative path for repeated text
+**status:** verified-feature-with-caveat
+**trust:** {F:0.78, G:0.40, R:0.72}
+**context:** ml (Qwen speculative decode, non-neural draft)
+**evidence:**
+- claim: "Added `bin/qwen35_ngram_speculative.cr`, an opt-in target-only speculative harness that uses repeated token suffixes as a zero-model-cost draft. It verifies candidates with the normal Qwen35 target path, and by default replays plain greedy target output to assert exact equality."
+  source: `bin/qwen35_ngram_speculative.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: harness control flow, target verifier semantics, tokenizer behavior, or default n-gram gates change
+- claim: "The harness is intentionally gated: default `min_ngram=6`, `max_ngram=8`, `gamma=16`. This avoids the earlier weak 1-gram/2-gram failure mode where random local repeats created expensive rejected verifier chunks."
+  source: `bin/qwen35_ngram_speculative.cr` defaults and temporary min-ngram grid on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution or acceptance predictor changes
+- claim: "On the high-repeat prompt `The capital of France is`, the default n-gram harness accepted `55/55` n-gram candidates with `7` verifier cycles and `9` plain target seed steps, measuring `1142.6 ms` / `17.85 ms/tok` in the smoke."
+  source: `/tmp/qwen35_ngram_speculative2 --tokens 64 'The capital of France is'` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, target verifier speed, n-gram defaults, or prompt output changes
+- claim: "On `def fibonacci(n):`, the default gate proposed no n-gram candidates (`0/0`, `cycles=0`) and fell back to `64` plain target steps, preserving exact output without spending verifier chunks on weak repeats."
+  source: `/tmp/qwen35_ngram_speculative2 --tokens 64 'def fibonacci(n):'` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt output, n-gram defaults, or fallback policy changes
+**note:** This is a paradigm shift rather than a universal decode win: it helps repeated/generated-template text and should eventually be composed with neural draft speculative decode as a cheap first-choice draft, but it is not a replacement for a faster learned draft on arbitrary prompts.
