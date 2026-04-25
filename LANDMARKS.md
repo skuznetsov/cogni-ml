@@ -4171,3 +4171,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: draft acceptance, prompt mix, or speculative scheduler changes
 **note:** This ports a known exact harness option into the practical CLI without changing defaults. It is a manual high-accept lever, not an auto policy.
+
+### [LM-codex-GENERATE-SPEC-SKIP-DRAFT-FALLBACK-1] qwen35_generate skips draft backup/resync before target-only fallback
+**status:** verified-feature
+**trust:** {F:0.82, G:0.48, R:0.78}
+**context:** ml (Qwen CLI / neural speculative decode)
+**evidence:**
+- claim: "`qwen35_generate` now skips draft-state backup and later draft resync when a speculative rejection would force the scheduler into target-only fallback (`current_gamma // 2 <= QWEN35_SPEC_PLAIN_FALLBACK_GAMMA`). Escape hatches are `QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF=1` and `QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF=1`."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: neural speculative scheduler, fallback policy, or draft state semantics change
+- claim: "Practical CLI parity matches greedy token IDs and the off-route token IDs for `The capital of France is`, `def fibonacci(n):`, and `The quick brown fox` at 32 generated tokens."
+  source: Python parity script over `/tmp/qwen35_generate_skipdraft PROMPT 32`, comparing greedy, default speculative, and skip-off speculative envs on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt outputs, draft acceptance, or speculative verifier changes
+- claim: "The same smoke shows the intended partial-reject effect: `The quick brown fox` avoids one draft backup/resync and improves from `25.99` to `25.09 ms/tok`; `def fibonacci(n):` improves slightly from `23.41` to `23.24 ms/tok`; high-accept `The capital of France is` is neutral/noisy."
+  source: `/tmp/qwen35_generate_skipdraft` practical CLI smoke with `QWEN35_DECODE_POLICY=speculative`, with and without skip-off envs, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt mix, draft acceptance, or fallback threshold changes
+**note:** This is exact because once the scheduler enters target-only fallback, draft state is no longer read for the rest of generation. It reduces rejection overhead but does not change the broader conclusion that neural speculative should stay opt-in.

@@ -130,6 +130,8 @@ Useful Qwen environment switches:
 | `QWEN35_SPEC_GAMMA=4` | Initial neural draft chunk size in `qwen35_generate`. |
 | `QWEN35_SPEC_MAX_GAMMA=32` | Maximum adaptive neural draft chunk size. |
 | `QWEN35_SPEC_BOOTSTRAP_GAMMA=N` | Default-off neural speculative jump after a fully accepted initial chunk. Can help 100%-accept runs; may regress prompts that reject after an accepted prefix. |
+| `QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF=1` | Disable the exact optimization that skips draft resync work when a rejection is guaranteed to enter target-only fallback. |
+| `QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF=1` | Disable the matching draft-backup skip before fallback-bound speculative chunks. |
 | `QWEN35_HEAD_FULL_ROWS_GUARDED=1` | Experimental speculative-verifier accelerator for large accepted chunks; uses a margin guard and exact fallback for low-margin rows. |
 | `QWEN35_HEAD_FULL_ROWS_MARGIN=0.25` | Margin threshold for the guarded full-row verifier route. Higher is safer but falls back more often. |
 | `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1` | Disable decode-wave FFN-down residual-add fusion for Q4/Q6 target and Q8 draft experiments. |

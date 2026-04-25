@@ -48,6 +48,8 @@ spec_plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to
 spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
 spec_bootstrap_gamma = (ENV["QWEN35_SPEC_BOOTSTRAP_GAMMA"]? || "0").to_i
+spec_skip_draft_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF"]? != "1"
+spec_skip_draft_backup_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF"]? != "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
@@ -245,6 +247,9 @@ if speculative_decode_enabled && !output_ids.empty?
   early_rejects = 0
   target_verify_ms = 0.0
   draft_ms = 0.0
+  draft_resync_ms = 0.0
+  draft_backup_skips = 0
+  draft_resync_skips = 0
 
   while output_ids.size < n_gen
     if !adaptive_growth_allowed && current_gamma <= spec_plain_fallback_gamma
@@ -270,6 +275,8 @@ if speculative_decode_enabled && !output_ids.empty?
     rejected = false
 
     if draft_next != target_next
+      will_plain_fallback_after_reject = spec_skip_draft_before_fallback &&
+                                         Math.max(1, current_gamma // 2) <= spec_plain_fallback_gamma
       emitted = target_next
       tstart = Time.instant
       target_next = advance_next(w, emitted, pos, state)
@@ -280,11 +287,19 @@ if speculative_decode_enabled && !output_ids.empty?
       pos += 1
       rejected = true
       early_rejects += 1
+      draft_resync_skips += 1 if will_plain_fallback_after_reject
       STDOUT << "  spec cycle=#{cycles} early_reject emitted=1 gamma=#{current_gamma}\n"
       STDOUT.flush
     else
       tstart = Time.instant
-      draft_cycle_base.copy_from!(draft_state)
+      skip_draft_backup_for_fallback = spec_skip_draft_before_fallback &&
+                                       spec_skip_draft_backup_before_fallback &&
+                                       Math.max(1, current_gamma // 2) <= spec_plain_fallback_gamma
+      unless skip_draft_backup_for_fallback
+        draft_cycle_base.copy_from!(draft_state)
+      else
+        draft_backup_skips += 1
+      end
       cycle_gamma.times do |i|
         candidates << draft_next
         draft_next = advance_next(draft_weights, draft_next, pos + i, draft_state)
@@ -319,7 +334,16 @@ if speculative_decode_enabled && !output_ids.empty?
         corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, correction_or_accepted, cycle_start_pos, state)
         target_verify_ms += (Time.instant - tstart).total_milliseconds
         target_next = corrected[-1][0]
-        draft_next = resync_draft!(draft_weights, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
+        will_plain_fallback_after_reject = spec_skip_draft_before_fallback &&
+                                           Math.max(1, current_gamma // 2) <= spec_plain_fallback_gamma
+        if will_plain_fallback_after_reject || output_ids.size >= n_gen
+          draft_resync_skips += 1
+        else
+          raise "draft backup missing before required resync" if skip_draft_backup_for_fallback
+          tstart = Time.instant
+          draft_next = resync_draft!(draft_weights, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
+          draft_resync_ms += (Time.instant - tstart).total_milliseconds
+        end
       else
         target_next = target_nexts[correction_or_accepted.size - 1][0]
       end
@@ -356,7 +380,7 @@ if speculative_decode_enabled && !output_ids.empty?
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = proposed > 0 ? (accepted.to_f64 * 100.0 / proposed.to_f64) : 0.0
-  STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)}\n"
+  STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
   puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
