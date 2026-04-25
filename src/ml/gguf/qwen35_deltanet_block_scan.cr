@@ -35,6 +35,30 @@ module ML
         end
       end
 
+      struct CompactTransition
+        getter gamma : Float64
+        getter u_cols : Array(Array(Float64))
+        getter v_cols : Array(Array(Float64))
+
+        def initialize(@gamma : Float64,
+                       @u_cols : Array(Array(Float64)),
+                       @v_cols : Array(Array(Float64)))
+          raise ArgumentError.new("compact transition factors size mismatch") unless @u_cols.size == @v_cols.size
+        end
+      end
+
+      struct FullyCompactDeltaSummary
+        getter transition : CompactTransition
+        getter b_lefts : Array(Array(Float64))
+        getter b_rights : Array(Array(Float64))
+
+        def initialize(@transition : CompactTransition,
+                       @b_lefts : Array(Array(Float64)),
+                       @b_rights : Array(Array(Float64)))
+          raise ArgumentError.new("compact B factors size mismatch") unless @b_lefts.size == @b_rights.size
+        end
+      end
+
       def self.zeros(rows : Int32, cols : Int32) : Matrix
         Array.new(rows) { Array.new(cols, 0.0) }
       end
@@ -148,6 +172,87 @@ module ML
         out
       end
 
+      def self.vec_dot(a : Array(Float64), b : Array(Float64)) : Float64
+        dot(a, b)
+      end
+
+      def self.vec_add_scaled(a : Array(Float64), b : Array(Float64), scale : Float64) : Array(Float64)
+        out = Array.new(a.size, 0.0)
+        a.size.times { |i| out[i] = a[i] + b[i] * scale }
+        out
+      end
+
+      def self.apply_transition_to_vec(v : Array(Float64), tr : CompactTransition) : Array(Float64)
+        result = v.dup
+        tr.u_cols.each_with_index do |u, idx|
+          coeff = vec_dot(v, u)
+          right = tr.v_cols[idx]
+          result = vec_add_scaled(result, right, coeff)
+        end
+        result.map { |x| x * tr.gamma }
+      end
+
+      def self.dense_a_from_transition(tr : CompactTransition, s : Int32) : Matrix
+        a = identity(s)
+        tr.u_cols.each_with_index do |u, idx|
+          v = tr.v_cols[idx]
+          s.times do |i|
+            s.times do |j|
+              a[i][j] += u[i] * v[j]
+            end
+          end
+        end
+        s.times do |i|
+          s.times { |j| a[i][j] *= tr.gamma }
+        end
+        a
+      end
+
+      def self.compact_transition_for_block(inputs : Array(DeltaInputs)) : CompactTransition
+        raise ArgumentError.new("inputs must not be empty") if inputs.empty?
+
+        gamma = 1.0
+        u_cols = [] of Array(Float64)
+        v_cols = [] of Array(Float64)
+
+        inputs.each do |inp|
+          u = inp.k.map { |x| -inp.beta * x }
+          v = inp.k
+          if u_cols.empty?
+            new_u = u
+          else
+            # (I + U V^T)(I + u v^T) = I + U V^T + (u + U(V^T u)) v^T.
+            new_u = u.dup
+            u_cols.each_with_index do |old_u, idx|
+              coeff = vec_dot(v_cols[idx], u)
+              new_u = vec_add_scaled(new_u, old_u, coeff)
+            end
+          end
+          u_cols << new_u
+          v_cols << v
+          gamma *= inp.g
+        end
+
+        CompactTransition.new(gamma, u_cols, v_cols)
+      end
+
+      def self.compose_transition(first : CompactTransition, second : CompactTransition) : CompactTransition
+        new_u = first.u_cols.dup
+        new_v = first.v_cols.dup
+
+        second.u_cols.each_with_index do |u2, idx|
+          transformed_u = u2.dup
+          first.u_cols.each_with_index do |u1, j|
+            coeff = vec_dot(first.v_cols[j], u2)
+            transformed_u = vec_add_scaled(transformed_u, u1, coeff)
+          end
+          new_u << transformed_u
+          new_v << second.v_cols[idx]
+        end
+
+        CompactTransition.new(first.gamma * second.gamma, new_u, new_v)
+      end
+
       def self.dense_low_rank_b_for_block(inputs : Array(DeltaInputs)) : Matrix
         dense_b_from_compact(compact_summary_for_block(inputs))
       end
@@ -168,6 +273,15 @@ module ML
         end
 
         CompactDeltaSummary.new(suffix, lefts, rights)
+      end
+
+      def self.fully_compact_summary_for_block(inputs : Array(DeltaInputs)) : FullyCompactDeltaSummary
+        dense_b_summary = compact_summary_for_block(inputs)
+        FullyCompactDeltaSummary.new(
+          compact_transition_for_block(inputs),
+          dense_b_summary.b_lefts,
+          dense_b_summary.b_rights
+        )
       end
 
       def self.dense_b_from_compact(summary : CompactDeltaSummary) : Matrix
@@ -198,10 +312,37 @@ module ML
         out
       end
 
+      def self.apply_fully_compact(state : Matrix, summary : FullyCompactDeltaSummary) : Matrix
+        s = state.size
+        out = zeros(s, s)
+        state.each_with_index do |row, i|
+          out[i] = apply_transition_to_vec(row, summary.transition)
+        end
+        summary.b_lefts.each_with_index do |left, idx|
+          right = summary.b_rights[idx]
+          s.times do |d2|
+            s.times do |d1|
+              out[d2][d1] += left[d2] * right[d1]
+            end
+          end
+        end
+        out
+      end
+
       def self.compose_compact(first : CompactDeltaSummary, second : CompactDeltaSummary) : CompactDeltaSummary
         transformed_rights = first.b_rights.map { |right| vec_matmul(right, second.a) }
         CompactDeltaSummary.new(
           matmul(first.a, second.a),
+          first.b_lefts + second.b_lefts,
+          transformed_rights + second.b_rights
+        )
+      end
+
+      def self.compose_fully_compact(first : FullyCompactDeltaSummary,
+                                     second : FullyCompactDeltaSummary) : FullyCompactDeltaSummary
+        transformed_rights = first.b_rights.map { |right| apply_transition_to_vec(right, second.transition) }
+        FullyCompactDeltaSummary.new(
+          compose_transition(first.transition, second.transition),
           first.b_lefts + second.b_lefts,
           transformed_rights + second.b_rights
         )

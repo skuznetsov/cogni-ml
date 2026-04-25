@@ -118,4 +118,56 @@ describe "Qwen35 DeltaNet affine block scan algebra" do
     BlockScan.max_abs_delta(dense.b, BlockScan.dense_b_from_compact(compact)).should be < 1.0e-10
     BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
   end
+
+  it "represents the transition matrix A as compact rank updates" do
+    s = 8
+    rng = Random.new(0xA11_u64)
+    inputs = random_inputs(rng, 6, s)
+
+    dense = BlockScan.compose_all(inputs)
+    compact_a = BlockScan.dense_a_from_transition(
+      BlockScan.compact_transition_for_block(inputs), s
+    )
+
+    BlockScan.max_abs_delta(dense.a, compact_a).should be < 1.0e-10
+  end
+
+  it "applies fully compact summaries without materializing dense A or dense B" do
+    s = 8
+    rng = Random.new(0xFA11C0_u64)
+    state = random_state(rng, s)
+    inputs = random_inputs(rng, 6, s)
+
+    dense = BlockScan.compose_all(inputs)
+    fully_compact = BlockScan.fully_compact_summary_for_block(inputs)
+
+    dense_out = BlockScan.apply_affine(state, dense)
+    compact_out = BlockScan.apply_fully_compact(state, fully_compact)
+
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
+  end
+
+  it "composes fully compact summaries without materializing dense A or B" do
+    s = 8
+    rng = Random.new(0xF011C0_u64)
+    state = random_state(rng, s)
+    first = random_inputs(rng, 4, s)
+    second = random_inputs(rng, 5, s)
+
+    dense = BlockScan.compose(BlockScan.compose_all(first), BlockScan.compose_all(second))
+    fully_compact = BlockScan.compose_fully_compact(
+      BlockScan.fully_compact_summary_for_block(first),
+      BlockScan.fully_compact_summary_for_block(second)
+    )
+
+    dense_a = BlockScan.dense_a_from_transition(fully_compact.transition, s)
+    dense_out = BlockScan.apply_affine(state, dense)
+    compact_out = BlockScan.apply_fully_compact(state, fully_compact)
+
+    BlockScan.max_abs_delta(dense.a, dense_a).should be < 1.0e-10
+    BlockScan.max_abs_delta(dense.b, BlockScan.dense_b_from_compact(
+      BlockScan::CompactDeltaSummary.new(dense_a, fully_compact.b_lefts, fully_compact.b_rights)
+    )).should be < 1.0e-10
+    BlockScan.max_abs_delta(dense_out, compact_out).should be < 1.0e-10
+  end
 end
