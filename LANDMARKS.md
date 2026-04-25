@@ -3960,6 +3960,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_prefill_attribution_wba_final --prompt=256 --warmup=1 --reps=6 --compare-env=QWEN35_PREFILL_FFN_DOWN_ADD_FUSED --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: host load, prompt length, prefill grouping, or benchmark harness changes
+- claim: "Refreshed prepared-state A/B also rejects default-on: pp64 measured default avg `142.32 ms`, opt-in avg `142.43 ms` with `4/8` wins; pp256 measured default avg `477.15 ms`, opt-in avg `478.33 ms` with `4/6` wins."
+  source: `/tmp/qwen35_prefill_attribution_prepare --prepare-state --prompt=64 --warmup=1 --reps=8 --compare-env=QWEN35_PREFILL_FFN_DOWN_ADD_FUSED --compare-off=1` and `--prompt=256 --reps=6` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prepared-state benchmark boundary, Q6_K add kernel, prefill grouping, or host load changes
 - claim: "Q4_K batch-add variants were explicitly rejected for now: direct `simdgroup_matrix` add is not supported by the Metal matrix type, and the cooperative-store fallback lost the existing direct simdgroup-store advantage. An accidental batch-Q4-to-GEMV add route was caught as a catastrophic regression before defaulting."
   source: local prefill WBA experiment on 2026-04-24; pp64 cooperative Q4+Q6 was neutral (`158.77 ms` default vs `159.29 ms` branch), and the accidental Q4 GEMV route regressed pp64 (`409.88 ms` opt-in vs `297.55 ms` off) plus pp256 (`1429.69 ms` opt-in vs `927.95 ms` off)
   verified_at: 2026-04-24
