@@ -4152,3 +4152,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt outputs, n-gram policy, guarded verifier interaction, or tokenizer changes
 **note:** This is a small CPU-side cleanup, not a model-kernel breakthrough. It mostly protects auto/ngram mode when repeated suffixes do not appear.
+
+### [LM-codex-GENERATE-SPEC-BOOTSTRAP-1] qwen35_generate exposes opt-in speculative bootstrap gamma
+**status:** verified-feature-with-caveat
+**trust:** {F:0.78, G:0.42, R:0.74}
+**context:** ml (Qwen CLI / neural speculative decode)
+**evidence:**
+- claim: "`qwen35_generate` now accepts `QWEN35_SPEC_BOOTSTRAP_GAMMA=N` for neural speculative decode. After a fully accepted initial adaptive chunk, the CLI can jump directly to the configured gamma, bounded by `QWEN35_SPEC_MAX_GAMMA`."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: neural speculative scheduler or CLI env parsing changes
+- claim: "The knob is default-off because prior harness evidence showed it can speed 100%-accept prompts but regress prompts that reject after an accepted prefix (`The capital of France is`: `17.89 -> 15.10 ms/tok`; `def fibonacci(n):` `23.36 -> 29.93 ms/tok`)."
+  source: `TODO.md` bootstrap falsifier/feature entry from the existing speculative harness work on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: draft model, verifier cost, or adaptive scheduling changes
+- claim: "Practical CLI parity with `QWEN35_DECODE_POLICY=speculative QWEN35_SPEC_BOOTSTRAP_GAMMA=32` matches greedy token IDs for `The capital of France is`, `def fibonacci(n):`, and `The quick brown fox` at 32 generated tokens. The same smoke shows why it stays manual: high-accept `The capital of France is` measured `16.65 ms/tok`, while rejection prompts regressed to `23.25` and `26.16 ms/tok`."
+  source: Python parity script over `/tmp/qwen35_generate_bootstrap PROMPT 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: draft acceptance, prompt mix, or speculative scheduler changes
+**note:** This ports a known exact harness option into the practical CLI without changing defaults. It is a manual high-accept lever, not an auto policy.

@@ -47,6 +47,7 @@ spec_max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "32").to_i
 spec_plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to_i
 spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
+spec_bootstrap_gamma = (ENV["QWEN35_SPEC_BOOTSTRAP_GAMMA"]? || "0").to_i
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
@@ -61,6 +62,7 @@ raise "QWEN35_SPEC_MAX_GAMMA must be positive" unless spec_max_gamma > 0
 raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fallback_gamma > 0
 raise "QWEN35_SPEC_FULL_ACCEPT_STREAK must be positive" unless spec_full_accept_streak > 0
 raise "QWEN35_SPEC_FAST_REGROW_MIN_GAMMA must be non-negative" unless spec_fast_regrow_min_gamma >= 0
+raise "QWEN35_SPEC_BOOTSTRAP_GAMMA must be non-negative" unless spec_bootstrap_gamma >= 0
 spec_max_gamma = Math.max(spec_max_gamma, spec_gamma)
 
 def cache_model_id(path : String) : String
@@ -223,7 +225,7 @@ end
 if speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
-  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma}"
+  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma}"
 
   decode_t0 = Time.instant
   target_next = output_ids.pop
@@ -333,14 +335,19 @@ if speculative_decode_enabled && !output_ids.empty?
       current_gamma = Math.max(1, current_gamma // 2)
     elsif adaptive_growth_allowed && candidates.size == cycle_gamma && current_gamma < spec_max_gamma
       full_accept_streak += 1
-      required = if spec_fast_regrow_min_gamma > 0 && current_gamma >= spec_fast_regrow_min_gamma
-                   1
-                 else
-                   spec_full_accept_streak
-                 end
-      if full_accept_streak >= required
-        current_gamma = Math.min(spec_max_gamma, current_gamma * 2)
+      if spec_bootstrap_gamma > current_gamma && current_gamma == spec_gamma
+        current_gamma = Math.min(spec_max_gamma, spec_bootstrap_gamma)
         full_accept_streak = 0
+      else
+        required = if spec_fast_regrow_min_gamma > 0 && current_gamma >= spec_fast_regrow_min_gamma
+                     1
+                   else
+                     spec_full_accept_streak
+                   end
+        if full_accept_streak >= required
+          current_gamma = Math.min(spec_max_gamma, current_gamma * 2)
+          full_accept_streak = 0
+        end
       end
     end
 
