@@ -66,6 +66,49 @@ kernel void simd_mv_q8_0_f32(
     }
 }
 
+// Same arithmetic as simd_mv_q8_0_f32, but folds the final residual add into
+// the output write. Used by the Q8_0 draft decode FFN-down path.
+kernel void simd_mv_q8_0_f32_add(
+    device const uint8_t* w_raw   [[buffer(0)]],
+    device const float*   x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    device const float*   residual[[buffer(6)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint nb = in_dim / Q8_0_QK;
+    const uint first_row = (tgpig.x * MV8_NSG + sgitg) * MV8_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    const uint row_bytes = nb * 34;
+    device const float * y_base = x + n * in_dim;
+    float sumf[MV8_NR0] = {0.f};
+
+    for (uint ib = 0; ib < nb; ++ib) {
+        const float y = y_base[ib * Q8_0_QK + tiisg];
+        for (short row = 0; row < MV8_NR0; ++row) {
+            const uint row_id = first_row + row;
+            if (row_id >= out_dim) continue;
+            device const block_q8_0_56 * blk =
+                (device const block_q8_0_56 *)(w_raw + row_id * row_bytes) + ib;
+            sumf[row] += (float)blk->d * y * (float)blk->qs[tiisg];
+        }
+    }
+
+    for (short row = 0; row < MV8_NR0 && first_row + row < out_dim; ++row) {
+        float tot = simd_sum(sumf[row]);
+        if (tiisg == 0) {
+            const uint out_idx = n * out_dim + first_row + row;
+            output[out_idx] = residual[out_idx] + tot;
+        }
+    }
+}
+
 kernel void simd_mv_q8_0_dual_f32(
     device const uint8_t* gate_w_raw [[buffer(0)]],
     device const uint8_t* up_w_raw   [[buffer(1)]],

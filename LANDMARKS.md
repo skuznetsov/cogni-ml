@@ -4007,3 +4007,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, prompt mix, verifier chunk sizes, or Q6 full-row kernel changes
 **note:** This deliberately does not default the route on. It is a useful upper-bound/opt-in speed path for accepted large chunks, but the accepted fast rows rely on a margin guard over an F16 full-row GEMM, not a formally exact argmax proof. Keep the final greedy-output equality check in the harness when using it for research.
+
+### [LM-codex-Q8-FFN-DOWN-ADD-WBA-1] Q8 draft FFN-down can fold residual add exactly
+**status:** verified-feature-with-caveat
+**trust:** {F:0.82, G:0.46, R:0.76}
+**context:** ml (Qwen speculative draft decode WBA)
+**evidence:**
+- claim: "Added `simd_mv_q8_0_f32_add` and routed Q8_0 FFN-down through the existing decode-wave FFN-down-add policy. The 0.8B draft now emits `rec.ffn_down_add` / `full.ffn_down_add` instead of separate `ffn_down` plus `add` kernels; `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1` still disables the route."
+  source: `src/ml/gguf/kernels/gemm_q56k.metal` and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Q8_0 GEMV kernels, decode wave routing, or FFN residual semantics change
+- claim: "Focused Metal and Qwen forward specs pass after enabling Q8 FFN-down-add by default."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8add_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags=...` returning `23 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: specs, Metal kernels, or Qwen forward path changes
+- claim: "Draft wave trace confirms the structural effect: default route reports `rec.ffn_down_add` and `full.ffn_down_add`; off-route reports `rec.ffn_down` + `rec.add` and `full.ffn_down` + `full.add`. Single trace wall was neutral (`8.10 ms/tok` both), so paired A/B is the stronger signal."
+  source: `/tmp/qwen35_wave_trace_profile_q8add --model Qwen3.5-0.8B-Q8_0.gguf --prefill=64 --decode=64`, with and without `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, trace harness, or wave route changes
+- claim: "Paired 0.8B draft A/B favors the fused route: default mean `8.102 ms/tok`, off mean `8.257 ms/tok`, default wins `7/8` pairs. End-to-end speculative smoke on `The capital of France is` remained neutral because target verification dominated."
+  source: `/tmp/qwen35_ab_profile_q8add --model Qwen3.5-0.8B-Q8_0.gguf --env=QWEN35_FFN_DOWN_ADD_FUSED_OFF --a='<unset>' --b=1 --prompt=64 --gen=64 --trials=8 --warmup=1`, plus `/tmp/qwen35_speculative_accept_q8add --tokens 64 --gamma 4 --max-gamma 32`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, draft model, speculative scheduler, or target verifier cost changes
+**note:** This is a real exact draft-kernel cleanup, but it is not a speculative breakthrough by itself. It reduces draft wave overhead; high-accept end-to-end decode now needs verifier-side gains or a smaller/faster draft to expose more of the benefit.

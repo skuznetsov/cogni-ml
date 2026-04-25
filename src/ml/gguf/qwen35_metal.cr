@@ -101,6 +101,7 @@ module ML
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_add_pipeline : ML::Metal::ComputePipeline?
         @@mv8_pipeline  : ML::Metal::ComputePipeline?
+        @@mv8_add_pipeline : ML::Metal::ComputePipeline?
         @@mv8_dual_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline?
@@ -612,6 +613,12 @@ module ML
           }
         end
 
+        private def self.mv8_add_pipeline : ML::Metal::ComputePipeline
+          @@mv8_add_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q8_0_f32_add") {
+            ML::Metal::ComputePipeline.new("simd_mv_q8_0_f32_add", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.mv8_dual_pipeline : ML::Metal::ComputePipeline
           @@mv8_dual_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q8_0_dual_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q8_0_dual_f32", GEMM_Q56K_SOURCE)
@@ -915,6 +922,7 @@ module ML
           case qw.type
           when .q4_k? then mv_add_pipeline
           when .q6_k? then mv6_add_pipeline
+          when .q8_0? then mv8_add_pipeline
           else             nil
           end
         end
@@ -925,7 +933,7 @@ module ML
             MV_Q5_NSG * MV_Q5_NR0
           when .same?(mv6_pipeline), .same?(mv6_add_pipeline)
             MV_Q6_NSG * MV_Q6_NR0
-          when .same?(mv8_pipeline)
+          when .same?(mv8_pipeline), .same?(mv8_add_pipeline)
             MV_Q8_NSG * MV_Q8_NR0
           else
             MV_Q4_NSG * MV_Q4_NR0
@@ -934,7 +942,7 @@ module ML
 
         private def self.gemv_threads_per_tg_for(pipeline : ML::Metal::ComputePipeline) : Int32
           case pipeline
-          when .same?(mv8_pipeline), .same?(mv8_top1_tiles_pipeline)
+          when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline)
             MV_Q8_NSG * 32
           else
             64
@@ -947,7 +955,7 @@ module ML
             {"Q5_K", Q5K_BLOCK_BYTES, QK_K}
           when .same?(mv6_pipeline), .same?(mv6_add_pipeline), .same?(mv6_top1_tiles_pipeline)
             {"Q6_K", Q6K_BLOCK_BYTES, QK_K}
-          when .same?(mv8_pipeline), .same?(mv8_top1_tiles_pipeline)
+          when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline)
             {"Q8_0", Q8_0_BLOCK_BYTES, Q8_0_QK}
           else
             {"Q4_K", Q4K_BLOCK_BYTES, QK_K}
