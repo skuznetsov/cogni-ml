@@ -4190,3 +4190,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, prompt mix, draft acceptance, or fallback threshold changes
 **note:** This is exact because once the scheduler enters target-only fallback, draft state is no longer read for the rest of generation. It reduces rejection overhead but does not change the broader conclusion that neural speculative should stay opt-in.
+
+### [LM-codex-AUTO-NGRAM-MISS-LIMIT-FALSIFIER-1] Auto n-gram miss-limit is not a useful speed policy
+**status:** falsified-no-code-retained
+**trust:** {F:0.78, G:0.40, R:0.74}
+**context:** ml (Qwen CLI / n-gram auto policy)
+**evidence:**
+- claim: "A temporary `QWEN35_NGRAM_PLAIN_MISS_LIMIT` policy disabled n-gram drafting after 16 consecutive no-candidate plain steps in `QWEN35_DECODE_POLICY=auto` mode while keeping explicit n-gram mode unlimited."
+  source: temporary local patch to `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: auto decode policy or n-gram candidate overhead changes
+- claim: "The policy preserved exact token IDs versus greedy and no-limit auto mode for `The capital of France is`, `The quick brown fox`, and `def fibonacci(n):` at 32 generated tokens."
+  source: Python parity script over `/tmp/qwen35_generate_automiss PROMPT 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt outputs, n-gram policy, or tokenizer changes
+- claim: "It was not a speed win: no-repeat `def fibonacci(n):` measured `20.29 ms/tok` with miss-limit versus `20.22 ms/tok` without, while high-repeat and partial-repeat prompts were neutral/noisy. Since it can also suppress late n-gram wins, no source change was retained."
+  source: `/tmp/qwen35_generate_automiss` practical CLI smoke with `QWEN35_DECODE_POLICY=auto`, with and without `QWEN35_NGRAM_PLAIN_MISS_LIMIT=0`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt mix, or NgramDraft overhead changes
+**note:** Keep auto simple for now. A better auto policy needs a cheaper predictor of future repetition, not a blind consecutive-miss cutoff.
