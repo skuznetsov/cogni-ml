@@ -4559,6 +4559,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** The prior rank-growth blocker is algebraically removable, so the DeltaNet summary-scan branch stays alive for pp1024+. The next falsifier is cost, not correctness: a Metal compression/prefix prototype must show row-basis compression plus replay is cheaper than the saved rowwise serial scan.
 **adversary:** The CPU proof materializes dense `s x s` matrices and uses row-basis rank exactly `<=s`, not a cheap GPU implementation. It proves exactness and rank stability only; it does not prove the compression kernel is fast enough.
 
+### [LM-codex-DELTANET-ROW-BASIS-COMPOSE-FALSIFIER-1] Naive dense row-basis prefix composition is too slow
+**status:** refuted implementation branch
+**trust:** {F:0.78, G:0.46, R:0.76}
+**context:** ml (Qwen35 long prefill / DeltaNet associative summaries / rank compression)
+**evidence:**
+- claim: "A custom Metal row-basis compose kernel is exact within f32 drift for one prefix level. It computes `D_out = D1 + D2 + D1*D2` and `B_out = B2 + gamma2 * B1*(I+D2)` with `max_d_delta` and `max_b_delta` about `9.3e-10` against a CPU check."
+  source: `bin/qwen35_deltanet_row_basis_compose_micro.cr`; `/tmp/qwen35_deltanet_row_basis_compose_micro --s=128 --pairs=1|2|4|8|16|32|64 --runs=8|20 --warmup=2|4` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: row-basis compose kernel, Metal compiler, or compose formula changes
+- claim: "The measured prefix-level costs are too high for the current rowwise baseline. A stable rerun measured p50 `~1.090/0.687/0.455/0.266/0.273/0.271 ms` for pairs `32/16/8/4/2/1`, summing to `~3.04 ms` for a pp1024-like 64-block scan; adding pairs `64` at `~0.974 ms` makes pp2048-like 128-block scan `~4.02 ms`."
+  source: same row-basis compose microbench on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: compose kernel tiling, GPU occupancy, or rowwise baseline changes
+- claim: "The synthetic rowwise baseline remains below those prefix-only costs: the multi-block summary harness measured tokens `1024` rowwise p50 `~0.790 ms` and tokens `2048` rowwise p50 `~1.240 ms`; summary-build alone wins, but summary-build plus naive row-basis prefix compose loses before replay/output costs."
+  source: `/tmp/qwen35_deltanet_compact_b_metal_micro_blocks2 --s=128 --block=16 --blocks=64|128 --runs=7 --warmup=2` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: rowwise kernel, summary-build harness, or prefix compose implementation changes
+**decision:** Do not implement production DeltaNet scan using this naive dense row-basis prefix compose kernel. The summary-scan branch now needs either a rank-stable compact-factor compose that avoids dense `128x128` products, or a much faster tiled/MMA F32 compose primitive whose full prefix+replay path beats rowwise.
+**adversary:** This refutes the current scalar-per-output compose kernel, not the algebraic idea. A hand-tuned F32 tiled GEMM or a different exact compact formulation could change the cost gate, but it must be measured before integration.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
