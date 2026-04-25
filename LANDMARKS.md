@@ -3752,3 +3752,30 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: quiet-system benchmark rerun, prefill grouping, or Metal scheduler behavior changes
 **note:** Keep the exact f32-output Q5/Q6 kernels, but do not count this as the pp64 breakthrough. The next prefill step should attack Q4_K 4096x12288/12288x4096 traffic or eliminate materialized FFN intermediates; this change mainly removes a provable conversion dispatch and improves isolated operator lower bounds.
+
+### [LM-codex-DRAFT-LAYER-TRUNC-REFUTE-1] Truncating the 0.8B Q8_0 draft collapses speculative acceptance
+**status:** verified-falsifier
+**trust:** {F:0.74, G:0.48, R:0.70}
+**context:** ml (Qwen speculative decode, approximate draft)
+**evidence:**
+- claim: "A bounded temporary branch added a draft-only `--draft-layers N` probe. The target verifier remained exact, so any accepted speedup would have been a valid speculative-decoding win; the only question was draft acceptance versus draft cost."
+  source: temporary local patch to `bin/qwen35_speculative_accept.cr` and `src/ml/gguf/qwen35_cpu.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: draft model architecture, speculative harness, or draft approximation method changes
+- claim: "The downloaded Qwen3.5 0.8B Q8_0 draft has `24` layers in this harness. Requests for `--draft-layers 24`, `26`, or `28` normalize to the full draft and therefore are not truncation experiments."
+  source: `/tmp/qwen35_speculative_accept_draft_limited --draft-layers 24/26/28 --tokens 64 ...` prompt line reported `draft_layers=full` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: model file or harness layer-limit normalization changes
+- claim: "The first real truncation tested, `--draft-layers 22`, destroyed the high-accept case: `The capital of France is` moved from full-draft `100.0%` acceptance and about `15.55 ms/tok` to `0.0%` acceptance, one immediate reject, and about `20.63 ms/tok` target-fallback behavior."
+  source: `/tmp/qwen35_speculative_accept_draft_limited --tokens 64 'The capital of France is'` versus `--draft-layers 22` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, draft model, or fallback policy changes
+- claim: "The same pattern held on partial-reject probes: `Once upon a time` and `The quick brown fox` dropped from `75%` first-cycle acceptance with the full draft to `0%` at 22 layers, and `def fibonacci(n):` dropped from `80%` to `25%`."
+  source: same temporary `/tmp/qwen35_speculative_accept_draft_limited` grid over four prompts on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, draft model, or draft approximation method changes
+- claim: "No code was retained after the falsifier; `rg -n \"draft-layers|DRAFT_LAYERS|forward_top1_limited\" bin/qwen35_speculative_accept.cr src/ml/gguf/qwen35_cpu.cr` returns no matches."
+  source: local source tree after reverting the temporary branch on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: future draft approximation feature work
+**note:** Approximate drafts are still a valid exact-speculative paradigm, but layer truncation is too destructive for this 0.8B model. Future work should try a separately quantized smaller/faster full draft, n-gram/cache draft, or trained early-exit/draft head rather than naively skipping transformer layers.
