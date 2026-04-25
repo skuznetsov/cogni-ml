@@ -389,6 +389,89 @@ kernel void simd_mv_q6k_f32(
     }
 }
 
+// Same arithmetic as simd_mv_q6k_f32, but folds the final residual add into
+// the output write. Used by the decode FFN-down path to remove one add kernel.
+kernel void simd_mv_q6k_f32_add(
+    device const uint8_t* w_raw   [[buffer(0)]],
+    device const float*   x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    device const float*   residual[[buffer(6)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    constexpr uint8_t kmask1 = 0x03;
+    constexpr uint8_t kmask2 = 0x0C;
+    constexpr uint8_t kmask3 = 0x30;
+    constexpr uint8_t kmask4 = 0xC0;
+
+    const uint nb = in_dim / Q56K_QK_K;
+    const uint first_row = (tgpig.x * MV6_NSG + sgitg) * MV6_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    const uint row_bytes = nb * 210;
+
+    const short tid = tiisg / 2;
+    const short ix  = tiisg % 2;
+    const short ip  = tid / 8;
+    const short il  = tid % 8;
+    const short l0  = 4 * il;
+    const short is  = 8 * ip + l0 / 16;
+
+    const short y_offset   = 128 * ip + l0;
+    const short q_offset_l =  64 * ip + l0;
+    const short q_offset_h =  32 * ip + l0;
+
+    float sumf[MV6_NR0] = {0.f};
+    float yl[16];
+
+    device const float * y_base = x + n * in_dim;
+
+    for (uint i = ix; i < nb; i += 2) {
+        device const float * y = y_base + i * Q56K_QK_K + y_offset;
+        for (short l = 0; l < 4; ++l) {
+            yl[4*l + 0] = y[l +  0];
+            yl[4*l + 1] = y[l + 32];
+            yl[4*l + 2] = y[l + 64];
+            yl[4*l + 3] = y[l + 96];
+        }
+
+        for (short row = 0; row < MV6_NR0; ++row) {
+            device const block_q6_K_56 * blk =
+                (device const block_q6_K_56 *)(w_raw + (first_row + row) * row_bytes) + i;
+
+            device const uint8_t * q1 = blk->ql + q_offset_l;
+            device const uint8_t * q2 = q1 + 32;
+            device const uint8_t * qh = blk->qh + q_offset_h;
+            device const int8_t  * sc = blk->scales + is;
+            device const half    * dh = &blk->d;
+
+            float4 sums = {0.f, 0.f, 0.f, 0.f};
+            FOR_UNROLL for (short l = 0; l < 4; ++l) {
+                sums[0] += yl[4*l + 0] * ((int8_t)((q1[l] & 0xF) | ((qh[l] & kmask1) << 4)) - 32);
+                sums[1] += yl[4*l + 1] * ((int8_t)((q2[l] & 0xF) | ((qh[l] & kmask2) << 2)) - 32);
+                sums[2] += yl[4*l + 2] * ((int8_t)((q1[l]  >> 4) | ((qh[l] & kmask3) << 0)) - 32);
+                sums[3] += yl[4*l + 3] * ((int8_t)((q2[l]  >> 4) | ((qh[l] & kmask4) >> 2)) - 32);
+            }
+
+            sumf[row] += dh[0] * (sums[0] * sc[0] + sums[1] * sc[2] +
+                                  sums[2] * sc[4] + sums[3] * sc[6]);
+        }
+    }
+
+    for (short row = 0; row < MV6_NR0 && first_row + row < out_dim; ++row) {
+        float tot = simd_sum(sumf[row]);
+        if (tiisg == 0) {
+            const uint out_idx = n * out_dim + first_row + row;
+            output[out_idx] = residual[out_idx] + tot;
+        }
+    }
+}
+
 // Q6_K lm-head greedy top1. This computes the same per-row dot products as
 // `simd_mv_q6k_f32`, but each threadgroup emits only the best row in a small
 // tile instead of materializing the full vocab logits vector. It is intended

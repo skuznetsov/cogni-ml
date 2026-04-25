@@ -3907,3 +3907,30 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: prompt distribution, adaptive gamma policy, or rows-min threshold changes
 **note:** This repairs a routing inconsistency, not a new universal verifier architecture. It helps large accepted verifier chunks and should stay guarded by `QWEN35_HEAD_TOP1_ROWS_MIN=8`; earlier falsifiers still argue against full-row F16 top1 and against lowering the threshold to 4.
+
+### [LM-codex-FFN-DOWN-ADD-WBA-1] Decode FFN-down can fold the residual add into Q4/Q6 GEMV
+**status:** verified-feature-with-caveat
+**trust:** {F:0.82, G:0.44, R:0.72}
+**context:** ml (Qwen decode WBA / FFN diamond)
+**evidence:**
+- claim: "The decode wave now has Q4_K and Q6_K GEMV variants that write `residual + dot` directly, allowing the FFN-down path to skip the separate `add_vec` kernel for both recurrent and full-attention layers. The feature is default-on and can be disabled with `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1`."
+  source: `src/ml/gguf/kernels/gemm_q4k.metal`, `src/ml/gguf/kernels/gemm_q56k.metal`, and `src/ml/gguf/qwen35_metal.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: decode wave routing, Q4/Q6 GEMV kernels, or FFN residual semantics change
+- claim: "Focused Qwen forward and DeltaNet specs pass with the fused-add route default-on."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ffn_add_default_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --link-flags=...` returning `17 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: specs, Metal kernels, or Qwen forward path changes
+- claim: "The default fused route and the old route produce identical generated token IDs on `The quick brown fox` for 32 generated tokens."
+  source: `/tmp/qwen35_generate_ffn_add "The quick brown fox" 32` compared with `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1 /tmp/qwen35_generate_ffn_add "The quick brown fox" 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt output, decode wave route, or FFN precision changes
+- claim: "Sync profile confirms the intended structural effect: default fused trace reports `rec.ffn_down_add` / `full.ffn_down_add` and no `rec.add` / `full.add`; off-route reports the old `rec.ffn_down` plus `rec.add` and `full.ffn_down` plus `full.add`. A short top1 sync smoke measured `24.82 ms/tok` default versus `29.57 ms/tok` off."
+  source: `/tmp/qwen35_sync_profile_ffn_add` with and without `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1`, prompt64/gen4, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: profile harness, host load, or wave command grouping changes
+- claim: "Paired decode A/B under active host load was positive but not clean enough to call a large benchmark win: opt-in A/B won `7/8` with `+0.312 ms/tok`, while a later default-vs-off A/B under heavier load was `4/8` with `+0.067 ms/tok`."
+  source: `/tmp/qwen35_ab_profile_ffn_add --env=QWEN35_FFN_DOWN_ADD_FUSED --a='<unset>' --b=1 ...` and `/tmp/qwen35_ab_profile_ffn_add_default --env=QWEN35_FFN_DOWN_ADD_FUSED_OFF --a='<unset>' --b=1 ...` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: quiet rerun, host load, or decode wave route changes
+**note:** This is a small exact WBA sub-diamond, not the full tile-streamed FFN breakthrough. It removes a dispatch and one residual/output buffer pass, but the real large lever remains avoiding or reusing FFN activation/down traffic across the whole `gate/up -> SwiGLU -> down -> residual` diamond.
