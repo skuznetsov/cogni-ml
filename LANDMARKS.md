@@ -3191,8 +3191,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 **note:** This is a small exact long-prefill cleanup, not a paradigm shift. It removes duplicated activation conversion for paired FFN projections but does not reduce the dominant weight traffic.
 
 ### [LM-codex-REC-PROJ-SHARED-H16-FALSIFIER-1] Recurrent projection shared H16 conversion is neutral
-**status:** verified-falsifier
-**trust:** {F:0.82, G:0.48, R:0.78}
+**status:** stale historical falsifier; superseded by [LM-codex-QWEN35-REC-PROJ-SHARED-H16-1]
+**trust:** {F:0.82, G:0.34, R:0.42}
 **context:** ml (Qwen prefill optimization)
 **evidence:**
 - claim: "An opt-in branch preconverted the recurrent prefill normed activation matrix to F16 once and reused it for Q5_K qkv half-output GEMM plus Q4_K gate/z half-input GEMM. The branch preserved the existing half-input arithmetic and passed focused Qwen forward/DeltaNet specs."
@@ -3203,7 +3203,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_recproj_shared_ab256 QWEN35_Q4K_PAIR_H16_GEMM_OFF=1 crystal run --release ... bin/qwen35_prefill_attribution.cr -- --prompt=256 --warmup=2 --reps=8 --compare-env=QWEN35_REC_PROJ_SHARED_H16 --compare-off=1` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: host load, power state, benchmark harness, or Q4/Q5 projection kernels change
-**note:** This reinforces the current bottleneck model: removing small activation conversions is mostly exhausted; future exact prefill gains need lower-level quantized tile throughput or elimination of work, not more conversion plumbing.
+**note:** This was valid for the temporary 2026-04-24 branch with `QWEN35_Q4K_PAIR_H16_GEMM_OFF=1` and older surrounding routes. The 2026-04-25 retained implementation is a refreshed default-on cleanup after later Q4/Q5 routing changes; it remains small, not a breakthrough.
 
 ### [LM-codex-CONVERSION-ATTRIBUTION-1] Prefill profile reports F32/F16 conversion traffic
 **status:** verified-instrumentation
