@@ -46,9 +46,9 @@ module ML
       # Above this batch, use GEMM. At or below, GEMV is faster.
       GEMM_BATCH_THRESHOLD = 8
 
-      # Reusing one F32->F16 activation conversion across FFN gate/up only
-      # pays for larger prefill batches; pp64 is noise/regression-prone.
-      Q4_PAIR_H16_MIN_BATCH = 256
+      # Reusing one F32->F16 activation conversion across FFN gate/up now
+      # pays even at pp64 after the later H16 routing cleanups.
+      Q4_PAIR_H16_MIN_BATCH = 64
 
       {% if flag?(:cpu_only) %}
         def self.available? : Bool

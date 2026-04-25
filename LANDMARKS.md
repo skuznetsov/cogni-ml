@@ -4031,9 +4031,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: host load, draft model, speculative scheduler, or target verifier cost changes
 **note:** This is a real exact draft-kernel cleanup, but it is not a speculative breakthrough by itself. It reduces draft wave overhead; high-accept end-to-end decode now needs verifier-side gains or a smaller/faster draft to expose more of the benefit.
 
-### [LM-codex-Q4-PAIR-H16-THRESHOLD-128-FALSIFIER-1] Q4 pair-H16 prefill threshold 128 is neutral, keep default 256
-**status:** falsified-default-unchanged
-**trust:** {F:0.76, G:0.40, R:0.72}
+### [LM-codex-Q4-PAIR-H16-THRESHOLD-128-FALSIFIER-1] Q4 pair-H16 prefill threshold 128 was neutral before later H16 routing changes
+**status:** stale historical falsifier; superseded by refreshed threshold64 default
+**trust:** {F:0.76, G:0.30, R:0.45}
 **context:** ml (Qwen prefill Q4 conversion reuse)
 **evidence:**
 - claim: "Added `QWEN35_Q4K_PAIR_H16_MIN_BATCH` as an experiment knob while keeping the default threshold at `256`."
@@ -4044,7 +4044,34 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_prefill_attribution_pair128 --prompt=64/128/256 --warmup=1 --reps=6 --compare-env=QWEN35_Q4K_PAIR_H16_GEMM_OFF --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: host load, Q4 pair route, or prompt-length mix changes
-**note:** This closes the untested threshold gap without changing default behavior. Use `QWEN35_Q4K_PAIR_H16_MIN_BATCH=128` only for controlled sweeps; it is not a current first-run pp64/pp128 breakthrough.
+**note:** This closes the old untested threshold gap for the 2026-04-24 route state. Later H16 routing cleanups changed the surrounding traffic enough that a 2026-04-25 refresh promoted threshold `64` as a small default win.
+
+### [LM-codex-Q4-PAIR-H16-THRESHOLD64-REFRESH-1] Q4 pair-H16 prefill sharing now starts at pp64
+**status:** verified small default tuning
+**trust:** {F:0.84, G:0.44, R:0.80}
+**context:** ml (Qwen35 prefill Q4 conversion reuse)
+**evidence:**
+- claim: "After the shared-H16 recurrent projection cleanup, lowering `QWEN35_Q4K_PAIR_H16_MIN_BATCH` from `256` to `64` is a small exact pp64/pp128 win."
+  source: `src/ml/gguf/qwen35_metal.cr` default `Q4_PAIR_H16_MIN_BATCH = 64`, implemented on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4 H16 GEMM route, FFN gate/up pairing, benchmark harness, or host load changes
+- claim: "Focused correctness passes with the threshold64 default."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_pair64_spec crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` -> `23 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: specs, Metal kernels, or Qwen35 forward routes change
+- claim: "Threshold64 versus historical threshold256 wins pp64 in repeated paired A/B: first run `150.03 ms` threshold64 vs `150.18 ms` default256, branch wins `6/8`; repeat `150.05 ms` threshold64 vs `150.38 ms` default256, branch wins `12/12`."
+  source: `qwen35_prefill_attribution.cr --prompt=64 --compare-env=QWEN35_Q4K_PAIR_H16_MIN_BATCH --compare-off=64` runs on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load or prefill route changes
+- claim: "Threshold64 also improves pp128 in the same comparison style: `263.66 ms` threshold64 vs `264.07 ms` default256, branch wins `5/6`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_pair128_refresh crystal run --release --link-flags=... bin/qwen35_prefill_attribution.cr -- --prompt=128 --warmup=1 --reps=6 --compare-env=QWEN35_Q4K_PAIR_H16_MIN_BATCH --compare-off=64` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load or prefill route changes
+- claim: "Default threshold64 versus fully disabling Q4 pair-H16 remains small-positive: pp64 `150.27 ms` default vs `150.40 ms` off (`5/8` wins), pp128 `263.51 ms` default vs `264.09 ms` off (`5/6` wins)."
+  source: `qwen35_prefill_attribution.cr --prompt=64/128 --compare-env=QWEN35_Q4K_PAIR_H16_GEMM_OFF --compare-off=1` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, Q4 pair route, or prompt-length mix changes
+**adversary:** The absolute delta is small (`~0.1-0.6 ms`), so this is not a breakthrough and should not be sold as closing the llama.cpp prefill gap. It is retained because it is exact, reversible by env, and consistently non-negative in the refreshed pp64/pp128 checks.
 
 ### [LM-codex-GENERATE-NEURAL-SPEC-1] qwen35_generate has opt-in exact neural speculative decode
 **status:** verified-feature-with-caveat
