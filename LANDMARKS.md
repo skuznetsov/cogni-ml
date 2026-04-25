@@ -4822,3 +4822,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: attribution harness, prepared-state code, or prefill route changes
 **decision:** Keep default first-run semantics unchanged, but expose prepared-state latency as an explicit server/session mode. This is not a kernel speedup; it is a timing-boundary and product-latency optimization for callers that can create a session before prompt ingest.
 **adversary:** This must not be marketed as making cold state+prefill cheaper end-to-end. The allocation/zeroing work still exists; it is moved before the latency-sensitive prefill measurement. It is nevertheless useful and comparable to systems that initialize KV/recurrent cache before timing prompt ingest.
+
+### [LM-codex-Q8-BLOCKMAJOR-PREPACK-FALSIFIER-1] Q8_0 block-major prepack is not a material draft GEMV win
+**status:** verified-falsifier
+**trust:** {F:0.78, G:0.42, R:0.78}
+**context:** ml (Qwen3.5 0.8B Q8_0 draft GEMV layout)
+**evidence:**
+- claim: "Added a bounded real-weight Metal microbench that packs Q8_0 weights from GGUF row-major `[row][block]` layout into `[block][row]` layout and compares a matching single-token GEMV kernel against the current row-major access pattern."
+  source: `bin/qwen35_q8_blockmajor_micro.cr` built with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_q8_blockmajor crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_q8_blockmajor_micro.cr -o /tmp/qwen35_q8_blockmajor_micro` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q8_0 GEMV kernel rewrite, Metal compiler behavior, or draft weight layout changes
+- claim: "The block-major kernel is numerically identical to row-major on representative Q8_0 draft tensors: `max_delta=0.0` for `blk.0.ffn_up.weight`, `blk.1.attn_qkv.weight`, and `blk.0.ffn_down.weight`."
+  source: `/tmp/qwen35_q8_blockmajor_micro --model Qwen3.5-0.8B-Q8_0.gguf --tensor=<tensor> --runs=200 --warmup=20` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q8_0 dequant semantics or microbench kernel changes
+- claim: "Measured p50 speedups were effectively neutral: `blk.0.ffn_up.weight` shape `1024x3584` row `0.246500 ms` vs block `0.244292 ms` (`1.009x`), `blk.1.attn_qkv.weight` shape `1024x6144` row `0.213708 ms` vs block `0.213834 ms` (`0.999x`), and `blk.0.ffn_down.weight` shape `3584x1024` row `0.211792 ms` vs block `0.211292 ms` (`1.002x`)."
+  source: same microbench runs on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, Q8_0 dispatch geometry, or a new kernel that exploits block-major locality differently
+**decision:** Do not add load-time Q8_0 block-major prepacking for the current draft kernels. The layout transform costs memory and loader complexity without a meaningful single-token GEMV lower-bound gain. Future Q8 work should target a different dot-product algorithm or fewer GEMV calls, not a standalone block-layout transpose.
+**adversary:** This falsifies only the tested block-major layout under the current row-per-simdgroup GEMV shape. It does not rule out a larger kernel rewrite that changes row ownership, batches multiple tokens, or combines multiple projections in a way that reuses block-major bytes differently.
