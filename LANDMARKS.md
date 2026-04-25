@@ -4129,3 +4129,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, final prefill path, or GEMV-add occupancy changes
 **note:** This is another local-WBA falsifier: removing one tiny add dispatch is not enough when the alternate GEMV-add form changes kernel balance. Do not re-add this exact patch without a different lower-level kernel design.
+
+### [LM-codex-NGRAM-RECURSIVE-COPY-1] Recursive n-gram drafting avoids scratch copies on no-match paths
+**status:** verified-small-optimization
+**trust:** {F:0.82, G:0.58, R:0.78}
+**context:** ml (Qwen CLI / n-gram speculative decode)
+**evidence:**
+- claim: "`ML::GGUF::NgramDraft.candidates(..., recursive: true)` now runs the first suffix match against the existing history and only duplicates/extends scratch history after a first candidate chunk exists. No-candidate calls return without `history.dup`."
+  source: `src/ml/gguf/ngram_draft.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: n-gram candidate semantics or recursive extension policy changes
+- claim: "Focused n-gram specs still pass after the copy-avoidance change."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_ngram_fast crystal spec spec/ngram_draft_spec.cr` returning `5 examples, 0 failures` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: spec coverage or n-gram matching semantics changes
+- claim: "An isolated 2048-token no-match microbench improved from `370.43 ms` to `358.58 ms` over 5000 recursive calls; a repeated-history microbench improved from `13.77 ms` to `13.09 ms`."
+  source: `build/tmp/ngram_draft_bench.cr` comparing old local implementation vs current module on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: Crystal optimizer/runtime, NgramDraft implementation, or benchmark shape changes
+- claim: "Real CLI auto parity still matches greedy token IDs for `The capital of France is`, `The quick brown fox`, and `def fibonacci(n):` at 32 generated tokens with `QWEN35_DECODE_POLICY=auto QWEN35_HEAD_FULL_ROWS_GUARDED=1`."
+  source: Python parity script over `/tmp/qwen35_generate_ngramfast PROMPT 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt outputs, n-gram policy, guarded verifier interaction, or tokenizer changes
+**note:** This is a small CPU-side cleanup, not a model-kernel breakthrough. It mostly protects auto/ngram mode when repeated suffixes do not appear.

@@ -14,8 +14,12 @@ module ML::GGUF
 
       return candidates_once(history, gamma, max_ngram, min_ngram) unless recursive
 
+      first = candidates_once(history, gamma, max_ngram, min_ngram)
+      return first if first.empty? || first.size >= gamma
+
       scratch = history.dup
-      result = [] of Int32
+      scratch.concat(first)
+      result = first
       while result.size < gamma
         chunk = candidates_once(scratch, gamma - result.size, max_ngram, min_ngram)
         break if chunk.empty?
