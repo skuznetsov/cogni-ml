@@ -6,6 +6,7 @@
 # serial target verifier.
 
 require "../src/ml/gguf/reader"
+require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
@@ -36,9 +37,15 @@ plain_fallback_enabled = ENV["QWEN35_SPEC_PLAIN_FALLBACK_OFF"]? != "1"
 plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to_i
 skip_draft_before_fallback_enabled = ENV["QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF"]? != "1"
 skip_draft_backup_before_fallback_enabled = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF"]? != "1"
+ngram_enabled = ENV["QWEN35_SPEC_NGRAM"]? == "1"
+ngram_gamma = (ENV["QWEN35_SPEC_NGRAM_GAMMA"]? || "32").to_i
+ngram_min = (ENV["QWEN35_SPEC_NGRAM_MIN"]? || "6").to_i
+ngram_max = (ENV["QWEN35_SPEC_NGRAM_MAX"]? || "8").to_i
+ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
+ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 
 OptionParser.parse(ARGV) do |parser|
-  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--bootstrap-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace|hybrid|staged] [prompt]"
+  parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--bootstrap-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace|hybrid|staged] [--ngram] [prompt]"
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--draft PATH", "Draft GGUF path (default: Qwen3.5 0.8B Q8_0)") { |path| draft_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
@@ -50,6 +57,12 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--tokens N", "Generated tokens to compare") { |value| n_gen = value.to_i }
   parser.on("--verify MODE", "Target verifier: serial, chunk, chunk-inplace, hybrid, or staged (default: chunk-inplace)") { |value| verify_mode = value }
   parser.on("--stage-gate N", "For --verify staged, verify this many candidates before drafting/verifying the rest") { |value| stage_gate = value.to_i }
+  parser.on("--ngram", "Try exact n-gram/cache draft chunks before the neural draft") { ngram_enabled = true }
+  parser.on("--ngram-gamma N", "Maximum n-gram candidates per chunk (default: env QWEN35_SPEC_NGRAM_GAMMA or 32)") { |value| ngram_gamma = value.to_i }
+  parser.on("--ngram-min N", "Minimum repeated suffix length before n-gram drafting (default: env QWEN35_SPEC_NGRAM_MIN or 6)") { |value| ngram_min = value.to_i }
+  parser.on("--ngram-max N", "Maximum repeated suffix length to search (default: env QWEN35_SPEC_NGRAM_MAX or 8)") { |value| ngram_max = value.to_i }
+  parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
+  parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -70,6 +83,9 @@ max_gamma = Math.max(max_gamma, gamma)
 raise ArgumentError.new("QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive") unless plain_fallback_gamma > 0
 raise ArgumentError.new("--tokens must be positive") unless n_gen > 0
 raise ArgumentError.new("--verify must be serial, chunk, chunk-inplace, hybrid, or staged") unless {"serial", "chunk", "chunk-inplace", "hybrid", "staged"}.includes?(verify_mode)
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_GAMMA must be positive") unless ngram_gamma > 0
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN must be positive") unless ngram_min > 0
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_MAX must be >= QWEN35_SPEC_NGRAM_MIN") unless ngram_max >= ngram_min
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -138,9 +154,9 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode}"
 
-max_seq = prompt_ids.size + n_gen + gamma + 8
+max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
 draft_state = ML::GGUF::Qwen35CPU::State.new(draft.hparams, max_seq: max_seq)
 target_backup_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -150,10 +166,17 @@ target_next = prefill_next(target, prompt_ids, target_state)
 draft_next = prefill_next(draft, prompt_ids, draft_state)
 
 generated_ids = [] of Int32
+history = prompt_ids.dup
+pending_draft_tokens = [] of Int32
+pending_draft_start_pos = 0
+ngram_disabled = false
 pos = prompt_ids.size
 accepted = 0
 proposed = 0
 cycles = 0
+ngram_cycles = 0
+ngram_accepted = 0
+ngram_proposed = 0
 target_verify_ms = 0.0
 draft_ms = 0.0
 target_backup_ms = 0.0
@@ -172,6 +195,74 @@ draft_backup_skips = 0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
+  history_size_before = generated_ids.size
+
+  if ngram_enabled && !ngram_disabled
+    ngram_candidates = ML::GGUF::NgramDraft.candidates(
+      history,
+      Math.min(ngram_gamma, n_gen - generated_ids.size),
+      ngram_max,
+      ngram_min,
+      recursive: ngram_recursive)
+
+    unless ngram_candidates.empty?
+      ngram_cycles += 1
+      ngram_proposed += ngram_candidates.size
+      proposed += ngram_candidates.size
+      cycle_start_pos = pos
+      correction_or_accepted = [] of Int32
+
+      tb0 = Time.instant
+      target_backup_state.copy_from!(target_state)
+      target_backup_ms += (Time.instant - tb0).total_milliseconds
+      tv0 = Time.instant
+      target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, ngram_candidates, cycle_start_pos, target_state)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+      if trace
+        puts "ngram_cycle=#{ngram_cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{ngram_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
+      end
+
+      expected = target_next
+      rejected = false
+      ngram_candidates.each_with_index do |cand, i|
+        if cand == expected
+          generated_ids << cand
+          correction_or_accepted << cand
+          accepted += 1
+          ngram_accepted += 1
+          expected = target_nexts[i][0]
+        else
+          generated_ids << expected
+          correction_or_accepted << expected
+          rejected = true
+          break
+        end
+      end
+
+      if rejected
+        ngram_disabled = true if ngram_disable_after_reject
+        target_state.copy_from!(target_backup_state)
+        tv1 = Time.instant
+        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+        target_verify_ms += (Time.instant - tv1).total_milliseconds
+        target_next = corrected[-1][0]
+        pos += correction_or_accepted.size
+      else
+        target_next = target_nexts[-1][0]
+        pos += ngram_candidates.size
+      end
+
+      unless correction_or_accepted.empty?
+        pending_draft_start_pos = cycle_start_pos if pending_draft_tokens.empty?
+        pending_draft_tokens.concat(correction_or_accepted)
+      end
+      if generated_ids.size > history_size_before
+        history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+      end
+      next
+    end
+  end
+
   if plain_fallback_enabled && adaptive_gamma && !adaptive_growth_allowed && current_gamma <= plain_fallback_gamma
     generated_ids << target_next
     tv0 = Time.instant
@@ -179,7 +270,17 @@ while generated_ids.size < n_gen
     target_verify_ms += (Time.instant - tv0).total_milliseconds
     pos += 1
     plain_fallback_tokens += 1
+    history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
     next
+  end
+
+  unless pending_draft_tokens.empty?
+    tr0 = Time.instant
+    pending_draft_tokens.each_with_index do |tok_id, i|
+      draft_next = advance_next(draft, tok_id, pending_draft_start_pos + i, draft_state)
+    end
+    draft_resync_ms += (Time.instant - tr0).total_milliseconds
+    pending_draft_tokens.clear
   end
 
   cycles += 1
@@ -455,6 +556,10 @@ while generated_ids.size < n_gen
     end
   end
 
+  if generated_ids.size > history_size_before
+    history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+  end
+
   if adaptive_gamma
     if rejected
       full_accept_streak = 0
@@ -495,6 +600,10 @@ plain_tokens_s = n_gen.to_f64 / (plain_ms / 1000.0)
 
 puts
 puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles}"
+if ngram_enabled
+  ngram_rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
+  puts "ngram_stats accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{ngram_rate.round(2)}% cycles=#{ngram_cycles} disabled=#{ngram_disabled} pending_draft=#{pending_draft_tokens.size}"
+end
 avg_gamma = cycles > 0 ? (gamma_sum.to_f64 / cycles.to_f64).round(2) : 0.0
 puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects} single_fast=#{single_accept_fast} plain_fallback=#{plain_fallback_tokens} draft_skip=#{draft_skips_before_fallback} draft_backup_skip=#{draft_backup_skips}"
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"

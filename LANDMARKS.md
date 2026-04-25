@@ -3836,4 +3836,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `bin/qwen35_ngram_speculative.cr` and `/tmp/qwen35_ngram_disable` A/B on `The quick brown fox` and high-repeat/no-repeat prompts on 2026-04-24
   verified_at: 2026-04-24
   decay_trigger: n-gram rejection policy, prompt distribution, or target verifier behavior changes
+- claim: "The main neural speculative harness now has an opt-in n-gram front-runner (`--ngram` / `QWEN35_SPEC_NGRAM=1`). It verifies n-gram chunks with the exact target path and lazy-resyncs the Q8_0 draft only if neural drafting is needed after n-gram-generated tokens."
+  source: `bin/qwen35_speculative_accept.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: speculative harness control flow, draft state semantics, or n-gram option defaults change
+- claim: "In the same built harness on `The capital of France is`, neural-only speculative measured `17.08 ms/tok`, while `--ngram` measured `11.24 ms/tok`; n-gram accepted `48/48` candidates in `2` n-gram cycles and left `48` draft tokens pending because no later neural resync was needed."
+  source: `/tmp/qwen35_speculative_accept_ngram --tokens 64 'The capital of France is'` with and without `--ngram` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, prompt output, n-gram defaults, or neural speculative scheduler changes
+- claim: "Adversary prompts stayed effectively unchanged under `--ngram`: `def fibonacci(n):` and `Once upon a time` proposed no n-gram candidates, while `The quick brown fox` used one n-gram chunk, disabled n-gram after rejection, and avoided repeated n-gram verifier waste."
+  source: `/tmp/qwen35_speculative_accept_ngram --tokens 64 --ngram ...` adversary grid on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt distribution, n-gram defaults, or fallback policy changes
 **note:** This is a paradigm shift rather than a universal decode win: it helps repeated/generated-template text and should eventually be composed with neural draft speculative decode as a cheap first-choice draft, but it is not a replacement for a faster learned draft on arbitrary prompts.
