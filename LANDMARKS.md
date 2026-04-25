@@ -4663,6 +4663,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 **decision:** Continue to the transformed-term construction gate. The output replay lower-bound is positive enough to justify measuring full adjoint replay, but it is not an integration result because term construction and final-state prefix scan are excluded.
 **adversary:** This lower-bound can easily disappear if transformed-query/additive construction is expensive. It also compares a synthetic one-head shape, not the full recurrent layer pipeline.
 
+### [LM-codex-DELTANET-ADJOINT-FULL-METAL-FALSIFIER-1] Full adjoint term construction is not a current speed win
+**status:** refuted implementation branch
+**trust:** {F:0.80, G:0.46, R:0.80}
+**context:** ml (Qwen35 long prefill / DeltaNet summaries / adjoint replay)
+**evidence:**
+- claim: "A reverse-scan threadgroup Metal kernel can construct adjoint `transformed_q` and additive output terms exactly enough for f32 inference. Across tokens `4/8/16/32/64/128`, `max_tq_delta` stayed below `2.91e-8`, `max_add_delta` below `9.66e-8`, and full/fused output deltas stayed around `8.46e-8..1.02e-7`."
+  source: `bin/qwen35_deltanet_adjoint_replay_micro.cr`; `/tmp/qwen35_deltanet_adjoint_replay_micro_full --s=128 --tokens=4|8|16|32|64|128 --runs=30 --warmup=5` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: adjoint term construction kernel, rowwise baseline, or DeltaNet recurrence changes
+- claim: "Including transformed-term construction removes the output-only lower-bound win. With precomputed rowwise reset data, fused adjoint term construction plus output replay measured p50 ratios below rowwise: tokens `4/8/16/32/64/128` were `0.810/0.791/0.853/0.816/0.781/0.720x` versus `delta_net_chunk_128_rowwise`."
+  source: same microbench command on 2026-04-25; p50 fused `0.227/0.245/0.219/0.219/0.264/0.334 ms` vs rowwise `0.184/0.194/0.187/0.179/0.206/0.240 ms`
+  verified_at: 2026-04-25
+  decay_trigger: rowwise kernel, fused adjoint kernel, final-state scan integration, host load, or long-prompt shape changes
+**decision:** Do not wire this adjoint replay path into production prefill. It is still useful as an exact algebraic lens and could help a future verifier/output-only branch, but it does not beat the current rowwise chunk when term construction is paid.
+**adversary:** The benchmark still excludes final-state prefix scan, so a production full path would be worse unless another branch reuses transformed terms or eliminates separate state update work. The refutation is for the current reverse-threadgroup/full-output formulation, not for all possible associative DeltaNet scans.
+
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
 **trust:** {F:0.70, G:0.48, R:0.74}
