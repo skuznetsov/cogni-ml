@@ -218,6 +218,11 @@ For publishable measurements, wait for a quiet host:
 Additional benchmark modes:
 
 ```sh
+# Fresh State per repetition, but Metal state buffers are prepared before
+# the timed prefill. This measures prompt ingest without first-touch buffer
+# allocation/zeroing in the timed region.
+./build/benchmark_qwen_vs_llama --native-prefill-prepare-state
+
 # State buffers allocated once, then reset between reps.
 ./build/benchmark_qwen_vs_llama --native-prefill-prealloc
 
@@ -229,10 +234,12 @@ Fresh local M2 Max 64GB relaxed-load snapshot after the shared-H16 recurrent pro
 
 | Mode | cogni-ml | llama.cpp | Gap |
 |---|---:|---:|---:|
-| First-run prefill | 426.79 tok/s p50 | 459.43 tok/s avg | -7.10% |
+| First-run prefill | 426.70 tok/s p50 | 455.10 tok/s avg | -6.24% |
+| Fresh state, prepared Metal buffers | 449.73 tok/s p50 | 464.78 tok/s avg | -3.24% |
 | Prefill with preallocated state | 448.60 tok/s p50 | 465.91 tok/s avg | -3.71% |
 | Prompt-cache restore | 1350.65 tok/s p50 | 465.80 tok/s avg | +189.97% |
-| Plain greedy decode, first-run bench | 48.70 tok/s p50 | 46.62 tok/s avg | +4.47% |
+| Plain greedy decode, first-run bench | 48.67 tok/s p50 | 46.67 tok/s avg | +4.29% |
+| Plain greedy decode, prepared-state bench | 48.59 tok/s p50 | 46.43 tok/s avg | +4.67% |
 | Plain greedy decode, preallocated bench | 48.51 tok/s p50 | 46.63 tok/s avg | +4.05% |
 | Plain greedy decode, prompt-cache bench | 48.52 tok/s p50 | 46.58 tok/s avg | +4.18% |
 
@@ -240,6 +247,7 @@ Notes:
 
 - The table is a local engineering snapshot, not a lab-clean public benchmark.
 - First-run prefill is still behind llama.cpp on this machine. The native wins currently come from state reuse, prompt-cache restore, and exact speculative decode.
+- `--native-prefill-prepare-state` uses a fresh `State` per repetition but calls `Qwen35CPU.prepare_state_metal!` before timing. This is useful for server-style latency where a session object can be prepared before the prompt arrives.
 - `--native-prefill-cache` measures exact restore of a previously computed prompt state; it is not a first-run prefill replacement.
 - Short decode runs are noisy on a desktop system. The two plain decode rows above are intentionally both shown: treat plain decode as parity-to-faster, not as a stable public margin without a quiet rerun.
 

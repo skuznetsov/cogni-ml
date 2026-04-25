@@ -55,6 +55,38 @@ def measure_native_prefill(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps :
   )
 end
 
+def measure_native_prefill_prepared_state(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32) : NativeStats
+  hp = w.hparams
+  prompt = Array(Int32).new(n_prompt) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+  warmup.times do
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    run_native_prefill(w, prompt, state)
+  end
+
+  times = Array(Float64).new(reps)
+  reps.times do
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    t0 = Time.instant
+    run_native_prefill(w, prompt, state)
+    times << (Time.instant - t0).total_milliseconds
+  end
+
+  sorted = times.sort
+  avg_ms = times.sum / times.size
+  p50_ms = percentile(sorted, 50)
+  p95_ms = percentile(sorted, 95)
+  NativeStats.new(
+    avg_ms: avg_ms,
+    p50_ms: p50_ms,
+    p95_ms: p95_ms,
+    tok_s_avg: (n_prompt * 1000.0) / avg_ms,
+    tok_s_p50: (n_prompt * 1000.0) / p50_ms,
+  )
+end
+
 def clear_float_buffer(buf : ML::MetalBuffer?) : Nil
   return unless b = buf
 
@@ -259,6 +291,7 @@ flash_attn = false
 native_decode_top1 = true
 native_prefill_cache = false
 native_prefill_prealloc = false
+native_prefill_prepare_state = false
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
@@ -279,6 +312,7 @@ OptionParser.parse do |p|
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
   p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
   p.on("--native-prefill-prealloc", "Measure native prefill with state buffers allocated outside the timed loop") { native_prefill_prealloc = true }
+  p.on("--native-prefill-prepare-state", "Prepare a fresh state's Metal buffers before each timed native prefill") { native_prefill_prepare_state = true }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
@@ -304,6 +338,8 @@ native_prefill = if native_prefill_cache
                    measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
                  elsif native_prefill_prealloc
                    measure_native_prefill_preallocated(w, n_prompt, reps, warmup)
+                 elsif native_prefill_prepare_state
+                   measure_native_prefill_prepared_state(w, n_prompt, reps, warmup)
                  else
                    measure_native_prefill(w, n_prompt, reps, warmup)
                  end
@@ -319,6 +355,8 @@ native_prefill_mode = if native_prefill_cache
                         "prompt_cache_restore_after_seed"
                       elsif native_prefill_prealloc
                         "preallocated_state_chunked_prompt_plus_final_top1"
+                      elsif native_prefill_prepare_state
+                        "prepared_state_chunked_prompt_plus_final_top1"
                       else
                         "chunked_prompt_plus_final_top1"
                       end

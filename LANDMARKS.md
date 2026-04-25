@@ -4473,3 +4473,23 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: profile instrumentation, prompt length, host load, or FFN route changes
 **decision:** Do not implement a narrow `SwiGLU`-only fusion as the next production branch. A useful WBA move must either fuse a larger `gate/up -> activation -> down` tile-streaming diamond or improve the Q4/Q6 matmul kernels; just eliminating the elementwise activation dispatch/intermediate read is too small.
 **adversary:** This microbench does not prove that a full FFN tile-streaming kernel is unprofitable. It only rules out the narrow activation-stage fusion hypothesis; the larger diamond remains a research branch because it could avoid more global writes/reads but has much higher kernel complexity and exactness risk.
+
+### [LM-codex-QWEN35-PREPARE-STATE-METAL-1] Preparing Metal state buffers removes first-touch allocation from prefill latency
+**status:** implemented
+**trust:** {F:0.82, G:0.58, R:0.82}
+**context:** ml (Qwen35 benchmark / state preparation / prefill latency)
+**evidence:**
+- claim: "A fresh `State` whose Metal KV/DeltaNet buffers are allocated and cleared before timing runs pp64 prefill about `7.95 ms` faster than a fresh lazy-allocation state in the timed region: fresh p50 `150.19 ms`, prepared p50 `142.24 ms`."
+  source: `/tmp/qwen35_prefill_state_prep_micro.cr` with `PROMPT=64 RUNS=6 WARMUP=1` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: state allocation policy, MetalBuffer behavior, or benchmark harness timing boundary changes
+- claim: "The reusable API and benchmark mode are now implemented as `Qwen35CPU.prepare_state_metal!(state, hp)` and `benchmark_qwen_vs_llama --native-prefill-prepare-state`. Focused Qwen Metal/forward specs pass."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prepare_state_specs crystal spec spec/qwen35_metal_spec.cr spec/qwen35_forward_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` -> `23 examples, 0 failures` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: state preparation code, specs, or Metal state layout changes
+- claim: "Matched llama.cpp snapshot with prepared state measured native prefill `142.31 ms` / `449.73 tok/s` p50 vs llama.cpp `464.78 tok/s` (`-3.24%`), while default first-run in the same binary measured `149.99 ms` / `426.70 tok/s` vs llama.cpp `455.10 tok/s` (`-6.24%`)."
+  source: `/tmp/benchmark_qwen_vs_llama_prepare_state --prompt=64 --gen=64 --reps=3 --warmup=1 --native-prefill-prepare-state --load-warning-threshold=0 --load-total-warning-threshold=0` and the same command without `--native-prefill-prepare-state` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: host load, llama.cpp build, benchmark mode, or state preparation semantics changes
+**decision:** Keep default first-run semantics unchanged, but expose prepared-state latency as an explicit server/session mode. This is not a kernel speedup; it is a timing-boundary and product-latency optimization for callers that can create a session before prompt ingest.
+**adversary:** This must not be marketed as making cold state+prefill cheaper end-to-end. The allocation/zeroing work still exists; it is moved before the latency-sensitive prefill measurement. It is nevertheless useful and comparable to systems that initialize KV/recurrent cache before timing prompt ingest.

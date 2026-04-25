@@ -178,6 +178,55 @@ module ML::GGUF
       end
     end
 
+    # Pre-allocate the GPU-resident state buffers used by Qwen35 Metal
+    # prefill/decode. This keeps latency-sensitive prefill timing focused on
+    # model work rather than first-touch MetalBuffer allocation and zeroing.
+    #
+    # K/V cache rows are overwritten before first use at start_pos=0, but the
+    # buffers are cleared here to preserve strict fresh-state semantics for
+    # callers that prepare a state ahead of time.
+    def prepare_state_metal!(state : State, hp : Qwen35Hparams, clear : Bool = true) : Nil
+      {% if flag?(:cpu_only) %}
+        return
+      {% else %}
+        return unless Qwen35Metal.available?
+
+        kv_dim = hp.head_dim * hp.n_head_kv
+        qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
+        conv_bytes = ((hp.ssm_conv_kernel - 1) * qkv_dim).to_i64 * sizeof(Float32)
+        ssm_bytes = (hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size).to_i64 * sizeof(Float32)
+        kv_bytes = (state.max_seq * kv_dim).to_i64 * sizeof(Float32)
+
+        state.layers.each_with_index do |layer, il|
+          layer.position = 0
+          if hp.full_attention?(il)
+            layer.k_cache_buf ||= ML::MetalBuffer.new(kv_bytes)
+            layer.v_cache_buf ||= ML::MetalBuffer.new(kv_bytes)
+            if clear
+              clear_metal_buffer(layer.k_cache_buf)
+              clear_metal_buffer(layer.v_cache_buf)
+            end
+          else
+            layer.conv_state_buf ||= ML::MetalBuffer.new(conv_bytes)
+            layer.ssm_state_buf ||= ML::MetalBuffer.new(ssm_bytes)
+            if clear
+              clear_metal_buffer(layer.conv_state_buf)
+              clear_metal_buffer(layer.ssm_state_buf)
+            end
+          end
+        end
+      {% end %}
+    end
+
+    private def clear_metal_buffer(buf : ML::MetalBuffer?) : Nil
+      {% if flag?(:cpu_only) %}
+        return
+      {% else %}
+        return unless b = buf
+        b.contents.as(Pointer(UInt8)).clear(b.size)
+      {% end %}
+    end
+
     # ─────────────────────────────────────────────────────────────────────
     # Primitives
     # ─────────────────────────────────────────────────────────────────────
