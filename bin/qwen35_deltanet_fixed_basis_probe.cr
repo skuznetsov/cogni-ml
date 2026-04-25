@@ -343,6 +343,132 @@ private def simulate_projected_delta(samples : Array(RecurrentSample),
   }
 end
 
+private def basis_coeffs(v : Array(Float32), offset : Int32,
+                         basis : Array(Array(Float64)), rank : Int32) : Array(Float32)
+  limit = Math.min(rank, basis.size)
+  Array.new(limit) do |i|
+    b = basis[i]
+    coeff = 0.0
+    b.size.times { |d| coeff += v[offset + d].to_f64 * b[d] }
+    coeff.to_f32
+  end
+end
+
+private def lowrank_projected_delta_step!(m_state : Array(Float32),
+                                          sample : RecurrentSample,
+                                          bases : Array(Array(Array(Float64))),
+                                          rank : Int32,
+                                          y : Array(Float32),
+                                          h_k : Int32, h_v : Int32, s : Int32,
+                                          scale : Float32) : Nil
+  h_v.times do |h|
+    k_head = h % h_k
+    basis = bases[k_head]
+    r = Math.min(rank, basis.size)
+    q_off = k_head * s
+    k_off = k_head * s
+    v_off = h * s
+    st_base = h * s * rank
+    gh = sample.ghead[h]
+    bh = sample.beta[h]
+    c = basis_coeffs(sample.k, k_off, basis, r)
+    qbar = basis_coeffs(sample.q, q_off, basis, r)
+
+    s.times do |row|
+      row_off = st_base + row * rank
+      r.times { |j| m_state[row_off + j] *= gh }
+
+      sk = 0.0_f32
+      r.times { |j| sk += m_state[row_off + j] * c[j] }
+      delt = bh * (sample.v[v_off + row] - sk)
+      r.times { |j| m_state[row_off + j] += delt * c[j] }
+
+      acc = 0.0_f32
+      r.times { |j| acc += m_state[row_off + j] * qbar[j] }
+      y[h * s + row] = acc * scale
+    end
+  end
+end
+
+private def reconstruct_lowrank_state(m_state : Array(Float32),
+                                      bases : Array(Array(Array(Float64))),
+                                      rank : Int32,
+                                      h_k : Int32, h_v : Int32, s : Int32) : Array(Float32)
+  out = Array(Float32).new(h_v * s * s, 0.0_f32)
+  h_v.times do |h|
+    basis = bases[h % h_k]
+    r = Math.min(rank, basis.size)
+    m_base = h * s * rank
+    out_base = h * s * s
+    s.times do |row|
+      r.times do |j|
+        coeff = m_state[m_base + row * rank + j].to_f64
+        b = basis[j]
+        s.times { |d| out[out_base + row * s + d] += (coeff * b[d]).to_f32 }
+      end
+    end
+  end
+  out
+end
+
+private def simulate_lowrank_projected_delta(samples : Array(RecurrentSample),
+                                             bases : Array(Array(Array(Float64))),
+                                             rank : Int32,
+                                             calib_count : Int32,
+                                             h_k : Int32, h_v : Int32, s : Int32) : NamedTuple(exact_y_rmse: Float64, exact_y_max: Float64, proof_y_rmse: Float64, proof_y_max: Float64, proof_state_rmse: Float64, proof_state_max: Float64)
+  exact_state = Array(Float32).new(h_v * s * s, 0.0_f32)
+  projected_state = Array(Float32).new(h_v * s * s, 0.0_f32)
+  lowrank_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  y_exact = Array(Float32).new(h_v * s, 0.0_f32)
+  y_projected = Array(Float32).new(h_v * s, 0.0_f32)
+  y_lowrank = Array(Float32).new(h_v * s, 0.0_f32)
+  exact_sq = 0.0
+  proof_sq = 0.0
+  exact_max = 0.0
+  proof_max = 0.0
+  count = 0
+
+  samples.each_with_index do |sample, idx|
+    ML::GGUF::Qwen35CPU.delta_net_step!(
+      exact_state, sample.q, sample.k, sample.v, sample.ghead, sample.beta,
+      y_exact, h_k, h_v, s, scale
+    )
+
+    k_projected = sample.k.dup
+    h_k.times { |h| project_with_basis(k_projected, h * s, bases[h], rank) }
+    ML::GGUF::Qwen35CPU.delta_net_step!(
+      projected_state, sample.q, k_projected, sample.v, sample.ghead, sample.beta,
+      y_projected, h_k, h_v, s, scale
+    )
+
+    lowrank_projected_delta_step!(
+      lowrank_state, sample, bases, rank, y_lowrank, h_k, h_v, s, scale
+    )
+
+    next if idx < calib_count
+
+    exact_rmse, exact_step_max = delta_stats(y_exact, y_projected)
+    proof_rmse, proof_step_max = delta_stats(y_projected, y_lowrank)
+    exact_sq += exact_rmse * exact_rmse * y_exact.size
+    proof_sq += proof_rmse * proof_rmse * y_exact.size
+    exact_max = exact_step_max if exact_step_max > exact_max
+    proof_max = proof_step_max if proof_step_max > proof_max
+    count += y_exact.size
+  end
+
+  reconstructed = reconstruct_lowrank_state(lowrank_state, bases, rank, h_k, h_v, s)
+  proof_state_rmse, proof_state_max = delta_stats(projected_state, reconstructed)
+  {
+    exact_y_rmse:     count > 0 ? Math.sqrt(exact_sq / count) : 0.0,
+    exact_y_max:      exact_max,
+    proof_y_rmse:     count > 0 ? Math.sqrt(proof_sq / count) : 0.0,
+    proof_y_max:      proof_max,
+    proof_state_rmse: proof_state_rmse,
+    proof_state_max:  proof_state_max,
+  }
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = DEFAULT_PROMPT
@@ -354,6 +480,7 @@ thresholds = [0.05, 0.10, 0.20, 0.35, 0.50]
 basis_mode = "greedy"
 pca_iters = 24
 simulate_delta = false
+simulate_lowrank = false
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
@@ -368,6 +495,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--basis=MODE", "Basis builder: greedy or pca (default: greedy)") { |v| basis_mode = v }
   p.on("--pca-iters=N", "Power iterations per PCA component (default: 24)") { |v| pca_iters = v.to_i }
   p.on("--simulate-delta", "Also simulate projected-K DeltaNet output/state drift") { simulate_delta = true }
+  p.on("--simulate-lowrank", "Also prove low-rank M*B^T recurrence against full projected-K recurrence") { simulate_lowrank = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -391,7 +519,7 @@ token_ids = token_ids[0, tokens_limit]
 
 weights = ML::GGUF::Qwen35Weights.from_gguf(model)
 per_head = recurrent_k_vectors_for_prompt(weights, token_ids, layer_index)
-samples = simulate_delta ? recurrent_samples_for_prompt(weights, token_ids, layer_index) : [] of RecurrentSample
+samples = (simulate_delta || simulate_lowrank) ? recurrent_samples_for_prompt(weights, token_ids, layer_index) : [] of RecurrentSample
 max_rank = ranks.max
 calib_count = Math.min(calib_tokens, token_ids.size - 1)
 raise "need at least one held-out token" unless calib_count > 0 && calib_count < token_ids.size
@@ -430,6 +558,12 @@ ranks.each do |rank|
     drift = simulate_projected_delta(samples, bases, rank, calib_count,
       hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size)
     line += " y_rmse=#{drift[:y_rmse].round(6)} y_max=#{drift[:y_max].round(6)} state_rmse=#{drift[:state_rmse].round(6)} state_max=#{drift[:state_max].round(6)}"
+  end
+  if simulate_lowrank
+    hp = weights.hparams
+    lr = simulate_lowrank_projected_delta(samples, bases, rank, calib_count,
+      hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size)
+    line += " lr_exact_y_rmse=#{lr[:exact_y_rmse].round(6)} lr_exact_y_max=#{lr[:exact_y_max].round(6)} lr_proof_y_rmse=#{lr[:proof_y_rmse].round(8)} lr_proof_y_max=#{lr[:proof_y_max].round(8)} lr_proof_state_rmse=#{lr[:proof_state_rmse].round(8)} lr_proof_state_max=#{lr[:proof_state_max].round(8)}"
   end
   puts line
 end

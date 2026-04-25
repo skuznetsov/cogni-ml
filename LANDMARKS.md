@@ -4728,8 +4728,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_deltanet_fixed_basis_probe_pca --simulate-delta --basis=pca --pca-iters=32 --tokens=96 --calib-tokens=48 --layer=0 ...`; layer1/2/4 short runs on 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: projected-K simulation, layer prompts, recurrent state formula, or eval metrics change
-**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: if `K≈B c`, then state can be represented as `M B^T` with shape `128 x rank`, and outputs use `M*(B^T q)`. This could reduce DeltaNet state work by about `rank/128` on layers where projected-K drift stays small.
-**adversary:** The projected-K drift check is still layer-local, not full-model logit drift. Layer0 looks unsafe under the same approximation, so a production design needs per-layer gating or exact fallback plus an eval harness before any speed claim.
+- claim: "The low-rank projected-state formula is algebraically correct in the CPU proof. For fixed basis `B` and `K_proj=Bc`, the full projected `128x128` recurrence is represented by `S=M B^T`, update `M=gM+beta*(V-gM c)c^T`, and output `Y=M*(B^T Q)`. The probe verifies this against full projected recurrence with `lr_proof_y_rmse` at `0..1e-8`, `lr_proof_y_max <= 8.3e-7`, `lr_proof_state_rmse <= 6e-8`, and `lr_proof_state_max <= 1.144e-5` across checked layers/ranks."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_lr --simulate-lowrank --basis=pca --pca-iters=32 --tokens=48 --calib-tokens=24 --layer=0|1|2|4 --ranks=16,24 --prompt=<varied>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: low-rank recurrence formula, basis projection, or DeltaNet recurrence changes
+- claim: "The low-rank projected-state approximation remains promising but layer-dependent across an adversarial code/mixed prompt. Layers `1/2/4` with PCA rank `16/24` measured `lr_exact_y_rmse` around `1.37e-4..1.82e-4`; layer0 on the varied prompt measured `0.00517/0.00284` for rank `16/24`, so layer0 needs fallback or exclusion."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_lr --simulate-lowrank ...` on two varied prompts, 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, full-layer drift harness, basis calibration, or layer selection policy changes
+**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. Next gate is full layer/logit drift, not another residual-only probe.
+**adversary:** The projected-K and low-rank proof checks are still layer-local, not full-model logit drift. Layer0 looks unsafe under the same approximation, so a production design needs per-layer gating/exclusion or exact fallback plus an eval harness before any speed claim.
 
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
