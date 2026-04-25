@@ -4457,3 +4457,19 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: attribution harness, readback behavior, or scratch-buffer route changes
 **decision:** Do not spend the next production pass on full-F16 predequantized FFN weights. If a prepack branch is revisited, it should preserve compressed/blocked Q4 layout or fuse downstream FFN work; expanding the hot weights to F16 loses on memory traffic before integration overhead is counted.
 **adversary:** The F16 microbench is synthetic and uses the current generic `simd_mm_f16` kernel, so this does not formally rule out a hand-tuned F16 GEMM. It does rule out the cheap "predequantize Q4 weights to full F16 and reuse existing F16 GEMM" path as a plausible short-term win.
+
+### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
+**status:** refuted optimization branch
+**trust:** {F:0.70, G:0.48, R:0.74}
+**context:** ml (Qwen35 prefill / FFN WBA / activation staging)
+**evidence:**
+- claim: "For the hot `4096x12288` Q4 FFN gate/up pair, adding the standalone SwiGLU combine to the same command buffer is almost free relative to the two Q4_H16 GEMMs. Measured p50 at b64 was `1.861 ms` for pair GEMMs, `0.193 ms` for SwiGLU alone, and `1.877 ms` for pair+SwiGLU; b128 was `3.255/0.220/3.268 ms`; b256 was `6.063/0.254/6.119 ms`."
+  source: `/tmp/qwen35_ffn_gate_swiglu_micro.cr`, built with `crystal build --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"` and run at `BATCH=64,128,256 RUNS=9 WARMUP=3` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: Q4_H16 pair route, SwiGLU kernel, command-buffer scheduling, or batch tiling changes
+- claim: "The current pp64 prefill profile still shows FFN gate/up as the dominant logical weight traffic (`1674 MiB` combined recurrent+full Q4_H16 upgate), but the elementwise activation stage is not separately large enough to recover the remaining `~7-8%` llama.cpp first-run prefill gap."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache_prefill_attr_wba crystal run --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++" bin/qwen35_prefill_attribution.cr -- --prompt=64 --warmup=1 --reps=3 --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: profile instrumentation, prompt length, host load, or FFN route changes
+**decision:** Do not implement a narrow `SwiGLU`-only fusion as the next production branch. A useful WBA move must either fuse a larger `gate/up -> activation -> down` tile-streaming diamond or improve the Q4/Q6 matmul kernels; just eliminating the elementwise activation dispatch/intermediate read is too small.
+**adversary:** This microbench does not prove that a full FFN tile-streaming kernel is unprofitable. It only rules out the narrow activation-stage fusion hypothesis; the larger diamond remains a research branch because it could avoid more global writes/reads but has much higher kernel complexity and exactness risk.
