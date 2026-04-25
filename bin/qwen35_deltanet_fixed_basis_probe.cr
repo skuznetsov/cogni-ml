@@ -22,6 +22,11 @@ private struct RecurrentSample
   end
 end
 
+private class LowRankState
+  property initialized : Bool = false
+  property m : Array(Float32) = [] of Float32
+end
+
 private def softplus(x : Float32) : Float32
   x > 20.0_f32 ? x : Math.log(1.0_f32 + Math.exp(x)).to_f32
 end
@@ -469,6 +474,260 @@ private def simulate_lowrank_projected_delta(samples : Array(RecurrentSample),
   }
 end
 
+private def project_full_state_to_lowrank(full_state : Array(Float32),
+                                          bases : Array(Array(Array(Float64))),
+                                          rank : Int32,
+                                          h_k : Int32, h_v : Int32, s : Int32) : Array(Float32)
+  out = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  h_v.times do |h|
+    basis = bases[h % h_k]
+    r = Math.min(rank, basis.size)
+    full_base = h * s * s
+    out_base = h * s * rank
+    s.times do |row|
+      r.times do |j|
+        b = basis[j]
+        acc = 0.0
+        s.times { |d| acc += full_state[full_base + row * s + d].to_f64 * b[d] }
+        out[out_base + row * rank + j] = acc.to_f32
+      end
+    end
+  end
+  out
+end
+
+private def recurrent_layer_cpu_exact(inpSA : Array(Float32),
+                                      lw : ML::GGUF::Qwen35RecurrentWeights,
+                                      lstate : ML::GGUF::Qwen35CPU::LayerState,
+                                      hp : ML::GGUF::Qwen35Hparams) : Array(Float32)
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  qkv_dim = 2 * h_k * s + h_v * s
+  conv_k = hp.ssm_conv_kernel
+  cur = ML::GGUF::Qwen35CPU.rms_norm(inpSA, lw.attn_norm, hp.rms_eps)
+  proj = ML::GGUF::Qwen35CPU.qmatvec_many([lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw], cur)
+  qkv_mixed = proj[0]
+  z = proj[1]
+  alpha = proj[2]
+  beta = proj[3]
+  h_v.times { |i| beta[i] = 1.0_f32 / (1.0_f32 + Math.exp(-beta[i]).to_f32) }
+  ghead = Array(Float32).new(h_v) { |i| Math.exp((softplus(alpha[i] + lw.ssm_dt_bias[i]) * lw.ssm_a[i]).to_f64).to_f32 }
+
+  conv_state = lstate.conv_state ||= Array(Float32).new((conv_k - 1) * qkv_dim, 0.0_f32)
+  conv_out = Array(Float32).new(qkv_dim) do |ch|
+    acc = 0.0_f32
+    w_base = ch * conv_k
+    (conv_k - 1).times { |t| acc += conv_state[t * qkv_dim + ch] * lw.ssm_conv1d[w_base + t] }
+    acc + qkv_mixed[ch] * lw.ssm_conv1d[w_base + (conv_k - 1)]
+  end
+  (conv_k - 2).times do |t|
+    src = (t + 1) * qkv_dim
+    dst = t * qkv_dim
+    qkv_dim.times { |ch| conv_state[dst + ch] = conv_state[src + ch] }
+  end
+  qkv_dim.times { |ch| conv_state[(conv_k - 2) * qkv_dim + ch] = qkv_mixed[ch] }
+
+  silu!(conv_out)
+  q_conv = Array(Float32).new(h_k * s) { |i| conv_out[i] }
+  k_conv = Array(Float32).new(h_k * s) { |i| conv_out[h_k * s + i] }
+  v_conv = Array(Float32).new(h_v * s) { |i| conv_out[2 * h_k * s + i] }
+  h_k.times do |h|
+    l2_norm_slice!(q_conv, h * s, s, hp.rms_eps)
+    l2_norm_slice!(k_conv, h * s, s, hp.rms_eps)
+  end
+
+  y = Array(Float32).new(h_v * s, 0.0_f32)
+  state = lstate.ssm_state ||= Array(Float32).new(h_v * s * s, 0.0_f32)
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  ML::GGUF::Qwen35CPU.delta_net_step!(state, q_conv, k_conv, v_conv, ghead, beta, y, h_k, h_v, s, scale)
+  h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y, h * s, s, lw.ssm_norm, hp.rms_eps) }
+  (h_v * s).times { |i| y[i] = y[i] * ML::GGUF::Qwen35CPU.silu(z[i]) }
+  attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y)
+
+  inp_l2 = Array(Float32).new(hp.n_embd) { |i| inpSA[i] + attn_out[i] }
+  ffn_in = ML::GGUF::Qwen35CPU.rms_norm(inp_l2, lw.post_attention_norm, hp.rms_eps)
+  gate_up = ML::GGUF::Qwen35CPU.qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in)
+  gate = gate_up[0]
+  up = gate_up[1]
+  combined = Array(Float32).new(hp.n_ff) { |i| ML::GGUF::Qwen35CPU.silu(gate[i]) * up[i] }
+  ffn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ffn_down_qw, combined)
+  Array(Float32).new(hp.n_embd) { |i| inp_l2[i] + ffn_out[i] }
+end
+
+private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
+                                        lw : ML::GGUF::Qwen35RecurrentWeights,
+                                        lstate : ML::GGUF::Qwen35CPU::LayerState,
+                                        hp : ML::GGUF::Qwen35Hparams,
+                                        bases : Array(Array(Array(Float64))),
+                                        rank : Int32,
+                                        lr_state : LowRankState) : Array(Float32)
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  qkv_dim = 2 * h_k * s + h_v * s
+  conv_k = hp.ssm_conv_kernel
+
+  unless lr_state.initialized
+    full_state = lstate.ssm_state || Array(Float32).new(h_v * s * s, 0.0_f32)
+    lr_state.m = project_full_state_to_lowrank(full_state, bases, rank, h_k, h_v, s)
+    lr_state.initialized = true
+  end
+
+  cur = ML::GGUF::Qwen35CPU.rms_norm(inpSA, lw.attn_norm, hp.rms_eps)
+  proj = ML::GGUF::Qwen35CPU.qmatvec_many([lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw], cur)
+  qkv_mixed = proj[0]
+  z = proj[1]
+  alpha = proj[2]
+  beta = proj[3]
+  h_v.times { |i| beta[i] = 1.0_f32 / (1.0_f32 + Math.exp(-beta[i]).to_f32) }
+  ghead = Array(Float32).new(h_v) { |i| Math.exp((softplus(alpha[i] + lw.ssm_dt_bias[i]) * lw.ssm_a[i]).to_f64).to_f32 }
+
+  conv_state = lstate.conv_state ||= Array(Float32).new((conv_k - 1) * qkv_dim, 0.0_f32)
+  conv_out = Array(Float32).new(qkv_dim) do |ch|
+    acc = 0.0_f32
+    w_base = ch * conv_k
+    (conv_k - 1).times { |t| acc += conv_state[t * qkv_dim + ch] * lw.ssm_conv1d[w_base + t] }
+    acc + qkv_mixed[ch] * lw.ssm_conv1d[w_base + (conv_k - 1)]
+  end
+  (conv_k - 2).times do |t|
+    src = (t + 1) * qkv_dim
+    dst = t * qkv_dim
+    qkv_dim.times { |ch| conv_state[dst + ch] = conv_state[src + ch] }
+  end
+  qkv_dim.times { |ch| conv_state[(conv_k - 2) * qkv_dim + ch] = qkv_mixed[ch] }
+
+  silu!(conv_out)
+  q_conv = Array(Float32).new(h_k * s) { |i| conv_out[i] }
+  k_conv = Array(Float32).new(h_k * s) { |i| conv_out[h_k * s + i] }
+  v_conv = Array(Float32).new(h_v * s) { |i| conv_out[2 * h_k * s + i] }
+  h_k.times do |h|
+    l2_norm_slice!(q_conv, h * s, s, hp.rms_eps)
+    l2_norm_slice!(k_conv, h * s, s, hp.rms_eps)
+  end
+
+  y = Array(Float32).new(h_v * s, 0.0_f32)
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  lowrank_projected_delta_step!(lr_state.m, RecurrentSample.new(q_conv, k_conv, v_conv, ghead, beta),
+    bases, rank, y, h_k, h_v, s, scale)
+  h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y, h * s, s, lw.ssm_norm, hp.rms_eps) }
+  (h_v * s).times { |i| y[i] = y[i] * ML::GGUF::Qwen35CPU.silu(z[i]) }
+  attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y)
+
+  inp_l2 = Array(Float32).new(hp.n_embd) { |i| inpSA[i] + attn_out[i] }
+  ffn_in = ML::GGUF::Qwen35CPU.rms_norm(inp_l2, lw.post_attention_norm, hp.rms_eps)
+  gate_up = ML::GGUF::Qwen35CPU.qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in)
+  gate = gate_up[0]
+  up = gate_up[1]
+  combined = Array(Float32).new(hp.n_ff) { |i| ML::GGUF::Qwen35CPU.silu(gate[i]) * up[i] }
+  ffn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ffn_down_qw, combined)
+  Array(Float32).new(hp.n_embd) { |i| inp_l2[i] + ffn_out[i] }
+end
+
+private def logits_with_target_layer(weights : ML::GGUF::Qwen35Weights,
+                                     token_id : Int32,
+                                     pos : Int32,
+                                     state : ML::GGUF::Qwen35CPU::State,
+                                     target_layer : Int32,
+                                     bases : Array(Array(Array(Float64))),
+                                     rank : Int32,
+                                     calib_count : Int32,
+                                     lr_state : LowRankState?,
+                                     approximate : Bool) : Array(Float32)
+  hp = weights.hparams
+  x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+  weights.layers.each_with_index do |layer, il|
+    case layer
+    in ML::GGUF::Qwen35FullAttnWeights
+      x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(x, pos, layer, state.layers[il], hp, state.max_seq)
+    in ML::GGUF::Qwen35RecurrentWeights
+      if il == target_layer
+        x = if approximate && pos >= calib_count
+              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state.not_nil!)
+            else
+              recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
+            end
+      else
+        x = ML::GGUF::Qwen35CPU.forward_recurrent_layer(x, pos, layer, state.layers[il], hp, state.max_seq)
+      end
+    end
+  end
+  x = ML::GGUF::Qwen35CPU.rms_norm(x, weights.output_norm, hp.rms_eps)
+  ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
+end
+
+private def cosine(a : Array(Float32), b : Array(Float32)) : Float64
+  dot = 0.0
+  aa = 0.0
+  bb = 0.0
+  a.size.times do |i|
+    av = a[i].to_f64
+    bv = b[i].to_f64
+    dot += av * bv
+    aa += av * av
+    bb += bv * bv
+  end
+  dot / Math.sqrt(aa * bb)
+end
+
+private def top1(v : Array(Float32)) : Int32
+  best = 0
+  best_v = v[0]
+  v.each_with_index do |x, i|
+    if x > best_v
+      best = i
+      best_v = x
+    end
+  end
+  best.to_i32
+end
+
+private def max_abs_delta(a : Array(Float32), b : Array(Float32)) : Float64
+  max = 0.0
+  a.size.times do |i|
+    d = (a[i] - b[i]).to_f64.abs
+    max = d if d > max
+  end
+  max
+end
+
+private def simulate_logits(weights : ML::GGUF::Qwen35Weights,
+                            token_ids : Array(Int32),
+                            target_layer : Int32,
+                            bases : Array(Array(Array(Float64))),
+                            rank : Int32,
+                            calib_count : Int32) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64)
+  exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
+  approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
+  lr_state = LowRankState.new
+  cosines = [] of Float64
+  max_delta = 0.0
+  top_matches = 0
+  compared = 0
+
+  token_ids.each_with_index do |token_id, pos|
+    exact = logits_with_target_layer(weights, token_id, pos.to_i32, exact_state,
+      target_layer, bases, rank, calib_count, nil, false)
+    approx = logits_with_target_layer(weights, token_id, pos.to_i32, approx_state,
+      target_layer, bases, rank, calib_count, lr_state, true)
+    next if pos < calib_count
+
+    c = cosine(exact, approx)
+    cosines << c
+    d = max_abs_delta(exact, approx)
+    max_delta = d if d > max_delta
+    top_matches += 1 if top1(exact) == top1(approx)
+    compared += 1
+  end
+
+  {
+    mean_cos:   cosines.sum / cosines.size,
+    min_cos:    cosines.min,
+    max_delta:  max_delta,
+    top1_match: 100.0 * top_matches / compared,
+  }
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = DEFAULT_PROMPT
@@ -481,6 +740,7 @@ basis_mode = "greedy"
 pca_iters = 24
 simulate_delta = false
 simulate_lowrank = false
+simulate_logit_rank : Int32? = nil
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
@@ -496,6 +756,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--pca-iters=N", "Power iterations per PCA component (default: 24)") { |v| pca_iters = v.to_i }
   p.on("--simulate-delta", "Also simulate projected-K DeltaNet output/state drift") { simulate_delta = true }
   p.on("--simulate-lowrank", "Also prove low-rank M*B^T recurrence against full projected-K recurrence") { simulate_lowrank = true }
+  p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -532,6 +793,11 @@ puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first cali
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
 
 bases = per_head.map { |vectors| build_basis(vectors[0, calib_count], max_rank, basis_mode, pca_iters) }
+
+if rank = simulate_logit_rank
+  logit = simulate_logits(weights, token_ids, layer_index, bases, rank, calib_count)
+  puts "logit_drift rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}%"
+end
 
 ranks.each do |rank|
   all_residuals = [] of Float64

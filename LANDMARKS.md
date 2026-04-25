@@ -4736,8 +4736,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `/tmp/qwen35_deltanet_fixed_basis_probe_lr --simulate-lowrank ...` on two varied prompts, 2026-04-25
   verified_at: 2026-04-25
   decay_trigger: prompt suite, full-layer drift harness, basis calibration, or layer selection policy changes
-**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. Next gate is full layer/logit drift, not another residual-only probe.
-**adversary:** The projected-K and low-rank proof checks are still layer-local, not full-model logit drift. Layer0 looks unsafe under the same approximation, so a production design needs per-layer gating/exclusion or exact fallback plus an eval harness before any speed claim.
+- claim: "A full-model single-layer logit drift gate is now available in the probe. One target recurrent layer switches to low-rank `M` state after a calibration prefix, all other layers run normally, and the gate compares logits/top1 against exact. On a varied technical prompt with `tokens=48/calib=24/rank=24`, layers `0/1/2/4` kept `top1_match=100%` and mean cosine `0.99937..0.99992`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_logit --simulate-logits-rank=24 --basis=pca --tokens=48 --calib-tokens=24 --layer=0|1|2|4 --prompt=<varied>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: logit gate implementation, prompt suite, rank policy, or layer selection changes
+- claim: "The adversary prompt shows projected-K low-rank is promising but not robust enough for default-on approximation. With the mixed code prompt at `rank24/calib24`, layers `0/2/4` kept `95.83%` top1 with mean cosine `0.9974..0.9991`, but layer1 dropped to `91.67%` top1 and mean cosine `0.9940`. Increasing layer1 to `rank32/calib32` only improved top1 to `93.75%` and mean cosine `0.9953`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe_logit --simulate-logits-rank=24|32 --prompt=<mixed code adversary>` on 2026-04-25
+  verified_at: 2026-04-25
+  decay_trigger: prompt suite, rank/calibration policy, layer1 behavior, or cumulative multi-layer gate changes
+**decision:** Do not use a simple fixed per-head K basis as an exact rank cap for DeltaNet summaries. Do preserve a separate approximate projected-DeltaNet branch: `S=M B^T` reduces state columns from `128` to `rank` and is algebraically exact for projected K. The next gate is policy search plus cumulative multi-layer logit drift, not Metal implementation yet.
+**adversary:** The single-layer logit gate is not a full eval harness and can pass one prompt while failing another. Layer1 is the current caution case. A production design needs per-layer/rank/fallback policy and a broader prompt/top-logit drift suite before any speed claim.
 
 ### [LM-codex-FFN-SWIGLU-ONLY-WBA-FALSIFIER-1] SwiGLU-only fusion is too small for a prefill breakthrough
 **status:** refuted optimization branch
