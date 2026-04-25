@@ -4045,3 +4045,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, Q4 pair route, or prompt-length mix changes
 **note:** This closes the untested threshold gap without changing default behavior. Use `QWEN35_Q4K_PAIR_H16_MIN_BATCH=128` only for controlled sweeps; it is not a current first-run pp64/pp128 breakthrough.
+
+### [LM-codex-GENERATE-NEURAL-SPEC-1] qwen35_generate has opt-in exact neural speculative decode
+**status:** verified-feature-with-caveat
+**trust:** {F:0.82, G:0.42, R:0.76}
+**context:** ml (Qwen CLI / speculative decode)
+**evidence:**
+- claim: "`qwen35_generate` now supports opt-in exact neural speculative decode via `QWEN35_SPECULATIVE_DECODE=1` and optional `QWEN35_DRAFT_MODEL`. The CLI uses the target chunk verifier, adaptive gamma, early-reject, and target-only fallback; it remains separate from the existing n-gram mode for this commit."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: generation CLI control flow, speculative harness policy, or state semantics change
+- claim: "Generated token IDs match greedy target output for three 32-token smoke prompts: `The capital of France is`, `def fibonacci(n):`, and `The quick brown fox`."
+  source: Python parity script running `/tmp/qwen35_generate_spec PROMPT 32` with and without `QWEN35_SPECULATIVE_DECODE=1` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: tokenizer, prompt outputs, target verifier, or draft resync policy changes
+- claim: "On a 64-token high-accept practical CLI smoke, `The capital of France is` measured `21.29 ms/tok` greedy, `17.48 ms/tok` neural speculative, and `15.73 ms/tok` with `QWEN35_HEAD_FULL_ROWS_GUARDED=1`; n-gram-only remained faster for this repeated-output prompt at `8.01 ms/tok`."
+  source: `/tmp/qwen35_generate_spec 'The capital of France is' 64`, with env variants `QWEN35_SPECULATIVE_DECODE=1`, `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, and `QWEN35_NGRAM_DECODE=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: host load, draft speed, target verifier, prompt distribution, or CLI timing changes
+- claim: "The 32-token smoke shows fixed speculative overhead can dominate short runs: high-accept speculative measured `22.04 ms/tok` versus greedy `20.71 ms/tok`, so the CLI mode should stay opt-in and documented as useful for longer high-accept generations."
+  source: same 32-token parity script on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: scheduler, draft cost, or default gamma policy changes
+**note:** This moves the neural speculative speed path from benchmark harness into the practical CLI. It does not yet compose neural and n-gram modes in `qwen35_generate`; that should be a separate state-machine change.

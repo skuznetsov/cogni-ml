@@ -13,11 +13,19 @@ require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
 
 MODEL_PATH         = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+DRAFT_MODEL_PATH   = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
 LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
+speculative_decode_enabled = ENV["QWEN35_SPECULATIVE_DECODE"]? == "1" || ENV.has_key?("QWEN35_DRAFT_MODEL")
+draft_model_path = ENV["QWEN35_DRAFT_MODEL"]? || DRAFT_MODEL_PATH
+spec_gamma = (ENV["QWEN35_SPEC_GAMMA"]? || "4").to_i
+spec_max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "32").to_i
+spec_plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to_i
+spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
+spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
 ngram_decode_enabled = ENV["QWEN35_NGRAM_DECODE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
@@ -28,6 +36,12 @@ ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
 raise "QWEN35_NGRAM_MIN must be positive" unless ngram_min > 0
 raise "QWEN35_NGRAM_MAX must be >= QWEN35_NGRAM_MIN" unless ngram_max >= ngram_min
+raise "QWEN35_SPEC_GAMMA must be positive" unless spec_gamma > 0
+raise "QWEN35_SPEC_MAX_GAMMA must be positive" unless spec_max_gamma > 0
+raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fallback_gamma > 0
+raise "QWEN35_SPEC_FULL_ACCEPT_STREAK must be positive" unless spec_full_accept_streak > 0
+raise "QWEN35_SPEC_FAST_REGROW_MIN_GAMMA must be non-negative" unless spec_fast_regrow_min_gamma >= 0
+spec_max_gamma = Math.max(spec_max_gamma, spec_gamma)
 
 def cache_model_id(path : String) : String
   info = File.info(path)
@@ -38,6 +52,34 @@ def cache_tokenizer_id(model_id : String, tok : ML::GGUF::Qwen35Tokenizer) : Str
   ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
 end
 
+def prefill_next(weights : ML::GGUF::Qwen35Weights,
+                 token_ids : Array(Int32),
+                 state : ML::GGUF::Qwen35CPU::State) : Int32
+  top, _logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, token_ids, 0, state)
+  top.to_i32
+end
+
+def advance_next(weights : ML::GGUF::Qwen35Weights,
+                 token_id : Int32,
+                 pos : Int32,
+                 state : ML::GGUF::Qwen35CPU::State) : Int32
+  top, _logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
+  top.to_i32
+end
+
+def resync_draft!(weights : ML::GGUF::Qwen35Weights,
+                  state : ML::GGUF::Qwen35CPU::State,
+                  base : ML::GGUF::Qwen35CPU::State,
+                  accepted_or_corrected : Array(Int32),
+                  start_pos : Int32) : Int32
+  state.copy_from!(base)
+  next_id = -1
+  accepted_or_corrected.each_with_index do |tok, i|
+    next_id = advance_next(weights, tok, start_pos + i, state)
+  end
+  next_id
+end
+
 puts "Loading model and weights..."
 t0 = Time.instant
 g = ML::GGUF::GGUFFile.new(MODEL_PATH)
@@ -46,6 +88,15 @@ g.close
 w = ML::GGUF::Qwen35Weights.from_gguf(MODEL_PATH)
 hp = w.hparams
 puts "Loaded in #{(Time.instant - t0).total_seconds.round(1)}s. n_layer=#{hp.n_layer} n_embd=#{hp.n_embd} n_ff=#{hp.n_ff} vocab=#{w.output.out_dim}"
+
+draft = nil.as(ML::GGUF::Qwen35Weights?)
+if speculative_decode_enabled
+  raise "draft model not found: #{draft_model_path}" unless File.exists?(draft_model_path)
+  tstart = Time.instant
+  draft = ML::GGUF::Qwen35Weights.from_gguf(draft_model_path)
+  raise "target/draft vocab mismatch: #{w.output.out_dim} != #{draft.not_nil!.output.out_dim}" unless w.output.out_dim == draft.not_nil!.output.out_dim
+  puts "Loaded draft in #{(Time.instant - tstart).total_seconds.round(1)}s. n_layer=#{draft.not_nil!.hparams.n_layer} n_embd=#{draft.not_nil!.hparams.n_embd}"
+end
 
 # Encode prompt
 ids = tok.encode(prompt)
@@ -137,9 +188,140 @@ if output_ids.empty?
 end
 
 # Decode loop
-if ngram_decode_enabled && !output_ids.empty?
+if speculative_decode_enabled && !output_ids.empty?
+  puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
+  puts "  draft=#{draft_model_path}"
+  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma}"
+
+  decode_t0 = Time.instant
+  target_next = output_ids.pop
+  draft_weights = draft.not_nil!
+  draft_state = ML::GGUF::Qwen35CPU::State.new(draft_weights.hparams, max_seq: max_seq)
+  draft_next = prefill_next(draft_weights, ids, draft_state)
+  target_backup_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  draft_cycle_base = ML::GGUF::Qwen35CPU::State.new(draft_weights.hparams, max_seq: max_seq)
+
+  current_gamma = spec_gamma
+  full_accept_streak = 0
+  adaptive_growth_allowed = true
+  accepted = 0
+  proposed = 0
+  cycles = 0
+  plain_fallback_steps = 0
+  early_rejects = 0
+  target_verify_ms = 0.0
+  draft_ms = 0.0
+
+  while output_ids.size < n_gen
+    if !adaptive_growth_allowed && current_gamma <= spec_plain_fallback_gamma
+      emitted = target_next
+      tstart = Time.instant
+      target_next = advance_next(w, emitted, pos, state)
+      target_verify_ms += (Time.instant - tstart).total_milliseconds
+      output_ids << emitted
+      piece = tok.decode_single(emitted)
+      STDOUT << "  gen #{output_ids.size}/#{n_gen} pos=#{pos} id=#{emitted} piece=#{piece.inspect} mode=target-fallback\n"
+      STDOUT.flush
+      pos += 1
+      plain_fallback_steps += 1
+      break if emitted == tok.eos_id
+      next
+    end
+
+    cycles += 1
+    cycle_start_pos = pos
+    cycle_gamma = Math.min(current_gamma, n_gen - output_ids.size)
+    correction_or_accepted = [] of Int32
+    candidates = [] of Int32
+    rejected = false
+
+    if draft_next != target_next
+      emitted = target_next
+      tstart = Time.instant
+      target_next = advance_next(w, emitted, pos, state)
+      target_verify_ms += (Time.instant - tstart).total_milliseconds
+      output_ids << emitted
+      correction_or_accepted << emitted
+      proposed += 1
+      pos += 1
+      rejected = true
+      early_rejects += 1
+      STDOUT << "  spec cycle=#{cycles} early_reject emitted=1 gamma=#{current_gamma}\n"
+      STDOUT.flush
+    else
+      tstart = Time.instant
+      draft_cycle_base.copy_from!(draft_state)
+      cycle_gamma.times do |i|
+        candidates << draft_next
+        draft_next = advance_next(draft_weights, draft_next, pos + i, draft_state)
+      end
+      draft_ms += (Time.instant - tstart).total_milliseconds
+      proposed += candidates.size
+
+      target_backup_state.copy_from!(state)
+      tstart = Time.instant
+      target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, cycle_start_pos, state)
+      target_verify_ms += (Time.instant - tstart).total_milliseconds
+
+      expected = target_next
+      candidates.each_with_index do |cand, i|
+        if cand == expected
+          output_ids << cand
+          correction_or_accepted << cand
+          accepted += 1
+          expected = target_nexts[i][0]
+          break if cand == tok.eos_id
+        else
+          output_ids << expected
+          correction_or_accepted << expected
+          rejected = true
+          break
+        end
+      end
+
+      if rejected
+        state.copy_from!(target_backup_state)
+        tstart = Time.instant
+        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, correction_or_accepted, cycle_start_pos, state)
+        target_verify_ms += (Time.instant - tstart).total_milliseconds
+        target_next = corrected[-1][0]
+        draft_next = resync_draft!(draft_weights, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
+      else
+        target_next = target_nexts[correction_or_accepted.size - 1][0]
+      end
+      pos += correction_or_accepted.size
+
+      STDOUT << "  spec cycle=#{cycles} accepted=#{accepted}/#{proposed} emitted=#{correction_or_accepted.size} gamma=#{current_gamma} rejected=#{rejected}\n"
+      STDOUT.flush
+    end
+
+    if rejected
+      full_accept_streak = 0
+      adaptive_growth_allowed = false
+      current_gamma = Math.max(1, current_gamma // 2)
+    elsif adaptive_growth_allowed && candidates.size == cycle_gamma && current_gamma < spec_max_gamma
+      full_accept_streak += 1
+      required = if spec_fast_regrow_min_gamma > 0 && current_gamma >= spec_fast_regrow_min_gamma
+                   1
+                 else
+                   spec_full_accept_streak
+                 end
+      if full_accept_streak >= required
+        current_gamma = Math.min(spec_max_gamma, current_gamma * 2)
+        full_accept_streak = 0
+      end
+    end
+
+    break if output_ids.last? == tok.eos_id
+  end
+
+  decode_ms = (Time.instant - decode_t0).total_milliseconds
+  rate = proposed > 0 ? (accepted.to_f64 * 100.0 / proposed.to_f64) : 0.0
+  STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)}\n"
+elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
   puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
+  decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
   ngram_disabled = false
@@ -215,10 +397,12 @@ if ngram_decode_enabled && !output_ids.empty?
     break if output_ids.last? == tok.eos_id
   end
 
+  decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
-  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled}\n"
+  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)}\n"
 else
   puts "\nGenerating #{n_gen} tokens greedily..."
+  decode_t0 = Time.instant
   (n_gen - 1).times do |g_i|
     prev = output_ids.last
     tstart = Time.instant
@@ -231,6 +415,8 @@ else
     pos += 1
     break if top == tok.eos_id
   end
+  decode_ms = (Time.instant - decode_t0).total_milliseconds
+  STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)}\n"
 end
 
 puts "\n=== Generated token ids ==="

@@ -90,6 +90,14 @@ Enable exact n-gram speculative decode for repeated text:
 QWEN35_NGRAM_DECODE=1 ./build/qwen35_generate "The capital of France is" 64
 ```
 
+Enable exact neural speculative decode with the Qwen 3.5 0.8B draft:
+
+```sh
+QWEN35_SPECULATIVE_DECODE=1 \
+QWEN35_HEAD_FULL_ROWS_GUARDED=1 \
+./build/qwen35_generate "The capital of France is" 64
+```
+
 Enable exact prompt cache:
 
 ```sh
@@ -110,6 +118,10 @@ Useful Qwen environment switches:
 | `QWEN35_NGRAM_MAX=8` | Maximum suffix length to search for n-gram drafting. |
 | `QWEN35_NGRAM_RECURSIVE_OFF=1` | Disable recursive n-gram extension through scratch history. |
 | `QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF=1` | Exploration mode: keep trying n-gram chunks after first rejection. |
+| `QWEN35_SPECULATIVE_DECODE=1` | Enable exact neural speculative decode in `qwen35_generate` using the 0.8B draft. |
+| `QWEN35_DRAFT_MODEL=/path` | Override the Qwen 3.5 draft GGUF used by neural speculative decode. |
+| `QWEN35_SPEC_GAMMA=4` | Initial neural draft chunk size in `qwen35_generate`. |
+| `QWEN35_SPEC_MAX_GAMMA=32` | Maximum adaptive neural draft chunk size. |
 | `QWEN35_HEAD_FULL_ROWS_GUARDED=1` | Experimental speculative-verifier accelerator for large accepted chunks; uses a margin guard and exact fallback for low-margin rows. |
 | `QWEN35_HEAD_FULL_ROWS_MARGIN=0.25` | Margin threshold for the guarded full-row verifier route. Higher is safer but falls back more often. |
 | `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1` | Disable decode-wave FFN-down residual-add fusion for Q4/Q6 target and Q8 draft experiments. |
@@ -262,6 +274,7 @@ Speculative decode caveats:
 
 - The speculative paths are exact greedy verification paths, not approximate sampling shortcuts.
 - Neural speculative speed depends on draft acceptance. High-accept prompts are faster; rejection-heavy prompts quickly fall back to plain target decode.
+- In `qwen35_generate`, neural speculative decode is useful for longer high-accept generations. In a local 64-token smoke, `The capital of France is` measured `21.29 ms/tok` greedy, `17.48 ms/tok` neural speculative, and `15.73 ms/tok` neural speculative with guarded full-row verification. A 32-token smoke was slower due fixed draft/verifier overhead.
 - N-gram speculation is a workload-specialized path for repeated/generated-template text. It is intentionally fail-closed after a rejected n-gram chunk by default.
 - `QWEN35_HEAD_FULL_ROWS_GUARDED=1` is still an experimental research switch. The harness checks final output against plain greedy target output, but the route is not broad-defaulted because it relies on a full-row F16 top1 margin guard.
 - These numbers are effective decode throughput after prompt prefill; they do not make first-run prefill faster.
