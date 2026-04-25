@@ -4209,3 +4209,22 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: host load, prompt mix, or NgramDraft overhead changes
 **note:** Keep auto simple for now. A better auto policy needs a cheaper predictor of future repetition, not a blind consecutive-miss cutoff.
+
+### [LM-codex-GENERATE-SPEC-FALLBACK-OFF-1] qwen35_generate has harness-compatible fallback-off switch
+**status:** verified-feature
+**trust:** {F:0.82, G:0.50, R:0.78}
+**context:** ml (Qwen CLI / neural speculative decode)
+**evidence:**
+- claim: "`qwen35_generate` now supports `QWEN35_SPEC_PLAIN_FALLBACK_OFF=1`, matching the speculative harness. Default behavior is unchanged: target-only fallback remains enabled unless the env is set."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: neural speculative scheduler or CLI env parsing changes
+- claim: "The existing draft-backup/resync skip is now gated by `spec_plain_fallback_enabled`, so fallback-off A/B does not accidentally skip draft state needed by continued speculation."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: draft state semantics or fallback policy changes
+- claim: "Practical CLI parity with fallback enabled and disabled matches greedy token IDs for `The capital of France is`, `def fibonacci(n):`, and `The quick brown fox` at 32 generated tokens. The smoke also confirms fallback-off remains an experiment knob, not a speed default: `The quick brown fox` regressed from `25.05` to `30.56 ms/tok`."
+  source: Python parity script over `/tmp/qwen35_generate_fallbackoff PROMPT 32`, comparing greedy, default speculative, and `QWEN35_SPEC_PLAIN_FALLBACK_OFF=1`, on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt outputs, draft acceptance, or fallback scheduler changes
+**note:** This is an experimental-control feature, not a default speed win. Use it to reproduce harness fallback-off comparisons inside the practical CLI.

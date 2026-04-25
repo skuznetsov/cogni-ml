@@ -44,6 +44,7 @@ end
 draft_model_path = ENV["QWEN35_DRAFT_MODEL"]? || DRAFT_MODEL_PATH
 spec_gamma = (ENV["QWEN35_SPEC_GAMMA"]? || "4").to_i
 spec_max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "32").to_i
+spec_plain_fallback_enabled = ENV["QWEN35_SPEC_PLAIN_FALLBACK_OFF"]? != "1"
 spec_plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to_i
 spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
@@ -227,7 +228,7 @@ end
 if speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
-  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma}"
+  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma}"
 
   decode_t0 = Time.instant
   target_next = output_ids.pop
@@ -252,7 +253,7 @@ if speculative_decode_enabled && !output_ids.empty?
   draft_resync_skips = 0
 
   while output_ids.size < n_gen
-    if !adaptive_growth_allowed && current_gamma <= spec_plain_fallback_gamma
+    if spec_plain_fallback_enabled && !adaptive_growth_allowed && current_gamma <= spec_plain_fallback_gamma
       emitted = target_next
       tstart = Time.instant
       target_next = advance_next(w, emitted, pos, state)
@@ -275,7 +276,8 @@ if speculative_decode_enabled && !output_ids.empty?
     rejected = false
 
     if draft_next != target_next
-      will_plain_fallback_after_reject = spec_skip_draft_before_fallback &&
+      will_plain_fallback_after_reject = spec_plain_fallback_enabled &&
+                                         spec_skip_draft_before_fallback &&
                                          Math.max(1, current_gamma // 2) <= spec_plain_fallback_gamma
       emitted = target_next
       tstart = Time.instant
@@ -292,7 +294,8 @@ if speculative_decode_enabled && !output_ids.empty?
       STDOUT.flush
     else
       tstart = Time.instant
-      skip_draft_backup_for_fallback = spec_skip_draft_before_fallback &&
+      skip_draft_backup_for_fallback = spec_plain_fallback_enabled &&
+                                       spec_skip_draft_before_fallback &&
                                        spec_skip_draft_backup_before_fallback &&
                                        Math.max(1, current_gamma // 2) <= spec_plain_fallback_gamma
       unless skip_draft_backup_for_fallback
@@ -334,7 +337,8 @@ if speculative_decode_enabled && !output_ids.empty?
         corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, correction_or_accepted, cycle_start_pos, state)
         target_verify_ms += (Time.instant - tstart).total_milliseconds
         target_next = corrected[-1][0]
-        will_plain_fallback_after_reject = spec_skip_draft_before_fallback &&
+        will_plain_fallback_after_reject = spec_plain_fallback_enabled &&
+                                           spec_skip_draft_before_fallback &&
                                            Math.max(1, current_gamma // 2) <= spec_plain_fallback_gamma
         if will_plain_fallback_after_reject || output_ids.size >= n_gen
           draft_resync_skips += 1

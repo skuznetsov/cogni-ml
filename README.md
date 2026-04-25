@@ -129,6 +129,8 @@ Useful Qwen environment switches:
 | `QWEN35_DRAFT_MODEL=/path` | Override the Qwen 3.5 draft GGUF used by neural speculative decode. |
 | `QWEN35_SPEC_GAMMA=4` | Initial neural draft chunk size in `qwen35_generate`. |
 | `QWEN35_SPEC_MAX_GAMMA=32` | Maximum adaptive neural draft chunk size. |
+| `QWEN35_SPEC_PLAIN_FALLBACK_OFF=1` | Disable target-only fallback after low-gamma speculative rejection. Useful for A/B experiments; default fallback is faster on rejection-heavy prompts. |
+| `QWEN35_SPEC_PLAIN_FALLBACK_GAMMA=2` | Gamma threshold at or below which rejected neural speculative decode falls back to target-only generation. |
 | `QWEN35_SPEC_BOOTSTRAP_GAMMA=N` | Default-off neural speculative jump after a fully accepted initial chunk. Can help 100%-accept runs; may regress prompts that reject after an accepted prefix. |
 | `QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF=1` | Disable the exact optimization that skips draft resync work when a rejection is guaranteed to enter target-only fallback. |
 | `QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF=1` | Disable the matching draft-backup skip before fallback-bound speculative chunks. |
