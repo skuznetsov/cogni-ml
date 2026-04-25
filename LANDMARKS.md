@@ -4068,3 +4068,26 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-04-24
   decay_trigger: scheduler, draft cost, or default gamma policy changes
 **note:** This moves the neural speculative speed path from benchmark harness into the practical CLI. It does not yet compose neural and n-gram modes in `qwen35_generate`; that should be a separate state-machine change.
+
+### [LM-codex-GENERATE-NGRAM-GUARD-FALSIFIER-1] N-gram verifier chunks must not use guarded full-row top1
+**status:** verified-fix-plus-refutation
+**trust:** {F:0.84, G:0.46, R:0.78}
+**context:** ml (Qwen CLI / n-gram speculative verifier)
+**evidence:**
+- claim: "A temporary ngram+neural composition in `qwen35_generate` diverged on `The quick brown fox` only when `QWEN35_HEAD_FULL_ROWS_GUARDED=1` was active. The same composition without the guard matched greedy output, isolating the hazard to guarded full-row verification on partial n-gram reject chunks."
+  source: `/tmp/qwen35_generate_compose 'The quick brown fox' 48` with `QWEN35_SPECULATIVE_DECODE=1 QWEN35_NGRAM_DECODE=1 QWEN35_HEAD_FULL_ROWS_GUARDED=1` versus without the guard on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: guarded verifier margin policy, n-gram verifier route, or target top1 exactness changes
+- claim: "The retained CLI fix wraps n-gram verifier calls with `with_guarded_full_rows_disabled`, so n-gram-only generation preserves exact greedy token IDs even if the guarded verifier env is set."
+  source: `bin/qwen35_generate.cr` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: generation CLI n-gram path or output-head routing changes
+- claim: "Post-fix parity smokes with `QWEN35_NGRAM_DECODE=1 QWEN35_HEAD_FULL_ROWS_GUARDED=1` match greedy token IDs for `The capital of France is`, `The quick brown fox`, and `def fibonacci(n):` at 32 generated tokens."
+  source: Python parity script over `/tmp/qwen35_generate_final PROMPT 32` on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt output drift, n-gram policy, or verifier route changes
+- claim: "The ngram+neural composition itself was not retained because it was not a speed win: on `The capital of France is` 64-token smoke, n-gram-only measured `7.76 ms/tok`, while neural speculative with guard measured `15.10 ms/tok`; partial/no-repeat prompts also favored fail-closed n-gram or greedy fallback over composition."
+  source: `/tmp/qwen35_generate_final 'The capital of France is' 64` with greedy/spec/spec_guard/ngram_guard env variants on 2026-04-24
+  verified_at: 2026-04-24
+  decay_trigger: prompt mix, draft cost, n-gram policy, or verifier performance changes
+**note:** Keep the modes separate in the practical CLI for now: use n-gram for repeated/template text, neural speculative for longer high-accept non-repeated text, and guarded full-row verifier only on neural speculative chunks.

@@ -80,6 +80,18 @@ def resync_draft!(weights : ML::GGUF::Qwen35Weights,
   next_id
 end
 
+def with_guarded_full_rows_disabled
+  old_guard = ENV["QWEN35_HEAD_FULL_ROWS_GUARDED"]?
+  ENV.delete("QWEN35_HEAD_FULL_ROWS_GUARDED")
+  yield
+ensure
+  if old_guard
+    ENV["QWEN35_HEAD_FULL_ROWS_GUARDED"] = old_guard
+  else
+    ENV.delete("QWEN35_HEAD_FULL_ROWS_GUARDED")
+  end
+end
+
 puts "Loading model and weights..."
 t0 = Time.instant
 g = ML::GGUF::GGUFFile.new(MODEL_PATH)
@@ -357,7 +369,9 @@ elsif ngram_decode_enabled && !output_ids.empty?
     ngram_proposed += candidates.size
     backup.copy_from!(state)
     tstart = Time.instant
-    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, pos, state)
+    target_nexts = with_guarded_full_rows_disabled do
+      ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, pos, state)
+    end
     dt = (Time.instant - tstart).total_seconds
 
     expected = next_id
@@ -384,7 +398,9 @@ elsif ngram_decode_enabled && !output_ids.empty?
     if rejected
       ngram_disabled = true if ngram_disable_after_reject
       state.copy_from!(backup)
-      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, accepted_or_corrected, pos, state)
+      corrected = with_guarded_full_rows_disabled do
+        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, accepted_or_corrected, pos, state)
+      end
       next_id = corrected[-1][0]
       pos += accepted_or_corrected.size
     else
