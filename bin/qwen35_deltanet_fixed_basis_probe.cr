@@ -591,7 +591,8 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
                                         bases : BasisSet,
                                         rank : Int32,
                                         lr_state : LowRankState,
-                                        fallback_threshold : Float64? = nil) : Array(Float32)
+                                        fallback_threshold : Float64? = nil,
+                                        force_fallback : Bool = false) : Array(Float32)
   h_k = hp.ssm_group_count
   h_v = hp.ssm_time_step_rank
   s = hp.ssm_state_size
@@ -639,9 +640,9 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
 
   y = Array(Float32).new(h_v * s, 0.0_f32)
   scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
-  fallback = false
+  fallback = force_fallback
   if threshold = fallback_threshold
-    fallback = max_k_residual(k_conv, bases, rank, h_k, s) > threshold
+    fallback ||= max_k_residual(k_conv, bases, rank, h_k, s) > threshold
   end
   if fallback
     unless lr_state.full_state_current
@@ -713,6 +714,7 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
                                        calib_count : Int32,
                                        lr_states : Hash(Int32, LowRankState),
                                        fallback_threshold : Float64?,
+                                       refresh_interval : Int32?,
                                        approximate : Bool) : Array(Float32)
   hp = weights.hparams
   x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
@@ -724,7 +726,12 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
       if bases = layer_bases[il]?
         x = if approximate && pos >= calib_count
               lr_state = lr_states[il] ||= LowRankState.new
-              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state, fallback_threshold)
+              force_refresh = if interval = refresh_interval
+                                interval > 0 && ((pos - calib_count) % interval == 0)
+                              else
+                                false
+                              end
+              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state, fallback_threshold, force_refresh)
             else
               recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
             end
@@ -735,6 +742,33 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
   end
   x = ML::GGUF::Qwen35CPU.rms_norm(x, weights.output_norm, hp.rms_eps)
   ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
+end
+
+private def refresh_due?(pos : Int32, calib_count : Int32, interval : Int32?) : Bool
+  return false unless n = interval
+  return false unless n > 0 && pos >= calib_count
+
+  ((pos - calib_count + 1) % n) == 0
+end
+
+private def sync_lowrank_shadow!(approx_state : ML::GGUF::Qwen35CPU::State,
+                                 exact_state : ML::GGUF::Qwen35CPU::State,
+                                 layer_bases : LayerBasisMap,
+                                 lr_states : Hash(Int32, LowRankState),
+                                 rank : Int32,
+                                 hp : ML::GGUF::Qwen35Hparams) : Nil
+  approx_state.copy_from!(exact_state)
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  layer_bases.each do |il, bases|
+    next unless state = approx_state.layers[il].ssm_state
+
+    lr_state = lr_states[il] ||= LowRankState.new
+    lr_state.m = project_full_state_to_lowrank(state, bases, rank, h_k, h_v, s)
+    lr_state.full_state_current = true
+    lr_state.initialized = true
+  end
 end
 
 private def cosine(a : Array(Float32), b : Array(Float32)) : Float64
@@ -865,7 +899,10 @@ private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
                                    layer_bases : LayerBasisMap,
                                    rank : Int32,
                                    calib_count : Int32,
-                                   fallback_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_steps: Int32, fallback_steps: Int32)
+                                   fallback_threshold : Float64?,
+                                   refresh_interval : Int32?,
+                                   oracle_refresh_interval : Int32?,
+                                   output_margin_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_steps: Int32, fallback_steps: Int32, output_fallbacks: Int32)
   exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
   approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
   lr_states = {} of Int32 => LowRankState
@@ -876,21 +913,30 @@ private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
   top5_hits = 0
   min_margin = Float64::INFINITY
   confident_mismatches = 0
+  output_fallbacks = 0
   compared = 0
 
   token_ids.each_with_index do |token_id, pos|
     exact = logits_with_lowrank_policy(weights, token_id, pos.to_i32, exact_state,
-      layer_bases, rank, calib_count, lr_states, fallback_threshold, false)
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, refresh_interval, false)
     approx = logits_with_lowrank_policy(weights, token_id, pos.to_i32, approx_state,
-      layer_bases, rank, calib_count, lr_states, fallback_threshold, true)
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, refresh_interval, true)
     next if pos < calib_count
 
-    c = cosine(exact, approx)
+    approx_eval = approx
+    if threshold = output_margin_threshold
+      if top1_margin(approx) < threshold
+        output_fallbacks += 1
+        approx_eval = exact
+      end
+    end
+
+    c = cosine(exact, approx_eval)
     cosines << c
-    d = max_abs_delta(exact, approx)
+    d = max_abs_delta(exact, approx_eval)
     max_delta = d if d > max_delta
     exact_top1 = top1(exact)
-    approx_top1 = top1(approx)
+    approx_top1 = top1(approx_eval)
     exact_margin = top1_margin(exact)
     min_margin = exact_margin if exact_margin < min_margin
     if exact_top1 == approx_top1
@@ -898,9 +944,12 @@ private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
     elsif exact_margin >= 0.5
       confident_mismatches += 1
     end
-    top5_hits += 1 if top_k_indices(approx, 5).includes?(exact_top1)
-    kls << softmax_kl(exact, approx)
+    top5_hits += 1 if top_k_indices(approx_eval, 5).includes?(exact_top1)
+    kls << softmax_kl(exact, approx_eval)
     compared += 1
+    if refresh_due?(pos.to_i32, calib_count, oracle_refresh_interval)
+      sync_lowrank_shadow!(approx_state, exact_state, layer_bases, lr_states, rank, weights.hparams)
+    end
   end
 
   {
@@ -915,6 +964,7 @@ private def simulate_logits_policy(weights : ML::GGUF::Qwen35Weights,
     confident_mismatches: confident_mismatches,
     approx_steps:         lr_states.values.sum(&.approx_steps),
     fallback_steps:       lr_states.values.sum(&.fallback_steps),
+    output_fallbacks:     output_fallbacks,
   }
 end
 
@@ -924,7 +974,10 @@ private def simulate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
                                    layer_bases : LayerBasisMap,
                                    rank : Int32,
                                    calib_count : Int32,
-                                   fallback_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_steps: Int32, fallback_steps: Int32, exact_ids: Array(Int32), approx_ids: Array(Int32))
+                                   fallback_threshold : Float64?,
+                                   refresh_interval : Int32?,
+                                   oracle_refresh_interval : Int32?,
+                                   output_margin_threshold : Float64?) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_steps: Int32, fallback_steps: Int32, output_fallbacks: Int32, exact_ids: Array(Int32), approx_ids: Array(Int32))
   exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + gen_tokens + 2)
   approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + gen_tokens + 2)
   lr_states = {} of Int32 => LowRankState
@@ -933,9 +986,13 @@ private def simulate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
 
   prompt_ids.each_with_index do |token_id, pos|
     exact_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, exact_state,
-      layer_bases, rank, calib_count, lr_states, fallback_threshold, false)
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, refresh_interval, false)
     approx_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, approx_state,
-      layer_bases, rank, calib_count, lr_states, fallback_threshold, true)
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, refresh_interval, true)
+    if refresh_due?(pos.to_i32, calib_count, oracle_refresh_interval)
+      sync_lowrank_shadow!(approx_state, exact_state, layer_bases, lr_states, rank, weights.hparams)
+      approx_logits = exact_logits.dup
+    end
   end
 
   cosines = [] of Float64
@@ -945,18 +1002,26 @@ private def simulate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
   top5_hits = 0
   min_margin = Float64::INFINITY
   confident_mismatches = 0
+  output_fallbacks = 0
   exact_ids = [] of Int32
   approx_ids = [] of Int32
 
   gen_tokens.times do |step|
     exact_top1 = top1(exact_logits)
-    approx_top1 = top1(approx_logits)
+    approx_eval = approx_logits
+    if threshold = output_margin_threshold
+      if top1_margin(approx_logits) < threshold
+        output_fallbacks += 1
+        approx_eval = exact_logits
+      end
+    end
+    approx_top1 = top1(approx_eval)
     exact_ids << exact_top1
     approx_ids << approx_top1
 
-    c = cosine(exact_logits, approx_logits)
+    c = cosine(exact_logits, approx_eval)
     cosines << c
-    d = max_abs_delta(exact_logits, approx_logits)
+    d = max_abs_delta(exact_logits, approx_eval)
     max_delta = d if d > max_delta
     exact_margin = top1_margin(exact_logits)
     min_margin = exact_margin if exact_margin < min_margin
@@ -965,16 +1030,20 @@ private def simulate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
     elsif exact_margin >= 0.5
       confident_mismatches += 1
     end
-    top5_hits += 1 if top_k_indices(approx_logits, 5).includes?(exact_top1)
-    kls << softmax_kl(exact_logits, approx_logits)
+    top5_hits += 1 if top_k_indices(approx_eval, 5).includes?(exact_top1)
+    kls << softmax_kl(exact_logits, approx_eval)
 
     pos = prompt_ids.size + step
     # Teacher-forced on the exact greedy trajectory. This isolates policy drift
     # from cascading different-token hidden-state divergence.
     exact_logits = logits_with_lowrank_policy(weights, exact_top1, pos.to_i32, exact_state,
-      layer_bases, rank, calib_count, lr_states, fallback_threshold, false)
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, refresh_interval, false)
     approx_logits = logits_with_lowrank_policy(weights, exact_top1, pos.to_i32, approx_state,
-      layer_bases, rank, calib_count, lr_states, fallback_threshold, true)
+      layer_bases, rank, calib_count, lr_states, fallback_threshold, refresh_interval, true)
+    if refresh_due?(pos.to_i32, calib_count, oracle_refresh_interval)
+      sync_lowrank_shadow!(approx_state, exact_state, layer_bases, lr_states, rank, weights.hparams)
+      approx_logits = exact_logits.dup
+    end
   end
 
   {
@@ -989,8 +1058,136 @@ private def simulate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
     confident_mismatches: confident_mismatches,
     approx_steps:         lr_states.values.sum(&.approx_steps),
     fallback_steps:       lr_states.values.sum(&.fallback_steps),
+    output_fallbacks:     output_fallbacks,
     exact_ids:            exact_ids,
     approx_ids:           approx_ids,
+  }
+end
+
+private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
+                                      prompt_ids : Array(Int32),
+                                      gen_tokens : Int32,
+                                      gamma : Int32,
+                                      layer_bases : LayerBasisMap,
+                                      rank : Int32,
+                                      calib_count : Int32,
+                                      fallback_threshold : Float64?,
+                                      refresh_interval : Int32?) : NamedTuple(chunks: Int32, full_accept_chunks: Int32, rejections: Int32, emitted_tokens: Int32, proposed_tokens: Int32, accepted_draft_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, approx_steps: Int32, fallback_steps: Int32, accept_rate: Float64, avg_accept: Float64, break_even_draft_verify_per_proposed: Float64, exact_ids: Array(Int32), emitted_ids: Array(Int32))
+  raise "self-spec gamma must be positive" unless gamma > 0
+
+  hp = weights.hparams
+  max_seq = prompt_ids.size + gen_tokens + gamma + 4
+  exact_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  exact_lr_states = {} of Int32 => LowRankState
+  exact_logits = [] of Float32
+  state_before_last = exact_state.fork
+  last_token = prompt_ids[0]
+  pos_last = 0
+
+  prompt_ids.each_with_index do |token_id, pos|
+    state_before_last = exact_state.fork
+    last_token = token_id
+    pos_last = pos
+    exact_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, exact_state,
+      layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+  end
+
+  chunks = 0
+  full_accept_chunks = 0
+  rejections = 0
+  emitted_tokens = 0
+  proposed_tokens = 0
+  accepted_draft_tokens = 0
+  verifier_tokens = 0
+  correction_steps = 0
+  approx_steps = 0
+  fallback_steps = 0
+  exact_ids = [] of Int32
+  emitted_ids = [] of Int32
+
+  while emitted_tokens < gen_tokens
+    chunks += 1
+    remaining = gen_tokens - emitted_tokens
+    chunk_gamma = Math.min(gamma, remaining)
+
+    draft_state = state_before_last.fork
+    draft_lr_states = {} of Int32 => LowRankState
+    sync_lowrank_shadow!(draft_state, state_before_last, layer_bases, draft_lr_states, rank, hp)
+    draft_logits = logits_with_lowrank_policy(weights, last_token, pos_last.to_i32, draft_state,
+      layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
+
+    proposal = [] of Int32
+    chunk_gamma.times do |j|
+      proposed = top1(draft_logits)
+      proposal << proposed
+      break if j == chunk_gamma - 1
+
+      draft_logits = logits_with_lowrank_policy(weights, proposed, (pos_last + 1 + j).to_i32, draft_state,
+        layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
+    end
+    approx_steps += draft_lr_states.values.sum(&.approx_steps)
+    fallback_steps += draft_lr_states.values.sum(&.fallback_steps)
+    proposed_tokens += proposal.size
+    verifier_tokens += proposal.size
+
+    accepted_this_chunk = 0
+    rejected = false
+    proposal.each_with_index do |draft_token, j|
+      exact_top1 = top1(exact_logits)
+      exact_ids << exact_top1
+      if draft_token == exact_top1
+        accepted_this_chunk += 1
+        accepted_draft_tokens += 1
+        emitted_tokens += 1
+        emitted_ids << draft_token
+        state_before_last = exact_state.fork
+        last_token = draft_token
+        pos_last = prompt_ids.size + emitted_tokens - 1
+        exact_logits = logits_with_lowrank_policy(weights, draft_token, pos_last.to_i32, exact_state,
+          layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+      else
+        rejections += 1
+        correction_steps += 1
+        emitted_tokens += 1
+        emitted_ids << exact_top1
+        state_before_last = exact_state.fork
+        last_token = exact_top1
+        pos_last = prompt_ids.size + emitted_tokens - 1
+        exact_logits = logits_with_lowrank_policy(weights, exact_top1, pos_last.to_i32, exact_state,
+          layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+        rejected = true
+        break
+      end
+      break if emitted_tokens >= gen_tokens
+    end
+    full_accept_chunks += 1 unless rejected
+    # If the final chunk was shorter than gamma and fully accepted, this is still
+    # a full accept for the proposed chunk length.
+  end
+
+  accept_rate = proposed_tokens > 0 ? (100.0 * accepted_draft_tokens / proposed_tokens) : 0.0
+  avg_accept = chunks > 0 ? (accepted_draft_tokens.to_f64 / chunks) : 0.0
+  # Normalized to one exact sequential target decode per emitted token. Correction
+  # steps consume exact target work outside the chunk verifier, so the remaining
+  # budget is what the low-rank draft plus chunk verifier may spend per proposal.
+  break_even = proposed_tokens > 0 ? ((gen_tokens - correction_steps).to_f64 / proposed_tokens) : 0.0
+
+  {
+    chunks:                                   chunks,
+    full_accept_chunks:                       full_accept_chunks,
+    rejections:                               rejections,
+    emitted_tokens:                           emitted_tokens,
+    proposed_tokens:                          proposed_tokens,
+    accepted_draft_tokens:                    accepted_draft_tokens,
+    verifier_tokens:                          verifier_tokens,
+    correction_steps:                         correction_steps,
+    approx_steps:                             approx_steps,
+    fallback_steps:                           fallback_steps,
+    accept_rate:                              accept_rate,
+    avg_accept:                               avg_accept,
+    break_even_draft_verify_per_proposed:     break_even,
+    exact_ids:                                exact_ids,
+    emitted_ids:                              emitted_ids,
   }
 end
 
@@ -1013,7 +1210,17 @@ simulate_lowrank = false
 simulate_logit_rank : Int32? = nil
 simulate_logit_layers = [] of Int32
 simulate_fallback_threshold : Float64? = nil
+simulate_fallback_thresholds = [] of Float64
 simulate_generate_tokens = 0
+simulate_output_margin_threshold : Float64? = nil
+simulate_refresh_interval : Int32? = nil
+simulate_oracle_refresh_interval : Int32? = nil
+simulate_self_spec_gammas = [] of Int32
+self_spec_cost_model = false
+self_spec_draft_cost = 0.0
+self_spec_verifier_cost = 0.0
+self_spec_chunk_overhead = 0.0
+self_spec_correction_cost = 1.0
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
@@ -1032,7 +1239,16 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
   p.on("--simulate-logits-layers=LIST", "Comma-separated recurrent layers to approximate together during the logit drift gate") { |v| simulate_logit_layers = parse_int_list(v) }
   p.on("--simulate-fallback-threshold=F", "Fallback to exact DeltaNet step when max per-head K residual exceeds F") { |v| simulate_fallback_threshold = v.to_f64 }
+  p.on("--simulate-fallback-thresholds=LIST", "Run multiple fallback thresholds in one process") { |v| simulate_fallback_thresholds = v.split(',').map(&.strip).reject(&.empty?).map(&.to_f64) }
+  p.on("--simulate-output-margin-threshold=F", "Fallback to exact output when approximate top1/top2 margin is below F") { |v| simulate_output_margin_threshold = v.to_f64 }
+  p.on("--simulate-refresh-interval=N", "Force an exact low-rank-state refresh every N approximate-eligible positions") { |v| simulate_refresh_interval = v.to_i }
+  p.on("--simulate-oracle-refresh-interval=N", "Copy the paired exact shadow state into the approximate state every N positions") { |v| simulate_oracle_refresh_interval = v.to_i }
   p.on("--simulate-generate=N", "Run teacher-forced exact-greedy generation drift gate for N decode tokens") { |v| simulate_generate_tokens = v.to_i }
+  p.on("--simulate-self-spec-gammas=LIST", "Run self-spec low-rank draft simulation for comma-separated gammas") { |v| simulate_self_spec_gammas = parse_int_list(v) }
+  p.on("--self-spec-draft-cost=F", "Relative cost per low-rank draft token (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_draft_cost = v.to_f64 }
+  p.on("--self-spec-verifier-cost=F", "Relative cost per exact verifier token in a chunk (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_verifier_cost = v.to_f64 }
+  p.on("--self-spec-chunk-overhead=F", "Relative fixed overhead per self-spec chunk") { |v| self_spec_cost_model = true; self_spec_chunk_overhead = v.to_f64 }
+  p.on("--self-spec-correction-cost=F", "Relative cost per rejected-token correction step") { |v| self_spec_cost_model = true; self_spec_correction_cost = v.to_f64 }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -1088,17 +1304,49 @@ if rank = simulate_logit_rank
                           end
                         end
     end
-    logit = simulate_logits_policy(weights, token_ids, layer_bases, rank, calib_count, simulate_fallback_threshold)
-    total_steps = logit[:approx_steps] + logit[:fallback_steps]
-    approx_rate = total_steps > 0 ? (100.0 * logit[:approx_steps] / total_steps) : 0.0
-    fallback_note = simulate_fallback_threshold ? " fallback_threshold=#{simulate_fallback_threshold} approx_rate=#{approx_rate.round(2)}%" : ""
-    puts "logit_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}% top5_hit=#{logit[:top5_hit].round(2)}% mean_kl=#{logit[:mean_kl].round(8)} max_kl=#{logit[:max_kl].round(8)} min_margin=#{logit[:min_margin].round(6)} confident_mismatches=#{logit[:confident_mismatches]} approx_steps=#{logit[:approx_steps]} fallback_steps=#{logit[:fallback_steps]}#{fallback_note}"
+    thresholds_to_run = if simulate_fallback_thresholds.empty?
+                          [simulate_fallback_threshold]
+                        else
+                          simulate_fallback_thresholds.map { |v| v.as(Float64?) }
+                        end
+    thresholds_to_run.each do |fallback_threshold|
+      logit = simulate_logits_policy(weights, token_ids, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_oracle_refresh_interval, simulate_output_margin_threshold)
+      total_steps = logit[:approx_steps] + logit[:fallback_steps]
+      approx_rate = total_steps > 0 ? (100.0 * logit[:approx_steps] / total_steps) : 0.0
+      fallback_note = fallback_threshold ? " fallback_threshold=#{fallback_threshold} approx_rate=#{approx_rate.round(2)}%" : ""
+      output_note = simulate_output_margin_threshold ? " output_margin_threshold=#{simulate_output_margin_threshold} output_fallbacks=#{logit[:output_fallbacks]}" : ""
+      refresh_note = simulate_refresh_interval ? " refresh_interval=#{simulate_refresh_interval}" : ""
+      oracle_refresh_note = simulate_oracle_refresh_interval ? " oracle_refresh_interval=#{simulate_oracle_refresh_interval}" : ""
+      puts "logit_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}% top5_hit=#{logit[:top5_hit].round(2)}% mean_kl=#{logit[:mean_kl].round(8)} max_kl=#{logit[:max_kl].round(8)} min_margin=#{logit[:min_margin].round(6)} confident_mismatches=#{logit[:confident_mismatches]} approx_steps=#{logit[:approx_steps]} fallback_steps=#{logit[:fallback_steps]}#{fallback_note}#{refresh_note}#{oracle_refresh_note}#{output_note}"
 
-    if simulate_generate_tokens > 0
-      gen = simulate_greedy_policy(weights, token_ids, simulate_generate_tokens, layer_bases, rank, calib_count, simulate_fallback_threshold)
-      gen_total_steps = gen[:approx_steps] + gen[:fallback_steps]
-      gen_approx_rate = gen_total_steps > 0 ? (100.0 * gen[:approx_steps] / gen_total_steps) : 0.0
-      puts "greedy_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gen_tokens=#{simulate_generate_tokens} mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} max_delta=#{gen[:max_delta].round(6)} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_steps=#{gen[:approx_steps]} fallback_steps=#{gen[:fallback_steps]} approx_rate=#{gen_approx_rate.round(2)}% exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
+      if simulate_generate_tokens > 0
+        gen = simulate_greedy_policy(weights, token_ids, simulate_generate_tokens, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_oracle_refresh_interval, simulate_output_margin_threshold)
+        gen_total_steps = gen[:approx_steps] + gen[:fallback_steps]
+        gen_approx_rate = gen_total_steps > 0 ? (100.0 * gen[:approx_steps] / gen_total_steps) : 0.0
+        gen_output_note = simulate_output_margin_threshold ? " output_margin_threshold=#{simulate_output_margin_threshold} output_fallbacks=#{gen[:output_fallbacks]}" : ""
+        gen_refresh_note = simulate_refresh_interval ? " refresh_interval=#{simulate_refresh_interval}" : ""
+        gen_oracle_refresh_note = simulate_oracle_refresh_interval ? " oracle_refresh_interval=#{simulate_oracle_refresh_interval}" : ""
+        puts "greedy_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gen_tokens=#{simulate_generate_tokens} mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} max_delta=#{gen[:max_delta].round(6)} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_steps=#{gen[:approx_steps]} fallback_steps=#{gen[:fallback_steps]} approx_rate=#{gen_approx_rate.round(2)}%#{gen_refresh_note}#{gen_oracle_refresh_note}#{gen_output_note} exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
+      end
+
+      if simulate_generate_tokens > 0 && !simulate_self_spec_gammas.empty?
+        simulate_self_spec_gammas.each do |gamma|
+          spec = simulate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval)
+          spec_total_steps = spec[:approx_steps] + spec[:fallback_steps]
+          spec_approx_rate = spec_total_steps > 0 ? (100.0 * spec[:approx_steps] / spec_total_steps) : 0.0
+          cost_note = ""
+          if self_spec_cost_model
+            estimated_cost = self_spec_draft_cost * spec[:proposed_tokens] +
+                             self_spec_verifier_cost * spec[:verifier_tokens] +
+                             self_spec_chunk_overhead * spec[:chunks] +
+                             self_spec_correction_cost * spec[:correction_steps]
+            plain_cost = simulate_generate_tokens.to_f64
+            estimated_speedup = estimated_cost > 0.0 ? plain_cost / estimated_cost : 0.0
+            cost_note = " cost_model=draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)} estimated_cost=#{estimated_cost.round(4)} estimated_speedup=#{estimated_speedup.round(4)}x"
+          end
+          puts "self_spec_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
+        end
+      end
     end
   end
 end

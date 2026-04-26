@@ -307,6 +307,33 @@ Rich landmarks include full State/Relations/Evidence structure.
   decay_trigger: speculative fallback policy, bootstrap policy, host load, or draft/verifier speed changes
 **decision:** Keep full-row F16 GEMM top1 default-off due exactness risk, but enable exact tile-reduce row-batched top1 for chunks at or above the WBA threshold. The next neural speculative speed lever is draft-side cost/quality (for example Q4/F16 source availability, Q8 kernel improvements, or fewer draft steps), not another small verifier-only tweak. Q8 top1 retunes must pass end-to-end speculative parity, not only draft sync-profile speed; Q8 FFN activation fusion must beat wall time, not only remove trace rows.
 
+### [LM-QWEN35-DELTANET-LOWRANK-1] Projected-K low-rank DeltaNet is a plausible approximate speed branch
+**status:** smoke-verified
+**trust:** {F:0.75, G:low, R:0.75}
+**context:** ml (Qwen35 DeltaNet / approximate recurrent compression)
+**evidence:**
+- claim: "For 27B Q4_K_M, projected-K low-rank DeltaNet with `layers=0,2,4`, `rank=64`, and residual fallback threshold `0.8` preserved teacher-forced greedy top1 over a six-prompt smoke with `gen=24`, while reaching useful approximate rates (`70.83-97.02%`)."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe --simulate-logits-layers=0,2,4 --simulate-logits-rank=64 --simulate-fallback-threshold=0.8 --simulate-generate=24`, prompts `varied`, `adversary_code`, `math_symbolic`, `dialogue_json`, `repetition_yaml`, `logs_sql`, on 2026-04-26
+  verified_at: 2026-04-26
+  decay_trigger: projected-K probe semantics, residual fallback policy, layer set/rank, prompt distribution, or target quantization changes
+- claim: "A stronger 64-token generation smoke on `adversary_code` and `logs_sql` also preserved `100%` greedy top1/top5 with no confident mismatches, at approximate rates `75.35%` and `97.57%`."
+  source: same probe with `--simulate-generate=64` on 2026-04-26
+  verified_at: 2026-04-26
+  decay_trigger: same as above
+- claim: "A 12-prompt `gen=32` falsifier found one greedy top1 mismatch for `layers=0,2,4/rank64/th=0.8` on a math/facts prompt (`\" then\"` became `\"\\n\\n\"`). Stricter K-residual thresholds down to `0.35` and approximate-output margin fallback did not fix it. An oracle exact shadow-state refresh every 4 approximate-eligible positions fixed the prompt; 8/16 did not."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe --simulate-logits-layers=0,2,4 --simulate-logits-rank=64 --simulate-fallback-threshold=0.8 --simulate-generate=32`, plus `--simulate-output-margin-threshold`, `--simulate-refresh-interval`, and `--simulate-oracle-refresh-interval` probes on 2026-04-26
+  verified_at: 2026-04-26
+  decay_trigger: projected-K probe semantics, true exact resync design, prompt distribution, rank/layer policy, or target quantization changes
+- claim: "A new self-spec simulation mode resyncs a projected-K low-rank draft branch from the exact checkpoint for each chunk, free-runs it for `gamma`, and exact-verifies proposals. On a five-prompt smoke with `layers=0,2,4/rank64/th=0.8/gen=32`, it emitted exact ids for all prompts. `varied/code/logs/json` had `100%` acceptance at `gamma=4/8`; `varied` also had `100%` at `gamma=16/32`. The previous math falsifier became one rejection, not a wrong output: `31/33` accepted proposals at `gamma=4/6/8` and `31/41` at `gamma=16/32`."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe --simulate-self-spec-gammas=4,8|16,32 --simulate-generate=32 --simulate-logits-layers=0,2,4 --simulate-logits-rank=64 --simulate-fallback-threshold=0.8`, prompts `varied`, `code_fib`, `logs_sql`, `json_only`, `math_paris`, on 2026-04-26
+  verified_at: 2026-04-26
+  decay_trigger: self-spec simulator semantics, exact verifier implementation, prompt suite, rank/layer/gamma policy, or target quantization changes
+- claim: "A relative cost model was added to the self-spec probe. Under conservative hypothetical costs (`draft=0.20`, exact chunk verifier token `0.65`, chunk overhead `0.03`, correction `1.0`, normalized to plain exact decode token `1.0`), `varied` estimates `~1.17x` at `gamma=4/8/16`; the math falsifier estimates `~1.09x` at `gamma=4/8` but `0.89x` at `gamma=16` because one rejection wastes a longer proposal."
+  source: `/tmp/qwen35_deltanet_fixed_basis_probe --simulate-self-spec-gammas=4,8,16 --self-spec-draft-cost=0.20 --self-spec-verifier-cost=0.65 --self-spec-chunk-overhead=0.03 --self-spec-correction-cost=1.0`, prompts `varied`, `math_paris`, on 2026-04-26
+  verified_at: 2026-04-26
+  decay_trigger: true Metal draft cost, exact verifier cost, chunk overhead, prompt suite, gamma policy, or target quantization changes
+**decision:** Treat projected-K low-rank DeltaNet as a default-off internal self-spec draft branch, not a standalone exact target replacement. The next gate is a larger paired prompt suite plus wall-clock cost model including draft Metal cost, exact chunk verifier cost, correction/resync cost, and acceptance by adaptive `gamma`. Long accepted chunks (`gamma=8..32` in smoke) reopen rank-stable scan/prefill-like verifier ideas, but only inside the speculative branch and only with shrink-on-reject policy.
+
 ## Graph Visualization
 
 ```
