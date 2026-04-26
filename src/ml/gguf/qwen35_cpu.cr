@@ -1938,6 +1938,21 @@ module ML::GGUF
                                            top1 : Bool = false,
                                            emit_head : Bool = true) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
+        if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, emit_head: emit_head)
+          return Qwen35Metal.wait_forward_decode_wave(submission)
+        end
+      {% end %}
+      nil
+    end
+
+    private def forward_decode_wave_routed_async(weights : Qwen35Weights,
+                                                 token_id : Int32,
+                                                 pos : Int32,
+                                                 state : State,
+                                                 top1 : Bool = false,
+                                                 emit_head : Bool = true,
+                                                 fresh_scratch : Bool = false)
+      {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
         return nil unless metal_qw_supported?(weights.output)
@@ -2014,10 +2029,10 @@ module ML::GGUF
         end
 
         emb = embedding_lookup(weights.token_embd, token_id)
-        Qwen35Metal.forward_decode_wave(
+        Qwen35Metal.forward_decode_wave_async(
           emb, weights.layers,
           k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
-          weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head)
+          weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head, fresh_scratch: fresh_scratch)
       {% else %}
         nil
       {% end %}

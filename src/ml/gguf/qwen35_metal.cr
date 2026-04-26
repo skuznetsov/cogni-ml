@@ -398,12 +398,29 @@ module ML
           @@pool_s : Hash({String, Int64}, ML::MetalBuffer) = {} of {String, Int64} => ML::MetalBuffer
           @@hits   = 0_i64
           @@misses = 0_i64
+          @@fresh_collectors = [] of Array(ML::MetalBuffer)
+
+          def self.with_fresh(&)
+            collector = [] of ML::MetalBuffer
+            @@fresh_collectors << collector
+            yield collector
+          ensure
+            @@fresh_collectors.pop?
+          end
+
+          private def self.fresh_buffer(byte_size : Int64) : ML::MetalBuffer
+            @@misses += 1
+            buf = ML::MetalBuffer.new(byte_size)
+            if collector = @@fresh_collectors.last?
+              collector << buf
+            end
+            buf
+          end
 
           def self.get(tag : Symbol, byte_size : Int64) : ML::MetalBuffer
             # A/B gate — when set, always allocate fresh (emulates pre-4.2).
-            if ENV["QWEN35_SCRATCH_OFF"]? == "1"
-              @@misses += 1
-              return ML::MetalBuffer.new(byte_size)
+            if ENV["QWEN35_SCRATCH_OFF"]? == "1" || !@@fresh_collectors.empty?
+              return fresh_buffer(byte_size)
             end
             key = {tag, byte_size}
             if buf = @@pool[key]?
@@ -417,9 +434,8 @@ module ML
           end
 
           def self.get(tag : String, byte_size : Int64) : ML::MetalBuffer
-            if ENV["QWEN35_SCRATCH_OFF"]? == "1"
-              @@misses += 1
-              return ML::MetalBuffer.new(byte_size)
+            if ENV["QWEN35_SCRATCH_OFF"]? == "1" || !@@fresh_collectors.empty?
+              return fresh_buffer(byte_size)
             end
             key = {tag, byte_size}
             if buf = @@pool_s[key]?
@@ -1583,6 +1599,43 @@ module ML
           Array({Int32, Float32}).new(rows) do |i|
             {ids[i].to_i32, values[i]}
           end
+        end
+
+        record DecodeWaveSubmission,
+          cmd : ML::Metal::CommandBuffer,
+          pending_cmds : Array(ML::Metal::CommandBuffer),
+          emit_head : Bool,
+          use_head_top1 : Bool,
+          logits_buf : ML::MetalBuffer?,
+          top1_id_buf : ML::MetalBuffer?,
+          top1_value_buf : ML::MetalBuffer?,
+          output_dim : Int32,
+          retained_bufs : Array(ML::MetalBuffer),
+          profile_t0 : Time::Instant?,
+          profile_tenc : Time::Instant?
+
+        def self.wait_forward_decode_wave(submission : DecodeWaveSubmission) : Array(Float32)
+          submission.pending_cmds.each(&.wait)
+          submission.cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = if submission.emit_head
+                     if submission.use_head_top1
+                       read_shared_top1(submission.top1_id_buf.not_nil!, submission.top1_value_buf.not_nil!)
+                     else
+                       read_shared_f32(submission.logits_buf.not_nil!, submission.output_dim)
+                     end
+                   else
+                     [] of Float32
+                   end
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_wave(
+              (submission.profile_tenc.not_nil! - submission.profile_t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - submission.profile_tenc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
         end
 
         private def self.read_shared_top2_rows(top_id_buf : ML::MetalBuffer,
@@ -5139,6 +5192,40 @@ module ML
                                      pos : Int32,
                                      top1 : Bool = false,
                                      emit_head : Bool = true) : Array(Float32)?
+          if submission = forward_decode_wave_async(
+               emb, layers,
+               k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
+               output_norm, output_qw, hp, pos, top1: top1, emit_head: emit_head)
+            wait_forward_decode_wave(submission)
+          end
+        end
+
+        def self.forward_decode_wave_async(emb : Array(Float32),
+                                           layers : Array(Qwen35LayerWeights),
+                                           k_cache_bufs : Array(ML::MetalBuffer?),
+                                           v_cache_bufs : Array(ML::MetalBuffer?),
+                                           conv_state_bufs : Array(ML::MetalBuffer?),
+                                           ssm_state_bufs : Array(ML::MetalBuffer?),
+                                           output_norm : Array(Float32),
+                                           output_qw : QuantWeight,
+                                           hp : Qwen35Hparams,
+                                           pos : Int32,
+                                           top1 : Bool = false,
+                                           emit_head : Bool = true,
+                                           fresh_scratch : Bool = false,
+                                           retained_scratch : Array(ML::MetalBuffer)? = nil) : DecodeWaveSubmission?
+          # Two-lane callers can request fresh scratch so multiple submitted waves
+          # do not race through the pooled temporary buffers before wait/readback.
+          if fresh_scratch
+            return Scratch.with_fresh do |retained|
+              forward_decode_wave_async(
+                emb, layers,
+                k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
+                output_norm, output_qw, hp, pos,
+                top1: top1, emit_head: emit_head, fresh_scratch: false, retained_scratch: retained)
+            end
+          end
+
           out_pipe = gemv_pipeline_for(output_qw)
           return nil if emit_head && out_pipe.nil?
 
@@ -5719,23 +5806,10 @@ module ML
 
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
-          pending_cmds.each(&.wait)
-          cmd.wait
-          t_wait = Time.instant if Profile.enabled?
-          result = if emit_head
-                     use_head_top1 ? read_shared_top1(top1_id_buf.not_nil!, top1_value_buf.not_nil!) : read_shared_f32(logits_buf.not_nil!, output_qw.out_dim)
-                   else
-                     [] of Float32
-                   end
-          if Profile.enabled?
-            t_read = Time.instant
-            Profile.bump_wave(
-              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
-              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
-              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
-            )
-          end
-          result
+          DecodeWaveSubmission.new(
+            cmd, pending_cmds, emit_head, use_head_top1,
+            logits_buf, top1_id_buf, top1_value_buf, output_qw.out_dim,
+            retained_scratch || [] of ML::MetalBuffer, t0, t_enc)
         end
 
         # Shared GEMV machinery: takes pre-allocated weight buffer and a

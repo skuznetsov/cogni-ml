@@ -1072,11 +1072,25 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
                                       rank : Int32,
                                       calib_count : Int32,
                                       fallback_threshold : Float64?,
-                                      refresh_interval : Int32?) : NamedTuple(chunks: Int32, full_accept_chunks: Int32, rejections: Int32, emitted_tokens: Int32, proposed_tokens: Int32, accepted_draft_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, approx_steps: Int32, fallback_steps: Int32, accept_rate: Float64, avg_accept: Float64, break_even_draft_verify_per_proposed: Float64, exact_ids: Array(Int32), emitted_ids: Array(Int32))
+                                      refresh_interval : Int32?,
+                                      adaptive_min_gamma : Int32? = nil,
+                                      adaptive_max_gamma : Int32? = nil,
+                                      adaptive_grow_margin_threshold : Float64? = nil,
+                                      draft_margin_threshold : Float64? = nil,
+                                      draft_stop_margin_threshold : Float64? = nil,
+                                      topk_rescue : Int32? = nil,
+                                      progressive_schedule : Array(Int32)? = nil) : NamedTuple(chunks: Int32, full_accept_chunks: Int32, rejections: Int32, topk_rescues: Int32, emitted_tokens: Int32, proposed_tokens: Int32, accepted_draft_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, approx_steps: Int32, fallback_steps: Int32, draft_top2_hits: Int32, draft_top5_hits: Int32, reject_top2_hits: Int32, reject_top5_hits: Int32, accept_rate: Float64, avg_accept: Float64, break_even_draft_verify_per_proposed: Float64, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, gamma_history: Array(Int32), verifier_history: Array(Int32), draft_min_margin_history: Array(Float64), draft_low_margin_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32))
   raise "self-spec gamma must be positive" unless gamma > 0
+  adaptive = !adaptive_min_gamma.nil? && !adaptive_max_gamma.nil?
+  progressive = progressive_schedule && !progressive_schedule.not_nil!.empty?
+  min_gamma = adaptive_min_gamma || gamma
+  max_gamma = adaptive_max_gamma || (progressive ? progressive_schedule.not_nil!.max : gamma)
+  raise "adaptive min gamma must be positive" if adaptive && min_gamma <= 0
+  raise "adaptive max gamma must be >= min gamma" if adaptive && max_gamma < min_gamma
+  raise "progressive schedule values must be positive" if progressive && progressive_schedule.not_nil!.any? { |v| v <= 0 }
 
   hp = weights.hparams
-  max_seq = prompt_ids.size + gen_tokens + gamma + 4
+  max_seq = prompt_ids.size + gen_tokens + max_gamma + 4
   exact_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
   exact_lr_states = {} of Int32 => LowRankState
   exact_logits = [] of Float32
@@ -1095,6 +1109,7 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
   chunks = 0
   full_accept_chunks = 0
   rejections = 0
+  topk_rescues = 0
   emitted_tokens = 0
   proposed_tokens = 0
   accepted_draft_tokens = 0
@@ -1102,13 +1117,29 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
   correction_steps = 0
   approx_steps = 0
   fallback_steps = 0
+  draft_top2_hits = 0
+  draft_top5_hits = 0
+  reject_top2_hits = 0
+  reject_top5_hits = 0
+  current_gamma = gamma.clamp(min_gamma, max_gamma)
+  progressive_index = 0
+  gamma_history = [] of Int32
+  verifier_history = [] of Int32
+  draft_min_margin_history = [] of Float64
+  draft_low_margin_history = [] of Int32
   exact_ids = [] of Int32
   emitted_ids = [] of Int32
 
   while emitted_tokens < gen_tokens
     chunks += 1
     remaining = gen_tokens - emitted_tokens
-    chunk_gamma = Math.min(gamma, remaining)
+    chunk_gamma = if progressive
+                    progressive_schedule.not_nil![progressive_index]
+                  else
+                    current_gamma
+                  end
+    chunk_gamma = Math.min(chunk_gamma, remaining)
+    gamma_history << chunk_gamma
 
     draft_state = state_before_last.fork
     draft_lr_states = {} of Int32 => LowRankState
@@ -1117,24 +1148,48 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
       layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
 
     proposal = [] of Int32
+    proposal_top5 = [] of Array(Int32)
+    chunk_draft_min_margin = Float64::INFINITY
+    chunk_draft_low_margin = 0
     chunk_gamma.times do |j|
+      draft_margin = top1_margin(draft_logits)
+      chunk_draft_min_margin = draft_margin if draft_margin < chunk_draft_min_margin
+      if threshold = draft_margin_threshold
+        chunk_draft_low_margin += 1 if draft_margin < threshold
+      end
+      draft_top5 = top_k_indices(draft_logits, 5)
       proposed = top1(draft_logits)
       proposal << proposed
+      proposal_top5 << draft_top5
+      if threshold = draft_stop_margin_threshold
+        break if proposal.size >= Math.min(min_gamma, chunk_gamma) && draft_margin < threshold
+      end
       break if j == chunk_gamma - 1
 
       draft_logits = logits_with_lowrank_policy(weights, proposed, (pos_last + 1 + j).to_i32, draft_state,
         layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
     end
+    draft_min_margin_history << chunk_draft_min_margin
+    draft_low_margin_history << chunk_draft_low_margin
     approx_steps += draft_lr_states.values.sum(&.approx_steps)
     fallback_steps += draft_lr_states.values.sum(&.fallback_steps)
     proposed_tokens += proposal.size
     verifier_tokens += proposal.size
+    verifier_history << proposal.size
 
     accepted_this_chunk = 0
     rejected = false
+    chunk_min_margin = Float64::INFINITY
     proposal.each_with_index do |draft_token, j|
       exact_top1 = top1(exact_logits)
+      exact_margin = top1_margin(exact_logits)
+      chunk_min_margin = exact_margin if exact_margin < chunk_min_margin
       exact_ids << exact_top1
+      top5 = proposal_top5[j]
+      top2_hit = top5[0, 2].includes?(exact_top1)
+      top5_hit = top5.includes?(exact_top1)
+      draft_top2_hits += 1 if top2_hit
+      draft_top5_hits += 1 if top5_hit
       if draft_token == exact_top1
         accepted_this_chunk += 1
         accepted_draft_tokens += 1
@@ -1147,7 +1202,17 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
           layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
       else
         rejections += 1
-        correction_steps += 1
+        rescue_hit = false
+        if k = topk_rescue
+          if k > 1
+            rescue_hit = top5[0, Math.min(k, top5.size)].includes?(exact_top1)
+          end
+        end
+        if rescue_hit
+          topk_rescues += 1
+        else
+          correction_steps += 1
+        end
         emitted_tokens += 1
         emitted_ids << exact_top1
         state_before_last = exact_state.fork
@@ -1155,6 +1220,8 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
         pos_last = prompt_ids.size + emitted_tokens - 1
         exact_logits = logits_with_lowrank_policy(weights, exact_top1, pos_last.to_i32, exact_state,
           layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+        reject_top2_hits += 1 if top2_hit
+        reject_top5_hits += 1 if top5_hit
         rejected = true
         break
       end
@@ -1163,10 +1230,23 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
     full_accept_chunks += 1 unless rejected
     # If the final chunk was shorter than gamma and fully accepted, this is still
     # a full accept for the proposed chunk length.
+    if adaptive
+      current_gamma = if rejected
+                        Math.max(min_gamma, current_gamma // 2)
+                      elsif threshold = adaptive_grow_margin_threshold
+                        chunk_min_margin >= threshold ? Math.min(max_gamma, current_gamma * 2) : current_gamma
+                      else
+                        Math.min(max_gamma, current_gamma * 2)
+                      end
+    elsif progressive
+      progressive_index = rejected ? 0 : ((progressive_index + 1) % progressive_schedule.not_nil!.size)
+    end
   end
 
   accept_rate = proposed_tokens > 0 ? (100.0 * accepted_draft_tokens / proposed_tokens) : 0.0
   avg_accept = chunks > 0 ? (accepted_draft_tokens.to_f64 / chunks) : 0.0
+  draft_top2_hit_rate = proposed_tokens > 0 ? (100.0 * draft_top2_hits / proposed_tokens) : 0.0
+  draft_top5_hit_rate = proposed_tokens > 0 ? (100.0 * draft_top5_hits / proposed_tokens) : 0.0
   # Normalized to one exact sequential target decode per emitted token. Correction
   # steps consume exact target work outside the chunk verifier, so the remaining
   # budget is what the low-rank draft plus chunk verifier may spend per proposal.
@@ -1176,6 +1256,7 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
     chunks:                                   chunks,
     full_accept_chunks:                       full_accept_chunks,
     rejections:                               rejections,
+    topk_rescues:                             topk_rescues,
     emitted_tokens:                           emitted_tokens,
     proposed_tokens:                          proposed_tokens,
     accepted_draft_tokens:                    accepted_draft_tokens,
@@ -1183,9 +1264,19 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
     correction_steps:                         correction_steps,
     approx_steps:                             approx_steps,
     fallback_steps:                           fallback_steps,
+    draft_top2_hits:                          draft_top2_hits,
+    draft_top5_hits:                          draft_top5_hits,
+    reject_top2_hits:                         reject_top2_hits,
+    reject_top5_hits:                         reject_top5_hits,
     accept_rate:                              accept_rate,
     avg_accept:                               avg_accept,
     break_even_draft_verify_per_proposed:     break_even,
+    draft_top2_hit_rate:                      draft_top2_hit_rate,
+    draft_top5_hit_rate:                      draft_top5_hit_rate,
+    gamma_history:                            gamma_history,
+    verifier_history:                         verifier_history,
+    draft_min_margin_history:                 draft_min_margin_history,
+    draft_low_margin_history:                 draft_low_margin_history,
     exact_ids:                                exact_ids,
     emitted_ids:                              emitted_ids,
   }
@@ -1193,6 +1284,32 @@ end
 
 private def parse_int_list(value : String) : Array(Int32)
   value.split(',').map(&.strip).reject(&.empty?).map(&.to_i)
+end
+
+private def self_spec_estimated_cost(spec,
+                                     draft_cost : Float64,
+                                     verifier_cost : Float64,
+                                     chunk_overhead : Float64,
+                                     correction_cost : Float64,
+                                     overlap : Bool,
+                                     overlap_efficiency : Float64) : Float64
+  if overlap
+    efficiency = overlap_efficiency.clamp(0.0, 1.0)
+    cost = 0.0
+    spec[:gamma_history].each_with_index do |draft_tokens, i|
+      verifier_tokens = spec[:verifier_history][i]
+      draft_segment = draft_cost * draft_tokens
+      verifier_segment = verifier_cost * verifier_tokens
+      hidden = Math.min(draft_segment, verifier_segment) * efficiency
+      cost += draft_segment + verifier_segment - hidden + chunk_overhead
+    end
+    cost + correction_cost * spec[:correction_steps]
+  else
+    draft_cost * spec[:proposed_tokens] +
+      verifier_cost * spec[:verifier_tokens] +
+      chunk_overhead * spec[:chunks] +
+      correction_cost * spec[:correction_steps]
+  end
 end
 
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
@@ -1216,11 +1333,22 @@ simulate_output_margin_threshold : Float64? = nil
 simulate_refresh_interval : Int32? = nil
 simulate_oracle_refresh_interval : Int32? = nil
 simulate_self_spec_gammas = [] of Int32
+simulate_self_spec_adaptive = false
+simulate_self_spec_adaptive_min = 4
+simulate_self_spec_adaptive_start = 4
+simulate_self_spec_adaptive_max = 16
+simulate_self_spec_adaptive_grow_margin : Float64? = nil
+simulate_self_spec_draft_margin : Float64? = nil
+simulate_self_spec_draft_stop_margin : Float64? = nil
+simulate_self_spec_topk_rescue : Int32? = nil
+simulate_self_spec_progressive = [] of Int32
 self_spec_cost_model = false
 self_spec_draft_cost = 0.0
 self_spec_verifier_cost = 0.0
 self_spec_chunk_overhead = 0.0
 self_spec_correction_cost = 1.0
+self_spec_overlap_cost = false
+self_spec_overlap_efficiency = 1.0
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
@@ -1245,10 +1373,25 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-oracle-refresh-interval=N", "Copy the paired exact shadow state into the approximate state every N positions") { |v| simulate_oracle_refresh_interval = v.to_i }
   p.on("--simulate-generate=N", "Run teacher-forced exact-greedy generation drift gate for N decode tokens") { |v| simulate_generate_tokens = v.to_i }
   p.on("--simulate-self-spec-gammas=LIST", "Run self-spec low-rank draft simulation for comma-separated gammas") { |v| simulate_self_spec_gammas = parse_int_list(v) }
+  p.on("--simulate-self-spec-adaptive=MIN,START,MAX", "Run adaptive self-spec gamma: grow on full accept, shrink on reject") do |v|
+    values = parse_int_list(v)
+    raise "adaptive self-spec expects MIN,START,MAX" unless values.size == 3
+    simulate_self_spec_adaptive = true
+    simulate_self_spec_adaptive_min = values[0]
+    simulate_self_spec_adaptive_start = values[1]
+    simulate_self_spec_adaptive_max = values[2]
+  end
+  p.on("--simulate-self-spec-adaptive-grow-margin=F", "Only grow adaptive self-spec gamma when exact verifier min margin in the chunk is at least F") { |v| simulate_self_spec_adaptive_grow_margin = v.to_f64 }
+  p.on("--simulate-self-spec-draft-margin=F", "Count low-margin draft proposal steps below F inside each self-spec chunk") { |v| simulate_self_spec_draft_margin = v.to_f64 }
+  p.on("--simulate-self-spec-draft-stop-margin=F", "Stop a self-spec proposal chunk once draft margin falls below F after the min gamma") { |v| simulate_self_spec_draft_stop_margin = v.to_f64 }
+  p.on("--simulate-self-spec-topk-rescue=K", "Treat a greedy reject as tree-rescued when exact token is in draft top-K") { |v| simulate_self_spec_topk_rescue = v.to_i }
+  p.on("--simulate-self-spec-progressive=LIST", "Run progressive self-spec verifier chunks with a repeating comma-separated schedule, e.g. 4,4,8") { |v| simulate_self_spec_progressive = parse_int_list(v) }
   p.on("--self-spec-draft-cost=F", "Relative cost per low-rank draft token (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_draft_cost = v.to_f64 }
   p.on("--self-spec-verifier-cost=F", "Relative cost per exact verifier token in a chunk (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_verifier_cost = v.to_f64 }
   p.on("--self-spec-chunk-overhead=F", "Relative fixed overhead per self-spec chunk") { |v| self_spec_cost_model = true; self_spec_chunk_overhead = v.to_f64 }
   p.on("--self-spec-correction-cost=F", "Relative cost per rejected-token correction step") { |v| self_spec_cost_model = true; self_spec_correction_cost = v.to_f64 }
+  p.on("--self-spec-overlap-cost", "Estimate draft/verifier pipeline cost as max(draft, verifier) per chunk") { self_spec_cost_model = true; self_spec_overlap_cost = true }
+  p.on("--self-spec-overlap-efficiency=F", "Fraction of min(draft, verifier) hidden by overlap, 0..1 (default: 1)") { |v| self_spec_cost_model = true; self_spec_overlap_cost = true; self_spec_overlap_efficiency = v.to_f64 }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -1331,21 +1474,54 @@ if rank = simulate_logit_rank
 
       if simulate_generate_tokens > 0 && !simulate_self_spec_gammas.empty?
         simulate_self_spec_gammas.each do |gamma|
-          spec = simulate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval)
+          spec = simulate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, nil, nil, nil, simulate_self_spec_draft_margin, simulate_self_spec_draft_stop_margin, simulate_self_spec_topk_rescue)
           spec_total_steps = spec[:approx_steps] + spec[:fallback_steps]
           spec_approx_rate = spec_total_steps > 0 ? (100.0 * spec[:approx_steps] / spec_total_steps) : 0.0
           cost_note = ""
           if self_spec_cost_model
-            estimated_cost = self_spec_draft_cost * spec[:proposed_tokens] +
-                             self_spec_verifier_cost * spec[:verifier_tokens] +
-                             self_spec_chunk_overhead * spec[:chunks] +
-                             self_spec_correction_cost * spec[:correction_steps]
+            estimated_cost = self_spec_estimated_cost(spec, self_spec_draft_cost, self_spec_verifier_cost,
+              self_spec_chunk_overhead, self_spec_correction_cost, self_spec_overlap_cost, self_spec_overlap_efficiency)
             plain_cost = simulate_generate_tokens.to_f64
             estimated_speedup = estimated_cost > 0.0 ? plain_cost / estimated_cost : 0.0
-            cost_note = " cost_model=draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)} estimated_cost=#{estimated_cost.round(4)} estimated_speedup=#{estimated_speedup.round(4)}x"
+            overlap_note = self_spec_overlap_cost ? ",overlap_eff:#{self_spec_overlap_efficiency.round(4)}" : ""
+            cost_note = " cost_model=#{self_spec_overlap_cost ? "overlap" : "sum"}:draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)}#{overlap_note} estimated_cost=#{estimated_cost.round(4)} estimated_speedup=#{estimated_speedup.round(4)}x"
           end
-          puts "self_spec_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
+          rescue_note = simulate_self_spec_topk_rescue ? " topk_rescue=#{simulate_self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
+          puts "self_spec_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
         end
+      end
+      if simulate_generate_tokens > 0 && simulate_self_spec_adaptive
+        spec = simulate_self_spec_policy(weights, token_ids, simulate_generate_tokens, simulate_self_spec_adaptive_start, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_self_spec_adaptive_min, simulate_self_spec_adaptive_max, simulate_self_spec_adaptive_grow_margin, simulate_self_spec_draft_margin, simulate_self_spec_draft_stop_margin, simulate_self_spec_topk_rescue)
+        spec_total_steps = spec[:approx_steps] + spec[:fallback_steps]
+        spec_approx_rate = spec_total_steps > 0 ? (100.0 * spec[:approx_steps] / spec_total_steps) : 0.0
+        cost_note = ""
+        if self_spec_cost_model
+          estimated_cost = self_spec_estimated_cost(spec, self_spec_draft_cost, self_spec_verifier_cost,
+            self_spec_chunk_overhead, self_spec_correction_cost, self_spec_overlap_cost, self_spec_overlap_efficiency)
+          plain_cost = simulate_generate_tokens.to_f64
+          estimated_speedup = estimated_cost > 0.0 ? plain_cost / estimated_cost : 0.0
+          overlap_note = self_spec_overlap_cost ? ",overlap_eff:#{self_spec_overlap_efficiency.round(4)}" : ""
+          cost_note = " cost_model=#{self_spec_overlap_cost ? "overlap" : "sum"}:draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)}#{overlap_note} estimated_cost=#{estimated_cost.round(4)} estimated_speedup=#{estimated_speedup.round(4)}x"
+        end
+        grow_margin_note = simulate_self_spec_adaptive_grow_margin ? " grow_margin=#{simulate_self_spec_adaptive_grow_margin}" : ""
+        rescue_note = simulate_self_spec_topk_rescue ? " topk_rescue=#{simulate_self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
+        puts "self_spec_adaptive layers=#{simulate_logit_layers.join(',')} rank=#{rank} min_gamma=#{simulate_self_spec_adaptive_min} start_gamma=#{simulate_self_spec_adaptive_start} max_gamma=#{simulate_self_spec_adaptive_max}#{grow_margin_note} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
+      end
+      if simulate_generate_tokens > 0 && !simulate_self_spec_progressive.empty?
+        spec = simulate_self_spec_policy(weights, token_ids, simulate_generate_tokens, simulate_self_spec_progressive[0], layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, nil, nil, nil, simulate_self_spec_draft_margin, simulate_self_spec_draft_stop_margin, simulate_self_spec_topk_rescue, simulate_self_spec_progressive)
+        spec_total_steps = spec[:approx_steps] + spec[:fallback_steps]
+        spec_approx_rate = spec_total_steps > 0 ? (100.0 * spec[:approx_steps] / spec_total_steps) : 0.0
+        cost_note = ""
+        if self_spec_cost_model
+          estimated_cost = self_spec_estimated_cost(spec, self_spec_draft_cost, self_spec_verifier_cost,
+            self_spec_chunk_overhead, self_spec_correction_cost, self_spec_overlap_cost, self_spec_overlap_efficiency)
+          plain_cost = simulate_generate_tokens.to_f64
+          estimated_speedup = estimated_cost > 0.0 ? plain_cost / estimated_cost : 0.0
+          overlap_note = self_spec_overlap_cost ? ",overlap_eff:#{self_spec_overlap_efficiency.round(4)}" : ""
+          cost_note = " cost_model=#{self_spec_overlap_cost ? "overlap" : "sum"}:draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)}#{overlap_note} estimated_cost=#{estimated_cost.round(4)} estimated_speedup=#{estimated_speedup.round(4)}x"
+        end
+        rescue_note = simulate_self_spec_topk_rescue ? " topk_rescue=#{simulate_self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
+        puts "self_spec_progressive layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_progressive.join(',')} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
       end
     end
   end
