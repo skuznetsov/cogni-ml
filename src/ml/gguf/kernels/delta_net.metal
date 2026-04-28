@@ -29,6 +29,368 @@ using namespace metal;
 
 constant ushort DN_SG = 32;   // threads per simdgroup (and per threadgroup)
 
+// Project Q/K heads into fixed low-rank bases.
+//
+// Layout:
+//   q/k    [h_k, s]
+//   basis  [h_k, rank, s]
+//   c/qbar [h_k, rank]
+//
+// Dispatch grid: (rank, h_k, 2), where z=0 writes c=K*B and z=1 writes
+// qbar=Q*B. This is intentionally simple; s is 128 and rank <= 64 in the
+// current experiments.
+kernel void lowrank_project_coeffs(
+    device const float* q_conv [[buffer(0)]],
+    device const float* k_conv [[buffer(1)]],
+    device const float* basis  [[buffer(2)]],
+    device       float* c      [[buffer(3)]],
+    device       float* qbar   [[buffer(4)]],
+    constant     uint&  h_k    [[buffer(5)]],
+    constant     uint&  s      [[buffer(6)]],
+    constant     uint&  rank   [[buffer(7)]],
+    uint3 tid [[thread_position_in_grid]])
+{
+    const uint j = tid.x;
+    const uint h = tid.y;
+    const uint which = tid.z;
+    if (h >= h_k || j >= rank || which > 1) return;
+
+    device const float* src = (which == 0 ? k_conv : q_conv) + h * s;
+    device const float* b = basis + (h * rank + j) * s;
+    float acc = 0.0f;
+    for (uint d = 0; d < s; ++d) {
+        acc += src[d] * b[d];
+    }
+
+    if (which == 0) {
+        c[h * rank + j] = acc;
+    } else {
+        qbar[h * rank + j] = acc;
+    }
+}
+
+// Token-major batch version of lowrank_project_coeffs.
+//
+// Layout:
+//   q/k    [n_tokens, h_k, s]
+//   basis  [h_k, rank, s]
+//   c/qbar [n_tokens, h_k, rank]
+//
+// Dispatch grid: (rank, h_k, n_tokens * 2), where z/2 is token and z&1
+// selects K coefficients (`c`) or Q coefficients (`qbar`).
+kernel void lowrank_project_coeffs_chunk(
+    device const float* q_conv [[buffer(0)]],
+    device const float* k_conv [[buffer(1)]],
+    device const float* basis  [[buffer(2)]],
+    device       float* c      [[buffer(3)]],
+    device       float* qbar   [[buffer(4)]],
+    constant     uint&  h_k    [[buffer(5)]],
+    constant     uint&  s      [[buffer(6)]],
+    constant     uint&  rank   [[buffer(7)]],
+    constant     uint&  n_tokens [[buffer(8)]],
+    uint3 tid [[thread_position_in_grid]])
+{
+    const uint j = tid.x;
+    const uint h = tid.y;
+    const uint token = tid.z >> 1;
+    const uint which = tid.z & 1;
+    if (h >= h_k || j >= rank || token >= n_tokens) return;
+
+    device const float* src = (which == 0 ? k_conv : q_conv) + (token * h_k + h) * s;
+    device const float* b = basis + (h * rank + j) * s;
+    float acc = 0.0f;
+    for (uint d = 0; d < s; ++d) {
+        acc += src[d] * b[d];
+    }
+
+    const uint dst = (token * h_k + h) * rank + j;
+    if (which == 0) {
+        c[dst] = acc;
+    } else {
+        qbar[dst] = acc;
+    }
+}
+
+// Predict FFN PCA coefficients directly from the post-attention FFN input.
+//
+// Layout:
+//   x             [hidden_dim]
+//   x_mean        [hidden_dim]
+//   c_mean        [rank]
+//   coeff_weights [rank, hidden_dim]
+//   coeffs        [rank]
+//
+// Dispatch grid: rank coefficients. This intentionally keeps one coefficient
+// per thread for a correctness/cost microprobe; rank is small (16/32).
+kernel void ffn_pca_updown_coeffs(
+    device const float* x             [[buffer(0)]],
+    device const float* x_mean        [[buffer(1)]],
+    device const float* c_mean        [[buffer(2)]],
+    device const float* coeff_weights [[buffer(3)]],
+    device       float* coeffs        [[buffer(4)]],
+    constant     uint&  hidden_dim    [[buffer(5)]],
+    constant     uint&  rank          [[buffer(6)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint j = tid;
+    if (j >= rank) return;
+
+    device const float* w = coeff_weights + j * hidden_dim;
+    float acc = c_mean[j];
+    for (uint d = 0; d < hidden_dim; ++d) {
+        acc += (x[d] - x_mean[d]) * w[d];
+    }
+    coeffs[j] = acc;
+}
+
+// Apply precomputed WdB vectors to PCA coefficients.
+//
+// Layout:
+//   coeffs     [rank]
+//   down_basis [rank, hidden_dim]
+//   out        [hidden_dim]
+//
+// Dispatch grid: hidden dimensions.
+kernel void ffn_pca_updown_out(
+    device const float* coeffs     [[buffer(0)]],
+    device const float* down_basis [[buffer(1)]],
+    device       float* out        [[buffer(2)]],
+    constant     uint&  hidden_dim [[buffer(3)]],
+    constant     uint&  rank       [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint d = tid;
+    if (d >= hidden_dim) return;
+
+    float acc = 0.0f;
+    for (uint j = 0; j < rank; ++j) {
+        acc += coeffs[j] * down_basis[j * hidden_dim + d];
+    }
+    out[d] = acc;
+}
+
+// Single-dispatch version for decode-time one-row FFN PCA up/down.
+// One threadgroup computes all rank coefficients into threadgroup memory, then
+// writes all hidden output dimensions. This avoids the underfilled coefficient
+// dispatch and the second command-encoder/kernel boundary above.
+kernel void ffn_pca_updown_fused(
+    device const float* x             [[buffer(0)]],
+    device const float* x_mean        [[buffer(1)]],
+    device const float* c_mean        [[buffer(2)]],
+    device const float* coeff_weights [[buffer(3)]],
+    device const float* down_basis    [[buffer(4)]],
+    device       float* out           [[buffer(5)]],
+    constant     uint&  hidden_dim    [[buffer(6)]],
+    constant     uint&  rank          [[buffer(7)]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float coeffs[64];
+
+    if (tid < rank && tid < 64) {
+        device const float* w = coeff_weights + tid * hidden_dim;
+        float acc = c_mean[tid];
+        for (uint d = 0; d < hidden_dim; ++d) {
+            acc += (x[d] - x_mean[d]) * w[d];
+        }
+        coeffs[tid] = acc;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint d = tid; d < hidden_dim; d += 256) {
+        float acc = 0.0f;
+        for (uint j = 0; j < rank && j < 64; ++j) {
+            acc += coeffs[j] * down_basis[j * hidden_dim + d];
+        }
+        out[d] = acc;
+    }
+}
+
+// Token-major batch version of ffn_pca_updown_fused.
+//
+// Layout:
+//   x   [n_tokens, hidden_dim]
+//   out [n_tokens, hidden_dim]
+//
+// Dispatch grid: one threadgroup per token.
+kernel void ffn_pca_updown_fused_rows(
+    device const float* x             [[buffer(0)]],
+    device const float* x_mean        [[buffer(1)]],
+    device const float* c_mean        [[buffer(2)]],
+    device const float* coeff_weights [[buffer(3)]],
+    device const float* down_basis    [[buffer(4)]],
+    device       float* out           [[buffer(5)]],
+    constant     uint&  hidden_dim    [[buffer(6)]],
+    constant     uint&  rank          [[buffer(7)]],
+    constant     uint&  n_tokens      [[buffer(8)]],
+    uint token [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]])
+{
+    if (token >= n_tokens) return;
+
+    threadgroup float coeffs[64];
+    device const float* row = x + token * hidden_dim;
+
+    if (tid < rank && tid < 64) {
+        device const float* w = coeff_weights + tid * hidden_dim;
+        float acc = c_mean[tid];
+        for (uint d = 0; d < hidden_dim; ++d) {
+            acc += (row[d] - x_mean[d]) * w[d];
+        }
+        coeffs[tid] = acc;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    device float* out_row = out + token * hidden_dim;
+    for (uint d = tid; d < hidden_dim; d += 256) {
+        float acc = 0.0f;
+        for (uint j = 0; j < rank && j < 64; ++j) {
+            acc += coeffs[j] * down_basis[j * hidden_dim + d];
+        }
+        out_row[d] = acc;
+    }
+}
+
+// Projected-K low-rank DeltaNet step.
+//
+// This is the core self-spec draft state update after Q/K have already been
+// projected into the per-k-head fixed basis:
+//
+//   M[h,row,:] *= g[h]
+//   sk          = dot(M[h,row,:], c[k_head,:])
+//   delta       = beta[h] * (V[h,row] - sk)
+//   M[h,row,:] += delta * c[k_head,:]
+//   out[h,row]  = dot(M[h,row,:], qbar[k_head,:]) * scale
+//
+// Layout:
+//   m_state [h_v, s, rank]
+//   c/qbar  [h_k, rank]
+//   v/out   [h_v, s]
+//
+// Dispatch: (s, h_v, 1) threadgroups x 1 thread. This intentionally starts
+// as a correctness kernel; rank is small (32/48/64) and the next pass can
+// split each row across a simdgroup if profiling shows this is the bottleneck.
+kernel void lowrank_delta_step(
+    device       float* m_state [[buffer(0)]],
+    device const float* c       [[buffer(1)]],
+    device const float* qbar    [[buffer(2)]],
+    device const float* v_conv  [[buffer(3)]],
+    device const float* g       [[buffer(4)]],
+    device const float* beta    [[buffer(5)]],
+    device       float* out     [[buffer(6)]],
+    constant     uint&  h_k     [[buffer(7)]],
+    constant     uint&  h_v     [[buffer(8)]],
+    constant     uint&  s       [[buffer(9)]],
+    constant     uint&  rank    [[buffer(10)]],
+    constant     float& scale   [[buffer(11)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    const uint row = tid.x;
+    const uint h = tid.y;
+    if (row >= s || h >= h_v) return;
+
+    const uint k_head = h % h_k;
+    device float* m = m_state + (h * s + row) * rank;
+    device const float* ch = c + k_head * rank;
+    device const float* qh = qbar + k_head * rank;
+
+    const float gh = g[h];
+    const float bh = beta[h];
+
+    float sk = 0.0f;
+    for (uint j = 0; j < rank; ++j) {
+        const float mv = m[j] * gh;
+        m[j] = mv;
+        sk += mv * ch[j];
+    }
+
+    const float delt = bh * (v_conv[h * s + row] - sk);
+    float acc = 0.0f;
+    for (uint j = 0; j < rank; ++j) {
+        const float mv = m[j] + delt * ch[j];
+        m[j] = mv;
+        acc += mv * qh[j];
+    }
+
+    out[h * s + row] = acc * scale;
+}
+
+// Token-major low-rank recurrent scan. One threadgroup owns one [h,row] state
+// row and scans tokens serially, while rank dot/update work is distributed
+// across the threadgroup.
+kernel void lowrank_delta_chunk_step_parallel(
+    device       float* m_state [[buffer(0)]],
+    device const float* c       [[buffer(1)]],
+    device const float* qbar    [[buffer(2)]],
+    device const float* v_conv  [[buffer(3)]],
+    device const float* g       [[buffer(4)]],
+    device const float* beta    [[buffer(5)]],
+    device       float* out     [[buffer(6)]],
+    constant     uint&  h_k     [[buffer(7)]],
+    constant     uint&  h_v     [[buffer(8)]],
+    constant     uint&  s       [[buffer(9)]],
+    constant     uint&  rank    [[buffer(10)]],
+    constant     uint&  n_tokens [[buffer(11)]],
+    constant     float& scale   [[buffer(12)]],
+    uint2 tgpig [[threadgroup_position_in_grid]],
+    ushort tiitg [[thread_index_in_threadgroup]])
+{
+    const uint row = tgpig.x;
+    const uint h = tgpig.y;
+    if (row >= s || h >= h_v) return;
+
+    const uint k_head = h % h_k;
+    device float* m = m_state + (h * s + row) * rank;
+    threadgroup float scratch[128];
+
+    for (uint t = 0; t < n_tokens; ++t) {
+        device const float* ch = c + (t * h_k + k_head) * rank;
+        device const float* qh = qbar + (t * h_k + k_head) * rank;
+        const float gh = g[t * h_v + h];
+        const float bh = beta[t * h_v + h];
+
+        float mv = 0.0f;
+        float part = 0.0f;
+        if (tiitg < rank) {
+            mv = m[tiitg] * gh;
+            m[tiitg] = mv;
+            part = mv * ch[tiitg];
+        }
+        scratch[tiitg] = part;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint stride = 64; stride > 0; stride >>= 1) {
+            if (tiitg < stride && tiitg + stride < rank) {
+                scratch[tiitg] += scratch[tiitg + stride];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        const float delt = bh * (v_conv[(t * h_v + h) * s + row] - scratch[0]);
+        part = 0.0f;
+        if (tiitg < rank) {
+            mv = m[tiitg] + delt * ch[tiitg];
+            m[tiitg] = mv;
+            part = mv * qh[tiitg];
+        }
+        scratch[tiitg] = part;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint stride = 64; stride > 0; stride >>= 1) {
+            if (tiitg < stride && tiitg + stride < rank) {
+                scratch[tiitg] += scratch[tiitg + stride];
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        if (tiitg == 0) {
+            out[(t * h_v + h) * s + row] = scratch[0] * scale;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 kernel void delta_net_step(
     device       float* state  [[buffer(0)]],
     device const float* q_conv [[buffer(1)]],

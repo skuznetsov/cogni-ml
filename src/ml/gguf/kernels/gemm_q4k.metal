@@ -31,12 +31,56 @@ struct block_q4_K {
     uint8_t qs[128];
 };
 
+static inline uchar2 get_scale_min_k4_scalar(uint j, device const uchar * q) {
+    if (j < 4) {
+        return uchar2{uchar(q[j] & 63), uchar(q[j + 4] & 63)};
+    }
+    return uchar2{
+        uchar((q[j + 4] & 0x0F) | ((q[j - 4] >> 6) << 4)),
+        uchar((q[j + 4] >> 4) | ((q[j] >> 6) << 4))
+    };
+}
+
 // Extract 6-bit (scale, min) pair for sub-block index j, k from packed scales.
 // Matches llama.cpp get_scale_min_k4_just2.
 static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q) {
     return j < 4 ? uchar2{uchar(q[j+0+k] & 63), uchar(q[j+4+k] & 63)}
                  : uchar2{uchar((q[j+4+k] & 0xF) | ((q[j-4+k] & 0xc0) >> 2)),
                           uchar((q[j+4+k] >> 4) | ((q[j-0+k] & 0xc0) >> 2))};
+}
+
+kernel void embed_q4k_f32_from_token_id(
+    device const uint8_t* w_raw       [[buffer(0)]],
+    device const uint*    token_ids   [[buffer(1)]],
+    device       float*   output      [[buffer(2)]],
+    constant     uint&    hidden_dim  [[buffer(3)]],
+    constant     uint&    vocab_size  [[buffer(4)]],
+    constant     uint&    token_index [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= hidden_dim) return;
+
+    const uint token_id = token_ids[token_index];
+    if (token_id >= vocab_size) {
+        output[tid] = 0.0f;
+        return;
+    }
+
+    const uint nb = hidden_dim / QK_K;
+    const uint row_bytes = nb * 144;
+    const uint block_id = tid / QK_K;
+    const uint within = tid - block_id * QK_K;
+    const uint group = within / 64;
+    const uint rem = within - group * 64;
+    const uint lane = rem & 31;
+    const uint scale_idx = group * 2 + (rem >= 32 ? 1 : 0);
+
+    device const block_q4_K * row = (device const block_q4_K *)(w_raw + token_id * row_bytes);
+    device const block_q4_K * blk = row + block_id;
+    const uchar2 sc_min = get_scale_min_k4_scalar(scale_idx, blk->scales);
+    const uchar q = blk->qs[group * 32 + lane];
+    const float qv = rem < 32 ? float(q & 0x0F) : float(q >> 4);
+    output[tid] = float(blk->d) * float(sc_min.x) * qv - float(blk->dmin) * float(sc_min.y);
 }
 
 // Dequantize 16 elements of sub-block `il` (0..15) into a 4x4 half register.

@@ -1606,6 +1606,74 @@ module ML::GGUF
       {logits.index(maxv).not_nil!.to_i32, maxv}
     end
 
+    {% unless flag?(:cpu_only) %}
+      # Experimental scheduling primitive for the two-lane decoder branch.
+      # The caller owns state independence: do not submit multiple in-flight
+      # waves that mutate the same KV/SSM buffers.
+      def forward_top1_async(weights : Qwen35Weights,
+                             token_id : Int32,
+                             pos : Int32,
+                             state : State,
+                             fresh_scratch : Bool = true,
+                             scratch_namespace : String? = nil) : Qwen35Metal::DecodeWaveSubmission?
+        forward_decode_wave_routed_async(weights, token_id, pos, state, top1: true,
+          fresh_scratch: fresh_scratch, scratch_namespace: scratch_namespace)
+      end
+
+      def wait_forward_top1(submission : Qwen35Metal::DecodeWaveSubmission) : {Int32, Float32}
+        packed = Qwen35Metal.wait_forward_decode_wave(submission)
+        raise "async top1 decode returned #{packed.size} values" unless packed.size == 2
+        {packed[0].to_i32, packed[1]}
+      end
+
+      # Self-draft greedy decode with low-rank substitution on selected
+      # recurrent layers. The caller owns the lifecycle of `lowrank_state_bufs`
+      # and `lowrank_basis_bufs`; this routine just plumbs them into the wave.
+      # Returns nil when the Metal wave path is unavailable.
+      def forward_self_draft_top1(weights : Qwen35Weights,
+                                  token_id : Int32,
+                                  pos : Int32,
+                                  state : State,
+                                  lowrank_layer_indices : Set(Int32),
+                                  lowrank_state_bufs : Hash(Int32, ML::MetalBuffer),
+                                  lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
+                                  lowrank_rank : Int32) : {Int32, Float32}?
+        submission = forward_decode_wave_routed_async(weights, token_id, pos, state,
+          top1: true, emit_head: true,
+          lowrank_layer_indices: lowrank_layer_indices,
+          lowrank_state_bufs: lowrank_state_bufs,
+          lowrank_basis_bufs: lowrank_basis_bufs,
+          lowrank_rank: lowrank_rank)
+        return nil unless submission
+        packed = Qwen35Metal.wait_forward_decode_wave(submission)
+        raise "self-draft decode returned #{packed.size} values" unless packed.size == 2
+        {packed[0].to_i32, packed[1]}
+      end
+
+      def forward_self_draft_top1_from_token_buf_async(weights : Qwen35Weights,
+                                                       token_ids_buf : ML::MetalBuffer,
+                                                       token_index : Int32,
+                                                       pos : Int32,
+                                                       state : State,
+                                                       lowrank_layer_indices : Set(Int32),
+                                                       lowrank_state_bufs : Hash(Int32, ML::MetalBuffer),
+                                                       lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
+                                                       lowrank_rank : Int32,
+                                                       scratch_namespace : String? = nil,
+                                                       command_queue_name : String? = nil) : Qwen35Metal::DecodeWaveSubmission?
+        forward_decode_wave_routed_async(weights, 0, pos, state,
+          top1: true, emit_head: true,
+          scratch_namespace: scratch_namespace,
+          lowrank_layer_indices: lowrank_layer_indices,
+          lowrank_state_bufs: lowrank_state_bufs,
+          lowrank_basis_bufs: lowrank_basis_bufs,
+          lowrank_rank: lowrank_rank,
+          token_ids_buf: token_ids_buf,
+          token_index: token_index,
+          command_queue_name: command_queue_name)
+      end
+    {% end %}
+
     # Prefill helper for prompt tokens whose logits are not needed.
     #
     # This is exact for autoregressive state construction: every layer still
@@ -1951,7 +2019,15 @@ module ML::GGUF
                                                  state : State,
                                                  top1 : Bool = false,
                                                  emit_head : Bool = true,
-                                                 fresh_scratch : Bool = false)
+                                                 fresh_scratch : Bool = false,
+                                                 scratch_namespace : String? = nil,
+                                                 lowrank_layer_indices : Set(Int32)? = nil,
+                                                 lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                 lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                 lowrank_rank : Int32 = 0,
+                                                 token_ids_buf : ML::MetalBuffer? = nil,
+                                                 token_index : Int32 = 0,
+                                                 command_queue_name : String? = nil)
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -2028,11 +2104,20 @@ module ML::GGUF
           end
         end
 
-        emb = embedding_lookup(weights.token_embd, token_id)
+        emb = token_ids_buf ? nil : embedding_lookup(weights.token_embd, token_id)
         Qwen35Metal.forward_decode_wave_async(
           emb, weights.layers,
           k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
-          weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head, fresh_scratch: fresh_scratch)
+          weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head,
+          fresh_scratch: fresh_scratch, scratch_namespace: scratch_namespace,
+          lowrank_layer_indices: lowrank_layer_indices,
+          lowrank_state_bufs: lowrank_state_bufs,
+          lowrank_basis_bufs: lowrank_basis_bufs,
+          lowrank_rank: lowrank_rank,
+          token_embd_qw: weights.token_embd,
+          token_ids_buf: token_ids_buf,
+          token_index: token_index,
+          command_queue_name: command_queue_name)
       {% else %}
         nil
       {% end %}

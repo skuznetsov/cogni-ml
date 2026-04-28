@@ -13,15 +13,18 @@ DEFAULT_PROMPT    = "The quick brown fox jumps over the lazy dog. Describe this 
 
 private alias BasisSet = Array(Array(Array(Float64)))
 private alias LayerBasisMap = Hash(Int32, BasisSet)
+private alias FFNBasisMap = Hash(Int32, Array(Array(Float64)))
 
 private struct RecurrentSample
+  getter inp : Array(Float32)
   getter q : Array(Float32)
   getter k : Array(Float32)
   getter v : Array(Float32)
   getter ghead : Array(Float32)
   getter beta : Array(Float32)
+  getter z : Array(Float32)
 
-  def initialize(@q, @k, @v, @ghead, @beta)
+  def initialize(@q, @k, @v, @ghead, @beta, @z = [] of Float32, @inp = [] of Float32)
   end
 end
 
@@ -29,8 +32,90 @@ private class LowRankState
   property initialized : Bool = false
   property full_state_current : Bool = true
   property m : Array(Float32) = [] of Float32
+  property m_buf : ML::MetalBuffer?
+  property basis_buf : ML::MetalBuffer?
+  property basis_key : String = ""
+  property updown_x_mean_buf : ML::MetalBuffer?
+  property updown_c_mean_buf : ML::MetalBuffer?
+  property updown_coeff_w_buf : ML::MetalBuffer?
+  property updown_down_buf : ML::MetalBuffer?
+  property updown_key : String = ""
   property approx_steps : Int32 = 0
   property fallback_steps : Int32 = 0
+end
+
+private class GpuDraftBlock
+  getter submissions : Array(ML::GGUF::Qwen35Metal::DecodeWaveSubmission)
+  getter state : ML::GGUF::Qwen35CPU::State
+  getter lr_bufs : Hash(Int32, ML::MetalBuffer)
+
+  def initialize(@submissions, @state, @lr_bufs)
+  end
+end
+
+private struct FFNAdapter
+  getter basis : Array(Array(Float64))
+  getter down_basis : Array(Array(Float32))
+
+  def initialize(@basis : Array(Array(Float64)), @down_basis : Array(Array(Float32)))
+  end
+end
+
+private alias FFNAdapterMap = Hash(Int32, FFNAdapter)
+
+private struct FFNUpDownAdapter
+  getter x_mean : Array(Float64)
+  getter c_mean : Array(Float64)
+  getter coeff_weights : Array(Array(Float64))
+  getter down_basis : Array(Array(Float32))
+
+  def initialize(@x_mean : Array(Float64),
+                 @c_mean : Array(Float64),
+                 @coeff_weights : Array(Array(Float64)),
+                 @down_basis : Array(Array(Float32)))
+  end
+end
+
+private alias FFNUpDownAdapterMap = Hash(Int32, FFNUpDownAdapter)
+
+private class WbaTrace
+  @base : Time::Instant
+  @events = [] of String
+  @mutex = Mutex.new
+
+  def initialize(@label : String)
+    @base = Time.instant
+  end
+
+  def self.enabled? : Bool
+    ENV["QWEN35_WBA"]? == "1"
+  end
+
+  def self.maybe(label : String) : WbaTrace?
+    enabled? ? new(label) : nil
+  end
+
+  def mark(lane : String, stage : String, t0 : Time::Instant, t1 : Time::Instant) : Nil
+    start_ms = (t0 - @base).total_milliseconds
+    end_ms = (t1 - @base).total_milliseconds
+    dur_ms = (t1 - t0).total_milliseconds
+    event = sprintf("wba label=%s lane=%s stage=%s start_ms=%.3f end_ms=%.3f dur_ms=%.3f",
+      @label, lane, stage, start_ms, end_ms, dur_ms)
+    @mutex.synchronize { @events << event }
+  end
+
+  def point(lane : String, stage : String, t : Time::Instant) : Nil
+    ms = (t - @base).total_milliseconds
+    event = sprintf("wba label=%s lane=%s stage=%s at_ms=%.3f",
+      @label, lane, stage, ms)
+    @mutex.synchronize { @events << event }
+  end
+
+  def flush : Nil
+    events = @mutex.synchronize { @events.dup }
+    return if events.empty?
+    events.each { |event| STDERR.puts event }
+  end
 end
 
 private def softplus(x : Float32) : Float32
@@ -139,10 +224,11 @@ private def recurrent_samples_for_prompt(weights : ML::GGUF::Qwen35Weights,
     end
 
     cur = ML::GGUF::Qwen35CPU.rms_norm(x, target_layer.attn_norm, hp.rms_eps)
-    proj = ML::GGUF::Qwen35CPU.qmatvec_many([target_layer.attn_qkv_qw, target_layer.ssm_alpha_qw, target_layer.ssm_beta_qw], cur)
+    proj = ML::GGUF::Qwen35CPU.qmatvec_many([target_layer.attn_qkv_qw, target_layer.attn_gate_qw, target_layer.ssm_alpha_qw, target_layer.ssm_beta_qw], cur)
     qkv_mixed = proj[0]
-    alpha = proj[1]
-    beta = proj[2]
+    z = proj[1]
+    alpha = proj[2]
+    beta = proj[3]
     h_v.times { |i| beta[i] = 1.0_f32 / (1.0_f32 + Math.exp(-beta[i]).to_f32) }
     ghead = Array(Float32).new(h_v) do |i|
       Math.exp((softplus(alpha[i] + target_layer.ssm_dt_bias[i]) * target_layer.ssm_a[i]).to_f64).to_f32
@@ -173,7 +259,7 @@ private def recurrent_samples_for_prompt(weights : ML::GGUF::Qwen35Weights,
       l2_norm_slice!(q_conv, h * s, s, hp.rms_eps)
       l2_norm_slice!(k_conv, h * s, s, hp.rms_eps)
     end
-    samples << RecurrentSample.new(q_conv, k_conv, v_conv, ghead, beta)
+    samples << RecurrentSample.new(q_conv, k_conv, v_conv, ghead, beta, z, x.dup)
   end
 
   samples
@@ -424,6 +510,126 @@ private def lowrank_projected_delta_step!(m_state : Array(Float32),
   end
 end
 
+private def sync_lowrank_state_from_metal!(lr_state : LowRankState) : Nil
+  return unless buf = lr_state.m_buf
+  return if lr_state.m.empty?
+  lr_state.m = buf.read(lr_state.m.size)
+end
+
+private def flatten_basis_for_metal(bases : BasisSet, rank : Int32, h_k : Int32, s : Int32) : Array(Float32)
+  flat = Array(Float32).new(h_k * rank * s, 0.0_f32)
+  h_k.times do |h|
+    basis = bases[h]
+    r = Math.min(rank, basis.size)
+    r.times do |j|
+      s.times do |d|
+        flat[(h * rank + j) * s + d] = basis[j][d].to_f32
+      end
+    end
+  end
+  flat
+end
+
+private def lowrank_basis_buffer!(lr_state : LowRankState, bases : BasisSet,
+                                  rank : Int32, h_k : Int32, s : Int32) : ML::MetalBuffer
+  key = "#{h_k}:#{s}:#{rank}:#{bases.object_id}"
+  byte_size = (h_k * rank * s).to_i64 * sizeof(Float32)
+  buf = lr_state.basis_buf
+  if buf.nil? || buf.size != byte_size || lr_state.basis_key != key
+    flat = flatten_basis_for_metal(bases, rank, h_k, s)
+    buf = ML::MetalBuffer.new(byte_size)
+    buf.write(flat)
+    lr_state.basis_buf = buf
+    lr_state.basis_key = key
+  end
+  buf
+end
+
+private def updown_adapter_buffers!(lr_state : LowRankState,
+                                    adapter : FFNUpDownAdapter,
+                                    rank : Int32,
+                                    hidden_dim : Int32) : NamedTuple(x_mean: ML::MetalBuffer, c_mean: ML::MetalBuffer, coeff_w: ML::MetalBuffer, down: ML::MetalBuffer, rank: Int32)
+  limit = Math.min(rank, adapter.coeff_weights.size)
+  raise "FFN up/down adapter has no coefficient weights" unless limit > 0
+  raise "FFN up/down adapter output dim mismatch" unless adapter.down_basis[0].size == hidden_dim
+  key = "#{adapter.coeff_weights.object_id}:#{adapter.down_basis.object_id}:#{limit}:#{hidden_dim}"
+  byte_size = (limit * hidden_dim).to_i64 * sizeof(Float32)
+  needs_upload = lr_state.updown_key != key ||
+                 lr_state.updown_x_mean_buf.nil? ||
+                 lr_state.updown_c_mean_buf.nil? ||
+                 lr_state.updown_coeff_w_buf.nil? ||
+                 lr_state.updown_down_buf.nil? ||
+                 lr_state.updown_coeff_w_buf.not_nil!.size != byte_size ||
+                 lr_state.updown_down_buf.not_nil!.size != byte_size
+  if needs_upload
+    coeff_weights = Array(Float32).new(limit * hidden_dim)
+    down_basis = Array(Float32).new(limit * hidden_dim)
+    limit.times do |j|
+      hidden_dim.times { |d| coeff_weights << adapter.coeff_weights[j][d].to_f32 }
+      hidden_dim.times { |d| down_basis << adapter.down_basis[j][d] }
+    end
+    lr_state.updown_x_mean_buf = ML::MetalBuffer.from_array(adapter.x_mean.map(&.to_f32))
+    lr_state.updown_c_mean_buf = ML::MetalBuffer.from_array(adapter.c_mean[0, limit].map(&.to_f32))
+    lr_state.updown_coeff_w_buf = ML::MetalBuffer.from_array(coeff_weights)
+    lr_state.updown_down_buf = ML::MetalBuffer.from_array(down_basis)
+    lr_state.updown_key = key
+  end
+  {
+    x_mean:  lr_state.updown_x_mean_buf.not_nil!,
+    c_mean:  lr_state.updown_c_mean_buf.not_nil!,
+    coeff_w: lr_state.updown_coeff_w_buf.not_nil!,
+    down:    lr_state.updown_down_buf.not_nil!,
+    rank:    limit,
+  }
+end
+
+private def lowrank_state_buffer!(lr_state : LowRankState) : ML::MetalBuffer
+  byte_size = lr_state.m.size.to_i64 * sizeof(Float32)
+  buf = lr_state.m_buf
+  if buf.nil? || buf.size != byte_size
+    buf = ML::MetalBuffer.new(byte_size)
+    lr_state.m_buf = buf
+    lr_state.full_state_current = true
+  end
+  buf.write(lr_state.m) if lr_state.full_state_current
+  buf
+end
+
+private def lowrank_projected_delta_step_metal!(lr_state : LowRankState,
+                                                sample : RecurrentSample,
+                                                bases : Array(Array(Array(Float64))),
+                                                rank : Int32,
+                                                y : Array(Float32),
+                                                h_k : Int32, h_v : Int32, s : Int32,
+                                                scale : Float32,
+                                                project_coeffs_on_gpu : Bool = false) : Nil
+  raise "Metal low-rank delta unavailable" unless ML::GGUF::Qwen35Metal.available?
+
+  buf = lowrank_state_buffer!(lr_state)
+
+  y_metal = if project_coeffs_on_gpu
+              basis_buf = lowrank_basis_buffer!(lr_state, bases, rank, h_k, s)
+              ML::GGUF::Qwen35Metal.lowrank_delta_step_projected_buf(buf, sample.q, sample.k, basis_buf, sample.v, sample.ghead, sample.beta,
+                h_k, h_v, s, rank, scale)
+            else
+              c = Array(Float32).new(h_k * rank, 0.0_f32)
+              qbar = Array(Float32).new(h_k * rank, 0.0_f32)
+              h_k.times do |h|
+                basis = bases[h]
+                r = Math.min(rank, basis.size)
+                k_coeffs = basis_coeffs(sample.k, h * s, basis, r)
+                q_coeffs = basis_coeffs(sample.q, h * s, basis, r)
+                r.times do |j|
+                  c[h * rank + j] = k_coeffs[j]
+                  qbar[h * rank + j] = q_coeffs[j]
+                end
+              end
+              ML::GGUF::Qwen35Metal.lowrank_delta_step(buf, c, qbar, sample.v, sample.ghead, sample.beta,
+                h_k, h_v, s, rank, scale)
+            end
+  y_metal.each_with_index { |v, i| y[i] = v }
+end
+
 private def reconstruct_lowrank_state(m_state : Array(Float32),
                                       bases : Array(Array(Array(Float64))),
                                       rank : Int32,
@@ -500,6 +706,1185 @@ private def simulate_lowrank_projected_delta(samples : Array(RecurrentSample),
     proof_y_max:      proof_max,
     proof_state_rmse: proof_state_rmse,
     proof_state_max:  proof_state_max,
+  }
+end
+
+private def simulate_lowrank_projected_delta_metal(samples : Array(RecurrentSample),
+                                                   bases : Array(Array(Array(Float64))),
+                                                   rank : Int32,
+                                                   calib_count : Int32,
+                                                   h_k : Int32, h_v : Int32, s : Int32) : NamedTuple(y_rmse: Float64, y_max: Float64, state_rmse: Float64, state_max: Float64, steps: Int32, cpu_ms: Float64, metal_ms: Float64)
+  raise "Metal low-rank delta unavailable" unless ML::GGUF::Qwen35Metal.available?
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  cpu_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_buf = ML::MetalBuffer.new(metal_state.size.to_i64 * sizeof(Float32))
+  metal_buf.write(metal_state)
+  y_cpu = Array(Float32).new(h_v * s, 0.0_f32)
+
+  y_sq = 0.0
+  y_max = 0.0
+  count = 0
+  steps = 0
+  cpu_ms = 0.0
+  metal_ms = 0.0
+  samples[calib_count, samples.size - calib_count].each do |sample|
+    c = Array(Float32).new(h_k * rank, 0.0_f32)
+    qbar = Array(Float32).new(h_k * rank, 0.0_f32)
+    h_k.times do |h|
+      basis = bases[h]
+      r = Math.min(rank, basis.size)
+      k_coeffs = basis_coeffs(sample.k, h * s, basis, r)
+      q_coeffs = basis_coeffs(sample.q, h * s, basis, r)
+      r.times do |j|
+        c[h * rank + j] = k_coeffs[j]
+        qbar[h * rank + j] = q_coeffs[j]
+      end
+    end
+
+    t_cpu = Time.instant
+    lowrank_projected_delta_step!(cpu_state, sample, bases, rank, y_cpu, h_k, h_v, s, scale)
+    cpu_ms += (Time.instant - t_cpu).total_milliseconds
+    t_metal = Time.instant
+    y_metal = ML::GGUF::Qwen35Metal.lowrank_delta_step(metal_buf, c, qbar, sample.v, sample.ghead, sample.beta, h_k, h_v, s, rank, scale)
+    metal_ms += (Time.instant - t_metal).total_milliseconds
+    y_cpu.each_with_index do |v, i|
+      e = (v - y_metal[i]).abs.to_f64
+      y_sq += e * e
+      y_max = e if e > y_max
+      count += 1
+    end
+    steps += 1
+  end
+
+  metal_state = metal_buf.read(metal_state.size)
+  state_rmse, state_max = delta_stats(cpu_state, metal_state)
+  {
+    y_rmse:     count > 0 ? Math.sqrt(y_sq / count) : 0.0,
+    y_max:      y_max,
+    state_rmse: state_rmse,
+    state_max:  state_max,
+    steps:      steps,
+    cpu_ms:     cpu_ms,
+    metal_ms:   metal_ms,
+  }
+end
+
+private def simulate_lowrank_projected_delta_metal_project(samples : Array(RecurrentSample),
+                                                           bases : BasisSet,
+                                                           rank : Int32,
+                                                           calib_count : Int32,
+                                                           h_k : Int32, h_v : Int32, s : Int32) : NamedTuple(y_rmse: Float64, y_max: Float64, state_rmse: Float64, state_max: Float64, steps: Int32, cpu_ms: Float64, metal_ms: Float64)
+  raise "Metal low-rank projected delta unavailable" unless ML::GGUF::Qwen35Metal.available?
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  cpu_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_buf = ML::MetalBuffer.new(metal_state.size.to_i64 * sizeof(Float32))
+  metal_buf.write(metal_state)
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  y_cpu = Array(Float32).new(h_v * s, 0.0_f32)
+
+  y_sq = 0.0
+  y_max = 0.0
+  count = 0
+  steps = 0
+  cpu_ms = 0.0
+  metal_ms = 0.0
+  samples[calib_count, samples.size - calib_count].each do |sample|
+    t_cpu = Time.instant
+    lowrank_projected_delta_step!(cpu_state, sample, bases, rank, y_cpu, h_k, h_v, s, scale)
+    cpu_ms += (Time.instant - t_cpu).total_milliseconds
+
+    t_metal = Time.instant
+    y_metal = ML::GGUF::Qwen35Metal.lowrank_delta_step_projected_buf(metal_buf, sample.q, sample.k, basis_buf, sample.v, sample.ghead, sample.beta,
+      h_k, h_v, s, rank, scale)
+    metal_ms += (Time.instant - t_metal).total_milliseconds
+
+    y_cpu.each_with_index do |v, i|
+      e = (v - y_metal[i]).abs.to_f64
+      y_sq += e * e
+      y_max = e if e > y_max
+      count += 1
+    end
+    steps += 1
+  end
+
+  metal_state = metal_buf.read(metal_state.size)
+  state_rmse, state_max = delta_stats(cpu_state, metal_state)
+  {
+    y_rmse:     count > 0 ? Math.sqrt(y_sq / count) : 0.0,
+    y_max:      y_max,
+    state_rmse: state_rmse,
+    state_max:  state_max,
+    steps:      steps,
+    cpu_ms:     cpu_ms,
+    metal_ms:   metal_ms,
+  }
+end
+
+private def simulate_lowrank_projected_delta_metal_chunk(samples : Array(RecurrentSample),
+                                                         bases : BasisSet,
+                                                         rank : Int32,
+                                                         calib_count : Int32,
+                                                         h_k : Int32, h_v : Int32, s : Int32) : NamedTuple(y_rmse: Float64, y_max: Float64, state_rmse: Float64, state_max: Float64, steps: Int32, cpu_ms: Float64, metal_ms: Float64)
+  raise "Metal low-rank delta unavailable" unless ML::GGUF::Qwen35Metal.available?
+  heldout = samples[calib_count, samples.size - calib_count]
+  n_tokens = heldout.size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  cpu_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_buf = ML::MetalBuffer.new(metal_state.size.to_i64 * sizeof(Float32))
+  metal_buf.write(metal_state)
+  y_cpu_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  y_cpu = Array(Float32).new(h_v * s, 0.0_f32)
+
+  q_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  k_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  v_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  g_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  b_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+
+  heldout.each_with_index do |sample, t|
+    (h_k * s).times do |i|
+      q_all[t * h_k * s + i] = sample.q[i]
+      k_all[t * h_k * s + i] = sample.k[i]
+    end
+    (h_v * s).times { |i| v_all[t * h_v * s + i] = sample.v[i] }
+    h_v.times do |i|
+      g_all[t * h_v + i] = sample.ghead[i]
+      b_all[t * h_v + i] = sample.beta[i]
+    end
+  end
+
+  t_cpu = Time.instant
+  heldout.each_with_index do |sample, t|
+    lowrank_projected_delta_step!(cpu_state, sample, bases, rank, y_cpu, h_k, h_v, s, scale)
+    y_cpu.each_with_index { |v, i| y_cpu_all[t * h_v * s + i] = v }
+  end
+  cpu_ms = (Time.instant - t_cpu).total_milliseconds
+
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  t_metal = Time.instant
+  y_metal_all = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_buf(metal_buf, q_all, k_all, basis_buf, v_all, g_all, b_all,
+    h_k, h_v, s, rank, n_tokens, scale)
+  metal_ms = (Time.instant - t_metal).total_milliseconds
+
+  y_sq = 0.0
+  y_max = 0.0
+  y_cpu_all.each_with_index do |v, i|
+    e = (v - y_metal_all[i]).abs.to_f64
+    y_sq += e * e
+    y_max = e if e > y_max
+  end
+  metal_state = metal_buf.read(metal_state.size)
+  state_rmse, state_max = delta_stats(cpu_state, metal_state)
+  count = y_cpu_all.size
+  {
+    y_rmse:     count > 0 ? Math.sqrt(y_sq / count) : 0.0,
+    y_max:      y_max,
+    state_rmse: state_rmse,
+    state_max:  state_max,
+    steps:      n_tokens,
+    cpu_ms:     cpu_ms,
+    metal_ms:   metal_ms,
+  }
+end
+
+private def simulate_lowrank_projected_delta_metal_chunk_out(samples : Array(RecurrentSample),
+                                                             bases : BasisSet,
+                                                             out_qw : ML::GGUF::QuantWeight,
+                                                             ssm_norm : Array(Float32),
+                                                             eps : Float32,
+                                                             rank : Int32,
+                                                             calib_count : Int32,
+                                                             h_k : Int32, h_v : Int32, s : Int32) : NamedTuple(out_rmse: Float64, out_max: Float64, state_rmse: Float64, state_max: Float64, steps: Int32, cpu_ms: Float64, metal_ms: Float64)
+  raise "Metal low-rank delta unavailable" unless ML::GGUF::Qwen35Metal.available?
+  heldout = samples[calib_count, samples.size - calib_count]
+  n_tokens = heldout.size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  cpu_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_buf = ML::MetalBuffer.new(metal_state.size.to_i64 * sizeof(Float32))
+  metal_buf.write(metal_state)
+  y_cpu = Array(Float32).new(h_v * s, 0.0_f32)
+  out_cpu_all = Array(Float32).new(n_tokens * out_qw.out_dim, 0.0_f32)
+
+  q_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  k_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  v_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  g_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  b_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  z_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+
+  heldout.each_with_index do |sample, t|
+    raise "sample z missing for chunk_out proof" if sample.z.empty?
+    (h_k * s).times do |i|
+      q_all[t * h_k * s + i] = sample.q[i]
+      k_all[t * h_k * s + i] = sample.k[i]
+    end
+    (h_v * s).times do |i|
+      v_all[t * h_v * s + i] = sample.v[i]
+      z_all[t * h_v * s + i] = sample.z[i]
+    end
+    h_v.times do |i|
+      g_all[t * h_v + i] = sample.ghead[i]
+      b_all[t * h_v + i] = sample.beta[i]
+    end
+  end
+
+  t_cpu = Time.instant
+  heldout.each_with_index do |sample, t|
+    lowrank_projected_delta_step!(cpu_state, sample, bases, rank, y_cpu, h_k, h_v, s, scale)
+    h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y_cpu, h * s, s, ssm_norm, eps) }
+    (h_v * s).times { |i| y_cpu[i] = y_cpu[i] * ML::GGUF::Qwen35CPU.silu(sample.z[i]) }
+    out = ML::GGUF::Qwen35CPU.qmatvec_nobias(out_qw, y_cpu)
+    out.each_with_index { |v, i| out_cpu_all[t * out_qw.out_dim + i] = v }
+  end
+  cpu_ms = (Time.instant - t_cpu).total_milliseconds
+
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  t_metal = Time.instant
+  out_metal_all = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_out_buf(metal_buf, q_all, k_all, basis_buf, v_all, g_all, b_all, z_all,
+    ssm_norm, out_qw, h_k, h_v, s, rank, n_tokens, eps, scale).not_nil!
+  metal_ms = (Time.instant - t_metal).total_milliseconds
+
+  sq = 0.0
+  max = 0.0
+  out_cpu_all.each_with_index do |v, i|
+    e = (v - out_metal_all[i]).abs.to_f64
+    sq += e * e
+    max = e if e > max
+  end
+  metal_state = metal_buf.read(metal_state.size)
+  state_rmse, state_max = delta_stats(cpu_state, metal_state)
+  count = out_cpu_all.size
+  {
+    out_rmse:   count > 0 ? Math.sqrt(sq / count) : 0.0,
+    out_max:    max,
+    state_rmse: state_rmse,
+    state_max:  state_max,
+    steps:      n_tokens,
+    cpu_ms:     cpu_ms,
+    metal_ms:   metal_ms,
+  }
+end
+
+private def finish_recurrent_layer_cpu(inp : Array(Float32),
+                                       attn_out : Array(Float32),
+                                       lw : ML::GGUF::Qwen35RecurrentWeights,
+                                       hp : ML::GGUF::Qwen35Hparams) : Array(Float32)
+  inp_l2 = Array(Float32).new(hp.n_embd) { |i| inp[i] + attn_out[i] }
+  ffn_in = ML::GGUF::Qwen35CPU.rms_norm(inp_l2, lw.post_attention_norm, hp.rms_eps)
+  gate_up = ML::GGUF::Qwen35CPU.qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in)
+  gate = gate_up[0]
+  up = gate_up[1]
+  combined = Array(Float32).new(hp.n_ff) { |i| ML::GGUF::Qwen35CPU.silu(gate[i]) * up[i] }
+  ffn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ffn_down_qw, combined)
+  Array(Float32).new(hp.n_embd) { |i| inp_l2[i] + ffn_out[i] }
+end
+
+private def simulate_lowrank_recurrent_layer_metal_chunk(samples : Array(RecurrentSample),
+                                                         bases : BasisSet,
+                                                         lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                         hp : ML::GGUF::Qwen35Hparams,
+                                                         rank : Int32,
+                                                         calib_count : Int32) : NamedTuple(layer_rmse: Float64, layer_max: Float64, state_rmse: Float64, state_max: Float64, steps: Int32, cpu_ms: Float64, metal_ms: Float64)
+  raise "Metal low-rank recurrent layer chunk unavailable" unless ML::GGUF::Qwen35Metal.available?
+  heldout = samples[calib_count, samples.size - calib_count]
+  n_tokens = heldout.size
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  cpu_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_buf = ML::MetalBuffer.new(metal_state.size.to_i64 * sizeof(Float32))
+  metal_buf.write(metal_state)
+  y_cpu = Array(Float32).new(h_v * s, 0.0_f32)
+  layer_cpu_all = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+
+  q_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  k_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  v_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  g_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  b_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  z_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+
+  heldout.each_with_index do |sample, t|
+    raise "sample inp missing for layer chunk proof" if sample.inp.empty?
+    raise "sample z missing for layer chunk proof" if sample.z.empty?
+    (h_k * s).times do |i|
+      q_all[t * h_k * s + i] = sample.q[i]
+      k_all[t * h_k * s + i] = sample.k[i]
+    end
+    (h_v * s).times do |i|
+      v_all[t * h_v * s + i] = sample.v[i]
+      z_all[t * h_v * s + i] = sample.z[i]
+    end
+    h_v.times do |i|
+      g_all[t * h_v + i] = sample.ghead[i]
+      b_all[t * h_v + i] = sample.beta[i]
+    end
+  end
+
+  t_cpu = Time.instant
+  heldout.each_with_index do |sample, t|
+    lowrank_projected_delta_step!(cpu_state, sample, bases, rank, y_cpu, h_k, h_v, s, scale)
+    h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y_cpu, h * s, s, lw.ssm_norm, hp.rms_eps) }
+    (h_v * s).times { |i| y_cpu[i] = y_cpu[i] * ML::GGUF::Qwen35CPU.silu(sample.z[i]) }
+    attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y_cpu)
+    out = finish_recurrent_layer_cpu(sample.inp, attn_out, lw, hp)
+    out.each_with_index { |v, i| layer_cpu_all[t * hp.n_embd + i] = v }
+  end
+  cpu_ms = (Time.instant - t_cpu).total_milliseconds
+
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  t_metal = Time.instant
+  attn_metal_all = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_out_buf(metal_buf, q_all, k_all, basis_buf, v_all, g_all, b_all, z_all,
+    lw.ssm_norm, lw.ssm_out_qw, h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  layer_metal_all = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+  heldout.each_with_index do |sample, t|
+    attn = attn_metal_all[t * hp.n_embd, hp.n_embd]
+    out = finish_recurrent_layer_cpu(sample.inp, attn, lw, hp)
+    out.each_with_index { |v, i| layer_metal_all[t * hp.n_embd + i] = v }
+  end
+  metal_ms = (Time.instant - t_metal).total_milliseconds
+
+  sq = 0.0
+  max = 0.0
+  layer_cpu_all.each_with_index do |v, i|
+    e = (v - layer_metal_all[i]).abs.to_f64
+    sq += e * e
+    max = e if e > max
+  end
+  metal_state = metal_buf.read(metal_state.size)
+  state_rmse, state_max = delta_stats(cpu_state, metal_state)
+  count = layer_cpu_all.size
+  {
+    layer_rmse: count > 0 ? Math.sqrt(sq / count) : 0.0,
+    layer_max:  max,
+    state_rmse: state_rmse,
+    state_max:  state_max,
+    steps:      n_tokens,
+    cpu_ms:     cpu_ms,
+    metal_ms:   metal_ms,
+  }
+end
+
+private def simulate_lowrank_recurrent_layer_full_metal_chunk(samples : Array(RecurrentSample),
+                                                              bases : BasisSet,
+                                                              lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                              hp : ML::GGUF::Qwen35Hparams,
+                                                              rank : Int32,
+                                                              calib_count : Int32) : NamedTuple(layer_rmse: Float64, layer_max: Float64, state_rmse: Float64, state_max: Float64, steps: Int32, cpu_ms: Float64, metal_ms: Float64)
+  raise "Metal low-rank recurrent full layer chunk unavailable" unless ML::GGUF::Qwen35Metal.available?
+  heldout = samples[calib_count, samples.size - calib_count]
+  n_tokens = heldout.size
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  cpu_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_buf = ML::MetalBuffer.new(metal_state.size.to_i64 * sizeof(Float32))
+  metal_buf.write(metal_state)
+  y_cpu = Array(Float32).new(h_v * s, 0.0_f32)
+  layer_cpu_all = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+
+  inp_all = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+  q_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  k_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  v_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  g_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  b_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  z_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+
+  heldout.each_with_index do |sample, t|
+    raise "sample inp missing for full layer chunk proof" if sample.inp.empty?
+    raise "sample z missing for full layer chunk proof" if sample.z.empty?
+    hp.n_embd.times { |i| inp_all[t * hp.n_embd + i] = sample.inp[i] }
+    (h_k * s).times do |i|
+      q_all[t * h_k * s + i] = sample.q[i]
+      k_all[t * h_k * s + i] = sample.k[i]
+    end
+    (h_v * s).times do |i|
+      v_all[t * h_v * s + i] = sample.v[i]
+      z_all[t * h_v * s + i] = sample.z[i]
+    end
+    h_v.times do |i|
+      g_all[t * h_v + i] = sample.ghead[i]
+      b_all[t * h_v + i] = sample.beta[i]
+    end
+  end
+
+  t_cpu = Time.instant
+  heldout.each_with_index do |sample, t|
+    lowrank_projected_delta_step!(cpu_state, sample, bases, rank, y_cpu, h_k, h_v, s, scale)
+    h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y_cpu, h * s, s, lw.ssm_norm, hp.rms_eps) }
+    (h_v * s).times { |i| y_cpu[i] = y_cpu[i] * ML::GGUF::Qwen35CPU.silu(sample.z[i]) }
+    attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y_cpu)
+    out = finish_recurrent_layer_cpu(sample.inp, attn_out, lw, hp)
+    out.each_with_index { |v, i| layer_cpu_all[t * hp.n_embd + i] = v }
+  end
+  cpu_ms = (Time.instant - t_cpu).total_milliseconds
+
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  t_metal = Time.instant
+  layer_metal_all = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(metal_buf, inp_all, q_all, k_all, basis_buf, v_all, g_all, b_all, z_all,
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  metal_ms = (Time.instant - t_metal).total_milliseconds
+
+  sq = 0.0
+  max = 0.0
+  layer_cpu_all.each_with_index do |v, i|
+    e = (v - layer_metal_all[i]).abs.to_f64
+    sq += e * e
+    max = e if e > max
+  end
+  metal_state = metal_buf.read(metal_state.size)
+  state_rmse, state_max = delta_stats(cpu_state, metal_state)
+  count = layer_cpu_all.size
+  {
+    layer_rmse: count > 0 ? Math.sqrt(sq / count) : 0.0,
+    layer_max:  max,
+    state_rmse: state_rmse,
+    state_max:  state_max,
+    steps:      n_tokens,
+    cpu_ms:     cpu_ms,
+    metal_ms:   metal_ms,
+  }
+end
+
+private def simulate_lowrank_recurrent_layer_updown_metal_chunk(samples : Array(RecurrentSample),
+                                                                bases : BasisSet,
+                                                                lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                                hp : ML::GGUF::Qwen35Hparams,
+                                                                rank : Int32,
+                                                                calib_count : Int32,
+                                                                adapter : FFNUpDownAdapter,
+                                                                updown_rank : Int32) : NamedTuple(layer_rmse: Float64, layer_max: Float64, state_rmse: Float64, state_max: Float64, steps: Int32, cpu_ms: Float64, metal_ms: Float64, updown_rank: Int32)
+  raise "Metal low-rank recurrent updown layer chunk unavailable" unless ML::GGUF::Qwen35Metal.available?
+  heldout = samples[calib_count, samples.size - calib_count]
+  n_tokens = heldout.size
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  hidden_dim = hp.n_embd
+  bench_rank = Math.min(updown_rank, adapter.coeff_weights.size)
+  raise "updown layer rank must be positive" unless bench_rank > 0
+  raise "updown layer hidden mismatch" unless adapter.down_basis[0].size == hidden_dim
+
+  cpu_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_state = Array(Float32).new(h_v * s * rank, 0.0_f32)
+  metal_buf = ML::MetalBuffer.new(metal_state.size.to_i64 * sizeof(Float32))
+  metal_buf.write(metal_state)
+  y_cpu = Array(Float32).new(h_v * s, 0.0_f32)
+  layer_cpu_all = Array(Float32).new(n_tokens * hidden_dim, 0.0_f32)
+
+  inp_all = Array(Float32).new(n_tokens * hidden_dim, 0.0_f32)
+  q_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  k_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  v_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  g_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  b_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  z_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+
+  heldout.each_with_index do |sample, t|
+    raise "sample inp missing for updown layer chunk proof" if sample.inp.empty?
+    raise "sample z missing for updown layer chunk proof" if sample.z.empty?
+    hidden_dim.times { |i| inp_all[t * hidden_dim + i] = sample.inp[i] }
+    (h_k * s).times do |i|
+      q_all[t * h_k * s + i] = sample.q[i]
+      k_all[t * h_k * s + i] = sample.k[i]
+    end
+    (h_v * s).times do |i|
+      v_all[t * h_v * s + i] = sample.v[i]
+      z_all[t * h_v * s + i] = sample.z[i]
+    end
+    h_v.times do |i|
+      g_all[t * h_v + i] = sample.ghead[i]
+      b_all[t * h_v + i] = sample.beta[i]
+    end
+  end
+
+  t_cpu = Time.instant
+  heldout.each_with_index do |sample, t|
+    lowrank_projected_delta_step!(cpu_state, sample, bases, rank, y_cpu, h_k, h_v, s, scale)
+    h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y_cpu, h * s, s, lw.ssm_norm, hp.rms_eps) }
+    (h_v * s).times { |i| y_cpu[i] = y_cpu[i] * ML::GGUF::Qwen35CPU.silu(sample.z[i]) }
+    attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y_cpu)
+    inp_l2 = Array(Float32).new(hidden_dim) { |i| sample.inp[i] + attn_out[i] }
+    ffn_in = ML::GGUF::Qwen35CPU.rms_norm(inp_l2, lw.post_attention_norm, hp.rms_eps)
+    ffn_out = ffn_out_from_updown_adapter(ffn_in, adapter, bench_rank)
+    hidden_dim.times { |i| layer_cpu_all[t * hidden_dim + i] = inp_l2[i] + ffn_out[i] }
+  end
+  cpu_ms = (Time.instant - t_cpu).total_milliseconds
+
+  coeff_weights = Array(Float32).new(bench_rank * hidden_dim)
+  down_basis = Array(Float32).new(bench_rank * hidden_dim)
+  bench_rank.times do |j|
+    hidden_dim.times { |d| coeff_weights << adapter.coeff_weights[j][d].to_f32 }
+    hidden_dim.times { |d| down_basis << adapter.down_basis[j][d] }
+  end
+  x_mean_buf = ML::MetalBuffer.from_array(adapter.x_mean.map(&.to_f32))
+  c_mean_buf = ML::MetalBuffer.from_array(adapter.c_mean[0, bench_rank].map(&.to_f32))
+  coeff_w_buf = ML::MetalBuffer.from_array(coeff_weights)
+  down_buf = ML::MetalBuffer.from_array(down_basis)
+
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  t_metal = Time.instant
+  layer_metal_all = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_updown_buf(metal_buf, inp_all, q_all, k_all, basis_buf, v_all, g_all, b_all, z_all,
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    x_mean_buf, c_mean_buf, coeff_w_buf, down_buf,
+    h_k, h_v, s, rank, n_tokens, bench_rank, hp.rms_eps.to_f32, scale).not_nil!
+  metal_ms = (Time.instant - t_metal).total_milliseconds
+
+  sq = 0.0
+  max = 0.0
+  layer_cpu_all.each_with_index do |v, i|
+    e = (v - layer_metal_all[i]).abs.to_f64
+    sq += e * e
+    max = e if e > max
+  end
+  metal_state = metal_buf.read(metal_state.size)
+  state_rmse, state_max = delta_stats(cpu_state, metal_state)
+  count = layer_cpu_all.size
+  {
+    layer_rmse:  count > 0 ? Math.sqrt(sq / count) : 0.0,
+    layer_max:   max,
+    state_rmse:  state_rmse,
+    state_max:   state_max,
+    steps:       n_tokens,
+    cpu_ms:      cpu_ms,
+    metal_ms:    metal_ms,
+    updown_rank: bench_rank,
+  }
+end
+
+private def lowrank_layer_chunk_inputs(samples : Array(RecurrentSample),
+                                       calib_count : Int32,
+                                       h_k : Int32, h_v : Int32, s : Int32,
+                                       hidden_dim : Int32) : NamedTuple(n_tokens: Int32, inp: Array(Float32), q: Array(Float32), k: Array(Float32), v: Array(Float32), g: Array(Float32), beta: Array(Float32), z: Array(Float32))
+  heldout = samples[calib_count, samples.size - calib_count]
+  n_tokens = heldout.size
+  inp_all = Array(Float32).new(n_tokens * hidden_dim, 0.0_f32)
+  q_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  k_all = Array(Float32).new(n_tokens * h_k * s, 0.0_f32)
+  v_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  g_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  b_all = Array(Float32).new(n_tokens * h_v, 0.0_f32)
+  z_all = Array(Float32).new(n_tokens * h_v * s, 0.0_f32)
+  heldout.each_with_index do |sample, t|
+    raise "sample inp missing for layer chunk inputs" if sample.inp.empty?
+    raise "sample z missing for layer chunk inputs" if sample.z.empty?
+    hidden_dim.times { |i| inp_all[t * hidden_dim + i] = sample.inp[i] }
+    (h_k * s).times do |i|
+      q_all[t * h_k * s + i] = sample.q[i]
+      k_all[t * h_k * s + i] = sample.k[i]
+    end
+    (h_v * s).times do |i|
+      v_all[t * h_v * s + i] = sample.v[i]
+      z_all[t * h_v * s + i] = sample.z[i]
+    end
+    h_v.times do |i|
+      g_all[t * h_v + i] = sample.ghead[i]
+      b_all[t * h_v + i] = sample.beta[i]
+    end
+  end
+  {n_tokens: n_tokens, inp: inp_all, q: q_all, k: k_all, v: v_all, g: g_all, beta: b_all, z: z_all}
+end
+
+private def simulate_lowrank_recurrent_layer_full_async_overlap(samples : Array(RecurrentSample),
+                                                                bases : BasisSet,
+                                                                lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                                hp : ML::GGUF::Qwen35Hparams,
+                                                                rank : Int32,
+                                                                calib_count : Int32) : NamedTuple(steps: Int32, serial_ms: Float64, async_ms: Float64, speedup: Float64, output_max: Float64)
+  raise "Metal low-rank recurrent async overlap unavailable" unless ML::GGUF::Qwen35Metal.available?
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  inputs = lowrank_layer_chunk_inputs(samples, calib_count, h_k, h_v, s, hp.n_embd)
+  n_tokens = inputs[:n_tokens]
+  state_size = h_v * s * rank
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+
+  state_serial_a = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  state_serial_b = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  state_serial_a.write(Array(Float32).new(state_size, 0.0_f32))
+  state_serial_b.write(Array(Float32).new(state_size, 0.0_f32))
+  t_serial = Time.instant
+  serial_a = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(state_serial_a, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(state_serial_b, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  serial_ms = (Time.instant - t_serial).total_milliseconds
+
+  state_async_a = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  state_async_b = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  state_async_a.write(Array(Float32).new(state_size, 0.0_f32))
+  state_async_b.write(Array(Float32).new(state_size, 0.0_f32))
+  t_async = Time.instant
+  sub_a = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_async(state_async_a, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale, scratch_namespace: "lr_async_a", command_queue_name: "lr_async_a").not_nil!
+  sub_b = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_async(state_async_b, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale, scratch_namespace: "lr_async_b", command_queue_name: "lr_async_b").not_nil!
+  async_a = ML::GGUF::Qwen35Metal.wait_lowrank_layer_chunk(sub_a)
+  ML::GGUF::Qwen35Metal.wait_lowrank_layer_chunk(sub_b)
+  async_ms = (Time.instant - t_async).total_milliseconds
+
+  max = 0.0
+  serial_a.each_with_index do |v, i|
+    e = (v - async_a[i]).abs.to_f64
+    max = e if e > max
+  end
+  {steps: n_tokens, serial_ms: serial_ms, async_ms: async_ms, speedup: async_ms > 0.0 ? serial_ms / async_ms : 0.0, output_max: max}
+end
+
+private def verifier_state_after_prefix(weights : ML::GGUF::Qwen35Weights,
+                                        prefix_ids : Array(Int32),
+                                        max_seq : Int32) : ML::GGUF::Qwen35CPU::State
+  hp = weights.hparams
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+  ML::GGUF::Qwen35CPU.prefill_tokens(weights, prefix_ids, 0, state) unless prefix_ids.empty?
+  state
+end
+
+private def simulate_lowrank_draft_exact_verifier_overlap(samples : Array(RecurrentSample),
+                                                          bases : BasisSet,
+                                                          weights : ML::GGUF::Qwen35Weights,
+                                                          token_ids : Array(Int32),
+                                                          lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                          hp : ML::GGUF::Qwen35Hparams,
+                                                          rank : Int32,
+                                                          calib_count : Int32) : NamedTuple(steps: Int32, draft_ms: Float64, verifier_ms: Float64, serial_ms: Float64, overlap_ms: Float64, speedup: Float64, hidden_ms: Float64, draft_output_max: Float64, verifier_match: Bool)
+  raise "Metal low-rank draft/verifier overlap unavailable" unless ML::GGUF::Qwen35Metal.available?
+  raise "calib_count must leave a non-empty verifier span" unless calib_count < token_ids.size
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  inputs = lowrank_layer_chunk_inputs(samples, calib_count, h_k, h_v, s, hp.n_embd)
+  n_tokens = inputs[:n_tokens]
+  candidates = token_ids[calib_count, n_tokens]
+  prefix_ids = token_ids[0, calib_count]
+  max_seq = token_ids.size + n_tokens + 8
+  state_size = h_v * s * rank
+  zero_state = Array(Float32).new(state_size, 0.0_f32)
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+
+  # Warm both routes outside the measured region so the comparison focuses on
+  # scheduling overlap rather than one-time pipeline/constant cache setup.
+  warm_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, warm_state)
+  warm_draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  warm_draft_state.write(zero_state)
+  ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(warm_draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+
+  serial_draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  serial_draft_state.write(zero_state)
+  serial_verifier_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_draft = Time.instant
+  serial_draft = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(serial_draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  draft_ms = (Time.instant - t_draft).total_milliseconds
+  t_verify = Time.instant
+  serial_verifier = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, serial_verifier_state)
+  verifier_ms = (Time.instant - t_verify).total_milliseconds
+  serial_ms = draft_ms + verifier_ms
+
+  overlap_draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  overlap_draft_state.write(zero_state)
+  overlap_verifier_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_overlap = Time.instant
+  sub = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_async(overlap_draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale, scratch_namespace: "lr_verifier_draft", command_queue_name: "lr_verifier_draft").not_nil!
+  overlap_verifier = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, overlap_verifier_state)
+  overlap_draft = ML::GGUF::Qwen35Metal.wait_lowrank_layer_chunk(sub)
+  overlap_ms = (Time.instant - t_overlap).total_milliseconds
+
+  max = 0.0
+  serial_draft.each_with_index do |v, i|
+    e = (v - overlap_draft[i]).abs.to_f64
+    max = e if e > max
+  end
+  {
+    steps:            n_tokens,
+    draft_ms:         draft_ms,
+    verifier_ms:      verifier_ms,
+    serial_ms:        serial_ms,
+    overlap_ms:       overlap_ms,
+    speedup:          overlap_ms > 0.0 ? serial_ms / overlap_ms : 0.0,
+    hidden_ms:        serial_ms - overlap_ms,
+    draft_output_max: max,
+    verifier_match:   serial_verifier == overlap_verifier,
+  }
+end
+
+private def simulate_lowrank_draft_exact_decode_verifier_overlap(samples : Array(RecurrentSample),
+                                                                 bases : BasisSet,
+                                                                 weights : ML::GGUF::Qwen35Weights,
+                                                                 token_ids : Array(Int32),
+                                                                 lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                                 hp : ML::GGUF::Qwen35Hparams,
+                                                                 rank : Int32,
+                                                                 calib_count : Int32) : NamedTuple(steps: Int32, draft_ms: Float64, verifier_serial_ms: Float64, verifier_async_ms: Float64, overlap_ms: Float64, async_speedup: Float64, overlap_speedup: Float64, hidden_ms: Float64, draft_output_max: Float64, verifier_match: Bool)
+  raise "Metal exact decode verifier overlap unavailable" unless ML::GGUF::Qwen35Metal.available?
+  raise "calib_count must leave a non-empty verifier span" unless calib_count < token_ids.size
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  inputs = lowrank_layer_chunk_inputs(samples, calib_count, h_k, h_v, s, hp.n_embd)
+  n_tokens = inputs[:n_tokens]
+  candidates = token_ids[calib_count, n_tokens]
+  prefix_ids = token_ids[0, calib_count]
+  max_seq = token_ids.size + n_tokens + 8
+  state_size = h_v * s * rank
+  zero_state = Array(Float32).new(state_size, 0.0_f32)
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  wba = WbaTrace.maybe("decode_verifier_overlap")
+
+  # Warm exact decode and draft lane outside measured regions.
+  warm_verify = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.forward_top1(weights, candidates[0], calib_count, warm_verify)
+  warm_draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  warm_draft_state.write(zero_state)
+  ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(warm_draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+
+  serial_verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  serial_results = [] of {Int32, Float32}
+  t_serial_verify = Time.instant
+  candidates.each_with_index do |tok, i|
+    serial_results << ML::GGUF::Qwen35CPU.forward_top1(weights, tok, calib_count + i, serial_verify_state)
+  end
+  verifier_serial_ms = (Time.instant - t_serial_verify).total_milliseconds
+
+  async_verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  submissions = [] of ML::GGUF::Qwen35Metal::DecodeWaveSubmission
+  t_async_verify = Time.instant
+  wba.try(&.point("verifier", "async_submit_begin", t_async_verify))
+  candidates.each_with_index do |tok, i|
+    submit_t0 = Time.instant
+    sub = ML::GGUF::Qwen35CPU.forward_top1_async(weights, tok, calib_count + i, async_verify_state,
+      fresh_scratch: false, scratch_namespace: "exact_verify_#{i}").not_nil!
+    submit_t1 = Time.instant
+    wba.try(&.mark("verifier", "async_submit_#{i}", submit_t0, submit_t1))
+    submissions << sub
+  end
+  wait_t0 = Time.instant
+  async_results = submissions.map_with_index do |sub, i|
+    one_wait_t0 = Time.instant
+    result = ML::GGUF::Qwen35CPU.wait_forward_top1(sub)
+    one_wait_t1 = Time.instant
+    wba.try(&.mark("verifier", "async_wait_#{i}", one_wait_t0, one_wait_t1))
+    result
+  end
+  wait_t1 = Time.instant
+  wba.try(&.mark("verifier", "async_wait_all", wait_t0, wait_t1))
+  verifier_async_ms = (Time.instant - t_async_verify).total_milliseconds
+
+  draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  draft_state.write(zero_state)
+  t_draft = Time.instant
+  serial_draft = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  draft_ms = (Time.instant - t_draft).total_milliseconds
+
+  overlap_draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  overlap_draft_state.write(zero_state)
+  overlap_verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_overlap = Time.instant
+  wba.try(&.point("overlap", "begin", t_overlap))
+  draft_submit_t0 = Time.instant
+  draft_sub = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_async(overlap_draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale, scratch_namespace: "lr_decode_verify_draft", command_queue_name: "lr_decode_verify_draft").not_nil!
+  draft_submit_t1 = Time.instant
+  wba.try(&.mark("draft", "submit", draft_submit_t0, draft_submit_t1))
+  overlap_subs = [] of ML::GGUF::Qwen35Metal::DecodeWaveSubmission
+  candidates.each_with_index do |tok, i|
+    submit_t0 = Time.instant
+    sub = ML::GGUF::Qwen35CPU.forward_top1_async(weights, tok, calib_count + i, overlap_verify_state,
+      fresh_scratch: false, scratch_namespace: "exact_overlap_#{i}").not_nil!
+    submit_t1 = Time.instant
+    wba.try(&.mark("verifier", "overlap_submit_#{i}", submit_t0, submit_t1))
+    overlap_subs << sub
+  end
+  verifier_wait_t0 = Time.instant
+  overlap_results = overlap_subs.map_with_index do |sub, i|
+    one_wait_t0 = Time.instant
+    result = ML::GGUF::Qwen35CPU.wait_forward_top1(sub)
+    one_wait_t1 = Time.instant
+    wba.try(&.mark("verifier", "overlap_wait_#{i}", one_wait_t0, one_wait_t1))
+    result
+  end
+  verifier_wait_t1 = Time.instant
+  wba.try(&.mark("verifier", "overlap_wait_all", verifier_wait_t0, verifier_wait_t1))
+  draft_wait_t0 = Time.instant
+  overlap_draft = ML::GGUF::Qwen35Metal.wait_lowrank_layer_chunk(draft_sub)
+  draft_wait_t1 = Time.instant
+  wba.try(&.mark("draft", "wait", draft_wait_t0, draft_wait_t1))
+  overlap_ms = (Time.instant - t_overlap).total_milliseconds
+  wba.try(&.point("overlap", "end", Time.instant))
+  wba.try(&.flush)
+
+  max = 0.0
+  serial_draft.each_with_index do |v, i|
+    e = (v - overlap_draft[i]).abs.to_f64
+    max = e if e > max
+  end
+  serial_overlap_ms = draft_ms + verifier_async_ms
+  {
+    steps:              n_tokens,
+    draft_ms:           draft_ms,
+    verifier_serial_ms: verifier_serial_ms,
+    verifier_async_ms:  verifier_async_ms,
+    overlap_ms:         overlap_ms,
+    async_speedup:      verifier_async_ms > 0.0 ? verifier_serial_ms / verifier_async_ms : 0.0,
+    overlap_speedup:    overlap_ms > 0.0 ? serial_overlap_ms / overlap_ms : 0.0,
+    hidden_ms:          serial_overlap_ms - overlap_ms,
+    draft_output_max:   max,
+    verifier_match:     serial_results == async_results && serial_results == overlap_results,
+  }
+end
+
+private def simulate_exact_verifier_ltp_proxy(weights : ML::GGUF::Qwen35Weights,
+                                              token_ids : Array(Int32),
+                                              calib_count : Int32) : NamedTuple(steps: Int32, decode_serial_ms: Float64, decode_queued_ms: Float64, chunk_major_ms: Float64, queued_speedup: Float64, ltp_speedup: Float64, queued_match: Bool, chunk_match: Bool)
+  raise "exact verifier LTP proxy requires a non-empty held-out span" unless calib_count < token_ids.size
+  hp = weights.hparams
+  candidates = token_ids[calib_count, token_ids.size - calib_count]
+  prefix_ids = token_ids[0, calib_count]
+  max_seq = token_ids.size + candidates.size + 8
+
+  # Warm all verifier routes outside measured regions.
+  warm_decode = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.forward_top1(weights, candidates[0], calib_count, warm_decode)
+  warm_chunk = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, warm_chunk)
+
+  serial_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  serial = [] of {Int32, Float32}
+  t_serial = Time.instant
+  candidates.each_with_index do |tok, i|
+    serial << ML::GGUF::Qwen35CPU.forward_top1(weights, tok, calib_count + i, serial_state)
+  end
+  decode_serial_ms = (Time.instant - t_serial).total_milliseconds
+
+  queued_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  submissions = [] of ML::GGUF::Qwen35Metal::DecodeWaveSubmission
+  t_queued = Time.instant
+  candidates.each_with_index do |tok, i|
+    submissions << ML::GGUF::Qwen35CPU.forward_top1_async(weights, tok, calib_count + i, queued_state,
+      fresh_scratch: false, scratch_namespace: "ltp_decode_#{i}").not_nil!
+  end
+  queued = submissions.map { |sub| ML::GGUF::Qwen35CPU.wait_forward_top1(sub) }
+  decode_queued_ms = (Time.instant - t_queued).total_milliseconds
+
+  chunk_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_chunk = Time.instant
+  chunk = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, chunk_state)
+  chunk_major_ms = (Time.instant - t_chunk).total_milliseconds
+
+  serial_ids = serial.map(&.[0])
+  queued_ids = queued.map(&.[0])
+  chunk_ids = chunk.map(&.[0])
+  {
+    steps:            candidates.size,
+    decode_serial_ms: decode_serial_ms,
+    decode_queued_ms: decode_queued_ms,
+    chunk_major_ms:   chunk_major_ms,
+    queued_speedup:   decode_queued_ms > 0.0 ? decode_serial_ms / decode_queued_ms : 0.0,
+    ltp_speedup:      chunk_major_ms > 0.0 ? decode_serial_ms / chunk_major_ms : 0.0,
+    queued_match:     serial_ids == queued_ids,
+    chunk_match:      serial_ids == chunk_ids,
+  }
+end
+
+private def simulate_lowrank_draft_exact_chunk_verifier_thread_overlap(samples : Array(RecurrentSample),
+                                                                       bases : BasisSet,
+                                                                       weights : ML::GGUF::Qwen35Weights,
+                                                                       token_ids : Array(Int32),
+                                                                       lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                                       hp : ML::GGUF::Qwen35Hparams,
+                                                                       rank : Int32,
+                                                                       calib_count : Int32) : NamedTuple(steps: Int32, draft_ms: Float64, chunk_verifier_ms: Float64, serial_ms: Float64, overlap_ms: Float64, speedup: Float64, hidden_ms: Float64, draft_output_max: Float64, verifier_match: Bool)
+  raise "threaded chunk verifier overlap requires Metal" unless ML::GGUF::Qwen35Metal.available?
+  raise "calib_count must leave a non-empty verifier span" unless calib_count < token_ids.size
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  inputs = lowrank_layer_chunk_inputs(samples, calib_count, h_k, h_v, s, hp.n_embd)
+  n_tokens = inputs[:n_tokens]
+  candidates = token_ids[calib_count, n_tokens]
+  prefix_ids = token_ids[0, calib_count]
+  max_seq = token_ids.size + n_tokens + 8
+  state_size = h_v * s * rank
+  zero_state = Array(Float32).new(state_size, 0.0_f32)
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  wba = WbaTrace.maybe("chunk_verifier_thread_overlap")
+
+  # Warm both routes outside the measured region.
+  warm_verify = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, warm_verify)
+  warm_draft = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  warm_draft.write(zero_state)
+  ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(warm_draft, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+
+  serial_draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  serial_draft_state.write(zero_state)
+  t_draft = Time.instant
+  serial_draft = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(serial_draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  draft_ms = (Time.instant - t_draft).total_milliseconds
+
+  serial_verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_verify = Time.instant
+  serial_verify = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, serial_verify_state)
+  chunk_verifier_ms = (Time.instant - t_verify).total_milliseconds
+  serial_ms = draft_ms + chunk_verifier_ms
+
+  thread_done = Atomic(Int32).new(0)
+  thread_result = nil.as(Array({Int32, Float32})?)
+  thread_error = nil.as(String?)
+  overlap_draft_state = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  overlap_draft_state.write(zero_state)
+  overlap_verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_overlap = Time.instant
+  wba.try(&.point("overlap", "begin", t_overlap))
+  draft_submit_t0 = Time.instant
+  draft_sub = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_async(overlap_draft_state, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale, scratch_namespace: "chunk_verifier_thread_draft", command_queue_name: "chunk_verifier_thread_draft").not_nil!
+  draft_submit_t1 = Time.instant
+  wba.try(&.mark("draft", "submit", draft_submit_t0, draft_submit_t1))
+  Thread.new do
+    begin
+      STDERR.puts "chunk-thread: begin verifier" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+      thread_t0 = Time.instant
+      result = ML::GGUF::Qwen35Metal::Scratch.with_namespace("chunk_verifier_thread") do
+        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, overlap_verify_state)
+      end
+      thread_t1 = Time.instant
+      wba.try(&.mark("verifier", "thread_prefill_top1s", thread_t0, thread_t1))
+      thread_result = result
+      STDERR.puts "chunk-thread: verifier done" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+    rescue ex
+      thread_error = "#{ex.class}: #{ex.message}\n#{ex.backtrace.join('\n')}"
+      STDERR.puts "chunk-thread: error #{thread_error}" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+    ensure
+      thread_done.set(1)
+      STDERR.puts "chunk-thread: done flag set" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+    end
+  end
+  draft_wait_t0 = Time.instant
+  overlap_draft = ML::GGUF::Qwen35Metal.wait_lowrank_layer_chunk(draft_sub)
+  draft_wait_t1 = Time.instant
+  wba.try(&.mark("draft", "wait", draft_wait_t0, draft_wait_t1))
+  recv_t0 = Time.instant
+  deadline = Time.instant + 120.seconds
+  while thread_done.get == 0
+    raise "chunk-major verifier worker did not finish within 120s" if Time.instant > deadline
+    Thread.yield
+  end
+  if error = thread_error
+    raise "chunk-major verifier worker failed: #{error}"
+  end
+  overlap_verify = thread_result.not_nil!
+  recv_t1 = Time.instant
+  wba.try(&.mark("verifier", "receive", recv_t0, recv_t1))
+  overlap_ms = (Time.instant - t_overlap).total_milliseconds
+  wba.try(&.point("overlap", "end", Time.instant))
+  wba.try(&.flush)
+
+  max = 0.0
+  serial_draft.each_with_index do |v, i|
+    e = (v - overlap_draft[i]).abs.to_f64
+    max = e if e > max
+  end
+  {
+    steps:             n_tokens,
+    draft_ms:          draft_ms,
+    chunk_verifier_ms: chunk_verifier_ms,
+    serial_ms:         serial_ms,
+    overlap_ms:        overlap_ms,
+    speedup:           overlap_ms > 0.0 ? serial_ms / overlap_ms : 0.0,
+    hidden_ms:         serial_ms - overlap_ms,
+    draft_output_max:  max,
+    verifier_match:    serial_verify.map(&.[0]) == overlap_verify.map(&.[0]),
+  }
+end
+
+private def simulate_lowrank_multilayer_chunk_thread_overlap(samples : Array(RecurrentSample),
+                                                             bases : BasisSet,
+                                                             weights : ML::GGUF::Qwen35Weights,
+                                                             token_ids : Array(Int32),
+                                                             lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                             hp : ML::GGUF::Qwen35Hparams,
+                                                             rank : Int32,
+                                                             calib_count : Int32,
+                                                             n_layers : Int32) : NamedTuple(steps: Int32, n_layers: Int32, draft_ms: Float64, draft_per_layer_ms: Float64, chunk_verifier_ms: Float64, serial_ms: Float64, overlap_ms: Float64, speedup: Float64, hidden_ms: Float64, draft_output_max: Float64, verifier_match: Bool)
+  raise "multilayer chunk verifier overlap requires Metal" unless ML::GGUF::Qwen35Metal.available?
+  raise "calib_count must leave a non-empty verifier span" unless calib_count < token_ids.size
+  raise "n_layers must be positive" unless n_layers > 0
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  inputs = lowrank_layer_chunk_inputs(samples, calib_count, h_k, h_v, s, hp.n_embd)
+  n_tokens = inputs[:n_tokens]
+  candidates = token_ids[calib_count, n_tokens]
+  prefix_ids = token_ids[0, calib_count]
+  max_seq = token_ids.size + n_tokens + 8
+  state_size = h_v * s * rank
+  zero_state = Array(Float32).new(state_size, 0.0_f32)
+  basis_buf = ML::MetalBuffer.new((h_k * rank * s).to_i64 * sizeof(Float32))
+  basis_buf.write(flatten_basis_for_metal(bases, rank, h_k, s))
+  wba = WbaTrace.maybe("multilayer_chunk_verifier_overlap")
+
+  # Warm both routes outside the measured region.
+  warm_verify = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, warm_verify)
+  warm_draft = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+  warm_draft.write(zero_state)
+  ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(warm_draft, inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+    lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+    h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+
+  # Serial baseline: N layer chunks back-to-back on the default queue.
+  serial_states = Array(ML::MetalBuffer).new(n_layers) do
+    buf = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+    buf.write(zero_state)
+    buf
+  end
+  last_serial_output = nil.as(Array(Float32)?)
+  t_draft = Time.instant
+  n_layers.times do |i|
+    last_serial_output = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_buf(serial_states[i], inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+      lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+      h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale).not_nil!
+  end
+  draft_ms = (Time.instant - t_draft).total_milliseconds
+  draft_per_layer_ms = n_layers > 0 ? draft_ms / n_layers : 0.0
+
+  serial_verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_verify = Time.instant
+  serial_verify = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, serial_verify_state)
+  chunk_verifier_ms = (Time.instant - t_verify).total_milliseconds
+  serial_ms = draft_ms + chunk_verifier_ms
+
+  thread_done = Atomic(Int32).new(0)
+  thread_result = nil.as(Array({Int32, Float32})?)
+  thread_error = nil.as(String?)
+  overlap_states = Array(ML::MetalBuffer).new(n_layers) do
+    buf = ML::MetalBuffer.new(state_size.to_i64 * sizeof(Float32))
+    buf.write(zero_state)
+    buf
+  end
+  overlap_verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_overlap = Time.instant
+  wba.try(&.point("overlap", "begin", t_overlap))
+  draft_submit_t0 = Time.instant
+  draft_subs = Array(ML::GGUF::Qwen35Metal::LowRankLayerChunkSubmission).new
+  n_layers.times do |i|
+    sub = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_async(overlap_states[i], inputs[:inp], inputs[:q], inputs[:k], basis_buf, inputs[:v], inputs[:g], inputs[:beta], inputs[:z],
+      lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+      h_k, h_v, s, rank, n_tokens, hp.rms_eps.to_f32, scale, scratch_namespace: "multi_draft_#{i}", command_queue_name: "multi_draft").not_nil!
+    draft_subs << sub
+  end
+  draft_submit_t1 = Time.instant
+  wba.try(&.mark("draft", "submit_all", draft_submit_t0, draft_submit_t1))
+  Thread.new do
+    begin
+      STDERR.puts "multi-thread: begin verifier" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+      thread_t0 = Time.instant
+      result = ML::GGUF::Qwen35Metal::Scratch.with_namespace("multi_chunk_verifier_thread") do
+        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, overlap_verify_state)
+      end
+      thread_t1 = Time.instant
+      wba.try(&.mark("verifier", "thread_prefill_top1s", thread_t0, thread_t1))
+      thread_result = result
+      STDERR.puts "multi-thread: verifier done" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+    rescue ex
+      thread_error = "#{ex.class}: #{ex.message}\n#{ex.backtrace.join('\n')}"
+      STDERR.puts "multi-thread: error #{thread_error}" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+    ensure
+      thread_done.set(1)
+      STDERR.puts "multi-thread: done flag set" if ENV["QWEN35_CHUNK_THREAD_DEBUG"]? == "1"
+    end
+  end
+  draft_wait_t0 = Time.instant
+  last_overlap_output = nil.as(Array(Float32)?)
+  draft_subs.each do |sub|
+    last_overlap_output = ML::GGUF::Qwen35Metal.wait_lowrank_layer_chunk(sub)
+  end
+  draft_wait_t1 = Time.instant
+  wba.try(&.mark("draft", "wait_all", draft_wait_t0, draft_wait_t1))
+  recv_t0 = Time.instant
+  deadline = Time.instant + 120.seconds
+  while thread_done.get == 0
+    raise "multilayer chunk-major verifier worker did not finish within 120s" if Time.instant > deadline
+    Thread.yield
+  end
+  if error = thread_error
+    raise "multilayer chunk-major verifier worker failed: #{error}"
+  end
+  overlap_verify = thread_result.not_nil!
+  recv_t1 = Time.instant
+  wba.try(&.mark("verifier", "receive", recv_t0, recv_t1))
+  overlap_ms = (Time.instant - t_overlap).total_milliseconds
+  wba.try(&.point("overlap", "end", Time.instant))
+  wba.try(&.flush)
+
+  max = 0.0
+  if (ls = last_serial_output) && (lo = last_overlap_output)
+    ls.each_with_index do |v, i|
+      e = (v - lo[i]).abs.to_f64
+      max = e if e > max
+    end
+  end
+  {
+    steps:              n_tokens,
+    n_layers:           n_layers,
+    draft_ms:           draft_ms,
+    draft_per_layer_ms: draft_per_layer_ms,
+    chunk_verifier_ms:  chunk_verifier_ms,
+    serial_ms:          serial_ms,
+    overlap_ms:         overlap_ms,
+    speedup:            overlap_ms > 0.0 ? serial_ms / overlap_ms : 0.0,
+    hidden_ms:          serial_ms - overlap_ms,
+    draft_output_max:   max,
+    verifier_match:     serial_verify.map(&.[0]) == overlap_verify.map(&.[0]),
   }
 end
 
@@ -584,6 +1969,248 @@ private def recurrent_layer_cpu_exact(inpSA : Array(Float32),
   Array(Float32).new(hp.n_embd) { |i| inp_l2[i] + ffn_out[i] }
 end
 
+private def recurrent_layer_cpu_exact_with_ffn_activation(inpSA : Array(Float32),
+                                                          lw : ML::GGUF::Qwen35RecurrentWeights,
+                                                          lstate : ML::GGUF::Qwen35CPU::LayerState,
+                                                          hp : ML::GGUF::Qwen35Hparams) : NamedTuple(out: Array(Float32), activation: Array(Float64), ffn_in: Array(Float64))
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  qkv_dim = 2 * h_k * s + h_v * s
+  conv_k = hp.ssm_conv_kernel
+  cur = ML::GGUF::Qwen35CPU.rms_norm(inpSA, lw.attn_norm, hp.rms_eps)
+  proj = ML::GGUF::Qwen35CPU.qmatvec_many([lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw], cur)
+  qkv_mixed = proj[0]
+  z = proj[1]
+  alpha = proj[2]
+  beta = proj[3]
+  h_v.times { |i| beta[i] = 1.0_f32 / (1.0_f32 + Math.exp(-beta[i]).to_f32) }
+  ghead = Array(Float32).new(h_v) { |i| Math.exp((softplus(alpha[i] + lw.ssm_dt_bias[i]) * lw.ssm_a[i]).to_f64).to_f32 }
+
+  conv_state = lstate.conv_state ||= Array(Float32).new((conv_k - 1) * qkv_dim, 0.0_f32)
+  conv_out = Array(Float32).new(qkv_dim) do |ch|
+    acc = 0.0_f32
+    w_base = ch * conv_k
+    (conv_k - 1).times { |t| acc += conv_state[t * qkv_dim + ch] * lw.ssm_conv1d[w_base + t] }
+    acc + qkv_mixed[ch] * lw.ssm_conv1d[w_base + (conv_k - 1)]
+  end
+  (conv_k - 2).times do |t|
+    src = (t + 1) * qkv_dim
+    dst = t * qkv_dim
+    qkv_dim.times { |ch| conv_state[dst + ch] = conv_state[src + ch] }
+  end
+  qkv_dim.times { |ch| conv_state[(conv_k - 2) * qkv_dim + ch] = qkv_mixed[ch] }
+
+  silu!(conv_out)
+  q_conv = Array(Float32).new(h_k * s) { |i| conv_out[i] }
+  k_conv = Array(Float32).new(h_k * s) { |i| conv_out[h_k * s + i] }
+  v_conv = Array(Float32).new(h_v * s) { |i| conv_out[2 * h_k * s + i] }
+  h_k.times do |h|
+    l2_norm_slice!(q_conv, h * s, s, hp.rms_eps)
+    l2_norm_slice!(k_conv, h * s, s, hp.rms_eps)
+  end
+
+  y = Array(Float32).new(h_v * s, 0.0_f32)
+  state = lstate.ssm_state ||= Array(Float32).new(h_v * s * s, 0.0_f32)
+  scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
+  ML::GGUF::Qwen35CPU.delta_net_step!(state, q_conv, k_conv, v_conv, ghead, beta, y, h_k, h_v, s, scale)
+  h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y, h * s, s, lw.ssm_norm, hp.rms_eps) }
+  (h_v * s).times { |i| y[i] = y[i] * ML::GGUF::Qwen35CPU.silu(z[i]) }
+  attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y)
+
+  inp_l2 = Array(Float32).new(hp.n_embd) { |i| inpSA[i] + attn_out[i] }
+  ffn_in = ML::GGUF::Qwen35CPU.rms_norm(inp_l2, lw.post_attention_norm, hp.rms_eps)
+  gate_up = ML::GGUF::Qwen35CPU.qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in)
+  gate = gate_up[0]
+  up = gate_up[1]
+  combined = Array(Float32).new(hp.n_ff) { |i| ML::GGUF::Qwen35CPU.silu(gate[i]) * up[i] }
+  ffn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ffn_down_qw, combined)
+  {
+    out:        Array(Float32).new(hp.n_embd) { |i| inp_l2[i] + ffn_out[i] },
+    activation: combined.map(&.to_f64),
+    ffn_in:     ffn_in.map(&.to_f64),
+  }
+end
+
+private def ffn_activation_vectors_for_prompt(weights : ML::GGUF::Qwen35Weights,
+                                              token_ids : Array(Int32),
+                                              layer_indices : Array(Int32),
+                                              calib_count : Int32) : Hash(Int32, Array(Array(Float64)))
+  hp = weights.hparams
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: token_ids.size + 2)
+  wanted = Set(Int32).new(layer_indices)
+  vectors = Hash(Int32, Array(Array(Float64))).new { |h, k| h[k] = [] of Array(Float64) }
+
+  token_ids.each_with_index do |token_id, pos|
+    x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+    weights.layers.each_with_index do |layer, il|
+      case layer
+      in ML::GGUF::Qwen35FullAttnWeights
+        x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(x, pos.to_i32, layer, state.layers[il], hp, state.max_seq)
+      in ML::GGUF::Qwen35RecurrentWeights
+        if wanted.includes?(il)
+          res = recurrent_layer_cpu_exact_with_ffn_activation(x, layer, state.layers[il], hp)
+          vectors[il] << res[:activation] if pos < calib_count
+          x = res[:out]
+        else
+          x = recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
+        end
+      end
+    end
+  end
+
+  vectors
+end
+
+private def token_ids_for_prompt(tok, prompt : String, tokens_limit : Int32) : Array(Int32)
+  token_ids = tok.encode(prompt, add_bos_override: false)
+  while token_ids.size < tokens_limit
+    token_ids.concat(tok.encode(prompt, add_bos_override: false))
+  end
+  token_ids[0, tokens_limit]
+end
+
+private def ffn_activation_vectors_for_token_sets(weights : ML::GGUF::Qwen35Weights,
+                                                  token_sets : Array(Array(Int32)),
+                                                  layer_indices : Array(Int32),
+                                                  calib_tokens : Int32) : Hash(Int32, Array(Array(Float64)))
+  merged = Hash(Int32, Array(Array(Float64))).new { |h, k| h[k] = [] of Array(Float64) }
+  token_sets.each do |token_ids|
+    prompt_calib_count = Math.min(calib_tokens, token_ids.size)
+    next if prompt_calib_count <= 0
+
+    vectors = ffn_activation_vectors_for_prompt(weights, token_ids[0, prompt_calib_count], layer_indices, prompt_calib_count)
+    vectors.each do |il, layer_vectors|
+      merged[il].concat(layer_vectors)
+    end
+  end
+  merged
+end
+
+private def ffn_updown_samples_for_token_sets(weights : ML::GGUF::Qwen35Weights,
+                                              token_sets : Array(Array(Int32)),
+                                              layer_indices : Array(Int32),
+                                              calib_tokens : Int32) : Hash(Int32, Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))))
+  hp = weights.hparams
+  wanted = Set(Int32).new(layer_indices)
+  samples = Hash(Int32, Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64)))).new do |h, k|
+    h[k] = [] of NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))
+  end
+
+  token_sets.each do |token_ids|
+    prompt_calib_count = Math.min(calib_tokens, token_ids.size)
+    next if prompt_calib_count <= 0
+
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: prompt_calib_count + 2)
+    token_ids[0, prompt_calib_count].each_with_index do |token_id, pos|
+      x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+      weights.layers.each_with_index do |layer, il|
+        case layer
+        in ML::GGUF::Qwen35FullAttnWeights
+          x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(x, pos.to_i32, layer, state.layers[il], hp, state.max_seq)
+        in ML::GGUF::Qwen35RecurrentWeights
+          if wanted.includes?(il)
+            res = recurrent_layer_cpu_exact_with_ffn_activation(x, layer, state.layers[il], hp)
+            samples[il] << {ffn_in: res[:ffn_in], activation: res[:activation]}
+            x = res[:out]
+          else
+            x = recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
+          end
+        end
+      end
+    end
+  end
+
+  samples
+end
+
+private def solve_linear_system(a_in : Array(Array(Float64)), b_in : Array(Float64), eps : Float64 = 1.0e-12) : Array(Float64)
+  n = b_in.size
+  a = a_in.map(&.dup)
+  b = b_in.dup
+  n.times do |col|
+    pivot = col
+    best = a[col][col].abs
+    (col + 1).upto(n - 1) do |row|
+      v = a[row][col].abs
+      if v > best
+        best = v
+        pivot = row
+      end
+    end
+    raise "singular ridge system" if best <= eps
+    if pivot != col
+      a[col], a[pivot] = a[pivot], a[col]
+      b[col], b[pivot] = b[pivot], b[col]
+    end
+    diag = a[col][col]
+    col.upto(n - 1) { |j| a[col][j] /= diag }
+    b[col] /= diag
+    n.times do |row|
+      next if row == col
+      factor = a[row][col]
+      next if factor.abs <= eps
+      col.upto(n - 1) { |j| a[row][j] -= factor * a[col][j] }
+      b[row] -= factor * b[col]
+    end
+  end
+  b
+end
+
+private def train_ffn_updown_adapter(samples : Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))),
+                                     basis : Array(Array(Float64)),
+                                     down_basis : Array(Array(Float32)),
+                                     rank : Int32,
+                                     ridge : Float64 = 1.0e-3) : FFNUpDownAdapter
+  raise "need samples for FFN up/down adapter" if samples.empty?
+  limit = Math.min(rank, basis.size)
+  raise "need basis vectors for FFN up/down adapter" unless limit > 0
+  n = samples.size
+  dim = samples[0][:ffn_in].size
+  x_mean = Array(Float64).new(dim, 0.0)
+  samples.each do |sample|
+    dim.times { |d| x_mean[d] += sample[:ffn_in][d] }
+  end
+  dim.times { |d| x_mean[d] /= n }
+
+  coeffs = Array.new(n) { Array(Float64).new(limit, 0.0) }
+  c_mean = Array(Float64).new(limit, 0.0)
+  samples.each_with_index do |sample, si|
+    limit.times do |j|
+      c = dot(sample[:activation], basis[j])
+      coeffs[si][j] = c
+      c_mean[j] += c
+    end
+  end
+  limit.times { |j| c_mean[j] /= n }
+
+  gram = Array.new(n) { Array(Float64).new(n, 0.0) }
+  n.times do |i|
+    xi = samples[i][:ffn_in]
+    i.upto(n - 1) do |k|
+      xk = samples[k][:ffn_in]
+      acc = 0.0
+      dim.times { |d| acc += (xi[d] - x_mean[d]) * (xk[d] - x_mean[d]) }
+      gram[i][k] = acc
+      gram[k][i] = acc
+    end
+    gram[i][i] += ridge
+  end
+
+  coeff_weights = Array.new(limit) { Array(Float64).new(dim, 0.0) }
+  limit.times do |j|
+    y = Array(Float64).new(n) { |i| coeffs[i][j] - c_mean[j] }
+    alpha = solve_linear_system(gram, y)
+    w = coeff_weights[j]
+    n.times do |i|
+      xi = samples[i][:ffn_in]
+      dim.times { |d| w[d] += alpha[i] * (xi[d] - x_mean[d]) }
+    end
+  end
+
+  FFNUpDownAdapter.new(x_mean, c_mean, coeff_weights, down_basis[0, limit])
+end
+
 private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
                                         lw : ML::GGUF::Qwen35RecurrentWeights,
                                         lstate : ML::GGUF::Qwen35CPU::LayerState,
@@ -592,7 +2219,16 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
                                         rank : Int32,
                                         lr_state : LowRankState,
                                         fallback_threshold : Float64? = nil,
-                                        force_fallback : Bool = false) : Array(Float32)
+                                        force_fallback : Bool = false,
+                                        use_metal_lowrank : Bool = false,
+                                        project_coeffs_on_gpu : Bool = false,
+                                        use_metal_layer_updown : Bool = false,
+                                        draft_variant : String = "lowrank",
+                                        ffn_basis : Array(Array(Float64))? = nil,
+                                        ffn_adapter : FFNAdapter? = nil,
+                                        ffn_updown_adapter : FFNUpDownAdapter? = nil) : Array(Float32)
+  return inpSA if draft_variant == "skip-layer"
+
   h_k = hp.ssm_group_count
   h_v = hp.ssm_time_step_rank
   s = hp.ssm_state_size
@@ -644,7 +2280,9 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
   if threshold = fallback_threshold
     fallback ||= max_k_residual(k_conv, bases, rank, h_k, s) > threshold
   end
+  routed_out = nil.as(Array(Float32)?)
   if fallback
+    sync_lowrank_state_from_metal!(lr_state) if use_metal_lowrank
     unless lr_state.full_state_current
       lstate.ssm_state = reconstruct_lowrank_state(lr_state.m, bases, rank, h_k, h_v, s)
     end
@@ -654,22 +2292,65 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
     lr_state.full_state_current = true
     lr_state.fallback_steps += 1
   else
-    lowrank_projected_delta_step!(lr_state.m, RecurrentSample.new(q_conv, k_conv, v_conv, ghead, beta),
-      bases, rank, y, h_k, h_v, s, scale)
-    lr_state.full_state_current = false
-    lr_state.approx_steps += 1
+    sample = RecurrentSample.new(q_conv, k_conv, v_conv, ghead, beta)
+    pca_updown_rank = draft_variant_ffn_pca_updown_rank(draft_variant)
+    if pca_updown_rank && use_metal_layer_updown && use_metal_lowrank && project_coeffs_on_gpu
+      adapter = ffn_updown_adapter || raise "draft variant #{draft_variant.inspect} requires FFN up/down adapter"
+      state_buf = lowrank_state_buffer!(lr_state)
+      basis_buf = lowrank_basis_buffer!(lr_state, bases, rank, h_k, s)
+      updown = updown_adapter_buffers!(lr_state, adapter, pca_updown_rank, hp.n_embd)
+      out = ML::GGUF::Qwen35Metal.lowrank_delta_chunk_projected_layer_updown_buf(
+        state_buf, inpSA, q_conv, k_conv, basis_buf, v_conv, ghead, beta, z,
+        lw.ssm_norm, lw.ssm_out_qw, lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+        updown[:x_mean], updown[:c_mean], updown[:coeff_w], updown[:down],
+        h_k, h_v, s, rank, 1, updown[:rank], hp.rms_eps.to_f32, scale
+      ).not_nil!
+      lr_state.full_state_current = false
+      lr_state.approx_steps += 1
+      routed_out = out
+    else
+      if use_metal_lowrank
+        lowrank_projected_delta_step_metal!(lr_state, sample, bases, rank, y, h_k, h_v, s, scale, project_coeffs_on_gpu)
+      else
+        lowrank_projected_delta_step!(lr_state.m, sample, bases, rank, y, h_k, h_v, s, scale)
+      end
+      lr_state.full_state_current = false
+      lr_state.approx_steps += 1
+    end
   end
+  return routed_out.not_nil! if routed_out
+
   h_v.times { |h| ML::GGUF::Qwen35CPU.rms_norm_slice!(y, h * s, s, lw.ssm_norm, hp.rms_eps) }
   (h_v * s).times { |i| y[i] = y[i] * ML::GGUF::Qwen35CPU.silu(z[i]) }
   attn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ssm_out_qw, y)
 
   inp_l2 = Array(Float32).new(hp.n_embd) { |i| inpSA[i] + attn_out[i] }
+  return inp_l2 if draft_variant == "lowrank-no-ffn"
+
   ffn_in = ML::GGUF::Qwen35CPU.rms_norm(inp_l2, lw.post_attention_norm, hp.rms_eps)
+  if pca_updown_rank = draft_variant_ffn_pca_updown_rank(draft_variant)
+    adapter = ffn_updown_adapter || raise "draft variant #{draft_variant.inspect} requires FFN up/down adapter"
+    ffn_out = ffn_out_from_updown_adapter(ffn_in, adapter, pca_updown_rank)
+    return Array(Float32).new(hp.n_embd) { |i| inp_l2[i] + ffn_out[i] }
+  end
+
   gate_up = ML::GGUF::Qwen35CPU.qmatvec_many([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in)
   gate = gate_up[0]
   up = gate_up[1]
   combined = Array(Float32).new(hp.n_ff) { |i| ML::GGUF::Qwen35CPU.silu(gate[i]) * up[i] }
-  ffn_out = ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ffn_down_qw, combined)
+  if percent = draft_variant_ffn_top_percent(draft_variant)
+    keep_top_abs_percent!(combined, percent)
+  end
+  if pca_rank = draft_variant_ffn_pca_rank(draft_variant)
+    basis = ffn_basis || raise "draft variant #{draft_variant.inspect} requires FFN activation basis"
+    project_vector_with_basis!(combined, basis, pca_rank)
+  end
+  ffn_out = if pca_down_rank = draft_variant_ffn_pca_down_rank(draft_variant)
+              adapter = ffn_adapter || raise "draft variant #{draft_variant.inspect} requires FFN down adapter"
+              ffn_down_from_adapter(combined, adapter, pca_down_rank)
+            else
+              ML::GGUF::Qwen35CPU.qmatvec_nobias(lw.ffn_down_qw, combined)
+            end
   Array(Float32).new(hp.n_embd) { |i| inp_l2[i] + ffn_out[i] }
 end
 
@@ -715,9 +2396,17 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
                                        lr_states : Hash(Int32, LowRankState),
                                        fallback_threshold : Float64?,
                                        refresh_interval : Int32?,
-                                       approximate : Bool) : Array(Float32)
+                                       approximate : Bool,
+                                       use_metal_lowrank : Bool = false,
+                                       project_coeffs_on_gpu : Bool = false,
+                                       use_metal_layer_updown : Bool = false,
+                                       draft_variant : String = "lowrank",
+                                       ffn_bases : FFNBasisMap? = nil,
+                                       ffn_adapters : FFNAdapterMap? = nil,
+                                       ffn_updown_adapters : FFNUpDownAdapterMap? = nil) : Array(Float32)
   hp = weights.hparams
   x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+  early_exit_layers = approximate ? cheap_draft_early_exit_layers(draft_variant) : nil
   weights.layers.each_with_index do |layer, il|
     case layer
     in ML::GGUF::Qwen35FullAttnWeights
@@ -731,7 +2420,10 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
                               else
                                 false
                               end
-              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state, fallback_threshold, force_refresh)
+              ffn_basis = ffn_bases ? ffn_bases.not_nil![il]? : nil
+              ffn_adapter = ffn_adapters ? ffn_adapters.not_nil![il]? : nil
+              ffn_updown_adapter = ffn_updown_adapters ? ffn_updown_adapters.not_nil![il]? : nil
+              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state, fallback_threshold, force_refresh, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_basis, ffn_adapter, ffn_updown_adapter)
             else
               recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
             end
@@ -739,6 +2431,7 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
         x = ML::GGUF::Qwen35CPU.forward_recurrent_layer(x, pos, layer, state.layers[il], hp, state.max_seq)
       end
     end
+    break if early_exit_layers && (il + 1) >= early_exit_layers
   end
   x = ML::GGUF::Qwen35CPU.rms_norm(x, weights.output_norm, hp.rms_eps)
   ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
@@ -827,6 +2520,124 @@ private def top1_margin(v : Array(Float32)) : Float64
     end
   end
   (best - second).to_f64
+end
+
+private def draft_variant_ffn_top_percent(variant : String) : Int32?
+  return nil unless variant.starts_with?("lowrank-ffn-top-")
+
+  percent = variant["lowrank-ffn-top-".size..].to_i? || raise "invalid FFN top-percent variant #{variant.inspect}"
+  raise "FFN top-percent must be in 1..100" unless percent >= 1 && percent <= 100
+  percent
+end
+
+private def draft_variant_ffn_pca_rank(variant : String) : Int32?
+  return nil unless variant.starts_with?("lowrank-ffn-pca-")
+  return nil if variant.starts_with?("lowrank-ffn-pca-down-")
+  return nil if variant.starts_with?("lowrank-ffn-pca-updown-")
+
+  rank = variant["lowrank-ffn-pca-".size..].to_i? || raise "invalid FFN PCA variant #{variant.inspect}"
+  raise "FFN PCA rank must be positive" unless rank > 0
+  rank
+end
+
+private def draft_variant_ffn_pca_down_rank(variant : String) : Int32?
+  return nil unless variant.starts_with?("lowrank-ffn-pca-down-")
+
+  rank = variant["lowrank-ffn-pca-down-".size..].to_i? || raise "invalid FFN PCA-down variant #{variant.inspect}"
+  raise "FFN PCA-down rank must be positive" unless rank > 0
+  rank
+end
+
+private def draft_variant_ffn_pca_updown_rank(variant : String) : Int32?
+  return nil unless variant.starts_with?("lowrank-ffn-pca-updown-")
+
+  rank = variant["lowrank-ffn-pca-updown-".size..].to_i? || raise "invalid FFN PCA-updown variant #{variant.inspect}"
+  raise "FFN PCA-updown rank must be positive" unless rank > 0
+  rank
+end
+
+private def keep_top_abs_percent!(values : Array(Float32), percent : Int32) : Nil
+  return if percent >= 100
+
+  keep = Math.max(1, (values.size.to_i64 * percent + 99) // 100).to_i
+  return if keep >= values.size
+
+  threshold = values.map(&.abs).sort![-keep]
+  kept = 0
+  values.size.times do |i|
+    if values[i].abs >= threshold && kept < keep
+      kept += 1
+    else
+      values[i] = 0.0_f32
+    end
+  end
+end
+
+private def project_vector_with_basis!(values : Array(Float32), basis : Array(Array(Float64)), rank : Int32) : Nil
+  return if basis.empty?
+
+  limit = Math.min(rank, basis.size)
+  projected = Array(Float64).new(values.size, 0.0)
+  limit.times do |i|
+    b = basis[i]
+    coeff = 0.0
+    values.size.times { |d| coeff += values[d].to_f64 * b[d] }
+    values.size.times { |d| projected[d] += coeff * b[d] }
+  end
+  values.size.times { |d| values[d] = projected[d].to_f32 }
+end
+
+private def ffn_down_from_adapter(combined : Array(Float32), adapter : FFNAdapter, rank : Int32) : Array(Float32)
+  limit = Math.min(rank, adapter.basis.size)
+  raise "FFN adapter has no basis vectors" unless limit > 0
+  out_dim = adapter.down_basis[0].size
+  out = Array(Float32).new(out_dim, 0.0_f32)
+  limit.times do |i|
+    b = adapter.basis[i]
+    coeff = 0.0
+    combined.size.times { |d| coeff += combined[d].to_f64 * b[d] }
+    coeff_f = coeff.to_f32
+    down = adapter.down_basis[i]
+    out_dim.times { |d| out[d] += coeff_f * down[d] }
+  end
+  out
+end
+
+private def ffn_out_from_updown_adapter(ffn_in : Array(Float32), adapter : FFNUpDownAdapter, rank : Int32) : Array(Float32)
+  limit = Math.min(rank, adapter.coeff_weights.size)
+  raise "FFN up/down adapter has no coefficient weights" unless limit > 0
+  out_dim = adapter.down_basis[0].size
+  out = Array(Float32).new(out_dim, 0.0_f32)
+  limit.times do |j|
+    w = adapter.coeff_weights[j]
+    coeff = adapter.c_mean[j]
+    ffn_in.size.times { |d| coeff += (ffn_in[d].to_f64 - adapter.x_mean[d]) * w[d] }
+    coeff_f = coeff.to_f32
+    down = adapter.down_basis[j]
+    out_dim.times { |d| out[d] += coeff_f * down[d] }
+  end
+  out
+end
+
+private struct TopKOracleSample
+  getter ids : Array(Int32)
+  getter logits : Array(Float32)
+  getter exact_id : Int32
+
+  def initialize(@ids : Array(Int32), @logits : Array(Float32), @exact_id : Int32)
+  end
+
+  def margin : Float64
+    return Float64::INFINITY if @logits.size < 2
+
+    (@logits[0] - @logits[1]).to_f64
+  end
+end
+
+private def topk_oracle_sample(approx_logits : Array(Float32), exact_id : Int32, top_k : Int32) : TopKOracleSample
+  ids = top_k_indices(approx_logits, top_k)
+  logits = ids.map { |id| approx_logits[id] }
+  TopKOracleSample.new(ids, logits, exact_id)
 end
 
 private def softmax_kl(exact : Array(Float32), approx : Array(Float32)) : Float64
@@ -1253,37 +3064,597 @@ private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
   break_even = proposed_tokens > 0 ? ((gen_tokens - correction_steps).to_f64 / proposed_tokens) : 0.0
 
   {
-    chunks:                                   chunks,
-    full_accept_chunks:                       full_accept_chunks,
-    rejections:                               rejections,
-    topk_rescues:                             topk_rescues,
-    emitted_tokens:                           emitted_tokens,
-    proposed_tokens:                          proposed_tokens,
-    accepted_draft_tokens:                    accepted_draft_tokens,
-    verifier_tokens:                          verifier_tokens,
-    correction_steps:                         correction_steps,
-    approx_steps:                             approx_steps,
-    fallback_steps:                           fallback_steps,
-    draft_top2_hits:                          draft_top2_hits,
-    draft_top5_hits:                          draft_top5_hits,
-    reject_top2_hits:                         reject_top2_hits,
-    reject_top5_hits:                         reject_top5_hits,
-    accept_rate:                              accept_rate,
-    avg_accept:                               avg_accept,
-    break_even_draft_verify_per_proposed:     break_even,
-    draft_top2_hit_rate:                      draft_top2_hit_rate,
-    draft_top5_hit_rate:                      draft_top5_hit_rate,
-    gamma_history:                            gamma_history,
-    verifier_history:                         verifier_history,
-    draft_min_margin_history:                 draft_min_margin_history,
-    draft_low_margin_history:                 draft_low_margin_history,
-    exact_ids:                                exact_ids,
-    emitted_ids:                              emitted_ids,
+    chunks:                               chunks,
+    full_accept_chunks:                   full_accept_chunks,
+    rejections:                           rejections,
+    topk_rescues:                         topk_rescues,
+    emitted_tokens:                       emitted_tokens,
+    proposed_tokens:                      proposed_tokens,
+    accepted_draft_tokens:                accepted_draft_tokens,
+    verifier_tokens:                      verifier_tokens,
+    correction_steps:                     correction_steps,
+    approx_steps:                         approx_steps,
+    fallback_steps:                       fallback_steps,
+    draft_top2_hits:                      draft_top2_hits,
+    draft_top5_hits:                      draft_top5_hits,
+    reject_top2_hits:                     reject_top2_hits,
+    reject_top5_hits:                     reject_top5_hits,
+    accept_rate:                          accept_rate,
+    avg_accept:                           avg_accept,
+    break_even_draft_verify_per_proposed: break_even,
+    draft_top2_hit_rate:                  draft_top2_hit_rate,
+    draft_top5_hit_rate:                  draft_top5_hit_rate,
+    gamma_history:                        gamma_history,
+    verifier_history:                     verifier_history,
+    draft_min_margin_history:             draft_min_margin_history,
+    draft_low_margin_history:             draft_low_margin_history,
+    exact_ids:                            exact_ids,
+    emitted_ids:                          emitted_ids,
+  }
+end
+
+private def simulate_self_spec_tree_oracle(weights : ML::GGUF::Qwen35Weights,
+                                           prompt_ids : Array(Int32),
+                                           gen_tokens : Int32,
+                                           top_k : Int32,
+                                           progressive_schedule : Array(Int32),
+                                           layer_bases : LayerBasisMap,
+                                           rank : Int32,
+                                           calib_count : Int32,
+                                           fallback_threshold : Float64?,
+                                           refresh_interval : Int32?) : NamedTuple(chunks: Int32, full_rescue_chunks: Int32, misses: Int32, emitted_tokens: Int32, draft_steps: Int32, top1_hits: Int32, topk_hits: Int32, branch_tokens_rank: Int32, branch_tokens_full: Int32, correction_steps: Int32, approx_steps: Int32, fallback_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, schedule_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32))
+  raise "tree top_k must be >= 2" unless top_k >= 2
+  raise "tree top_k must be <= 16" unless top_k <= 16
+  raise "tree progressive schedule must not be empty" if progressive_schedule.empty?
+  raise "tree schedule values must be positive" if progressive_schedule.any? { |v| v <= 0 }
+
+  hp = weights.hparams
+  max_gamma = progressive_schedule.max
+  max_seq = prompt_ids.size + gen_tokens + max_gamma + 4
+  exact_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  exact_lr_states = {} of Int32 => LowRankState
+  exact_logits = [] of Float32
+  state_before_last = exact_state.fork
+  last_token = prompt_ids[0]
+  pos_last = 0
+
+  prompt_ids.each_with_index do |token_id, pos|
+    state_before_last = exact_state.fork
+    last_token = token_id
+    pos_last = pos
+    exact_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, exact_state,
+      layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+  end
+
+  chunks = 0
+  full_rescue_chunks = 0
+  misses = 0
+  emitted_tokens = 0
+  draft_steps = 0
+  top1_hits = 0
+  topk_hits = 0
+  branch_tokens_rank = 0
+  branch_tokens_full = 0
+  correction_steps = 0
+  approx_steps = 0
+  fallback_steps = 0
+  progressive_index = 0
+  schedule_history = [] of Int32
+  exact_ids = [] of Int32
+  emitted_ids = [] of Int32
+
+  while emitted_tokens < gen_tokens
+    chunks += 1
+    chunk_gamma = Math.min(progressive_schedule[progressive_index], gen_tokens - emitted_tokens)
+    schedule_history << chunk_gamma
+    draft_state = state_before_last.fork
+    draft_lr_states = {} of Int32 => LowRankState
+    sync_lowrank_shadow!(draft_state, state_before_last, layer_bases, draft_lr_states, rank, hp)
+    draft_logits = logits_with_lowrank_policy(weights, last_token, pos_last.to_i32, draft_state,
+      layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
+
+    rescued_chunk = true
+    chunk_gamma.times do |j|
+      exact_top1 = top1(exact_logits)
+      exact_ids << exact_top1
+      draft_topk = top_k_indices(draft_logits, top_k)
+      draft_steps += 1
+      if draft_topk[0] == exact_top1
+        top1_hits += 1
+        topk_hits += 1
+        branch_tokens_rank += 1
+        branch_tokens_full += 1
+      elsif idx = draft_topk.index(exact_top1)
+        topk_hits += 1
+        branch_tokens_rank += idx + 1
+        branch_tokens_full += top_k
+      else
+        misses += 1
+        correction_steps += 1
+        branch_tokens_rank += top_k
+        branch_tokens_full += top_k
+        rescued_chunk = false
+      end
+
+      emitted_tokens += 1
+      emitted_ids << exact_top1
+      state_before_last = exact_state.fork
+      last_token = exact_top1
+      pos_last = prompt_ids.size + emitted_tokens - 1
+      exact_logits = logits_with_lowrank_policy(weights, exact_top1, pos_last.to_i32, exact_state,
+        layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+      break if !rescued_chunk || emitted_tokens >= gen_tokens || j == chunk_gamma - 1
+
+      draft_logits = logits_with_lowrank_policy(weights, exact_top1, pos_last.to_i32, draft_state,
+        layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
+    end
+
+    approx_steps += draft_lr_states.values.sum(&.approx_steps)
+    fallback_steps += draft_lr_states.values.sum(&.fallback_steps)
+    full_rescue_chunks += 1 if rescued_chunk
+    progressive_index = rescued_chunk ? ((progressive_index + 1) % progressive_schedule.size) : 0
+  end
+
+  {
+    chunks:                 chunks,
+    full_rescue_chunks:     full_rescue_chunks,
+    misses:                 misses,
+    emitted_tokens:         emitted_tokens,
+    draft_steps:            draft_steps,
+    top1_hits:              top1_hits,
+    topk_hits:              topk_hits,
+    branch_tokens_rank:     branch_tokens_rank,
+    branch_tokens_full:     branch_tokens_full,
+    correction_steps:       correction_steps,
+    approx_steps:           approx_steps,
+    fallback_steps:         fallback_steps,
+    top1_rate:              emitted_tokens > 0 ? 100.0 * top1_hits / emitted_tokens : 0.0,
+    topk_rate:              emitted_tokens > 0 ? 100.0 * topk_hits / emitted_tokens : 0.0,
+    avg_rank_branch_tokens: emitted_tokens > 0 ? branch_tokens_rank.to_f64 / emitted_tokens : 0.0,
+    avg_full_branch_tokens: emitted_tokens > 0 ? branch_tokens_full.to_f64 / emitted_tokens : 0.0,
+    schedule_history:       schedule_history,
+    exact_ids:              exact_ids,
+    emitted_ids:            emitted_ids,
+  }
+end
+
+private def train_topk_oracle_biases(samples : Array(TopKOracleSample),
+                                     top_k : Int32) : NamedTuple(token_bias: Hash(Int32, Float64), rank_bias: Array(Float64))
+  token_seen = Hash(Int32, Int32).new(0)
+  token_hit = Hash(Int32, Int32).new(0)
+  rank_seen = Array(Int32).new(top_k, 0)
+  rank_hit = Array(Int32).new(top_k, 0)
+
+  samples.each do |sample|
+    sample.ids.each_with_index do |id, rank|
+      token_seen[id] += 1
+      token_hit[id] += 1 if id == sample.exact_id
+      rank_seen[rank] += 1
+      rank_hit[rank] += 1 if id == sample.exact_id
+    end
+  end
+
+  alpha = 0.5
+  total_seen = Math.max(1, samples.size * top_k)
+  total_hit = samples.count { |s| s.ids.includes?(s.exact_id) }
+  global_logit = Math.log((total_hit + alpha) / (total_seen - total_hit + alpha))
+
+  token_bias = {} of Int32 => Float64
+  token_seen.each do |id, seen|
+    hit = token_hit[id]
+    token_bias[id] = Math.log((hit + alpha) / (seen - hit + alpha)) - global_logit
+  end
+
+  rank_bias = Array(Float64).new(top_k, 0.0)
+  top_k.times do |rank|
+    seen = rank_seen[rank]
+    hit = rank_hit[rank]
+    rank_bias[rank] = seen > 0 ? Math.log((hit + alpha) / (seen - hit + alpha)) - global_logit : 0.0
+  end
+
+  {token_bias: token_bias, rank_bias: rank_bias}
+end
+
+private def eval_topk_oracle_samples(samples : Array(TopKOracleSample),
+                                     token_bias : Hash(Int32, Float64),
+                                     rank_bias : Array(Float64),
+                                     token_scale : Float64,
+                                     rank_scale : Float64) : NamedTuple(samples: Int32, top1_hits: Int32, topk_hits: Int32, misses: Int32, branch_tokens: Int32, top1_rate: Float64, topk_rate: Float64, avg_branch_tokens: Float64)
+  top1_hits = 0
+  topk_hits = 0
+  misses = 0
+  branch_tokens = 0
+
+  samples.each do |sample|
+    order = (0...sample.ids.size).to_a
+    order.sort_by! do |rank|
+      id = sample.ids[rank]
+      -(sample.logits[rank].to_f64 + token_scale * (token_bias[id]? || 0.0) + rank_scale * rank_bias[rank])
+    end
+
+    reranked_ids = order.map { |rank| sample.ids[rank] }
+    if reranked_ids[0]? == sample.exact_id
+      top1_hits += 1
+      topk_hits += 1
+      branch_tokens += 1
+    elsif idx = reranked_ids.index(sample.exact_id)
+      topk_hits += 1
+      branch_tokens += idx + 1
+    else
+      misses += 1
+      branch_tokens += sample.ids.size
+    end
+  end
+
+  n = samples.size
+  {
+    samples:           n,
+    top1_hits:         top1_hits,
+    topk_hits:         topk_hits,
+    misses:            misses,
+    branch_tokens:     branch_tokens,
+    top1_rate:         n > 0 ? 100.0 * top1_hits / n : 0.0,
+    topk_rate:         n > 0 ? 100.0 * topk_hits / n : 0.0,
+    avg_branch_tokens: n > 0 ? branch_tokens.to_f64 / n : 0.0,
+  }
+end
+
+private def eval_topk_margin_gate(samples : Array(TopKOracleSample),
+                                  margin_threshold : Float64,
+                                  correction_penalty : Float64) : NamedTuple(samples: Int32, gated_steps: Int32, top1_hits: Int32, topk_hits: Int32, misses: Int32, branch_tokens: Int32, estimated_cost: Float64, gate_rate: Float64, top1_rate: Float64, topk_rate: Float64, avg_branch_tokens: Float64)
+  gated_steps = 0
+  top1_hits = 0
+  topk_hits = 0
+  misses = 0
+  branch_tokens = 0
+
+  samples.each do |sample|
+    exact_rank = sample.ids.index(sample.exact_id)
+    if sample.margin < margin_threshold
+      gated_steps += 1
+      if exact_rank
+        topk_hits += 1
+        top1_hits += 1 if exact_rank == 0
+        branch_tokens += exact_rank + 1
+      else
+        misses += 1
+        branch_tokens += sample.ids.size
+      end
+    else
+      branch_tokens += 1
+      if sample.ids[0]? == sample.exact_id
+        top1_hits += 1
+        topk_hits += 1
+      elsif exact_rank
+        # The token was available in topK, but the margin gate chose the cheap
+        # top1 path, so the verifier would need a correction/resync.
+        misses += 1
+      else
+        misses += 1
+      end
+    end
+  end
+
+  n = samples.size
+  {
+    samples:           n,
+    gated_steps:       gated_steps,
+    top1_hits:         top1_hits,
+    topk_hits:         topk_hits,
+    misses:            misses,
+    branch_tokens:     branch_tokens,
+    estimated_cost:    branch_tokens.to_f64 + correction_penalty * misses,
+    gate_rate:         n > 0 ? 100.0 * gated_steps / n : 0.0,
+    top1_rate:         n > 0 ? 100.0 * top1_hits / n : 0.0,
+    topk_rate:         n > 0 ? 100.0 * topk_hits / n : 0.0,
+    avg_branch_tokens: n > 0 ? branch_tokens.to_f64 / n : 0.0,
+  }
+end
+
+private def simulate_topk_oracle_calibration(weights : ML::GGUF::Qwen35Weights,
+                                             prompt_ids : Array(Int32),
+                                             gen_tokens : Int32,
+                                             top_k : Int32,
+                                             train_tokens : Int32?,
+                                             layer_bases : LayerBasisMap,
+                                             rank : Int32,
+                                             calib_count : Int32,
+                                             fallback_threshold : Float64?,
+                                             refresh_interval : Int32?) : NamedTuple(samples: Int32, train_samples: Int32, test_samples: Int32, best_token_scale: Float64, best_rank_scale: Float64, best_margin_threshold: Float64, train_top1_rate: Float64, train_topk_rate: Float64, train_avg_branch_tokens: Float64, baseline_top1_rate: Float64, baseline_topk_rate: Float64, baseline_avg_branch_tokens: Float64, calibrated_top1_rate: Float64, calibrated_topk_rate: Float64, calibrated_avg_branch_tokens: Float64, margin_gate_rate: Float64, margin_gate_topk_rate: Float64, margin_gate_avg_branch_tokens: Float64, margin_gate_misses: Int32, margin_gate_cost: Float64, baseline_misses: Int32, calibrated_misses: Int32, exact_ids: Array(Int32))
+  raise "topK oracle top_k must be >= 2" unless top_k >= 2
+  raise "topK oracle top_k must be <= 16" unless top_k <= 16
+  raise "topK oracle gen_tokens must be >= 4" unless gen_tokens >= 4
+
+  hp = weights.hparams
+  max_seq = prompt_ids.size + gen_tokens + 4
+  exact_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  exact_lr_states = {} of Int32 => LowRankState
+  exact_logits = [] of Float32
+  state_before_last = exact_state.fork
+  last_token = prompt_ids[0]
+  pos_last = 0
+
+  prompt_ids.each_with_index do |token_id, pos|
+    state_before_last = exact_state.fork
+    last_token = token_id
+    pos_last = pos
+    exact_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, exact_state,
+      layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+  end
+
+  draft_state = state_before_last.fork
+  draft_lr_states = {} of Int32 => LowRankState
+  sync_lowrank_shadow!(draft_state, state_before_last, layer_bases, draft_lr_states, rank, hp)
+  draft_logits = logits_with_lowrank_policy(weights, last_token, pos_last.to_i32, draft_state,
+    layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
+
+  samples = [] of TopKOracleSample
+  exact_ids = [] of Int32
+  gen_tokens.times do |step|
+    exact_top1 = top1(exact_logits)
+    samples << topk_oracle_sample(draft_logits, exact_top1, top_k)
+    exact_ids << exact_top1
+
+    pos_last = prompt_ids.size + step
+    exact_logits = logits_with_lowrank_policy(weights, exact_top1, pos_last.to_i32, exact_state,
+      layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+    break if step == gen_tokens - 1
+    draft_logits = logits_with_lowrank_policy(weights, exact_top1, pos_last.to_i32, draft_state,
+      layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true)
+  end
+
+  requested_train = train_tokens || (samples.size // 2)
+  train_count = requested_train.clamp(1, samples.size - 1)
+  train = samples[0, train_count]
+  test = samples[train_count, samples.size - train_count]
+  biases = train_topk_oracle_biases(train, top_k)
+  zero_token_bias = {} of Int32 => Float64
+  zero_rank_bias = Array(Float64).new(top_k, 0.0)
+  baseline = eval_topk_oracle_samples(test, zero_token_bias, zero_rank_bias, 0.0, 0.0)
+
+  token_scales = [0.0, 0.25, 0.5, 1.0, 2.0]
+  rank_scales = [0.0, 0.25, 0.5, 1.0]
+  best_token_scale = 0.0
+  best_rank_scale = 0.0
+  best_train = eval_topk_oracle_samples(train, biases[:token_bias], biases[:rank_bias], 0.0, 0.0)
+  token_scales.each do |ts|
+    rank_scales.each do |rs|
+      cur = eval_topk_oracle_samples(train, biases[:token_bias], biases[:rank_bias], ts, rs)
+      if cur[:avg_branch_tokens] < best_train[:avg_branch_tokens] ||
+         (cur[:avg_branch_tokens] == best_train[:avg_branch_tokens] && cur[:top1_rate] > best_train[:top1_rate])
+        best_train = cur
+        best_token_scale = ts
+        best_rank_scale = rs
+      end
+    end
+  end
+
+  calibrated = eval_topk_oracle_samples(test, biases[:token_bias], biases[:rank_bias], best_token_scale, best_rank_scale)
+  correction_penalty = top_k.to_f64
+  thresholds = [-1.0] + train.map(&.margin).uniq.sort + [Float64::INFINITY]
+  best_margin_threshold = thresholds[0]
+  best_margin_train = eval_topk_margin_gate(train, best_margin_threshold, correction_penalty)
+  thresholds.each do |threshold|
+    cur = eval_topk_margin_gate(train, threshold, correction_penalty)
+    if cur[:estimated_cost] < best_margin_train[:estimated_cost] ||
+       (cur[:estimated_cost] == best_margin_train[:estimated_cost] && cur[:gated_steps] < best_margin_train[:gated_steps])
+      best_margin_train = cur
+      best_margin_threshold = threshold
+    end
+  end
+  margin_gate = eval_topk_margin_gate(test, best_margin_threshold, correction_penalty)
+  {
+    samples:                       samples.size,
+    train_samples:                 train.size,
+    test_samples:                  test.size,
+    best_token_scale:              best_token_scale,
+    best_rank_scale:               best_rank_scale,
+    best_margin_threshold:         best_margin_threshold,
+    train_top1_rate:               best_train[:top1_rate],
+    train_topk_rate:               best_train[:topk_rate],
+    train_avg_branch_tokens:       best_train[:avg_branch_tokens],
+    baseline_top1_rate:            baseline[:top1_rate],
+    baseline_topk_rate:            baseline[:topk_rate],
+    baseline_avg_branch_tokens:    baseline[:avg_branch_tokens],
+    calibrated_top1_rate:          calibrated[:top1_rate],
+    calibrated_topk_rate:          calibrated[:topk_rate],
+    calibrated_avg_branch_tokens:  calibrated[:avg_branch_tokens],
+    margin_gate_rate:              margin_gate[:gate_rate],
+    margin_gate_topk_rate:         margin_gate[:topk_rate],
+    margin_gate_avg_branch_tokens: margin_gate[:avg_branch_tokens],
+    margin_gate_misses:            margin_gate[:misses],
+    margin_gate_cost:              margin_gate[:estimated_cost],
+    baseline_misses:               baseline[:misses],
+    calibrated_misses:             calibrated[:misses],
+    exact_ids:                     exact_ids,
+  }
+end
+
+private def simulate_self_spec_wall_policy(weights : ML::GGUF::Qwen35Weights,
+                                           prompt_ids : Array(Int32),
+                                           gen_tokens : Int32,
+                                           progressive_schedule : Array(Int32),
+                                           layer_bases : LayerBasisMap,
+                                           rank : Int32,
+                                           calib_count : Int32,
+                                           fallback_threshold : Float64?,
+                                           refresh_interval : Int32?,
+                                           use_metal_lowrank : Bool,
+                                           project_coeffs_on_gpu : Bool,
+                                           use_metal_layer_updown : Bool = false,
+                                           draft_variant : String = "lowrank",
+                                           ffn_bases : FFNBasisMap? = nil,
+                                           ffn_adapters : FFNAdapterMap? = nil,
+                                           ffn_updown_adapters : FFNUpDownAdapterMap? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, draft_ms: Float64, verifier_ms: Float64, replay_ms: Float64, serial_ms: Float64, overlap_est_ms: Float64, speedup_est: Float64, accept_rate: Float64, exact_ids: Array(Int32), emitted_ids: Array(Int32))
+  raise "wall self-spec requires a non-empty progressive schedule" if progressive_schedule.empty?
+  raise "wall self-spec schedule values must be positive" if progressive_schedule.any? { |v| v <= 0 }
+
+  hp = weights.hparams
+  max_gamma = progressive_schedule.max
+  max_seq = prompt_ids.size + gen_tokens + max_gamma + 4
+
+  # CPU shadow state feeds the projected-K draft branch. The verifier state uses
+  # the production chunk verifier path, which can route its exact work to Metal.
+  shadow_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(verifier_state, hp)
+
+  exact_lr_states = {} of Int32 => LowRankState
+  exact_logits = [] of Float32
+  state_before_last = shadow_state.fork
+  last_token = prompt_ids[0]
+  pos_last = 0
+
+  prompt_ids.each_with_index do |token_id, pos|
+    state_before_last = shadow_state.fork
+    last_token = token_id
+    pos_last = pos
+    exact_logits = logits_with_lowrank_policy(weights, token_id, pos.to_i32, shadow_state,
+      layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+  end
+  target_next, _ = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, verifier_state)
+  raise "shadow/verifier prompt top1 mismatch: #{top1(exact_logits)} != #{target_next}" unless top1(exact_logits) == target_next
+
+  emitted_tokens = 0
+  chunks = 0
+  rejections = 0
+  proposed_tokens = 0
+  accepted_draft_tokens = 0
+  verifier_tokens = 0
+  correction_steps = 0
+  progressive_index = 0
+  target_next_id = target_next.to_i32
+  draft_ms = 0.0
+  verifier_ms = 0.0
+  replay_ms = 0.0
+  chunk_draft_ms = [] of Float64
+  chunk_verifier_ms = [] of Float64
+  exact_ids = [] of Int32
+  emitted_ids = [] of Int32
+
+  while emitted_tokens < gen_tokens
+    chunks += 1
+    chunk_gamma = Math.min(progressive_schedule[progressive_index], gen_tokens - emitted_tokens)
+
+    t_draft = Time.instant
+    draft_state = state_before_last.fork
+    draft_lr_states = {} of Int32 => LowRankState
+    sync_lowrank_shadow!(draft_state, state_before_last, layer_bases, draft_lr_states, rank, hp)
+    draft_logits = logits_with_lowrank_policy(weights, last_token, pos_last.to_i32, draft_state,
+      layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_bases, ffn_adapters, ffn_updown_adapters)
+    proposal = [] of Int32
+    chunk_gamma.times do |j|
+      proposed = top1(draft_logits)
+      proposal << proposed
+      break if j == chunk_gamma - 1
+      draft_logits = logits_with_lowrank_policy(weights, proposed, (pos_last + 1 + j).to_i32, draft_state,
+        layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_bases, ffn_adapters, ffn_updown_adapters)
+    end
+    dt_draft = (Time.instant - t_draft).total_milliseconds
+    draft_ms += dt_draft
+    chunk_draft_ms << dt_draft
+    proposed_tokens += proposal.size
+    verifier_tokens += proposal.size
+
+    cycle_start_pos = prompt_ids.size + emitted_tokens
+    verifier_backup = verifier_state.fork
+    t_verify = Time.instant
+    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, proposal, cycle_start_pos, verifier_state)
+    dt_verify = (Time.instant - t_verify).total_milliseconds
+    verifier_ms += dt_verify
+    chunk_verifier_ms << dt_verify
+
+    correction_or_accepted = [] of Int32
+    expected = target_next_id
+    rejected = false
+    proposal.each_with_index do |cand, i|
+      exact_ids << expected
+      emitted = if cand == expected
+                  accepted_draft_tokens += 1
+                  cand
+                else
+                  rejections += 1
+                  correction_steps += 1
+                  rejected = true
+                  expected
+                end
+      correction_or_accepted << emitted
+      emitted_ids << emitted
+      emitted_tokens += 1
+
+      pos = cycle_start_pos + i
+      state_before_last = shadow_state.fork
+      last_token = emitted
+      pos_last = pos
+      exact_logits = logits_with_lowrank_policy(weights, emitted, pos.to_i32, shadow_state,
+        layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
+      expected = target_nexts[i][0] if cand == expected
+      break if rejected || emitted_tokens >= gen_tokens
+    end
+
+    if rejected
+      verifier_state.copy_from!(verifier_backup)
+      t_replay = Time.instant
+      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, verifier_state)
+      replay_ms += (Time.instant - t_replay).total_milliseconds
+      target_next_id = corrected[-1][0]
+      progressive_index = 0
+    else
+      target_next_id = target_nexts[correction_or_accepted.size - 1][0]
+      progressive_index = (progressive_index + 1) % progressive_schedule.size
+    end
+  end
+
+  serial_ms = draft_ms + verifier_ms + replay_ms
+  overlap_est_ms = 0.0
+  chunk_draft_ms.each_with_index do |d_ms, i|
+    v_ms = chunk_verifier_ms[i]? || 0.0
+    overlap_est_ms += Math.max(d_ms, v_ms)
+  end
+  overlap_est_ms += replay_ms
+  speedup_est = overlap_est_ms > 0.0 ? serial_ms / overlap_est_ms : 0.0
+  accept_rate = proposed_tokens > 0 ? (100.0 * accepted_draft_tokens / proposed_tokens) : 0.0
+
+  {
+    chunks:                chunks,
+    rejections:            rejections,
+    accepted_draft_tokens: accepted_draft_tokens,
+    proposed_tokens:       proposed_tokens,
+    verifier_tokens:       verifier_tokens,
+    correction_steps:      correction_steps,
+    draft_ms:              draft_ms,
+    verifier_ms:           verifier_ms,
+    replay_ms:             replay_ms,
+    serial_ms:             serial_ms,
+    overlap_est_ms:        overlap_est_ms,
+    speedup_est:           speedup_est,
+    accept_rate:           accept_rate,
+    exact_ids:             exact_ids,
+    emitted_ids:           emitted_ids,
   }
 end
 
 private def parse_int_list(value : String) : Array(Int32)
   value.split(',').map(&.strip).reject(&.empty?).map(&.to_i)
+end
+
+private def cheap_draft_variant_valid?(variant : String) : Bool
+  return true if {"lowrank", "lowrank-no-ffn", "skip-layer"}.includes?(variant)
+  return true if draft_variant_ffn_top_percent(variant)
+  return true if draft_variant_ffn_pca_rank(variant)
+  return true if draft_variant_ffn_pca_down_rank(variant)
+  return true if draft_variant_ffn_pca_updown_rank(variant)
+  return false unless variant.starts_with?("early-exit-")
+
+  variant["early-exit-".size..].to_i? ? true : false
+end
+
+private def cheap_draft_early_exit_layers(variant : String) : Int32?
+  return nil unless variant.starts_with?("early-exit-")
+
+  n = variant["early-exit-".size..].to_i? || raise "invalid early-exit variant #{variant.inspect}"
+  raise "early-exit layer count must be positive" unless n > 0
+  n
 end
 
 private def self_spec_estimated_cost(spec,
@@ -1312,6 +3683,643 @@ private def self_spec_estimated_cost(spec,
   end
 end
 
+private def self_spec_tree_estimated_cost(tree,
+                                          draft_cost : Float64,
+                                          verifier_cost : Float64,
+                                          chunk_overhead : Float64,
+                                          correction_cost : Float64,
+                                          branch_tokens : Int32) : Float64
+  draft_cost * tree[:draft_steps] +
+    verifier_cost * branch_tokens +
+    chunk_overhead * tree[:chunks] +
+    correction_cost * tree[:correction_steps]
+end
+
+private def simulate_self_draft_metal_baseline_run(weights : ML::GGUF::Qwen35Weights,
+                                                   token_ids : Array(Int32),
+                                                   calib_count : Int32,
+                                                   n_draft : Int32,
+                                                   layer_bases : Hash(Int32, BasisSet),
+                                                   rank : Int32) : NamedTuple(steps: Int32, self_draft_ms: Float64, exact_ms: Float64, verifier_ms: Float64, self_draft_per_token_ms: Float64, exact_per_token_ms: Float64, verifier_per_token_ms: Float64, self_spec_wall_ratio: Float64, agreement: Int32, self_draft_ids: Array(Int32), exact_ids: Array(Int32), verifier_ids: Array(Int32))
+  raise "Metal unavailable for self-draft baseline" unless ML::GGUF::Qwen35Metal.available?
+  raise "n_draft must be positive" unless n_draft > 0
+  raise "calib_count must leave a non-empty held-out span >= n_draft" unless calib_count + n_draft <= token_ids.size
+  raise "layer_bases must not be empty" if layer_bases.empty?
+
+  hp = weights.hparams
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  prefix_ids = token_ids[0, calib_count]
+  input_ids = token_ids[calib_count, n_draft]
+  max_seq = token_ids.size + n_draft + 8
+
+  basis_size_bytes = (h_k * rank * s).to_i64 * sizeof(Float32)
+  state_size_bytes = (h_v * s * rank).to_i64 * sizeof(Float32)
+  full_state_size = h_v * s * s
+
+  lowrank_set = Set(Int32).new(layer_bases.keys)
+  shared_basis_bufs = {} of Int32 => ML::MetalBuffer
+  layer_bases.each do |il, bs|
+    buf = ML::MetalBuffer.new(basis_size_bytes)
+    buf.write(flatten_basis_for_metal(bs, rank, h_k, s))
+    shared_basis_bufs[il] = buf
+  end
+
+  build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State) {
+    bufs = {} of Int32 => ML::MetalBuffer
+    layer_bases.each do |il, bs|
+      buf = ML::MetalBuffer.new(state_size_bytes)
+      ssm_buf = state.layers[il].ssm_state_buf
+      full_state = if ssm_buf
+                     ssm_buf.read(full_state_size)
+                   else
+                     state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
+                   end
+      buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+      bufs[il] = buf
+    end
+    bufs
+  }
+
+  warmup_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  warmup_lr = build_lr_states.call(warmup_state)
+  ML::GGUF::Qwen35CPU.forward_self_draft_top1(weights, input_ids[0], calib_count, warmup_state,
+    lowrank_set, warmup_lr, shared_basis_bufs, rank).not_nil!
+
+  warmup_exact = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.forward_top1(weights, input_ids[0], calib_count, warmup_exact)
+
+  warmup_verify = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, input_ids, calib_count, warmup_verify)
+
+  self_draft_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  self_lr = build_lr_states.call(self_draft_state)
+  self_draft_ids = [] of Int32
+  t_self = Time.instant
+  input_ids.each_with_index do |tok, i|
+    out = ML::GGUF::Qwen35CPU.forward_self_draft_top1(weights, tok, calib_count + i, self_draft_state,
+      lowrank_set, self_lr, shared_basis_bufs, rank).not_nil!
+    self_draft_ids << out[0]
+  end
+  self_draft_ms = (Time.instant - t_self).total_milliseconds
+
+  exact_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  exact_ids = [] of Int32
+  t_exact = Time.instant
+  input_ids.each_with_index do |tok, i|
+    out = ML::GGUF::Qwen35CPU.forward_top1(weights, tok, calib_count + i, exact_state)
+    exact_ids << out[0]
+  end
+  exact_ms = (Time.instant - t_exact).total_milliseconds
+
+  verify_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  t_verify = Time.instant
+  verify_results = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, input_ids, calib_count, verify_state)
+  verifier_ms = (Time.instant - t_verify).total_milliseconds
+  verifier_ids = verify_results.map { |r| r[0] }
+
+  agreement = self_draft_ids.zip(exact_ids).count { |pair| pair[0] == pair[1] }
+  wall_total = self_draft_ms + verifier_ms
+
+  {
+    steps:                   n_draft,
+    self_draft_ms:           self_draft_ms,
+    exact_ms:                exact_ms,
+    verifier_ms:             verifier_ms,
+    self_draft_per_token_ms: self_draft_ms / n_draft,
+    exact_per_token_ms:      exact_ms / n_draft,
+    verifier_per_token_ms:   verifier_ms / n_draft,
+    self_spec_wall_ratio:    wall_total > 0.0 ? exact_ms / wall_total : 0.0,
+    agreement:               agreement,
+    self_draft_ids:          self_draft_ids,
+    exact_ids:               exact_ids,
+    verifier_ids:            verifier_ids,
+  }
+end
+
+private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
+                                              token_ids : Array(Int32),
+                                              calib_count : Int32,
+                                              n_draft : Int32,
+                                              layer_bases : LayerBasisMap,
+                                              rank : Int32) : NamedTuple(steps: Int32, submit_ms: Float64, wait_ms: Float64, chain_ms: Float64, exact_ms: Float64, agreement: Int32, chain_ids: Array(Int32), exact_ids: Array(Int32))
+  raise "self-draft GPU chain requires at least one held-out token" unless n_draft > 0
+  raise "self-draft GPU chain requires Metal" unless ML::GGUF::Qwen35Metal.available?
+  hp = weights.hparams
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  prefix_ids = token_ids[0, calib_count]
+  first_token = token_ids[calib_count]
+  max_seq = token_ids.size + n_draft + 8
+
+  basis_size_bytes = (h_k * rank * s).to_i64 * sizeof(Float32)
+  state_size_bytes = (h_v * s * rank).to_i64 * sizeof(Float32)
+  full_state_size = h_v * s * s
+
+  lowrank_set = Set(Int32).new(layer_bases.keys)
+  shared_basis_bufs = {} of Int32 => ML::MetalBuffer
+  layer_bases.each do |il, bs|
+    buf = ML::MetalBuffer.new(basis_size_bytes)
+    buf.write(flatten_basis_for_metal(bs, rank, h_k, s))
+    shared_basis_bufs[il] = buf
+  end
+
+  build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State) {
+    bufs = {} of Int32 => ML::MetalBuffer
+    layer_bases.each do |il, bs|
+      buf = ML::MetalBuffer.new(state_size_bytes)
+      ssm_buf = state.layers[il].ssm_state_buf
+      full_state = if ssm_buf
+                     ssm_buf.read(full_state_size)
+                   else
+                     state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
+                   end
+      buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+      bufs[il] = buf
+    end
+    bufs
+  }
+
+  exact_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  exact_ids = [] of Int32
+  exact_tok = first_token
+  t_exact = Time.instant
+  n_draft.times do |i|
+    out = ML::GGUF::Qwen35CPU.forward_top1(weights, exact_tok, calib_count + i, exact_state)
+    exact_ids << out[0]
+    exact_tok = out[0]
+  end
+  exact_ms = (Time.instant - t_exact).total_milliseconds
+
+  chain_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  chain_lr = build_lr_states.call(chain_state)
+  initial_token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+  initial_token_buf.contents.as(Pointer(UInt32)).value = first_token.to_u32
+  token_buf = initial_token_buf
+  submissions = [] of ML::GGUF::Qwen35Metal::DecodeWaveSubmission
+  wba = WbaTrace.maybe("self_draft_gpu_chain")
+
+  t_chain = Time.instant
+  t_submit = Time.instant
+  n_draft.times do |i|
+    t0 = Time.instant
+    sub = ML::GGUF::Qwen35CPU.forward_self_draft_top1_from_token_buf_async(weights, token_buf, 0, calib_count + i, chain_state,
+      lowrank_set, chain_lr, shared_basis_bufs, rank, scratch_namespace: "self_draft_gpu_chain_#{i}").not_nil!
+    wba.try(&.mark("draft", "submit_#{i}", t0, Time.instant))
+    submissions << sub
+    token_buf = sub.top1_id_buf.not_nil!
+  end
+  submit_ms = (Time.instant - t_submit).total_milliseconds
+
+  chain_ids = [] of Int32
+  t_wait = Time.instant
+  submissions.each_with_index do |sub, i|
+    t0 = Time.instant
+    packed = ML::GGUF::Qwen35Metal.wait_forward_decode_wave(sub)
+    wba.try(&.mark("draft", "wait_read_#{i}", t0, Time.instant))
+    raise "GPU chain decode returned #{packed.size} values" unless packed.size == 2
+    chain_ids << packed[0].to_i32
+  end
+  wba.try(&.flush)
+  wait_ms = (Time.instant - t_wait).total_milliseconds
+  chain_ms = (Time.instant - t_chain).total_milliseconds
+  agreement = chain_ids.zip(exact_ids).count { |pair| pair[0] == pair[1] }
+
+  {
+    steps:     n_draft,
+    submit_ms: submit_ms,
+    wait_ms:   wait_ms,
+    chain_ms:  chain_ms,
+    exact_ms:  exact_ms,
+    agreement: agreement,
+    chain_ids: chain_ids,
+    exact_ids: exact_ids,
+  }
+end
+
+private def simulate_self_draft_gpu_chain_overlap_run(weights : ML::GGUF::Qwen35Weights,
+                                                      token_ids : Array(Int32),
+                                                      calib_count : Int32,
+                                                      n_draft : Int32,
+                                                      layer_bases : LayerBasisMap,
+                                                      rank : Int32) : NamedTuple(steps: Int32, draft_alone_ms: Float64, verifier_ms: Float64, overlap_ms: Float64, draft_submit_ms: Float64, draft_wait_ms: Float64, hidden_ms: Float64, speedup: Float64, agreement: Int32, draft_ids: Array(Int32), exact_ids: Array(Int32), verifier_ids: Array(Int32))
+  solo = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, n_draft, layer_bases, rank)
+  raise "self-draft GPU chain overlap requires Metal" unless ML::GGUF::Qwen35Metal.available?
+  hp = weights.hparams
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  prefix_ids = token_ids[0, calib_count]
+  candidates = token_ids[calib_count, n_draft]
+  first_token = candidates[0]
+  max_seq = token_ids.size + n_draft + 8
+
+  basis_size_bytes = (h_k * rank * s).to_i64 * sizeof(Float32)
+  state_size_bytes = (h_v * s * rank).to_i64 * sizeof(Float32)
+  full_state_size = h_v * s * s
+
+  lowrank_set = Set(Int32).new(layer_bases.keys)
+  shared_basis_bufs = {} of Int32 => ML::MetalBuffer
+  layer_bases.each do |il, bs|
+    buf = ML::MetalBuffer.new(basis_size_bytes)
+    buf.write(flatten_basis_for_metal(bs, rank, h_k, s))
+    shared_basis_bufs[il] = buf
+  end
+
+  build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State) {
+    bufs = {} of Int32 => ML::MetalBuffer
+    layer_bases.each do |il, bs|
+      buf = ML::MetalBuffer.new(state_size_bytes)
+      ssm_buf = state.layers[il].ssm_state_buf
+      full_state = if ssm_buf
+                     ssm_buf.read(full_state_size)
+                   else
+                     state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
+                   end
+      buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+      bufs[il] = buf
+    end
+    bufs
+  }
+
+  draft_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  draft_lr = build_lr_states.call(draft_state)
+  verifier_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  initial_token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+  initial_token_buf.contents.as(Pointer(UInt32)).value = first_token.to_u32
+  token_buf = initial_token_buf
+  submissions = [] of ML::GGUF::Qwen35Metal::DecodeWaveSubmission
+  wba = WbaTrace.maybe("self_draft_gpu_chain_overlap")
+
+  t_overlap = Time.instant
+  t_submit = Time.instant
+  n_draft.times do |i|
+    t0 = Time.instant
+    sub = ML::GGUF::Qwen35CPU.forward_self_draft_top1_from_token_buf_async(weights, token_buf, 0, calib_count + i, draft_state,
+      lowrank_set, draft_lr, shared_basis_bufs, rank,
+      scratch_namespace: "self_draft_gpu_chain_overlap_#{i}",
+      command_queue_name: "self_draft_gpu_chain_overlap").not_nil!
+    wba.try(&.mark("draft", "submit_#{i}", t0, Time.instant))
+    submissions << sub
+    token_buf = sub.top1_id_buf.not_nil!
+  end
+  draft_submit_ms = (Time.instant - t_submit).total_milliseconds
+
+  t_verify = Time.instant
+  verifier = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, verifier_state)
+  verifier_ms = (Time.instant - t_verify).total_milliseconds
+  wba.try(&.mark("verifier", "chunk_major", t_verify, Time.instant))
+
+  draft_ids = [] of Int32
+  t_wait = Time.instant
+  submissions.each_with_index do |sub, i|
+    t0 = Time.instant
+    packed = ML::GGUF::Qwen35Metal.wait_forward_decode_wave(sub)
+    wba.try(&.mark("draft", "wait_read_#{i}", t0, Time.instant))
+    raise "GPU chain overlap decode returned #{packed.size} values" unless packed.size == 2
+    draft_ids << packed[0].to_i32
+  end
+  draft_wait_ms = (Time.instant - t_wait).total_milliseconds
+  overlap_ms = (Time.instant - t_overlap).total_milliseconds
+  wba.try(&.flush)
+
+  serial_ms = solo[:chain_ms] + verifier_ms
+  hidden_ms = serial_ms - overlap_ms
+  {
+    steps:           n_draft,
+    draft_alone_ms:  solo[:chain_ms],
+    verifier_ms:     verifier_ms,
+    overlap_ms:      overlap_ms,
+    draft_submit_ms: draft_submit_ms,
+    draft_wait_ms:   draft_wait_ms,
+    hidden_ms:       hidden_ms,
+    speedup:         overlap_ms > 0.0 ? serial_ms / overlap_ms : 0.0,
+    agreement:       draft_ids.zip(solo[:exact_ids]).count { |pair| pair[0] == pair[1] },
+    draft_ids:       draft_ids,
+    exact_ids:       solo[:exact_ids],
+    verifier_ids:    verifier.map { |r| r[0] },
+  }
+end
+
+private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weights,
+                                                prompt_ids : Array(Int32),
+                                                gen_tokens : Int32,
+                                                gamma : Int32,
+                                                layer_bases : LayerBasisMap,
+                                                rank : Int32) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, controller_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, parity: Bool, exact_ids: Array(Int32), emitted_ids: Array(Int32))
+  raise "GPU pipeline requires Metal" unless ML::GGUF::Qwen35Metal.available?
+  raise "GPU pipeline gamma must be positive" unless gamma > 0
+  raise "GPU pipeline gen_tokens must be positive" unless gen_tokens > 0
+  raise "GPU pipeline requires non-empty prompt" if prompt_ids.empty?
+
+  hp = weights.hparams
+  h_k = hp.ssm_group_count
+  h_v = hp.ssm_time_step_rank
+  s = hp.ssm_state_size
+  max_seq = prompt_ids.size + gen_tokens + gamma + 8
+  prefix_ids = prompt_ids[0, prompt_ids.size - 1]
+  prompt_last_token = prompt_ids[-1]
+  prompt_pos_last = prompt_ids.size - 1
+  last_token = prompt_last_token
+  pos_last = prompt_pos_last
+
+  basis_size_bytes = (h_k * rank * s).to_i64 * sizeof(Float32)
+  state_size_bytes = (h_v * s * rank).to_i64 * sizeof(Float32)
+  full_state_size = h_v * s * s
+  lowrank_set = Set(Int32).new(layer_bases.keys)
+  shared_basis_bufs = {} of Int32 => ML::MetalBuffer
+  layer_bases.each do |il, bs|
+    buf = ML::MetalBuffer.new(basis_size_bytes)
+    buf.write(flatten_basis_for_metal(bs, rank, h_k, s))
+    shared_basis_bufs[il] = buf
+  end
+  wba = WbaTrace.maybe("self_spec_gpu_pipeline")
+
+  build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State) {
+    bufs = {} of Int32 => ML::MetalBuffer
+    layer_bases.each do |il, bs|
+      buf = ML::MetalBuffer.new(state_size_bytes)
+      ssm_buf = state.layers[il].ssm_state_buf
+      full_state = if ssm_buf
+                     ssm_buf.read(full_state_size)
+                   else
+                     state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
+                   end
+      buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+      bufs[il] = buf
+    end
+    bufs
+  }
+
+  submit_block = ->(state : ML::GGUF::Qwen35CPU::State,
+                    lr_bufs : Hash(Int32, ML::MetalBuffer),
+                    token_buf : ML::MetalBuffer,
+                    pos_start : Int32,
+                    label : String) {
+    submissions = [] of ML::GGUF::Qwen35Metal::DecodeWaveSubmission
+    cur_token_buf = token_buf
+    gamma.times do |j|
+      t_submit = Time.instant
+      sub = ML::GGUF::Qwen35CPU.forward_self_draft_top1_from_token_buf_async(weights, cur_token_buf, 0, pos_start + j, state,
+        lowrank_set, lr_bufs, shared_basis_bufs, rank,
+        scratch_namespace: "#{label}_#{j}",
+        command_queue_name: "self_spec_gpu_pipeline_draft").not_nil!
+      wba.try(&.mark("draft", "submit_#{label}_#{j}", t_submit, Time.instant))
+      submissions << sub
+      cur_token_buf = sub.top1_id_buf.not_nil!
+    end
+    GpuDraftBlock.new(submissions, state, lr_bufs)
+  }
+
+  submit_seed = ->(base_state : ML::GGUF::Qwen35CPU::State,
+                   token_id : Int32,
+                   pos_start : Int32,
+                   label : String) {
+    state = base_state.fork
+    lr_bufs = build_lr_states.call(state)
+    token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
+    submit_block.call(state, lr_bufs, token_buf, pos_start, label)
+  }
+
+  read_block = ->(block : GpuDraftBlock, limit : Int32, label : String) {
+    ids = [] of Int32
+    block.submissions.each_with_index do |sub, i|
+      break if i >= limit
+      t_wait = Time.instant
+      packed = ML::GGUF::Qwen35Metal.wait_forward_decode_wave(sub)
+      wba.try(&.mark("draft", "wait_read_#{label}_#{i}", t_wait, Time.instant))
+      raise "GPU pipeline draft returned #{packed.size} values" unless packed.size == 2
+      ids << packed[0].to_i32
+    end
+    ids
+  }
+
+  drain_block = ->(block : GpuDraftBlock?) {
+    if b = block
+      b.submissions.each do |sub|
+        sub.pending_cmds.each(&.wait)
+        sub.cmd.wait
+      end
+    end
+  }
+
+  state_before_last = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  verifier_state = state_before_last.fork
+  verifier_backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(verifier_backup, hp)
+  target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, last_token, pos_last, verifier_state)[0]
+
+  t_seed = Time.instant
+  current_block = submit_seed.call(state_before_last, last_token, pos_last, "self_spec_seed")
+  current_proposal = read_block.call(current_block, Math.min(gamma, gen_tokens), "seed")
+  draft_seed_ms = (Time.instant - t_seed).total_milliseconds
+  wba.try(&.mark("pipeline", "seed_block", t_seed, Time.instant))
+
+  emitted_tokens = 0
+  chunks = 0
+  rejections = 0
+  accepted_draft_tokens = 0
+  proposed_tokens = 0
+  draft_next_ms = 0.0
+  verifier_ms = 0.0
+  draft_wait_ms = 0.0
+  backup_ms = 0.0
+  controller_ms = 0.0
+  replay_ms = 0.0
+  overlap_ms = draft_seed_ms
+  exact_ids = [] of Int32
+  emitted_ids = [] of Int32
+
+  while emitted_tokens < gen_tokens
+    chunks += 1
+    chunk_size = Math.min(current_proposal.size, gen_tokens - emitted_tokens)
+    proposal = current_proposal[0, chunk_size]
+    proposed_tokens += proposal.size
+    cycle_start_pos = prompt_ids.size + emitted_tokens
+
+    next_block = nil.as(GpuDraftBlock?)
+    chunk_draft_next_ms = 0.0
+    t_overlap = Time.instant
+    if emitted_tokens + proposal.size < gen_tokens
+      t_next = Time.instant
+      last_proposed_buf = current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+      next_block = submit_block.call(current_block.state, current_block.lr_bufs, last_proposed_buf, pos_last + proposal.size, "self_spec_next_#{chunks}")
+      chunk_draft_next_ms += (Time.instant - t_next).total_milliseconds
+    end
+
+    t_backup = Time.instant
+    verifier_backup.copy_from!(verifier_state)
+    backup_ms += (Time.instant - t_backup).total_milliseconds
+    wba.try(&.mark("controller", "backup_#{chunks}", t_backup, Time.instant))
+    t_verify = Time.instant
+    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, proposal, cycle_start_pos, verifier_state)
+    verifier_ms += (Time.instant - t_verify).total_milliseconds
+    wba.try(&.mark("verifier", "chunk_#{chunks}", t_verify, Time.instant))
+
+    if next_block
+      t_wait = Time.instant
+      next_limit = Math.min(gamma, gen_tokens - emitted_tokens - proposal.size)
+      next_proposal = read_block.call(next_block.not_nil!, next_limit, "next_#{chunks}")
+      draft_wait_ms += (Time.instant - t_wait).total_milliseconds
+      chunk_draft_next_ms += (Time.instant - t_wait).total_milliseconds
+    else
+      next_proposal = [] of Int32
+    end
+    overlap_ms += (Time.instant - t_overlap).total_milliseconds
+    wba.try(&.mark("pipeline", "overlap_chunk_#{chunks}", t_overlap, Time.instant))
+
+    t_controller = Time.instant
+    correction_or_accepted = [] of Int32
+    expected = target_next_id
+    rejected = false
+    proposal.each_with_index do |cand, i|
+      exact_ids << expected
+      emitted = if cand == expected
+                  accepted_draft_tokens += 1
+                  cand
+                else
+                  rejections += 1
+                  rejected = true
+                  expected
+                end
+      correction_or_accepted << emitted
+      emitted_ids << emitted
+      emitted_tokens += 1
+
+      pos = cycle_start_pos + i
+      last_token = emitted
+      pos_last = pos
+      expected = target_nexts[i][0] if cand == expected
+      break if rejected || emitted_tokens >= gen_tokens
+    end
+    controller_ms += (Time.instant - t_controller).total_milliseconds
+    wba.try(&.mark("controller", "accept_chunk_#{chunks}", t_controller, Time.instant))
+
+    if rejected
+      drain_block.call(next_block)
+      verifier_state.copy_from!(verifier_backup)
+      t_replay = Time.instant
+      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, verifier_state)
+      replay_ms += (Time.instant - t_replay).total_milliseconds
+      target_next_id = corrected[-1][0]
+      if emitted_tokens < gen_tokens
+        t_resync = Time.instant
+        resync_base = verifier_backup.fork
+        if correction_or_accepted.size > 1
+          ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
+        end
+        current_block = submit_seed.call(resync_base, last_token, pos_last, "self_spec_resync_#{chunks}")
+        current_proposal = read_block.call(current_block, Math.min(gamma, gen_tokens - emitted_tokens), "resync_#{chunks}")
+        draft_seed_ms += (Time.instant - t_resync).total_milliseconds
+        overlap_ms += (Time.instant - t_resync).total_milliseconds
+        wba.try(&.mark("pipeline", "resync_#{chunks}", t_resync, Time.instant))
+      end
+    else
+      target_next_id = target_nexts[proposal.size - 1][0]
+      if emitted_tokens < gen_tokens
+        draft_next_ms += chunk_draft_next_ms
+        current_block = next_block.not_nil!
+        current_proposal = next_proposal
+      end
+    end
+  end
+
+  t_serial = Time.instant
+  serial_state_before_last = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  serial_verifier_state = serial_state_before_last.fork
+  serial_backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(serial_backup, hp)
+  serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, prompt_last_token, prompt_pos_last, serial_verifier_state)[0]
+  serial_last_token = prompt_last_token
+  serial_pos_last = prompt_pos_last
+  serial_current_block = submit_seed.call(serial_state_before_last, serial_last_token, serial_pos_last, "self_spec_serial_seed")
+  serial_current_proposal = read_block.call(serial_current_block, Math.min(gamma, gen_tokens), "serial_seed")
+  serial_emitted_tokens = 0
+  serial_exact_ids = [] of Int32
+  serial_emitted_ids = [] of Int32
+  serial_chunks = 0
+
+  while serial_emitted_tokens < gen_tokens
+    serial_chunks += 1
+    chunk_size = Math.min(serial_current_proposal.size, gen_tokens - serial_emitted_tokens)
+    proposal = serial_current_proposal[0, chunk_size]
+    cycle_start_pos = prompt_ids.size + serial_emitted_tokens
+
+    serial_backup.copy_from!(serial_verifier_state)
+    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, proposal, cycle_start_pos, serial_verifier_state)
+
+    correction_or_accepted = [] of Int32
+    expected = serial_target_next_id
+    rejected = false
+    proposal.each_with_index do |cand, i|
+      serial_exact_ids << expected
+      emitted = if cand == expected
+                  cand
+                else
+                  rejected = true
+                  expected
+                end
+      correction_or_accepted << emitted
+      serial_emitted_ids << emitted
+      serial_emitted_tokens += 1
+      serial_last_token = emitted
+      serial_pos_last = cycle_start_pos + i
+      expected = target_nexts[i][0] if cand == expected
+      break if rejected || serial_emitted_tokens >= gen_tokens
+    end
+
+    if rejected
+      serial_verifier_state.copy_from!(serial_backup)
+      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, serial_verifier_state)
+      serial_target_next_id = corrected[-1][0]
+      if serial_emitted_tokens < gen_tokens
+        resync_base = serial_backup.fork
+        if correction_or_accepted.size > 1
+          ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
+        end
+        serial_current_block = submit_seed.call(resync_base, serial_last_token, serial_pos_last, "self_spec_serial_resync_#{serial_chunks}")
+        serial_current_proposal = read_block.call(serial_current_block, Math.min(gamma, gen_tokens - serial_emitted_tokens), "serial_resync_#{serial_chunks}")
+      end
+    else
+      serial_target_next_id = target_nexts[proposal.size - 1][0]
+      if serial_emitted_tokens < gen_tokens
+        last_proposed_buf = serial_current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+        serial_current_block = submit_block.call(serial_current_block.state, serial_current_block.lr_bufs, last_proposed_buf, serial_pos_last, "self_spec_serial_next_#{serial_chunks}")
+        serial_current_proposal = read_block.call(serial_current_block, Math.min(gamma, gen_tokens - serial_emitted_tokens), "serial_next_#{serial_chunks}")
+      end
+    end
+  end
+  serial_ms = (Time.instant - t_serial).total_milliseconds
+  raise "serial pipeline exact ids mismatch" unless serial_exact_ids == exact_ids
+  raise "serial pipeline emitted ids mismatch" unless serial_emitted_ids == emitted_ids
+  wba.try(&.mark("pipeline", "paired_serial", t_serial, Time.instant))
+  wba.try(&.flush)
+  hidden_ms = serial_ms - overlap_ms
+  {
+    chunks:                chunks,
+    rejections:            rejections,
+    accepted_draft_tokens: accepted_draft_tokens,
+    proposed_tokens:       proposed_tokens,
+    draft_seed_ms:         draft_seed_ms,
+    draft_next_ms:         draft_next_ms,
+    verifier_ms:           verifier_ms,
+    draft_wait_ms:         draft_wait_ms,
+    backup_ms:             backup_ms,
+    controller_ms:         controller_ms,
+    serial_ms:             serial_ms,
+    overlap_ms:            overlap_ms,
+    replay_ms:             replay_ms,
+    hidden_ms:             hidden_ms,
+    speedup:               overlap_ms > 0.0 ? serial_ms / overlap_ms : 0.0,
+    parity:                exact_ids == emitted_ids,
+    exact_ids:             exact_ids,
+    emitted_ids:           emitted_ids,
+  }
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = DEFAULT_PROMPT
@@ -1324,6 +4332,19 @@ basis_mode = "greedy"
 pca_iters = 24
 simulate_delta = false
 simulate_lowrank = false
+simulate_lowrank_metal = false
+simulate_lowrank_metal_project = false
+simulate_lowrank_metal_chunk = false
+simulate_lowrank_metal_chunk_out = false
+simulate_lowrank_metal_layer_chunk = false
+simulate_lowrank_metal_layer_full = false
+simulate_lowrank_metal_layer_updown_rank : Int32? = nil
+simulate_lowrank_metal_layer_overlap = false
+simulate_lowrank_metal_verifier_overlap = false
+simulate_lowrank_metal_decode_verifier_overlap = false
+simulate_exact_verifier_ltp = false
+simulate_lowrank_metal_chunk_thread_overlap = false
+simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
 simulate_logit_layers = [] of Int32
 simulate_fallback_threshold : Float64? = nil
@@ -1341,7 +4362,21 @@ simulate_self_spec_adaptive_grow_margin : Float64? = nil
 simulate_self_spec_draft_margin : Float64? = nil
 simulate_self_spec_draft_stop_margin : Float64? = nil
 simulate_self_spec_topk_rescue : Int32? = nil
+simulate_self_spec_tree_k : Int32? = nil
+simulate_topk_oracle_k : Int32? = nil
+simulate_topk_oracle_train_tokens : Int32? = nil
 simulate_self_spec_progressive = [] of Int32
+simulate_self_spec_wall_progressive = [] of Int32
+simulate_cheap_self_draft_variants = [] of String
+ffn_pca_calib_prompts = [] of String
+simulate_ffn_updown_metal_rank : Int32? = nil
+simulate_self_spec_wall_metal_lowrank = false
+simulate_self_spec_wall_metal_project = false
+simulate_self_spec_wall_metal_layer_updown = false
+simulate_self_draft_metal_baseline = 0
+simulate_self_draft_gpu_chain = 0
+simulate_self_draft_gpu_chain_overlap = 0
+simulate_self_spec_gpu_pipeline = 0
 self_spec_cost_model = false
 self_spec_draft_cost = 0.0
 self_spec_verifier_cost = 0.0
@@ -1364,6 +4399,19 @@ OptionParser.parse(ARGV) do |p|
   p.on("--pca-iters=N", "Power iterations per PCA component (default: 24)") { |v| pca_iters = v.to_i }
   p.on("--simulate-delta", "Also simulate projected-K DeltaNet output/state drift") { simulate_delta = true }
   p.on("--simulate-lowrank", "Also prove low-rank M*B^T recurrence against full projected-K recurrence") { simulate_lowrank = true }
+  p.on("--simulate-lowrank-metal", "Compare Metal low-rank DeltaNet step against the CPU low-rank proof kernel") { simulate_lowrank_metal = true }
+  p.on("--simulate-lowrank-metal-project", "Compare Metal Q/K projection plus low-rank DeltaNet step against the CPU proof kernel") { simulate_lowrank_metal_project = true }
+  p.on("--simulate-lowrank-metal-chunk", "Compare one-command-buffer Metal low-rank chunk scan against CPU low-rank steps") { simulate_lowrank_metal_chunk = true }
+  p.on("--simulate-lowrank-metal-chunk-out", "Compare fused Metal low-rank chunk scan+postnorm+ssm_out against CPU steps") { simulate_lowrank_metal_chunk_out = true }
+  p.on("--simulate-lowrank-metal-layer-chunk", "Compare fused Metal low-rank recurrent attention chunk plus CPU FFN against CPU low-rank layer steps") { simulate_lowrank_metal_layer_chunk = true }
+  p.on("--simulate-lowrank-metal-layer-full", "Compare one-command-buffer Metal low-rank recurrent layer chunk against CPU low-rank layer steps") { simulate_lowrank_metal_layer_full = true }
+  p.on("--simulate-lowrank-metal-layer-updown=R", "Compare integrated Metal low-rank recurrent layer chunk with FFN pca-updown rank R against CPU pca-updown") { |v| simulate_lowrank_metal_layer_updown_rank = v.to_i }
+  p.on("--simulate-lowrank-metal-layer-overlap", "Compare serial vs queued async full low-rank layer chunk submissions") { simulate_lowrank_metal_layer_overlap = true }
+  p.on("--simulate-lowrank-metal-verifier-overlap", "Overlap one async low-rank layer chunk with exact prefill verifier on the held-out span") { simulate_lowrank_metal_verifier_overlap = true }
+  p.on("--simulate-lowrank-metal-decode-verifier-overlap", "Overlap one async low-rank layer chunk with queued exact decode-wave verifier on the held-out span") { simulate_lowrank_metal_decode_verifier_overlap = true }
+  p.on("--simulate-exact-verifier-ltp", "Compare exact verifier routes: serial decode, queued decode, and chunk-major prefill") { simulate_exact_verifier_ltp = true }
+  p.on("--simulate-lowrank-metal-chunk-thread-overlap", "Overlap one async low-rank layer chunk with chunk-major verifier in a worker thread") { simulate_lowrank_metal_chunk_thread_overlap = true }
+  p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
   p.on("--simulate-logits-layers=LIST", "Comma-separated recurrent layers to approximate together during the logit drift gate") { |v| simulate_logit_layers = parse_int_list(v) }
   p.on("--simulate-fallback-threshold=F", "Fallback to exact DeltaNet step when max per-head K residual exceeds F") { |v| simulate_fallback_threshold = v.to_f64 }
@@ -1385,7 +4433,21 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-draft-margin=F", "Count low-margin draft proposal steps below F inside each self-spec chunk") { |v| simulate_self_spec_draft_margin = v.to_f64 }
   p.on("--simulate-self-spec-draft-stop-margin=F", "Stop a self-spec proposal chunk once draft margin falls below F after the min gamma") { |v| simulate_self_spec_draft_stop_margin = v.to_f64 }
   p.on("--simulate-self-spec-topk-rescue=K", "Treat a greedy reject as tree-rescued when exact token is in draft top-K") { |v| simulate_self_spec_topk_rescue = v.to_i }
+  p.on("--simulate-self-spec-tree-k=K", "Run progressive top-K tree oracle using --simulate-self-spec-progressive as the schedule") { |v| simulate_self_spec_tree_k = v.to_i }
+  p.on("--simulate-topk-oracle=K", "Train/test a lightweight token/rank-bias reranker inside low-rank draft top-K") { |v| simulate_topk_oracle_k = v.to_i }
+  p.on("--simulate-topk-oracle-train-tokens=N", "Training samples from the start of --simulate-generate for --simulate-topk-oracle") { |v| simulate_topk_oracle_train_tokens = v.to_i }
   p.on("--simulate-self-spec-progressive=LIST", "Run progressive self-spec verifier chunks with a repeating comma-separated schedule, e.g. 4,4,8") { |v| simulate_self_spec_progressive = parse_int_list(v) }
+  p.on("--simulate-self-spec-wall-progressive=LIST", "Measure wall-clock low-rank draft plus exact chunk verifier for a progressive schedule") { |v| simulate_self_spec_wall_progressive = parse_int_list(v) }
+  p.on("--simulate-cheap-self-draft-variants=LIST", "Run wall self-spec with comma-separated draft variants: lowrank,lowrank-no-ffn,skip-layer,early-exit-N,lowrank-ffn-top-P,lowrank-ffn-pca-R,lowrank-ffn-pca-down-R,lowrank-ffn-pca-updown-R") { |v| simulate_cheap_self_draft_variants = v.split(',').map(&.strip).reject(&.empty?) }
+  p.on("--ffn-pca-calib-prompt=TEXT", "Additional prompt used to build FFN PCA/PCA-down basis; may be repeated") { |v| ffn_pca_calib_prompts << v }
+  p.on("--simulate-ffn-updown-metal=R", "Run Metal microkernel gate for FFN pca-updown rank R") { |v| simulate_ffn_updown_metal_rank = v.to_i }
+  p.on("--simulate-self-spec-wall-metal-lowrank", "Use the Metal low-rank DeltaNet core inside wall-clock self-spec draft proposals") { simulate_self_spec_wall_metal_lowrank = true }
+  p.on("--simulate-self-spec-wall-metal-project", "Also compute Q/K low-rank coefficients on Metal before the Metal low-rank step") { simulate_self_spec_wall_metal_lowrank = true; simulate_self_spec_wall_metal_project = true }
+  p.on("--simulate-self-spec-wall-metal-layer-updown", "Route lowrank-ffn-pca-updown-R draft layers through the integrated Metal layer-updown path") { simulate_self_spec_wall_metal_lowrank = true; simulate_self_spec_wall_metal_project = true; simulate_self_spec_wall_metal_layer_updown = true }
+  p.on("--simulate-self-draft-metal-baseline=N", "Wall-clock the Metal-only self-draft (low-rank on --simulate-logits-layers) vs exact greedy and chunk-major verifier on N held-out tokens") { |v| simulate_self_draft_metal_baseline = v.to_i }
+  p.on("--simulate-self-draft-gpu-chain=N", "Queue N low-rank self-draft top1 steps with GPU top1_id -> next embedding and no intermediate CPU readback") { |v| simulate_self_draft_gpu_chain = v.to_i }
+  p.on("--simulate-self-draft-gpu-chain-overlap=N", "Run GPU self-draft chain on a lane queue while chunk-major verifier runs on the default queue") { |v| simulate_self_draft_gpu_chain_overlap = v.to_i }
+  p.on("--simulate-self-spec-gpu-pipeline=N", "Run real fixed-gamma self-spec block pipeline: draft[k+1] on lane queue while verifier validates draft[k]") { |v| simulate_self_spec_gpu_pipeline = v.to_i }
   p.on("--self-spec-draft-cost=F", "Relative cost per low-rank draft token (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_draft_cost = v.to_f64 }
   p.on("--self-spec-verifier-cost=F", "Relative cost per exact verifier token in a chunk (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_verifier_cost = v.to_f64 }
   p.on("--self-spec-chunk-overhead=F", "Relative fixed overhead per self-spec chunk") { |v| self_spec_cost_model = true; self_spec_chunk_overhead = v.to_f64 }
@@ -1407,15 +4469,12 @@ raise "pca-iters must be positive" unless pca_iters > 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
-token_ids = tok.encode(prompt, add_bos_override: false)
-while token_ids.size < tokens_limit
-  token_ids.concat(tok.encode(prompt, add_bos_override: false))
-end
-token_ids = token_ids[0, tokens_limit]
+token_ids = token_ids_for_prompt(tok, prompt, tokens_limit)
+ffn_pca_calib_token_sets = ffn_pca_calib_prompts.map { |calib_prompt| token_ids_for_prompt(tok, calib_prompt, tokens_limit) }
 
 weights = ML::GGUF::Qwen35Weights.from_gguf(model)
 per_head = recurrent_k_vectors_for_prompt(weights, token_ids, layer_index)
-samples = (simulate_delta || simulate_lowrank) ? recurrent_samples_for_prompt(weights, token_ids, layer_index) : [] of RecurrentSample
+samples = (simulate_delta || simulate_lowrank || simulate_lowrank_metal || simulate_lowrank_metal_project || simulate_lowrank_metal_chunk || simulate_lowrank_metal_chunk_out || simulate_lowrank_metal_layer_chunk || simulate_lowrank_metal_layer_full || simulate_lowrank_metal_layer_updown_rank || simulate_lowrank_metal_layer_overlap || simulate_lowrank_metal_verifier_overlap || simulate_lowrank_metal_decode_verifier_overlap || simulate_lowrank_metal_chunk_thread_overlap || simulate_multilayer_overlap_n > 0) ? recurrent_samples_for_prompt(weights, token_ids, layer_index) : [] of RecurrentSample
 max_rank = ranks.max
 if rank = simulate_logit_rank
   max_rank = Math.max(max_rank, rank)
@@ -1446,6 +4505,119 @@ if rank = simulate_logit_rank
                             build_basis(vectors[0, calib_count], max_rank, basis_mode, pca_iters)
                           end
                         end
+    end
+    ffn_pca_ranks = [] of Int32
+    ffn_pca_down_ranks = [] of Int32
+    ffn_pca_updown_ranks = [] of Int32
+    if metal_updown_rank = simulate_ffn_updown_metal_rank
+      ffn_pca_updown_ranks << metal_updown_rank
+    end
+    if layer_updown_rank = simulate_lowrank_metal_layer_updown_rank
+      ffn_pca_updown_ranks << layer_updown_rank
+    end
+    simulate_cheap_self_draft_variants.each do |variant|
+      if pca_rank = draft_variant_ffn_pca_rank(variant)
+        ffn_pca_ranks << pca_rank
+      end
+      if pca_down_rank = draft_variant_ffn_pca_down_rank(variant)
+        ffn_pca_down_ranks << pca_down_rank
+      end
+      if pca_updown_rank = draft_variant_ffn_pca_updown_rank(variant)
+        ffn_pca_updown_ranks << pca_updown_rank
+      end
+    end
+    ffn_activation_bases = nil.as(FFNBasisMap?)
+    ffn_down_adapters = nil.as(FFNAdapterMap?)
+    ffn_updown_adapters = nil.as(FFNUpDownAdapterMap?)
+    all_ffn_pca_ranks = ffn_pca_ranks + ffn_pca_down_ranks + ffn_pca_updown_ranks
+    unless all_ffn_pca_ranks.empty?
+      max_ffn_pca_rank = all_ffn_pca_ranks.max
+      ffn_vectors = if ffn_pca_calib_token_sets.empty?
+                      ffn_activation_vectors_for_prompt(weights, token_ids, simulate_logit_layers.uniq, calib_count)
+                    else
+                      ffn_activation_vectors_for_token_sets(weights, ffn_pca_calib_token_sets, simulate_logit_layers.uniq, calib_tokens)
+                    end
+      built = {} of Int32 => Array(Array(Float64))
+      ffn_vectors.each do |il, vectors|
+        next if vectors.empty?
+        built[il] = pca_basis(vectors, max_ffn_pca_rank, pca_iters)
+      end
+      ffn_activation_bases = built
+      calib_source = ffn_pca_calib_token_sets.empty? ? "eval_prompt" : "external_prompts:#{ffn_pca_calib_token_sets.size}"
+      puts "ffn_activation_pca_basis source=#{calib_source} layers=#{built.keys.sort.join(',')} max_rank=#{max_ffn_pca_rank} calib_vectors=#{built.map { |il, _| "#{il}:#{ffn_vectors[il].size}" }.join(',')} pca_iters=#{pca_iters}"
+      unless (ffn_pca_down_ranks + ffn_pca_updown_ranks).empty?
+        adapters = {} of Int32 => FFNAdapter
+        built.each do |il, basis_set|
+          layer = weights.layers[il].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "FFN PCA-down layer #{il} is not recurrent"
+          down_basis = basis_set.map do |basis_vec|
+            ML::GGUF::Qwen35CPU.qmatvec_nobias(layer.ffn_down_qw, basis_vec.map(&.to_f32))
+          end
+          adapters[il] = FFNAdapter.new(basis_set, down_basis)
+        end
+        ffn_down_adapters = adapters
+        adapter_rank_note = (ffn_pca_down_ranks + ffn_pca_updown_ranks).max
+        puts "ffn_down_pca_adapter layers=#{adapters.keys.sort.join(',')} max_rank=#{adapter_rank_note} precomputed_vectors=#{adapters.map { |il, adapter| "#{il}:#{adapter.down_basis.size}" }.join(',')}"
+      end
+      unless ffn_pca_updown_ranks.empty?
+        updown_token_sets = ffn_pca_calib_token_sets.empty? ? [token_ids[0, calib_count]] : ffn_pca_calib_token_sets
+        updown_samples = ffn_updown_samples_for_token_sets(weights, updown_token_sets, simulate_logit_layers.uniq, calib_tokens)
+        updown = {} of Int32 => FFNUpDownAdapter
+        max_updown_rank = ffn_pca_updown_ranks.max
+        down_adapters = ffn_down_adapters || raise "FFN up/down adapter requires down adapters"
+        built.each do |il, basis_set|
+          samples_for_layer = updown_samples[il]? || [] of NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))
+          updown[il] = train_ffn_updown_adapter(samples_for_layer, basis_set, down_adapters[il].down_basis, max_updown_rank)
+        end
+        ffn_updown_adapters = updown
+        puts "ffn_updown_pca_adapter layers=#{updown.keys.sort.join(',')} max_rank=#{max_updown_rank} samples=#{updown_samples.map { |il, s| "#{il}:#{s.size}" }.join(',')}"
+        if metal_rank = simulate_ffn_updown_metal_rank
+          raise "Metal FFN up/down unavailable" unless ML::GGUF::Qwen35Metal.available?
+          layer_id = simulate_logit_layers.uniq.find { |il| updown[il]? && updown_samples[il]? && !updown_samples[il].empty? } || raise "no FFN up/down sample for Metal gate"
+          adapter = updown[layer_id]
+          sample = updown_samples[layer_id][0]
+          ffn_in = sample[:ffn_in].map(&.to_f32)
+          hidden_dim = ffn_in.size
+          bench_rank = Math.min(metal_rank, adapter.coeff_weights.size)
+          raise "FFN up/down Metal rank must be positive" unless bench_rank > 0
+          raise "FFN up/down Metal output dim mismatch" unless adapter.down_basis[0].size == hidden_dim
+
+          x_mean = adapter.x_mean.map(&.to_f32)
+          c_mean = adapter.c_mean.map(&.to_f32)
+          coeff_weights = Array(Float32).new(bench_rank * hidden_dim)
+          down_basis = Array(Float32).new(bench_rank * hidden_dim)
+          bench_rank.times do |j|
+            hidden_dim.times { |d| coeff_weights << adapter.coeff_weights[j][d].to_f32 }
+            hidden_dim.times { |d| down_basis << adapter.down_basis[j][d] }
+          end
+
+          cpu_out = [] of Float32
+          cpu_reps = 3
+          t_cpu = Time.instant
+          cpu_reps.times { cpu_out = ffn_out_from_updown_adapter(ffn_in, adapter, bench_rank) }
+          cpu_ms = (Time.instant - t_cpu).total_milliseconds / cpu_reps
+
+          x_mean_buf = ML::MetalBuffer.from_array(x_mean[0, hidden_dim])
+          c_mean_buf = ML::MetalBuffer.from_array(c_mean[0, bench_rank])
+          coeff_w_buf = ML::MetalBuffer.from_array(coeff_weights)
+          down_buf = ML::MetalBuffer.from_array(down_basis)
+
+          metal_out = ML::GGUF::Qwen35Metal.ffn_pca_updown_out_resident(ffn_in, x_mean_buf, c_mean_buf, coeff_w_buf, down_buf, hidden_dim, bench_rank)
+          metal_reps = 5
+          t_metal = Time.instant
+          metal_reps.times { metal_out = ML::GGUF::Qwen35Metal.ffn_pca_updown_out_resident(ffn_in, x_mean_buf, c_mean_buf, coeff_w_buf, down_buf, hidden_dim, bench_rank) }
+          metal_ms = (Time.instant - t_metal).total_milliseconds / metal_reps
+
+          sum_sq = 0.0
+          max_delta = 0.0
+          hidden_dim.times do |d|
+            delta = (cpu_out[d] - metal_out[d]).abs.to_f64
+            max_delta = delta if delta > max_delta
+            sum_sq += delta * delta
+          end
+          rmse = Math.sqrt(sum_sq / hidden_dim)
+          puts "ffn_updown_metal layer=#{layer_id} rank=#{bench_rank} hidden=#{hidden_dim} max_delta=#{max_delta.round(8)} rmse=#{rmse.round(8)} cpu_ms=#{cpu_ms.round(4)} metal_ms=#{metal_ms.round(4)} metal_note=resident_adapter_upload_x_readback"
+        end
+      end
     end
     thresholds_to_run = if simulate_fallback_thresholds.empty?
                           [simulate_fallback_threshold]
@@ -1523,6 +4695,58 @@ if rank = simulate_logit_rank
         rescue_note = simulate_self_spec_topk_rescue ? " topk_rescue=#{simulate_self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
         puts "self_spec_progressive layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_progressive.join(',')} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
       end
+      if simulate_generate_tokens > 0 && (tree_k = simulate_self_spec_tree_k)
+        tree_schedule = simulate_self_spec_progressive.empty? ? [2, 2, 4] : simulate_self_spec_progressive
+        tree = simulate_self_spec_tree_oracle(weights, token_ids, simulate_generate_tokens, tree_k, tree_schedule, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval)
+        tree_total_steps = tree[:approx_steps] + tree[:fallback_steps]
+        tree_approx_rate = tree_total_steps > 0 ? (100.0 * tree[:approx_steps] / tree_total_steps) : 0.0
+        parity = tree[:exact_ids] == tree[:emitted_ids]
+        tree_cost_note = ""
+        if self_spec_cost_model
+          rank_cost = self_spec_tree_estimated_cost(tree, self_spec_draft_cost, self_spec_verifier_cost, self_spec_chunk_overhead, self_spec_correction_cost, tree[:branch_tokens_rank])
+          full_cost = self_spec_tree_estimated_cost(tree, self_spec_draft_cost, self_spec_verifier_cost, self_spec_chunk_overhead, self_spec_correction_cost, tree[:branch_tokens_full])
+          tree_cost_note = " cost_model=tree:draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)} rank_cost=#{rank_cost.round(4)} rank_speedup=#{(simulate_generate_tokens / rank_cost).round(4)}x full_cost=#{full_cost.round(4)} full_speedup=#{(simulate_generate_tokens / full_cost).round(4)}x"
+        end
+        puts "self_spec_tree_oracle layers=#{simulate_logit_layers.join(',')} rank=#{rank} top_k=#{tree_k} schedule=#{tree_schedule.join(',')} gen_tokens=#{simulate_generate_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} approx_steps=#{tree[:approx_steps]} fallback_steps=#{tree[:fallback_steps]} approx_rate=#{tree_approx_rate.round(2)}% schedule_history=#{tree[:schedule_history].join(',')}#{tree_cost_note} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+      end
+      if simulate_generate_tokens > 0 && (oracle_k = simulate_topk_oracle_k)
+        oracle = simulate_topk_oracle_calibration(weights, token_ids, simulate_generate_tokens, oracle_k, simulate_topk_oracle_train_tokens, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval)
+        delta_branch = oracle[:baseline_avg_branch_tokens] - oracle[:calibrated_avg_branch_tokens]
+        puts "topk_oracle_calibration layers=#{simulate_logit_layers.join(',')} rank=#{rank} top_k=#{oracle_k} gen_tokens=#{simulate_generate_tokens} samples=#{oracle[:samples]} train=#{oracle[:train_samples]} test=#{oracle[:test_samples]} best_token_scale=#{oracle[:best_token_scale]} best_rank_scale=#{oracle[:best_rank_scale]} best_margin_threshold=#{oracle[:best_margin_threshold].round(4)} train_top1=#{oracle[:train_top1_rate].round(2)}% train_topk=#{oracle[:train_topk_rate].round(2)}% train_avg_branch=#{oracle[:train_avg_branch_tokens].round(3)} baseline_top1=#{oracle[:baseline_top1_rate].round(2)}% baseline_topk=#{oracle[:baseline_topk_rate].round(2)}% baseline_avg_branch=#{oracle[:baseline_avg_branch_tokens].round(3)} baseline_misses=#{oracle[:baseline_misses]} calibrated_top1=#{oracle[:calibrated_top1_rate].round(2)}% calibrated_topk=#{oracle[:calibrated_topk_rate].round(2)}% calibrated_avg_branch=#{oracle[:calibrated_avg_branch_tokens].round(3)} calibrated_misses=#{oracle[:calibrated_misses]} delta_avg_branch=#{delta_branch.round(3)} margin_gate_rate=#{oracle[:margin_gate_rate].round(2)}% margin_gate_topk=#{oracle[:margin_gate_topk_rate].round(2)}% margin_gate_avg_branch=#{oracle[:margin_gate_avg_branch_tokens].round(3)} margin_gate_misses=#{oracle[:margin_gate_misses]} margin_gate_cost=#{oracle[:margin_gate_cost].round(3)} exact_ids=#{oracle[:exact_ids].join(',')}"
+      end
+      if simulate_generate_tokens > 0 && !simulate_self_spec_wall_progressive.empty?
+        wall = simulate_self_spec_wall_policy(weights, token_ids, simulate_generate_tokens, simulate_self_spec_wall_progressive, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_self_spec_wall_metal_lowrank, simulate_self_spec_wall_metal_project, simulate_self_spec_wall_metal_layer_updown)
+        metal_note = simulate_self_spec_wall_metal_layer_updown ? " metal_project=1 metal_layer_updown=1" : (simulate_self_spec_wall_metal_project ? " metal_project=1" : (simulate_self_spec_wall_metal_lowrank ? " metal_lowrank=1" : ""))
+        puts "self_spec_wall_progressive layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_wall_progressive.join(',')}#{metal_note} gen_tokens=#{simulate_generate_tokens} chunks=#{wall[:chunks]} rejections=#{wall[:rejections]} accepted_draft_tokens=#{wall[:accepted_draft_tokens]} proposed_tokens=#{wall[:proposed_tokens]} accept_rate=#{wall[:accept_rate].round(2)}% verifier_tokens=#{wall[:verifier_tokens]} correction_steps=#{wall[:correction_steps]} draft_ms=#{wall[:draft_ms].round(3)} verifier_ms=#{wall[:verifier_ms].round(3)} replay_ms=#{wall[:replay_ms].round(3)} serial_ms=#{wall[:serial_ms].round(3)} overlap_est_ms=#{wall[:overlap_est_ms].round(3)} speedup_est=#{wall[:speedup_est].round(4)}x exact_ids=#{wall[:exact_ids].join(',')} emitted_ids=#{wall[:emitted_ids].join(',')}"
+      end
+      if simulate_generate_tokens > 0 && !simulate_self_spec_wall_progressive.empty? && !simulate_cheap_self_draft_variants.empty?
+        simulate_cheap_self_draft_variants.each do |variant|
+          unless cheap_draft_variant_valid?(variant)
+            raise "unknown cheap self-draft variant #{variant.inspect}"
+          end
+          wall = simulate_self_spec_wall_policy(weights, token_ids, simulate_generate_tokens, simulate_self_spec_wall_progressive, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_self_spec_wall_metal_lowrank, simulate_self_spec_wall_metal_project, simulate_self_spec_wall_metal_layer_updown, variant, ffn_activation_bases, ffn_down_adapters, ffn_updown_adapters)
+          metal_note = simulate_self_spec_wall_metal_layer_updown ? " metal_project=1 metal_layer_updown=1" : (simulate_self_spec_wall_metal_project ? " metal_project=1" : (simulate_self_spec_wall_metal_lowrank ? " metal_lowrank=1" : ""))
+          parity = wall[:exact_ids] == wall[:emitted_ids]
+          puts "cheap_self_draft_variant=#{variant} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_wall_progressive.join(',')}#{metal_note} gen_tokens=#{simulate_generate_tokens} chunks=#{wall[:chunks]} rejections=#{wall[:rejections]} accepted_draft_tokens=#{wall[:accepted_draft_tokens]} proposed_tokens=#{wall[:proposed_tokens]} accept_rate=#{wall[:accept_rate].round(2)}% parity=#{parity} verifier_tokens=#{wall[:verifier_tokens]} correction_steps=#{wall[:correction_steps]} draft_ms=#{wall[:draft_ms].round(3)} verifier_ms=#{wall[:verifier_ms].round(3)} replay_ms=#{wall[:replay_ms].round(3)} serial_ms=#{wall[:serial_ms].round(3)} overlap_est_ms=#{wall[:overlap_est_ms].round(3)} speedup_est=#{wall[:speedup_est].round(4)}x exact_ids=#{wall[:exact_ids].join(',')} emitted_ids=#{wall[:emitted_ids].join(',')}"
+        end
+      end
+    end
+    if simulate_self_draft_metal_baseline > 0
+      sd = simulate_self_draft_metal_baseline_run(weights, token_ids, calib_count, simulate_self_draft_metal_baseline, layer_bases, rank)
+      puts "self_draft_metal_baseline layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{sd[:steps]} self_draft_ms=#{sd[:self_draft_ms].round(3)} exact_ms=#{sd[:exact_ms].round(3)} verifier_ms=#{sd[:verifier_ms].round(3)} self_draft_per_tok_ms=#{sd[:self_draft_per_token_ms].round(3)} exact_per_tok_ms=#{sd[:exact_per_token_ms].round(3)} verifier_per_tok_ms=#{sd[:verifier_per_token_ms].round(3)} self_spec_wall_ratio=#{sd[:self_spec_wall_ratio].round(4)} agreement=#{sd[:agreement]}/#{sd[:steps]} self_draft_ids=#{sd[:self_draft_ids].join(',')} exact_ids=#{sd[:exact_ids].join(',')} verifier_ids=#{sd[:verifier_ids].join(',')}"
+    end
+    if simulate_self_draft_gpu_chain > 0
+      chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain, layer_bases, rank)
+      puts "self_draft_gpu_chain layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} submit_ms=#{chain[:submit_ms].round(3)} wait_ms=#{chain[:wait_ms].round(3)} chain_ms=#{chain[:chain_ms].round(3)} exact_ms=#{chain[:exact_ms].round(3)} agreement=#{chain[:agreement]}/#{chain[:steps]} chain_ids=#{chain[:chain_ids].join(',')} exact_ids=#{chain[:exact_ids].join(',')}"
+    end
+    if simulate_self_draft_gpu_chain_overlap > 0
+      ov = simulate_self_draft_gpu_chain_overlap_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain_overlap, layer_bases, rank)
+      puts "self_draft_gpu_chain_overlap layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{ov[:steps]} draft_alone_ms=#{ov[:draft_alone_ms].round(3)} verifier_ms=#{ov[:verifier_ms].round(3)} overlap_ms=#{ov[:overlap_ms].round(3)} draft_submit_ms=#{ov[:draft_submit_ms].round(3)} draft_wait_ms=#{ov[:draft_wait_ms].round(3)} hidden_ms=#{ov[:hidden_ms].round(3)} speedup=#{ov[:speedup].round(4)} agreement=#{ov[:agreement]}/#{ov[:steps]} draft_ids=#{ov[:draft_ids].join(',')} exact_ids=#{ov[:exact_ids].join(',')} verifier_ids=#{ov[:verifier_ids].join(',')}"
+    end
+    if simulate_generate_tokens > 0 && simulate_self_spec_gpu_pipeline > 0
+      pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, simulate_self_spec_gpu_pipeline, layer_bases, rank)
+      accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
+      puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{simulate_self_spec_gpu_pipeline} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
     end
   end
 end
@@ -1558,6 +4782,90 @@ ranks.each do |rank|
     lr = simulate_lowrank_projected_delta(samples, bases, rank, calib_count,
       hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size)
     line += " lr_exact_y_rmse=#{lr[:exact_y_rmse].round(6)} lr_exact_y_max=#{lr[:exact_y_max].round(6)} lr_proof_y_rmse=#{lr[:proof_y_rmse].round(8)} lr_proof_y_max=#{lr[:proof_y_max].round(8)} lr_proof_state_rmse=#{lr[:proof_state_rmse].round(8)} lr_proof_state_max=#{lr[:proof_state_max].round(8)}"
+  end
+  if simulate_lowrank_metal
+    hp = weights.hparams
+    lr_metal = simulate_lowrank_projected_delta_metal(samples, bases, rank, calib_count,
+      hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size)
+    line += " lr_metal_steps=#{lr_metal[:steps]} lr_cpu_ms=#{lr_metal[:cpu_ms].round(3)} lr_metal_ms=#{lr_metal[:metal_ms].round(3)} lr_metal_y_rmse=#{lr_metal[:y_rmse].round(8)} lr_metal_y_max=#{lr_metal[:y_max].round(8)} lr_metal_state_rmse=#{lr_metal[:state_rmse].round(8)} lr_metal_state_max=#{lr_metal[:state_max].round(8)}"
+  end
+  if simulate_lowrank_metal_project
+    hp = weights.hparams
+    lr_project = simulate_lowrank_projected_delta_metal_project(samples, bases, rank, calib_count,
+      hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size)
+    line += " lr_project_steps=#{lr_project[:steps]} lr_project_cpu_ms=#{lr_project[:cpu_ms].round(3)} lr_project_metal_ms=#{lr_project[:metal_ms].round(3)} lr_project_y_rmse=#{lr_project[:y_rmse].round(8)} lr_project_y_max=#{lr_project[:y_max].round(8)} lr_project_state_rmse=#{lr_project[:state_rmse].round(8)} lr_project_state_max=#{lr_project[:state_max].round(8)}"
+  end
+  if simulate_lowrank_metal_chunk
+    hp = weights.hparams
+    lr_chunk = simulate_lowrank_projected_delta_metal_chunk(samples, bases, rank, calib_count,
+      hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size)
+    line += " lr_chunk_steps=#{lr_chunk[:steps]} lr_chunk_cpu_ms=#{lr_chunk[:cpu_ms].round(3)} lr_chunk_metal_ms=#{lr_chunk[:metal_ms].round(3)} lr_chunk_y_rmse=#{lr_chunk[:y_rmse].round(8)} lr_chunk_y_max=#{lr_chunk[:y_max].round(8)} lr_chunk_state_rmse=#{lr_chunk[:state_rmse].round(8)} lr_chunk_state_max=#{lr_chunk[:state_max].round(8)}"
+  end
+  if simulate_lowrank_metal_chunk_out
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    lr_chunk_out = simulate_lowrank_projected_delta_metal_chunk_out(samples, bases, target_layer.ssm_out_qw, target_layer.ssm_norm, hp.rms_eps.to_f32, rank, calib_count,
+      hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_state_size)
+    line += " lr_chunk_out_steps=#{lr_chunk_out[:steps]} lr_chunk_out_cpu_ms=#{lr_chunk_out[:cpu_ms].round(3)} lr_chunk_out_metal_ms=#{lr_chunk_out[:metal_ms].round(3)} lr_chunk_out_rmse=#{lr_chunk_out[:out_rmse].round(8)} lr_chunk_out_max=#{lr_chunk_out[:out_max].round(8)} lr_chunk_out_state_rmse=#{lr_chunk_out[:state_rmse].round(8)} lr_chunk_out_state_max=#{lr_chunk_out[:state_max].round(8)}"
+  end
+  if simulate_lowrank_metal_layer_chunk
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    lr_layer = simulate_lowrank_recurrent_layer_metal_chunk(samples, bases, target_layer, hp, rank, calib_count)
+    line += " lr_layer_chunk_steps=#{lr_layer[:steps]} lr_layer_chunk_cpu_ms=#{lr_layer[:cpu_ms].round(3)} lr_layer_chunk_metal_ms=#{lr_layer[:metal_ms].round(3)} lr_layer_chunk_rmse=#{lr_layer[:layer_rmse].round(8)} lr_layer_chunk_max=#{lr_layer[:layer_max].round(8)} lr_layer_chunk_state_rmse=#{lr_layer[:state_rmse].round(8)} lr_layer_chunk_state_max=#{lr_layer[:state_max].round(8)}"
+  end
+  if simulate_lowrank_metal_layer_full
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    lr_full = simulate_lowrank_recurrent_layer_full_metal_chunk(samples, bases, target_layer, hp, rank, calib_count)
+    line += " lr_layer_full_steps=#{lr_full[:steps]} lr_layer_full_cpu_ms=#{lr_full[:cpu_ms].round(3)} lr_layer_full_metal_ms=#{lr_full[:metal_ms].round(3)} lr_layer_full_rmse=#{lr_full[:layer_rmse].round(8)} lr_layer_full_max=#{lr_full[:layer_max].round(8)} lr_layer_full_state_rmse=#{lr_full[:state_rmse].round(8)} lr_layer_full_state_max=#{lr_full[:state_max].round(8)}"
+  end
+  if layer_updown_rank = simulate_lowrank_metal_layer_updown_rank
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    ffn_vectors = ffn_activation_vectors_for_prompt(weights, token_ids, [layer_index], calib_count)[layer_index]
+    ffn_basis = pca_basis(ffn_vectors, layer_updown_rank, pca_iters)
+    down_basis = ffn_basis.map do |basis_vec|
+      ML::GGUF::Qwen35CPU.qmatvec_nobias(target_layer.ffn_down_qw, basis_vec.map(&.to_f32))
+    end
+    updown_samples = ffn_updown_samples_for_token_sets(weights, [token_ids[0, calib_count]], [layer_index], calib_count)[layer_index]
+    updown_adapter = train_ffn_updown_adapter(updown_samples, ffn_basis, down_basis, layer_updown_rank)
+    lr_updown = simulate_lowrank_recurrent_layer_updown_metal_chunk(samples, bases, target_layer, hp, rank, calib_count, updown_adapter, layer_updown_rank)
+    line += " lr_layer_updown_steps=#{lr_updown[:steps]} lr_layer_updown_rank=#{lr_updown[:updown_rank]} lr_layer_updown_cpu_ms=#{lr_updown[:cpu_ms].round(3)} lr_layer_updown_metal_ms=#{lr_updown[:metal_ms].round(3)} lr_layer_updown_rmse=#{lr_updown[:layer_rmse].round(8)} lr_layer_updown_max=#{lr_updown[:layer_max].round(8)} lr_layer_updown_state_rmse=#{lr_updown[:state_rmse].round(8)} lr_layer_updown_state_max=#{lr_updown[:state_max].round(8)}"
+  end
+  if simulate_lowrank_metal_layer_overlap
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    lr_overlap = simulate_lowrank_recurrent_layer_full_async_overlap(samples, bases, target_layer, hp, rank, calib_count)
+    line += " lr_layer_overlap_steps=#{lr_overlap[:steps]} lr_layer_overlap_serial_ms=#{lr_overlap[:serial_ms].round(3)} lr_layer_overlap_async_ms=#{lr_overlap[:async_ms].round(3)} lr_layer_overlap_speedup=#{lr_overlap[:speedup].round(4)} lr_layer_overlap_output_max=#{lr_overlap[:output_max].round(8)}"
+  end
+  if simulate_lowrank_metal_verifier_overlap
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    lr_verify = simulate_lowrank_draft_exact_verifier_overlap(samples, bases, weights, token_ids, target_layer, hp, rank, calib_count)
+    line += " lr_verifier_overlap_steps=#{lr_verify[:steps]} lr_verifier_draft_ms=#{lr_verify[:draft_ms].round(3)} lr_verifier_verify_ms=#{lr_verify[:verifier_ms].round(3)} lr_verifier_serial_ms=#{lr_verify[:serial_ms].round(3)} lr_verifier_overlap_ms=#{lr_verify[:overlap_ms].round(3)} lr_verifier_speedup=#{lr_verify[:speedup].round(4)} lr_verifier_hidden_ms=#{lr_verify[:hidden_ms].round(3)} lr_verifier_draft_output_max=#{lr_verify[:draft_output_max].round(8)} lr_verifier_match=#{lr_verify[:verifier_match]}"
+  end
+  if simulate_lowrank_metal_decode_verifier_overlap
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    lr_decode_verify = simulate_lowrank_draft_exact_decode_verifier_overlap(samples, bases, weights, token_ids, target_layer, hp, rank, calib_count)
+    line += " lr_decode_verify_steps=#{lr_decode_verify[:steps]} lr_decode_verify_draft_ms=#{lr_decode_verify[:draft_ms].round(3)} lr_decode_verify_serial_ms=#{lr_decode_verify[:verifier_serial_ms].round(3)} lr_decode_verify_async_ms=#{lr_decode_verify[:verifier_async_ms].round(3)} lr_decode_verify_overlap_ms=#{lr_decode_verify[:overlap_ms].round(3)} lr_decode_verify_async_speedup=#{lr_decode_verify[:async_speedup].round(4)} lr_decode_verify_overlap_speedup=#{lr_decode_verify[:overlap_speedup].round(4)} lr_decode_verify_hidden_ms=#{lr_decode_verify[:hidden_ms].round(3)} lr_decode_verify_draft_output_max=#{lr_decode_verify[:draft_output_max].round(8)} lr_decode_verify_match=#{lr_decode_verify[:verifier_match]}"
+  end
+  if simulate_exact_verifier_ltp
+    ltp = simulate_exact_verifier_ltp_proxy(weights, token_ids, calib_count)
+    line += " exact_ltp_steps=#{ltp[:steps]} exact_ltp_decode_serial_ms=#{ltp[:decode_serial_ms].round(3)} exact_ltp_decode_queued_ms=#{ltp[:decode_queued_ms].round(3)} exact_ltp_chunk_major_ms=#{ltp[:chunk_major_ms].round(3)} exact_ltp_queued_speedup=#{ltp[:queued_speedup].round(4)} exact_ltp_speedup=#{ltp[:ltp_speedup].round(4)} exact_ltp_queued_match=#{ltp[:queued_match]} exact_ltp_chunk_match=#{ltp[:chunk_match]}"
+  end
+  if simulate_lowrank_metal_chunk_thread_overlap
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    ltp_overlap = simulate_lowrank_draft_exact_chunk_verifier_thread_overlap(samples, bases, weights, token_ids, target_layer, hp, rank, calib_count)
+    line += " chunk_thread_steps=#{ltp_overlap[:steps]} chunk_thread_draft_ms=#{ltp_overlap[:draft_ms].round(3)} chunk_thread_verify_ms=#{ltp_overlap[:chunk_verifier_ms].round(3)} chunk_thread_serial_ms=#{ltp_overlap[:serial_ms].round(3)} chunk_thread_overlap_ms=#{ltp_overlap[:overlap_ms].round(3)} chunk_thread_speedup=#{ltp_overlap[:speedup].round(4)} chunk_thread_hidden_ms=#{ltp_overlap[:hidden_ms].round(3)} chunk_thread_draft_output_max=#{ltp_overlap[:draft_output_max].round(8)} chunk_thread_match=#{ltp_overlap[:verifier_match]}"
+  end
+  if simulate_multilayer_overlap_n > 0
+    hp = weights.hparams
+    target_layer = weights.layers[layer_index].as?(ML::GGUF::Qwen35RecurrentWeights) || raise "layer #{layer_index} is not recurrent"
+    multi = simulate_lowrank_multilayer_chunk_thread_overlap(samples, bases, weights, token_ids, target_layer, hp, rank, calib_count, simulate_multilayer_overlap_n)
+    line += " multi_thread_n_layers=#{multi[:n_layers]} multi_thread_steps=#{multi[:steps]} multi_thread_draft_ms=#{multi[:draft_ms].round(3)} multi_thread_draft_per_layer_ms=#{multi[:draft_per_layer_ms].round(3)} multi_thread_verify_ms=#{multi[:chunk_verifier_ms].round(3)} multi_thread_serial_ms=#{multi[:serial_ms].round(3)} multi_thread_overlap_ms=#{multi[:overlap_ms].round(3)} multi_thread_speedup=#{multi[:speedup].round(4)} multi_thread_hidden_ms=#{multi[:hidden_ms].round(3)} multi_thread_draft_output_max=#{multi[:draft_output_max].round(8)} multi_thread_match=#{multi[:verifier_match]}"
   end
   puts line
 end

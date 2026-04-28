@@ -90,6 +90,7 @@ module ML
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
         @@mv_add_pipeline : ML::Metal::ComputePipeline?
+        @@embed_q4k_pipeline : ML::Metal::ComputePipeline?
         @@mm_pipeline   : ML::Metal::ComputePipeline?
         @@mm_h16_pipeline : ML::Metal::ComputePipeline?
         @@mm5_pipeline  : ML::Metal::ComputePipeline?
@@ -118,6 +119,14 @@ module ML
         @@dn128_chunk_rowwise_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@lowrank_project_coeffs_pipeline : ML::Metal::ComputePipeline?
+        @@lowrank_project_coeffs_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@lowrank_delta_pipeline : ML::Metal::ComputePipeline?
+        @@lowrank_delta_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@ffn_pca_updown_coeffs_pipeline : ML::Metal::ComputePipeline?
+        @@ffn_pca_updown_out_pipeline : ML::Metal::ComputePipeline?
+        @@ffn_pca_updown_fused_pipeline : ML::Metal::ComputePipeline?
+        @@ffn_pca_updown_fused_rows_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
         @@f32_to_f16_pipeline : ML::Metal::ComputePipeline?
         @@f16_to_f32_pipeline : ML::Metal::ComputePipeline?
@@ -387,6 +396,12 @@ module ML
           :mv_many_out_7,
         ]
 
+        @@lane_command_queues = {} of String => ML::Metal::CommandQueue
+
+        private def self.lane_command_queue(name : String) : ML::Metal::CommandQueue
+          @@lane_command_queues[name] ||= ML::Metal::CommandQueue.new
+        end
+
         # ── Phase 4.2 scratch pool ─────────────────────────────────────
         # Persistent per-dispatch scratch buffers keyed by (tag, bytes).
         # Each dispatch-site tag names a buffer slot that must not alias
@@ -396,88 +411,134 @@ module ML
         module Scratch
           @@pool : Hash({Symbol, Int64}, ML::MetalBuffer) = {} of {Symbol, Int64} => ML::MetalBuffer
           @@pool_s : Hash({String, Int64}, ML::MetalBuffer) = {} of {String, Int64} => ML::MetalBuffer
+          @@mutex = Mutex.new
           @@hits   = 0_i64
           @@misses = 0_i64
-          @@fresh_collectors = [] of Array(ML::MetalBuffer)
+          @@fresh_collectors = {} of UInt64 => Array(Array(ML::MetalBuffer))
+          @@namespaces = {} of UInt64 => Array(String)
+
+          private def self.thread_key : UInt64
+            Thread.current.object_id
+          end
+
+          private def self.fresh_stack : Array(Array(ML::MetalBuffer))
+            key = thread_key
+            @@mutex.synchronize { @@fresh_collectors[key] ||= [] of Array(ML::MetalBuffer) }
+          end
+
+          private def self.namespace_stack : Array(String)
+            key = thread_key
+            @@mutex.synchronize { @@namespaces[key] ||= [] of String }
+          end
 
           def self.with_fresh(&)
             collector = [] of ML::MetalBuffer
-            @@fresh_collectors << collector
+            fresh_stack << collector
             yield collector
           ensure
-            @@fresh_collectors.pop?
+            fresh_stack.pop?
           end
 
           private def self.fresh_buffer(byte_size : Int64) : ML::MetalBuffer
-            @@misses += 1
+            @@mutex.synchronize { @@misses += 1 }
             buf = ML::MetalBuffer.new(byte_size)
-            if collector = @@fresh_collectors.last?
+            if collector = fresh_stack.last?
               collector << buf
             end
             buf
           end
 
-          def self.get(tag : Symbol, byte_size : Int64) : ML::MetalBuffer
-            # A/B gate — when set, always allocate fresh (emulates pre-4.2).
-            if ENV["QWEN35_SCRATCH_OFF"]? == "1" || !@@fresh_collectors.empty?
+          def self.with_namespace(namespace : String, &)
+            namespace_stack << namespace
+            yield
+          ensure
+            namespace_stack.pop?
+          end
+
+          private def self.get_string_raw(tag : String, byte_size : Int64) : ML::MetalBuffer
+            if ENV["QWEN35_SCRATCH_OFF"]? == "1" || !fresh_stack.empty?
               return fresh_buffer(byte_size)
             end
             key = {tag, byte_size}
-            if buf = @@pool[key]?
-              @@hits += 1
-              return buf
+            @@mutex.synchronize do
+              if buf = @@pool_s[key]?
+                @@hits += 1
+                return buf
+              end
+              @@misses += 1
+              buf = ML::MetalBuffer.new(byte_size)
+              @@pool_s[key] = buf
+              buf
             end
-            @@misses += 1
-            buf = ML::MetalBuffer.new(byte_size)
-            @@pool[key] = buf
-            buf
+          end
+
+          def self.get(tag : Symbol, byte_size : Int64) : ML::MetalBuffer
+            if namespace = namespace_stack.last?
+              return get_string_raw("#{namespace}:#{tag}", byte_size)
+            end
+            # A/B gate — when set, always allocate fresh (emulates pre-4.2).
+            if ENV["QWEN35_SCRATCH_OFF"]? == "1" || !fresh_stack.empty?
+              return fresh_buffer(byte_size)
+            end
+            key = {tag, byte_size}
+            @@mutex.synchronize do
+              if buf = @@pool[key]?
+                @@hits += 1
+                return buf
+              end
+              @@misses += 1
+              buf = ML::MetalBuffer.new(byte_size)
+              @@pool[key] = buf
+              buf
+            end
           end
 
           def self.get(tag : String, byte_size : Int64) : ML::MetalBuffer
-            if ENV["QWEN35_SCRATCH_OFF"]? == "1" || !@@fresh_collectors.empty?
-              return fresh_buffer(byte_size)
+            if namespace = namespace_stack.last?
+              tag = "#{namespace}:#{tag}"
             end
-            key = {tag, byte_size}
-            if buf = @@pool_s[key]?
-              @@hits += 1
-              return buf
-            end
-            @@misses += 1
-            buf = ML::MetalBuffer.new(byte_size)
-            @@pool_s[key] = buf
-            buf
+            get_string_raw(tag, byte_size)
           end
 
           def self.stats : {Int64, Int64}
-            {@@hits, @@misses}
+            @@mutex.synchronize { {@@hits, @@misses} }
           end
 
           def self.clear : Nil
-            @@pool.clear
-            @@pool_s.clear
-            @@hits = @@misses = 0_i64
+            @@mutex.synchronize do
+              @@pool.clear
+              @@pool_s.clear
+              @@fresh_collectors.clear
+              @@namespaces.clear
+              @@hits = @@misses = 0_i64
+            end
           end
         end
 
         module ConstCache
           @@written : Hash(String, Bool) = {} of String => Bool
+          @@mutex = Mutex.new
 
           def self.write_once(tag : String, buf : ML::MetalBuffer, data : Array(Float32)) : Nil
             key = "#{tag}:#{buf.handle.address}:#{buf.size}:#{data.to_unsafe.address}:#{data.size}"
-            return if @@written[key]?
-            buf.write(data)
-            @@written[key] = true
+            @@mutex.synchronize do
+              return if @@written[key]?
+              buf.write(data)
+              @@written[key] = true
+            end
           end
 
           def self.write_zero_f32_once(tag : String, buf : ML::MetalBuffer, count : Int32) : Nil
             key = "#{tag}:#{buf.handle.address}:#{buf.size}:zero:#{count}"
-            return if @@written[key]?
-            buf.contents.as(Pointer(UInt8)).clear(count.to_i64 * sizeof(Float32))
-            @@written[key] = true
+            @@mutex.synchronize do
+              return if @@written[key]?
+              buf.contents.as(Pointer(UInt8)).clear(count.to_i64 * sizeof(Float32))
+              @@written[key] = true
+            end
           end
 
           def self.clear : Nil
-            @@written.clear
+            @@mutex.synchronize { @@written.clear }
           end
         end
 
@@ -550,6 +611,53 @@ module ML
           end
         end
 
+        def self.embedding_q4k_from_token_id(token_embd_qw : QuantWeight,
+                                             token_id : Int32) : Array(Float32)?
+          return nil unless token_embd_qw.type.q4_k?
+          token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+          token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
+          out_buf = ML::MetalBuffer.new(token_embd_qw.in_dim.to_i64 * sizeof(Float32))
+          embedding_q4k_from_token_id_buf(token_embd_qw, token_buf, out_buf)
+          out_buf.read(token_embd_qw.in_dim)
+        end
+
+        def self.embedding_q4k_from_token_id_buf(token_embd_qw : QuantWeight,
+                                                 token_ids_buf : ML::MetalBuffer,
+                                                 out_buf : ML::MetalBuffer,
+                                                 token_index : Int32 = 0,
+                                                 command_queue_name : String? = nil) : Nil
+          raise "embedding_q4k_from_token_id_buf requires Q4_K token embeddings" unless token_embd_qw.type.q4_k?
+          raise "embedding dim #{token_embd_qw.in_dim} must be divisible by #{QK_K}" unless token_embd_qw.in_dim % QK_K == 0
+
+          w_buf, w_off = weight_slot(token_embd_qw)
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
+          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue)
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_embedding_q4k_from_token_id(enc, w_buf, w_off, token_ids_buf, out_buf,
+            token_embd_qw.in_dim, token_embd_qw.out_dim, token_index)
+          enc.end_encoding
+          cmd.commit
+          cmd.wait
+        end
+
+        private def self.encode_embedding_q4k_from_token_id(enc : ML::Metal::ComputeEncoder,
+                                                            w_buf : ML::MetalBuffer,
+                                                            w_off : Int64,
+                                                            token_ids_buf : ML::MetalBuffer,
+                                                            out_buf : ML::MetalBuffer,
+                                                            hidden_dim : Int32,
+                                                            vocab_size : Int32,
+                                                            token_index : Int32) : Nil
+          enc.set_pipeline(embed_q4k_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(token_ids_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(hidden_dim.to_u32, 3)
+          enc.set_value(vocab_size.to_u32, 4)
+          enc.set_value(token_index.to_u32, 5)
+          enc.dispatch_1d(hidden_dim, 256)
+        end
+
         # Lazy compile and cache pipelines on first use.
         private def self.mv_pipeline : ML::Metal::ComputePipeline
           @@mv_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_f32") {
@@ -560,6 +668,12 @@ module ML
         private def self.mv_add_pipeline : ML::Metal::ComputePipeline
           @@mv_add_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_f32_add") {
             ML::Metal::ComputePipeline.new("simd_mv_q4k_f32_add", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.embed_q4k_pipeline : ML::Metal::ComputePipeline
+          @@embed_q4k_pipeline ||= ML::Metal::PipelineCache.get("embed_q4k_f32_from_token_id") {
+            ML::Metal::ComputePipeline.new("embed_q4k_f32_from_token_id", GEMM_Q4K_SOURCE)
           }
         end
 
@@ -759,6 +873,54 @@ module ML
         private def self.dn_post_chunk_pipeline : ML::Metal::ComputePipeline
           @@dn_post_chunk_pipeline ||= ML::Metal::PipelineCache.get("delta_net_post_norm_gate_chunk") {
             ML::Metal::ComputePipeline.new("delta_net_post_norm_gate_chunk", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.lowrank_delta_pipeline : ML::Metal::ComputePipeline
+          @@lowrank_delta_pipeline ||= ML::Metal::PipelineCache.get("lowrank_delta_step") {
+            ML::Metal::ComputePipeline.new("lowrank_delta_step", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.lowrank_project_coeffs_pipeline : ML::Metal::ComputePipeline
+          @@lowrank_project_coeffs_pipeline ||= ML::Metal::PipelineCache.get("lowrank_project_coeffs") {
+            ML::Metal::ComputePipeline.new("lowrank_project_coeffs", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.lowrank_project_coeffs_chunk_pipeline : ML::Metal::ComputePipeline
+          @@lowrank_project_coeffs_chunk_pipeline ||= ML::Metal::PipelineCache.get("lowrank_project_coeffs_chunk") {
+            ML::Metal::ComputePipeline.new("lowrank_project_coeffs_chunk", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.lowrank_delta_chunk_pipeline : ML::Metal::ComputePipeline
+          @@lowrank_delta_chunk_pipeline ||= ML::Metal::PipelineCache.get("lowrank_delta_chunk_step_parallel") {
+            ML::Metal::ComputePipeline.new("lowrank_delta_chunk_step_parallel", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.ffn_pca_updown_coeffs_pipeline : ML::Metal::ComputePipeline
+          @@ffn_pca_updown_coeffs_pipeline ||= ML::Metal::PipelineCache.get("ffn_pca_updown_coeffs") {
+            ML::Metal::ComputePipeline.new("ffn_pca_updown_coeffs", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.ffn_pca_updown_out_pipeline : ML::Metal::ComputePipeline
+          @@ffn_pca_updown_out_pipeline ||= ML::Metal::PipelineCache.get("ffn_pca_updown_out") {
+            ML::Metal::ComputePipeline.new("ffn_pca_updown_out", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.ffn_pca_updown_fused_pipeline : ML::Metal::ComputePipeline
+          @@ffn_pca_updown_fused_pipeline ||= ML::Metal::PipelineCache.get("ffn_pca_updown_fused") {
+            ML::Metal::ComputePipeline.new("ffn_pca_updown_fused", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.ffn_pca_updown_fused_rows_pipeline : ML::Metal::ComputePipeline
+          @@ffn_pca_updown_fused_rows_pipeline ||= ML::Metal::PipelineCache.get("ffn_pca_updown_fused_rows") {
+            ML::Metal::ComputePipeline.new("ffn_pca_updown_fused_rows", DELTA_NET_SOURCE)
           }
         end
 
@@ -1638,6 +1800,17 @@ module ML
           result
         end
 
+        record LowRankLayerChunkSubmission,
+          cmd : ML::Metal::CommandBuffer,
+          output_buf : ML::MetalBuffer,
+          output_size : Int32,
+          retained_bufs : Array(ML::MetalBuffer)
+
+        def self.wait_lowrank_layer_chunk(submission : LowRankLayerChunkSubmission) : Array(Float32)
+          submission.cmd.wait
+          read_shared_f32(submission.output_buf, submission.output_size)
+        end
+
         private def self.read_shared_top2_rows(top_id_buf : ML::MetalBuffer,
                                                top_value_buf : ML::MetalBuffer,
                                                second_id_buf : ML::MetalBuffer,
@@ -1875,6 +2048,766 @@ module ML
             )
           end
           result
+        end
+
+        # Projected-K low-rank DeltaNet state update for the self-spec draft
+        # branch. `m_state_buf` is [h_v, s, rank] and is updated in place.
+        # `c` and `qbar` are pre-projected K/Q basis coefficients [h_k, rank].
+        def self.lowrank_delta_step(m_state_buf : ML::MetalBuffer,
+                                    c : Array(Float32),
+                                    qbar : Array(Float32),
+                                    v_conv : Array(Float32),
+                                    ghead : Array(Float32),
+                                    beta : Array(Float32),
+                                    h_k : Int32, h_v : Int32, s : Int32,
+                                    rank : Int32,
+                                    scale : Float32) : Array(Float32)
+          ML::Metal::Device.init!
+          raise "lowrank_delta_step rank must be positive" unless rank > 0
+          raise "lowrank_delta_step c size mismatch" unless c.size == h_k * rank
+          raise "lowrank_delta_step qbar size mismatch" unless qbar.size == h_k * rank
+          raise "lowrank_delta_step v size mismatch" unless v_conv.size == h_v * s
+          raise "lowrank_delta_step g size mismatch" unless ghead.size == h_v
+          raise "lowrank_delta_step beta size mismatch" unless beta.size == h_v
+          raise "lowrank_delta_step state size mismatch" unless m_state_buf.size >= (h_v * s * rank).to_i64 * sizeof(Float32)
+
+          c_buf = Scratch.get(:lowrank_delta_c, c.size.to_i64 * sizeof(Float32))
+          qbar_buf = Scratch.get(:lowrank_delta_qbar, qbar.size.to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:lowrank_delta_v, v_conv.size.to_i64 * sizeof(Float32))
+          g_buf = Scratch.get(:lowrank_delta_g, ghead.size.to_i64 * sizeof(Float32))
+          b_buf = Scratch.get(:lowrank_delta_b, beta.size.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:lowrank_delta_out, (h_v * s).to_i64 * sizeof(Float32))
+
+          c_buf.write(c)
+          qbar_buf.write(qbar)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(lowrank_delta_pipeline)
+          enc.set_buffer(m_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          enc.set_buffer(c_buf, 1)
+          enc.set_buffer(qbar_buf, 2)
+          enc.set_buffer(v_buf, 3)
+          enc.set_buffer(g_buf, 4)
+          enc.set_buffer(b_buf, 5)
+          enc.set_buffer(out_buf, 6, ML::Metal::BufferAccess::Write)
+          enc.set_value(h_k.to_u32, 7)
+          enc.set_value(h_v.to_u32, 8)
+          enc.set_value(s.to_u32, 9)
+          enc.set_value(rank.to_u32, 10)
+          enc.set_value(scale, 11)
+          enc.dispatch_threadgroups({s, h_v, 1}, {1, 1, 1})
+          enc.end_encoding
+          cmd.commit
+          cmd.wait
+          read_shared_f32(out_buf, h_v * s)
+        end
+
+        # Same low-rank state update as `lowrank_delta_step`, but computes the
+        # Q/K basis coefficients on GPU first and keeps them in temporary Metal
+        # buffers for the update dispatch in the same command buffer.
+        def self.lowrank_delta_step_projected(m_state_buf : ML::MetalBuffer,
+                                              q_conv : Array(Float32),
+                                              k_conv : Array(Float32),
+                                              basis : Array(Float32),
+                                              v_conv : Array(Float32),
+                                              ghead : Array(Float32),
+                                              beta : Array(Float32),
+                                              h_k : Int32, h_v : Int32, s : Int32,
+                                              rank : Int32,
+                                              scale : Float32) : Array(Float32)
+          ML::Metal::Device.init!
+          raise "lowrank_delta_step_projected rank must be positive" unless rank > 0
+          raise "lowrank_delta_step_projected q size mismatch" unless q_conv.size == h_k * s
+          raise "lowrank_delta_step_projected k size mismatch" unless k_conv.size == h_k * s
+          raise "lowrank_delta_step_projected basis size mismatch" unless basis.size == h_k * rank * s
+          raise "lowrank_delta_step_projected v size mismatch" unless v_conv.size == h_v * s
+          raise "lowrank_delta_step_projected g size mismatch" unless ghead.size == h_v
+          raise "lowrank_delta_step_projected beta size mismatch" unless beta.size == h_v
+          raise "lowrank_delta_step_projected state size mismatch" unless m_state_buf.size >= (h_v * s * rank).to_i64 * sizeof(Float32)
+
+          basis_buf = Scratch.get(:lowrank_project_basis, basis.size.to_i64 * sizeof(Float32))
+          basis_buf.write(basis)
+          lowrank_delta_step_projected_buf(m_state_buf, q_conv, k_conv, basis_buf, v_conv, ghead, beta,
+            h_k, h_v, s, rank, scale)
+        end
+
+        def self.lowrank_delta_step_projected_buf(m_state_buf : ML::MetalBuffer,
+                                                  q_conv : Array(Float32),
+                                                  k_conv : Array(Float32),
+                                                  basis_buf : ML::MetalBuffer,
+                                                  v_conv : Array(Float32),
+                                                  ghead : Array(Float32),
+                                                  beta : Array(Float32),
+                                                  h_k : Int32, h_v : Int32, s : Int32,
+                                                  rank : Int32,
+                                                  scale : Float32) : Array(Float32)
+          ML::Metal::Device.init!
+          raise "lowrank_delta_step_projected_buf rank must be positive" unless rank > 0
+          raise "lowrank_delta_step_projected_buf q size mismatch" unless q_conv.size == h_k * s
+          raise "lowrank_delta_step_projected_buf k size mismatch" unless k_conv.size == h_k * s
+          raise "lowrank_delta_step_projected_buf basis size mismatch" unless basis_buf.size >= (h_k * rank * s).to_i64 * sizeof(Float32)
+          raise "lowrank_delta_step_projected_buf v size mismatch" unless v_conv.size == h_v * s
+          raise "lowrank_delta_step_projected_buf g size mismatch" unless ghead.size == h_v
+          raise "lowrank_delta_step_projected_buf beta size mismatch" unless beta.size == h_v
+          raise "lowrank_delta_step_projected_buf state size mismatch" unless m_state_buf.size >= (h_v * s * rank).to_i64 * sizeof(Float32)
+
+          q_buf = Scratch.get(:lowrank_project_q, q_conv.size.to_i64 * sizeof(Float32))
+          k_buf = Scratch.get(:lowrank_project_k, k_conv.size.to_i64 * sizeof(Float32))
+          c_buf = Scratch.get(:lowrank_project_c, (h_k * rank).to_i64 * sizeof(Float32))
+          qbar_buf = Scratch.get(:lowrank_project_qbar, (h_k * rank).to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:lowrank_delta_v, v_conv.size.to_i64 * sizeof(Float32))
+          g_buf = Scratch.get(:lowrank_delta_g, ghead.size.to_i64 * sizeof(Float32))
+          b_buf = Scratch.get(:lowrank_delta_b, beta.size.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:lowrank_delta_out, (h_v * s).to_i64 * sizeof(Float32))
+
+          q_buf.write(q_conv)
+          k_buf.write(k_conv)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+          proj_enc.set_pipeline(lowrank_project_coeffs_pipeline)
+          proj_enc.set_buffer(q_buf, 0)
+          proj_enc.set_buffer(k_buf, 1)
+          proj_enc.set_buffer(basis_buf, 2)
+          proj_enc.set_buffer(c_buf, 3, ML::Metal::BufferAccess::Write)
+          proj_enc.set_buffer(qbar_buf, 4, ML::Metal::BufferAccess::Write)
+          proj_enc.set_value(h_k.to_u32, 5)
+          proj_enc.set_value(s.to_u32, 6)
+          proj_enc.set_value(rank.to_u32, 7)
+          proj_enc.dispatch_threadgroups({(rank + 7) // 8, h_k, 2}, {8, 1, 1})
+          proj_enc.end_encoding
+
+          step_enc = ML::Metal::ComputeEncoder.new(cmd)
+          step_enc.set_pipeline(lowrank_delta_pipeline)
+          step_enc.set_buffer(m_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          step_enc.set_buffer(c_buf, 1)
+          step_enc.set_buffer(qbar_buf, 2)
+          step_enc.set_buffer(v_buf, 3)
+          step_enc.set_buffer(g_buf, 4)
+          step_enc.set_buffer(b_buf, 5)
+          step_enc.set_buffer(out_buf, 6, ML::Metal::BufferAccess::Write)
+          step_enc.set_value(h_k.to_u32, 7)
+          step_enc.set_value(h_v.to_u32, 8)
+          step_enc.set_value(s.to_u32, 9)
+          step_enc.set_value(rank.to_u32, 10)
+          step_enc.set_value(scale, 11)
+          step_enc.dispatch_threadgroups({s, h_v, 1}, {1, 1, 1})
+          step_enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+          read_shared_f32(out_buf, h_v * s)
+        end
+
+        # Token-major chunk version of `lowrank_delta_step_projected_buf`.
+        # Inputs contain precomputed recurrent q/k/v/g/beta for a known token
+        # span. The low-rank M state is scanned in token order inside one command
+        # buffer and `out` is returned as [n_tokens, h_v, s].
+        def self.lowrank_delta_chunk_projected_buf(m_state_buf : ML::MetalBuffer,
+                                                   q_conv : Array(Float32),
+                                                   k_conv : Array(Float32),
+                                                   basis_buf : ML::MetalBuffer,
+                                                   v_conv : Array(Float32),
+                                                   ghead : Array(Float32),
+                                                   beta : Array(Float32),
+                                                   h_k : Int32, h_v : Int32, s : Int32,
+                                                   rank : Int32,
+                                                   n_tokens : Int32,
+                                                   scale : Float32) : Array(Float32)
+          ML::Metal::Device.init!
+          raise "lowrank_delta_chunk_projected_buf n_tokens must be positive" unless n_tokens > 0
+          raise "lowrank_delta_chunk_projected_buf rank must be positive" unless rank > 0
+          raise "lowrank_delta_chunk_projected_buf q size mismatch" unless q_conv.size == n_tokens * h_k * s
+          raise "lowrank_delta_chunk_projected_buf k size mismatch" unless k_conv.size == n_tokens * h_k * s
+          raise "lowrank_delta_chunk_projected_buf basis size mismatch" unless basis_buf.size >= (h_k * rank * s).to_i64 * sizeof(Float32)
+          raise "lowrank_delta_chunk_projected_buf v size mismatch" unless v_conv.size == n_tokens * h_v * s
+          raise "lowrank_delta_chunk_projected_buf g size mismatch" unless ghead.size == n_tokens * h_v
+          raise "lowrank_delta_chunk_projected_buf beta size mismatch" unless beta.size == n_tokens * h_v
+          raise "lowrank_delta_chunk_projected_buf state size mismatch" unless m_state_buf.size >= (h_v * s * rank).to_i64 * sizeof(Float32)
+
+          q_buf = Scratch.get(:lowrank_chunk_q, q_conv.size.to_i64 * sizeof(Float32))
+          k_buf = Scratch.get(:lowrank_chunk_k, k_conv.size.to_i64 * sizeof(Float32))
+          c_buf = Scratch.get(:lowrank_chunk_c, (n_tokens * h_k * rank).to_i64 * sizeof(Float32))
+          qbar_buf = Scratch.get(:lowrank_chunk_qbar, (n_tokens * h_k * rank).to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:lowrank_chunk_v, v_conv.size.to_i64 * sizeof(Float32))
+          g_buf = Scratch.get(:lowrank_chunk_g, ghead.size.to_i64 * sizeof(Float32))
+          b_buf = Scratch.get(:lowrank_chunk_b, beta.size.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:lowrank_chunk_out, (n_tokens * h_v * s).to_i64 * sizeof(Float32))
+
+          q_buf.write(q_conv)
+          k_buf.write(k_conv)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+          proj_enc.set_pipeline(lowrank_project_coeffs_chunk_pipeline)
+          proj_enc.set_buffer(q_buf, 0)
+          proj_enc.set_buffer(k_buf, 1)
+          proj_enc.set_buffer(basis_buf, 2)
+          proj_enc.set_buffer(c_buf, 3, ML::Metal::BufferAccess::Write)
+          proj_enc.set_buffer(qbar_buf, 4, ML::Metal::BufferAccess::Write)
+          proj_enc.set_value(h_k.to_u32, 5)
+          proj_enc.set_value(s.to_u32, 6)
+          proj_enc.set_value(rank.to_u32, 7)
+          proj_enc.set_value(n_tokens.to_u32, 8)
+          proj_enc.dispatch_threadgroups({(rank + 7) // 8, h_k, n_tokens * 2}, {8, 1, 1})
+          proj_enc.end_encoding
+
+          scan_enc = ML::Metal::ComputeEncoder.new(cmd)
+          scan_enc.set_pipeline(lowrank_delta_chunk_pipeline)
+          scan_enc.set_buffer(m_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          scan_enc.set_buffer(c_buf, 1)
+          scan_enc.set_buffer(qbar_buf, 2)
+          scan_enc.set_buffer(v_buf, 3)
+          scan_enc.set_buffer(g_buf, 4)
+          scan_enc.set_buffer(b_buf, 5)
+          scan_enc.set_buffer(out_buf, 6, ML::Metal::BufferAccess::Write)
+          scan_enc.set_value(h_k.to_u32, 7)
+          scan_enc.set_value(h_v.to_u32, 8)
+          scan_enc.set_value(s.to_u32, 9)
+          scan_enc.set_value(rank.to_u32, 10)
+          scan_enc.set_value(n_tokens.to_u32, 11)
+          scan_enc.set_value(scale, 12)
+          scan_enc.dispatch_threadgroups({s, h_v, 1}, {128, 1, 1})
+          scan_enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+          read_shared_f32(out_buf, n_tokens * h_v * s)
+        end
+
+        # Low-rank recurrent attention chunk through the output projection:
+        #   project Q/K -> c/qbar -> low-rank M scan -> RMSNorm(y)*SiLU(z)
+        #   -> ssm_out projection.
+        #
+        # Returns token-major `attn_out` [n_tokens, hidden_dim].
+        def self.lowrank_delta_chunk_projected_out_buf(m_state_buf : ML::MetalBuffer,
+                                                       q_conv : Array(Float32),
+                                                       k_conv : Array(Float32),
+                                                       basis_buf : ML::MetalBuffer,
+                                                       v_conv : Array(Float32),
+                                                       ghead : Array(Float32),
+                                                       beta : Array(Float32),
+                                                       z : Array(Float32),
+                                                       ssm_norm : Array(Float32),
+                                                       out_qw : QuantWeight,
+                                                       h_k : Int32, h_v : Int32, s : Int32,
+                                                       rank : Int32,
+                                                       n_tokens : Int32,
+                                                       eps : Float32,
+                                                       scale : Float32) : Array(Float32)?
+          ML::Metal::Device.init!
+          out_pipe = gemv_pipeline_for(out_qw)
+          return nil if out_pipe.nil?
+          inner_dim = h_v * s
+          raise "lowrank_delta_chunk_projected_out n_tokens must be positive" unless n_tokens > 0
+          raise "lowrank_delta_chunk_projected_out rank must be positive" unless rank > 0
+          raise "lowrank_delta_chunk_projected_out q size mismatch" unless q_conv.size == n_tokens * h_k * s
+          raise "lowrank_delta_chunk_projected_out k size mismatch" unless k_conv.size == n_tokens * h_k * s
+          raise "lowrank_delta_chunk_projected_out basis size mismatch" unless basis_buf.size >= (h_k * rank * s).to_i64 * sizeof(Float32)
+          raise "lowrank_delta_chunk_projected_out v size mismatch" unless v_conv.size == n_tokens * h_v * s
+          raise "lowrank_delta_chunk_projected_out g size mismatch" unless ghead.size == n_tokens * h_v
+          raise "lowrank_delta_chunk_projected_out beta size mismatch" unless beta.size == n_tokens * h_v
+          raise "lowrank_delta_chunk_projected_out z size mismatch" unless z.size == n_tokens * inner_dim
+          raise "lowrank_delta_chunk_projected_out norm size mismatch" unless ssm_norm.size == s
+          raise "lowrank_delta_chunk_projected_out projection in_dim mismatch" unless out_qw.in_dim == inner_dim
+          raise "lowrank_delta_chunk_projected_out state size mismatch" unless m_state_buf.size >= (h_v * s * rank).to_i64 * sizeof(Float32)
+
+          q_buf = Scratch.get(:lowrank_chunk_q, q_conv.size.to_i64 * sizeof(Float32))
+          k_buf = Scratch.get(:lowrank_chunk_k, k_conv.size.to_i64 * sizeof(Float32))
+          c_buf = Scratch.get(:lowrank_chunk_c, (n_tokens * h_k * rank).to_i64 * sizeof(Float32))
+          qbar_buf = Scratch.get(:lowrank_chunk_qbar, (n_tokens * h_k * rank).to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:lowrank_chunk_v, v_conv.size.to_i64 * sizeof(Float32))
+          g_buf = Scratch.get(:lowrank_chunk_g, ghead.size.to_i64 * sizeof(Float32))
+          b_buf = Scratch.get(:lowrank_chunk_b, beta.size.to_i64 * sizeof(Float32))
+          z_buf = Scratch.get(:lowrank_chunk_z, z.size.to_i64 * sizeof(Float32))
+          norm_buf = Scratch.get(:lowrank_chunk_norm, ssm_norm.size.to_i64 * sizeof(Float32))
+          mid_buf = Scratch.get(:lowrank_chunk_out, (n_tokens * inner_dim).to_i64 * sizeof(Float32))
+          attn_out_buf = Scratch.get(:lowrank_chunk_attn_out, (n_tokens * out_qw.out_dim).to_i64 * sizeof(Float32))
+
+          q_buf.write(q_conv)
+          k_buf.write(k_conv)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+          z_buf.write(z)
+          norm_buf.write(ssm_norm)
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+          proj_enc.set_pipeline(lowrank_project_coeffs_chunk_pipeline)
+          proj_enc.set_buffer(q_buf, 0)
+          proj_enc.set_buffer(k_buf, 1)
+          proj_enc.set_buffer(basis_buf, 2)
+          proj_enc.set_buffer(c_buf, 3, ML::Metal::BufferAccess::Write)
+          proj_enc.set_buffer(qbar_buf, 4, ML::Metal::BufferAccess::Write)
+          proj_enc.set_value(h_k.to_u32, 5)
+          proj_enc.set_value(s.to_u32, 6)
+          proj_enc.set_value(rank.to_u32, 7)
+          proj_enc.set_value(n_tokens.to_u32, 8)
+          proj_enc.dispatch_threadgroups({(rank + 7) // 8, h_k, n_tokens * 2}, {8, 1, 1})
+          proj_enc.end_encoding
+
+          scan_enc = ML::Metal::ComputeEncoder.new(cmd)
+          scan_enc.set_pipeline(lowrank_delta_chunk_pipeline)
+          scan_enc.set_buffer(m_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          scan_enc.set_buffer(c_buf, 1)
+          scan_enc.set_buffer(qbar_buf, 2)
+          scan_enc.set_buffer(v_buf, 3)
+          scan_enc.set_buffer(g_buf, 4)
+          scan_enc.set_buffer(b_buf, 5)
+          scan_enc.set_buffer(mid_buf, 6, ML::Metal::BufferAccess::Write)
+          scan_enc.set_value(h_k.to_u32, 7)
+          scan_enc.set_value(h_v.to_u32, 8)
+          scan_enc.set_value(s.to_u32, 9)
+          scan_enc.set_value(rank.to_u32, 10)
+          scan_enc.set_value(n_tokens.to_u32, 11)
+          scan_enc.set_value(scale, 12)
+          scan_enc.dispatch_threadgroups({s, h_v, 1}, {128, 1, 1})
+          scan_enc.end_encoding
+
+          post_enc = ML::Metal::ComputeEncoder.new(cmd)
+          post_enc.set_pipeline(dn_post_chunk_pipeline)
+          post_enc.set_buffer(mid_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          post_enc.set_buffer(z_buf, 1)
+          post_enc.set_buffer(norm_buf, 2)
+          post_enc.set_value(h_v.to_u32, 3)
+          post_enc.set_value(s.to_u32, 4)
+          post_enc.set_value(eps, 5)
+          post_enc.set_value(n_tokens.to_u32, 6)
+          post_enc.dispatch_threadgroups({h_v, n_tokens, 1}, {32, 1, 1})
+          post_enc.end_encoding
+
+          out_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_matmul(out_enc, out_pipe.not_nil!, out_qw, mid_buf, attn_out_buf, out_w_buf, out_w_off, out_qw.in_dim, out_qw.out_dim, n_tokens)
+          out_enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+          read_shared_f32(attn_out_buf, n_tokens * out_qw.out_dim)
+        end
+
+        # Same low-rank recurrent attention chunk as above, fused through the
+        # post-attention residual/RMSNorm and FFN tail. This is a known-token-span
+        # building block for the self-spec draft/verifier lane experiments.
+        def self.lowrank_delta_chunk_projected_layer_buf(m_state_buf : ML::MetalBuffer,
+                                                         inp : Array(Float32),
+                                                         q_conv : Array(Float32),
+                                                         k_conv : Array(Float32),
+                                                         basis_buf : ML::MetalBuffer,
+                                                         v_conv : Array(Float32),
+                                                         ghead : Array(Float32),
+                                                         beta : Array(Float32),
+                                                         z : Array(Float32),
+                                                         ssm_norm : Array(Float32),
+                                                         out_qw : QuantWeight,
+                                                         post_attention_norm : Array(Float32),
+                                                         ffn_gate_qw : QuantWeight,
+                                                         ffn_up_qw : QuantWeight,
+                                                         ffn_down_qw : QuantWeight,
+                                                         h_k : Int32, h_v : Int32, s : Int32,
+                                                         rank : Int32,
+                                                         n_tokens : Int32,
+                                                         eps : Float32,
+                                                         scale : Float32) : Array(Float32)?
+          submission = lowrank_delta_chunk_projected_layer_async(m_state_buf, inp, q_conv, k_conv, basis_buf, v_conv, ghead, beta, z,
+            ssm_norm, out_qw, post_attention_norm, ffn_gate_qw, ffn_up_qw, ffn_down_qw,
+            h_k, h_v, s, rank, n_tokens, eps, scale)
+          return nil if submission.nil?
+          wait_lowrank_layer_chunk(submission)
+        end
+
+        def self.lowrank_delta_chunk_projected_layer_updown_buf(m_state_buf : ML::MetalBuffer,
+                                                                inp : Array(Float32),
+                                                                q_conv : Array(Float32),
+                                                                k_conv : Array(Float32),
+                                                                basis_buf : ML::MetalBuffer,
+                                                                v_conv : Array(Float32),
+                                                                ghead : Array(Float32),
+                                                                beta : Array(Float32),
+                                                                z : Array(Float32),
+                                                                ssm_norm : Array(Float32),
+                                                                out_qw : QuantWeight,
+                                                                post_attention_norm : Array(Float32),
+                                                                ffn_gate_qw : QuantWeight,
+                                                                ffn_up_qw : QuantWeight,
+                                                                ffn_down_qw : QuantWeight,
+                                                                updown_x_mean_buf : ML::MetalBuffer,
+                                                                updown_c_mean_buf : ML::MetalBuffer,
+                                                                updown_coeff_w_buf : ML::MetalBuffer,
+                                                                updown_down_buf : ML::MetalBuffer,
+                                                                h_k : Int32, h_v : Int32, s : Int32,
+                                                                rank : Int32,
+                                                                n_tokens : Int32,
+                                                                updown_rank : Int32,
+                                                                eps : Float32,
+                                                                scale : Float32) : Array(Float32)?
+          submission = lowrank_delta_chunk_projected_layer_async(m_state_buf, inp, q_conv, k_conv, basis_buf, v_conv, ghead, beta, z,
+            ssm_norm, out_qw, post_attention_norm, ffn_gate_qw, ffn_up_qw, ffn_down_qw,
+            h_k, h_v, s, rank, n_tokens, eps, scale,
+            updown_x_mean_buf: updown_x_mean_buf,
+            updown_c_mean_buf: updown_c_mean_buf,
+            updown_coeff_w_buf: updown_coeff_w_buf,
+            updown_down_buf: updown_down_buf,
+            updown_rank: updown_rank)
+          return nil if submission.nil?
+          wait_lowrank_layer_chunk(submission)
+        end
+
+        # Probe-only FFN PCA up/down microkernel:
+        #   coeffs = c_mean + (x - x_mean) * coeff_weights^T
+        #   out    = coeffs * down_basis
+        #
+        # This is the cheap draft FFN tail used by `lowrank-ffn-pca-updown-R`.
+        # The current wrapper uploads and reads back for correctness/timing
+        # gates; production use should keep adapter buffers GPU-resident.
+        def self.ffn_pca_updown_out(x : Array(Float32),
+                                    x_mean : Array(Float32),
+                                    c_mean : Array(Float32),
+                                    coeff_weights : Array(Float32),
+                                    down_basis : Array(Float32),
+                                    hidden_dim : Int32,
+                                    rank : Int32) : Array(Float32)
+          ML::Metal::Device.init!
+          raise "ffn_pca_updown hidden_dim must be positive" unless hidden_dim > 0
+          raise "ffn_pca_updown rank must be positive" unless rank > 0
+          raise "ffn_pca_updown x size mismatch" unless x.size == hidden_dim
+          raise "ffn_pca_updown x_mean size mismatch" unless x_mean.size == hidden_dim
+          raise "ffn_pca_updown c_mean size mismatch" unless c_mean.size >= rank
+          raise "ffn_pca_updown coeff_weights size mismatch" unless coeff_weights.size >= rank * hidden_dim
+          raise "ffn_pca_updown down_basis size mismatch" unless down_basis.size >= rank * hidden_dim
+
+          x_buf = Scratch.get(:ffn_updown_x, hidden_dim.to_i64 * sizeof(Float32))
+          x_mean_buf = Scratch.get(:ffn_updown_x_mean, hidden_dim.to_i64 * sizeof(Float32))
+          c_mean_buf = Scratch.get(:ffn_updown_c_mean, rank.to_i64 * sizeof(Float32))
+          coeff_w_buf = Scratch.get(:ffn_updown_coeff_w, (rank * hidden_dim).to_i64 * sizeof(Float32))
+          down_buf = Scratch.get(:ffn_updown_down, (rank * hidden_dim).to_i64 * sizeof(Float32))
+          coeff_buf = Scratch.get(:ffn_updown_coeffs, rank.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:ffn_updown_out, hidden_dim.to_i64 * sizeof(Float32))
+
+          x_buf.write(x)
+          x_mean_buf.write(x_mean)
+          c_mean_buf.write(c_mean[0, rank])
+          coeff_w_buf.write(coeff_weights[0, rank * hidden_dim])
+          down_buf.write(down_basis[0, rank * hidden_dim])
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          coeff_enc = ML::Metal::ComputeEncoder.new(cmd)
+          coeff_enc.set_pipeline(ffn_pca_updown_coeffs_pipeline)
+          coeff_enc.set_buffer(x_buf, 0)
+          coeff_enc.set_buffer(x_mean_buf, 1)
+          coeff_enc.set_buffer(c_mean_buf, 2)
+          coeff_enc.set_buffer(coeff_w_buf, 3)
+          coeff_enc.set_buffer(coeff_buf, 4, ML::Metal::BufferAccess::Write)
+          coeff_enc.set_value(hidden_dim.to_u32, 5)
+          coeff_enc.set_value(rank.to_u32, 6)
+          coeff_enc.dispatch_1d(rank, 64)
+          coeff_enc.end_encoding
+
+          out_enc = ML::Metal::ComputeEncoder.new(cmd)
+          out_enc.set_pipeline(ffn_pca_updown_out_pipeline)
+          out_enc.set_buffer(coeff_buf, 0)
+          out_enc.set_buffer(down_buf, 1)
+          out_enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          out_enc.set_value(hidden_dim.to_u32, 3)
+          out_enc.set_value(rank.to_u32, 4)
+          out_enc.dispatch_1d(hidden_dim, 256)
+          out_enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+          read_shared_f32(out_buf, hidden_dim)
+        end
+
+        def self.ffn_pca_updown_out_resident(x : Array(Float32),
+                                             x_mean_buf : ML::MetalBuffer,
+                                             c_mean_buf : ML::MetalBuffer,
+                                             coeff_w_buf : ML::MetalBuffer,
+                                             down_buf : ML::MetalBuffer,
+                                             hidden_dim : Int32,
+                                             rank : Int32) : Array(Float32)
+          ML::Metal::Device.init!
+          raise "ffn_pca_updown resident hidden_dim must be positive" unless hidden_dim > 0
+          raise "ffn_pca_updown resident rank must be positive" unless rank > 0
+          raise "ffn_pca_updown resident x size mismatch" unless x.size == hidden_dim
+          raise "ffn_pca_updown resident x_mean buffer too small" unless x_mean_buf.size >= hidden_dim.to_i64 * sizeof(Float32)
+          raise "ffn_pca_updown resident c_mean buffer too small" unless c_mean_buf.size >= rank.to_i64 * sizeof(Float32)
+          raise "ffn_pca_updown resident coeff buffer too small" unless coeff_w_buf.size >= (rank * hidden_dim).to_i64 * sizeof(Float32)
+          raise "ffn_pca_updown resident down buffer too small" unless down_buf.size >= (rank * hidden_dim).to_i64 * sizeof(Float32)
+
+          x_buf = Scratch.get(:ffn_updown_resident_x, hidden_dim.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:ffn_updown_resident_out, hidden_dim.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(ffn_pca_updown_fused_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(x_mean_buf, 1)
+          enc.set_buffer(c_mean_buf, 2)
+          enc.set_buffer(coeff_w_buf, 3)
+          enc.set_buffer(down_buf, 4)
+          enc.set_buffer(out_buf, 5, ML::Metal::BufferAccess::Write)
+          enc.set_value(hidden_dim.to_u32, 6)
+          enc.set_value(rank.to_u32, 7)
+          enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+          read_shared_f32(out_buf, hidden_dim)
+        end
+
+        def self.lowrank_delta_chunk_projected_layer_async(m_state_buf : ML::MetalBuffer,
+                                                           inp : Array(Float32),
+                                                           q_conv : Array(Float32),
+                                                           k_conv : Array(Float32),
+                                                           basis_buf : ML::MetalBuffer,
+                                                           v_conv : Array(Float32),
+                                                           ghead : Array(Float32),
+                                                           beta : Array(Float32),
+                                                           z : Array(Float32),
+                                                           ssm_norm : Array(Float32),
+                                                           out_qw : QuantWeight,
+                                                           post_attention_norm : Array(Float32),
+                                                           ffn_gate_qw : QuantWeight,
+                                                           ffn_up_qw : QuantWeight,
+                                                           ffn_down_qw : QuantWeight,
+                                                           h_k : Int32, h_v : Int32, s : Int32,
+                                                           rank : Int32,
+                                                           n_tokens : Int32,
+                                                           eps : Float32,
+                                                           scale : Float32,
+                                                           fresh_scratch : Bool = false,
+                                                           scratch_namespace : String? = nil,
+                                                           command_queue_name : String? = nil,
+                                                           retained_scratch : Array(ML::MetalBuffer)? = nil,
+                                                           updown_x_mean_buf : ML::MetalBuffer? = nil,
+                                                           updown_c_mean_buf : ML::MetalBuffer? = nil,
+                                                           updown_coeff_w_buf : ML::MetalBuffer? = nil,
+                                                           updown_down_buf : ML::MetalBuffer? = nil,
+                                                           updown_rank : Int32 = 0) : LowRankLayerChunkSubmission?
+          if fresh_scratch
+            return Scratch.with_fresh do |retained|
+              lowrank_delta_chunk_projected_layer_async(m_state_buf, inp, q_conv, k_conv, basis_buf, v_conv, ghead, beta, z,
+                ssm_norm, out_qw, post_attention_norm, ffn_gate_qw, ffn_up_qw, ffn_down_qw,
+                h_k, h_v, s, rank, n_tokens, eps, scale, command_queue_name: command_queue_name, retained_scratch: retained,
+                updown_x_mean_buf: updown_x_mean_buf, updown_c_mean_buf: updown_c_mean_buf,
+                updown_coeff_w_buf: updown_coeff_w_buf, updown_down_buf: updown_down_buf, updown_rank: updown_rank)
+            end
+          end
+          if namespace = scratch_namespace
+            return Scratch.with_namespace(namespace) do
+              lowrank_delta_chunk_projected_layer_async(m_state_buf, inp, q_conv, k_conv, basis_buf, v_conv, ghead, beta, z,
+                ssm_norm, out_qw, post_attention_norm, ffn_gate_qw, ffn_up_qw, ffn_down_qw,
+                h_k, h_v, s, rank, n_tokens, eps, scale, command_queue_name: command_queue_name,
+                updown_x_mean_buf: updown_x_mean_buf, updown_c_mean_buf: updown_c_mean_buf,
+                updown_coeff_w_buf: updown_coeff_w_buf, updown_down_buf: updown_down_buf, updown_rank: updown_rank)
+            end
+          end
+          ML::Metal::Device.init!
+          use_updown = !updown_x_mean_buf.nil? && !updown_c_mean_buf.nil? && !updown_coeff_w_buf.nil? && !updown_down_buf.nil? && updown_rank > 0
+          out_pipe = gemv_pipeline_for(out_qw)
+          ffn_gate_pipe = use_updown ? nil : gemv_pipeline_for(ffn_gate_qw)
+          ffn_up_pipe = use_updown ? nil : gemv_pipeline_for(ffn_up_qw)
+          ffn_down_pipe = use_updown ? nil : gemv_pipeline_for(ffn_down_qw)
+          return nil if out_pipe.nil?
+          return nil if !use_updown && (ffn_gate_pipe.nil? || ffn_up_pipe.nil? || ffn_down_pipe.nil?)
+          inner_dim = h_v * s
+          hidden_dim = out_qw.out_dim
+          ffn_dim = ffn_gate_qw.out_dim
+          raise "lowrank_delta_chunk_projected_layer n_tokens must be positive" unless n_tokens > 0
+          raise "lowrank_delta_chunk_projected_layer rank must be positive" unless rank > 0
+          raise "lowrank_delta_chunk_projected_layer input size mismatch" unless inp.size == n_tokens * hidden_dim
+          raise "lowrank_delta_chunk_projected_layer q size mismatch" unless q_conv.size == n_tokens * h_k * s
+          raise "lowrank_delta_chunk_projected_layer k size mismatch" unless k_conv.size == n_tokens * h_k * s
+          raise "lowrank_delta_chunk_projected_layer basis size mismatch" unless basis_buf.size >= (h_k * rank * s).to_i64 * sizeof(Float32)
+          raise "lowrank_delta_chunk_projected_layer v size mismatch" unless v_conv.size == n_tokens * h_v * s
+          raise "lowrank_delta_chunk_projected_layer g size mismatch" unless ghead.size == n_tokens * h_v
+          raise "lowrank_delta_chunk_projected_layer beta size mismatch" unless beta.size == n_tokens * h_v
+          raise "lowrank_delta_chunk_projected_layer z size mismatch" unless z.size == n_tokens * inner_dim
+          raise "lowrank_delta_chunk_projected_layer norm size mismatch" unless ssm_norm.size == s
+          raise "lowrank_delta_chunk_projected_layer post norm size mismatch" unless post_attention_norm.size == hidden_dim
+          raise "lowrank_delta_chunk_projected_layer projection in_dim mismatch" unless out_qw.in_dim == inner_dim
+          raise "lowrank_delta_chunk_projected_layer ffn gate/up mismatch" unless ffn_gate_qw.in_dim == hidden_dim && ffn_up_qw.in_dim == hidden_dim && ffn_gate_qw.out_dim == ffn_up_qw.out_dim
+          raise "lowrank_delta_chunk_projected_layer ffn down mismatch" unless ffn_down_qw.in_dim == ffn_dim && ffn_down_qw.out_dim == hidden_dim
+          if use_updown
+            raise "lowrank_delta_chunk_projected_layer updown rank too large" if updown_rank > 64
+            raise "lowrank_delta_chunk_projected_layer updown x_mean buffer too small" unless updown_x_mean_buf.not_nil!.size >= hidden_dim.to_i64 * sizeof(Float32)
+            raise "lowrank_delta_chunk_projected_layer updown c_mean buffer too small" unless updown_c_mean_buf.not_nil!.size >= updown_rank.to_i64 * sizeof(Float32)
+            raise "lowrank_delta_chunk_projected_layer updown coeff buffer too small" unless updown_coeff_w_buf.not_nil!.size >= (updown_rank * hidden_dim).to_i64 * sizeof(Float32)
+            raise "lowrank_delta_chunk_projected_layer updown down buffer too small" unless updown_down_buf.not_nil!.size >= (updown_rank * hidden_dim).to_i64 * sizeof(Float32)
+          end
+          raise "lowrank_delta_chunk_projected_layer state size mismatch" unless m_state_buf.size >= (h_v * s * rank).to_i64 * sizeof(Float32)
+
+          inp_buf = Scratch.get(:lowrank_layer_inp, inp.size.to_i64 * sizeof(Float32))
+          q_buf = Scratch.get(:lowrank_layer_q, q_conv.size.to_i64 * sizeof(Float32))
+          k_buf = Scratch.get(:lowrank_layer_k, k_conv.size.to_i64 * sizeof(Float32))
+          c_buf = Scratch.get(:lowrank_layer_c, (n_tokens * h_k * rank).to_i64 * sizeof(Float32))
+          qbar_buf = Scratch.get(:lowrank_layer_qbar, (n_tokens * h_k * rank).to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:lowrank_layer_v, v_conv.size.to_i64 * sizeof(Float32))
+          g_buf = Scratch.get(:lowrank_layer_g, ghead.size.to_i64 * sizeof(Float32))
+          b_buf = Scratch.get(:lowrank_layer_b, beta.size.to_i64 * sizeof(Float32))
+          z_buf = Scratch.get(:lowrank_layer_z, z.size.to_i64 * sizeof(Float32))
+          norm_buf = Scratch.get(:lowrank_layer_norm, ssm_norm.size.to_i64 * sizeof(Float32))
+          mid_buf = Scratch.get(:lowrank_layer_mid, (n_tokens * inner_dim).to_i64 * sizeof(Float32))
+          attn_out_buf = Scratch.get(:lowrank_layer_attn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+          post_w_buf = Scratch.get(:lowrank_layer_post_w, post_attention_norm.size.to_i64 * sizeof(Float32))
+          residual_buf = Scratch.get(:lowrank_layer_residual, inp.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:lowrank_layer_normed, inp.size.to_i64 * sizeof(Float32))
+          ffn_gate_buf = Scratch.get(:lowrank_layer_ffn_gate, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_up_buf = Scratch.get(:lowrank_layer_ffn_up, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_comb_buf = Scratch.get(:lowrank_layer_ffn_comb, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_out_buf = Scratch.get(:lowrank_layer_ffn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:lowrank_layer_out, inp.size.to_i64 * sizeof(Float32))
+
+          inp_buf.write(inp)
+          q_buf.write(q_conv)
+          k_buf.write(k_conv)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+          z_buf.write(z)
+          norm_buf.write(ssm_norm)
+          post_w_buf.write(post_attention_norm)
+          out_w_buf, out_w_off = weight_slot(out_qw)
+          ffn_gate_w_buf, ffn_gate_w_off = weight_slot(ffn_gate_qw)
+          ffn_up_w_buf, ffn_up_w_off = weight_slot(ffn_up_qw)
+          ffn_down_w_buf, ffn_down_w_off = weight_slot(ffn_down_qw)
+
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
+          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue)
+
+          proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+          proj_enc.set_pipeline(lowrank_project_coeffs_chunk_pipeline)
+          proj_enc.set_buffer(q_buf, 0)
+          proj_enc.set_buffer(k_buf, 1)
+          proj_enc.set_buffer(basis_buf, 2)
+          proj_enc.set_buffer(c_buf, 3, ML::Metal::BufferAccess::Write)
+          proj_enc.set_buffer(qbar_buf, 4, ML::Metal::BufferAccess::Write)
+          proj_enc.set_value(h_k.to_u32, 5)
+          proj_enc.set_value(s.to_u32, 6)
+          proj_enc.set_value(rank.to_u32, 7)
+          proj_enc.set_value(n_tokens.to_u32, 8)
+          proj_enc.dispatch_threadgroups({(rank + 7) // 8, h_k, n_tokens * 2}, {8, 1, 1})
+          proj_enc.end_encoding
+
+          scan_enc = ML::Metal::ComputeEncoder.new(cmd)
+          scan_enc.set_pipeline(lowrank_delta_chunk_pipeline)
+          scan_enc.set_buffer(m_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          scan_enc.set_buffer(c_buf, 1)
+          scan_enc.set_buffer(qbar_buf, 2)
+          scan_enc.set_buffer(v_buf, 3)
+          scan_enc.set_buffer(g_buf, 4)
+          scan_enc.set_buffer(b_buf, 5)
+          scan_enc.set_buffer(mid_buf, 6, ML::Metal::BufferAccess::Write)
+          scan_enc.set_value(h_k.to_u32, 7)
+          scan_enc.set_value(h_v.to_u32, 8)
+          scan_enc.set_value(s.to_u32, 9)
+          scan_enc.set_value(rank.to_u32, 10)
+          scan_enc.set_value(n_tokens.to_u32, 11)
+          scan_enc.set_value(scale, 12)
+          scan_enc.dispatch_threadgroups({s, h_v, 1}, {128, 1, 1})
+          scan_enc.end_encoding
+
+          post_enc = ML::Metal::ComputeEncoder.new(cmd)
+          post_enc.set_pipeline(dn_post_chunk_pipeline)
+          post_enc.set_buffer(mid_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          post_enc.set_buffer(z_buf, 1)
+          post_enc.set_buffer(norm_buf, 2)
+          post_enc.set_value(h_v.to_u32, 3)
+          post_enc.set_value(s.to_u32, 4)
+          post_enc.set_value(eps, 5)
+          post_enc.set_value(n_tokens.to_u32, 6)
+          post_enc.dispatch_threadgroups({h_v, n_tokens, 1}, {32, 1, 1})
+          post_enc.end_encoding
+
+          out_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_matmul(out_enc, out_pipe.not_nil!, out_qw, mid_buf, attn_out_buf, out_w_buf, out_w_off, out_qw.in_dim, out_qw.out_dim, n_tokens)
+          out_enc.end_encoding
+
+          addnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_add_rmsnorm_rows(addnorm_enc, inp_buf, attn_out_buf, post_w_buf, residual_buf, normed_buf, hidden_dim, n_tokens, eps)
+          addnorm_enc.end_encoding
+
+          if use_updown
+            updown_enc = ML::Metal::ComputeEncoder.new(cmd)
+            updown_enc.set_pipeline(ffn_pca_updown_fused_rows_pipeline)
+            updown_enc.set_buffer(normed_buf, 0)
+            updown_enc.set_buffer(updown_x_mean_buf.not_nil!, 1)
+            updown_enc.set_buffer(updown_c_mean_buf.not_nil!, 2)
+            updown_enc.set_buffer(updown_coeff_w_buf.not_nil!, 3)
+            updown_enc.set_buffer(updown_down_buf.not_nil!, 4)
+            updown_enc.set_buffer(ffn_out_buf, 5, ML::Metal::BufferAccess::Write)
+            updown_enc.set_value(hidden_dim.to_u32, 6)
+            updown_enc.set_value(updown_rank.to_u32, 7)
+            updown_enc.set_value(n_tokens.to_u32, 8)
+            updown_enc.dispatch_threadgroups({n_tokens, 1, 1}, {256, 1, 1})
+            updown_enc.end_encoding
+
+            add_enc = ML::Metal::ComputeEncoder.new(cmd)
+            add_enc.set_pipeline(add_vec_pipeline)
+            add_enc.set_buffer(residual_buf, 0)
+            add_enc.set_buffer(ffn_out_buf, 1)
+            add_enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+            add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
+            add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
+            add_enc.end_encoding
+          else
+            ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+            encode_matmul(ffn_proj_enc, ffn_gate_pipe.not_nil!, ffn_gate_qw, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
+            encode_matmul(ffn_proj_enc, ffn_up_pipe.not_nil!, ffn_up_qw, normed_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, ffn_up_qw.in_dim, ffn_up_qw.out_dim, n_tokens)
+            ffn_proj_enc.end_encoding
+
+            swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+            swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
+            swiglu_enc.set_buffer(ffn_gate_buf, 0)
+            swiglu_enc.set_buffer(ffn_up_buf, 1)
+            swiglu_enc.set_buffer(ffn_comb_buf, 2, ML::Metal::BufferAccess::Write)
+            swiglu_enc.set_value((n_tokens * ffn_dim).to_u32, 3)
+            swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
+            swiglu_enc.end_encoding
+
+            fused_down_add = false
+            if prefill_ffn_down_add_fused_enabled?
+              ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+              fused_down_add = encode_matmul_add(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_comb_buf, residual_buf, out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+              ffn_down_enc.end_encoding
+            end
+
+            unless fused_down_add
+              ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+              encode_matmul(ffn_down_enc, ffn_down_pipe.not_nil!, ffn_down_qw, ffn_comb_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, ffn_down_qw.in_dim, ffn_down_qw.out_dim, n_tokens)
+              ffn_down_enc.end_encoding
+
+              add_enc = ML::Metal::ComputeEncoder.new(cmd)
+              add_enc.set_pipeline(add_vec_pipeline)
+              add_enc.set_buffer(residual_buf, 0)
+              add_enc.set_buffer(ffn_out_buf, 1)
+              add_enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+              add_enc.set_value((n_tokens * hidden_dim).to_u32, 3)
+              add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
+              add_enc.end_encoding
+            end
+          end
+
+          cmd.commit
+          LowRankLayerChunkSubmission.new(cmd, out_buf, n_tokens * hidden_dim, retained_scratch || [] of ML::MetalBuffer)
         end
 
         # Multi-token DeltaNet scan on Metal.
@@ -5191,16 +6124,24 @@ module ML
                                      hp : Qwen35Hparams,
                                      pos : Int32,
                                      top1 : Bool = false,
-                                     emit_head : Bool = true) : Array(Float32)?
+                                     emit_head : Bool = true,
+                                     lowrank_layer_indices : Set(Int32)? = nil,
+                                     lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                     lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                     lowrank_rank : Int32 = 0) : Array(Float32)?
           if submission = forward_decode_wave_async(
                emb, layers,
                k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
-               output_norm, output_qw, hp, pos, top1: top1, emit_head: emit_head)
+               output_norm, output_qw, hp, pos, top1: top1, emit_head: emit_head,
+               lowrank_layer_indices: lowrank_layer_indices,
+               lowrank_state_bufs: lowrank_state_bufs,
+               lowrank_basis_bufs: lowrank_basis_bufs,
+               lowrank_rank: lowrank_rank)
             wait_forward_decode_wave(submission)
           end
         end
 
-        def self.forward_decode_wave_async(emb : Array(Float32),
+        def self.forward_decode_wave_async(emb : Array(Float32)?,
                                            layers : Array(Qwen35LayerWeights),
                                            k_cache_bufs : Array(ML::MetalBuffer?),
                                            v_cache_bufs : Array(ML::MetalBuffer?),
@@ -5213,7 +6154,16 @@ module ML
                                            top1 : Bool = false,
                                            emit_head : Bool = true,
                                            fresh_scratch : Bool = false,
-                                           retained_scratch : Array(ML::MetalBuffer)? = nil) : DecodeWaveSubmission?
+                                           scratch_namespace : String? = nil,
+                                           retained_scratch : Array(ML::MetalBuffer)? = nil,
+                                           lowrank_layer_indices : Set(Int32)? = nil,
+                                           lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_rank : Int32 = 0,
+                                           token_embd_qw : QuantWeight? = nil,
+                                           token_ids_buf : ML::MetalBuffer? = nil,
+                                           token_index : Int32 = 0,
+                                           command_queue_name : String? = nil) : DecodeWaveSubmission?
           # Two-lane callers can request fresh scratch so multiple submitted waves
           # do not race through the pooled temporary buffers before wait/readback.
           if fresh_scratch
@@ -5222,7 +6172,32 @@ module ML
                 emb, layers,
                 k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                 output_norm, output_qw, hp, pos,
-                top1: top1, emit_head: emit_head, fresh_scratch: false, retained_scratch: retained)
+                top1: top1, emit_head: emit_head, fresh_scratch: false, retained_scratch: retained,
+                lowrank_layer_indices: lowrank_layer_indices,
+                lowrank_state_bufs: lowrank_state_bufs,
+                lowrank_basis_bufs: lowrank_basis_bufs,
+                lowrank_rank: lowrank_rank,
+                token_embd_qw: token_embd_qw,
+                token_ids_buf: token_ids_buf,
+                token_index: token_index,
+                command_queue_name: command_queue_name)
+            end
+          end
+          if namespace = scratch_namespace
+            return Scratch.with_namespace(namespace) do
+              forward_decode_wave_async(
+                emb, layers,
+                k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
+                output_norm, output_qw, hp, pos,
+                top1: top1, emit_head: emit_head, scratch_namespace: nil, retained_scratch: retained_scratch,
+                lowrank_layer_indices: lowrank_layer_indices,
+                lowrank_state_bufs: lowrank_state_bufs,
+                lowrank_basis_bufs: lowrank_basis_bufs,
+                lowrank_rank: lowrank_rank,
+                token_embd_qw: token_embd_qw,
+                token_ids_buf: token_ids_buf,
+                token_index: token_index,
+                command_queue_name: command_queue_name)
             end
           end
 
@@ -5231,7 +6206,14 @@ module ML
 
           ML::Metal::Device.init!
 
-          hidden_dim = emb.size
+          hidden_dim = emb ? emb.not_nil!.size : hp.n_embd
+          use_token_embedding = emb.nil?
+          if use_token_embedding
+            return nil unless token_embd = token_embd_qw
+            return nil unless token_ids = token_ids_buf
+            return nil unless token_embd.type.q4_k?
+            return nil unless token_embd.in_dim == hidden_dim
+          end
           q_dim = hp.n_head * hp.head_dim
           kv_dim = hp.n_head_kv * hp.head_dim
           rec_qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
@@ -5279,7 +6261,7 @@ module ML
           ffn_comb_buf = Scratch.get(:wave_ffn_comb, ffn_dim.to_i64 * sizeof(Float32))
           ffn_out_buf = Scratch.get(:wave_ffn_out, hidden_dim.to_i64 * sizeof(Float32))
 
-          src_buf.write(emb)
+          src_buf.write(emb.not_nil!) if emb
           if emit_head
             ConstCache.write_once("wave_output_norm", output_norm_buf.not_nil!, output_norm)
           end
@@ -5348,8 +6330,25 @@ module ML
           chunk_layers = wave_chunk_layers
           pending_cmds = [] of ML::Metal::CommandBuffer
 
+          lr_set = lowrank_layer_indices
+          lr_states = lowrank_state_bufs
+          lr_bases = lowrank_basis_bufs
+          lr_active = !lr_set.nil? && !lr_set.empty? && lowrank_rank > 0 && !lr_states.nil? && !lr_bases.nil?
+          lr_c_buf = lr_active ? Scratch.get(:wave_lr_c, (hp.ssm_group_count * lowrank_rank).to_i64 * sizeof(Float32)) : nil
+          lr_qbar_buf = lr_active ? Scratch.get(:wave_lr_qbar, (hp.ssm_group_count * lowrank_rank).to_i64 * sizeof(Float32)) : nil
+
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
           t0 = Time.instant if Profile.enabled?
-          cmd = ML::Metal::CommandBuffer.new(fast: wave_fast_command_buffer_enabled?)
+          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue, fast: wave_fast_command_buffer_enabled?)
+
+          if use_token_embedding
+            emb_qw = token_embd_qw.not_nil!
+            emb_w_buf, emb_w_off = weight_slot(emb_qw)
+            emb_enc = ML::Metal::ComputeEncoder.new(cmd)
+            encode_embedding_q4k_from_token_id(emb_enc, emb_w_buf, emb_w_off, token_ids_buf.not_nil!, src_buf,
+              hidden_dim, emb_qw.out_dim, token_index)
+            emb_enc.end_encoding
+          end
 
           layers.each_with_index do |lw, il|
             case lw
@@ -5651,28 +6650,41 @@ module ML
                 end
 
                 Profile.trace("rec.dn") do
-                  dn_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  dn_enc.set_pipeline(wave_dn_pipeline)
-                  dn_enc.set_buffer(ssm_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
-                  dn_enc.set_buffer(rec_q_buf, 1)
-                  dn_enc.set_buffer(rec_k_buf, 2)
-                  dn_enc.set_buffer(rec_v_buf, 3)
-                  dn_enc.set_buffer(g_buf, 4)
-                  dn_enc.set_buffer(beta_buf, 5)
-                  dn_enc.set_buffer(rec_mid_buf, 6, ML::Metal::BufferAccess::Write)
-                  dn_enc.set_value(hp.ssm_group_count.to_u32, 7)
-                  dn_enc.set_value(hp.ssm_time_step_rank.to_u32, 8)
-                  dn_enc.set_value(hp.ssm_state_size.to_u32, 9)
-                  dn_enc.set_value(rec_scale, 10)
-                  if use_dn_post_fused
-                    dn_enc.set_buffer(z_buf, 11)
-                    dn_enc.set_buffer(ssm_norm_buf, 12)
-                    dn_enc.set_value(hp.rms_eps, 13)
-                  end
-                  dn_enc.dispatch_threadgroups({hp.ssm_time_step_rank, 1, 1}, {wave_dn_threadgroup_size, 1, 1})
-                  dn_enc.end_encoding
+                  use_lr = lr_active && lr_set.try(&.includes?(il)) == true
+                  if use_lr
+                    lr_state_buf = lr_states.not_nil![il]
+                    lr_basis_buf = lr_bases.not_nil![il]
 
-                  unless use_dn_post_fused
+                    proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    proj_enc.set_pipeline(lowrank_project_coeffs_pipeline)
+                    proj_enc.set_buffer(rec_q_buf, 0)
+                    proj_enc.set_buffer(rec_k_buf, 1)
+                    proj_enc.set_buffer(lr_basis_buf, 2)
+                    proj_enc.set_buffer(lr_c_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
+                    proj_enc.set_buffer(lr_qbar_buf.not_nil!, 4, ML::Metal::BufferAccess::Write)
+                    proj_enc.set_value(hp.ssm_group_count.to_u32, 5)
+                    proj_enc.set_value(hp.ssm_state_size.to_u32, 6)
+                    proj_enc.set_value(lowrank_rank.to_u32, 7)
+                    proj_enc.dispatch_threadgroups({(lowrank_rank + 7) // 8, hp.ssm_group_count, 2}, {8, 1, 1})
+                    proj_enc.end_encoding
+
+                    step_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    step_enc.set_pipeline(lowrank_delta_pipeline)
+                    step_enc.set_buffer(lr_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+                    step_enc.set_buffer(lr_c_buf.not_nil!, 1)
+                    step_enc.set_buffer(lr_qbar_buf.not_nil!, 2)
+                    step_enc.set_buffer(rec_v_buf, 3)
+                    step_enc.set_buffer(g_buf, 4)
+                    step_enc.set_buffer(beta_buf, 5)
+                    step_enc.set_buffer(rec_mid_buf, 6, ML::Metal::BufferAccess::Write)
+                    step_enc.set_value(hp.ssm_group_count.to_u32, 7)
+                    step_enc.set_value(hp.ssm_time_step_rank.to_u32, 8)
+                    step_enc.set_value(hp.ssm_state_size.to_u32, 9)
+                    step_enc.set_value(lowrank_rank.to_u32, 10)
+                    step_enc.set_value(rec_scale, 11)
+                    step_enc.dispatch_threadgroups({hp.ssm_state_size, hp.ssm_time_step_rank, 1}, {1, 1, 1})
+                    step_enc.end_encoding
+
                     post_enc = ML::Metal::ComputeEncoder.new(cmd)
                     post_enc.set_pipeline(dn_post_pipeline)
                     post_enc.set_buffer(rec_mid_buf, 0, ML::Metal::BufferAccess::ReadWrite)
@@ -5683,6 +6695,40 @@ module ML
                     post_enc.set_value(hp.rms_eps, 5)
                     post_enc.dispatch_threadgroups({hp.ssm_time_step_rank, 1, 1}, {32, 1, 1})
                     post_enc.end_encoding
+                  else
+                    dn_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    dn_enc.set_pipeline(wave_dn_pipeline)
+                    dn_enc.set_buffer(ssm_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+                    dn_enc.set_buffer(rec_q_buf, 1)
+                    dn_enc.set_buffer(rec_k_buf, 2)
+                    dn_enc.set_buffer(rec_v_buf, 3)
+                    dn_enc.set_buffer(g_buf, 4)
+                    dn_enc.set_buffer(beta_buf, 5)
+                    dn_enc.set_buffer(rec_mid_buf, 6, ML::Metal::BufferAccess::Write)
+                    dn_enc.set_value(hp.ssm_group_count.to_u32, 7)
+                    dn_enc.set_value(hp.ssm_time_step_rank.to_u32, 8)
+                    dn_enc.set_value(hp.ssm_state_size.to_u32, 9)
+                    dn_enc.set_value(rec_scale, 10)
+                    if use_dn_post_fused
+                      dn_enc.set_buffer(z_buf, 11)
+                      dn_enc.set_buffer(ssm_norm_buf, 12)
+                      dn_enc.set_value(hp.rms_eps, 13)
+                    end
+                    dn_enc.dispatch_threadgroups({hp.ssm_time_step_rank, 1, 1}, {wave_dn_threadgroup_size, 1, 1})
+                    dn_enc.end_encoding
+
+                    unless use_dn_post_fused
+                      post_enc = ML::Metal::ComputeEncoder.new(cmd)
+                      post_enc.set_pipeline(dn_post_pipeline)
+                      post_enc.set_buffer(rec_mid_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+                      post_enc.set_buffer(z_buf, 1)
+                      post_enc.set_buffer(ssm_norm_buf, 2)
+                      post_enc.set_value(hp.ssm_time_step_rank.to_u32, 3)
+                      post_enc.set_value(hp.ssm_state_size.to_u32, 4)
+                      post_enc.set_value(hp.rms_eps, 5)
+                      post_enc.dispatch_threadgroups({hp.ssm_time_step_rank, 1, 1}, {32, 1, 1})
+                      post_enc.end_encoding
+                    end
                   end
                 end
 
@@ -5757,7 +6803,7 @@ module ML
             if chunk_layers > 0 && il + 1 < layers.size && (il + 1) % chunk_layers == 0
               cmd.commit
               pending_cmds << cmd
-              cmd = ML::Metal::CommandBuffer.new(fast: wave_fast_command_buffer_enabled?)
+              cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue, fast: wave_fast_command_buffer_enabled?)
             end
           end
 

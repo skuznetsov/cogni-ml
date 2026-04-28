@@ -269,6 +269,30 @@ extern "C" void* create_command_buffer_impl() {
     return (__bridge_retained void*)cmd;
 }
 
+extern "C" void* gs_create_command_queue() {
+    if (ensure_device() != 0) return nullptr;
+    id<MTLCommandQueue> queue = [gs_device newCommandQueue];
+    return (__bridge_retained void*)queue;
+}
+
+extern "C" void gs_release_command_queue(void* queue_handle) {
+    if (queue_handle == nullptr) return;
+    CFBridgingRelease(queue_handle);
+}
+
+extern "C" void* gs_create_command_buffer_on_queue(void* queue_handle) {
+    if (queue_handle == nullptr) return create_command_buffer_impl();
+    id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)queue_handle;
+    id<MTLCommandBuffer> cmd = [queue commandBuffer];
+    return (__bridge_retained void*)cmd;
+}
+
+extern "C" void* gs_create_command_buffer_fast_on_queue(void* queue_handle) {
+    id<MTLCommandQueue> queue = queue_handle == nullptr ? gs_command_queue : (__bridge id<MTLCommandQueue>)queue_handle;
+    id<MTLCommandBuffer> cmd = [queue commandBufferWithUnretainedReferences];
+    return (__bridge_retained void*)cmd;
+}
+
 // Lightweight command buffer (no retain tracking — faster)
 extern "C" void* gs_create_command_buffer_fast() {
     if (ensure_device() != 0) return nullptr;
