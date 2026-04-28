@@ -27,6 +27,7 @@ adaptive_regrow = ENV["QWEN35_SPEC_ADAPTIVE_REGROW"]? == "1"
 adaptive_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 adaptive_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
 adaptive_bootstrap_gamma = (ENV["QWEN35_SPEC_BOOTSTRAP_GAMMA"]? || "0").to_i
+adaptive_bootstrap_streak = (ENV["QWEN35_SPEC_BOOTSTRAP_STREAK"]? || "1").to_i
 max_gamma = (ENV["QWEN35_SPEC_MAX_GAMMA"]? || "32").to_i
 verify_mode = ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace"
 stage_gate = (ENV["QWEN35_SPEC_STAGE_GATE"]? || gamma.to_s).to_i
@@ -53,7 +54,8 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
   parser.on("--gamma N", "Draft candidates per cycle") { |value| gamma = value.to_i }
   parser.on("--max-gamma N", "Maximum adaptive draft candidates per cycle (default: 32)") { |value| max_gamma = value.to_i }
-  parser.on("--bootstrap-gamma N", "After one fully accepted initial chunk, jump to this gamma (default: env QWEN35_SPEC_BOOTSTRAP_GAMMA or 0/off)") { |value| adaptive_bootstrap_gamma = value.to_i }
+  parser.on("--bootstrap-gamma N", "After enough fully accepted initial chunks, jump to this gamma (default: env QWEN35_SPEC_BOOTSTRAP_GAMMA or 0/off)") { |value| adaptive_bootstrap_gamma = value.to_i }
+  parser.on("--bootstrap-streak N", "Full accepts at initial gamma before --bootstrap-gamma jump (default: env QWEN35_SPEC_BOOTSTRAP_STREAK or 1)") { |value| adaptive_bootstrap_streak = value.to_i }
   parser.on("--adaptive", "Adapt gamma: double after fully accepted cycles, halve after rejection (default)") { adaptive_gamma = true }
   parser.on("--no-adaptive", "Use fixed --gamma for every speculative cycle") { adaptive_gamma = false }
   parser.on("--tokens N", "Generated tokens to compare") { |value| n_gen = value.to_i }
@@ -81,6 +83,7 @@ stage_gate = gamma if stage_gate <= 0
 raise ArgumentError.new("QWEN35_SPEC_FULL_ACCEPT_STREAK must be positive") unless adaptive_full_accept_streak > 0
 raise ArgumentError.new("QWEN35_SPEC_FAST_REGROW_MIN_GAMMA must be non-negative") unless adaptive_fast_regrow_min_gamma >= 0
 raise ArgumentError.new("QWEN35_SPEC_BOOTSTRAP_GAMMA must be non-negative") unless adaptive_bootstrap_gamma >= 0
+raise ArgumentError.new("QWEN35_SPEC_BOOTSTRAP_STREAK must be positive") unless adaptive_bootstrap_streak > 0
 raise ArgumentError.new("--max-gamma must be positive") unless max_gamma > 0
 max_gamma = Math.max(max_gamma, gamma)
 raise ArgumentError.new("QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive") unless plain_fallback_gamma > 0
@@ -183,7 +186,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -603,8 +606,10 @@ while generated_ids.size < n_gen
     elsif adaptive_growth_allowed && candidates.size == cycle_gamma && current_gamma < max_gamma
       full_accept_streak += 1
       if adaptive_bootstrap_gamma > current_gamma && current_gamma == gamma
-        current_gamma = Math.min(max_gamma, adaptive_bootstrap_gamma)
-        full_accept_streak = 0
+        if full_accept_streak >= adaptive_bootstrap_streak
+          current_gamma = Math.min(max_gamma, adaptive_bootstrap_gamma)
+          full_accept_streak = 0
+        end
       else
         required_full_accept_streak = if adaptive_fast_regrow_min_gamma > 0 && current_gamma >= adaptive_fast_regrow_min_gamma
                                         1

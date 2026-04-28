@@ -42,7 +42,7 @@ prompts = [
   "The quick brown fox",
   "def fibonacci(n):",
 ]
-policy_names = ["default", "guard", "bootstrap32", "bootstrap32_guard", "hybrid", "ngram", "ngram_guard"]
+policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "hybrid", "ngram", "ngram_guard"]
 extra_args = [] of String
 
 OptionParser.parse(ARGV) do |p|
@@ -52,7 +52,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--gamma N", "Initial speculative gamma (default: 4)") { |v| gamma = v.to_i }
   p.on("--max-gamma N", "Maximum adaptive gamma (default: 32)") { |v| max_gamma = v.to_i }
   p.on("--reps N", "Repeat each policy/prompt this many times (default: 1)") { |v| reps = v.to_i }
-  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_guard,hybrid,ngram,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
+  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,hybrid,ngram,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
     policy_names = v.split(',').map(&.strip).reject(&.empty?)
   end
   p.on("--prompt TEXT", "Add one prompt; can be passed multiple times") { |v| prompts << v }
@@ -79,6 +79,7 @@ policies = {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
   "bootstrap32"       => Policy.new("bootstrap32", ["--bootstrap-gamma", "32"], {} of String => String),
+  "bootstrap32_s2"    => Policy.new("bootstrap32_s2", ["--bootstrap-gamma", "32", "--bootstrap-streak", "2"], {} of String => String),
   "bootstrap32_guard" => Policy.new("bootstrap32_guard", ["--bootstrap-gamma", "32", "--allow-guarded-verifier"], {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
