@@ -18,6 +18,7 @@ record Policy, name : String, args : Array(String), env : Hash(String, String)
 record RunResult,
   policy : String,
   prompt : String,
+  rep : Int32,
   ok : Bool,
   spec_ms_tok : Float64?,
   plain_ms_tok : Float64?,
@@ -105,6 +106,7 @@ end
 def run_one(runner : String,
             policy : Policy,
             prompt : String,
+            rep : Int32,
             tokens : Int32,
             gamma : Int32,
             max_gamma : Int32,
@@ -139,6 +141,7 @@ def run_one(runner : String,
   RunResult.new(
     policy: policy.name,
     prompt: prompt,
+    rep: rep,
     ok: status.success? && !!spec && !!plain,
     spec_ms_tok: spec,
     plain_ms_tok: plain,
@@ -158,10 +161,10 @@ results = [] of RunResult
 
 # Interleave policies inside each prompt/rep block so host drift affects the
 # candidates more evenly than a policy-major run order.
-reps.times do
+reps.times do |rep|
   prompts.each do |prompt|
     selected.each do |policy|
-      result = run_one(runner, policy, prompt, tokens, gamma, max_gamma, extra_args)
+      result = run_one(runner, policy, prompt, rep, tokens, gamma, max_gamma, extra_args)
       results << result
       unless result.ok
         STDERR.puts "FAILED policy=#{policy.name} prompt=#{prompt.inspect}"
@@ -169,6 +172,11 @@ reps.times do
       end
     end
   end
+end
+
+baseline_by_key = Hash({String, Int32}, RunResult).new
+results.each do |r|
+  baseline_by_key[{r.prompt, r.rep}] = r if r.policy == "default" && r.ok
 end
 
 puts "Qwen35 speculative policy sweep"
@@ -210,4 +218,25 @@ selected.each do |policy|
   accept_avg = rows.compact_map(&.accept_rate).sum / rows.size
   printf "%-18s %9.2f %9.2f %7.3fx %8.2f%% %7d\n",
     policy.name, spec_avg, plain_avg, speed_avg, accept_avg, rows.size
+end
+
+if baseline_by_key.any?
+  puts
+  puts "Paired vs default"
+  printf "%-18s %7s %7s %10s %10s\n", "policy", "wins", "pairs", "delta_ms", "avg_ratio"
+  selected.each do |policy|
+    next if policy.name == "default"
+    pairs = results.compact_map do |r|
+      next unless r.policy == policy.name && r.ok
+      base = baseline_by_key[{r.prompt, r.rep}]?
+      next unless base && base.spec_ms_tok && r.spec_ms_tok
+      {r.spec_ms_tok.not_nil! - base.spec_ms_tok.not_nil!, r.spec_ms_tok.not_nil! / base.spec_ms_tok.not_nil!}
+    end
+    next if pairs.empty?
+    wins = pairs.count { |(delta, _ratio)| delta < 0.0 }
+    avg_delta = pairs.sum { |(delta, _ratio)| delta } / pairs.size
+    avg_ratio = pairs.sum { |(_delta, ratio)| ratio } / pairs.size
+    printf "%-18s %7d %7d %10.2f %9.3fx\n",
+      policy.name, wins, pairs.size, avg_delta, avg_ratio
+  end
 end
