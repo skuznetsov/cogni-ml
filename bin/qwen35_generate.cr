@@ -50,6 +50,7 @@ spec_plain_fallback_gamma = (ENV["QWEN35_SPEC_PLAIN_FALLBACK_GAMMA"]? || "2").to
 spec_full_accept_streak = (ENV["QWEN35_SPEC_FULL_ACCEPT_STREAK"]? || "2").to_i
 spec_fast_regrow_min_gamma = (ENV["QWEN35_SPEC_FAST_REGROW_MIN_GAMMA"]? || "8").to_i
 spec_bootstrap_gamma = (ENV["QWEN35_SPEC_BOOTSTRAP_GAMMA"]? || "0").to_i
+spec_bootstrap_streak = (ENV["QWEN35_SPEC_BOOTSTRAP_STREAK"]? || "1").to_i
 spec_single_fast_enabled = ENV["QWEN35_SPEC_SINGLE_FAST_OFF"]? != "1"
 spec_verify_mode = (ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace").downcase
 spec_skip_draft_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF"]? != "1"
@@ -70,6 +71,7 @@ raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fall
 raise "QWEN35_SPEC_FULL_ACCEPT_STREAK must be positive" unless spec_full_accept_streak > 0
 raise "QWEN35_SPEC_FAST_REGROW_MIN_GAMMA must be non-negative" unless spec_fast_regrow_min_gamma >= 0
 raise "QWEN35_SPEC_BOOTSTRAP_GAMMA must be non-negative" unless spec_bootstrap_gamma >= 0
+raise "QWEN35_SPEC_BOOTSTRAP_STREAK must be positive" unless spec_bootstrap_streak > 0
 unless spec_verify_mode == "chunk-inplace" || spec_verify_mode == "hybrid" || spec_verify_mode == "serial"
   raise "QWEN35_SPEC_VERIFY must be chunk-inplace, hybrid, or serial"
 end
@@ -237,7 +239,7 @@ end
 if speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
-  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma} single_fast=#{spec_single_fast_enabled} verify=#{spec_verify_mode}"
+  puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} bootstrap_streak=#{spec_bootstrap_streak} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma} single_fast=#{spec_single_fast_enabled} verify=#{spec_verify_mode}"
 
   decode_t0 = Time.instant
   target_next = output_ids.pop
@@ -434,8 +436,10 @@ if speculative_decode_enabled && !output_ids.empty?
     elsif adaptive_growth_allowed && candidates.size == cycle_gamma && current_gamma < spec_max_gamma
       full_accept_streak += 1
       if spec_bootstrap_gamma > current_gamma && current_gamma == spec_gamma
-        current_gamma = Math.min(spec_max_gamma, spec_bootstrap_gamma)
-        full_accept_streak = 0
+        if full_accept_streak >= spec_bootstrap_streak
+          current_gamma = Math.min(spec_max_gamma, spec_bootstrap_gamma)
+          full_accept_streak = 0
+        end
       else
         required = if spec_fast_regrow_min_gamma > 0 && current_gamma >= spec_fast_regrow_min_gamma
                      1
