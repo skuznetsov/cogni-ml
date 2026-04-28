@@ -1637,13 +1637,17 @@ module ML::GGUF
                                   lowrank_layer_indices : Set(Int32),
                                   lowrank_state_bufs : Hash(Int32, ML::MetalBuffer),
                                   lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
-                                  lowrank_rank : Int32) : {Int32, Float32}?
+                                  lowrank_rank : Int32,
+                                  lowrank_skip_ffn : Bool = false,
+                                  skip_recurrent_ffn : Bool = false) : {Int32, Float32}?
         submission = forward_decode_wave_routed_async(weights, token_id, pos, state,
           top1: true, emit_head: true,
           lowrank_layer_indices: lowrank_layer_indices,
           lowrank_state_bufs: lowrank_state_bufs,
           lowrank_basis_bufs: lowrank_basis_bufs,
-          lowrank_rank: lowrank_rank)
+          lowrank_rank: lowrank_rank,
+          lowrank_skip_ffn: lowrank_skip_ffn,
+          skip_recurrent_ffn: skip_recurrent_ffn)
         return nil unless submission
         packed = Qwen35Metal.wait_forward_decode_wave(submission)
         raise "self-draft decode returned #{packed.size} values" unless packed.size == 2
@@ -1659,6 +1663,8 @@ module ML::GGUF
                                                        lowrank_state_bufs : Hash(Int32, ML::MetalBuffer),
                                                        lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
                                                        lowrank_rank : Int32,
+                                                       lowrank_skip_ffn : Bool = false,
+                                                       skip_recurrent_ffn : Bool = false,
                                                        scratch_namespace : String? = nil,
                                                        command_queue_name : String? = nil,
                                                        append_command_buffer : ML::Metal::CommandBuffer? = nil) : Qwen35Metal::DecodeWaveSubmission?
@@ -1669,6 +1675,8 @@ module ML::GGUF
           lowrank_state_bufs: lowrank_state_bufs,
           lowrank_basis_bufs: lowrank_basis_bufs,
           lowrank_rank: lowrank_rank,
+          lowrank_skip_ffn: lowrank_skip_ffn,
+          skip_recurrent_ffn: skip_recurrent_ffn,
           token_ids_buf: token_ids_buf,
           token_index: token_index,
           command_queue_name: command_queue_name,
@@ -2027,6 +2035,8 @@ module ML::GGUF
                                                  lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                                  lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                                  lowrank_rank : Int32 = 0,
+                                                 lowrank_skip_ffn : Bool = false,
+                                                 skip_recurrent_ffn : Bool = false,
                                                  token_ids_buf : ML::MetalBuffer? = nil,
                                                  token_index : Int32 = 0,
                                                  command_queue_name : String? = nil,
@@ -2117,6 +2127,8 @@ module ML::GGUF
           lowrank_state_bufs: lowrank_state_bufs,
           lowrank_basis_bufs: lowrank_basis_bufs,
           lowrank_rank: lowrank_rank,
+          lowrank_skip_ffn: lowrank_skip_ffn,
+          skip_recurrent_ffn: skip_recurrent_ffn,
           token_embd_qw: weights.token_embd,
           token_ids_buf: token_ids_buf,
           token_index: token_index,

@@ -6216,6 +6216,8 @@ module ML
                                            lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                            lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                            lowrank_rank : Int32 = 0,
+                                           lowrank_skip_ffn : Bool = false,
+                                           skip_recurrent_ffn : Bool = false,
                                            token_embd_qw : QuantWeight? = nil,
                                            token_ids_buf : ML::MetalBuffer? = nil,
                                            token_index : Int32 = 0,
@@ -6234,6 +6236,8 @@ module ML
                 lowrank_state_bufs: lowrank_state_bufs,
                 lowrank_basis_bufs: lowrank_basis_bufs,
                 lowrank_rank: lowrank_rank,
+                lowrank_skip_ffn: lowrank_skip_ffn,
+                skip_recurrent_ffn: skip_recurrent_ffn,
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
@@ -6252,6 +6256,8 @@ module ML
                 lowrank_state_bufs: lowrank_state_bufs,
                 lowrank_basis_bufs: lowrank_basis_bufs,
                 lowrank_rank: lowrank_rank,
+                lowrank_skip_ffn: lowrank_skip_ffn,
+                skip_recurrent_ffn: skip_recurrent_ffn,
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
@@ -6319,8 +6325,12 @@ module ML
           ffn_up_buf = Scratch.get(:wave_ffn_up, ffn_dim.to_i64 * sizeof(Float32))
           ffn_comb_buf = Scratch.get(:wave_ffn_comb, ffn_dim.to_i64 * sizeof(Float32))
           ffn_out_buf = Scratch.get(:wave_ffn_out, hidden_dim.to_i64 * sizeof(Float32))
+          zero_hidden_buf = (lowrank_skip_ffn || skip_recurrent_ffn) ? Scratch.get(:wave_zero_hidden, hidden_dim.to_i64 * sizeof(Float32)) : nil
 
           src_buf.write(emb.not_nil!) if emb
+          if zh = zero_hidden_buf
+            ConstCache.write_zero_f32_once("wave_zero_hidden", zh, hidden_dim)
+          end
           if emit_head
             ConstCache.write_once("wave_output_norm", output_norm_buf.not_nil!, output_norm)
           end
@@ -6708,8 +6718,9 @@ module ML
                   ab_enc.end_encoding
                 end
 
+                use_lr = lr_active && lr_set.try(&.includes?(il)) == true
+
                 Profile.trace("rec.dn") do
-                  use_lr = lr_active && lr_set.try(&.includes?(il)) == true
                   if use_lr
                     lr_state_buf = lr_states.not_nil![il]
                     lr_basis_buf = lr_bases.not_nil![il]
@@ -6803,56 +6814,69 @@ module ML
                   addnorm_enc.end_encoding
                 end
 
-                Profile.trace("rec.ffn_upgate") do
-                  ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  if q8_dual_gemv_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw)
-                    encode_gemv_q8_dual(ffn_proj_enc, pre_norm_buf, ffn_gate_buf, ffn_up_buf,
-                      ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
-                      lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
-                  else
-                    encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
-                    encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
-                  end
-                  ffn_proj_enc.end_encoding
-                end
-
-                Profile.trace("rec.ffn_act") do
-                  swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  ffn_act_buf = decode_swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
-                  swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
-                  swiglu_enc.set_buffer(ffn_gate_buf, 0)
-                  swiglu_enc.set_buffer(ffn_up_buf, 1)
-                  swiglu_enc.set_buffer(ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
-                  swiglu_enc.set_value(lw.ffn_gate_qw.out_dim.to_u32, 3)
-                  swiglu_enc.dispatch_1d(lw.ffn_gate_qw.out_dim, 256)
-                  swiglu_enc.end_encoding
-                end
-
-                if ffn_down_add_fused_enabled? && (add_pipe = gemv_add_pipeline_for(lw.ffn_down_qw))
-                  Profile.trace("rec.ffn_down_add") do
-                    ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-                    ffn_act_buf = decode_swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
-                    encode_gemv_add(ffn_down_enc, add_pipe, ffn_act_buf, residual_buf, dst_buf,
-                      ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim)
-                    ffn_down_enc.end_encoding
+                if skip_recurrent_ffn || (use_lr && lowrank_skip_ffn)
+                  Profile.trace("rec.ffn_skip") do
+                    copy_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    copy_enc.set_pipeline(add_vec_pipeline)
+                    copy_enc.set_buffer(residual_buf, 0)
+                    copy_enc.set_buffer(zero_hidden_buf.not_nil!, 1)
+                    copy_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
+                    copy_enc.set_value(hidden_dim.to_u32, 3)
+                    copy_enc.dispatch_1d(hidden_dim, 256)
+                    copy_enc.end_encoding
                   end
                 else
-                  Profile.trace("rec.ffn_down") do
-                    ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
-                    ffn_act_buf = decode_swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
-                    encode_gemv(ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, ffn_act_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim)
-                    ffn_down_enc.end_encoding
+                  Profile.trace("rec.ffn_upgate") do
+                    ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    if q8_dual_gemv_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw)
+                      encode_gemv_q8_dual(ffn_proj_enc, pre_norm_buf, ffn_gate_buf, ffn_up_buf,
+                        ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
+                        lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
+                    else
+                      encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
+                      encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
+                    end
+                    ffn_proj_enc.end_encoding
                   end
 
-                  Profile.trace("rec.add") do
-                    add_enc = ML::Metal::ComputeEncoder.new(cmd)
-                    add_enc.set_pipeline(add_vec_pipeline)
-                    add_enc.set_buffer(residual_buf, 0)
-                    add_enc.set_buffer(ffn_out_buf, 1)
-                    add_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
-                    add_enc.set_value(hidden_dim.to_u32, 3)
-                    add_enc.dispatch_1d(hidden_dim, 256)
-                    add_enc.end_encoding
+                  Profile.trace("rec.ffn_act") do
+                    swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    ffn_act_buf = decode_swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
+                    swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
+                    swiglu_enc.set_buffer(ffn_gate_buf, 0)
+                    swiglu_enc.set_buffer(ffn_up_buf, 1)
+                    swiglu_enc.set_buffer(ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
+                    swiglu_enc.set_value(lw.ffn_gate_qw.out_dim.to_u32, 3)
+                    swiglu_enc.dispatch_1d(lw.ffn_gate_qw.out_dim, 256)
+                    swiglu_enc.end_encoding
+                  end
+
+                  if ffn_down_add_fused_enabled? && (add_pipe = gemv_add_pipeline_for(lw.ffn_down_qw))
+                    Profile.trace("rec.ffn_down_add") do
+                      ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+                      ffn_act_buf = decode_swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
+                      encode_gemv_add(ffn_down_enc, add_pipe, ffn_act_buf, residual_buf, dst_buf,
+                        ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim)
+                      ffn_down_enc.end_encoding
+                    end
+                  else
+                    Profile.trace("rec.ffn_down") do
+                      ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+                      ffn_act_buf = decode_swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
+                      encode_gemv(ffn_down_enc, gemv_pipeline_for(lw.ffn_down_qw).not_nil!, ffn_act_buf, ffn_out_buf, ffn_down_w_buf, ffn_down_w_off, lw.ffn_down_qw.in_dim, lw.ffn_down_qw.out_dim)
+                      ffn_down_enc.end_encoding
+                    end
+
+                    Profile.trace("rec.add") do
+                      add_enc = ML::Metal::ComputeEncoder.new(cmd)
+                      add_enc.set_pipeline(add_vec_pipeline)
+                      add_enc.set_buffer(residual_buf, 0)
+                      add_enc.set_buffer(ffn_out_buf, 1)
+                      add_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
+                      add_enc.set_value(hidden_dim.to_u32, 3)
+                      add_enc.dispatch_1d(hidden_dim, 256)
+                      add_enc.end_encoding
+                    end
                   end
                 end
               end
