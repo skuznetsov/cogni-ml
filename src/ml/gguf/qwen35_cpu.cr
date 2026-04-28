@@ -1660,7 +1660,8 @@ module ML::GGUF
                                                        lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
                                                        lowrank_rank : Int32,
                                                        scratch_namespace : String? = nil,
-                                                       command_queue_name : String? = nil) : Qwen35Metal::DecodeWaveSubmission?
+                                                       command_queue_name : String? = nil,
+                                                       append_command_buffer : ML::Metal::CommandBuffer? = nil) : Qwen35Metal::DecodeWaveSubmission?
         forward_decode_wave_routed_async(weights, 0, pos, state,
           top1: true, emit_head: true,
           scratch_namespace: scratch_namespace,
@@ -1670,7 +1671,8 @@ module ML::GGUF
           lowrank_rank: lowrank_rank,
           token_ids_buf: token_ids_buf,
           token_index: token_index,
-          command_queue_name: command_queue_name)
+          command_queue_name: command_queue_name,
+          append_command_buffer: append_command_buffer)
       end
     {% end %}
 
@@ -2027,7 +2029,8 @@ module ML::GGUF
                                                  lowrank_rank : Int32 = 0,
                                                  token_ids_buf : ML::MetalBuffer? = nil,
                                                  token_index : Int32 = 0,
-                                                 command_queue_name : String? = nil)
+                                                 command_queue_name : String? = nil,
+                                                 append_command_buffer : ML::Metal::CommandBuffer? = nil)
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -2117,7 +2120,8 @@ module ML::GGUF
           token_embd_qw: weights.token_embd,
           token_ids_buf: token_ids_buf,
           token_index: token_index,
-          command_queue_name: command_queue_name)
+          command_queue_name: command_queue_name,
+          append_command_buffer: append_command_buffer)
       {% else %}
         nil
       {% end %}

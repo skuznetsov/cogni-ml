@@ -111,6 +111,41 @@ kernel void lowrank_project_coeffs_chunk(
     }
 }
 
+// Project a full DeltaNet recurrent state into the fixed low-rank basis used by
+// the draft branch.
+//
+// Layout:
+//   full_state [h_v, s, s]
+//   basis      [h_k, rank, s]
+//   out        [h_v, s, rank]
+//
+// Dispatch grid: (rank, s, h_v). For each value head and state row, compute
+// dot(full_state[h, row, :], basis[h % h_k, j, :]).
+kernel void lowrank_project_state(
+    device const float* full_state [[buffer(0)]],
+    device const float* basis      [[buffer(1)]],
+    device       float* out        [[buffer(2)]],
+    constant     uint&  h_k        [[buffer(3)]],
+    constant     uint&  h_v        [[buffer(4)]],
+    constant     uint&  s          [[buffer(5)]],
+    constant     uint&  rank       [[buffer(6)]],
+    uint3 tid [[thread_position_in_grid]])
+{
+    const uint j = tid.x;
+    const uint row = tid.y;
+    const uint h = tid.z;
+    if (j >= rank || row >= s || h >= h_v) return;
+
+    const uint basis_h = h % h_k;
+    device const float* src = full_state + (h * s + row) * s;
+    device const float* b = basis + (basis_h * rank + j) * s;
+    float acc = 0.0f;
+    for (uint d = 0; d < s; ++d) {
+        acc += src[d] * b[d];
+    }
+    out[(h * s + row) * rank + j] = acc;
+}
+
 // Predict FFN PCA coefficients directly from the post-attention FFN input.
 //
 // Layout:

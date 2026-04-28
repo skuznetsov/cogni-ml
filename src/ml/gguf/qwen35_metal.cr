@@ -121,6 +121,7 @@ module ML
         @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_coeffs_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_coeffs_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@lowrank_project_state_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_delta_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_delta_chunk_pipeline : ML::Metal::ComputePipeline?
         @@ffn_pca_updown_coeffs_pipeline : ML::Metal::ComputePipeline?
@@ -400,6 +401,12 @@ module ML
 
         private def self.lane_command_queue(name : String) : ML::Metal::CommandQueue
           @@lane_command_queues[name] ||= ML::Metal::CommandQueue.new
+        end
+
+        def self.decode_wave_command_buffer(command_queue_name : String? = nil) : ML::Metal::CommandBuffer
+          ML::Metal::Device.init!
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
+          ML::Metal::CommandBuffer.new(queue: cmd_queue, fast: wave_fast_command_buffer_enabled?)
         end
 
         # ── Phase 4.2 scratch pool ─────────────────────────────────────
@@ -891,6 +898,12 @@ module ML
         private def self.lowrank_project_coeffs_chunk_pipeline : ML::Metal::ComputePipeline
           @@lowrank_project_coeffs_chunk_pipeline ||= ML::Metal::PipelineCache.get("lowrank_project_coeffs_chunk") {
             ML::Metal::ComputePipeline.new("lowrank_project_coeffs_chunk", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.lowrank_project_state_pipeline : ML::Metal::ComputePipeline
+          @@lowrank_project_state_pipeline ||= ML::Metal::PipelineCache.get("lowrank_project_state") {
+            ML::Metal::ComputePipeline.new("lowrank_project_state", DELTA_NET_SOURCE)
           }
         end
 
@@ -2205,6 +2218,49 @@ module ML
           cmd.commit
           cmd.wait
           read_shared_f32(out_buf, h_v * s)
+        end
+
+        def self.lowrank_project_state_buf(full_state_buf : ML::MetalBuffer,
+                                           basis_buf : ML::MetalBuffer,
+                                           h_k : Int32, h_v : Int32, s : Int32,
+                                           rank : Int32,
+                                           command_queue_name : String? = nil) : ML::MetalBuffer
+          ML::Metal::Device.init!
+          raise "lowrank_project_state rank must be positive" unless rank > 0
+          raise "lowrank_project_state full state size mismatch" unless full_state_buf.size >= (h_v * s * s).to_i64 * sizeof(Float32)
+          raise "lowrank_project_state basis size mismatch" unless basis_buf.size >= (h_k * rank * s).to_i64 * sizeof(Float32)
+
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
+          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue, fast: wave_fast_command_buffer_enabled?)
+          out_buf = lowrank_project_state_append(full_state_buf, basis_buf, h_k, h_v, s, rank, cmd)
+          cmd.commit
+          cmd.wait
+          out_buf
+        end
+
+        def self.lowrank_project_state_append(full_state_buf : ML::MetalBuffer,
+                                              basis_buf : ML::MetalBuffer,
+                                              h_k : Int32, h_v : Int32, s : Int32,
+                                              rank : Int32,
+                                              cmd : ML::Metal::CommandBuffer) : ML::MetalBuffer
+          ML::Metal::Device.init!
+          raise "lowrank_project_state rank must be positive" unless rank > 0
+          raise "lowrank_project_state full state size mismatch" unless full_state_buf.size >= (h_v * s * s).to_i64 * sizeof(Float32)
+          raise "lowrank_project_state basis size mismatch" unless basis_buf.size >= (h_k * rank * s).to_i64 * sizeof(Float32)
+
+          out_buf = ML::MetalBuffer.new((h_v * s * rank).to_i64 * sizeof(Float32))
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(lowrank_project_state_pipeline)
+          enc.set_buffer(full_state_buf, 0)
+          enc.set_buffer(basis_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(h_k.to_u32, 3)
+          enc.set_value(h_v.to_u32, 4)
+          enc.set_value(s.to_u32, 5)
+          enc.set_value(rank.to_u32, 6)
+          enc.dispatch_threadgroups({(rank + 7) // 8, s, h_v}, {8, 1, 1})
+          enc.end_encoding
+          out_buf
         end
 
         # Token-major chunk version of `lowrank_delta_step_projected_buf`.
@@ -6163,7 +6219,8 @@ module ML
                                            token_embd_qw : QuantWeight? = nil,
                                            token_ids_buf : ML::MetalBuffer? = nil,
                                            token_index : Int32 = 0,
-                                           command_queue_name : String? = nil) : DecodeWaveSubmission?
+                                           command_queue_name : String? = nil,
+                                           append_command_buffer : ML::Metal::CommandBuffer? = nil) : DecodeWaveSubmission?
           # Two-lane callers can request fresh scratch so multiple submitted waves
           # do not race through the pooled temporary buffers before wait/readback.
           if fresh_scratch
@@ -6180,7 +6237,8 @@ module ML
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
-                command_queue_name: command_queue_name)
+                command_queue_name: command_queue_name,
+                append_command_buffer: append_command_buffer)
             end
           end
           if namespace = scratch_namespace
@@ -6197,7 +6255,8 @@ module ML
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
-                command_queue_name: command_queue_name)
+                command_queue_name: command_queue_name,
+                append_command_buffer: append_command_buffer)
             end
           end
 
@@ -6327,7 +6386,7 @@ module ML
           wave_dn_pipeline = use_dn_post_fused ? dn128_fused_post_pipeline : active_dn_pipeline
           wave_dn_threadgroup_size = use_dn_post_fused ? 128 : dn_threadgroup_size
           use_conv_shift_fused = recurrent_conv_shift_fused_enabled?
-          chunk_layers = wave_chunk_layers
+          chunk_layers = append_command_buffer ? 0 : wave_chunk_layers
           pending_cmds = [] of ML::Metal::CommandBuffer
 
           lr_set = lowrank_layer_indices
@@ -6339,7 +6398,7 @@ module ML
 
           cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
           t0 = Time.instant if Profile.enabled?
-          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue, fast: wave_fast_command_buffer_enabled?)
+          cmd = append_command_buffer || ML::Metal::CommandBuffer.new(queue: cmd_queue, fast: wave_fast_command_buffer_enabled?)
 
           if use_token_embedding
             emb_qw = token_embd_qw.not_nil!
@@ -6851,7 +6910,7 @@ module ML
           end
 
           t_enc = Time.instant if Profile.enabled?
-          cmd.commit
+          cmd.commit unless append_command_buffer
           DecodeWaveSubmission.new(
             cmd, pending_cmds, emit_head, use_head_top1,
             logits_buf, top1_id_buf, top1_value_buf, output_qw.out_dim,

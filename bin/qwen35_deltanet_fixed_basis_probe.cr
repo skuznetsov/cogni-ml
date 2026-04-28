@@ -10,6 +10,7 @@ DEFAULT_MODEL     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Q
 DEFAULT_TOKENIZER = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 DEFAULT_PROMPT    = "The quick brown fox jumps over the lazy dog. Describe this scene in detail, then explain how weather, geometry, and memory interact in a compact machine learning runtime. " \
                     "Use precise technical language and include several short code-like phrases so the token stream is varied."
+DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS = 1
 
 private alias BasisSet = Array(Array(Array(Float64)))
 private alias LayerBasisMap = Hash(Int32, BasisSet)
@@ -3729,14 +3730,16 @@ private def simulate_self_draft_metal_baseline_run(weights : ML::GGUF::Qwen35Wei
   build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State) {
     bufs = {} of Int32 => ML::MetalBuffer
     layer_bases.each do |il, bs|
-      buf = ML::MetalBuffer.new(state_size_bytes)
       ssm_buf = state.layers[il].ssm_state_buf
-      full_state = if ssm_buf
-                     ssm_buf.read(full_state_size)
-                   else
-                     state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
-                   end
-      buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+      buf = if ssm_buf
+              ML::GGUF::Qwen35Metal.lowrank_project_state_buf(ssm_buf, shared_basis_bufs[il],
+                h_k, h_v, s, rank, command_queue_name: "self_spec_gpu_pipeline_draft")
+            else
+              cpu_buf = ML::MetalBuffer.new(state_size_bytes)
+              full_state = state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
+              cpu_buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+              cpu_buf
+            end
       bufs[il] = buf
     end
     bufs
@@ -4008,7 +4011,9 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                                                 gen_tokens : Int32,
                                                 gamma : Int32,
                                                 layer_bases : LayerBasisMap,
-                                                rank : Int32) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, controller_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, parity: Bool, exact_ids: Array(Int32), emitted_ids: Array(Int32))
+                                                rank : Int32,
+                                                use_verifier_backup : Bool = true,
+                                                draft_block_tokens : Int32? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, parity: Bool, exact_ids: Array(Int32), emitted_ids: Array(Int32))
   raise "GPU pipeline requires Metal" unless ML::GGUF::Qwen35Metal.available?
   raise "GPU pipeline gamma must be positive" unless gamma > 0
   raise "GPU pipeline gen_tokens must be positive" unless gen_tokens > 0
@@ -4035,19 +4040,33 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     buf.write(flatten_basis_for_metal(bs, rank, h_k, s))
     shared_basis_bufs[il] = buf
   end
+  if first_basis = shared_basis_bufs.values.first?
+    warm_full_state = ML::MetalBuffer.new(full_state_size.to_i64 * sizeof(Float32))
+    warm_full_state.contents.as(Pointer(UInt8)).clear(warm_full_state.size)
+    ML::GGUF::Qwen35Metal.lowrank_project_state_buf(warm_full_state, first_basis,
+      h_k, h_v, s, rank, command_queue_name: "self_spec_gpu_pipeline_draft")
+  end
   wba = WbaTrace.maybe("self_spec_gpu_pipeline")
 
-  build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State) {
+  build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State,
+                       block_cmd : ML::Metal::CommandBuffer?) {
     bufs = {} of Int32 => ML::MetalBuffer
     layer_bases.each do |il, bs|
-      buf = ML::MetalBuffer.new(state_size_bytes)
       ssm_buf = state.layers[il].ssm_state_buf
-      full_state = if ssm_buf
-                     ssm_buf.read(full_state_size)
-                   else
-                     state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
-                   end
-      buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+      buf = if ssm_buf
+              if cmd = block_cmd
+                ML::GGUF::Qwen35Metal.lowrank_project_state_append(ssm_buf, shared_basis_bufs[il],
+                  h_k, h_v, s, rank, cmd)
+              else
+                ML::GGUF::Qwen35Metal.lowrank_project_state_buf(ssm_buf, shared_basis_bufs[il],
+                  h_k, h_v, s, rank, command_queue_name: "self_spec_gpu_pipeline_draft")
+              end
+            else
+              cpu_buf = ML::MetalBuffer.new(state_size_bytes)
+              full_state = state.layers[il].ssm_state ||= Array(Float32).new(full_state_size, 0.0_f32)
+              cpu_buf.write(project_full_state_to_lowrank(full_state, bs, rank, h_k, h_v, s))
+              cpu_buf
+            end
       bufs[il] = buf
     end
     bufs
@@ -4057,19 +4076,31 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                     lr_bufs : Hash(Int32, ML::MetalBuffer),
                     token_buf : ML::MetalBuffer,
                     pos_start : Int32,
-                    label : String) {
+                    label : String,
+                    block_cmd : ML::Metal::CommandBuffer?) {
     submissions = [] of ML::GGUF::Qwen35Metal::DecodeWaveSubmission
     cur_token_buf = token_buf
+    split_tokens = draft_block_tokens || (ENV["QWEN35_DRAFT_BLOCK_TOKENS"]?.try(&.to_i?) || DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS)
+    current_cmd = block_cmd || ML::GGUF::Qwen35Metal.decode_wave_command_buffer("self_spec_gpu_pipeline_draft")
     gamma.times do |j|
+      if split_tokens > 0 && j > 0 && (j % split_tokens) == 0
+        t_commit = Time.instant
+        current_cmd.commit
+        wba.try(&.mark("draft", "commit_#{label}_part_#{j // split_tokens}", t_commit, Time.instant))
+        current_cmd = ML::GGUF::Qwen35Metal.decode_wave_command_buffer("self_spec_gpu_pipeline_draft")
+      end
       t_submit = Time.instant
       sub = ML::GGUF::Qwen35CPU.forward_self_draft_top1_from_token_buf_async(weights, cur_token_buf, 0, pos_start + j, state,
         lowrank_set, lr_bufs, shared_basis_bufs, rank,
         scratch_namespace: "#{label}_#{j}",
-        command_queue_name: "self_spec_gpu_pipeline_draft").not_nil!
+        append_command_buffer: current_cmd).not_nil!
       wba.try(&.mark("draft", "submit_#{label}_#{j}", t_submit, Time.instant))
       submissions << sub
       cur_token_buf = sub.top1_id_buf.not_nil!
     end
+    t_commit = Time.instant
+    current_cmd.commit
+    wba.try(&.mark("draft", "commit_#{label}", t_commit, Time.instant))
     GpuDraftBlock.new(submissions, state, lr_bufs)
   }
 
@@ -4077,23 +4108,35 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                    token_id : Int32,
                    pos_start : Int32,
                    label : String) {
+    t_fork = Time.instant
     state = base_state.fork
-    lr_bufs = build_lr_states.call(state)
+    wba.try(&.mark("draft", "fork_#{label}", t_fork, Time.instant))
+    t_token = Time.instant
     token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
     token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
-    submit_block.call(state, lr_bufs, token_buf, pos_start, label)
+    wba.try(&.mark("draft", "token_buf_#{label}", t_token, Time.instant))
+    block_cmd = ML::GGUF::Qwen35Metal.decode_wave_command_buffer("self_spec_gpu_pipeline_draft")
+    t_lr = Time.instant
+    lr_bufs = build_lr_states.call(state, block_cmd)
+    wba.try(&.mark("draft", "lr_states_#{label}", t_lr, Time.instant))
+    submit_block.call(state, lr_bufs, token_buf, pos_start, label, block_cmd)
   }
 
   read_block = ->(block : GpuDraftBlock, limit : Int32, label : String) {
-    ids = [] of Int32
-    block.submissions.each_with_index do |sub, i|
-      break if i >= limit
-      t_wait = Time.instant
-      packed = ML::GGUF::Qwen35Metal.wait_forward_decode_wave(sub)
-      wba.try(&.mark("draft", "wait_read_#{label}_#{i}", t_wait, Time.instant))
-      raise "GPU pipeline draft returned #{packed.size} values" unless packed.size == 2
-      ids << packed[0].to_i32
+    active = block.submissions[0, limit]
+    t_wait = Time.instant
+    active.each do |sub|
+      sub.pending_cmds.each(&.wait)
+      sub.cmd.wait
     end
+    wba.try(&.mark("draft", "wait_block_#{label}", t_wait, Time.instant))
+
+    ids = Array(Int32).new(active.size)
+    t_read = Time.instant
+    active.each do |sub|
+      ids << sub.top1_id_buf.not_nil!.contents.as(Pointer(UInt32)).value.to_i32
+    end
+    wba.try(&.mark("draft", "read_ids_#{label}", t_read, Time.instant))
     ids
   }
 
@@ -4108,12 +4151,18 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
   state_before_last = verifier_state_after_prefix(weights, prefix_ids, max_seq)
   verifier_state = state_before_last.fork
-  verifier_backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-  ML::GGUF::Qwen35CPU.prepare_state_metal!(verifier_backup, hp)
-  target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, last_token, pos_last, verifier_state)[0]
-
+  verifier_backup = if use_verifier_backup
+                      backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+                      ML::GGUF::Qwen35CPU.prepare_state_metal!(backup, hp)
+                      backup
+                    else
+                      nil
+                    end
   t_seed = Time.instant
   current_block = submit_seed.call(state_before_last, last_token, pos_last, "self_spec_seed")
+  t_initial_target = Time.instant
+  target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, last_token, pos_last, verifier_state)[0]
+  wba.try(&.mark("verifier", "initial_target", t_initial_target, Time.instant))
   current_proposal = read_block.call(current_block, Math.min(gamma, gen_tokens), "seed")
   draft_seed_ms = (Time.instant - t_seed).total_milliseconds
   wba.try(&.mark("pipeline", "seed_block", t_seed, Time.instant))
@@ -4127,6 +4176,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   verifier_ms = 0.0
   draft_wait_ms = 0.0
   backup_ms = 0.0
+  rebuild_ms = 0.0
   controller_ms = 0.0
   replay_ms = 0.0
   overlap_ms = draft_seed_ms
@@ -4139,6 +4189,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     proposal = current_proposal[0, chunk_size]
     proposed_tokens += proposal.size
     cycle_start_pos = prompt_ids.size + emitted_tokens
+    final_chunk = emitted_tokens + proposal.size >= gen_tokens
+    verifier_tokens = final_chunk && proposal.size > 1 ? proposal[0, proposal.size - 1] : proposal
 
     next_block = nil.as(GpuDraftBlock?)
     chunk_draft_next_ms = 0.0
@@ -4146,16 +4198,18 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     if emitted_tokens + proposal.size < gen_tokens
       t_next = Time.instant
       last_proposed_buf = current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
-      next_block = submit_block.call(current_block.state, current_block.lr_bufs, last_proposed_buf, pos_last + proposal.size, "self_spec_next_#{chunks}")
+      next_block = submit_block.call(current_block.state, current_block.lr_bufs, last_proposed_buf, pos_last + proposal.size, "self_spec_next_#{chunks}", nil)
       chunk_draft_next_ms += (Time.instant - t_next).total_milliseconds
     end
 
-    t_backup = Time.instant
-    verifier_backup.copy_from!(verifier_state)
-    backup_ms += (Time.instant - t_backup).total_milliseconds
-    wba.try(&.mark("controller", "backup_#{chunks}", t_backup, Time.instant))
+    if use_verifier_backup
+      t_backup = Time.instant
+      verifier_backup.not_nil!.copy_from!(verifier_state)
+      backup_ms += (Time.instant - t_backup).total_milliseconds
+      wba.try(&.mark("controller", "backup_#{chunks}", t_backup, Time.instant))
+    end
     t_verify = Time.instant
-    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, proposal, cycle_start_pos, verifier_state)
+    target_nexts = verifier_tokens.empty? ? [] of {Int32, Float32} : ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, verifier_tokens, cycle_start_pos, verifier_state)
     verifier_ms += (Time.instant - t_verify).total_milliseconds
     wba.try(&.mark("verifier", "chunk_#{chunks}", t_verify, Time.instant))
 
@@ -4192,7 +4246,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       pos = cycle_start_pos + i
       last_token = emitted
       pos_last = pos
-      expected = target_nexts[i][0] if cand == expected
+      expected = target_nexts[i][0] if cand == expected && i < target_nexts.size
       break if rejected || emitted_tokens >= gen_tokens
     end
     controller_ms += (Time.instant - t_controller).total_milliseconds
@@ -4200,26 +4254,40 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
     if rejected
       drain_block.call(next_block)
-      verifier_state.copy_from!(verifier_backup)
-      t_replay = Time.instant
-      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, verifier_state)
-      replay_ms += (Time.instant - t_replay).total_milliseconds
-      target_next_id = corrected[-1][0]
-      if emitted_tokens < gen_tokens
-        t_resync = Time.instant
-        resync_base = verifier_backup.fork
+      resync_base = nil.as(ML::GGUF::Qwen35CPU::State?)
+      if use_verifier_backup
+        backup = verifier_backup.not_nil!
+        verifier_state.copy_from!(backup)
+        t_replay = Time.instant
+        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, verifier_state)
+        replay_ms += (Time.instant - t_replay).total_milliseconds
+        target_next_id = corrected[-1][0]
+        resync_base = backup.fork
         if correction_or_accepted.size > 1
           ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
         end
-        current_block = submit_seed.call(resync_base, last_token, pos_last, "self_spec_resync_#{chunks}")
+      else
+        t_rebuild = Time.instant
+        consumed = prompt_ids + emitted_ids
+        verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(verifier_state, hp)
+        target_next_id = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, consumed, 0, verifier_state)[0]
+        base_tokens = consumed[0, consumed.size - 1]
+        resync_base = verifier_state_after_prefix(weights, base_tokens, max_seq)
+        rebuild_ms += (Time.instant - t_rebuild).total_milliseconds
+        wba.try(&.mark("controller", "rebuild_#{chunks}", t_rebuild, Time.instant))
+      end
+      if emitted_tokens < gen_tokens
+        t_resync = Time.instant
+        current_block = submit_seed.call(resync_base.not_nil!, last_token, pos_last, "self_spec_resync_#{chunks}")
         current_proposal = read_block.call(current_block, Math.min(gamma, gen_tokens - emitted_tokens), "resync_#{chunks}")
         draft_seed_ms += (Time.instant - t_resync).total_milliseconds
         overlap_ms += (Time.instant - t_resync).total_milliseconds
         wba.try(&.mark("pipeline", "resync_#{chunks}", t_resync, Time.instant))
       end
     else
-      target_next_id = target_nexts[proposal.size - 1][0]
       if emitted_tokens < gen_tokens
+        target_next_id = target_nexts[proposal.size - 1][0]
         draft_next_ms += chunk_draft_next_ms
         current_block = next_block.not_nil!
         current_proposal = next_proposal
@@ -4230,8 +4298,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   t_serial = Time.instant
   serial_state_before_last = verifier_state_after_prefix(weights, prefix_ids, max_seq)
   serial_verifier_state = serial_state_before_last.fork
-  serial_backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-  ML::GGUF::Qwen35CPU.prepare_state_metal!(serial_backup, hp)
+  serial_backup = if use_verifier_backup
+                    backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+                    ML::GGUF::Qwen35CPU.prepare_state_metal!(backup, hp)
+                    backup
+                  else
+                    nil
+                  end
   serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, prompt_last_token, prompt_pos_last, serial_verifier_state)[0]
   serial_last_token = prompt_last_token
   serial_pos_last = prompt_pos_last
@@ -4247,9 +4320,11 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     chunk_size = Math.min(serial_current_proposal.size, gen_tokens - serial_emitted_tokens)
     proposal = serial_current_proposal[0, chunk_size]
     cycle_start_pos = prompt_ids.size + serial_emitted_tokens
+    final_chunk = serial_emitted_tokens + proposal.size >= gen_tokens
+    verifier_tokens = final_chunk && proposal.size > 1 ? proposal[0, proposal.size - 1] : proposal
 
-    serial_backup.copy_from!(serial_verifier_state)
-    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, proposal, cycle_start_pos, serial_verifier_state)
+    serial_backup.try(&.copy_from!(serial_verifier_state))
+    target_nexts = verifier_tokens.empty? ? [] of {Int32, Float32} : ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, verifier_tokens, cycle_start_pos, serial_verifier_state)
 
     correction_or_accepted = [] of Int32
     expected = serial_target_next_id
@@ -4267,27 +4342,38 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       serial_emitted_tokens += 1
       serial_last_token = emitted
       serial_pos_last = cycle_start_pos + i
-      expected = target_nexts[i][0] if cand == expected
+      expected = target_nexts[i][0] if cand == expected && i < target_nexts.size
       break if rejected || serial_emitted_tokens >= gen_tokens
     end
 
     if rejected
-      serial_verifier_state.copy_from!(serial_backup)
-      corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, serial_verifier_state)
-      serial_target_next_id = corrected[-1][0]
-      if serial_emitted_tokens < gen_tokens
-        resync_base = serial_backup.fork
+      serial_resync_base = nil.as(ML::GGUF::Qwen35CPU::State?)
+      if use_verifier_backup
+        backup = serial_backup.not_nil!
+        serial_verifier_state.copy_from!(backup)
+        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, serial_verifier_state)
+        serial_target_next_id = corrected[-1][0]
+        serial_resync_base = backup.fork
         if correction_or_accepted.size > 1
-          ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
+          ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, serial_resync_base)
         end
-        serial_current_block = submit_seed.call(resync_base, serial_last_token, serial_pos_last, "self_spec_serial_resync_#{serial_chunks}")
+      else
+        consumed = prompt_ids + serial_emitted_ids
+        serial_verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(serial_verifier_state, hp)
+        serial_target_next_id = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, consumed, 0, serial_verifier_state)[0]
+        base_tokens = consumed[0, consumed.size - 1]
+        serial_resync_base = verifier_state_after_prefix(weights, base_tokens, max_seq)
+      end
+      if serial_emitted_tokens < gen_tokens
+        serial_current_block = submit_seed.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_resync_#{serial_chunks}")
         serial_current_proposal = read_block.call(serial_current_block, Math.min(gamma, gen_tokens - serial_emitted_tokens), "serial_resync_#{serial_chunks}")
       end
     else
-      serial_target_next_id = target_nexts[proposal.size - 1][0]
       if serial_emitted_tokens < gen_tokens
+        serial_target_next_id = target_nexts[proposal.size - 1][0]
         last_proposed_buf = serial_current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
-        serial_current_block = submit_block.call(serial_current_block.state, serial_current_block.lr_bufs, last_proposed_buf, serial_pos_last, "self_spec_serial_next_#{serial_chunks}")
+        serial_current_block = submit_block.call(serial_current_block.state, serial_current_block.lr_bufs, last_proposed_buf, serial_pos_last, "self_spec_serial_next_#{serial_chunks}", nil)
         serial_current_proposal = read_block.call(serial_current_block, Math.min(gamma, gen_tokens - serial_emitted_tokens), "serial_next_#{serial_chunks}")
       end
     end
@@ -4308,6 +4394,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     verifier_ms:           verifier_ms,
     draft_wait_ms:         draft_wait_ms,
     backup_ms:             backup_ms,
+    rebuild_ms:            rebuild_ms,
     controller_ms:         controller_ms,
     serial_ms:             serial_ms,
     overlap_ms:            overlap_ms,
@@ -4377,6 +4464,9 @@ simulate_self_draft_metal_baseline = 0
 simulate_self_draft_gpu_chain = 0
 simulate_self_draft_gpu_chain_overlap = 0
 simulate_self_spec_gpu_pipeline = 0
+simulate_self_spec_gpu_pipeline_gammas = [] of Int32
+simulate_self_spec_gpu_pipeline_draft_splits = [] of Int32
+simulate_self_spec_gpu_pipeline_no_backup = false
 self_spec_cost_model = false
 self_spec_draft_cost = 0.0
 self_spec_verifier_cost = 0.0
@@ -4448,6 +4538,9 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-draft-gpu-chain=N", "Queue N low-rank self-draft top1 steps with GPU top1_id -> next embedding and no intermediate CPU readback") { |v| simulate_self_draft_gpu_chain = v.to_i }
   p.on("--simulate-self-draft-gpu-chain-overlap=N", "Run GPU self-draft chain on a lane queue while chunk-major verifier runs on the default queue") { |v| simulate_self_draft_gpu_chain_overlap = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline=N", "Run real fixed-gamma self-spec block pipeline: draft[k+1] on lane queue while verifier validates draft[k]") { |v| simulate_self_spec_gpu_pipeline = v.to_i }
+  p.on("--simulate-self-spec-gpu-pipeline-gammas=LIST", "Run real GPU self-spec pipeline for comma-separated fixed gammas in one model load") { |v| simulate_self_spec_gpu_pipeline_gammas = parse_int_list(v) }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-splits=LIST", "Run real GPU self-spec pipeline with comma-separated draft command-buffer split sizes; 0 keeps one command buffer per draft block") { |v| simulate_self_spec_gpu_pipeline_draft_splits = parse_int_list(v) }
+  p.on("--simulate-self-spec-gpu-pipeline-no-backup", "Skip verifier rollback backup on the hot full-accept path; rebuild exact state from emitted ids on reject") { simulate_self_spec_gpu_pipeline_no_backup = true }
   p.on("--self-spec-draft-cost=F", "Relative cost per low-rank draft token (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_draft_cost = v.to_f64 }
   p.on("--self-spec-verifier-cost=F", "Relative cost per exact verifier token in a chunk (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_verifier_cost = v.to_f64 }
   p.on("--self-spec-chunk-overhead=F", "Relative fixed overhead per self-spec chunk") { |v| self_spec_cost_model = true; self_spec_chunk_overhead = v.to_f64 }
@@ -4743,10 +4836,22 @@ if rank = simulate_logit_rank
       ov = simulate_self_draft_gpu_chain_overlap_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain_overlap, layer_bases, rank)
       puts "self_draft_gpu_chain_overlap layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{ov[:steps]} draft_alone_ms=#{ov[:draft_alone_ms].round(3)} verifier_ms=#{ov[:verifier_ms].round(3)} overlap_ms=#{ov[:overlap_ms].round(3)} draft_submit_ms=#{ov[:draft_submit_ms].round(3)} draft_wait_ms=#{ov[:draft_wait_ms].round(3)} hidden_ms=#{ov[:hidden_ms].round(3)} speedup=#{ov[:speedup].round(4)} agreement=#{ov[:agreement]}/#{ov[:steps]} draft_ids=#{ov[:draft_ids].join(',')} exact_ids=#{ov[:exact_ids].join(',')} verifier_ids=#{ov[:verifier_ids].join(',')}"
     end
-    if simulate_generate_tokens > 0 && simulate_self_spec_gpu_pipeline > 0
-      pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, simulate_self_spec_gpu_pipeline, layer_bases, rank)
-      accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
-      puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{simulate_self_spec_gpu_pipeline} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+    pipeline_gammas = simulate_self_spec_gpu_pipeline_gammas.dup
+    if simulate_self_spec_gpu_pipeline > 0 && !pipeline_gammas.includes?(simulate_self_spec_gpu_pipeline)
+      pipeline_gammas << simulate_self_spec_gpu_pipeline
+    end
+    if simulate_generate_tokens > 0 && !pipeline_gammas.empty?
+      default_draft_split = ENV["QWEN35_DRAFT_BLOCK_TOKENS"]?.try(&.to_i?) || DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS
+      pipeline_splits = simulate_self_spec_gpu_pipeline_draft_splits.empty? ? [default_draft_split.as(Int32?)] : simulate_self_spec_gpu_pipeline_draft_splits.map { |v| v.as(Int32?) }
+      pipeline_gammas.each do |pipeline_gamma|
+        pipeline_splits.each do |draft_split|
+          pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_gamma, layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split)
+          accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
+          backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
+          split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
+          puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+        end
+      end
     end
   end
 end
