@@ -378,7 +378,9 @@ if speculative_decode_enabled && !output_ids.empty?
       else
         target_backup_state.copy_from!(state)
         tstart = Time.instant
-        target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, cycle_start_pos, state)
+        target_nexts = with_guarded_full_rows_disabled do
+          ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, cycle_start_pos, state)
+        end
         target_verify_ms += (Time.instant - tstart).total_milliseconds
 
         expected = target_next
@@ -400,7 +402,9 @@ if speculative_decode_enabled && !output_ids.empty?
         if rejected
           state.copy_from!(target_backup_state)
           tstart = Time.instant
-          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, correction_or_accepted, cycle_start_pos, state)
+          corrected = with_guarded_full_rows_disabled do
+            ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, correction_or_accepted, cycle_start_pos, state)
+          end
           target_verify_ms += (Time.instant - tstart).total_milliseconds
           target_next = corrected[-1][0]
         else
