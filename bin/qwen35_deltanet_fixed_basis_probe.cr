@@ -370,6 +370,20 @@ private def build_basis(vectors : Array(Array(Float64)), max_rank : Int32,
   end
 end
 
+private def basis_rank_range(bases : BasisSet) : NamedTuple(min: Int32, max: Int32)
+  sizes = bases.map(&.size)
+  {min: sizes.min, max: sizes.max}
+end
+
+private def basis_rank_note(bases : BasisSet, requested_rank : Int32) : String
+  range = basis_rank_range(bases)
+  note = "effective_basis_rank=#{range[:min]}..#{range[:max]}"
+  if requested_rank > range[:min]
+    note += " requested_rank=#{requested_rank} note=requested_rank_exceeds_some_effective_bases"
+  end
+  note
+end
+
 private def project_with_basis(v : Array(Float32), offset : Int32,
                                basis : Array(Array(Float64)), rank : Int32) : Nil
   limit = Math.min(rank, basis.size)
@@ -4575,14 +4589,15 @@ end
 calib_count = Math.min(calib_tokens, token_ids.size - 1)
 raise "need at least one held-out token" unless calib_count > 0 && calib_count < token_ids.size
 
+bases = per_head.map { |vectors| build_basis(vectors[0, calib_count], max_rank, basis_mode, pca_iters) }
+
 puts "Qwen35 DeltaNet fixed-basis K residual probe"
 puts "model=#{File.basename(model)}"
 puts "layer=#{layer_index} token_vectors=#{token_ids.size} calib_tokens=#{calib_count} heldout_tokens=#{token_ids.size - calib_count}"
 puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.join(',')}"
 puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first calib_tokens; reports held-out L2 residual for normalized K vectors"
+puts basis_rank_note(bases, max_rank)
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
-
-bases = per_head.map { |vectors| build_basis(vectors[0, calib_count], max_rank, basis_mode, pca_iters) }
 
 if rank = simulate_logit_rank
   if simulate_logit_layers.empty?
@@ -4599,6 +4614,10 @@ if rank = simulate_logit_rank
                           end
                         end
     end
+    rank_notes = simulate_logit_layers.uniq.sort.map do |il|
+      "#{il}:#{basis_rank_note(layer_bases[il], rank)}"
+    end
+    puts "layer_basis_effective_ranks #{rank_notes.join(' ')}"
     ffn_pca_ranks = [] of Int32
     ffn_pca_down_ranks = [] of Int32
     ffn_pca_updown_ranks = [] of Int32
