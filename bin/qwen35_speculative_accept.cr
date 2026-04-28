@@ -44,6 +44,7 @@ ngram_max = (ENV["QWEN35_SPEC_NGRAM_MAX"]? || "8").to_i
 ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
+allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--bootstrap-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace|hybrid|staged] [--ngram] [prompt]"
@@ -59,6 +60,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--verify MODE", "Target verifier: serial, chunk, chunk-inplace, hybrid, or staged (default: chunk-inplace)") { |value| verify_mode = value }
   parser.on("--stage-gate N", "For --verify staged, verify this many candidates before drafting/verifying the rest") { |value| stage_gate = value.to_i }
   parser.on("--ngram", "Try exact n-gram/cache draft chunks before the neural draft") { ngram_enabled = true }
+  parser.on("--allow-guarded-verifier", "Research only: allow guarded full-row verifier inside speculative target chunks") { allow_guarded_verifier = true }
   parser.on("--ngram-gamma N", "Maximum n-gram candidates per chunk (default: env QWEN35_SPEC_NGRAM_GAMMA or 32)") { |value| ngram_gamma = value.to_i }
   parser.on("--ngram-min N", "Minimum repeated suffix length before n-gram drafting (default: env QWEN35_SPEC_NGRAM_MIN or 6)") { |value| ngram_min = value.to_i }
   parser.on("--ngram-max N", "Maximum repeated suffix length to search (default: env QWEN35_SPEC_NGRAM_MAX or 8)") { |value| ngram_max = value.to_i }
@@ -150,6 +152,20 @@ ensure
   end
 end
 
+def target_prefill_top1s_exact(weights : ML::GGUF::Qwen35Weights,
+                               token_ids : Array(Int32),
+                               start_pos : Int32,
+                               state : ML::GGUF::Qwen35CPU::State,
+                               allow_guarded_verifier : Bool) : Array({Int32, Float32})
+  if allow_guarded_verifier
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, token_ids, start_pos, state)
+  else
+    with_guarded_full_rows_disabled do
+      ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, token_ids, start_pos, state)
+    end
+  end
+end
+
 puts "Loading tokenizer and models..."
 t0 = Time.instant
 tok = load_tokenizer(target_path, tokenizer_bin)
@@ -167,7 +183,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -235,9 +251,7 @@ while generated_ids.size < n_gen
       target_backup_state.copy_from!(target_state)
       target_backup_ms += (Time.instant - tb0).total_milliseconds
       tv0 = Time.instant
-      target_nexts = with_guarded_full_rows_disabled do
-        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, ngram_candidates, cycle_start_pos, target_state)
-      end
+      target_nexts = target_prefill_top1s_exact(target, ngram_candidates, cycle_start_pos, target_state, allow_guarded_verifier)
       target_verify_ms += (Time.instant - tv0).total_milliseconds
       if trace
         puts "ngram_cycle=#{ngram_cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{ngram_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -264,9 +278,7 @@ while generated_ids.size < n_gen
         ngram_disabled = true if ngram_disable_after_reject
         target_state.copy_from!(target_backup_state)
         tv1 = Time.instant
-        corrected = with_guarded_full_rows_disabled do
-          ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
-        end
+        corrected = target_prefill_top1s_exact(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier)
         target_verify_ms += (Time.instant - tv1).total_milliseconds
         target_next = corrected[-1][0]
         pos += correction_or_accepted.size
@@ -414,7 +426,7 @@ while generated_ids.size < n_gen
         target_backup_state.copy_from!(target_state)
         target_backup_ms += (Time.instant - tb0).total_milliseconds
         tv0 = Time.instant
-        target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, stage_candidates, stage_start_pos, target_state)
+        target_nexts = target_prefill_top1s_exact(target, stage_candidates, stage_start_pos, target_state, allow_guarded_verifier)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
         if trace
           puts "cycle=#{cycles} stage=#{stage_index} pos=#{stage_start_pos} expected0=#{target_next} candidates=#{stage_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -441,7 +453,7 @@ while generated_ids.size < n_gen
         if rejected
           target_state.copy_from!(target_backup_state)
           tv1 = Time.instant
-          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, stage_correction_or_accepted, stage_start_pos, target_state)
+          corrected = target_prefill_top1s_exact(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier)
           target_verify_ms += (Time.instant - tv1).total_milliseconds
           target_next = corrected[-1][0]
           pos += stage_correction_or_accepted.size
@@ -488,7 +500,7 @@ while generated_ids.size < n_gen
         target_base = target_state
         verify_state = target_base.fork
         tv0 = Time.instant
-        target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, verify_state)
+        target_nexts = target_prefill_top1s_exact(target, candidates, cycle_start_pos, verify_state, allow_guarded_verifier)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
         if trace
           puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -513,7 +525,7 @@ while generated_ids.size < n_gen
 
         if rejected
           tv1 = Time.instant
-          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+          corrected = target_prefill_top1s_exact(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier)
           target_verify_ms += (Time.instant - tv1).total_milliseconds
           target_next = corrected[-1][0]
           pos += correction_or_accepted.size
@@ -527,7 +539,7 @@ while generated_ids.size < n_gen
         target_backup_state.copy_from!(target_state)
         target_backup_ms += (Time.instant - tb0).total_milliseconds
         tv0 = Time.instant
-        target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, candidates, cycle_start_pos, target_state)
+        target_nexts = target_prefill_top1s_exact(target, candidates, cycle_start_pos, target_state, allow_guarded_verifier)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
         if trace
           puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -551,7 +563,7 @@ while generated_ids.size < n_gen
         if rejected
           target_state.copy_from!(target_backup_state)
           tv1 = Time.instant
-          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(target, correction_or_accepted, cycle_start_pos, target_state)
+          corrected = target_prefill_top1s_exact(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier)
           target_verify_ms += (Time.instant - tv1).total_milliseconds
           target_next = corrected[-1][0]
           pos += correction_or_accepted.size
