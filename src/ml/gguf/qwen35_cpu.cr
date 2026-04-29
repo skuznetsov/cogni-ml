@@ -1702,6 +1702,45 @@ module ML::GGUF
           command_queue_name: command_queue_name,
           append_command_buffer: append_command_buffer)
       end
+
+      def forward_self_draft_state_from_token_buf_async(weights : Qwen35Weights,
+                                                        token_ids_buf : ML::MetalBuffer,
+                                                        token_index : Int32,
+                                                        pos : Int32,
+                                                        state : State,
+                                                        lowrank_layer_indices : Set(Int32),
+                                                        lowrank_state_bufs : Hash(Int32, ML::MetalBuffer),
+                                                        lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
+                                                        lowrank_rank : Int32,
+                                                        lowrank_skip_ffn : Bool = false,
+                                                        skip_recurrent_ffn : Bool = false,
+                                                        lowrank_updown_x_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                        lowrank_updown_c_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                        lowrank_updown_coeff_w_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                        lowrank_updown_down_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                        lowrank_updown_rank : Int32 = 0,
+                                                        scratch_namespace : String? = nil,
+                                                        command_queue_name : String? = nil,
+                                                        append_command_buffer : ML::Metal::CommandBuffer? = nil) : Qwen35Metal::DecodeWaveSubmission?
+        forward_decode_wave_routed_async(weights, 0, pos, state,
+          top1: false, emit_head: false,
+          scratch_namespace: scratch_namespace,
+          lowrank_layer_indices: lowrank_layer_indices,
+          lowrank_state_bufs: lowrank_state_bufs,
+          lowrank_basis_bufs: lowrank_basis_bufs,
+          lowrank_rank: lowrank_rank,
+          lowrank_skip_ffn: lowrank_skip_ffn,
+          skip_recurrent_ffn: skip_recurrent_ffn,
+          lowrank_updown_x_mean_bufs: lowrank_updown_x_mean_bufs,
+          lowrank_updown_c_mean_bufs: lowrank_updown_c_mean_bufs,
+          lowrank_updown_coeff_w_bufs: lowrank_updown_coeff_w_bufs,
+          lowrank_updown_down_bufs: lowrank_updown_down_bufs,
+          lowrank_updown_rank: lowrank_updown_rank,
+          token_ids_buf: token_ids_buf,
+          token_index: token_index,
+          command_queue_name: command_queue_name,
+          append_command_buffer: append_command_buffer)
+      end
     {% end %}
 
     # Prefill helper for prompt tokens whose logits are not needed.
