@@ -10,6 +10,7 @@ require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
+require "json"
 require "option_parser"
 
 DEFAULT_TARGET    = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
@@ -46,6 +47,8 @@ ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
+dump_cycles_path = ENV["QWEN35_SPEC_DUMP_CYCLES"]?
+dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--bootstrap-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace|hybrid|staged] [--ngram] [prompt]"
@@ -69,6 +72,8 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
+  parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
+  parser.on("--dump-cycle-token-ids", "Include raw token ids in --dump-cycles records; default only writes stable hashes") { dump_cycle_token_ids = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -169,6 +174,111 @@ def target_prefill_top1s_exact(weights : ML::GGUF::Qwen35Weights,
   end
 end
 
+def fnv1a64_hex(bytes : Bytes) : String
+  hash = 0xcbf29ce484222325_u64
+  bytes.each do |b|
+    hash = (hash ^ b.to_u64) &* 0x100000001b3_u64
+  end
+  hash.to_s(16)
+end
+
+def token_ids_hash(ids : Array(Int32)) : String
+  bytes = Bytes.new(ids.size * 4)
+  ids.each_with_index do |id, i|
+    value = id.to_u32
+    offset = i * 4
+    bytes[offset] = (value & 0xff).to_u8
+    bytes[offset + 1] = ((value >> 8) & 0xff).to_u8
+    bytes[offset + 2] = ((value >> 16) & 0xff).to_u8
+    bytes[offset + 3] = ((value >> 24) & 0xff).to_u8
+  end
+  fnv1a64_hex(bytes)
+end
+
+def ngram_match_len(history : Array(Int32), max_ngram : Int32, min_ngram : Int32) : Int32
+  return 0 if history.empty?
+  max_len = Math.min(max_ngram, history.size)
+  max_len.downto(min_ngram) do |n|
+    suffix_start = history.size - n
+    i = history.size - n - 1
+    while i >= 0
+      matched = true
+      n.times do |j|
+        if history[i + j] != history[suffix_start + j]
+          matched = false
+          break
+        end
+      end
+      return n if matched && i + n < history.size
+      i -= 1
+    end
+  end
+  0
+end
+
+private class CycleDump
+  include JSON::Serializable
+
+  property prompt_hash : String
+  property target_model : String
+  property draft_model : String
+  property kind : String
+  property policy : String
+  property verify_mode : String
+  property position : Int32
+  property generated_before : Int32
+  property generated_count : Int32
+  property gamma : Int32
+  property proposed_count : Int32
+  property accepted_count : Int32
+  property reject_index : Int32
+  property ngram_match_len : Int32
+  property ngram_min : Int32
+  property ngram_max : Int32
+  property ngram_recursive : Bool
+  property ngram_disabled_before : Bool
+  property ngram_disabled_after : Bool
+  property candidate_hash : String
+  property candidates : Array(Int32)?
+  property draft_ms : Float64
+  property target_verify_ms : Float64
+  property target_backup_ms : Float64
+  property draft_backup_ms : Float64
+  property draft_resync_ms : Float64
+  property wall_ms : Float64
+  property expected_gain_ms : Float64?
+
+  def initialize(@prompt_hash : String,
+                 @target_model : String,
+                 @draft_model : String,
+                 @kind : String,
+                 @policy : String,
+                 @verify_mode : String,
+                 @position : Int32,
+                 @generated_before : Int32,
+                 @generated_count : Int32,
+                 @gamma : Int32,
+                 @proposed_count : Int32,
+                 @accepted_count : Int32,
+                 @reject_index : Int32,
+                 @ngram_match_len : Int32,
+                 @ngram_min : Int32,
+                 @ngram_max : Int32,
+                 @ngram_recursive : Bool,
+                 @ngram_disabled_before : Bool,
+                 @ngram_disabled_after : Bool,
+                 @candidate_hash : String,
+                 @candidates : Array(Int32)?,
+                 @draft_ms : Float64,
+                 @target_verify_ms : Float64,
+                 @target_backup_ms : Float64,
+                 @draft_backup_ms : Float64,
+                 @draft_resync_ms : Float64,
+                 @wall_ms : Float64,
+                 @expected_gain_ms : Float64? = nil)
+  end
+end
+
 puts "Loading tokenizer and models..."
 t0 = Time.instant
 tok = load_tokenizer(target_path, tokenizer_bin)
@@ -182,11 +292,15 @@ end
 
 prompt_ids = tok.encode(prompt)
 raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
+prompt_hash = fnv1a64_hex(prompt.to_slice)
+target_model_id = File.basename(target_path)
+draft_model_id = File.basename(draft_path)
+cycle_dumps = [] of CycleDump
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -244,6 +358,14 @@ while generated_ids.size < n_gen
       recursive: ngram_recursive)
 
     unless ngram_candidates.empty?
+      cycle_wall0 = Time.instant
+      cycle_draft0 = draft_ms
+      cycle_target_verify0 = target_verify_ms
+      cycle_target_backup0 = target_backup_ms
+      cycle_draft_backup0 = draft_backup_ms
+      cycle_draft_resync0 = draft_resync_ms
+      ngram_disabled_before = ngram_disabled
+      match_len = ngram_match_len(history, ngram_max, ngram_min)
       ngram_cycles += 1
       ngram_proposed += ngram_candidates.size
       proposed += ngram_candidates.size
@@ -262,17 +384,21 @@ while generated_ids.size < n_gen
 
       expected = target_next
       rejected = false
+      accepted_in_cycle = 0
+      reject_index = -1
       ngram_candidates.each_with_index do |cand, i|
         if cand == expected
           generated_ids << cand
           correction_or_accepted << cand
           accepted += 1
+          accepted_in_cycle += 1
           ngram_accepted += 1
           expected = target_nexts[i][0]
         else
           generated_ids << expected
           correction_or_accepted << expected
           rejected = true
+          reject_index = i
           break
         end
       end
@@ -297,11 +423,35 @@ while generated_ids.size < n_gen
       if generated_ids.size > history_size_before
         history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
       end
+      if dump_cycles_path
+        record_candidates = dump_cycle_token_ids ? ngram_candidates.dup : nil
+        cycle_dumps << CycleDump.new(
+          prompt_hash, target_model_id, draft_model_id,
+          "ngram", "ngram", verify_mode,
+          cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
+          ngram_candidates.size, ngram_candidates.size, accepted_in_cycle, reject_index,
+          match_len, ngram_min, ngram_max, ngram_recursive,
+          ngram_disabled_before, ngram_disabled,
+          token_ids_hash(ngram_candidates), record_candidates,
+          draft_ms - cycle_draft0,
+          target_verify_ms - cycle_target_verify0,
+          target_backup_ms - cycle_target_backup0,
+          draft_backup_ms - cycle_draft_backup0,
+          draft_resync_ms - cycle_draft_resync0,
+          (Time.instant - cycle_wall0).total_milliseconds)
+      end
       next
     end
   end
 
   if plain_fallback_enabled && adaptive_gamma && !adaptive_growth_allowed && current_gamma <= plain_fallback_gamma
+    cycle_wall0 = Time.instant
+    cycle_draft0 = draft_ms
+    cycle_target_verify0 = target_verify_ms
+    cycle_target_backup0 = target_backup_ms
+    cycle_draft_backup0 = draft_backup_ms
+    cycle_draft_resync0 = draft_resync_ms
+    cycle_start_pos = pos
     generated_ids << target_next
     tv0 = Time.instant
     target_next = advance_next(target, target_next, pos, target_state)
@@ -309,6 +459,22 @@ while generated_ids.size < n_gen
     pos += 1
     plain_fallback_tokens += 1
     history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+    if dump_cycles_path
+      cycle_dumps << CycleDump.new(
+        prompt_hash, target_model_id, draft_model_id,
+        "target_only", "plain_fallback", verify_mode,
+        cycle_start_pos, history_size_before, 1,
+        1, 0, 0, -1,
+        0, ngram_min, ngram_max, ngram_recursive,
+        ngram_disabled, ngram_disabled,
+        token_ids_hash([] of Int32), nil,
+        draft_ms - cycle_draft0,
+        target_verify_ms - cycle_target_verify0,
+        target_backup_ms - cycle_target_backup0,
+        draft_backup_ms - cycle_draft_backup0,
+        draft_resync_ms - cycle_draft_resync0,
+        (Time.instant - cycle_wall0).total_milliseconds)
+    end
     next
   end
 
@@ -322,8 +488,16 @@ while generated_ids.size < n_gen
   end
 
   cycles += 1
+  cycle_wall0 = Time.instant
+  cycle_draft0 = draft_ms
+  cycle_target_verify0 = target_verify_ms
+  cycle_target_backup0 = target_backup_ms
+  cycle_draft_backup0 = draft_backup_ms
+  cycle_draft_resync0 = draft_resync_ms
   cycle_start_pos = pos
   cycle_gamma = adaptive_gamma ? current_gamma : gamma
+  draft_next_at_cycle = draft_next
+  cycle_ngram_match_len = ngram_match_len(history, ngram_max, ngram_min)
   gamma_sum += cycle_gamma
   gamma_max_seen = Math.max(gamma_max_seen, cycle_gamma)
   correction_or_accepted = [] of Int32
@@ -598,6 +772,36 @@ while generated_ids.size < n_gen
     history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
   end
 
+  if dump_cycles_path
+    candidate_snapshot = candidates.empty? && !correction_or_accepted.empty? ? [draft_next_at_cycle] : candidates
+    accepted_in_cycle = rejected ? Math.max(correction_or_accepted.size - 1, 0) : correction_or_accepted.size
+    reject_index = rejected ? accepted_in_cycle : -1
+    kind = if candidate_snapshot.size == 1 && rejected && candidates.empty?
+             "neural_early_reject"
+           elsif candidate_snapshot.size == 1 && !rejected && candidates.empty?
+             "neural_single_fast"
+           elsif verify_mode == "staged"
+             "neural_staged"
+           else
+             "neural"
+           end
+    record_candidates = dump_cycle_token_ids ? candidate_snapshot.dup : nil
+    cycle_dumps << CycleDump.new(
+      prompt_hash, target_model_id, draft_model_id,
+      kind, "neural", verify_mode,
+      cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
+      cycle_gamma, candidate_snapshot.size, accepted_in_cycle, reject_index,
+      cycle_ngram_match_len, ngram_min, ngram_max, ngram_recursive,
+      ngram_disabled, ngram_disabled,
+      token_ids_hash(candidate_snapshot), record_candidates,
+      draft_ms - cycle_draft0,
+      target_verify_ms - cycle_target_verify0,
+      target_backup_ms - cycle_target_backup0,
+      draft_backup_ms - cycle_draft_backup0,
+      draft_resync_ms - cycle_draft_resync0,
+      (Time.instant - cycle_wall0).total_milliseconds)
+  end
+
   if adaptive_gamma
     if rejected
       full_accept_streak = 0
@@ -632,6 +836,21 @@ plain_ms = (Time.instant - plain0).total_milliseconds
 unless plain == generated_ids
   first_diff = plain.zip(generated_ids).index { |(a, b)| a != b } || Math.min(plain.size, generated_ids.size)
   raise "speculative output diverged from target greedy at #{first_diff}: plain=#{plain.inspect} speculative=#{generated_ids.inspect}"
+end
+
+if path = dump_cycles_path
+  plain_ms_per_token = plain_ms / n_gen
+  cycle_dumps.each do |record|
+    record.expected_gain_ms = record.generated_count * plain_ms_per_token - record.wall_ms
+  end
+  dir = File.dirname(path)
+  Dir.mkdir_p(dir) unless dir.empty? || dir == "."
+  File.open(path, "w") do |io|
+    cycle_dumps.each do |record|
+      record.to_json(io)
+      io.puts
+    end
+  end
 end
 
 accept_rate = accepted.to_f64 / proposed.to_f64
