@@ -58,9 +58,13 @@ spec_skip_draft_backup_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFO
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
-ngram_stage_min = (ENV["QWEN35_NGRAM_STAGE_MIN"]? || "0").to_i
+ngram_stage_min = (ENV["QWEN35_NGRAM_STAGE_MIN"]? || (decode_policy == "auto" ? "16" : "0")).to_i
 ngram_stage_gate = (ENV["QWEN35_NGRAM_STAGE_GATE"]? || "4").to_i
-ngram_risk_gate = ENV["QWEN35_NGRAM_RISK_GATE"]? == "1"
+ngram_risk_gate = if value = ENV["QWEN35_NGRAM_RISK_GATE"]?
+                    value == "1"
+                  else
+                    decode_policy == "auto"
+                  end
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"

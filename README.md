@@ -119,13 +119,15 @@ Useful Qwen environment switches:
 | `QWEN35_PROMPT_CACHE=1` | Enable exact prompt-state cache lookup/save in `qwen35_generate`. |
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
 | `QWEN35_PREPARE_STATE_OFF=1` | Disable eager Metal state-buffer preparation in `qwen35_generate`. By default the CLI prepares KV/DeltaNet buffers before timing prompt ingest. |
-| `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` currently chooses the exact fail-closed n-gram path; explicit policy overrides legacy mode envs. |
+| `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk-gated large-chunk staging; explicit policy overrides legacy mode envs. |
 | `QWEN35_TRACE_STEPS_OFF=1` | Suppress per-token/per-cycle trace lines in `qwen35_generate` while keeping summaries and final output. |
 | `QWEN35_QUIET=1` | Alias for suppressing per-step traces in `qwen35_generate`; useful for cleaner local timing. |
 | `QWEN35_NGRAM_DECODE=1` | Enable exact n-gram speculative decode in `qwen35_generate`. |
 | `QWEN35_NGRAM_GAMMA=32` | Maximum n-gram verifier chunk size. |
 | `QWEN35_NGRAM_MIN=6` | Minimum repeated suffix length before n-gram drafting. |
 | `QWEN35_NGRAM_MAX=8` | Maximum suffix length to search for n-gram drafting. |
+| `QWEN35_NGRAM_STAGE_MIN=16` | In `auto`, split only large n-gram verifier chunks into staged subchunks. Explicit `ngram` keeps the old default `0` unless set. |
+| `QWEN35_NGRAM_RISK_GATE=0\|1` | In `auto`, the exact candidate-shape risk gate is enabled by default; set `0` to disable. Explicit `ngram` keeps the old default off unless set to `1`. |
 | `QWEN35_NGRAM_RECURSIVE_OFF=1` | Disable recursive n-gram extension through scratch history. |
 | `QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF=1` | Exploration mode: keep trying n-gram chunks after first rejection. |
 | `QWEN35_SPECULATIVE_DECODE=1` | Enable exact neural speculative decode in `qwen35_generate` using the 0.8B draft. |
