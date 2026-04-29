@@ -5925,3 +5925,8 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   verified_at: 2026-04-29
   decay_trigger: route ordering, prompt suite, generated length, rank/layers, no-FFN maps, scheduler, or host-load conditions
   adversary_update: The route-map signal is useful for default/code/json, but not a user-facing speed win because `plain_speedup` remains below `1.0` and long-reasoning still has contradictory evidence for `noffn_0_2`.
+- claim: "The long-reasoning adversary prompt refutes the default/code/json no-FFN winners as global self-draft routes. On the 192-token reasoning prompt (`9B`, `gen=16`, schedule `4,4,8`, tree2-first, layers `0,2,4,6,8,10`, rank48), pure lowrank stayed best (`overlap_ms=735.740`, `accept=78.95%`, parity true). The suite winners regressed: `noffn_0` `931.148ms`, `noffn_0_2` `1038.631ms`, and manual `noffn_suffix4=4,6,8,10` `1372.102ms` with only `43.48%` acceptance."
+  source: `/tmp/qwen35_long_reasoning_manual_suffix4_gen16_pure_first.log`, on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: prompt classifier/risk gate, no-FFN route maps, rank/layers, schedule, or tree2 scheduler changes
+  adversary_update: Do not promote no-FFN maps as defaults. The next route-map work needs prompt/risk-aware selection or a safer candidate source, not broader static no-FFN coverage.
