@@ -438,6 +438,27 @@ private def prompt_route_feature_note(name : String,
   "self_spec_prompt_route_features name=#{name} layers=#{layer_ids.join(',')} rank=#{rank} token_vectors=#{token_count} calib_tokens=#{calib_count} heldout_tokens=#{token_count - calib_count} residual_count=#{stats[:count]} residual_mean=#{stats[:mean].round(6)} residual_p50=#{stats[:p50].round(6)} residual_p90=#{stats[:p90].round(6)} residual_p99=#{stats[:p99].round(6)} residual_max=#{stats[:max].round(6)} pass_rates=#{pass.join(',')}"
 end
 
+private def prompt_route_layer_feature_notes(name : String,
+                                             layer_ids : Array(Int32),
+                                             rank : Int32,
+                                             token_count : Int32,
+                                             calib_count : Int32,
+                                             layer_vectors : LayerVectorMap,
+                                             layer_bases : LayerBasisMap,
+                                             thresholds : Array(Float64)) : Array(String)
+  layer_ids.map do |il|
+    single_vectors = {} of Int32 => BasisSet
+    single_bases = {} of Int32 => BasisSet
+    single_vectors[il] = layer_vectors[il]
+    single_bases[il] = layer_bases[il]
+    stats = route_residual_stats(single_vectors, single_bases, rank, calib_count, thresholds)
+    pass = stats[:pass_rates].map do |entry|
+      "#{entry[:threshold].round(4)}:#{entry[:rate].round(2)}%"
+    end
+    "self_spec_prompt_route_layer_features name=#{name} layer=#{il} rank=#{rank} token_vectors=#{token_count} calib_tokens=#{calib_count} heldout_tokens=#{token_count - calib_count} residual_count=#{stats[:count]} residual_mean=#{stats[:mean].round(6)} residual_p50=#{stats[:p50].round(6)} residual_p90=#{stats[:p90].round(6)} residual_p99=#{stats[:p99].round(6)} residual_max=#{stats[:max].round(6)} pass_rates=#{pass.join(',')}"
+  end
+end
+
 private def project_with_basis(v : Array(Float32), offset : Int32,
                                basis : Array(Array(Float64)), rank : Int32) : Nil
   limit = Math.min(rank, basis.size)
@@ -5975,6 +5996,7 @@ if rank = simulate_logit_rank
     puts "layer_basis_effective_ranks #{rank_notes.join(' ')}"
     if simulate_self_spec_gpu_pipeline_route_features
       puts prompt_route_feature_note("main", sorted_simulate_logit_layers, rank, token_ids.size, calib_count, layer_vectors, layer_bases, thresholds)
+      prompt_route_layer_feature_notes("main", sorted_simulate_logit_layers, rank, token_ids.size, calib_count, layer_vectors, layer_bases, thresholds).each { |line| puts line }
     end
     ffn_pca_ranks = [] of Int32
     ffn_pca_down_ranks = [] of Int32
@@ -6360,6 +6382,7 @@ if rank = simulate_logit_rank
           puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} token_vectors=#{suite_token_ids.size} calib_tokens=#{suite_calib_count} heldout_tokens=#{suite_token_ids.size - suite_calib_count} layer_basis_effective_ranks=#{suite_rank_notes.join(' ')}"
           if simulate_self_spec_gpu_pipeline_route_features
             puts prompt_route_feature_note(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds)
+            prompt_route_layer_feature_notes(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds).each { |line| puts line }
           end
           if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
             pipeline_gammas.each do |pipeline_gamma|
@@ -6480,6 +6503,7 @@ if rank = simulate_logit_rank
         end
         puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} token_vectors=#{suite_token_ids.size} calib_tokens=#{suite_calib_count} heldout_tokens=#{suite_token_ids.size - suite_calib_count} layer_basis_effective_ranks=#{suite_rank_notes.join(' ')}"
         puts prompt_route_feature_note(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds)
+        prompt_route_layer_feature_notes(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds).each { |line| puts line }
       end
     end
   end
