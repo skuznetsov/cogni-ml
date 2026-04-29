@@ -12,6 +12,7 @@ require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 require "json"
 require "option_parser"
+require "set"
 
 DEFAULT_TARGET    = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 DEFAULT_DRAFT     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
@@ -52,6 +53,7 @@ warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
 dump_cycles_path = ENV["QWEN35_SPEC_DUMP_CYCLES"]?
 dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
+router_model_path = ENV["QWEN35_SPEC_ROUTER_MODEL"]?
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--bootstrap-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace|hybrid|staged] [--ngram] [prompt]"
@@ -80,6 +82,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
   parser.on("--dump-cycle-token-ids", "Include raw token ids in --dump-cycles records; default only writes stable hashes") { dump_cycle_token_ids = true }
+  parser.on("--router-model PATH", "Research: logistic router JSON used to gate n-gram chunks before verification") { |path| router_model_path = path }
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -104,6 +107,7 @@ raise ArgumentError.new("QWEN35_SPEC_NGRAM_GAMMA must be positive") unless ngram
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN must be positive") unless ngram_min > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MAX must be >= QWEN35_SPEC_NGRAM_MIN") unless ngram_max >= ngram_min
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_STAGE_MIN must be positive") unless ngram_stage_min > 0
+raise ArgumentError.new("router model not found: #{router_model_path}") if router_model_path && !File.file?(router_model_path.not_nil!)
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -227,6 +231,106 @@ def ngram_match_len(history : Array(Int32), max_ngram : Int32, min_ngram : Int32
   0
 end
 
+class SpecRouterModel
+  getter threshold : Float64
+  getter feature_names : Array(String)
+  getter weights : Array(Float64)
+  getter path : String
+
+  def initialize(@path : String, @threshold : Float64, @feature_names : Array(String), @weights : Array(Float64))
+    raise ArgumentError.new("router feature/weight size mismatch") unless @feature_names.size == @weights.size
+  end
+
+  def self.load(path : String) : self
+    rec = JSON.parse(File.read(path))
+    kind = rec["kind"]?.try(&.as_s) || ""
+    raise ArgumentError.new("unsupported router model kind: #{kind}") unless kind == "qwen35_spec_router_logistic"
+
+    threshold = rec["threshold"].as_f
+    feature_names = rec["feature_names"].as_a.map(&.as_s)
+    weights = rec["weights"].as_a.map(&.as_f)
+    new(path, threshold, feature_names, weights)
+  end
+
+  def score(features : Hash(String, Float64)) : Float64
+    z = 0.0
+    @feature_names.each_with_index do |name, i|
+      z += @weights[i] * (features[name]? || 0.0)
+    end
+    sigmoid(z)
+  end
+
+  private def sigmoid(z : Float64) : Float64
+    if z >= 0.0
+      1.0 / (1.0 + Math.exp(-z))
+    else
+      ez = Math.exp(z)
+      ez / (1.0 + ez)
+    end
+  end
+end
+
+def add_candidate_features(features : Hash(String, Float64), ids : Array(Int32))
+  features["candidate_features_present"] = ids.empty? ? 0.0 : 1.0
+  return if ids.empty?
+
+  counts = Hash(Int32, Int32).new(0)
+  ids.each { |id| counts[id] += 1 }
+  features["candidate_unique_ratio"] = counts.size.to_f / ids.size
+  features["candidate_pair_unique_ratio"] = ML::GGUF::NgramDraft.pair_unique_ratio(ids)
+
+  entropy = 0.0
+  counts.each_value do |count|
+    p = count.to_f / ids.size
+    entropy -= p * (Math.log(p) / Math.log(2.0))
+  end
+  max_entropy = ids.size > 1 ? Math.log(ids.size.to_f) / Math.log(2.0) : 1.0
+  features["candidate_entropy_norm"] = max_entropy > 0.0 ? entropy / max_entropy : 0.0
+
+  longest = 1
+  run = 1
+  1.upto(ids.size - 1) do |i|
+    if ids[i] == ids[i - 1]
+      run += 1
+    else
+      longest = Math.max(longest, run)
+      run = 1
+    end
+  end
+  longest = Math.max(longest, run)
+  features["candidate_longest_run_ratio"] = longest.to_f / ids.size
+
+  period = ML::GGUF::NgramDraft.exact_period(ids, 8)
+  features["candidate_exact_period_over_8"] = period > 0 ? period.to_f / 8.0 : 0.0
+  features["candidate_lag1_ratio"] = ML::GGUF::NgramDraft.lag_ratio(ids, 1)
+  features["candidate_lag2_ratio"] = ML::GGUF::NgramDraft.lag_ratio(ids, 2)
+  features["candidate_lag4_ratio"] = ML::GGUF::NgramDraft.lag_ratio(ids, 4)
+  features["candidate_lag8_ratio"] = ML::GGUF::NgramDraft.lag_ratio(ids, 8)
+end
+
+def ngram_router_features(candidates : Array(Int32),
+                          generated_before : Int32,
+                          match_len : Int32,
+                          ngram_max : Int32,
+                          ngram_disabled_before : Bool,
+                          verify_mode : String,
+                          draft_model_id : String) : Hash(String, Float64)
+  proposed = candidates.size
+  features = Hash(String, Float64).new(0.0)
+  features["bias"] = 1.0
+  features["gamma_over_32"] = proposed.clamp(0, 64).to_f / 32.0
+  features["proposed_over_32"] = proposed.clamp(0, 64).to_f / 32.0
+  features["proposed_to_gamma_ratio"] = proposed > 0 ? 1.0 : 0.0
+  features["generated_before_over_128"] = generated_before.clamp(0, 512).to_f / 128.0
+  features["ngram_match_ratio"] = ngram_max > 0 ? match_len.clamp(0, ngram_max).to_f / ngram_max : 0.0
+  features["ngram_disabled_before"] = ngram_disabled_before ? 1.0 : 0.0
+  add_candidate_features(features, candidates)
+  features["kind=ngram"] = 1.0
+  features["verify=#{verify_mode}"] = 1.0
+  features["draft=#{draft_model_id}"] = 1.0
+  features
+end
+
 private class CycleDump
   include JSON::Serializable
 
@@ -306,12 +410,13 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 prompt_hash = fnv1a64_hex(prompt.to_slice)
 target_model_id = File.basename(target_path)
 draft_model_id = File.basename(draft_path)
+router_model = router_model_path ? SpecRouterModel.load(router_model_path.not_nil!) : nil
 cycle_dumps = [] of CycleDump
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -351,6 +456,9 @@ cycles = 0
 ngram_cycles = 0
 ngram_accepted = 0
 ngram_proposed = 0
+ngram_router_checks = 0
+ngram_router_skips = 0
+ngram_router_score_sum = 0.0
 target_verify_ms = 0.0
 draft_ms = 0.0
 target_backup_ms = 0.0
@@ -381,6 +489,17 @@ while generated_ids.size < n_gen
     if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, Math.max(ngram_stage_min, 16))
       ngram_disabled = true
       ngram_candidates = [] of Int32
+    end
+    if router_model && !ngram_candidates.empty?
+      match_len = ngram_match_len(history, ngram_max, ngram_min)
+      score = router_model.not_nil!.score(ngram_router_features(
+        ngram_candidates, generated_ids.size, match_len, ngram_max, ngram_disabled, verify_mode, draft_model_id))
+      ngram_router_checks += 1
+      ngram_router_score_sum += score
+      if score < router_model.not_nil!.threshold
+        ngram_router_skips += 1
+        ngram_candidates = [] of Int32
+      end
     end
 
     unless ngram_candidates.empty?
@@ -900,6 +1019,10 @@ puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{prop
 if ngram_enabled
   ngram_rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
   puts "ngram_stats accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{ngram_rate.round(2)}% cycles=#{ngram_cycles} disabled=#{ngram_disabled} pending_draft=#{pending_draft_tokens.size}"
+  if router_model
+    avg_router_score = ngram_router_checks > 0 ? (ngram_router_score_sum / ngram_router_checks).round(4) : 0.0
+    puts "ngram_router_stats checks=#{ngram_router_checks} skips=#{ngram_router_skips} threshold=#{router_model.not_nil!.threshold} avg_score=#{avg_router_score}"
+  end
 end
 avg_gamma = cycles > 0 ? (gamma_sum.to_f64 / cycles.to_f64).round(2) : 0.0
 puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects} single_fast=#{single_accept_fast} plain_fallback=#{plain_fallback_tokens} draft_skip=#{draft_skips_before_fallback} draft_backup_skip=#{draft_backup_skips}"
