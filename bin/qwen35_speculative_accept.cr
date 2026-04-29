@@ -143,6 +143,7 @@ def greedy_sequence(weights : ML::GGUF::Qwen35Weights,
   decode0 = Time.instant
   n_gen.times do
     ids << next_id
+    break if ids.size >= n_gen
     next_id = advance_next(weights, next_id, pos, state)
     pos += 1
   end
@@ -187,6 +188,23 @@ def target_prefill_top1s_exact(weights : ML::GGUF::Qwen35Weights,
       ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, token_ids, start_pos, state)
     end
   end
+end
+
+def target_prefill_top1s_for_future(weights : ML::GGUF::Qwen35Weights,
+                                    token_ids : Array(Int32),
+                                    start_pos : Int32,
+                                    state : ML::GGUF::Qwen35CPU::State,
+                                    allow_guarded_verifier : Bool,
+                                    generated_before : Int32,
+                                    n_gen : Int32) : Array({Int32, Float32})
+  # The final generated token does not need its next-token logits. Skipping that
+  # tail row keeps speculative timings aligned with the CLI decode path.
+  remaining = Math.max(n_gen - generated_before, 0)
+  verify_len = Math.min(token_ids.size, remaining)
+  verify_len -= 1 if verify_len > 0 && generated_before + verify_len >= n_gen
+  verify_ids = token_ids[0, verify_len]
+  return [] of {Int32, Float32} if verify_ids.empty?
+  target_prefill_top1s_exact(weights, verify_ids, start_pos, state, allow_guarded_verifier)
 end
 
 def fnv1a64_hex(bytes : Bytes) : String
@@ -525,6 +543,8 @@ while generated_ids.size < n_gen
       while ngram_offset < ngram_candidates.size
         remaining = ngram_candidates.size - ngram_offset
         stage_len = stage_ngram ? Math.min(stage_gate, remaining) : remaining
+        stage_len = Math.min(stage_len, n_gen - generated_ids.size)
+        break if stage_len <= 0
         stage_candidates = ngram_candidates[ngram_offset, stage_len]
         stage_start_pos = cycle_start_pos + ngram_offset
         stage_correction_or_accepted = [] of Int32
@@ -533,7 +553,7 @@ while generated_ids.size < n_gen
         target_backup_state.copy_from!(target_state)
         target_backup_ms += (Time.instant - tb0).total_milliseconds
         tv0 = Time.instant
-        target_nexts = target_prefill_top1s_exact(target, stage_candidates, stage_start_pos, target_state, allow_guarded_verifier)
+        target_nexts = target_prefill_top1s_for_future(target, stage_candidates, stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size, n_gen)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
         if trace
           puts "ngram_cycle=#{ngram_cycles} stage_offset=#{ngram_offset} pos=#{stage_start_pos} expected0=#{target_next} candidates=#{stage_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -541,6 +561,7 @@ while generated_ids.size < n_gen
 
         expected = target_next
         stage_candidates.each_with_index do |cand, i|
+          break if generated_ids.size >= n_gen
           if cand == expected
             generated_ids << cand
             correction_or_accepted << cand
@@ -548,7 +569,7 @@ while generated_ids.size < n_gen
             accepted += 1
             accepted_in_cycle += 1
             ngram_accepted += 1
-            expected = target_nexts[i][0]
+            expected = target_nexts[i][0] if i < target_nexts.size
           else
             generated_ids << expected
             correction_or_accepted << expected
@@ -561,17 +582,19 @@ while generated_ids.size < n_gen
 
         if rejected
           ngram_disabled = true if ngram_disable_after_reject
-          target_state.copy_from!(target_backup_state)
-          tv1 = Time.instant
-          corrected = target_prefill_top1s_exact(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier)
-          target_verify_ms += (Time.instant - tv1).total_milliseconds
-          target_next = corrected[-1][0]
+          if generated_ids.size < n_gen
+            target_state.copy_from!(target_backup_state)
+            tv1 = Time.instant
+            corrected = target_prefill_top1s_for_future(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size - stage_correction_or_accepted.size, n_gen)
+            target_verify_ms += (Time.instant - tv1).total_milliseconds
+            target_next = corrected[-1][0]
+          end
           pos += stage_correction_or_accepted.size
           break
         else
-          target_next = target_nexts[-1][0]
-          pos += stage_candidates.size
-          ngram_offset += stage_candidates.size
+          target_next = target_nexts[-1][0] if generated_ids.size < n_gen
+          pos += stage_correction_or_accepted.size
+          ngram_offset += stage_correction_or_accepted.size
         end
       end
 
@@ -612,9 +635,11 @@ while generated_ids.size < n_gen
     cycle_draft_resync0 = draft_resync_ms
     cycle_start_pos = pos
     generated_ids << target_next
-    tv0 = Time.instant
-    target_next = advance_next(target, target_next, pos, target_state)
-    target_verify_ms += (Time.instant - tv0).total_milliseconds
+    if generated_ids.size < n_gen
+      tv0 = Time.instant
+      target_next = advance_next(target, target_next, pos, target_state)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+    end
     pos += 1
     plain_fallback_tokens += 1
     history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
@@ -673,9 +698,11 @@ while generated_ids.size < n_gen
     generated_ids << target_next
     correction_or_accepted << target_next
     proposed += 1
-    tv0 = Time.instant
-    target_next = advance_next(target, target_next, pos, target_state)
-    target_verify_ms += (Time.instant - tv0).total_milliseconds
+    if generated_ids.size < n_gen
+      tv0 = Time.instant
+      target_next = advance_next(target, target_next, pos, target_state)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+    end
     if will_plain_fallback_after_reject || generated_ids.size >= n_gen
       draft_skips_before_fallback += 1
     else
@@ -693,12 +720,14 @@ while generated_ids.size < n_gen
     correction_or_accepted << accepted_token
     accepted += 1
     proposed += 1
-    td0 = Time.instant
-    draft_next = advance_next(draft, accepted_token, pos, draft_state)
-    draft_ms += (Time.instant - td0).total_milliseconds
-    tv0 = Time.instant
-    target_next = advance_next(target, accepted_token, pos, target_state)
-    target_verify_ms += (Time.instant - tv0).total_milliseconds
+    if generated_ids.size < n_gen
+      td0 = Time.instant
+      draft_next = advance_next(draft, accepted_token, pos, draft_state)
+      draft_ms += (Time.instant - td0).total_milliseconds
+      tv0 = Time.instant
+      target_next = advance_next(target, accepted_token, pos, target_state)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+    end
     pos += 1
     single_accept_fast += 1
     rejected = false
@@ -728,9 +757,11 @@ while generated_ids.size < n_gen
           generated_ids << target_next
           correction_or_accepted << target_next
           proposed += 1
-          tv0 = Time.instant
-          target_next = advance_next(target, target_next, pos, target_state)
-          target_verify_ms += (Time.instant - tv0).total_milliseconds
+          if generated_ids.size < n_gen
+            tv0 = Time.instant
+            target_next = advance_next(target, target_next, pos, target_state)
+            target_verify_ms += (Time.instant - tv0).total_milliseconds
+          end
           pos += 1
           rejected = true
           early_rejects += 1
@@ -751,6 +782,7 @@ while generated_ids.size < n_gen
         stage_len.times do |i|
           break if generated_ids.size + stage_candidates.size >= n_gen
           stage_candidates << draft_next
+          break if generated_ids.size + stage_candidates.size >= n_gen
           draft_next = advance_next(draft, draft_next, stage_start_pos + i, draft_state)
         end
         draft_ms += (Time.instant - td0).total_milliseconds
@@ -762,7 +794,7 @@ while generated_ids.size < n_gen
         target_backup_state.copy_from!(target_state)
         target_backup_ms += (Time.instant - tb0).total_milliseconds
         tv0 = Time.instant
-        target_nexts = target_prefill_top1s_exact(target, stage_candidates, stage_start_pos, target_state, allow_guarded_verifier)
+        target_nexts = target_prefill_top1s_for_future(target, stage_candidates, stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size, n_gen)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
         if trace
           puts "cycle=#{cycles} stage=#{stage_index} pos=#{stage_start_pos} expected0=#{target_next} candidates=#{stage_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -771,12 +803,13 @@ while generated_ids.size < n_gen
         expected = target_next
         stage_correction_or_accepted = [] of Int32
         stage_candidates.each_with_index do |cand, i|
+          break if generated_ids.size >= n_gen
           if cand == expected
             generated_ids << cand
             correction_or_accepted << cand
             stage_correction_or_accepted << cand
             accepted += 1
-            expected = target_nexts[i][0]
+            expected = target_nexts[i][0] if i < target_nexts.size
           else
             generated_ids << expected
             correction_or_accepted << expected
@@ -787,15 +820,17 @@ while generated_ids.size < n_gen
         end
 
         if rejected
-          target_state.copy_from!(target_backup_state)
-          tv1 = Time.instant
-          corrected = target_prefill_top1s_exact(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier)
-          target_verify_ms += (Time.instant - tv1).total_milliseconds
-          target_next = corrected[-1][0]
+          if generated_ids.size < n_gen
+            target_state.copy_from!(target_backup_state)
+            tv1 = Time.instant
+            corrected = target_prefill_top1s_for_future(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size - stage_correction_or_accepted.size, n_gen)
+            target_verify_ms += (Time.instant - tv1).total_milliseconds
+            target_next = corrected[-1][0]
+          end
           pos += stage_correction_or_accepted.size
           break
         else
-          target_next = target_nexts[-1][0]
+          target_next = target_nexts[-1][0] if generated_ids.size < n_gen
           pos += stage_candidates.size
           remaining_gamma -= stage_candidates.size
           stage_index += 1
@@ -806,6 +841,7 @@ while generated_ids.size < n_gen
       cycle_gamma.times do |i|
         break if generated_ids.size + candidates.size >= n_gen
         candidates << draft_next
+        break if generated_ids.size + candidates.size >= n_gen
         draft_next = advance_next(draft, draft_next, pos + i, draft_state)
       end
       draft_ms += (Time.instant - td0).total_milliseconds
@@ -817,16 +853,20 @@ while generated_ids.size < n_gen
             generated_ids << cand
             correction_or_accepted << cand
             accepted += 1
-            tv0 = Time.instant
-            target_next = advance_next(target, cand, pos, target_state)
-            target_verify_ms += (Time.instant - tv0).total_milliseconds
+            if generated_ids.size < n_gen
+              tv0 = Time.instant
+              target_next = advance_next(target, cand, pos, target_state)
+              target_verify_ms += (Time.instant - tv0).total_milliseconds
+            end
             pos += 1
           else
             generated_ids << target_next
             correction_or_accepted << target_next
-            tv0 = Time.instant
-            target_next = advance_next(target, target_next, pos, target_state)
-            target_verify_ms += (Time.instant - tv0).total_milliseconds
+            if generated_ids.size < n_gen
+              tv0 = Time.instant
+              target_next = advance_next(target, target_next, pos, target_state)
+              target_verify_ms += (Time.instant - tv0).total_milliseconds
+            end
             pos += 1
             rejected = true
             break
@@ -836,7 +876,7 @@ while generated_ids.size < n_gen
         target_base = target_state
         verify_state = target_base.fork
         tv0 = Time.instant
-        target_nexts = target_prefill_top1s_exact(target, candidates, cycle_start_pos, verify_state, allow_guarded_verifier)
+        target_nexts = target_prefill_top1s_for_future(target, candidates, cycle_start_pos, verify_state, allow_guarded_verifier, generated_ids.size, n_gen)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
         if trace
           puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -845,11 +885,12 @@ while generated_ids.size < n_gen
         expected = target_next
         reject_at = nil.as(Int32?)
         candidates.each_with_index do |cand, i|
+          break if generated_ids.size >= n_gen
           if cand == expected
             generated_ids << cand
             correction_or_accepted << cand
             accepted += 1
-            expected = target_nexts[i][0]
+            expected = target_nexts[i][0] if i < target_nexts.size
           else
             generated_ids << expected
             correction_or_accepted << expected
@@ -860,14 +901,16 @@ while generated_ids.size < n_gen
         end
 
         if rejected
-          tv1 = Time.instant
-          corrected = target_prefill_top1s_exact(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier)
-          target_verify_ms += (Time.instant - tv1).total_milliseconds
-          target_next = corrected[-1][0]
+          if generated_ids.size < n_gen
+            tv1 = Time.instant
+            corrected = target_prefill_top1s_for_future(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier, generated_ids.size - correction_or_accepted.size, n_gen)
+            target_verify_ms += (Time.instant - tv1).total_milliseconds
+            target_next = corrected[-1][0]
+          end
           pos += correction_or_accepted.size
         else
-          target_state.copy_from!(verify_state)
-          target_next = target_nexts[-1][0]
+          target_state.copy_from!(verify_state) if generated_ids.size < n_gen
+          target_next = target_nexts[-1][0] if generated_ids.size < n_gen
           pos += candidates.size
         end
       else
@@ -875,7 +918,7 @@ while generated_ids.size < n_gen
         target_backup_state.copy_from!(target_state)
         target_backup_ms += (Time.instant - tb0).total_milliseconds
         tv0 = Time.instant
-        target_nexts = target_prefill_top1s_exact(target, candidates, cycle_start_pos, target_state, allow_guarded_verifier)
+        target_nexts = target_prefill_top1s_for_future(target, candidates, cycle_start_pos, target_state, allow_guarded_verifier, generated_ids.size, n_gen)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
         if trace
           puts "cycle=#{cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
@@ -883,11 +926,12 @@ while generated_ids.size < n_gen
 
         expected = target_next
         candidates.each_with_index do |cand, i|
+          break if generated_ids.size >= n_gen
           if cand == expected
             generated_ids << cand
             correction_or_accepted << cand
             accepted += 1
-            expected = target_nexts[i][0]
+            expected = target_nexts[i][0] if i < target_nexts.size
           else
             generated_ids << expected
             correction_or_accepted << expected
@@ -897,14 +941,16 @@ while generated_ids.size < n_gen
         end
 
         if rejected
-          target_state.copy_from!(target_backup_state)
-          tv1 = Time.instant
-          corrected = target_prefill_top1s_exact(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier)
-          target_verify_ms += (Time.instant - tv1).total_milliseconds
-          target_next = corrected[-1][0]
+          if generated_ids.size < n_gen
+            target_state.copy_from!(target_backup_state)
+            tv1 = Time.instant
+            corrected = target_prefill_top1s_for_future(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier, generated_ids.size - correction_or_accepted.size, n_gen)
+            target_verify_ms += (Time.instant - tv1).total_milliseconds
+            target_next = corrected[-1][0]
+          end
           pos += correction_or_accepted.size
         else
-          target_next = target_nexts[-1][0]
+          target_next = target_nexts[-1][0] if generated_ids.size < n_gen
           pos += candidates.size
         end
       end
