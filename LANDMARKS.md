@@ -5803,3 +5803,7 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_27b_route_score_layers24_30_gen4.log`, command with Qwen3.6-27B-Q4_K_M and route scoreboard, on 2026-04-29
   verified_at: 2026-04-29
   decay_trigger: 27B prompt set, generated length, selected layer band, rank, pca/updown calibration, route generator, or timing boundary changes
+- claim: "Focused 27B two-chunk A/B confirmed mid-band suffix no-FFN is safe but only a small speed win. Shape: Qwen3.6 27B Q4_K_M, layers `24,25,26,28,29,30`, rank40, `gamma=4`, `gen=8`, default prompt. Pure low-rank measured `overlap_ms=896.568`, `plain_speedup=0.5788x`, `accept=100%`, `parity=true`. `noffn_suffix3` (`28,29,30`) measured `overlap_ms=873.904`, `plain_speedup=0.5945x`, `accept=100%`, `parity=true`, about `2.53%` faster than pure. This is not enough to justify super-fusing that route alone as the main breakthrough path."
+  source: `/tmp/qwen36_27b_gen8_pure_vs_noffn_suffix3.log`, on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: 27B prompt set, generated length, selected layer band, rank, gamma, scheduler, or timing boundary changes
