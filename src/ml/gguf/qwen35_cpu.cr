@@ -1886,6 +1886,12 @@ module ML::GGUF
         return [forward_top1(weights, token_ids[0], start_pos, state)]
       end
 
+      if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1"
+        return Array({Int32, Float32}).new(token_ids.size) do |i|
+          forward_top1(weights, token_ids[i], start_pos + i, state)
+        end
+      end
+
       hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
       hp = weights.hparams
       if top1s = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
