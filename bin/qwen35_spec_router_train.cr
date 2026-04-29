@@ -18,6 +18,7 @@ holdout_every = 5
 include_kinds = Set(String).new
 exclude_kinds = Set(String).new
 use_sweep_feature = true
+use_category_feature = true
 
 def parse_csv_set(value : String) : Set(String)
   value.split(',').map(&.strip).reject(&.empty?).to_set
@@ -36,6 +37,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--include-kind LIST", "Comma-separated cycle kinds to keep, e.g. neural,ngram,neural_staged") { |v| include_kinds = parse_csv_set(v) }
   p.on("--exclude-kind LIST", "Comma-separated cycle kinds to drop, e.g. target_only,neural_early_reject") { |v| exclude_kinds = parse_csv_set(v) }
   p.on("--no-sweep-feature", "Do not include sweep_policy as a categorical feature") { use_sweep_feature = false }
+  p.on("--no-category-feature", "Do not include prompt_category as a categorical feature") { use_category_feature = false }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -95,12 +97,14 @@ end
 abort "no rows found" if rows.empty?
 
 kind_values = Set(String).new
+category_values = Set(String).new
 verify_values = Set(String).new
 sweep_values = Set(String).new
 draft_values = Set(String).new
 
 rows.each do |row|
   kind_values << row.s("kind")
+  category_values << row.s("prompt_category") if use_category_feature
   verify_values << row.s("verify_mode")
   sweep_values << row.s("sweep_policy") if use_sweep_feature
   draft_values << row.s("draft_model")
@@ -115,16 +119,19 @@ feature_names = [
   "ngram_disabled_before",
 ]
 
+category_values.to_a.sort.each { |v| feature_names << "category=#{v}" } if use_category_feature
 kind_values.to_a.sort.each { |v| feature_names << "kind=#{v}" }
 verify_values.to_a.sort.each { |v| feature_names << "verify=#{v}" }
 sweep_values.to_a.sort.each { |v| feature_names << "sweep=#{v}" } if use_sweep_feature
 draft_values.to_a.sort.each { |v| feature_names << "draft=#{v}" }
 
-kind_offset = 6
+category_offset = use_category_feature ? 6 : -1
+kind_offset = use_category_feature ? category_offset + category_values.size : 6
 verify_offset = kind_offset + kind_values.size
 sweep_offset = use_sweep_feature ? verify_offset + verify_values.size : -1
 draft_offset = use_sweep_feature ? sweep_offset + sweep_values.size : verify_offset + verify_values.size
 
+category_index = category_values.to_a.sort.each_with_index.to_h
 kind_index = kind_values.to_a.sort.each_with_index.to_h
 verify_index = verify_values.to_a.sort.each_with_index.to_h
 sweep_index = sweep_values.to_a.sort.each_with_index.to_h
@@ -132,10 +139,12 @@ draft_index = draft_values.to_a.sort.each_with_index.to_h
 
 def feature_vector(row : Row,
                    feature_count : Int32,
+                   category_offset : Int32,
                    kind_offset : Int32,
                    verify_offset : Int32,
                    sweep_offset : Int32,
                    draft_offset : Int32,
+                   category_index : Hash(String, Int32),
                    kind_index : Hash(String, Int32),
                    verify_index : Hash(String, Int32),
                    sweep_index : Hash(String, Int32),
@@ -149,6 +158,9 @@ def feature_vector(row : Row,
   x[4] = ngram_max > 0 ? row.i("ngram_match_len").clamp(0, ngram_max).to_f / ngram_max : 0.0
   x[5] = row.b("ngram_disabled_before") ? 1.0 : 0.0
 
+  if category_offset >= 0 && (idx = category_index[row.s("prompt_category")]?)
+    x[category_offset + idx] = 1.0
+  end
   if idx = kind_index[row.s("kind")]?
     x[kind_offset + idx] = 1.0
   end
@@ -165,8 +177,8 @@ def feature_vector(row : Row,
 end
 
 xs = rows.map do |row|
-  feature_vector(row, feature_names.size, kind_offset, verify_offset, sweep_offset, draft_offset,
-    kind_index, verify_index, sweep_index, draft_index)
+  feature_vector(row, feature_names.size, category_offset, kind_offset, verify_offset, sweep_offset, draft_offset,
+    category_index, kind_index, verify_index, sweep_index, draft_index)
 end
 
 train_idx = [] of Int32
@@ -265,7 +277,7 @@ def metrics_json(metrics : Metrics)
 end
 
 STDERR.puts "Router logistic train rows=#{train_idx.size} holdout=#{holdout_idx.size} features=#{feature_names.size} label=#{label_name}"
-STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature}"
+STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature}"
 STDERR.printf "train   acc=%.3f precision=%.3f recall=%.3f logloss=%.4f positives=%d/%d predicted=%d\n",
   train_metrics.accuracy, train_metrics.precision, train_metrics.recall, train_metrics.logloss,
   train_metrics.positives, train_metrics.count, train_metrics.predicted_positive
@@ -285,7 +297,8 @@ model = {
     "exclude_kind" => exclude_kinds.to_a.sort,
   },
   "feature_options" => {
-    "sweep_feature" => use_sweep_feature,
+    "sweep_feature"    => use_sweep_feature,
+    "category_feature" => use_category_feature,
   },
   "train"   => metrics_json(train_metrics),
   "holdout" => metrics_json(holdout_metrics),

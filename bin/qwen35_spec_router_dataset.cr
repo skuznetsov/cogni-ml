@@ -84,6 +84,12 @@ def infer_run_meta(path : String, prompts : Hash(Int32, PromptInfo)) : {Int32, I
   {rep, prompt_index, prompt_name, sweep_policy}
 end
 
+def prompt_category(prompt_name : String) : String
+  return "unknown" if prompt_name.empty?
+  head = prompt_name.split('_', 2)[0]
+  head.empty? ? "unknown" : head
+end
+
 record SummaryKey, sweep_policy : String, kind : String
 
 class Summary
@@ -159,6 +165,7 @@ begin
           "rep"                   => rep,
           "prompt_index"          => prompt_index,
           "prompt_name"           => prompt_name,
+          "prompt_category"       => prompt_category(prompt_name),
           "prompt_hash"           => json_s(rec, "prompt_hash"),
           "sweep_policy"          => sweep_policy,
           "kind"                  => kind,
