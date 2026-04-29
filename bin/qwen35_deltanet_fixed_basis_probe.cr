@@ -6230,7 +6230,8 @@ if rank = simulate_logit_rank
     if simulate_self_spec_gpu_pipeline > 0 && !pipeline_gammas.includes?(simulate_self_spec_gpu_pipeline)
       pipeline_gammas << simulate_self_spec_gpu_pipeline
     end
-    if simulate_generate_tokens > 0 && (!pipeline_gammas.empty? || !simulate_self_spec_gpu_pipeline_schedules.empty?)
+    pipeline_route_active = simulate_generate_tokens > 0 && (!pipeline_gammas.empty? || !simulate_self_spec_gpu_pipeline_schedules.empty?)
+    if pipeline_route_active
       default_draft_split = ENV["QWEN35_DRAFT_BLOCK_TOKENS"]?.try(&.to_i?) || DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS
       pipeline_splits = simulate_self_spec_gpu_pipeline_draft_splits.empty? ? [default_draft_split.as(Int32?)] : simulate_self_spec_gpu_pipeline_draft_splits.map { |v| v.as(Int32?) }
       route_score_rows = [] of RouteScoreRow
@@ -6458,6 +6459,27 @@ if rank = simulate_logit_rank
       if simulate_self_spec_gpu_pipeline_hybrid_sweep && (simulate_self_spec_gpu_pipeline_route_scoreboard || simulate_self_spec_gpu_pipeline_hybrid_rich_sweep || simulate_self_spec_gpu_pipeline_suite_hybrid_sweep)
         print_route_scoreboard(route_score_rows)
         print_route_stability_scoreboard(route_score_rows) if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
+      end
+    end
+    if simulate_self_spec_gpu_pipeline_route_features && !pipeline_route_active && !simulate_self_spec_gpu_pipeline_suite_prompts.empty?
+      simulate_self_spec_gpu_pipeline_suite_prompts.each do |suite_prompt|
+        suite_token_ids = token_ids_for_prompt(tok, suite_prompt[:text], tokens_limit)
+        suite_calib_count = Math.min(calib_tokens, suite_token_ids.size - 1)
+        raise "suite prompt #{suite_prompt[:name]} needs at least one held-out token" unless suite_calib_count > 0 && suite_calib_count < suite_token_ids.size
+        suite_layer_vectors = {} of Int32 => BasisSet
+        suite_layer_bases = {} of Int32 => BasisSet
+        sorted_simulate_logit_layers.each do |il|
+          vectors = recurrent_k_vectors_for_prompt(weights, suite_token_ids, il)
+          suite_layer_vectors[il] = vectors
+          suite_layer_bases[il] = vectors.map do |head_vectors|
+            build_basis(head_vectors[0, suite_calib_count], max_rank, basis_mode, pca_iters)
+          end
+        end
+        suite_rank_notes = sorted_simulate_logit_layers.map do |il|
+          "#{il}:#{basis_rank_note(suite_layer_bases[il], rank)}"
+        end
+        puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} token_vectors=#{suite_token_ids.size} calib_tokens=#{suite_calib_count} heldout_tokens=#{suite_token_ids.size - suite_calib_count} layer_basis_effective_ranks=#{suite_rank_notes.join(' ')}"
+        puts prompt_route_feature_note(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds)
       end
     end
   end
