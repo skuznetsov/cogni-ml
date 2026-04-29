@@ -47,6 +47,14 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.risky_candidate_shape?(compact_ids, min_size: 16).should be_false
   end
 
+  it "risk-gates short period-eight candidate tails when they repeat tokens internally" do
+    ids = [1, 2, 3, 4, 5, 6, 1, 7]
+
+    ML::GGUF::NgramDraft.exact_period(ids, 8).should eq(8)
+    ML::GGUF::NgramDraft.unique_ratio(ids).should be < 0.95
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16).should be_true
+  end
+
   it "detects non-repeating high-diversity candidate tails" do
     ids = (1..16).to_a
 

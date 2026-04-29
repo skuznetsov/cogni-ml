@@ -32,12 +32,23 @@ module ML::GGUF
     end
 
     def risky_candidate_shape?(ids : Array(Int32), min_size : Int32 = 16) : Bool
-      return false if ids.size < min_size
+      return false if ids.size < Math.min(min_size, 8)
 
       period = exact_period(ids, 8)
-      return true if period == 8
+      return true if ids.size >= min_size && period == 8
+      if ids.size >= 8 && period == 8
+        return true if pair_unique_ratio(ids) > 0.90 && unique_ratio(ids) < 0.95
+      end
+
+      return false if ids.size < min_size
 
       pair_unique_ratio(ids) > 0.90 && lag_ratio(ids, 4) < 0.05 && lag_ratio(ids, 8) < 0.20
+    end
+
+    def unique_ratio(ids : Array(Int32)) : Float64
+      return 0.0 if ids.empty?
+
+      ids.to_set.size.to_f / ids.size
     end
 
     def exact_period(ids : Array(Int32), max_period : Int32) : Int32
