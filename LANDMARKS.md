@@ -5822,3 +5822,14 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   verified_at: 2026-04-29
   decay_trigger: lm-head quant type, top2 tile kernels, decode-wave submission layout, output head routing, or tree scheduler integration changes
   adversary_update: This validates top2 availability and head overhead only. The next falsifier is real `k=2` branch scheduling cost, including extra branch state copies, verifier tokens, and rescue frequency.
+
+- claim: "The GPU self-spec schedule reader now uses the scheduled `next_steps` limit instead of truncating every next block to the initial `gamma`. Before the fix, `schedule=4,4,8` could print and execute as `gamma_history=4,4,4,4,3`, creating artificial rejects and wasting submitted draft work. After the fix, the 9B `layers=0,2,4,6,8,10`, rank48, `noffn_0_2`, `gen=16`, `schedule=4,4,8` smoke prints `gamma_history=4,4,8`, keeps `parity=true` and `100%` acceptance, with `overlap_ms=630.070`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_tree2_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_tree2_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; logs `/tmp/qwen35_tree2_first_baseline_noffn_0_2_gen16_after_schedule_fix.log` and `/tmp/qwen35_tree2_first_tree2_noffn_0_2_gen16_after_schedule_fix.log`, on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: self-spec scheduler, gamma schedule handling, draft block readback, route prompt, model file, or timing boundary changes
+  adversary_update: The earlier `tree2_first_rescues=1` observation on the same route was a scheduler-artifact refutation, not a valid top2-rescue result.
+- claim: "`--simulate-self-spec-gpu-pipeline-tree2-first` is implemented as an exact first-token branch/early-exit probe using real Metal draft top2 buffers. It preserves the top1 GPU-resident draft chain, reports checks/rescues/misses/early exits, and keeps the paired serial boundary consistent. On a stable 9B route it is inert (`checks=3`, `early_exits=0`). On a deliberately hostile `rank8 + draft_skip_recurrent_ffn` route, it preserved parity and avoided verifying wrong tails (`verifier_tokens 23 -> 7`, `replay_ms 177.474 -> 0`, `overlap_ms 1200.397 -> 664.077`), but every first-token mismatch was a top2 miss (`rescues=0`, `misses=8`)."
+  source: logs `/tmp/qwen35_tree2_rank8_skiprec_default_gen8_baseline.log` and `/tmp/qwen35_tree2_rank8_skiprec_default_gen8.log`, plus the same `/tmp/qwen35_tree2_probe` build, on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: top2 lm-head path, self-spec early-reject control flow, draft route quality, gamma schedule, or paired-serial timing semantics
+  adversary_update: This is a validated exact control-flow primitive, not evidence that top2 rescue is common enough to beat plain decode; production value still depends on real rescue frequency or a better candidate source.
