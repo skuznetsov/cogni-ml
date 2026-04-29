@@ -17,7 +17,7 @@ private alias LayerVectorMap = Hash(Int32, BasisSet)
 private alias LayerBasisMap = Hash(Int32, BasisSet)
 private alias FFNBasisMap = Hash(Int32, Array(Array(Float64)))
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
-private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64)
+private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
 
 private struct RecurrentSample
   getter inp : Array(Float32)
@@ -5618,19 +5618,21 @@ private def append_route_score(rows : Array(RouteScoreRow),
                                pipe,
                                accept_rate : Float64)
   rows << {
-    prompt:         prompt_name,
-    mode:           mode,
-    split:          draft_split.nil? ? "nil" : draft_split.to_s,
-    route:          route[:name],
-    updown_rank:    updown_rank,
-    parity:         pipe[:parity],
-    accept_rate:    accept_rate,
-    rejections:     pipe[:rejections],
-    plain_speedup:  pipe[:plain_speedup],
-    overlap_ms:     pipe[:overlap_ms],
-    plain_exact_ms: pipe[:plain_exact_ms],
-    draft_wait_ms:  pipe[:draft_wait_ms],
-    replay_ms:      pipe[:replay_ms],
+    prompt:                  prompt_name,
+    mode:                    mode,
+    split:                   draft_split.nil? ? "nil" : draft_split.to_s,
+    route:                   route[:name],
+    updown_rank:             updown_rank,
+    parity:                  pipe[:parity],
+    accept_rate:             accept_rate,
+    rejections:              pipe[:rejections],
+    plain_speedup:           pipe[:plain_speedup],
+    overlap_ms:              pipe[:overlap_ms],
+    plain_exact_ms:          pipe[:plain_exact_ms],
+    draft_wait_ms:           pipe[:draft_wait_ms],
+    replay_ms:               pipe[:replay_ms],
+    tree2_margin_min:        pipe[:tree2_margin_min],
+    tree2_reject_margin_min: pipe[:tree2_reject_margin_min],
   }
 end
 
@@ -5661,13 +5663,13 @@ private def print_route_scoreboard(rows : Array(RouteScoreRow), limit : Int32 = 
     route_score(b, baselines[route_baseline_key(b)]?) <=> route_score(a, baselines[route_baseline_key(a)]?)
   end
   puts "self_spec_route_scoreboard rows=#{rows.size} baselines=#{baselines.size} limit=#{limit}"
-  puts "rank prompt mode split route updown parity accept% plain_speedup overlap_ms baseline_delta% draft_wait_ms replay_ms rejections"
+  puts "rank prompt mode split route updown parity accept% plain_speedup overlap_ms baseline_delta% draft_wait_ms replay_ms margin_min reject_margin_min rejections"
   ranked.first(limit).each_with_index do |row, i|
     baseline = baselines[route_baseline_key(row)]?
     baseline_delta = baseline && baseline > 0.0 ? ((baseline - row[:overlap_ms]) * 100.0 / baseline) : nil
     delta_text = baseline_delta ? sprintf("%.2f", baseline_delta) : "na"
     updown_text = row[:updown_rank] ? row[:updown_rank].to_s : "-"
-    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:route]} #{updown_text} #{row[:parity]} #{row[:accept_rate].round(2)} #{row[:plain_speedup].round(4)} #{row[:overlap_ms].round(3)} #{delta_text} #{row[:draft_wait_ms].round(3)} #{row[:replay_ms].round(3)} #{row[:rejections]}"
+    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:route]} #{updown_text} #{row[:parity]} #{row[:accept_rate].round(2)} #{row[:plain_speedup].round(4)} #{row[:overlap_ms].round(3)} #{delta_text} #{row[:draft_wait_ms].round(3)} #{row[:replay_ms].round(3)} #{row[:tree2_margin_min].round(4)} #{row[:tree2_reject_margin_min].round(4)} #{row[:rejections]}"
   end
 end
 
@@ -5696,6 +5698,7 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
     delta_mean: Float64,
     delta_min: Float64,
     replay_max: Float64,
+    margin_min: Float64,
     score: Float64)
   groups.each do |key, group|
     prompts = group.size
@@ -5704,6 +5707,7 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
     plain_speedup_mean = group.sum { |row| row[:plain_speedup] } / prompts
     overlap_total = group.sum { |row| row[:overlap_ms] }
     replay_max = group.max_of { |row| row[:replay_ms] }
+    margin_min = group.min_of { |row| row[:tree2_margin_min] }
     deltas = [] of Float64
     group.each do |row|
       if baseline = baselines[route_baseline_key(row)]?
@@ -5726,16 +5730,17 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
       delta_mean:         delta_mean,
       delta_min:          delta_min,
       replay_max:         replay_max,
+      margin_min:         margin_min,
       score:              score,
     }
   end
 
   ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
   puts "self_spec_route_stability_scoreboard groups=#{summaries.size} baselines=#{baselines.size} limit=#{limit}"
-  puts "rank mode split route updown prompts baselines parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% replay_max score"
+  puts "rank mode split route updown prompts baselines parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% replay_max margin_min score"
   ranked.first(limit).each_with_index do |row, i|
     mode, split, route, updown = row[:key].split('|')
-    puts "#{i + 1} #{mode} #{split} #{route} #{updown} #{row[:prompts]} #{row[:baseline_count]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:replay_max].round(3)} #{row[:score].round(4)}"
+    puts "#{i + 1} #{mode} #{split} #{route} #{updown} #{row[:prompts]} #{row[:baseline_count]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:replay_max].round(3)} #{row[:margin_min].round(4)} #{row[:score].round(4)}"
   end
 end
 
