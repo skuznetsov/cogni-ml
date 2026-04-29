@@ -86,6 +86,10 @@ def feature_value(name : String, rec : JSON::Any) : Float64
     i(rec, "gamma").clamp(0, 64).to_f / 32.0
   when "proposed_over_32"
     i(rec, "proposed_count").clamp(0, 64).to_f / 32.0
+  when "proposed_to_gamma_ratio"
+    gamma = i(rec, "gamma")
+    proposed = i(rec, "proposed_count")
+    gamma > 0 ? (proposed.to_f / gamma).clamp(0.0, 4.0) : 0.0
   when "generated_before_over_128"
     i(rec, "generated_before").clamp(0, 512).to_f / 128.0
   when "ngram_match_ratio"

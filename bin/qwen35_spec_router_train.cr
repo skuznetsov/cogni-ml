@@ -129,19 +129,21 @@ feature_names = [
   "bias",
   "gamma_over_32",
   "proposed_over_32",
+  "proposed_to_gamma_ratio",
   "generated_before_over_128",
   "ngram_match_ratio",
   "ngram_disabled_before",
 ]
 
+base_feature_count = feature_names.size
 category_values.to_a.sort.each { |v| feature_names << "category=#{v}" } if use_category_feature
 kind_values.to_a.sort.each { |v| feature_names << "kind=#{v}" }
 verify_values.to_a.sort.each { |v| feature_names << "verify=#{v}" }
 sweep_values.to_a.sort.each { |v| feature_names << "sweep=#{v}" } if use_sweep_feature
 draft_values.to_a.sort.each { |v| feature_names << "draft=#{v}" }
 
-category_offset = use_category_feature ? 6 : -1
-kind_offset = use_category_feature ? category_offset + category_values.size : 6
+category_offset = use_category_feature ? base_feature_count : -1
+kind_offset = use_category_feature ? category_offset + category_values.size : base_feature_count
 verify_offset = kind_offset + kind_values.size
 sweep_offset = use_sweep_feature ? verify_offset + verify_values.size : -1
 draft_offset = use_sweep_feature ? sweep_offset + sweep_values.size : verify_offset + verify_values.size
@@ -166,12 +168,15 @@ def feature_vector(row : Row,
                    draft_index : Hash(String, Int32)) : Array(Float64)
   x = Array.new(feature_count, 0.0)
   x[0] = 1.0
-  x[1] = row.i("gamma").clamp(0, 64).to_f / 32.0
-  x[2] = row.i("proposed_count").clamp(0, 64).to_f / 32.0
-  x[3] = row.i("generated_before").clamp(0, 512).to_f / 128.0
+  gamma = row.i("gamma")
+  proposed = row.i("proposed_count")
+  x[1] = gamma.clamp(0, 64).to_f / 32.0
+  x[2] = proposed.clamp(0, 64).to_f / 32.0
+  x[3] = gamma > 0 ? (proposed.to_f / gamma).clamp(0.0, 4.0) : 0.0
+  x[4] = row.i("generated_before").clamp(0, 512).to_f / 128.0
   ngram_max = row.i("ngram_max")
-  x[4] = ngram_max > 0 ? row.i("ngram_match_len").clamp(0, ngram_max).to_f / ngram_max : 0.0
-  x[5] = row.b("ngram_disabled_before") ? 1.0 : 0.0
+  x[5] = ngram_max > 0 ? row.i("ngram_match_len").clamp(0, ngram_max).to_f / ngram_max : 0.0
+  x[6] = row.b("ngram_disabled_before") ? 1.0 : 0.0
 
   if category_offset >= 0 && (idx = category_index[row.s("prompt_category")]?)
     x[category_offset + idx] = 1.0
