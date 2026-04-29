@@ -60,6 +60,7 @@ ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
 ngram_stage_min = (ENV["QWEN35_NGRAM_STAGE_MIN"]? || "0").to_i
 ngram_stage_gate = (ENV["QWEN35_NGRAM_STAGE_GATE"]? || "4").to_i
+ngram_risk_gate = ENV["QWEN35_NGRAM_RISK_GATE"]? == "1"
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
@@ -469,7 +470,7 @@ if speculative_decode_enabled && !output_ids.empty?
   STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
-  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
+  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
   decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
@@ -484,6 +485,10 @@ elsif ngram_decode_enabled && !output_ids.empty?
     remaining = n_gen - output_ids.size
     candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(
       history, Math.min(ngram_gamma, remaining), ngram_max, ngram_min, recursive: ngram_recursive)
+    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, Math.max(ngram_stage_min, 16))
+      ngram_disabled = true
+      candidates = [] of Int32
+    end
 
     if candidates.empty?
       tstart = Time.instant

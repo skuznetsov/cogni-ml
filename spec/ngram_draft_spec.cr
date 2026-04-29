@@ -31,4 +31,27 @@ describe ML::GGUF::NgramDraft do
       ML::GGUF::NgramDraft.candidates([1, 2, 1], gamma: 1, max_ngram: 1, min_ngram: 2)
     end
   end
+
+  it "recognizes exact candidate periods for conservative risk gating" do
+    ids = [1, 2, 3, 4, 5, 6, 7, 8] * 2
+
+    ML::GGUF::NgramDraft.exact_period(ids, 8).should eq(8)
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16).should be_true
+  end
+
+  it "does not risk-gate short or compact low-period candidates" do
+    short_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+    compact_ids = [1, 2, 3, 4] * 4
+
+    ML::GGUF::NgramDraft.risky_candidate_shape?(short_ids, min_size: 16).should be_false
+    ML::GGUF::NgramDraft.risky_candidate_shape?(compact_ids, min_size: 16).should be_false
+  end
+
+  it "detects non-repeating high-diversity candidate tails" do
+    ids = (1..16).to_a
+
+    ML::GGUF::NgramDraft.pair_unique_ratio(ids).should eq(1.0)
+    ML::GGUF::NgramDraft.lag_ratio(ids, 4).should eq(0.0)
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16).should be_true
+  end
 end

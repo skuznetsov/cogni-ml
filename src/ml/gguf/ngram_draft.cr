@@ -1,3 +1,5 @@
+require "set"
+
 module ML::GGUF
   module NgramDraft
     extend self
@@ -27,6 +29,49 @@ module ML::GGUF
         scratch.concat(chunk)
       end
       result
+    end
+
+    def risky_candidate_shape?(ids : Array(Int32), min_size : Int32 = 16) : Bool
+      return false if ids.size < min_size
+
+      period = exact_period(ids, 8)
+      return true if period == 8
+
+      pair_unique_ratio(ids) > 0.90 && lag_ratio(ids, 4) < 0.05 && lag_ratio(ids, 8) < 0.20
+    end
+
+    def exact_period(ids : Array(Int32), max_period : Int32) : Int32
+      return 0 if ids.empty?
+
+      1.upto(Math.min(max_period, ids.size)) do |period|
+        exact = true
+        period.upto(ids.size - 1) do |i|
+          if ids[i] != ids[i % period]
+            exact = false
+            break
+          end
+        end
+        return period if exact
+      end
+      0
+    end
+
+    def lag_ratio(ids : Array(Int32), lag : Int32) : Float64
+      return 0.0 if ids.size <= lag
+
+      matches = 0
+      lag.upto(ids.size - 1) do |i|
+        matches += 1 if ids[i] == ids[i - lag]
+      end
+      matches.to_f / (ids.size - lag)
+    end
+
+    def pair_unique_ratio(ids : Array(Int32)) : Float64
+      return 0.0 if ids.size < 2
+
+      pairs = Set(Tuple(Int32, Int32)).new
+      0.upto(ids.size - 2) { |i| pairs << {ids[i], ids[i + 1]} }
+      pairs.size.to_f / (ids.size - 1)
     end
 
     private def candidates_once(history : Array(Int32),
