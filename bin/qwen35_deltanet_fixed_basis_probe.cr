@@ -5784,6 +5784,59 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
   end
 end
 
+private def print_route_oracle_scoreboard(rows : Array(RouteScoreRow), limit : Int32 = 30)
+  return if rows.empty?
+  baselines = {} of String => RouteScoreRow
+  rows.each do |row|
+    next unless row[:parity]
+    next unless row[:route] == "pure" && row[:updown_rank].nil?
+    baselines[route_baseline_key(row)] = row
+  end
+  return if baselines.empty?
+
+  groups = Hash(String, Array(RouteScoreRow)).new { |h, k| h[k] = [] of RouteScoreRow }
+  rows.each do |row|
+    next unless row[:parity]
+    key = route_baseline_key(row)
+    next unless baselines.has_key?(key)
+    groups[key] << row
+  end
+
+  picks = [] of NamedTuple(prompt: String, mode: String, split: String, route: String, updown: String, accept_rate: Float64, baseline_ms: Float64, best_ms: Float64, delta: Float64, replay_ms: Float64, margin_min: Float64, reject_margin_min: Float64, rejections: Int32)
+  pure_total = 0.0
+  best_total = 0.0
+  groups.each do |key, group|
+    baseline = baselines[key]
+    best = group.min_by { |row| row[:overlap_ms] }
+    next unless baseline[:overlap_ms] > 0.0
+    delta = (baseline[:overlap_ms] - best[:overlap_ms]) * 100.0 / baseline[:overlap_ms]
+    pure_total += baseline[:overlap_ms]
+    best_total += best[:overlap_ms]
+    picks << {
+      prompt:            best[:prompt],
+      mode:              best[:mode],
+      split:             best[:split],
+      route:             best[:route],
+      updown:            best[:updown_rank] ? best[:updown_rank].to_s : "-",
+      accept_rate:       best[:accept_rate],
+      baseline_ms:       baseline[:overlap_ms],
+      best_ms:           best[:overlap_ms],
+      delta:             delta,
+      replay_ms:         best[:replay_ms],
+      margin_min:        best[:tree2_margin_min],
+      reject_margin_min: best[:tree2_reject_margin_min],
+      rejections:        best[:rejections],
+    }
+  end
+
+  total_delta = pure_total > 0.0 ? (pure_total - best_total) * 100.0 / pure_total : 0.0
+  puts "self_spec_route_oracle prompts=#{picks.size} pure_overlap_total=#{pure_total.round(3)} oracle_overlap_total=#{best_total.round(3)} oracle_delta%=#{total_delta.round(2)} limit=#{limit}"
+  puts "rank prompt mode split best_route updown accept% baseline_ms best_ms delta% replay_ms margin_min reject_margin_min rejections"
+  picks.sort_by { |row| -row[:delta] }.first(limit).each_with_index do |row, i|
+    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:route]} #{row[:updown]} #{row[:accept_rate].round(2)} #{row[:baseline_ms].round(3)} #{row[:best_ms].round(3)} #{row[:delta].round(2)} #{row[:replay_ms].round(3)} #{row[:margin_min].round(4)} #{row[:reject_margin_min].round(4)} #{row[:rejections]}"
+  end
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = DEFAULT_PROMPT
@@ -6539,7 +6592,10 @@ if rank = simulate_logit_rank
       end
       if simulate_self_spec_gpu_pipeline_hybrid_sweep && (simulate_self_spec_gpu_pipeline_route_scoreboard || simulate_self_spec_gpu_pipeline_hybrid_rich_sweep || simulate_self_spec_gpu_pipeline_suite_hybrid_sweep)
         print_route_scoreboard(route_score_rows)
-        print_route_stability_scoreboard(route_score_rows) if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
+        if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
+          print_route_stability_scoreboard(route_score_rows)
+          print_route_oracle_scoreboard(route_score_rows)
+        end
       end
     end
     if simulate_self_spec_gpu_pipeline_route_features && !pipeline_route_active && !simulate_self_spec_gpu_pipeline_suite_prompts.empty?
