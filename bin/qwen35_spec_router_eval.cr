@@ -97,6 +97,26 @@ def feature_value(name : String, rec : JSON::Any) : Float64
     ngram_max > 0 ? i(rec, "ngram_match_len").clamp(0, ngram_max).to_f / ngram_max : 0.0
   when "ngram_disabled_before"
     b(rec, "ngram_disabled_before") ? 1.0 : 0.0
+  when "candidate_features_present"
+    b(rec, "candidate_features_present") ? 1.0 : 0.0
+  when "candidate_unique_ratio"
+    f(rec, "candidate_unique_ratio").clamp(0.0, 1.0)
+  when "candidate_pair_unique_ratio"
+    f(rec, "candidate_pair_unique_ratio").clamp(0.0, 1.0)
+  when "candidate_entropy_norm"
+    f(rec, "candidate_entropy_norm").clamp(0.0, 1.0)
+  when "candidate_longest_run_ratio"
+    f(rec, "candidate_longest_run_ratio").clamp(0.0, 1.0)
+  when "candidate_exact_period_over_8"
+    f(rec, "candidate_exact_period_over_8").clamp(0.0, 1.0)
+  when "candidate_lag1_ratio"
+    f(rec, "candidate_lag1_ratio").clamp(0.0, 1.0)
+  when "candidate_lag2_ratio"
+    f(rec, "candidate_lag2_ratio").clamp(0.0, 1.0)
+  when "candidate_lag4_ratio"
+    f(rec, "candidate_lag4_ratio").clamp(0.0, 1.0)
+  when "candidate_lag8_ratio"
+    f(rec, "candidate_lag8_ratio").clamp(0.0, 1.0)
   else
     if name.starts_with?("category=")
       s(rec, "prompt_category") == name["category=".size..] ? 1.0 : 0.0

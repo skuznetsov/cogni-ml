@@ -5,6 +5,7 @@
 
 require "json"
 require "option_parser"
+require "set"
 
 inputs = [] of String
 out_path = nil.as(String?)
@@ -64,6 +65,101 @@ end
 def json_b(rec : JSON::Any, key : String) : Bool
   value = rec[key]?
   value ? value.as_bool : false
+end
+
+def json_i_array(rec : JSON::Any, key : String) : Array(Int32)
+  value = rec[key]?
+  return [] of Int32 unless value
+  value.as_a.map(&.as_i.to_i32)
+rescue TypeCastError
+  [] of Int32
+end
+
+record CandidateStats,
+  present : Bool,
+  unique_ratio : Float64,
+  pair_unique_ratio : Float64,
+  entropy_norm : Float64,
+  longest_run_ratio : Float64,
+  exact_period_over_8 : Float64,
+  lag1_ratio : Float64,
+  lag2_ratio : Float64,
+  lag4_ratio : Float64,
+  lag8_ratio : Float64
+
+def lag_ratio(ids : Array(Int32), lag : Int32) : Float64
+  return 0.0 if ids.size <= lag
+  matches = 0
+  lag.upto(ids.size - 1) do |i|
+    matches += 1 if ids[i] == ids[i - lag]
+  end
+  matches.to_f / (ids.size - lag)
+end
+
+def exact_period(ids : Array(Int32), max_period : Int32) : Int32
+  return 0 if ids.empty?
+  1.upto(Math.min(max_period, ids.size)) do |period|
+    exact = true
+    period.upto(ids.size - 1) do |i|
+      if ids[i] != ids[i % period]
+        exact = false
+        break
+      end
+    end
+    return period if exact
+  end
+  0
+end
+
+def candidate_stats(rec : JSON::Any) : CandidateStats
+  ids = json_i_array(rec, "candidates")
+  n = ids.size
+  return CandidateStats.new(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) if n == 0
+
+  counts = Hash(Int32, Int32).new(0)
+  ids.each { |id| counts[id] += 1 }
+  unique_ratio = counts.size.to_f / n
+
+  pair_unique_ratio = 0.0
+  if n > 1
+    pairs = Set(Tuple(Int32, Int32)).new
+    0.upto(n - 2) { |i| pairs << {ids[i], ids[i + 1]} }
+    pair_unique_ratio = pairs.size.to_f / (n - 1)
+  end
+
+  entropy = 0.0
+  counts.each_value do |count|
+    p = count.to_f / n
+    entropy -= p * (Math.log(p) / Math.log(2.0))
+  end
+  max_entropy = n > 1 ? Math.log(n.to_f) / Math.log(2.0) : 1.0
+  entropy_norm = max_entropy > 0.0 ? entropy / max_entropy : 0.0
+
+  longest = 1
+  run = 1
+  1.upto(n - 1) do |i|
+    if ids[i] == ids[i - 1]
+      run += 1
+    else
+      longest = Math.max(longest, run)
+      run = 1
+    end
+  end
+  longest = Math.max(longest, run)
+
+  period = exact_period(ids, 8)
+  CandidateStats.new(
+    true,
+    unique_ratio,
+    pair_unique_ratio,
+    entropy_norm,
+    longest.to_f / n,
+    period > 0 ? period.to_f / 8.0 : 0.0,
+    lag_ratio(ids, 1),
+    lag_ratio(ids, 2),
+    lag_ratio(ids, 4),
+    lag_ratio(ids, 8)
+  )
 end
 
 def infer_run_meta(path : String, prompts : Hash(Int32, PromptInfo)) : {Int32, Int32, String, String}
@@ -163,48 +259,59 @@ begin
       full_accept = proposed > 0 && accepted == proposed
       positive_gain = gain > 0.0
       kind = json_s(rec, "kind")
+      candidates = candidate_stats(rec)
 
       summary[SummaryKey.new(sweep_policy, kind)].add(generated, proposed, accepted, full_accept, positive_gain, wall, gain)
 
       unless summary_only
         out_io.puts({
-          "source_file"           => File.basename(path),
-          "rep"                   => rep,
-          "prompt_index"          => prompt_index,
-          "prompt_name"           => prompt_name,
-          "prompt_category"       => prompt_category(prompt_name),
-          "prompt_hash"           => json_s(rec, "prompt_hash"),
-          "sweep_policy"          => sweep_policy,
-          "kind"                  => kind,
-          "policy"                => json_s(rec, "policy"),
-          "verify_mode"           => json_s(rec, "verify_mode"),
-          "target_model"          => json_s(rec, "target_model"),
-          "draft_model"           => json_s(rec, "draft_model"),
-          "position"              => json_i(rec, "position"),
-          "generated_before"      => json_i(rec, "generated_before"),
-          "generated_count"       => generated,
-          "gamma"                 => json_i(rec, "gamma"),
-          "proposed_count"        => proposed,
-          "accepted_count"        => accepted,
-          "accepted_ratio"        => accepted_ratio,
-          "full_accept"           => full_accept,
-          "accept_ge_75pct"       => proposed > 0 && accepted_ratio >= 0.75,
-          "positive_gain"         => positive_gain,
-          "expected_gain_ms"      => gain,
-          "reject_index"          => json_i(rec, "reject_index"),
-          "ngram_match_len"       => json_i(rec, "ngram_match_len"),
-          "ngram_min"             => json_i(rec, "ngram_min"),
-          "ngram_max"             => json_i(rec, "ngram_max"),
-          "ngram_recursive"       => json_b(rec, "ngram_recursive"),
-          "ngram_disabled_before" => json_b(rec, "ngram_disabled_before"),
-          "ngram_disabled_after"  => json_b(rec, "ngram_disabled_after"),
-          "draft_ms"              => json_f(rec, "draft_ms"),
-          "target_verify_ms"      => json_f(rec, "target_verify_ms"),
-          "target_backup_ms"      => json_f(rec, "target_backup_ms"),
-          "draft_backup_ms"       => json_f(rec, "draft_backup_ms"),
-          "draft_resync_ms"       => json_f(rec, "draft_resync_ms"),
-          "wall_ms"               => wall,
-          "candidate_hash"        => json_s(rec, "candidate_hash"),
+          "source_file"                   => File.basename(path),
+          "rep"                           => rep,
+          "prompt_index"                  => prompt_index,
+          "prompt_name"                   => prompt_name,
+          "prompt_category"               => prompt_category(prompt_name),
+          "prompt_hash"                   => json_s(rec, "prompt_hash"),
+          "sweep_policy"                  => sweep_policy,
+          "kind"                          => kind,
+          "policy"                        => json_s(rec, "policy"),
+          "verify_mode"                   => json_s(rec, "verify_mode"),
+          "target_model"                  => json_s(rec, "target_model"),
+          "draft_model"                   => json_s(rec, "draft_model"),
+          "position"                      => json_i(rec, "position"),
+          "generated_before"              => json_i(rec, "generated_before"),
+          "generated_count"               => generated,
+          "gamma"                         => json_i(rec, "gamma"),
+          "proposed_count"                => proposed,
+          "accepted_count"                => accepted,
+          "accepted_ratio"                => accepted_ratio,
+          "full_accept"                   => full_accept,
+          "accept_ge_75pct"               => proposed > 0 && accepted_ratio >= 0.75,
+          "positive_gain"                 => positive_gain,
+          "expected_gain_ms"              => gain,
+          "reject_index"                  => json_i(rec, "reject_index"),
+          "ngram_match_len"               => json_i(rec, "ngram_match_len"),
+          "ngram_min"                     => json_i(rec, "ngram_min"),
+          "ngram_max"                     => json_i(rec, "ngram_max"),
+          "ngram_recursive"               => json_b(rec, "ngram_recursive"),
+          "ngram_disabled_before"         => json_b(rec, "ngram_disabled_before"),
+          "ngram_disabled_after"          => json_b(rec, "ngram_disabled_after"),
+          "candidate_features_present"    => candidates.present,
+          "candidate_unique_ratio"        => candidates.unique_ratio,
+          "candidate_pair_unique_ratio"   => candidates.pair_unique_ratio,
+          "candidate_entropy_norm"        => candidates.entropy_norm,
+          "candidate_longest_run_ratio"   => candidates.longest_run_ratio,
+          "candidate_exact_period_over_8" => candidates.exact_period_over_8,
+          "candidate_lag1_ratio"          => candidates.lag1_ratio,
+          "candidate_lag2_ratio"          => candidates.lag2_ratio,
+          "candidate_lag4_ratio"          => candidates.lag4_ratio,
+          "candidate_lag8_ratio"          => candidates.lag8_ratio,
+          "draft_ms"                      => json_f(rec, "draft_ms"),
+          "target_verify_ms"              => json_f(rec, "target_verify_ms"),
+          "target_backup_ms"              => json_f(rec, "target_backup_ms"),
+          "draft_backup_ms"               => json_f(rec, "draft_backup_ms"),
+          "draft_resync_ms"               => json_f(rec, "draft_resync_ms"),
+          "wall_ms"                       => wall,
+          "candidate_hash"                => json_s(rec, "candidate_hash"),
         }.to_json)
       end
       rows += 1

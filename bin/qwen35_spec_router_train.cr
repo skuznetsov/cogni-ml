@@ -21,6 +21,7 @@ include_kinds = Set(String).new
 exclude_kinds = Set(String).new
 use_sweep_feature = true
 use_category_feature = true
+use_candidate_features = true
 
 def parse_csv_set(value : String) : Set(String)
   value.split(',').map(&.strip).reject(&.empty?).to_set
@@ -42,6 +43,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--exclude-kind LIST", "Comma-separated cycle kinds to drop, e.g. target_only,neural_early_reject") { |v| exclude_kinds = parse_csv_set(v) }
   p.on("--no-sweep-feature", "Do not include sweep_policy as a categorical feature") { use_sweep_feature = false }
   p.on("--no-category-feature", "Do not include prompt_category as a categorical feature") { use_category_feature = false }
+  p.on("--no-candidate-features", "Do not include opt-in candidate-token aggregate features") { use_candidate_features = false }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -90,7 +92,7 @@ class Row
     value ? value.as_bool : false
   end
 
-  private def f(key : String) : Float64
+  def f(key : String) : Float64
     value = @rec[key]?
     value ? value.as_f : 0.0
   end
@@ -135,6 +137,25 @@ feature_names = [
   "ngram_disabled_before",
 ]
 
+candidate_feature_names = [
+  "candidate_features_present",
+  "candidate_unique_ratio",
+  "candidate_pair_unique_ratio",
+  "candidate_entropy_norm",
+  "candidate_longest_run_ratio",
+  "candidate_exact_period_over_8",
+  "candidate_lag1_ratio",
+  "candidate_lag2_ratio",
+  "candidate_lag4_ratio",
+  "candidate_lag8_ratio",
+]
+
+candidate_offset = -1
+if use_candidate_features
+  candidate_offset = feature_names.size
+  feature_names.concat(candidate_feature_names)
+end
+
 base_feature_count = feature_names.size
 category_values.to_a.sort.each { |v| feature_names << "category=#{v}" } if use_category_feature
 kind_values.to_a.sort.each { |v| feature_names << "kind=#{v}" }
@@ -161,6 +182,7 @@ def feature_vector(row : Row,
                    verify_offset : Int32,
                    sweep_offset : Int32,
                    draft_offset : Int32,
+                   candidate_offset : Int32,
                    category_index : Hash(String, Int32),
                    kind_index : Hash(String, Int32),
                    verify_index : Hash(String, Int32),
@@ -177,6 +199,18 @@ def feature_vector(row : Row,
   ngram_max = row.i("ngram_max")
   x[5] = ngram_max > 0 ? row.i("ngram_match_len").clamp(0, ngram_max).to_f / ngram_max : 0.0
   x[6] = row.b("ngram_disabled_before") ? 1.0 : 0.0
+  if candidate_offset >= 0
+    x[candidate_offset] = row.b("candidate_features_present") ? 1.0 : 0.0
+    x[candidate_offset + 1] = row.f("candidate_unique_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 2] = row.f("candidate_pair_unique_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 3] = row.f("candidate_entropy_norm").clamp(0.0, 1.0)
+    x[candidate_offset + 4] = row.f("candidate_longest_run_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 5] = row.f("candidate_exact_period_over_8").clamp(0.0, 1.0)
+    x[candidate_offset + 6] = row.f("candidate_lag1_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 7] = row.f("candidate_lag2_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 8] = row.f("candidate_lag4_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 9] = row.f("candidate_lag8_ratio").clamp(0.0, 1.0)
+  end
 
   if category_offset >= 0 && (idx = category_index[row.s("prompt_category")]?)
     x[category_offset + idx] = 1.0
@@ -197,7 +231,7 @@ def feature_vector(row : Row,
 end
 
 xs = rows.map do |row|
-  feature_vector(row, feature_names.size, category_offset, kind_offset, verify_offset, sweep_offset, draft_offset,
+  feature_vector(row, feature_names.size, category_offset, kind_offset, verify_offset, sweep_offset, draft_offset, candidate_offset,
     category_index, kind_index, verify_index, sweep_index, draft_index)
 end
 
@@ -316,7 +350,7 @@ def metrics_json(metrics : Metrics)
 end
 
 STDERR.puts "Router logistic train rows=#{train_idx.size} holdout=#{holdout_idx.size} features=#{feature_names.size} label=#{label_name}"
-STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature} holdout_by=#{holdout_by} min_gain_ms=#{min_gain_ms}"
+STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature} candidate_features=#{use_candidate_features} holdout_by=#{holdout_by} min_gain_ms=#{min_gain_ms}"
 STDERR.printf "train   acc=%.3f precision=%.3f recall=%.3f logloss=%.4f positives=%d/%d predicted=%d\n",
   train_metrics.accuracy, train_metrics.precision, train_metrics.recall, train_metrics.logloss,
   train_metrics.positives, train_metrics.count, train_metrics.predicted_positive
@@ -338,8 +372,9 @@ model = {
   },
   "holdout_by"      => holdout_by,
   "feature_options" => {
-    "sweep_feature"    => use_sweep_feature,
-    "category_feature" => use_category_feature,
+    "sweep_feature"      => use_sweep_feature,
+    "category_feature"   => use_category_feature,
+    "candidate_features" => use_candidate_features,
   },
   "train"   => metrics_json(train_metrics),
   "holdout" => metrics_json(holdout_metrics),
