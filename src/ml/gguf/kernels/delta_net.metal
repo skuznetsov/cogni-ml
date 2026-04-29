@@ -263,16 +263,34 @@ kernel void ffn_pca_updown_fused_rows(
 {
     if (token >= n_tokens) return;
 
+    threadgroup float partials[64 * 8];
     threadgroup float coeffs[64];
     device const float* row = x + token * hidden_dim;
 
-    if (tid < rank && tid < 64) {
-        device const float* w = coeff_weights + tid * hidden_dim;
-        float acc = c_mean[tid];
-        for (uint d = 0; d < hidden_dim; ++d) {
+    // The original row kernel assigned one thread to each coefficient and
+    // made it scan the whole hidden vector. Split each coefficient dot product
+    // across several lanes so single-token decode does not serialize on rank
+    // threads while preserving the one-dispatch fused path.
+    uint lanes = (rank <= 32) ? 8 : 4;
+    uint coeff = tid / lanes;
+    uint lane = tid - coeff * lanes;
+    if (coeff < rank && coeff < 64 && lane < lanes) {
+        device const float* w = coeff_weights + coeff * hidden_dim;
+        float acc = 0.0f;
+        for (uint d = lane; d < hidden_dim; d += lanes) {
             acc += (row[d] - x_mean[d]) * w[d];
         }
-        coeffs[tid] = acc;
+        partials[coeff * 8 + lane] = acc;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (coeff < rank && coeff < 64 && lane == 0) {
+        float acc = c_mean[coeff];
+        for (uint l = 0; l < lanes; ++l) {
+            acc += partials[coeff * 8 + l];
+        }
+        coeffs[coeff] = acc;
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);

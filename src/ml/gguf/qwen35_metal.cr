@@ -6218,6 +6218,11 @@ module ML
                                            lowrank_rank : Int32 = 0,
                                            lowrank_skip_ffn : Bool = false,
                                            skip_recurrent_ffn : Bool = false,
+                                           lowrank_updown_x_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_c_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_coeff_w_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_down_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_rank : Int32 = 0,
                                            token_embd_qw : QuantWeight? = nil,
                                            token_ids_buf : ML::MetalBuffer? = nil,
                                            token_index : Int32 = 0,
@@ -6238,6 +6243,11 @@ module ML
                 lowrank_rank: lowrank_rank,
                 lowrank_skip_ffn: lowrank_skip_ffn,
                 skip_recurrent_ffn: skip_recurrent_ffn,
+                lowrank_updown_x_mean_bufs: lowrank_updown_x_mean_bufs,
+                lowrank_updown_c_mean_bufs: lowrank_updown_c_mean_bufs,
+                lowrank_updown_coeff_w_bufs: lowrank_updown_coeff_w_bufs,
+                lowrank_updown_down_bufs: lowrank_updown_down_bufs,
+                lowrank_updown_rank: lowrank_updown_rank,
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
@@ -6258,6 +6268,11 @@ module ML
                 lowrank_rank: lowrank_rank,
                 lowrank_skip_ffn: lowrank_skip_ffn,
                 skip_recurrent_ffn: skip_recurrent_ffn,
+                lowrank_updown_x_mean_bufs: lowrank_updown_x_mean_bufs,
+                lowrank_updown_c_mean_bufs: lowrank_updown_c_mean_bufs,
+                lowrank_updown_coeff_w_bufs: lowrank_updown_coeff_w_bufs,
+                lowrank_updown_down_bufs: lowrank_updown_down_bufs,
+                lowrank_updown_rank: lowrank_updown_rank,
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
@@ -6403,6 +6418,15 @@ module ML
           lr_states = lowrank_state_bufs
           lr_bases = lowrank_basis_bufs
           lr_active = !lr_set.nil? && !lr_set.empty? && lowrank_rank > 0 && !lr_states.nil? && !lr_bases.nil?
+          lr_updown_active = lowrank_updown_rank > 0
+          if lr_updown_active
+            raise "decode wave lowrank updown requires active lowrank layers" unless lr_active
+            raise "decode wave lowrank updown rank too large" if lowrank_updown_rank > 64
+            raise "decode wave lowrank updown requires x_mean buffers" if lowrank_updown_x_mean_bufs.nil?
+            raise "decode wave lowrank updown requires c_mean buffers" if lowrank_updown_c_mean_bufs.nil?
+            raise "decode wave lowrank updown requires coeff buffers" if lowrank_updown_coeff_w_bufs.nil?
+            raise "decode wave lowrank updown requires down buffers" if lowrank_updown_down_bufs.nil?
+          end
           lr_c_buf = lr_active ? Scratch.get(:wave_lr_c, (hp.ssm_group_count * lowrank_rank).to_i64 * sizeof(Float32)) : nil
           lr_qbar_buf = lr_active ? Scratch.get(:wave_lr_qbar, (hp.ssm_group_count * lowrank_rank).to_i64 * sizeof(Float32)) : nil
 
@@ -6824,6 +6848,38 @@ module ML
                     copy_enc.set_value(hidden_dim.to_u32, 3)
                     copy_enc.dispatch_1d(hidden_dim, 256)
                     copy_enc.end_encoding
+                  end
+                elsif use_lr && lr_updown_active
+                  x_mean_buf = lowrank_updown_x_mean_bufs.not_nil![il]? || raise "decode wave lowrank updown missing x_mean for layer #{il}"
+                  c_mean_buf = lowrank_updown_c_mean_bufs.not_nil![il]? || raise "decode wave lowrank updown missing c_mean for layer #{il}"
+                  coeff_w_buf = lowrank_updown_coeff_w_bufs.not_nil![il]? || raise "decode wave lowrank updown missing coeff_w for layer #{il}"
+                  down_buf = lowrank_updown_down_bufs.not_nil![il]? || raise "decode wave lowrank updown missing down for layer #{il}"
+
+                  Profile.trace("rec.ffn_pca_updown") do
+                    updown_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    updown_enc.set_pipeline(ffn_pca_updown_fused_rows_pipeline)
+                    updown_enc.set_buffer(pre_norm_buf, 0)
+                    updown_enc.set_buffer(x_mean_buf, 1)
+                    updown_enc.set_buffer(c_mean_buf, 2)
+                    updown_enc.set_buffer(coeff_w_buf, 3)
+                    updown_enc.set_buffer(down_buf, 4)
+                    updown_enc.set_buffer(ffn_out_buf, 5, ML::Metal::BufferAccess::Write)
+                    updown_enc.set_value(hidden_dim.to_u32, 6)
+                    updown_enc.set_value(lowrank_updown_rank.to_u32, 7)
+                    updown_enc.set_value(1_u32, 8)
+                    updown_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+                    updown_enc.end_encoding
+                  end
+
+                  Profile.trace("rec.ffn_pca_updown_add") do
+                    add_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    add_enc.set_pipeline(add_vec_pipeline)
+                    add_enc.set_buffer(residual_buf, 0)
+                    add_enc.set_buffer(ffn_out_buf, 1)
+                    add_enc.set_buffer(dst_buf, 2, ML::Metal::BufferAccess::Write)
+                    add_enc.set_value(hidden_dim.to_u32, 3)
+                    add_enc.dispatch_1d(hidden_dim, 256)
+                    add_enc.end_encoding
                   end
                 else
                   Profile.trace("rec.ffn_upgate") do
