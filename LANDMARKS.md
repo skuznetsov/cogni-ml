@@ -5895,3 +5895,8 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   verified_at: 2026-04-29
   decay_trigger: margin threshold, prompt suite, verifier cost, Metal scheduling variance, tree2-first interaction, branch-state implementation, or FFN/head kernel changes
   adversary_update: Do not spend more time on plain margin-based verifier splitting unless a prompt suite shows frequent later-token rejects with low false-pass rate. The next speed branch should use resident branch-state/top-k verification to avoid repeating FFN-heavy verifier work on accepted chunks.
+- claim: "FFN pca-updown/no-FFN hybrid draft routes are refuted as the next speed lever on the current long reasoning gate. With 9B, `gen=16`, layers `0,2,4,6,8,10`, rank48, schedule `4,4,8`, and tree2-first, the pure lowrank route stayed best (`plain_speedup=0.5597`, `overlap_ms=744.915`, accept `78.95%`). Non-rich hybrid sweep with updown rank32 produced no faster row; the best hybrid was `hybrid_n0_u10` at `plain_speedup=0.5143`, `overlap_ms=842.127`, accept `63.64%`. Direct all-layer updown-32 was worse (`plain_speedup=0.2776`, accept `43.48%`, `6` rejects, `overlap_ms=1516.417`)."
+  source: `/tmp/qwen35_hybrid_tree2_first_long_reasoning_gen16_updown0_32.log`, `/tmp/qwen35_updown32_all_tree2_first_long_reasoning_gen16.log`, produced with `/tmp/qwen35_tree2_guard_probe` on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: prompt suite, FFN pca/updown rank, adapter calibration source, layer route set, scheduler, model file, or Metal FFN kernel changes
+  adversary_update: This is a route-specific refutation, not a universal claim that FFN compression is useless. Reopen only with a prompt-suite scoreboard showing both lower draft cost and non-degraded acceptance.
