@@ -5565,6 +5565,11 @@ private def route_baseline_key(row : RouteScoreRow) : String
   "#{row[:prompt]}|#{row[:mode]}|#{row[:split]}"
 end
 
+private def route_stability_key(row : RouteScoreRow) : String
+  updown = row[:updown_rank] ? row[:updown_rank].to_s : "-"
+  "#{row[:mode]}|#{row[:split]}|#{row[:route]}|#{updown}"
+end
+
 private def route_score(row : RouteScoreRow, baseline_overlap : Float64?) : Float64
   return -1.0e9 unless row[:parity]
   speed_component = baseline_overlap && baseline_overlap > 0.0 ? baseline_overlap / row[:overlap_ms] : row[:plain_speedup]
@@ -5590,6 +5595,74 @@ private def print_route_scoreboard(rows : Array(RouteScoreRow), limit : Int32 = 
     delta_text = baseline_delta ? sprintf("%.2f", baseline_delta) : "na"
     updown_text = row[:updown_rank] ? row[:updown_rank].to_s : "-"
     puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:route]} #{updown_text} #{row[:parity]} #{row[:accept_rate].round(2)} #{row[:plain_speedup].round(4)} #{row[:overlap_ms].round(3)} #{delta_text} #{row[:draft_wait_ms].round(3)} #{row[:replay_ms].round(3)} #{row[:rejections]}"
+  end
+end
+
+private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit : Int32 = 30)
+  return if rows.empty?
+  baselines = {} of String => Float64
+  rows.each do |row|
+    next unless row[:parity]
+    next unless row[:route] == "pure" && row[:updown_rank].nil?
+    baselines[route_baseline_key(row)] = row[:overlap_ms]
+  end
+
+  groups = Hash(String, Array(RouteScoreRow)).new { |h, k| h[k] = [] of RouteScoreRow }
+  rows.each do |row|
+    groups[route_stability_key(row)] << row
+  end
+
+  summaries = [] of NamedTuple(
+    key: String,
+    prompts: Int32,
+    baseline_count: Int32,
+    parity_all: Bool,
+    accept_mean: Float64,
+    plain_speedup_mean: Float64,
+    overlap_total: Float64,
+    delta_mean: Float64,
+    delta_min: Float64,
+    replay_max: Float64,
+    score: Float64)
+  groups.each do |key, group|
+    prompts = group.size
+    parity_all = group.all? { |row| row[:parity] }
+    accept_mean = group.sum { |row| row[:accept_rate] } / prompts
+    plain_speedup_mean = group.sum { |row| row[:plain_speedup] } / prompts
+    overlap_total = group.sum { |row| row[:overlap_ms] }
+    replay_max = group.max_of { |row| row[:replay_ms] }
+    deltas = [] of Float64
+    group.each do |row|
+      if baseline = baselines[route_baseline_key(row)]?
+        deltas << ((baseline - row[:overlap_ms]) * 100.0 / baseline) if baseline > 0.0
+      end
+    end
+    baseline_count = deltas.size
+    delta_mean = deltas.empty? ? 0.0 : deltas.sum / deltas.size
+    delta_min = deltas.empty? ? 0.0 : deltas.min
+    speed_score = baseline_count > 0 ? delta_mean : (plain_speedup_mean * 100.0)
+    score = parity_all ? (speed_score + accept_mean / 100.0 - replay_max / 1000.0) : -1.0e9
+    summaries << {
+      key:                key,
+      prompts:            prompts,
+      baseline_count:     baseline_count,
+      parity_all:         parity_all,
+      accept_mean:        accept_mean,
+      plain_speedup_mean: plain_speedup_mean,
+      overlap_total:      overlap_total,
+      delta_mean:         delta_mean,
+      delta_min:          delta_min,
+      replay_max:         replay_max,
+      score:              score,
+    }
+  end
+
+  ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
+  puts "self_spec_route_stability_scoreboard groups=#{summaries.size} baselines=#{baselines.size} limit=#{limit}"
+  puts "rank mode split route updown prompts baselines parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% replay_max score"
+  ranked.first(limit).each_with_index do |row, i|
+    mode, split, route, updown = row[:key].split('|')
+    puts "#{i + 1} #{mode} #{split} #{route} #{updown} #{row[:prompts]} #{row[:baseline_count]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:replay_max].round(3)} #{row[:score].round(4)}"
   end
 end
 
@@ -5672,6 +5745,7 @@ simulate_self_spec_gpu_pipeline_tree2_margin_guard : Float64? = nil
 simulate_self_spec_gpu_pipeline_attribution = ENV["QWEN35_SELF_SPEC_ATTR"]? == "1"
 simulate_self_spec_gpu_pipeline_hybrid_sweep = false
 simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = false
+simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = false
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 self_spec_cost_model = false
 self_spec_draft_cost = 0.0
@@ -5765,6 +5839,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-attribution", "Append WBA attribution counters for the real GPU self-spec pipeline") { simulate_self_spec_gpu_pipeline_attribution = true }
   p.on("--simulate-self-spec-gpu-pipeline-hybrid-sweep", "Run an in-process route sweep over pure/no-FFN/pca-updown hybrid layer masks") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true }
   p.on("--simulate-self-spec-gpu-pipeline-hybrid-rich-sweep", "Add per-layer, prefix/suffix, and alternating hybrid routes to the GPU self-spec layer-mode sweep") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = true }
+  p.on("--simulate-self-spec-gpu-pipeline-suite-hybrid-sweep", "Apply the hybrid route sweep to suite prompts and print aggregate prompt-stability ranking") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = true }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-suite-prompt=NAME::TEXT", "Additional eval prompt for GPU self-spec pipeline suite; main --prompt still runs first") do |v|
     if sep = v.index("::")
@@ -6160,7 +6235,6 @@ if rank = simulate_logit_rank
             end
           end
         end
-        print_route_scoreboard(route_score_rows) if simulate_self_spec_gpu_pipeline_route_scoreboard || simulate_self_spec_gpu_pipeline_hybrid_rich_sweep
       else
         pipeline_gammas.each do |pipeline_gamma|
           pipeline_splits.each do |draft_split|
@@ -6219,6 +6293,58 @@ if rank = simulate_logit_rank
             "#{il}:#{basis_rank_note(suite_layer_bases[il], rank)}"
           end
           puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} token_vectors=#{suite_token_ids.size} calib_tokens=#{suite_calib_count} heldout_tokens=#{suite_token_ids.size - suite_calib_count} layer_basis_effective_ranks=#{suite_rank_notes.join(' ')}"
+          if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
+            pipeline_gammas.each do |pipeline_gamma|
+              pipeline_splits.each do |draft_split|
+                pipeline_updown_options.each do |pipeline_updown_rank|
+                  hybrid_routes.each do |route|
+                    next if pipeline_updown_rank && route[:updown].nil?
+                    next if pipeline_updown_rank.nil? && route[:updown]
+                    route_updown_rank = route[:updown] ? pipeline_updown_rank : nil
+                    pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_gamma, suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, route_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard)
+                    accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
+                    backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
+                    draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
+                    draft_updown_note = route_updown_rank ? " draft_pca_updown=#{route_updown_rank}" : ""
+                    draft_updown_fallback_note = (route_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject) ? " draft_pca_updown_fallback=reject" : ""
+                    draft_updown_warmup_note = (route_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts > 0) ? " draft_pca_updown_after_full_accepts=#{simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts}" : ""
+                    split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
+                    route_note = hybrid_route_note(route, route_updown_rank)
+                    tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
+                    attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
+                    puts "self_spec_gpu_pipeline_suite_hybrid name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                    append_route_score(route_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}", route, draft_split, route_updown_rank, pipe, accept_rate)
+                  end
+                end
+              end
+            end
+            simulate_self_spec_gpu_pipeline_schedules.each do |pipeline_schedule|
+              next if pipeline_schedule.empty?
+              pipeline_splits.each do |draft_split|
+                pipeline_updown_options.each do |pipeline_updown_rank|
+                  hybrid_routes.each do |route|
+                    next if pipeline_updown_rank && route[:updown].nil?
+                    next if pipeline_updown_rank.nil? && route[:updown]
+                    route_updown_rank = route[:updown] ? pipeline_updown_rank : nil
+                    pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_schedule[0], suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, route_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard)
+                    accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
+                    backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
+                    draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
+                    draft_updown_note = route_updown_rank ? " draft_pca_updown=#{route_updown_rank}" : ""
+                    draft_updown_fallback_note = (route_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject) ? " draft_pca_updown_fallback=reject" : ""
+                    draft_updown_warmup_note = (route_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts > 0) ? " draft_pca_updown_after_full_accepts=#{simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts}" : ""
+                    split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
+                    route_note = hybrid_route_note(route, route_updown_rank)
+                    tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
+                    attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
+                    puts "self_spec_gpu_pipeline_suite_hybrid name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                    append_route_score(route_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", route, draft_split, route_updown_rank, pipe, accept_rate)
+                  end
+                end
+              end
+            end
+            next
+          end
           pipeline_gammas.each do |pipeline_gamma|
             pipeline_splits.each do |draft_split|
               pipeline_updown_options.each do |pipeline_updown_rank|
@@ -6261,6 +6387,10 @@ if rank = simulate_logit_rank
             end
           end
         end
+      end
+      if simulate_self_spec_gpu_pipeline_hybrid_sweep && (simulate_self_spec_gpu_pipeline_route_scoreboard || simulate_self_spec_gpu_pipeline_hybrid_rich_sweep || simulate_self_spec_gpu_pipeline_suite_hybrid_sweep)
+        print_route_scoreboard(route_score_rows)
+        print_route_stability_scoreboard(route_score_rows) if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
       end
     end
   end
