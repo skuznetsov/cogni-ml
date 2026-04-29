@@ -5844,3 +5844,14 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   verified_at: 2026-04-29
   decay_trigger: no-FFN route masks, rank/layer selection, prompt class, oracle implementation, or tree2-first branch policy
   adversary_update: The next implementation should branch/check later token positions inside a chunk, because oracle top2 covered all pure-lowrank misses while current tree2 only acts at first-token chunk boundaries.
+
+- claim: "`--simulate-self-spec-gpu-pipeline-tree2-anywhere` is implemented as an exact serial verifier inside each draft chunk. It requests real Metal top2 for the draft chain, checks every token until the first mismatch, records anywhere checks/rescues/misses/early exits, and preserves paired serial parity. This proves chunk-internal top2 rescue semantics without post-hoc oracle assumptions."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_tree2_anywhere_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_tree2_anywhere_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; smoke log `/tmp/qwen35_tree2_anywhere_rank8_skiprec_smoke.log` (`parity=true`, `checks=8`, `rescues=0`, `misses=8`), on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: tree2-anywhere verifier path, top2 decode-wave buffers, paired serial boundary, draft route masks, or timing semantics
+  adversary_update: This mode intentionally serializes verifier work inside the chunk; use it to validate rescue coverage, not as evidence of production speed.
+- claim: "On the long reasoning pure-lowrank prompt, tree2-anywhere confirms that chunk-internal top2 rescue exists but refutes serial-anywhere as the production scheduler. It rescued the same two top2 misses as first-token tree2 (`tree2_anywhere_rescues=2`, `misses=0`, parity true), but measured `overlap_ms=1876.081`, worse than the earlier tree2-first `1430.232` and roughly neutral/worse than baseline self-spec `1854.106`, because accepted chunks lost chunk-major verifier overlap. The next speed path is a staged/branch-state tree2 that preserves overlap on accepted chunks and only splits/branches when a guard predicts likely mismatch."
+  source: `/tmp/qwen35_tree2_anywhere_long_reasoning_pure_gen32.log`, compared with `/tmp/qwen35_tree2_long_reasoning_pure_baseline_gen32.log` and `/tmp/qwen35_tree2_long_reasoning_pure_tree2_gen32.log`, on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: prompt class, selected layer/rank, gamma schedule, serial verifier implementation, branch scheduler, or hardware load
+  adversary_update: This is a useful refutation of the naive implementation. Do not optimize this serial path; pivot to guard-stage or resident branch-state verification.
