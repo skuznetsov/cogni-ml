@@ -87,7 +87,14 @@ end
 def prompt_category(prompt_name : String) : String
   return "unknown" if prompt_name.empty?
   head = prompt_name.split('_', 2)[0]
-  head.empty? ? "unknown" : head
+  case head
+  when ""
+    "unknown"
+  when "templ"
+    "template"
+  else
+    head
+  end
 end
 
 record SummaryKey, sweep_policy : String, kind : String
