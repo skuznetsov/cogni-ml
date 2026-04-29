@@ -5058,30 +5058,30 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       if (draft_updown_fallback_on_reject || draft_updown_after_full_accepts > 0) && draft_updown_enabled
         draft_updown_enabled = false
       end
-      resync_base = nil.as(ML::GGUF::Qwen35CPU::State?)
-      if use_verifier_backup
-        backup = verifier_backup.not_nil!
-        copy_verifier_state.call(verifier_state, backup, cycle_start_pos)
-        t_replay = Time.instant
-        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, verifier_state)
-        replay_ms += (Time.instant - t_replay).total_milliseconds
-        target_next_id = corrected[-1][0]
-        resync_base = copy_owned_resync_base.call(backup, cycle_start_pos, "resync_#{chunks}")
-        if correction_or_accepted.size > 1
-          ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
-        end
-      else
-        t_rebuild = Time.instant
-        consumed = prompt_ids + emitted_ids
-        verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-        ML::GGUF::Qwen35CPU.prepare_state_metal!(verifier_state, hp)
-        target_next_id = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, consumed, 0, verifier_state)[0]
-        base_tokens = consumed[0, consumed.size - 1]
-        resync_base = verifier_state_after_prefix(weights, base_tokens, max_seq)
-        rebuild_ms += (Time.instant - t_rebuild).total_milliseconds
-        wba.try(&.mark("controller", "rebuild_#{chunks}", t_rebuild, Time.instant))
-      end
       if emitted_tokens < gen_tokens
+        resync_base = nil.as(ML::GGUF::Qwen35CPU::State?)
+        if use_verifier_backup
+          backup = verifier_backup.not_nil!
+          copy_verifier_state.call(verifier_state, backup, cycle_start_pos)
+          t_replay = Time.instant
+          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, verifier_state)
+          replay_ms += (Time.instant - t_replay).total_milliseconds
+          target_next_id = corrected[-1][0]
+          resync_base = copy_owned_resync_base.call(backup, cycle_start_pos, "resync_#{chunks}")
+          if correction_or_accepted.size > 1
+            ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
+          end
+        else
+          t_rebuild = Time.instant
+          consumed = prompt_ids + emitted_ids
+          verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+          ML::GGUF::Qwen35CPU.prepare_state_metal!(verifier_state, hp)
+          target_next_id = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, consumed, 0, verifier_state)[0]
+          base_tokens = consumed[0, consumed.size - 1]
+          resync_base = verifier_state_after_prefix(weights, base_tokens, max_seq)
+          rebuild_ms += (Time.instant - t_rebuild).total_milliseconds
+          wba.try(&.mark("controller", "rebuild_#{chunks}", t_rebuild, Time.instant))
+        end
         t_resync = Time.instant
         current_schedule_index = 0
         draft_resyncs += 1
@@ -5395,25 +5395,25 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       if (draft_updown_fallback_on_reject || draft_updown_after_full_accepts > 0) && serial_draft_updown_enabled
         serial_draft_updown_enabled = false
       end
-      serial_resync_base = nil.as(ML::GGUF::Qwen35CPU::State?)
-      if use_verifier_backup
-        backup = serial_backup.not_nil!
-        copy_verifier_state.call(serial_verifier_state, backup, cycle_start_pos)
-        corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, serial_verifier_state)
-        serial_target_next_id = corrected[-1][0]
-        serial_resync_base = copy_owned_resync_base.call(backup, cycle_start_pos, "serial_resync_#{serial_chunks}")
-        if correction_or_accepted.size > 1
-          ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, serial_resync_base)
-        end
-      else
-        consumed = prompt_ids + serial_emitted_ids
-        serial_verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-        ML::GGUF::Qwen35CPU.prepare_state_metal!(serial_verifier_state, hp)
-        serial_target_next_id = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, consumed, 0, serial_verifier_state)[0]
-        base_tokens = consumed[0, consumed.size - 1]
-        serial_resync_base = verifier_state_after_prefix(weights, base_tokens, max_seq)
-      end
       if serial_emitted_tokens < gen_tokens
+        serial_resync_base = nil.as(ML::GGUF::Qwen35CPU::State?)
+        if use_verifier_backup
+          backup = serial_backup.not_nil!
+          copy_verifier_state.call(serial_verifier_state, backup, cycle_start_pos)
+          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, serial_verifier_state)
+          serial_target_next_id = corrected[-1][0]
+          serial_resync_base = copy_owned_resync_base.call(backup, cycle_start_pos, "serial_resync_#{serial_chunks}")
+          if correction_or_accepted.size > 1
+            ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, serial_resync_base)
+          end
+        else
+          consumed = prompt_ids + serial_emitted_ids
+          serial_verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+          ML::GGUF::Qwen35CPU.prepare_state_metal!(serial_verifier_state, hp)
+          serial_target_next_id = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, consumed, 0, serial_verifier_state)[0]
+          base_tokens = consumed[0, consumed.size - 1]
+          serial_resync_base = verifier_state_after_prefix(weights, base_tokens, max_seq)
+        end
         serial_schedule_index = 0
         serial_current_block = submit_seed_owned.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_resync_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
         serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_resync_#{serial_chunks}")
