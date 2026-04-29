@@ -12,6 +12,7 @@
 # prompt/repetition block to reduce host-drift bias.
 
 require "option_parser"
+require "json"
 
 record Policy, name : String, args : Array(String), env : Hash(String, String)
 
@@ -32,6 +33,48 @@ record RunResult,
   cycle_dump_path : String?,
   stderr : String,
   stdout : String
+
+def json_i(rec : JSON::Any, key : String) : Int32
+  if value = rec[key]?
+    value.as_i.to_i32
+  else
+    0
+  end
+end
+
+def json_f(rec : JSON::Any, key : String) : Float64
+  if value = rec[key]?
+    value.as_f? || 0.0
+  else
+    0.0
+  end
+end
+
+class CycleStats
+  property count : Int32 = 0
+  property proposed : Int32 = 0
+  property accepted : Int32 = 0
+  property rejects : Int32 = 0
+  property generated : Int32 = 0
+  property gain_ms : Float64 = 0.0
+  property wall_ms : Float64 = 0.0
+  property draft_ms : Float64 = 0.0
+  property verify_ms : Float64 = 0.0
+  property backup_ms : Float64 = 0.0
+
+  def add(rec : JSON::Any)
+    @count += 1
+    @proposed += json_i(rec, "proposed_count")
+    @accepted += json_i(rec, "accepted_count")
+    @rejects += 1 if json_i(rec, "reject_index") >= 0
+    @generated += json_i(rec, "generated_count")
+    @gain_ms += json_f(rec, "expected_gain_ms")
+    @wall_ms += json_f(rec, "wall_ms")
+    @draft_ms += json_f(rec, "draft_ms")
+    @verify_ms += json_f(rec, "target_verify_ms")
+    @backup_ms += json_f(rec, "target_backup_ms") + json_f(rec, "draft_backup_ms") + json_f(rec, "draft_resync_ms")
+  end
+end
 
 runner = ENV["QWEN35_SPEC_SWEEP_RUNNER"]? || "/tmp/qwen35_speculative_accept"
 tokens = 32
@@ -264,4 +307,27 @@ if dump_cycles_dir
   dumped = results.compact_map(&.cycle_dump_path).count { |path| path && File.exists?(path) }
   puts
   puts "Cycle JSONL dumps: #{dumped}/#{results.size} files in #{dump_cycles_dir}"
+  stats = Hash(String, CycleStats).new { |hash, key| hash[key] = CycleStats.new }
+  results.each do |result|
+    path = result.cycle_dump_path
+    next unless path && File.exists?(path)
+    File.each_line(path) do |line|
+      next if line.empty?
+      rec = JSON.parse(line)
+      key = "#{rec["policy"].as_s}/#{rec["kind"].as_s}"
+      stats[key].add(rec)
+    end
+  end
+  unless stats.empty?
+    puts
+    puts "Cycle JSONL summary"
+    printf "%-28s %7s %9s %9s %8s %10s %9s %9s %9s\n",
+      "policy/kind", "cycles", "accepted", "proposed", "rejects", "gain_ms", "wall_ms", "draft_ms", "verify_ms"
+    stats.keys.sort.each do |key|
+      stat = stats[key]
+      printf "%-28s %7d %9d %9d %8d %10.1f %9.1f %9.1f %9.1f\n",
+        key, stat.count, stat.accepted, stat.proposed, stat.rejects,
+        stat.gain_ms, stat.wall_ms, stat.draft_ms, stat.verify_ms
+    end
+  end
 end
