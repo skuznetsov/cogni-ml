@@ -221,9 +221,10 @@ module ML::GGUF
     # Copy only the live GPU-resident decode state into an already prepared
     # destination state. This is the branch-state primitive needed by exact
     # tree/speculative verification: recurrent state is copied in full, while
-    # full-attention KV copies are bounded by each layer's live `position`
-    # instead of the allocated max sequence.
+    # full-attention KV copies are bounded by the caller-provided live token
+    # count instead of the allocated max sequence.
     def copy_state_metal_used!(dst : State, src : State, hp : Qwen35Hparams,
+                               used_tokens : Int32? = nil,
                                rec_only : Bool = false,
                                full_kv_capacity : Bool = false) : Nil
       {% if flag?(:cpu_only) %}
@@ -235,13 +236,15 @@ module ML::GGUF
         end
 
         ML::Metal::Dispatch.execute_blit do |enc|
-          encode_state_metal_used_copy!(enc, dst, src, hp, rec_only: rec_only, full_kv_capacity: full_kv_capacity)
+          encode_state_metal_used_copy!(enc, dst, src, hp, used_tokens: used_tokens,
+            rec_only: rec_only, full_kv_capacity: full_kv_capacity)
         end
       {% end %}
     end
 
     def encode_state_metal_used_copy!(enc : ML::Metal::BlitEncoder,
                                       dst : State, src : State, hp : Qwen35Hparams,
+                                      used_tokens : Int32? = nil,
                                       rec_only : Bool = false,
                                       full_kv_capacity : Bool = false) : Nil
       {% if flag?(:cpu_only) %}
@@ -262,7 +265,8 @@ module ML::GGUF
             src_v = src_layer.v_cache_buf.not_nil!
             dst_k = dst_layer.k_cache_buf.not_nil!
             dst_v = dst_layer.v_cache_buf.not_nil!
-            bytes = full_kv_capacity ? src_k.size : src_layer.position.to_i64 * kv_row_bytes
+            live_tokens = used_tokens || src_layer.position
+            bytes = full_kv_capacity ? src_k.size : live_tokens.to_i64 * kv_row_bytes
             raise ArgumentError.new("live KV bytes exceed source buffer at layer #{il}: #{bytes} > #{src_k.size}") if bytes > src_k.size || bytes > src_v.size
             raise ArgumentError.new("live KV bytes exceed destination buffer at layer #{il}: #{bytes} > #{dst_k.size}") if bytes > dst_k.size || bytes > dst_v.size
             next if bytes <= 0

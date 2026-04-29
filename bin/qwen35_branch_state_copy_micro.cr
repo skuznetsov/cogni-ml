@@ -107,6 +107,7 @@ private def copy_branch_blit!(src : ML::GGUF::Qwen35CPU::State,
                               enc : ML::Metal::BlitEncoder) : Nil
   ML::GGUF::Qwen35CPU.encode_state_metal_used_copy!(
     enc, dst, src, hp,
+    used_tokens: pos,
     rec_only: mode.rec_only?,
     full_kv_capacity: mode.full?
   )
