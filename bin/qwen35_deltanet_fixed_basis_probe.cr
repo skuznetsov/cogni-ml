@@ -5473,9 +5473,10 @@ private def build_self_spec_hybrid_routes(layer_ids : Array(Int32),
 
   manual_noffn_values = manual_noffn ? manual_noffn.not_nil!.to_a : [] of Int32
   manual_updown_values = manual_updown ? manual_updown.not_nil!.to_a : [] of Int32
-  add_route.call("manual", manual_noffn_values, manual_updown_values) unless manual_noffn_values.empty? && manual_updown_values.empty?
-
+  # Emit the pure baseline before manual candidates so in-process scoreboards
+  # compare routes against an earlier, not warmed-by-candidate, baseline.
   add_route.call("pure", [] of Int32, [] of Int32)
+  add_route.call("manual", manual_noffn_values, manual_updown_values) unless manual_noffn_values.empty? && manual_updown_values.empty?
   return routes if layers.empty?
 
   head1 = layers[0, 1]
