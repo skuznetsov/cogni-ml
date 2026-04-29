@@ -15,6 +15,13 @@ lr = 0.2
 l2 = 1.0e-4
 threshold = 0.5
 holdout_every = 5
+include_kinds = Set(String).new
+exclude_kinds = Set(String).new
+use_sweep_feature = true
+
+def parse_csv_set(value : String) : Set(String)
+  value.split(',').map(&.strip).reject(&.empty?).to_set
+end
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_spec_router_train --input ROWS.jsonl [--input ...] [--out model.json]"
@@ -26,6 +33,9 @@ OptionParser.parse(ARGV) do |p|
   p.on("--l2 X", "L2 regularization (default: 1e-4)") { |v| l2 = v.to_f }
   p.on("--threshold X", "Classification threshold for metrics/model (default: 0.5)") { |v| threshold = v.to_f }
   p.on("--holdout-every N", "Every Nth row is deterministic holdout; <=0 disables (default: 5)") { |v| holdout_every = v.to_i }
+  p.on("--include-kind LIST", "Comma-separated cycle kinds to keep, e.g. neural,ngram,neural_staged") { |v| include_kinds = parse_csv_set(v) }
+  p.on("--exclude-kind LIST", "Comma-separated cycle kinds to drop, e.g. target_only,neural_early_reject") { |v| exclude_kinds = parse_csv_set(v) }
+  p.on("--no-sweep-feature", "Do not include sweep_policy as a categorical feature") { use_sweep_feature = false }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -74,7 +84,11 @@ inputs.each do |path|
   abort "input not found: #{path}" unless File.file?(path)
   File.each_line(path) do |line|
     next if line.empty?
-    rows << Row.new(JSON.parse(line), label_name)
+    row = Row.new(JSON.parse(line), label_name)
+    kind = row.s("kind")
+    next if include_kinds.any? && !include_kinds.includes?(kind)
+    next if exclude_kinds.includes?(kind)
+    rows << row
   end
 end
 
@@ -88,7 +102,7 @@ draft_values = Set(String).new
 rows.each do |row|
   kind_values << row.s("kind")
   verify_values << row.s("verify_mode")
-  sweep_values << row.s("sweep_policy")
+  sweep_values << row.s("sweep_policy") if use_sweep_feature
   draft_values << row.s("draft_model")
 end
 
@@ -103,13 +117,13 @@ feature_names = [
 
 kind_values.to_a.sort.each { |v| feature_names << "kind=#{v}" }
 verify_values.to_a.sort.each { |v| feature_names << "verify=#{v}" }
-sweep_values.to_a.sort.each { |v| feature_names << "sweep=#{v}" }
+sweep_values.to_a.sort.each { |v| feature_names << "sweep=#{v}" } if use_sweep_feature
 draft_values.to_a.sort.each { |v| feature_names << "draft=#{v}" }
 
 kind_offset = 6
 verify_offset = kind_offset + kind_values.size
-sweep_offset = verify_offset + verify_values.size
-draft_offset = sweep_offset + sweep_values.size
+sweep_offset = use_sweep_feature ? verify_offset + verify_values.size : -1
+draft_offset = use_sweep_feature ? sweep_offset + sweep_values.size : verify_offset + verify_values.size
 
 kind_index = kind_values.to_a.sort.each_with_index.to_h
 verify_index = verify_values.to_a.sort.each_with_index.to_h
@@ -141,7 +155,7 @@ def feature_vector(row : Row,
   if idx = verify_index[row.s("verify_mode")]?
     x[verify_offset + idx] = 1.0
   end
-  if idx = sweep_index[row.s("sweep_policy")]?
+  if sweep_offset >= 0 && (idx = sweep_index[row.s("sweep_policy")]?)
     x[sweep_offset + idx] = 1.0
   end
   if idx = draft_index[row.s("draft_model")]?
@@ -251,6 +265,7 @@ def metrics_json(metrics : Metrics)
 end
 
 STDERR.puts "Router logistic train rows=#{train_idx.size} holdout=#{holdout_idx.size} features=#{feature_names.size} label=#{label_name}"
+STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature}"
 STDERR.printf "train   acc=%.3f precision=%.3f recall=%.3f logloss=%.4f positives=%d/%d predicted=%d\n",
   train_metrics.accuracy, train_metrics.precision, train_metrics.recall, train_metrics.logloss,
   train_metrics.positives, train_metrics.count, train_metrics.predicted_positive
@@ -265,9 +280,16 @@ model = {
   "threshold"     => threshold,
   "feature_names" => feature_names,
   "weights"       => weights,
-  "train"         => metrics_json(train_metrics),
-  "holdout"       => metrics_json(holdout_metrics),
-  "notes"         => "Offline research baseline only; target verification remains mandatory for every proposed token.",
+  "filters"       => {
+    "include_kind" => include_kinds.to_a.sort,
+    "exclude_kind" => exclude_kinds.to_a.sort,
+  },
+  "feature_options" => {
+    "sweep_feature" => use_sweep_feature,
+  },
+  "train"   => metrics_json(train_metrics),
+  "holdout" => metrics_json(holdout_metrics),
+  "notes"   => "Offline research baseline only; target verification remains mandatory for every proposed token.",
 }
 
 if path = out_path
