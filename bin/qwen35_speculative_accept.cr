@@ -44,7 +44,9 @@ ngram_enabled = ENV["QWEN35_SPEC_NGRAM"]? == "1"
 ngram_gamma = (ENV["QWEN35_SPEC_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_SPEC_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_SPEC_NGRAM_MAX"]? || "8").to_i
-ngram_stage_min = (ENV["QWEN35_SPEC_NGRAM_STAGE_MIN"]? || (ngram_gamma + 1).to_s).to_i
+ngram_stage_min_env = ENV["QWEN35_SPEC_NGRAM_STAGE_MIN"]?
+ngram_stage_min = (ngram_stage_min_env || (ngram_gamma + 1).to_s).to_i
+ngram_stage_min_explicit = !ngram_stage_min_env.nil?
 ngram_risk_min_size = (ENV["QWEN35_SPEC_NGRAM_RISK_MIN_SIZE"]? || "16").to_i
 ngram_risk_gate = ENV["QWEN35_SPEC_NGRAM_RISK_GATE"]? == "1"
 ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
@@ -75,7 +77,10 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-gamma N", "Maximum n-gram candidates per chunk (default: env QWEN35_SPEC_NGRAM_GAMMA or 32)") { |value| ngram_gamma = value.to_i }
   parser.on("--ngram-min N", "Minimum repeated suffix length before n-gram drafting (default: env QWEN35_SPEC_NGRAM_MIN or 6)") { |value| ngram_min = value.to_i }
   parser.on("--ngram-max N", "Maximum repeated suffix length to search (default: env QWEN35_SPEC_NGRAM_MAX or 8)") { |value| ngram_max = value.to_i }
-  parser.on("--ngram-stage-min N", "For --verify staged, only split n-gram chunks with at least this many candidates (default: ngram_gamma + 1)") { |value| ngram_stage_min = value.to_i }
+  parser.on("--ngram-stage-min N", "For --verify staged, only split n-gram chunks with at least this many candidates (default: ngram_gamma + 1)") do |value|
+    ngram_stage_min = value.to_i
+    ngram_stage_min_explicit = true
+  end
   parser.on("--ngram-risk-min-size N", "Minimum candidate size for the n-gram risk gate (default: 16)") { |value| ngram_risk_min_size = value.to_i }
   parser.on("--ngram-risk-gate", "Research: skip n-gram chunks whose candidate-token shape matches known bad repeat tails") { ngram_risk_gate = true }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
@@ -93,6 +98,8 @@ OptionParser.parse(ARGV) do |parser|
     prompt = before_dash.join(" ") unless before_dash.empty?
   end
 end
+
+ngram_stage_min = ngram_gamma + 1 unless ngram_stage_min_explicit
 
 raise ArgumentError.new("--gamma must be positive") unless gamma > 0
 stage_gate = gamma if stage_gate <= 0

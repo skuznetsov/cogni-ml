@@ -5775,3 +5775,7 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_spec_chunkoff_build crystal build --release bin/qwen35_speculative_accept.cr -o /tmp/qwen35_spec_accept_chunkoff --link-flags="..."`, `QWEN35_PREFILL_CHUNK_OFF=1 /tmp/qwen35_spec_accept_chunkoff --tokens 4 --ngram ... "alpha beta gamma delta alpha beta gamma delta"` (`accepted=4/4`, no crash), and `crystal spec spec/ngram_draft_spec.cr`, on 2026-04-29
   verified_at: 2026-04-29
   decay_trigger: `prefill_tokens_top1s`, `prefill_tokens_hidden`, chunk-off debug path, or verifier fallback semantics
+- claim: "`bin/qwen35_speculative_accept.cr` now keeps the default `ngram_stage_min` tied to the final parsed `ngram_gamma`. If `QWEN35_SPEC_NGRAM_STAGE_MIN` / `--ngram-stage-min` is absent, the default is recomputed after CLI parsing, so `--ngram-gamma 4` correctly prints `ngram_stage_min=5` instead of retaining the earlier pre-parse default."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_stage_default_build crystal build --release bin/qwen35_speculative_accept.cr -o /tmp/qwen35_spec_accept_stage_default --link-flags="..."`, `/tmp/qwen35_spec_accept_stage_default --tokens 4 --ngram --ngram-gamma 4 --verify staged --stage-gate 2 ...` (`ngram_stage_min=5`, `accepted=4/4`), and `crystal spec spec/ngram_draft_spec.cr`, on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: n-gram option parsing, stage-min defaults, or speculative harness CLI policy
