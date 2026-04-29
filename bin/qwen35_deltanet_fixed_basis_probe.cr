@@ -4354,6 +4354,19 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     submit_block.call(state, lr_bufs, token_buf, pos_start, label, block_cmd, steps, use_updown)
   }
 
+  submit_seed_owned = ->(state : ML::GGUF::Qwen35CPU::State, token_id : Int32, pos_start : Int32, label : String, steps : Int32, use_updown : Bool) {
+    t_token = Time.instant
+    token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
+    draft_token_buf_ms += (Time.instant - t_token).total_milliseconds if attr_collect
+    wba.try(&.mark("draft", "token_buf_#{label}_owned", t_token, Time.instant))
+    block_cmd = ML::GGUF::Qwen35Metal.decode_wave_command_buffer("self_spec_gpu_pipeline_draft")
+    t_lr = Time.instant
+    lr_bufs = build_lr_states.call(state, block_cmd)
+    wba.try(&.mark("draft", "lr_states_#{label}_owned", t_lr, Time.instant))
+    submit_block.call(state, lr_bufs, token_buf, pos_start, label, block_cmd, steps, use_updown)
+  }
+
   read_block = ->(block : GpuDraftBlock, limit : Int32, label : String) {
     active = block.submissions[0, limit]
     t_wait = Time.instant
@@ -4568,7 +4581,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
             current_schedule_index = 0
             t_resync = Time.instant
-            current_block = submit_seed.call(resync_base.not_nil!, last_token, pos_last, "self_spec_staged_resync_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
+            current_block = submit_seed_owned.call(resync_base.not_nil!, last_token, pos_last, "self_spec_staged_resync_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
             current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "staged_resync_#{chunks}")
             dt_resync = (Time.instant - t_resync).total_milliseconds
             draft_seed_ms += dt_resync
@@ -4653,7 +4666,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             end
             current_schedule_index = 0
             t_resync = Time.instant
-            current_block = submit_seed.call(resync_base.not_nil!, last_token, pos_last, "self_spec_tree2_anywhere_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
+            current_block = submit_seed_owned.call(resync_base.not_nil!, last_token, pos_last, "self_spec_tree2_anywhere_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
             current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "tree2_anywhere_#{chunks}")
             dt_resync = (Time.instant - t_resync).total_milliseconds
             draft_seed_ms += dt_resync
@@ -4716,7 +4729,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
         current_schedule_index = 0
         t_resync = Time.instant
-        current_block = submit_seed.call(resync_base, last_token, pos_last, "self_spec_tree2_first_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
+        current_block = submit_seed_owned.call(resync_base, last_token, pos_last, "self_spec_tree2_first_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
         current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "tree2_first_#{chunks}")
         dt_resync = (Time.instant - t_resync).total_milliseconds
         draft_seed_ms += dt_resync
@@ -4833,7 +4846,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       if emitted_tokens < gen_tokens
         t_resync = Time.instant
         current_schedule_index = 0
-        current_block = submit_seed.call(resync_base.not_nil!, last_token, pos_last, "self_spec_resync_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
+        current_block = submit_seed_owned.call(resync_base.not_nil!, last_token, pos_last, "self_spec_resync_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
         current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "resync_#{chunks}")
         dt_resync = (Time.instant - t_resync).total_milliseconds
         draft_seed_ms += dt_resync
@@ -4971,7 +4984,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             end
 
             serial_schedule_index = 0
-            serial_current_block = submit_seed.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_staged_resync_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
+            serial_current_block = submit_seed_owned.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_staged_resync_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
             serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_staged_resync_#{serial_chunks}")
           end
           break
@@ -5023,7 +5036,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
               serial_draft_updown_enabled = false
             end
             serial_schedule_index = 0
-            serial_current_block = submit_seed.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_tree2_anywhere_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
+            serial_current_block = submit_seed_owned.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_tree2_anywhere_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
             serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_tree2_anywhere_#{serial_chunks}")
           end
         end
@@ -5061,7 +5074,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         serial_resync_base = serial_verifier_state.fork
         serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, expected, cycle_start_pos, serial_verifier_state)[0]
         serial_schedule_index = 0
-        serial_current_block = submit_seed.call(serial_resync_base, serial_last_token, serial_pos_last, "self_spec_serial_tree2_first_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
+        serial_current_block = submit_seed_owned.call(serial_resync_base, serial_last_token, serial_pos_last, "self_spec_serial_tree2_first_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
         serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_tree2_first_#{serial_chunks}")
       end
       next
@@ -5117,7 +5130,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       end
       if serial_emitted_tokens < gen_tokens
         serial_schedule_index = 0
-        serial_current_block = submit_seed.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_resync_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
+        serial_current_block = submit_seed_owned.call(serial_resync_base.not_nil!, serial_last_token, serial_pos_last, "self_spec_serial_resync_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
         serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_resync_#{serial_chunks}")
       end
     else
