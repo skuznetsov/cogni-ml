@@ -5834,6 +5834,18 @@ self_spec_correction_cost = 1.0
 self_spec_overlap_cost = false
 self_spec_overlap_efficiency = 1.0
 
+add_self_spec_suite_prompt = ->(raw : String) {
+  if sep = raw.index("::")
+    name = raw[0, sep]
+    text = raw[(sep + 2)..]
+  else
+    name = "suite#{simulate_self_spec_gpu_pipeline_suite_prompts.size + 1}"
+    text = raw
+  end
+  safe_name = name.empty? ? "suite#{simulate_self_spec_gpu_pipeline_suite_prompts.size + 1}" : name.gsub(/[^A-Za-z0-9_.-]/, "_")
+  simulate_self_spec_gpu_pipeline_suite_prompts << {name: safe_name, text: text}
+}
+
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
@@ -5922,15 +5934,14 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-route-features", "Print held-out PCA residual features that can predict risky self-spec draft routes") { simulate_self_spec_gpu_pipeline_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-suite-prompt=NAME::TEXT", "Additional eval prompt for GPU self-spec pipeline suite; main --prompt still runs first") do |v|
-    if sep = v.index("::")
-      name = v[0, sep]
-      text = v[(sep + 2)..]
-    else
-      name = "suite#{simulate_self_spec_gpu_pipeline_suite_prompts.size + 1}"
-      text = v
+    add_self_spec_suite_prompt.call(v)
+  end
+  p.on("--simulate-self-spec-gpu-pipeline-suite-prompts-file=PATH", "Read additional suite prompts from a UTF-8 text file; each non-empty non-comment line is NAME::TEXT or TEXT") do |path|
+    File.each_line(path) do |line|
+      raw = line.strip
+      next if raw.empty? || raw.starts_with?("#")
+      add_self_spec_suite_prompt.call(raw)
     end
-    safe_name = name.empty? ? "suite#{simulate_self_spec_gpu_pipeline_suite_prompts.size + 1}" : name.gsub(/[^A-Za-z0-9_.-]/, "_")
-    simulate_self_spec_gpu_pipeline_suite_prompts << {name: safe_name, text: text}
   end
   p.on("--self-spec-draft-cost=F", "Relative cost per low-rank draft token (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_draft_cost = v.to_f64 }
   p.on("--self-spec-verifier-cost=F", "Relative cost per exact verifier token in a chunk (plain exact decode token = 1)") { |v| self_spec_cost_model = true; self_spec_verifier_cost = v.to_f64 }
