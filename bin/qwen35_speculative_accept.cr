@@ -43,6 +43,7 @@ ngram_enabled = ENV["QWEN35_SPEC_NGRAM"]? == "1"
 ngram_gamma = (ENV["QWEN35_SPEC_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_SPEC_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_SPEC_NGRAM_MAX"]? || "8").to_i
+ngram_stage_min = (ENV["QWEN35_SPEC_NGRAM_STAGE_MIN"]? || "16").to_i
 ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
@@ -70,6 +71,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-gamma N", "Maximum n-gram candidates per chunk (default: env QWEN35_SPEC_NGRAM_GAMMA or 32)") { |value| ngram_gamma = value.to_i }
   parser.on("--ngram-min N", "Minimum repeated suffix length before n-gram drafting (default: env QWEN35_SPEC_NGRAM_MIN or 6)") { |value| ngram_min = value.to_i }
   parser.on("--ngram-max N", "Maximum repeated suffix length to search (default: env QWEN35_SPEC_NGRAM_MAX or 8)") { |value| ngram_max = value.to_i }
+  parser.on("--ngram-stage-min N", "For --verify staged, only split n-gram chunks with at least this many candidates (default: 16)") { |value| ngram_stage_min = value.to_i }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
   parser.on("--no-warm-verifier", "Do not warm the target chunk-verifier route before decode timing") { warm_verifier = false }
@@ -99,6 +101,7 @@ raise ArgumentError.new("--verify must be serial, chunk, chunk-inplace, hybrid, 
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_GAMMA must be positive") unless ngram_gamma > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN must be positive") unless ngram_min > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MAX must be >= QWEN35_SPEC_NGRAM_MIN") unless ngram_max >= ngram_min
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_STAGE_MIN must be positive") unless ngram_stage_min > 0
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -306,7 +309,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_stage_min=#{ngram_stage_min} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -389,48 +392,62 @@ while generated_ids.size < n_gen
       cycle_start_pos = pos
       correction_or_accepted = [] of Int32
 
-      tb0 = Time.instant
-      target_backup_state.copy_from!(target_state)
-      target_backup_ms += (Time.instant - tb0).total_milliseconds
-      tv0 = Time.instant
-      target_nexts = target_prefill_top1s_exact(target, ngram_candidates, cycle_start_pos, target_state, allow_guarded_verifier)
-      target_verify_ms += (Time.instant - tv0).total_milliseconds
-      if trace
-        puts "ngram_cycle=#{ngram_cycles} pos=#{cycle_start_pos} expected0=#{target_next} candidates=#{ngram_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
-      end
-
-      expected = target_next
       rejected = false
       accepted_in_cycle = 0
       reject_index = -1
-      ngram_candidates.each_with_index do |cand, i|
-        if cand == expected
-          generated_ids << cand
-          correction_or_accepted << cand
-          accepted += 1
-          accepted_in_cycle += 1
-          ngram_accepted += 1
-          expected = target_nexts[i][0]
-        else
-          generated_ids << expected
-          correction_or_accepted << expected
-          rejected = true
-          reject_index = i
-          break
-        end
-      end
+      ngram_offset = 0
+      stage_ngram = verify_mode == "staged" && ngram_candidates.size >= ngram_stage_min
+      while ngram_offset < ngram_candidates.size
+        remaining = ngram_candidates.size - ngram_offset
+        stage_len = stage_ngram ? Math.min(stage_gate, remaining) : remaining
+        stage_candidates = ngram_candidates[ngram_offset, stage_len]
+        stage_start_pos = cycle_start_pos + ngram_offset
+        stage_correction_or_accepted = [] of Int32
 
-      if rejected
-        ngram_disabled = true if ngram_disable_after_reject
-        target_state.copy_from!(target_backup_state)
-        tv1 = Time.instant
-        corrected = target_prefill_top1s_exact(target, correction_or_accepted, cycle_start_pos, target_state, allow_guarded_verifier)
-        target_verify_ms += (Time.instant - tv1).total_milliseconds
-        target_next = corrected[-1][0]
-        pos += correction_or_accepted.size
-      else
-        target_next = target_nexts[-1][0]
-        pos += ngram_candidates.size
+        tb0 = Time.instant
+        target_backup_state.copy_from!(target_state)
+        target_backup_ms += (Time.instant - tb0).total_milliseconds
+        tv0 = Time.instant
+        target_nexts = target_prefill_top1s_exact(target, stage_candidates, stage_start_pos, target_state, allow_guarded_verifier)
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        if trace
+          puts "ngram_cycle=#{ngram_cycles} stage_offset=#{ngram_offset} pos=#{stage_start_pos} expected0=#{target_next} candidates=#{stage_candidates.inspect} target_nexts=#{target_nexts.map(&.[0]).inspect}"
+        end
+
+        expected = target_next
+        stage_candidates.each_with_index do |cand, i|
+          if cand == expected
+            generated_ids << cand
+            correction_or_accepted << cand
+            stage_correction_or_accepted << cand
+            accepted += 1
+            accepted_in_cycle += 1
+            ngram_accepted += 1
+            expected = target_nexts[i][0]
+          else
+            generated_ids << expected
+            correction_or_accepted << expected
+            stage_correction_or_accepted << expected
+            rejected = true
+            reject_index = ngram_offset + i
+            break
+          end
+        end
+
+        if rejected
+          ngram_disabled = true if ngram_disable_after_reject
+          target_state.copy_from!(target_backup_state)
+          tv1 = Time.instant
+          corrected = target_prefill_top1s_exact(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier)
+          target_verify_ms += (Time.instant - tv1).total_milliseconds
+          target_next = corrected[-1][0]
+          pos += stage_correction_or_accepted.size
+          break
+        else
+          target_next = target_nexts[-1][0]
+          pos += stage_candidates.size
+          ngram_offset += stage_candidates.size
+        end
       end
 
       unless correction_or_accepted.empty?
