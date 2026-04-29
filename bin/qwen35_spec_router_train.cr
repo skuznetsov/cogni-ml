@@ -16,6 +16,7 @@ l2 = 1.0e-4
 threshold = 0.5
 holdout_every = 5
 holdout_by = "row"
+min_gain_ms = 0.0
 include_kinds = Set(String).new
 exclude_kinds = Set(String).new
 use_sweep_feature = true
@@ -34,6 +35,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--lr X", "Learning rate (default: 0.2)") { |v| lr = v.to_f }
   p.on("--l2 X", "L2 regularization (default: 1e-4)") { |v| l2 = v.to_f }
   p.on("--threshold X", "Classification threshold for metrics/model (default: 0.5)") { |v| threshold = v.to_f }
+  p.on("--min-gain-ms X", "For --label positive_gain, require expected_gain_ms > X (default: 0)") { |v| min_gain_ms = v.to_f }
   p.on("--holdout-every N", "Every Nth row is deterministic holdout; <=0 disables (default: 5)") { |v| holdout_every = v.to_i }
   p.on("--holdout-by MODE", "Holdout split unit: row or prompt (default: row)") { |v| holdout_by = v }
   p.on("--include-kind LIST", "Comma-separated cycle kinds to keep, e.g. neural,ngram,neural_staged") { |v| include_kinds = parse_csv_set(v) }
@@ -59,8 +61,13 @@ class Row
   getter rec : JSON::Any
   getter label : Float64
 
-  def initialize(@rec : JSON::Any, label_name : String)
-    @label = bool_field(label_name) ? 1.0 : 0.0
+  def initialize(@rec : JSON::Any, label_name : String, min_gain_ms : Float64)
+    @label = case label_name
+             when "positive_gain"
+               f("expected_gain_ms") > min_gain_ms ? 1.0 : 0.0
+             else
+               bool_field(label_name) ? 1.0 : 0.0
+             end
   end
 
   def s(key : String) : String
@@ -82,6 +89,11 @@ class Row
     value = @rec[key]?
     value ? value.as_bool : false
   end
+
+  private def f(key : String) : Float64
+    value = @rec[key]?
+    value ? value.as_f : 0.0
+  end
 end
 
 rows = [] of Row
@@ -89,7 +101,7 @@ inputs.each do |path|
   abort "input not found: #{path}" unless File.file?(path)
   File.each_line(path) do |line|
     next if line.empty?
-    row = Row.new(JSON.parse(line), label_name)
+    row = Row.new(JSON.parse(line), label_name, min_gain_ms)
     kind = row.s("kind")
     next if include_kinds.any? && !include_kinds.includes?(kind)
     next if exclude_kinds.includes?(kind)
@@ -299,7 +311,7 @@ def metrics_json(metrics : Metrics)
 end
 
 STDERR.puts "Router logistic train rows=#{train_idx.size} holdout=#{holdout_idx.size} features=#{feature_names.size} label=#{label_name}"
-STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature} holdout_by=#{holdout_by}"
+STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature} holdout_by=#{holdout_by} min_gain_ms=#{min_gain_ms}"
 STDERR.printf "train   acc=%.3f precision=%.3f recall=%.3f logloss=%.4f positives=%d/%d predicted=%d\n",
   train_metrics.accuracy, train_metrics.precision, train_metrics.recall, train_metrics.logloss,
   train_metrics.positives, train_metrics.count, train_metrics.predicted_positive
@@ -311,6 +323,7 @@ model = {
   "version"       => 1,
   "kind"          => "qwen35_spec_router_logistic",
   "label"         => label_name,
+  "min_gain_ms"   => min_gain_ms,
   "threshold"     => threshold,
   "feature_names" => feature_names,
   "weights"       => weights,
