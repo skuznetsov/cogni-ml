@@ -44,7 +44,8 @@ ngram_enabled = ENV["QWEN35_SPEC_NGRAM"]? == "1"
 ngram_gamma = (ENV["QWEN35_SPEC_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_SPEC_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_SPEC_NGRAM_MAX"]? || "8").to_i
-ngram_stage_min = (ENV["QWEN35_SPEC_NGRAM_STAGE_MIN"]? || "16").to_i
+ngram_stage_min = (ENV["QWEN35_SPEC_NGRAM_STAGE_MIN"]? || (ngram_gamma + 1).to_s).to_i
+ngram_risk_min_size = (ENV["QWEN35_SPEC_NGRAM_RISK_MIN_SIZE"]? || "16").to_i
 ngram_risk_gate = ENV["QWEN35_SPEC_NGRAM_RISK_GATE"]? == "1"
 ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
@@ -74,7 +75,8 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-gamma N", "Maximum n-gram candidates per chunk (default: env QWEN35_SPEC_NGRAM_GAMMA or 32)") { |value| ngram_gamma = value.to_i }
   parser.on("--ngram-min N", "Minimum repeated suffix length before n-gram drafting (default: env QWEN35_SPEC_NGRAM_MIN or 6)") { |value| ngram_min = value.to_i }
   parser.on("--ngram-max N", "Maximum repeated suffix length to search (default: env QWEN35_SPEC_NGRAM_MAX or 8)") { |value| ngram_max = value.to_i }
-  parser.on("--ngram-stage-min N", "For --verify staged, only split n-gram chunks with at least this many candidates (default: 16)") { |value| ngram_stage_min = value.to_i }
+  parser.on("--ngram-stage-min N", "For --verify staged, only split n-gram chunks with at least this many candidates (default: ngram_gamma + 1)") { |value| ngram_stage_min = value.to_i }
+  parser.on("--ngram-risk-min-size N", "Minimum candidate size for the n-gram risk gate (default: 16)") { |value| ngram_risk_min_size = value.to_i }
   parser.on("--ngram-risk-gate", "Research: skip n-gram chunks whose candidate-token shape matches known bad repeat tails") { ngram_risk_gate = true }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
@@ -107,6 +109,7 @@ raise ArgumentError.new("QWEN35_SPEC_NGRAM_GAMMA must be positive") unless ngram
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN must be positive") unless ngram_min > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MAX must be >= QWEN35_SPEC_NGRAM_MIN") unless ngram_max >= ngram_min
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_STAGE_MIN must be positive") unless ngram_stage_min > 0
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_RISK_MIN_SIZE must be positive") unless ngram_risk_min_size > 0
 raise ArgumentError.new("router model not found: #{router_model_path}") if router_model_path && !File.file?(router_model_path.not_nil!)
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
@@ -434,7 +437,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -460,6 +463,12 @@ if warm_verifier && n_gen > 1
     target_prefill_top1s_exact(target, warm_candidates, prompt_ids.size, warm_state, allow_guarded_verifier)
     verifier_warmup_ms = (Time.instant - tw0).total_milliseconds
   end
+end
+
+profile_spec_region = ENV["QWEN35_SPEC_PROFILE"]? == "1"
+if profile_spec_region
+  ML::GGUF::Qwen35Metal::Profile.reset
+  ML::GGUF::Qwen35Metal::Profile.enable!
 end
 
 generated_ids = [] of Int32
@@ -505,7 +514,7 @@ while generated_ids.size < n_gen
       ngram_min,
       recursive: ngram_recursive)
     match_len = ngram_match_len(history, ngram_max, ngram_min)
-    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, Math.max(ngram_stage_min, 16), match_len)
+    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       ngram_candidates = [] of Int32
     end
@@ -1034,6 +1043,11 @@ while generated_ids.size < n_gen
   end
 end
 wall_ms = (Time.instant - wall0).total_milliseconds
+profile_report = nil.as(String?)
+if profile_spec_region
+  ML::GGUF::Qwen35Metal::Profile.disable!
+  profile_report = ML::GGUF::Qwen35Metal::Profile.report_io
+end
 
 plain, plain_ms, plain_prefill_ms = greedy_sequence(target, prompt_ids, n_gen)
 unless plain == generated_ids
@@ -1077,5 +1091,6 @@ puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} 
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
+puts profile_report.not_nil! if profile_report
 puts "note=exact speculative probe; speedup still needs lower draft cost and/or verifier rollback overhead removal"
 puts "generated=#{tok.decode(generated_ids).inspect}"

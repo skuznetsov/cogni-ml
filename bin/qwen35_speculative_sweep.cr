@@ -130,7 +130,7 @@ prompts = [
   PromptCase.new("quick_brown_fox", "The quick brown fox"),
   PromptCase.new("code_fibonacci", "def fibonacci(n):"),
 ]
-policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "router16", "router16_staged", "fixed16", "staged16", "hybrid", "ngram", "ngram_bootstrap32_s2", "ngram_router16", "ngram_router16_staged", "ngram_router16_staged_risk", "ngram_router16_staged_model", "ngram_fixed16", "ngram_staged16", "ngram_guard"]
+policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "router16", "router16_staged", "fixed16", "staged16", "hybrid", "ngram", "ngram_bootstrap32_s2", "ngram_router16", "ngram_router16_risk", "ngram_router16_staged", "ngram_router16_staged_risk", "ngram_router16_staged_model", "ngram_fixed16", "ngram_staged16", "ngram_guard"]
 extra_args = [] of String
 dump_cycles_dir = ENV["QWEN35_SPEC_SWEEP_DUMP_CYCLES_DIR"]?
 dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
@@ -144,7 +144,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--gamma N", "Initial speculative gamma (default: 4)") { |v| gamma = v.to_i }
   p.on("--max-gamma N", "Maximum adaptive gamma (default: 32)") { |v| max_gamma = v.to_i }
   p.on("--reps N", "Repeat each policy/prompt this many times (default: 1)") { |v| reps = v.to_i }
-  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,router16,router16_staged,fixed16,staged16,hybrid,ngram,ngram_bootstrap32_s2,ngram_router16,ngram_router16_staged,ngram_router16_staged_risk,ngram_router16_staged_model,ngram_fixed16,ngram_staged16,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
+  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,router16,router16_staged,fixed16,staged16,hybrid,ngram,ngram_bootstrap32_s2,ngram_router16,ngram_router16_risk,ngram_router16_staged,ngram_router16_staged_risk,ngram_router16_staged_model,ngram_fixed16,ngram_staged16,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
     policy_names = v.split(',').map(&.strip).reject(&.empty?)
   end
   p.on("--prompt TEXT", "Add one prompt; can be passed multiple times. Optional NAME::TEXT gives a stable dataset label.") do |v|
@@ -194,11 +194,12 @@ policies = {
   "ngram"                       => Policy.new("ngram", ["--ngram"], {} of String => String),
   "ngram_bootstrap32_s2"        => Policy.new("ngram_bootstrap32_s2", ["--ngram", "--bootstrap-gamma", "32", "--bootstrap-streak", "2"], {} of String => String),
   "ngram_router16"              => Policy.new("ngram_router16", ["--ngram", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1"], {} of String => String),
-  "ngram_router16_staged"       => Policy.new("ngram_router16_staged", ["--ngram", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1", "--verify", "staged", "--stage-gate", "4"], {} of String => String),
-  "ngram_router16_staged_risk"  => Policy.new("ngram_router16_staged_risk", ["--ngram", "--ngram-risk-gate", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1", "--verify", "staged", "--stage-gate", "4"], {} of String => String),
-  "ngram_router16_staged_model" => Policy.new("ngram_router16_staged_model", ["--ngram", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1", "--verify", "staged", "--stage-gate", "4"] + model_args, {} of String => String),
+  "ngram_router16_risk"         => Policy.new("ngram_router16_risk", ["--ngram", "--ngram-risk-gate", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1"], {} of String => String),
+  "ngram_router16_staged"       => Policy.new("ngram_router16_staged", ["--ngram", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1", "--verify", "staged", "--stage-gate", "4", "--ngram-stage-min", "16"], {} of String => String),
+  "ngram_router16_staged_risk"  => Policy.new("ngram_router16_staged_risk", ["--ngram", "--ngram-risk-gate", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1", "--verify", "staged", "--stage-gate", "4", "--ngram-stage-min", "16"], {} of String => String),
+  "ngram_router16_staged_model" => Policy.new("ngram_router16_staged_model", ["--ngram", "--gamma", "4", "--max-gamma", "16", "--bootstrap-gamma", "16", "--bootstrap-streak", "1", "--verify", "staged", "--stage-gate", "4", "--ngram-stage-min", "16"] + model_args, {} of String => String),
   "ngram_fixed16"               => Policy.new("ngram_fixed16", ["--ngram", "--gamma", "16", "--max-gamma", "16", "--no-adaptive"], {} of String => String),
-  "ngram_staged16"              => Policy.new("ngram_staged16", ["--ngram", "--gamma", "16", "--max-gamma", "16", "--no-adaptive", "--verify", "staged", "--stage-gate", "4"], {} of String => String),
+  "ngram_staged16"              => Policy.new("ngram_staged16", ["--ngram", "--gamma", "16", "--max-gamma", "16", "--no-adaptive", "--verify", "staged", "--stage-gate", "4", "--ngram-stage-min", "16"], {} of String => String),
   "ngram_guard"                 => Policy.new("ngram_guard", ["--ngram", "--allow-guarded-verifier"], {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),

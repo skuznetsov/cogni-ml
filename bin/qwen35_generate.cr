@@ -58,8 +58,9 @@ spec_skip_draft_backup_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFO
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
-ngram_stage_min = (ENV["QWEN35_NGRAM_STAGE_MIN"]? || (decode_policy == "auto" ? "16" : "0")).to_i
+ngram_stage_min = (ENV["QWEN35_NGRAM_STAGE_MIN"]? || (decode_policy == "auto" ? (ngram_gamma + 1).to_s : "0")).to_i
 ngram_stage_gate = (ENV["QWEN35_NGRAM_STAGE_GATE"]? || "4").to_i
+ngram_risk_min_size = (ENV["QWEN35_NGRAM_RISK_MIN_SIZE"]? || "16").to_i
 ngram_risk_gate = if value = ENV["QWEN35_NGRAM_RISK_GATE"]?
                     value == "1"
                   else
@@ -74,6 +75,7 @@ raise "QWEN35_NGRAM_MIN must be positive" unless ngram_min > 0
 raise "QWEN35_NGRAM_MAX must be >= QWEN35_NGRAM_MIN" unless ngram_max >= ngram_min
 raise "QWEN35_NGRAM_STAGE_MIN must be non-negative" unless ngram_stage_min >= 0
 raise "QWEN35_NGRAM_STAGE_GATE must be positive" unless ngram_stage_gate > 0
+raise "QWEN35_NGRAM_RISK_MIN_SIZE must be positive" unless ngram_risk_min_size > 0
 raise "QWEN35_SPEC_GAMMA must be positive" unless spec_gamma > 0
 raise "QWEN35_SPEC_MAX_GAMMA must be positive" unless spec_max_gamma > 0
 raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fallback_gamma > 0
@@ -474,7 +476,7 @@ if speculative_decode_enabled && !output_ids.empty?
   STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
-  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
+  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
   decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
@@ -490,7 +492,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
     candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(
       history, Math.min(ngram_gamma, remaining), ngram_max, ngram_min, recursive: ngram_recursive)
     match_len = ngram_disabled ? 0 : ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
-    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, Math.max(ngram_stage_min, 16), match_len)
+    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       candidates = [] of Int32
     end
