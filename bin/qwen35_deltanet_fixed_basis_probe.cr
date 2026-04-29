@@ -4169,7 +4169,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                                                 tree2_first : Bool = false,
                                                 tree2_anywhere : Bool = false,
                                                 tree2_staged_tokens : Int32 = 0,
-                                                tree2_margin_guard : Float64? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
+                                                tree2_margin_guard : Float64? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, draft_resyncs: Int32, draft_wasted_tail_tokens: Int32, draft_wasted_next_tokens: Int32, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
   raise "GPU pipeline requires Metal" unless ML::GGUF::Qwen35Metal.available?
   raise "GPU pipeline gamma must be positive" unless gamma > 0
   raise "GPU pipeline gen_tokens must be positive" unless gen_tokens > 0
@@ -4249,6 +4249,9 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   draft_wait_block_ms = 0.0
   draft_read_ids_ms = 0.0
   draft_resync_ms = 0.0
+  draft_resyncs = 0
+  draft_wasted_tail_tokens = 0
+  draft_wasted_next_tokens = 0
   verifier_initial_ms = 0.0
   verifier_prefill_ms = 0.0
   verifier_chunks = 0
@@ -4588,6 +4591,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                       tree2_staged_rescues += 1 if second_id == expected
                       tree2_staged_misses += 1 if second_id != expected
                       tree2_staged_early_exits += 1
+                      draft_wasted_tail_tokens += proposal.size - (stage_offset + j) - 1
                       rejections += 1
                       rejected = true
                       stage_rejected = true
@@ -4604,6 +4608,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         end
 
         if stage_rejected
+          draft_wasted_next_tokens += next_proposal_limit if next_block
           drain_block.call(next_block)
           draft_updown_full_accept_streak = 0
           if (draft_updown_fallback_on_reject || draft_updown_after_full_accepts > 0) && draft_updown_enabled
@@ -4636,6 +4641,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
             current_schedule_index = 0
             t_resync = Time.instant
+            draft_resyncs += 1
             current_block = submit_seed_owned.call(resync_base.not_nil!, last_token, pos_last, "self_spec_staged_resync_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
             current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "staged_resync_#{chunks}")
             dt_resync = (Time.instant - t_resync).total_milliseconds
@@ -4695,6 +4701,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                     tree2_anywhere_rescues += 1 if second_id == expected
                     tree2_anywhere_misses += 1 if second_id != expected
                     tree2_anywhere_early_exits += 1
+                    draft_wasted_tail_tokens += proposal.size - i - 1
                     rejections += 1
                     rejected = true
                     expected
@@ -4724,6 +4731,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             end
             current_schedule_index = 0
             t_resync = Time.instant
+            draft_resyncs += 1
             current_block = submit_seed_owned.call(resync_base.not_nil!, last_token, pos_last, "self_spec_tree2_anywhere_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
             current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "tree2_anywhere_#{chunks}")
             dt_resync = (Time.instant - t_resync).total_milliseconds
@@ -4765,6 +4773,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       tree2_first_rescues += 1 if second_id == expected
       tree2_first_misses += 1 if second_id != expected
       tree2_first_early_exits += 1
+      draft_wasted_tail_tokens += proposal.size - 1
       rejections += 1
       draft_updown_full_accept_streak = 0
       if (draft_updown_fallback_on_reject || draft_updown_after_full_accepts > 0) && draft_updown_enabled
@@ -4790,6 +4799,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
         current_schedule_index = 0
         t_resync = Time.instant
+        draft_resyncs += 1
         current_block = submit_seed_owned.call(resync_base, last_token, pos_last, "self_spec_tree2_first_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
         current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "tree2_first_#{chunks}")
         dt_resync = (Time.instant - t_resync).total_milliseconds
@@ -4928,6 +4938,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                       record_tree2_reject_margin.call(margin)
                     end
                   end
+                  draft_wasted_tail_tokens += proposal.size - i - 1
                   rejections += 1
                   rejected = true
                   expected
@@ -4946,6 +4957,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     wba.try(&.mark("controller", "accept_chunk_#{chunks}", t_controller, Time.instant))
 
     if rejected
+      draft_wasted_next_tokens += next_proposal_limit if next_block
       drain_block.call(next_block)
       draft_updown_full_accept_streak = 0
       if (draft_updown_fallback_on_reject || draft_updown_after_full_accepts > 0) && draft_updown_enabled
@@ -4977,6 +4989,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       if emitted_tokens < gen_tokens
         t_resync = Time.instant
         current_schedule_index = 0
+        draft_resyncs += 1
         current_block = submit_seed_owned.call(resync_base.not_nil!, last_token, pos_last, "self_spec_resync_#{chunks}", Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), draft_updown_enabled)
         current_proposal = read_block.call(current_block, Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens), "resync_#{chunks}")
         dt_resync = (Time.instant - t_resync).total_milliseconds
@@ -5379,6 +5392,9 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     draft_wait_block_ms:          draft_wait_block_ms,
     draft_read_ids_ms:            draft_read_ids_ms,
     draft_resync_ms:              draft_resync_ms,
+    draft_resyncs:                draft_resyncs,
+    draft_wasted_tail_tokens:     draft_wasted_tail_tokens,
+    draft_wasted_next_tokens:     draft_wasted_next_tokens,
     verifier_initial_ms:          verifier_initial_ms,
     verifier_prefill_ms:          verifier_prefill_ms,
     verifier_chunks:              verifier_chunks,
@@ -5392,12 +5408,13 @@ private def self_spec_pipeline_attr_note(pipe) : String
                       pipe[:draft_submit_ms] + pipe[:draft_commit_ms] + pipe[:draft_wait_block_ms] +
                       pipe[:draft_read_ids_ms]
   verifier_total_ms = pipe[:verifier_initial_ms] + pipe[:verifier_prefill_ms]
-  sprintf(" attr_draft_steps=%d attr_draft_blocks=%d attr_draft_profiled_ms=%.3f attr_draft_fork_ms=%.3f attr_draft_token_buf_ms=%.3f attr_draft_lr_project_ms=%.3f attr_draft_submit_ms=%.3f attr_draft_commit_ms=%.3f attr_draft_wait_block_ms=%.3f attr_draft_read_ids_ms=%.3f attr_draft_resync_ms=%.3f attr_verifier_total_ms=%.3f attr_verifier_initial_ms=%.3f attr_verifier_prefill_ms=%.3f attr_verifier_chunks=%d attr_verifier_tokens=%d attr_verifier_tail_skip_tokens=%d",
+  sprintf(" attr_draft_steps=%d attr_draft_blocks=%d attr_draft_profiled_ms=%.3f attr_draft_fork_ms=%.3f attr_draft_token_buf_ms=%.3f attr_draft_lr_project_ms=%.3f attr_draft_submit_ms=%.3f attr_draft_commit_ms=%.3f attr_draft_wait_block_ms=%.3f attr_draft_read_ids_ms=%.3f attr_draft_resync_ms=%.3f attr_draft_resyncs=%d attr_draft_wasted_tail_tokens=%d attr_draft_wasted_next_tokens=%d attr_verifier_total_ms=%.3f attr_verifier_initial_ms=%.3f attr_verifier_prefill_ms=%.3f attr_verifier_chunks=%d attr_verifier_tokens=%d attr_verifier_tail_skip_tokens=%d",
     pipe[:draft_steps], pipe[:draft_blocks],
     draft_profiled_ms,
     pipe[:draft_fork_ms], pipe[:draft_token_buf_ms], pipe[:draft_lr_project_ms],
     pipe[:draft_submit_ms], pipe[:draft_commit_ms], pipe[:draft_wait_block_ms],
     pipe[:draft_read_ids_ms], pipe[:draft_resync_ms],
+    pipe[:draft_resyncs], pipe[:draft_wasted_tail_tokens], pipe[:draft_wasted_next_tokens],
     verifier_total_ms, pipe[:verifier_initial_ms], pipe[:verifier_prefill_ms],
     pipe[:verifier_chunks], pipe[:verifier_tokens], pipe[:verifier_tail_skip_tokens])
 end
