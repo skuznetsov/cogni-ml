@@ -13,6 +13,7 @@ DEFAULT_PROMPT    = "The quick brown fox jumps over the lazy dog. Describe this 
 DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS = 1
 
 private alias BasisSet = Array(Array(Array(Float64)))
+private alias LayerVectorMap = Hash(Int32, BasisSet)
 private alias LayerBasisMap = Hash(Int32, BasisSet)
 private alias FFNBasisMap = Hash(Int32, Array(Array(Float64)))
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
@@ -385,6 +386,56 @@ private def basis_rank_note(bases : BasisSet, requested_rank : Int32) : String
     note += " requested_rank=#{requested_rank} note=requested_rank_exceeds_some_effective_bases"
   end
   note
+end
+
+private def route_residual_stats(layer_vectors : LayerVectorMap,
+                                 layer_bases : LayerBasisMap,
+                                 rank : Int32,
+                                 calib_count : Int32,
+                                 thresholds : Array(Float64))
+  residuals = [] of Float64
+  layer_vectors.keys.sort.each do |il|
+    vectors = layer_vectors[il]
+    bases = layer_bases[il]
+    vectors.each_with_index do |head_vectors, head|
+      next if calib_count >= head_vectors.size
+      head_vectors[calib_count, head_vectors.size - calib_count].each do |v|
+        residuals << residual_norm(v, bases[head], rank)
+      end
+    end
+  end
+  raise "route residual stats require held-out vectors" if residuals.empty?
+
+  sorted = residuals.sort
+  mean = residuals.sum / residuals.size
+  pass_rates = thresholds.map do |threshold|
+    passed = residuals.count { |r| r <= threshold }
+    {threshold: threshold, rate: 100.0 * passed / residuals.size}
+  end
+  {
+    count:      residuals.size,
+    mean:       mean,
+    p50:        sorted[sorted.size // 2],
+    p90:        sorted[(sorted.size * 90 // 100).clamp(0, sorted.size - 1)],
+    p99:        sorted[(sorted.size * 99 // 100).clamp(0, sorted.size - 1)],
+    max:        sorted[-1],
+    pass_rates: pass_rates,
+  }
+end
+
+private def prompt_route_feature_note(name : String,
+                                      layer_ids : Array(Int32),
+                                      rank : Int32,
+                                      token_count : Int32,
+                                      calib_count : Int32,
+                                      layer_vectors : LayerVectorMap,
+                                      layer_bases : LayerBasisMap,
+                                      thresholds : Array(Float64)) : String
+  stats = route_residual_stats(layer_vectors, layer_bases, rank, calib_count, thresholds)
+  pass = stats[:pass_rates].map do |entry|
+    "#{entry[:threshold].round(4)}:#{entry[:rate].round(2)}%"
+  end
+  "self_spec_prompt_route_features name=#{name} layers=#{layer_ids.join(',')} rank=#{rank} token_vectors=#{token_count} calib_tokens=#{calib_count} heldout_tokens=#{token_count - calib_count} residual_count=#{stats[:count]} residual_mean=#{stats[:mean].round(6)} residual_p50=#{stats[:p50].round(6)} residual_p90=#{stats[:p90].round(6)} residual_p99=#{stats[:p99].round(6)} residual_max=#{stats[:max].round(6)} pass_rates=#{pass.join(',')}"
 end
 
 private def project_with_basis(v : Array(Float32), offset : Int32,
@@ -5747,6 +5798,7 @@ simulate_self_spec_gpu_pipeline_attribution = ENV["QWEN35_SELF_SPEC_ATTR"]? == "
 simulate_self_spec_gpu_pipeline_hybrid_sweep = false
 simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = false
 simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = false
+simulate_self_spec_gpu_pipeline_route_features = false
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 self_spec_cost_model = false
 self_spec_draft_cost = 0.0
@@ -5840,7 +5892,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-attribution", "Append WBA attribution counters for the real GPU self-spec pipeline") { simulate_self_spec_gpu_pipeline_attribution = true }
   p.on("--simulate-self-spec-gpu-pipeline-hybrid-sweep", "Run an in-process route sweep over pure/no-FFN/pca-updown hybrid layer masks") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true }
   p.on("--simulate-self-spec-gpu-pipeline-hybrid-rich-sweep", "Add per-layer, prefix/suffix, and alternating hybrid routes to the GPU self-spec layer-mode sweep") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = true }
-  p.on("--simulate-self-spec-gpu-pipeline-suite-hybrid-sweep", "Apply the hybrid route sweep to suite prompts and print aggregate prompt-stability ranking") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = true }
+  p.on("--simulate-self-spec-gpu-pipeline-suite-hybrid-sweep", "Apply the hybrid route sweep to suite prompts and print aggregate prompt-stability ranking") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_route_features = true }
+  p.on("--simulate-self-spec-gpu-pipeline-route-features", "Print held-out PCA residual features that can predict risky self-spec draft routes") { simulate_self_spec_gpu_pipeline_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-suite-prompt=NAME::TEXT", "Additional eval prompt for GPU self-spec pipeline suite; main --prompt still runs first") do |v|
     if sep = v.index("::")
@@ -5902,20 +5955,27 @@ if rank = simulate_logit_rank
     logit = simulate_logits(weights, token_ids, layer_index, bases, rank, calib_count)
     puts "logit_drift rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}%"
   else
+    sorted_simulate_logit_layers = simulate_logit_layers.uniq.sort
+    layer_vectors = {} of Int32 => BasisSet
     layer_bases = {} of Int32 => BasisSet
-    simulate_logit_layers.uniq.each do |il|
+    sorted_simulate_logit_layers.each do |il|
+      vectors = il == layer_index ? per_head : recurrent_k_vectors_for_prompt(weights, token_ids, il)
+      layer_vectors[il] = vectors
       layer_bases[il] = if il == layer_index
                           bases
                         else
-                          recurrent_k_vectors_for_prompt(weights, token_ids, il).map do |vectors|
-                            build_basis(vectors[0, calib_count], max_rank, basis_mode, pca_iters)
+                          vectors.map do |head_vectors|
+                            build_basis(head_vectors[0, calib_count], max_rank, basis_mode, pca_iters)
                           end
                         end
     end
-    rank_notes = simulate_logit_layers.uniq.sort.map do |il|
+    rank_notes = sorted_simulate_logit_layers.map do |il|
       "#{il}:#{basis_rank_note(layer_bases[il], rank)}"
     end
     puts "layer_basis_effective_ranks #{rank_notes.join(' ')}"
+    if simulate_self_spec_gpu_pipeline_route_features
+      puts prompt_route_feature_note("main", sorted_simulate_logit_layers, rank, token_ids.size, calib_count, layer_vectors, layer_bases, thresholds)
+    end
     ffn_pca_ranks = [] of Int32
     ffn_pca_down_ranks = [] of Int32
     ffn_pca_updown_ranks = [] of Int32
@@ -6284,16 +6344,22 @@ if rank = simulate_logit_rank
           suite_token_ids = token_ids_for_prompt(tok, suite_prompt[:text], tokens_limit)
           suite_calib_count = Math.min(calib_tokens, suite_token_ids.size - 1)
           raise "suite prompt #{suite_prompt[:name]} needs at least one held-out token" unless suite_calib_count > 0 && suite_calib_count < suite_token_ids.size
+          suite_layer_vectors = {} of Int32 => BasisSet
           suite_layer_bases = {} of Int32 => BasisSet
-          simulate_logit_layers.uniq.each do |il|
-            suite_layer_bases[il] = recurrent_k_vectors_for_prompt(weights, suite_token_ids, il).map do |vectors|
-              build_basis(vectors[0, suite_calib_count], max_rank, basis_mode, pca_iters)
+          sorted_simulate_logit_layers.each do |il|
+            vectors = recurrent_k_vectors_for_prompt(weights, suite_token_ids, il)
+            suite_layer_vectors[il] = vectors
+            suite_layer_bases[il] = vectors.map do |head_vectors|
+              build_basis(head_vectors[0, suite_calib_count], max_rank, basis_mode, pca_iters)
             end
           end
-          suite_rank_notes = simulate_logit_layers.uniq.sort.map do |il|
+          suite_rank_notes = sorted_simulate_logit_layers.map do |il|
             "#{il}:#{basis_rank_note(suite_layer_bases[il], rank)}"
           end
           puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} token_vectors=#{suite_token_ids.size} calib_tokens=#{suite_calib_count} heldout_tokens=#{suite_token_ids.size - suite_calib_count} layer_basis_effective_ranks=#{suite_rank_notes.join(' ')}"
+          if simulate_self_spec_gpu_pipeline_route_features
+            puts prompt_route_feature_note(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds)
+          end
           if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
             pipeline_gammas.each do |pipeline_gamma|
               pipeline_splits.each do |draft_split|
