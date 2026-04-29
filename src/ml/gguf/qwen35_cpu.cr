@@ -218,6 +218,69 @@ module ML::GGUF
       {% end %}
     end
 
+    # Copy only the live GPU-resident decode state into an already prepared
+    # destination state. This is the branch-state primitive needed by exact
+    # tree/speculative verification: recurrent state is copied in full, while
+    # full-attention KV copies are bounded by each layer's live `position`
+    # instead of the allocated max sequence.
+    def copy_state_metal_used!(dst : State, src : State, hp : Qwen35Hparams,
+                               rec_only : Bool = false,
+                               full_kv_capacity : Bool = false) : Nil
+      {% if flag?(:cpu_only) %}
+        dst.copy_from!(src)
+      {% else %}
+        unless Qwen35Metal.available?
+          dst.copy_from!(src)
+          return
+        end
+
+        ML::Metal::Dispatch.execute_blit do |enc|
+          encode_state_metal_used_copy!(enc, dst, src, hp, rec_only: rec_only, full_kv_capacity: full_kv_capacity)
+        end
+      {% end %}
+    end
+
+    def encode_state_metal_used_copy!(enc : ML::Metal::BlitEncoder,
+                                      dst : State, src : State, hp : Qwen35Hparams,
+                                      rec_only : Bool = false,
+                                      full_kv_capacity : Bool = false) : Nil
+      {% if flag?(:cpu_only) %}
+        dst.copy_from!(src)
+      {% else %}
+        raise ArgumentError.new("max_seq mismatch: #{dst.max_seq} != #{src.max_seq}") unless dst.max_seq == src.max_seq
+        raise ArgumentError.new("layer count mismatch: #{dst.layers.size} != #{src.layers.size}") unless dst.layers.size == src.layers.size
+
+        kv_row_bytes = (hp.head_dim * hp.n_head_kv).to_i64 * sizeof(Float32)
+        src.layers.each_with_index do |src_layer, il|
+          dst_layer = dst.layers[il]
+          dst_layer.position = src_layer.position
+
+          if hp.full_attention?(il)
+            next if rec_only
+
+            src_k = src_layer.k_cache_buf.not_nil!
+            src_v = src_layer.v_cache_buf.not_nil!
+            dst_k = dst_layer.k_cache_buf.not_nil!
+            dst_v = dst_layer.v_cache_buf.not_nil!
+            bytes = full_kv_capacity ? src_k.size : src_layer.position.to_i64 * kv_row_bytes
+            raise ArgumentError.new("live KV bytes exceed source buffer at layer #{il}: #{bytes} > #{src_k.size}") if bytes > src_k.size || bytes > src_v.size
+            raise ArgumentError.new("live KV bytes exceed destination buffer at layer #{il}: #{bytes} > #{dst_k.size}") if bytes > dst_k.size || bytes > dst_v.size
+            next if bytes <= 0
+
+            enc.copy_buffer(src_k, 0, dst_k, 0, checked_blit_bytes(bytes))
+            enc.copy_buffer(src_v, 0, dst_v, 0, checked_blit_bytes(bytes))
+          else
+            src_conv = src_layer.conv_state_buf.not_nil!
+            src_ssm = src_layer.ssm_state_buf.not_nil!
+            dst_conv = dst_layer.conv_state_buf.not_nil!
+            dst_ssm = dst_layer.ssm_state_buf.not_nil!
+            enc.copy_buffer(src_conv, 0, dst_conv, 0, checked_blit_bytes(src_conv.size))
+            enc.copy_buffer(src_ssm, 0, dst_ssm, 0, checked_blit_bytes(src_ssm.size))
+          end
+        end
+      {% end %}
+    end
+
     private def clear_metal_buffer(buf : ML::MetalBuffer?) : Nil
       {% if flag?(:cpu_only) %}
         return
@@ -225,6 +288,11 @@ module ML::GGUF
         return unless b = buf
         b.contents.as(Pointer(UInt8)).clear(b.size)
       {% end %}
+    end
+
+    private def checked_blit_bytes(bytes : Int64) : Int32
+      raise ArgumentError.new("copy byte size exceeds Int32 encoder limit: #{bytes}") if bytes > Int32::MAX
+      bytes.to_i32
     end
 
     # ─────────────────────────────────────────────────────────────────────
