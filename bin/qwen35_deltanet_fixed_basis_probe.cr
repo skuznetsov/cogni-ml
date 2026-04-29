@@ -4253,6 +4253,16 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   verifier_tokens_count = 0
   verifier_tail_skip_tokens = 0
 
+  copy_owned_resync_base = ->(src : ML::GGUF::Qwen35CPU::State, used_tokens : Int32, label : String) {
+    t_copy = Time.instant
+    dst = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(dst, hp)
+    copy_verifier_state.call(dst, src, used_tokens)
+    draft_fork_ms += (Time.instant - t_copy).total_milliseconds if attr_collect
+    wba.try(&.mark("draft", "copy_resync_base_#{label}", t_copy, Time.instant))
+    dst
+  }
+
   build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State, block_cmd : ML::Metal::CommandBuffer?) {
     t_lr_build = Time.instant
     bufs = {} of Int32 => ML::MetalBuffer
@@ -4563,7 +4573,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
               corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, stage_pos, verifier_state)
               replay_ms += (Time.instant - t_replay).total_milliseconds
               target_next_id = corrected[-1][0]
-              resync_base = backup.fork
+              resync_base = copy_owned_resync_base.call(backup, stage_pos, "staged_#{chunks}_#{stage_offset}")
               if correction_or_accepted.size > 1
                 ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], stage_pos, resync_base)
               end
@@ -4648,7 +4658,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         pos_last = pos
 
         if emitted_tokens < gen_tokens
-          resync_base = rejected ? verifier_state.fork : nil
+          resync_base = rejected ? copy_owned_resync_base.call(verifier_state, pos, "tree2_anywhere_#{chunks}_#{i}") : nil
           t_verify = Time.instant
           target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, emitted, pos, verifier_state)[0]
           dt_verify = (Time.instant - t_verify).total_milliseconds
@@ -4716,7 +4726,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       pos_last = cycle_start_pos
 
       if emitted_tokens < gen_tokens
-        resync_base = verifier_state.fork
+        resync_base = copy_owned_resync_base.call(verifier_state, cycle_start_pos, "tree2_first_#{chunks}")
         t_verify = Time.instant
         target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, expected, cycle_start_pos, verifier_state)[0]
         dt_verify = (Time.instant - t_verify).total_milliseconds
@@ -4828,7 +4838,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, verifier_state)
         replay_ms += (Time.instant - t_replay).total_milliseconds
         target_next_id = corrected[-1][0]
-        resync_base = backup.fork
+        resync_base = copy_owned_resync_base.call(backup, cycle_start_pos, "resync_#{chunks}")
         if correction_or_accepted.size > 1
           ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
         end
@@ -4970,7 +4980,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
               copy_verifier_state.call(serial_verifier_state, backup, stage_pos)
               corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, stage_pos, serial_verifier_state)
               serial_target_next_id = corrected[-1][0]
-              serial_resync_base = backup.fork
+              serial_resync_base = copy_owned_resync_base.call(backup, stage_pos, "serial_staged_#{serial_chunks}_#{stage_offset}")
               if correction_or_accepted.size > 1
                 ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], stage_pos, serial_resync_base)
               end
@@ -5027,7 +5037,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         serial_pos_last = pos
 
         if serial_emitted_tokens < gen_tokens
-          serial_resync_base = rejected ? serial_verifier_state.fork : nil
+          serial_resync_base = rejected ? copy_owned_resync_base.call(serial_verifier_state, pos, "serial_tree2_anywhere_#{serial_chunks}_#{i}") : nil
           serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, emitted, pos, serial_verifier_state)[0]
 
           if rejected
@@ -5071,7 +5081,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       end
 
       if serial_emitted_tokens < gen_tokens
-        serial_resync_base = serial_verifier_state.fork
+        serial_resync_base = copy_owned_resync_base.call(serial_verifier_state, cycle_start_pos, "serial_tree2_first_#{serial_chunks}")
         serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, expected, cycle_start_pos, serial_verifier_state)[0]
         serial_schedule_index = 0
         serial_current_block = submit_seed_owned.call(serial_resync_base, serial_last_token, serial_pos_last, "self_spec_serial_tree2_first_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
@@ -5116,7 +5126,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         copy_verifier_state.call(serial_verifier_state, backup, cycle_start_pos)
         corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, serial_verifier_state)
         serial_target_next_id = corrected[-1][0]
-        serial_resync_base = backup.fork
+        serial_resync_base = copy_owned_resync_base.call(backup, cycle_start_pos, "serial_resync_#{serial_chunks}")
         if correction_or_accepted.size > 1
           ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, serial_resync_base)
         end
