@@ -4546,11 +4546,11 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     end
   end
   # Report real self-spec wall time. The phase counters above are diagnostic only:
-  # they can overlap and used to miss reject replay/controller work.
+  # they can overlap and previously missed reject replay/controller work.
   overlap_ms = (Time.instant - t_seed).total_milliseconds
 
-  t_plain = Time.instant
   plain_state = state_before_last.fork
+  t_plain = Time.instant
   plain_last_token = prompt_last_token
   plain_pos_last = prompt_pos_last
   plain_exact_ids = [] of Int32
@@ -4565,9 +4565,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   wba.try(&.mark("pipeline", "plain_exact", t_plain, Time.instant))
 
   attr_collect = false
-  t_serial = Time.instant
-  serial_state_before_last = verifier_state_after_prefix(weights, prefix_ids, max_seq)
-  serial_verifier_state = serial_state_before_last.fork
+  serial_state_before_last = state_before_last
+  serial_verifier_state = state_before_last.fork
   serial_backup = if use_verifier_backup
                     backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
                     ML::GGUF::Qwen35CPU.prepare_state_metal!(backup, hp)
@@ -4575,6 +4574,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                   else
                     nil
                   end
+  t_serial = Time.instant
   serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, prompt_last_token, prompt_pos_last, serial_verifier_state)[0]
   serial_last_token = prompt_last_token
   serial_pos_last = prompt_pos_last
