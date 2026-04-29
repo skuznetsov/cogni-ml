@@ -15,9 +15,11 @@ require "option_parser"
 require "json"
 
 record Policy, name : String, args : Array(String), env : Hash(String, String)
+record PromptCase, name : String, text : String
 
 record RunResult,
   policy : String,
+  prompt_name : String,
   prompt : String,
   rep : Int32,
   ok : Bool,
@@ -76,20 +78,63 @@ class CycleStats
   end
 end
 
+def fnv1a64_hex(bytes : Bytes) : String
+  hash = 0xcbf29ce484222325_u64
+  bytes.each do |b|
+    hash = (hash ^ b.to_u64) &* 0x100000001b3_u64
+  end
+  hash.to_s(16)
+end
+
+def prompt_case_from_spec(spec : String, index : Int32) : PromptCase
+  if match = spec.match(/\A([A-Za-z0-9_.-]+)::(.+)\z/m)
+    PromptCase.new(match[1], match[2])
+  else
+    PromptCase.new("prompt#{index}", spec)
+  end
+end
+
+def safe_name(name : String) : String
+  safe = name.gsub(/[^A-Za-z0-9_.-]/, "_")
+  safe.empty? ? "prompt" : safe
+end
+
+def write_prompt_manifest(dir : String, prompts : Array(PromptCase), include_text : Bool)
+  Dir.mkdir_p(dir)
+  path = File.join(dir, "prompt_manifest.jsonl")
+  File.open(path, "w") do |io|
+    prompts.each_with_index do |prompt, index|
+      base = {
+        prompt_index: index,
+        prompt_name:  prompt.name,
+        prompt_hash:  fnv1a64_hex(prompt.text.to_slice),
+        prompt_bytes: prompt.text.bytesize,
+      }
+      if include_text
+        base.merge({prompt_text: prompt.text}).to_json(io)
+      else
+        base.to_json(io)
+      end
+      io.puts
+    end
+  end
+end
+
 runner = ENV["QWEN35_SPEC_SWEEP_RUNNER"]? || "/tmp/qwen35_speculative_accept"
 tokens = 32
 gamma = 4
 max_gamma = 32
 reps = 1
 prompts = [
-  "The capital of France is",
-  "The quick brown fox",
-  "def fibonacci(n):",
+  PromptCase.new("france", "The capital of France is"),
+  PromptCase.new("quick_brown_fox", "The quick brown fox"),
+  PromptCase.new("code_fibonacci", "def fibonacci(n):"),
 ]
 policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "hybrid", "ngram", "ngram_bootstrap32_s2", "ngram_guard"]
 extra_args = [] of String
 dump_cycles_dir = ENV["QWEN35_SPEC_SWEEP_DUMP_CYCLES_DIR"]?
 dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
+dump_prompt_texts = ENV["QWEN35_SPEC_DUMP_PROMPT_TEXTS"]? == "1"
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_speculative_sweep [--runner PATH] [--tokens N] [--reps N] [--policies LIST] [--prompt TEXT] [--extra-arg ARG]"
@@ -101,13 +146,16 @@ OptionParser.parse(ARGV) do |p|
   p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,hybrid,ngram,ngram_bootstrap32_s2,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
     policy_names = v.split(',').map(&.strip).reject(&.empty?)
   end
-  p.on("--prompt TEXT", "Add one prompt; can be passed multiple times") { |v| prompts << v }
-  p.on("--only-prompts LIST", "Replace prompt set with pipe-separated prompts") do |v|
-    prompts = v.split('|').map(&.strip).reject(&.empty?)
+  p.on("--prompt TEXT", "Add one prompt; can be passed multiple times. Optional NAME::TEXT gives a stable dataset label.") do |v|
+    prompts << prompt_case_from_spec(v, prompts.size)
+  end
+  p.on("--only-prompts LIST", "Replace prompt set with pipe-separated prompts. Entries may be NAME::TEXT.") do |v|
+    prompts = v.split('|').map(&.strip).reject(&.empty?).map_with_index { |spec, i| prompt_case_from_spec(spec, i) }
   end
   p.on("--extra-arg ARG", "Extra arg forwarded to every runner invocation; can be repeated") { |v| extra_args << v }
   p.on("--dump-cycles-dir DIR", "Write per-run cycle JSONL files under DIR by forwarding --dump-cycles to the runner") { |v| dump_cycles_dir = v }
   p.on("--dump-cycle-token-ids", "Forward --dump-cycle-token-ids to the runner; default sweep dumps only candidate hashes") { dump_cycle_token_ids = true }
+  p.on("--dump-prompt-texts", "Include raw prompt text in dump prompt_manifest.jsonl; default writes labels and hashes only") { dump_prompt_texts = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -155,7 +203,7 @@ end
 
 def run_one(runner : String,
             policy : Policy,
-            prompt : String,
+            prompt : PromptCase,
             prompt_index : Int32,
             rep : Int32,
             tokens : Int32,
@@ -175,11 +223,11 @@ def run_one(runner : String,
   if dir = dump_cycles_dir
     Dir.mkdir_p(dir)
     safe_policy = policy.name.gsub(/[^A-Za-z0-9_.-]/, "_")
-    cycle_dump_path = File.join(dir, "rep#{rep}_prompt#{prompt_index}_#{safe_policy}.jsonl")
+    cycle_dump_path = File.join(dir, "rep#{rep}_prompt#{prompt_index}_#{safe_name(prompt.name)}_#{safe_policy}.jsonl")
     args.concat(["--dump-cycles", cycle_dump_path])
     args << "--dump-cycle-token-ids" if dump_cycle_token_ids
   end
-  args << prompt
+  args << prompt.text
 
   stdout = IO::Memory.new
   stderr = IO::Memory.new
@@ -201,7 +249,8 @@ def run_one(runner : String,
 
   RunResult.new(
     policy: policy.name,
-    prompt: prompt,
+    prompt_name: prompt.name,
+    prompt: prompt.text,
     rep: rep,
     ok: status.success? && !!spec && !!plain,
     spec_ms_tok: spec,
@@ -220,6 +269,7 @@ def run_one(runner : String,
 end
 
 results = [] of RunResult
+write_prompt_manifest(dump_cycles_dir.not_nil!, prompts, dump_prompt_texts) if dump_cycles_dir
 
 # Interleave policies inside each prompt/rep block so host drift affects the
 # candidates more evenly than a policy-major run order.
@@ -229,7 +279,7 @@ reps.times do |rep|
       result = run_one(runner, policy, prompt, prompt_index, rep, tokens, gamma, max_gamma, extra_args, dump_cycles_dir, dump_cycle_token_ids)
       results << result
       unless result.ok
-        STDERR.puts "FAILED policy=#{policy.name} prompt=#{prompt.inspect}"
+        STDERR.puts "FAILED policy=#{policy.name} prompt=#{prompt.name.inspect}"
         STDERR.puts result.stderr
       end
     end
@@ -238,7 +288,7 @@ end
 
 baseline_by_key = Hash({String, Int32}, RunResult).new
 results.each do |r|
-  baseline_by_key[{r.prompt, r.rep}] = r if r.policy == "default" && r.ok
+  baseline_by_key[{r.prompt_name, r.rep}] = r if r.policy == "default" && r.ok
 end
 
 puts "Qwen35 speculative policy sweep"
@@ -249,7 +299,7 @@ printf "%-18s %-26s %9s %9s %8s %9s %9s %7s %7s\n",
   "policy", "prompt", "spec", "plain", "speedup", "accept", "accepted", "cycles", "gamma"
 
 results.each do |r|
-  prompt = r.prompt.size > 25 ? "#{r.prompt[0, 22]}..." : r.prompt
+  prompt = r.prompt_name
   accepted = if r.accepted && r.proposed
                "#{r.accepted}/#{r.proposed}"
              else
@@ -290,7 +340,7 @@ if baseline_by_key.any?
     next if policy.name == "default"
     pairs = results.compact_map do |r|
       next unless r.policy == policy.name && r.ok
-      base = baseline_by_key[{r.prompt, r.rep}]?
+      base = baseline_by_key[{r.prompt_name, r.rep}]?
       next unless base && base.spec_ms_tok && r.spec_ms_tok
       {r.spec_ms_tok.not_nil! - base.spec_ms_tok.not_nil!, r.spec_ms_tok.not_nil! / base.spec_ms_tok.not_nil!}
     end
