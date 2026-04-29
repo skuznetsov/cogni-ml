@@ -29,6 +29,7 @@ record RunResult,
   cycles : Int32?,
   max_gamma : Int32?,
   final_gamma : Int32?,
+  cycle_dump_path : String?,
   stderr : String,
   stdout : String
 
@@ -44,6 +45,8 @@ prompts = [
 ]
 policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "hybrid", "ngram", "ngram_bootstrap32_s2", "ngram_guard"]
 extra_args = [] of String
+dump_cycles_dir = ENV["QWEN35_SPEC_SWEEP_DUMP_CYCLES_DIR"]?
+dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_speculative_sweep [--runner PATH] [--tokens N] [--reps N] [--policies LIST] [--prompt TEXT] [--extra-arg ARG]"
@@ -60,6 +63,8 @@ OptionParser.parse(ARGV) do |p|
     prompts = v.split('|').map(&.strip).reject(&.empty?)
   end
   p.on("--extra-arg ARG", "Extra arg forwarded to every runner invocation; can be repeated") { |v| extra_args << v }
+  p.on("--dump-cycles-dir DIR", "Write per-run cycle JSONL files under DIR by forwarding --dump-cycles to the runner") { |v| dump_cycles_dir = v }
+  p.on("--dump-cycle-token-ids", "Forward --dump-cycle-token-ids to the runner; default sweep dumps only candidate hashes") { dump_cycle_token_ids = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -83,10 +88,10 @@ policies = {
   "bootstrap32_guard" => Policy.new("bootstrap32_guard", ["--bootstrap-gamma", "32", "--allow-guarded-verifier"], {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
-  "hybrid"      => Policy.new("hybrid", ["--verify", "hybrid"], {} of String => String),
-  "ngram"       => Policy.new("ngram", ["--ngram"], {} of String => String),
+  "hybrid"               => Policy.new("hybrid", ["--verify", "hybrid"], {} of String => String),
+  "ngram"                => Policy.new("ngram", ["--ngram"], {} of String => String),
   "ngram_bootstrap32_s2" => Policy.new("ngram_bootstrap32_s2", ["--ngram", "--bootstrap-gamma", "32", "--bootstrap-streak", "2"], {} of String => String),
-  "ngram_guard" => Policy.new("ngram_guard", ["--ngram", "--allow-guarded-verifier"], {
+  "ngram_guard"          => Policy.new("ngram_guard", ["--ngram", "--allow-guarded-verifier"], {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
 }
@@ -108,11 +113,14 @@ end
 def run_one(runner : String,
             policy : Policy,
             prompt : String,
+            prompt_index : Int32,
             rep : Int32,
             tokens : Int32,
             gamma : Int32,
             max_gamma : Int32,
-            extra_args : Array(String)) : RunResult
+            extra_args : Array(String),
+            dump_cycles_dir : String?,
+            dump_cycle_token_ids : Bool) : RunResult
   args = [
     "--tokens", tokens.to_s,
     "--gamma", gamma.to_s,
@@ -120,6 +128,14 @@ def run_one(runner : String,
   ]
   args.concat(policy.args)
   args.concat(extra_args)
+  cycle_dump_path = nil.as(String?)
+  if dir = dump_cycles_dir
+    Dir.mkdir_p(dir)
+    safe_policy = policy.name.gsub(/[^A-Za-z0-9_.-]/, "_")
+    cycle_dump_path = File.join(dir, "rep#{rep}_prompt#{prompt_index}_#{safe_policy}.jsonl")
+    args.concat(["--dump-cycles", cycle_dump_path])
+    args << "--dump-cycle-token-ids" if dump_cycle_token_ids
+  end
   args << prompt
 
   stdout = IO::Memory.new
@@ -154,6 +170,7 @@ def run_one(runner : String,
     cycles: cycles,
     max_gamma: max_seen,
     final_gamma: final_gamma,
+    cycle_dump_path: cycle_dump_path,
     stderr: err,
     stdout: stdout_text,
   )
@@ -164,9 +181,9 @@ results = [] of RunResult
 # Interleave policies inside each prompt/rep block so host drift affects the
 # candidates more evenly than a policy-major run order.
 reps.times do |rep|
-  prompts.each do |prompt|
+  prompts.each_with_index do |prompt, prompt_index|
     selected.each do |policy|
-      result = run_one(runner, policy, prompt, rep, tokens, gamma, max_gamma, extra_args)
+      result = run_one(runner, policy, prompt, prompt_index, rep, tokens, gamma, max_gamma, extra_args, dump_cycles_dir, dump_cycle_token_ids)
       results << result
       unless result.ok
         STDERR.puts "FAILED policy=#{policy.name} prompt=#{prompt.inspect}"
@@ -183,7 +200,7 @@ end
 
 puts "Qwen35 speculative policy sweep"
 puts "runner=#{runner}"
-puts "tokens=#{tokens} gamma=#{gamma} max_gamma=#{max_gamma} reps=#{reps}"
+puts "tokens=#{tokens} gamma=#{gamma} max_gamma=#{max_gamma} reps=#{reps} dump_cycles_dir=#{dump_cycles_dir || ""} dump_token_ids=#{dump_cycle_token_ids}"
 puts
 printf "%-18s %-26s %9s %9s %8s %9s %9s %7s %7s\n",
   "policy", "prompt", "spec", "plain", "speedup", "accept", "accepted", "cycles", "gamma"
@@ -241,4 +258,10 @@ if baseline_by_key.any?
     printf "%-18s %7d %7d %10.2f %9.3fx\n",
       policy.name, wins, pairs.size, avg_delta, avg_ratio
   end
+end
+
+if dump_cycles_dir
+  dumped = results.compact_map(&.cycle_dump_path).count { |path| path && File.exists?(path) }
+  puts
+  puts "Cycle JSONL dumps: #{dumped}/#{results.size} files in #{dump_cycles_dir}"
 end
