@@ -15,6 +15,7 @@ lr = 0.2
 l2 = 1.0e-4
 threshold = 0.5
 holdout_every = 5
+holdout_by = "row"
 include_kinds = Set(String).new
 exclude_kinds = Set(String).new
 use_sweep_feature = true
@@ -34,6 +35,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--l2 X", "L2 regularization (default: 1e-4)") { |v| l2 = v.to_f }
   p.on("--threshold X", "Classification threshold for metrics/model (default: 0.5)") { |v| threshold = v.to_f }
   p.on("--holdout-every N", "Every Nth row is deterministic holdout; <=0 disables (default: 5)") { |v| holdout_every = v.to_i }
+  p.on("--holdout-by MODE", "Holdout split unit: row or prompt (default: row)") { |v| holdout_by = v }
   p.on("--include-kind LIST", "Comma-separated cycle kinds to keep, e.g. neural,ngram,neural_staged") { |v| include_kinds = parse_csv_set(v) }
   p.on("--exclude-kind LIST", "Comma-separated cycle kinds to drop, e.g. target_only,neural_early_reject") { |v| exclude_kinds = parse_csv_set(v) }
   p.on("--no-sweep-feature", "Do not include sweep_policy as a categorical feature") { use_sweep_feature = false }
@@ -48,6 +50,7 @@ abort "at least one --input is required" if inputs.empty?
 abort "--epochs must be positive" unless epochs > 0
 abort "--lr must be positive" unless lr > 0
 abort "--threshold must be in [0,1]" unless threshold >= 0.0 && threshold <= 1.0
+abort "--holdout-by must be row or prompt" unless {"row", "prompt"}.includes?(holdout_by)
 unless {"positive_gain", "full_accept", "accept_ge_75pct"}.includes?(label_name)
   abort "unknown --label #{label_name.inspect}; expected positive_gain, full_accept, or accept_ge_75pct"
 end
@@ -183,8 +186,27 @@ end
 
 train_idx = [] of Int32
 holdout_idx = [] of Int32
+
+def stable_mod(value : String, modulus : Int32) : Int32
+  return 0 if modulus <= 1
+  acc = 0_u64
+  value.each_byte { |byte| acc = acc &* 131_u64 &+ byte.to_u64 }
+  (acc % modulus.to_u64).to_i
+end
+
 rows.each_index do |i|
-  if holdout_every > 0 && rows.size >= holdout_every * 2 && (i % holdout_every == 0)
+  holdout = if holdout_every > 0 && rows.size >= holdout_every * 2
+              case holdout_by
+              when "prompt"
+                stable_mod(rows[i].s("prompt_hash"), holdout_every) == 0
+              else
+                i % holdout_every == 0
+              end
+            else
+              false
+            end
+
+  if holdout
     holdout_idx << i
   else
     train_idx << i
@@ -277,7 +299,7 @@ def metrics_json(metrics : Metrics)
 end
 
 STDERR.puts "Router logistic train rows=#{train_idx.size} holdout=#{holdout_idx.size} features=#{feature_names.size} label=#{label_name}"
-STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature}"
+STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature} holdout_by=#{holdout_by}"
 STDERR.printf "train   acc=%.3f precision=%.3f recall=%.3f logloss=%.4f positives=%d/%d predicted=%d\n",
   train_metrics.accuracy, train_metrics.precision, train_metrics.recall, train_metrics.logloss,
   train_metrics.positives, train_metrics.count, train_metrics.predicted_positive
@@ -296,6 +318,7 @@ model = {
     "include_kind" => include_kinds.to_a.sort,
     "exclude_kind" => exclude_kinds.to_a.sort,
   },
+  "holdout_by"      => holdout_by,
   "feature_options" => {
     "sweep_feature"    => use_sweep_feature,
     "category_feature" => use_category_feature,
