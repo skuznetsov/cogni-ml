@@ -17,6 +17,12 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 2, min_ngram: 2, recursive: true).should eq([3, 4, 1, 2])
   end
 
+  it "reports the suffix match length used by the n-gram draft" do
+    history = [1, 2, 3, 4, 1, 2]
+
+    ML::GGUF::NgramDraft.match_len(history, max_ngram: 4, min_ngram: 2).should eq(2)
+  end
+
   it "ignores weak short repeats below the minimum length" do
     history = [1, 2, 3, 4, 2, 3]
     ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 3, min_ngram: 3).should eq([] of Int32)
@@ -52,7 +58,15 @@ describe ML::GGUF::NgramDraft do
 
     ML::GGUF::NgramDraft.exact_period(ids, 8).should eq(8)
     ML::GGUF::NgramDraft.unique_ratio(ids).should be < 0.95
-    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16).should be_true
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 5).should be_true
+  end
+
+  it "does not risk-gate short table-like repeats with only a short suffix match" do
+    ids = [735, 7993, 735, 220, 18, 735, 735, 5388]
+
+    ML::GGUF::NgramDraft.exact_period(ids, 8).should eq(8)
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 4).should be_false
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 5).should be_true
   end
 
   it "detects non-repeating high-diversity candidate tails" do

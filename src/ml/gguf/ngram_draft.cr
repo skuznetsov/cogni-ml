@@ -31,18 +31,43 @@ module ML::GGUF
       result
     end
 
-    def risky_candidate_shape?(ids : Array(Int32), min_size : Int32 = 16) : Bool
+    def risky_candidate_shape?(ids : Array(Int32), min_size : Int32 = 16, match_len : Int32 = 0) : Bool
       return false if ids.size < Math.min(min_size, 8)
 
       period = exact_period(ids, 8)
       return true if ids.size >= min_size && period == 8
       if ids.size >= 8 && period == 8
-        return true if pair_unique_ratio(ids) > 0.90 && unique_ratio(ids) < 0.95
+        # Short period-8 tails are risky only when the repeated suffix is long
+        # enough. This preserves compact table-like repeats where the candidate
+        # is exact and cheap, while still catching YAML/JSON tails that overrun.
+        return true if match_len >= 5 && pair_unique_ratio(ids) > 0.90 && unique_ratio(ids) < 0.95
       end
 
       return false if ids.size < min_size
 
       pair_unique_ratio(ids) > 0.90 && lag_ratio(ids, 4) < 0.05 && lag_ratio(ids, 8) < 0.20
+    end
+
+    def match_len(history : Array(Int32), max_ngram : Int32, min_ngram : Int32) : Int32
+      return 0 if history.empty?
+
+      max_len = Math.min(max_ngram, history.size)
+      max_len.downto(min_ngram) do |n|
+        suffix_start = history.size - n
+        i = history.size - n - 1
+        while i >= 0
+          matched = true
+          n.times do |j|
+            if history[i + j] != history[suffix_start + j]
+              matched = false
+              break
+            end
+          end
+          return n if matched && i + n < history.size
+          i -= 1
+        end
+      end
+      0
     end
 
     def unique_ratio(ids : Array(Int32)) : Float64

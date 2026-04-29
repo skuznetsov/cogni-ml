@@ -486,12 +486,12 @@ while generated_ids.size < n_gen
       ngram_max,
       ngram_min,
       recursive: ngram_recursive)
-    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, Math.max(ngram_stage_min, 16))
+    match_len = ngram_match_len(history, ngram_max, ngram_min)
+    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, Math.max(ngram_stage_min, 16), match_len)
       ngram_disabled = true
       ngram_candidates = [] of Int32
     end
     if router_model && !ngram_candidates.empty?
-      match_len = ngram_match_len(history, ngram_max, ngram_min)
       score = router_model.not_nil!.score(ngram_router_features(
         ngram_candidates, generated_ids.size, match_len, ngram_max, ngram_disabled, verify_mode, draft_model_id))
       ngram_router_checks += 1

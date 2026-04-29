@@ -485,7 +485,8 @@ elsif ngram_decode_enabled && !output_ids.empty?
     remaining = n_gen - output_ids.size
     candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(
       history, Math.min(ngram_gamma, remaining), ngram_max, ngram_min, recursive: ngram_recursive)
-    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, Math.max(ngram_stage_min, 16))
+    match_len = ngram_disabled ? 0 : ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, Math.max(ngram_stage_min, 16), match_len)
       ngram_disabled = true
       candidates = [] of Int32
     end
