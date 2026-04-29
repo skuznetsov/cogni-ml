@@ -58,6 +58,8 @@ spec_skip_draft_backup_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFO
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
+ngram_stage_min = (ENV["QWEN35_NGRAM_STAGE_MIN"]? || "0").to_i
+ngram_stage_gate = (ENV["QWEN35_NGRAM_STAGE_GATE"]? || "4").to_i
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
@@ -65,6 +67,8 @@ prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
 raise "QWEN35_NGRAM_MIN must be positive" unless ngram_min > 0
 raise "QWEN35_NGRAM_MAX must be >= QWEN35_NGRAM_MIN" unless ngram_max >= ngram_min
+raise "QWEN35_NGRAM_STAGE_MIN must be non-negative" unless ngram_stage_min >= 0
+raise "QWEN35_NGRAM_STAGE_GATE must be positive" unless ngram_stage_gate > 0
 raise "QWEN35_SPEC_GAMMA must be positive" unless spec_gamma > 0
 raise "QWEN35_SPEC_MAX_GAMMA must be positive" unless spec_max_gamma > 0
 raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fallback_gamma > 0
@@ -114,7 +118,7 @@ def resync_draft!(weights : ML::GGUF::Qwen35Weights,
   next_id
 end
 
-def with_guarded_full_rows_disabled
+def with_guarded_full_rows_disabled(&)
   old_guard = ENV["QWEN35_HEAD_FULL_ROWS_GUARDED"]?
   ENV.delete("QWEN35_HEAD_FULL_ROWS_GUARDED")
   yield
@@ -465,7 +469,7 @@ if speculative_decode_enabled && !output_ids.empty?
   STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
-  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
+  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
   decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
@@ -503,46 +507,61 @@ elsif ngram_decode_enabled && !output_ids.empty?
     ngram_cycles += 1
     ngram_proposed += candidates.size
     backup ||= ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-    backup.not_nil!.copy_from!(state)
-    tstart = Time.instant
-    target_nexts = with_guarded_full_rows_disabled do
-      ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, candidates, pos, state)
-    end
-    dt = (Time.instant - tstart).total_seconds
-
-    expected = next_id
     accepted_or_corrected = [] of Int32
     rejected = false
-    candidates.each_with_index do |cand, i|
-      break if output_ids.size >= n_gen
-      if cand == expected
-        output_ids << cand
-        history << cand
-        accepted_or_corrected << cand
-        ngram_accepted += 1
-        expected = target_nexts[i][0]
-        break if cand == tok.eos_id
-      else
-        output_ids << expected
-        history << expected
-        accepted_or_corrected << expected
-        rejected = true
-        break
-      end
-    end
+    stage_ngram = ngram_stage_min > 0 && candidates.size >= ngram_stage_min
+    ngram_offset = 0
+    tstart = Time.instant
+    while ngram_offset < candidates.size && output_ids.size < n_gen
+      remaining_stage = candidates.size - ngram_offset
+      stage_len = stage_ngram ? Math.min(ngram_stage_gate, remaining_stage) : remaining_stage
+      stage_candidates = candidates[ngram_offset, stage_len]
+      stage_pos = pos
+      stage_accepted_or_corrected = [] of Int32
 
-    if rejected
-      ngram_disabled = true if ngram_disable_after_reject
-      state.copy_from!(backup.not_nil!)
-      corrected = with_guarded_full_rows_disabled do
-        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, accepted_or_corrected, pos, state)
+      backup.not_nil!.copy_from!(state)
+      target_nexts = with_guarded_full_rows_disabled do
+        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, stage_candidates, stage_pos, state)
       end
-      next_id = corrected[-1][0]
-      pos += accepted_or_corrected.size
-    else
-      next_id = target_nexts[accepted_or_corrected.size - 1][0]
-      pos += accepted_or_corrected.size
+
+      expected = next_id
+      stage_candidates.each_with_index do |cand, i|
+        break if output_ids.size >= n_gen
+        if cand == expected
+          output_ids << cand
+          history << cand
+          accepted_or_corrected << cand
+          stage_accepted_or_corrected << cand
+          ngram_accepted += 1
+          expected = target_nexts[i][0]
+          break if cand == tok.eos_id
+        else
+          output_ids << expected
+          history << expected
+          accepted_or_corrected << expected
+          stage_accepted_or_corrected << expected
+          rejected = true
+          break
+        end
+      end
+
+      if rejected
+        ngram_disabled = true if ngram_disable_after_reject
+        state.copy_from!(backup.not_nil!)
+        corrected = with_guarded_full_rows_disabled do
+          ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, stage_accepted_or_corrected, stage_pos, state)
+        end
+        next_id = corrected[-1][0]
+        pos += stage_accepted_or_corrected.size
+        break
+      else
+        next_id = target_nexts[stage_accepted_or_corrected.size - 1][0]
+        pos += stage_accepted_or_corrected.size
+        ngram_offset += stage_candidates.size
+        break if output_ids.last? == tok.eos_id
+      end
     end
+    dt = (Time.instant - tstart).total_seconds
 
     if trace_steps
       STDOUT << "  ngram cycle=#{ngram_cycles} accepted=#{ngram_accepted}/#{ngram_proposed} emitted=#{accepted_or_corrected.size} pos=#{pos} rejected=#{rejected} took=#{dt.round(2)}s\n"
