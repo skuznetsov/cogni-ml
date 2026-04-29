@@ -1750,6 +1750,97 @@ private def simulate_exact_verifier_ltp_proxy(weights : ML::GGUF::Qwen35Weights,
   }
 end
 
+private def print_cost_truth_row(kind : String, route : String, steps : Int32, ms : Float64,
+                                 plain_per_token_ms : Float64, match : Bool, note : String = "") : Nil
+  per_token = steps > 0 ? ms / steps : 0.0
+  rel = plain_per_token_ms > 0.0 ? per_token / plain_per_token_ms : 0.0
+  tok_s = per_token > 0.0 ? 1000.0 / per_token : 0.0
+  puts "cost_truth kind=#{kind} route=#{route} steps=#{steps} ms=#{ms.round(3)} ms_per_tok=#{per_token.round(3)} rel_to_plain_tok=#{rel.round(4)} tok_s=#{tok_s.round(2)} match=#{match}#{note}"
+end
+
+private def simulate_self_spec_cost_truth_table(weights : ML::GGUF::Qwen35Weights,
+                                                token_ids : Array(Int32),
+                                                calib_count : Int32,
+                                                chunk_sizes : Array(Int32),
+                                                layer_bases : LayerBasisMap,
+                                                rank : Int32,
+                                                ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
+                                                draft_updown_rank : Int32? = nil,
+                                                draft_updown_layer_indices : Set(Int32)? = nil) : Nil
+  raise "cost truth table needs at least one chunk size" if chunk_sizes.empty?
+  raise "cost truth table requires at least one held-out token" unless calib_count < token_ids.size
+  raise "cost truth table requires Metal" unless ML::GGUF::Qwen35Metal.available?
+
+  sizes = chunk_sizes.select { |v| v > 0 }.uniq.sort
+  raise "cost truth table chunk sizes must be positive" if sizes.empty?
+  heldout = token_ids.size - calib_count
+  max_steps = Math.min(sizes.max, heldout)
+  raise "cost truth table has no held-out tokens to measure" unless max_steps > 0
+
+  hp = weights.hparams
+  prefix_ids = token_ids[0, calib_count]
+  candidates = token_ids[calib_count, max_steps]
+  max_seq = token_ids.size + max_steps + 8
+
+  warm_plain = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.forward_top1(weights, candidates[0], calib_count, warm_plain)
+  warm_chunk = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, candidates, calib_count, warm_chunk)
+
+  plain_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  plain_results = [] of {Int32, Float32}
+  t_plain = Time.instant
+  candidates.each_with_index do |tok, i|
+    plain_results << ML::GGUF::Qwen35CPU.forward_top1(weights, tok, calib_count + i, plain_state)
+  end
+  plain_ms = (Time.instant - t_plain).total_milliseconds
+  plain_per_token = plain_ms / max_steps
+
+  puts "cost_truth_table steps=#{max_steps} chunks=#{sizes.join(',')} layers=#{layer_bases.keys.sort.join(',')} rank=#{rank} plain_ms=#{plain_ms.round(3)} plain_ms_per_tok=#{plain_per_token.round(3)}"
+  print_cost_truth_row("exact", "decode_serial", max_steps, plain_ms, plain_per_token, true, " note=autoregressive_target")
+
+  sizes.each do |raw_k|
+    k = Math.min(raw_k, max_steps)
+    chunk_tokens = candidates[0, k]
+    warm_k_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, chunk_tokens, calib_count, warm_k_state)
+    chunk_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+    t_chunk = Time.instant
+    chunk_results = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, chunk_tokens, calib_count, chunk_state)
+    chunk_ms = (Time.instant - t_chunk).total_milliseconds
+    match = chunk_results.map(&.[0]) == plain_results[0, k].map(&.[0])
+    print_cost_truth_row("verifier", "exact_chunk_major_k#{k}", k, chunk_ms, plain_per_token, match, " note=known_candidate_span")
+  end
+
+  if layer_bases.empty?
+    puts "cost_truth kind=draft route=skipped steps=0 ms=0.0 ms_per_tok=0.0 rel_to_plain_tok=0.0 tok_s=0.0 match=false note=missing_lowrank_layers"
+    return
+  end
+
+  state_only = simulate_self_draft_gpu_state_only_run(weights, token_ids, calib_count, max_steps, layer_bases, rank)
+  print_cost_truth_row("draft_lower_bound", "lowrank_state_only_known", state_only[:steps], state_only[:chain_ms], plain_per_token, true,
+    " project_ms=#{state_only[:project_ms].round(3)} note=no_lm_head_known_tokens")
+
+  chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, max_steps, layer_bases, rank)
+  chain_match = chain[:agreement] == chain[:steps]
+  print_cost_truth_row("draft", "lowrank_gpu_chain", chain[:steps], chain[:chain_ms], plain_per_token, chain_match,
+    " agreement=#{chain[:agreement]}/#{chain[:steps]} exact_ms=#{chain[:exact_ms].round(3)} note=autoregressive_top1_id_chain")
+
+  return unless requested_updown_rank = draft_updown_rank
+
+  adapters = ffn_updown_adapters || raise "cost truth pca-updown requires FFN up/down adapters"
+  updown_state = simulate_self_draft_gpu_state_only_run(weights, token_ids, calib_count, max_steps, layer_bases, rank,
+    requested_updown_rank, adapters, draft_updown_layer_indices)
+  print_cost_truth_row("draft_lower_bound", "pca_updown_state_only_known", updown_state[:steps], updown_state[:chain_ms], plain_per_token, true,
+    " project_ms=#{updown_state[:project_ms].round(3)} updown_rank=#{updown_state[:updown_rank]} note=no_lm_head_known_tokens")
+
+  updown_chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, max_steps, layer_bases, rank,
+    requested_updown_rank, adapters, draft_updown_layer_indices)
+  updown_match = updown_chain[:agreement] == updown_chain[:steps]
+  print_cost_truth_row("draft", "pca_updown_gpu_chain", updown_chain[:steps], updown_chain[:chain_ms], plain_per_token, updown_match,
+    " agreement=#{updown_chain[:agreement]}/#{updown_chain[:steps]} updown_rank=#{updown_chain[:updown_rank]} exact_ms=#{updown_chain[:exact_ms].round(3)} note=autoregressive_top1_id_chain")
+end
+
 private def simulate_lowrank_draft_exact_chunk_verifier_thread_overlap(samples : Array(RecurrentSample),
                                                                        bases : BasisSet,
                                                                        weights : ML::GGUF::Qwen35Weights,
@@ -3929,7 +4020,10 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
                                               calib_count : Int32,
                                               n_draft : Int32,
                                               layer_bases : LayerBasisMap,
-                                              rank : Int32) : NamedTuple(steps: Int32, submit_ms: Float64, wait_ms: Float64, chain_ms: Float64, exact_ms: Float64, agreement: Int32, chain_ids: Array(Int32), exact_ids: Array(Int32))
+                                              rank : Int32,
+                                              draft_updown_rank : Int32? = nil,
+                                              ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
+                                              draft_updown_layer_indices : Set(Int32)? = nil) : NamedTuple(steps: Int32, submit_ms: Float64, wait_ms: Float64, chain_ms: Float64, exact_ms: Float64, agreement: Int32, chain_ids: Array(Int32), exact_ids: Array(Int32), updown_rank: Int32)
   raise "self-draft GPU chain requires at least one held-out token" unless n_draft > 0
   raise "self-draft GPU chain requires Metal" unless ML::GGUF::Qwen35Metal.available?
   hp = weights.hparams
@@ -3950,6 +4044,21 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
     buf = ML::MetalBuffer.new(basis_size_bytes)
     buf.write(flatten_basis_for_metal(bs, rank, h_k, s))
     shared_basis_bufs[il] = buf
+  end
+  updown_x_mean_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_c_mean_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_coeff_w_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_down_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  actual_updown_rank = 0
+  if requested_updown_rank = draft_updown_rank
+    adapters = ffn_updown_adapters || raise "self-draft GPU chain pca-updown requires FFN up/down adapters"
+    updown_layers = draft_updown_layer_indices || lowrank_set
+    maps = build_updown_adapter_buffer_maps(adapters, updown_layers, requested_updown_rank, hp.n_embd)
+    updown_x_mean_bufs = maps[:x_mean]
+    updown_c_mean_bufs = maps[:c_mean]
+    updown_coeff_w_bufs = maps[:coeff_w]
+    updown_down_bufs = maps[:down]
+    actual_updown_rank = maps[:rank]
   end
 
   build_lr_states = ->(state : ML::GGUF::Qwen35CPU::State) {
@@ -3992,7 +4101,14 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
   n_draft.times do |i|
     t0 = Time.instant
     sub = ML::GGUF::Qwen35CPU.forward_self_draft_top1_from_token_buf_async(weights, token_buf, 0, calib_count + i, chain_state,
-      lowrank_set, chain_lr, shared_basis_bufs, rank, scratch_namespace: "self_draft_gpu_chain_#{i}").not_nil!
+      lowrank_set, chain_lr, shared_basis_bufs, rank,
+      lowrank_updown_x_mean_bufs: updown_x_mean_bufs,
+      lowrank_updown_c_mean_bufs: updown_c_mean_bufs,
+      lowrank_updown_coeff_w_bufs: updown_coeff_w_bufs,
+      lowrank_updown_down_bufs: updown_down_bufs,
+      lowrank_updown_rank: actual_updown_rank,
+      lowrank_updown_layer_indices: draft_updown_layer_indices,
+      scratch_namespace: "self_draft_gpu_chain_#{i}").not_nil!
     wba.try(&.mark("draft", "submit_#{i}", t0, Time.instant))
     submissions << sub
     token_buf = sub.top1_id_buf.not_nil!
@@ -4014,14 +4130,15 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
   agreement = chain_ids.zip(exact_ids).count { |pair| pair[0] == pair[1] }
 
   {
-    steps:     n_draft,
-    submit_ms: submit_ms,
-    wait_ms:   wait_ms,
-    chain_ms:  chain_ms,
-    exact_ms:  exact_ms,
-    agreement: agreement,
-    chain_ids: chain_ids,
-    exact_ids: exact_ids,
+    steps:       n_draft,
+    submit_ms:   submit_ms,
+    wait_ms:     wait_ms,
+    chain_ms:    chain_ms,
+    exact_ms:    exact_ms,
+    agreement:   agreement,
+    chain_ids:   chain_ids,
+    exact_ids:   exact_ids,
+    updown_rank: actual_updown_rank,
   }
 end
 
@@ -4030,7 +4147,10 @@ private def simulate_self_draft_gpu_state_only_run(weights : ML::GGUF::Qwen35Wei
                                                    calib_count : Int32,
                                                    n_draft : Int32,
                                                    layer_bases : LayerBasisMap,
-                                                   rank : Int32) : NamedTuple(steps: Int32, project_ms: Float64, submit_ms: Float64, wait_ms: Float64, chain_ms: Float64, per_token_ms: Float64)
+                                                   rank : Int32,
+                                                   draft_updown_rank : Int32? = nil,
+                                                   ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
+                                                   draft_updown_layer_indices : Set(Int32)? = nil) : NamedTuple(steps: Int32, project_ms: Float64, submit_ms: Float64, wait_ms: Float64, chain_ms: Float64, per_token_ms: Float64, updown_rank: Int32)
   raise "self-draft GPU state-only requires at least one held-out token" unless n_draft > 0
   raise "self-draft GPU state-only requires Metal" unless ML::GGUF::Qwen35Metal.available?
   hp = weights.hparams
@@ -4051,6 +4171,21 @@ private def simulate_self_draft_gpu_state_only_run(weights : ML::GGUF::Qwen35Wei
     buf = ML::MetalBuffer.new(basis_size_bytes)
     buf.write(flatten_basis_for_metal(bs, rank, h_k, s))
     shared_basis_bufs[il] = buf
+  end
+  updown_x_mean_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_c_mean_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_coeff_w_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_down_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  actual_updown_rank = 0
+  if requested_updown_rank = draft_updown_rank
+    adapters = ffn_updown_adapters || raise "self-draft GPU state-only pca-updown requires FFN up/down adapters"
+    updown_layers = draft_updown_layer_indices || lowrank_set
+    maps = build_updown_adapter_buffer_maps(adapters, updown_layers, requested_updown_rank, hp.n_embd)
+    updown_x_mean_bufs = maps[:x_mean]
+    updown_c_mean_bufs = maps[:c_mean]
+    updown_coeff_w_bufs = maps[:coeff_w]
+    updown_down_bufs = maps[:down]
+    actual_updown_rank = maps[:rank]
   end
 
   state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
@@ -4087,6 +4222,12 @@ private def simulate_self_draft_gpu_state_only_run(weights : ML::GGUF::Qwen35Wei
     t0 = Time.instant
     sub = ML::GGUF::Qwen35CPU.forward_self_draft_state_from_token_buf_async(weights, token_buf, i, calib_count + i, state,
       lowrank_set, lr_bufs, shared_basis_bufs, rank,
+      lowrank_updown_x_mean_bufs: updown_x_mean_bufs,
+      lowrank_updown_c_mean_bufs: updown_c_mean_bufs,
+      lowrank_updown_coeff_w_bufs: updown_coeff_w_bufs,
+      lowrank_updown_down_bufs: updown_down_bufs,
+      lowrank_updown_rank: actual_updown_rank,
+      lowrank_updown_layer_indices: draft_updown_layer_indices,
       scratch_namespace: "self_draft_gpu_state_only_#{i}",
       command_queue_name: "self_draft_gpu_state_only",
       append_command_buffer: cmd).not_nil!
@@ -4113,6 +4254,7 @@ private def simulate_self_draft_gpu_state_only_run(weights : ML::GGUF::Qwen35Wei
     wait_ms:      wait_ms,
     chain_ms:     chain_ms,
     per_token_ms: chain_ms / n_draft,
+    updown_rank:  actual_updown_rank,
   }
 end
 
@@ -5860,6 +6002,9 @@ simulate_lowrank_metal_layer_overlap = false
 simulate_lowrank_metal_verifier_overlap = false
 simulate_lowrank_metal_decode_verifier_overlap = false
 simulate_exact_verifier_ltp = false
+simulate_cost_truth_chunks = [] of Int32
+simulate_cost_truth_updown_rank : Int32? = nil
+simulate_cost_truth_updown_layers = [] of Int32
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -5965,6 +6110,9 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-lowrank-metal-verifier-overlap", "Overlap one async low-rank layer chunk with exact prefill verifier on the held-out span") { simulate_lowrank_metal_verifier_overlap = true }
   p.on("--simulate-lowrank-metal-decode-verifier-overlap", "Overlap one async low-rank layer chunk with queued exact decode-wave verifier on the held-out span") { simulate_lowrank_metal_decode_verifier_overlap = true }
   p.on("--simulate-exact-verifier-ltp", "Compare exact verifier routes: serial decode, queued decode, and chunk-major prefill") { simulate_exact_verifier_ltp = true }
+  p.on("--simulate-cost-truth-table=LIST", "Print normalized cost table for exact decode, chunk verifier, low-rank draft, and optional pca-updown draft over chunk sizes") { |v| simulate_cost_truth_chunks = parse_int_list(v) }
+  p.on("--simulate-cost-truth-updown=R", "Include resident FFN pca-updown rank R in --simulate-cost-truth-table") { |v| simulate_cost_truth_updown_rank = v.to_i }
+  p.on("--simulate-cost-truth-updown-layers=LIST", "Apply pca-updown cost-table rows only to the listed low-rank recurrent draft layers") { |v| simulate_cost_truth_updown_layers = parse_int_list(v) }
   p.on("--simulate-lowrank-metal-chunk-thread-overlap", "Overlap one async low-rank layer chunk with chunk-major verifier in a worker thread") { simulate_lowrank_metal_chunk_thread_overlap = true }
   p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
@@ -6056,6 +6204,10 @@ raise "tokens must be positive" unless tokens_limit > 0
 raise "calib-tokens must be positive" unless calib_tokens > 0
 raise "ranks must not be empty" if ranks.empty?
 raise "pca-iters must be positive" unless pca_iters > 0
+if !simulate_cost_truth_chunks.empty?
+  raise "--simulate-cost-truth-table requires --simulate-logits-rank" if simulate_logit_rank.nil?
+  raise "--simulate-cost-truth-table requires --simulate-logits-layers" if simulate_logit_layers.empty?
+end
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
@@ -6114,6 +6266,9 @@ if rank = simulate_logit_rank
     ffn_pca_updown_ranks = [] of Int32
     if metal_updown_rank = simulate_ffn_updown_metal_rank
       ffn_pca_updown_ranks << metal_updown_rank
+    end
+    if cost_updown_rank = simulate_cost_truth_updown_rank
+      ffn_pca_updown_ranks << cost_updown_rank
     end
     if layer_updown_rank = simulate_lowrank_metal_layer_updown_rank
       ffn_pca_updown_ranks << layer_updown_rank
@@ -6227,6 +6382,11 @@ if rank = simulate_logit_rank
           puts "ffn_updown_metal layer=#{layer_id} rank=#{bench_rank} hidden=#{hidden_dim} max_delta=#{max_delta.round(8)} rmse=#{rmse.round(8)} cpu_ms=#{cpu_ms.round(4)} metal_ms=#{metal_ms.round(4)} metal_note=resident_adapter_upload_x_readback"
         end
       end
+    end
+    unless simulate_cost_truth_chunks.empty?
+      cost_updown_layers = simulate_cost_truth_updown_layers.empty? ? nil : Set(Int32).new(simulate_cost_truth_updown_layers)
+      simulate_self_spec_cost_truth_table(weights, token_ids, calib_count, simulate_cost_truth_chunks, layer_bases, rank,
+        ffn_updown_adapters, simulate_cost_truth_updown_rank, cost_updown_layers)
     end
     thresholds_to_run = if simulate_fallback_thresholds.empty?
                           [simulate_fallback_threshold]
