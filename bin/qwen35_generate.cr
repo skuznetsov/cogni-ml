@@ -498,11 +498,13 @@ elsif ngram_decode_enabled && !output_ids.empty?
     if candidates.empty?
       tstart = Time.instant
       emitted = next_id
-      top, _top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, emitted, pos, state)
-      dt = (Time.instant - tstart).total_seconds
       output_ids << emitted
       history << emitted
-      next_id = top
+      if output_ids.size < n_gen && emitted != tok.eos_id
+        top, _top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, emitted, pos, state)
+        next_id = top
+      end
+      dt = (Time.instant - tstart).total_seconds
       piece = tok.decode_single(emitted)
       if trace_steps
         STDOUT << "  gen #{output_ids.size}/#{n_gen} pos=#{pos} id=#{emitted} piece=#{piece.inspect} mode=plain took #{dt.round(2)}s\n"
@@ -526,12 +528,14 @@ elsif ngram_decode_enabled && !output_ids.empty?
       remaining_stage = candidates.size - ngram_offset
       stage_len = stage_ngram ? Math.min(ngram_stage_gate, remaining_stage) : remaining_stage
       stage_candidates = candidates[ngram_offset, stage_len]
+      final_stage = output_ids.size + stage_candidates.size >= n_gen
+      verify_candidates = final_stage ? stage_candidates[0, stage_candidates.size - 1] : stage_candidates
       stage_pos = pos
       stage_accepted_or_corrected = [] of Int32
 
       backup.not_nil!.copy_from!(state)
-      target_nexts = with_guarded_full_rows_disabled do
-        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, stage_candidates, stage_pos, state)
+      target_nexts = verify_candidates.empty? ? [] of {Int32, Float32} : with_guarded_full_rows_disabled do
+        ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, verify_candidates, stage_pos, state)
       end
 
       expected = next_id
@@ -543,7 +547,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
           accepted_or_corrected << cand
           stage_accepted_or_corrected << cand
           ngram_accepted += 1
-          expected = target_nexts[i][0]
+          expected = target_nexts[i][0] if i < target_nexts.size
           break if cand == tok.eos_id
         else
           output_ids << expected
@@ -557,17 +561,19 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
       if rejected
         ngram_disabled = true if ngram_disable_after_reject
-        state.copy_from!(backup.not_nil!)
-        corrected = with_guarded_full_rows_disabled do
-          ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, stage_accepted_or_corrected, stage_pos, state)
+        if output_ids.size < n_gen && output_ids.last? != tok.eos_id
+          state.copy_from!(backup.not_nil!)
+          corrected = with_guarded_full_rows_disabled do
+            ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, stage_accepted_or_corrected, stage_pos, state)
+          end
+          next_id = corrected[-1][0]
         end
-        next_id = corrected[-1][0]
         pos += stage_accepted_or_corrected.size
         break
       else
-        next_id = target_nexts[stage_accepted_or_corrected.size - 1][0]
         pos += stage_accepted_or_corrected.size
         ngram_offset += stage_candidates.size
+        next_id = target_nexts[stage_accepted_or_corrected.size - 1][0] if output_ids.size < n_gen && stage_accepted_or_corrected.size - 1 < target_nexts.size
         break if output_ids.last? == tok.eos_id
       end
     end
