@@ -131,6 +131,7 @@ Useful Qwen environment switches:
 | `QWEN35_NGRAM_RISK_MIN_SIZE=16` | Candidate size threshold used by the n-gram risk gate. This is independent from `QWEN35_NGRAM_STAGE_MIN`, so staging can be disabled without weakening fail-closed risk checks. |
 | `QWEN35_NGRAM_RECURSIVE_OFF=1` | Disable recursive n-gram extension through scratch history. |
 | `QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF=1` | Exploration mode: keep trying n-gram chunks after first rejection. |
+| `QWEN35_NGRAM_REPLAY_ON_REJECT=1` | Research/fast-path mode: skip n-gram target-state backups and rebuild the exact target state only after a non-final n-gram reject. Use with the default `auto` risk gate; it can regress badly when a large bad n-gram chunk is forced through verification. |
 | `QWEN35_SPECULATIVE_DECODE=1` | Enable exact neural speculative decode in `qwen35_generate` using the 0.8B draft. |
 | `QWEN35_DRAFT_MODEL=/path` | Override the Qwen 3.5 draft GGUF used by neural speculative decode. |
 | `QWEN35_SPEC_GAMMA=4` | Initial neural draft chunk size in `qwen35_generate`. |
@@ -306,6 +307,7 @@ Speculative decode caveats:
 - Neural speculative speed depends on draft acceptance. High-accept prompts are faster; rejection-heavy prompts quickly fall back to plain target decode.
 - In `qwen35_generate`, neural speculative decode is useful for longer high-accept generations. In a local 64-token smoke, `The capital of France is` measured `20.40 ms/tok` greedy, `16.61 ms/tok` neural speculative, and `15.10 ms/tok` neural speculative with guarded full-row verification. A 32-token smoke was slower due fixed draft/verifier overhead.
 - N-gram speculation is a workload-specialized path for repeated/generated-template text. It is intentionally fail-closed after a rejected n-gram chunk by default.
+- `QWEN35_NGRAM_REPLAY_ON_REJECT=1` is exact but deliberately opt-in. It removes rollback-copy overhead on high-confidence accepted n-gram chunks; on the local 27B+0.8B repeat8 harness it improved `ngram_router16_risk` from `30.85` to `30.21 ms/tok`. A forced no-risk YAML reject regressed from `71.53` to `95.86 ms/tok`, so this is not a broad default.
 - N-gram verifier chunks temporarily disable guarded full-row verification even if `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, because partial n-gram rejection exposed a close-row guard failure during adversarial CLI testing.
 - `QWEN35_HEAD_FULL_ROWS_GUARDED=1` is still an experimental research switch. The harness checks final output against plain greedy target output, but the route is not broad-defaulted because it relies on a full-row F16 top1 margin guard.
 - These numbers are effective decode throughput after prompt prefill; they do not make first-run prefill faster.

@@ -68,6 +68,7 @@ ngram_risk_gate = if value = ENV["QWEN35_NGRAM_RISK_GATE"]?
                   end
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
+ngram_replay_on_reject = ENV["QWEN35_NGRAM_REPLAY_ON_REJECT"]? == "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
@@ -135,6 +136,18 @@ ensure
   else
     ENV.delete("QWEN35_HEAD_FULL_ROWS_GUARDED")
   end
+end
+
+def replay_target_state(weights : ML::GGUF::Qwen35Weights,
+                        prompt_ids : Array(Int32),
+                        generated_ids : Array(Int32),
+                        max_seq : Int32,
+                        prepare_state_metal : Bool) : {ML::GGUF::Qwen35CPU::State, Int32}
+  replay_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(replay_state, weights.hparams) if prepare_state_metal
+  replay_ids = prompt_ids.dup
+  replay_ids.concat(generated_ids)
+  {replay_state, prefill_next(weights, replay_ids, replay_state)}
 end
 
 puts "Loading model and weights..."
@@ -476,7 +489,7 @@ if speculative_decode_enabled && !output_ids.empty?
   STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
-  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject}"
+  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject} replay_on_reject=#{ngram_replay_on_reject}"
   decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
@@ -485,6 +498,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
   ngram_accepted = 0
   ngram_proposed = 0
   plain_steps = 0
+  target_replay_ms = 0.0
   backup = nil.as(ML::GGUF::Qwen35CPU::State?)
 
   while output_ids.size < n_gen
@@ -520,7 +534,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
     ngram_cycles += 1
     ngram_proposed += candidates.size
-    backup ||= ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+    backup ||= ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq) unless ngram_replay_on_reject
     accepted_or_corrected = [] of Int32
     rejected = false
     stage_ngram = ngram_stage_min > 0 && candidates.size >= ngram_stage_min
@@ -535,7 +549,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
       stage_pos = pos
       stage_accepted_or_corrected = [] of Int32
 
-      backup.not_nil!.copy_from!(state)
+      backup.not_nil!.copy_from!(state) unless ngram_replay_on_reject
       target_nexts = verify_candidates.empty? ? [] of {Int32, Float32} : with_guarded_full_rows_disabled do
         ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, verify_candidates, stage_pos, state)
       end
@@ -564,11 +578,17 @@ elsif ngram_decode_enabled && !output_ids.empty?
       if rejected
         ngram_disabled = true if ngram_disable_after_reject
         if output_ids.size < n_gen && output_ids.last? != tok.eos_id
-          state.copy_from!(backup.not_nil!)
-          corrected = with_guarded_full_rows_disabled do
-            ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, stage_accepted_or_corrected, stage_pos, state)
+          if ngram_replay_on_reject
+            replay_t0 = Time.instant
+            state, next_id = replay_target_state(w, ids, output_ids, max_seq, prepare_state_metal)
+            target_replay_ms += (Time.instant - replay_t0).total_milliseconds
+          else
+            state.copy_from!(backup.not_nil!)
+            corrected = with_guarded_full_rows_disabled do
+              ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, stage_accepted_or_corrected, stage_pos, state)
+            end
+            next_id = corrected[-1][0]
           end
-          next_id = corrected[-1][0]
         end
         pos += stage_accepted_or_corrected.size
         break
@@ -590,7 +610,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
-  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)}\n"
+  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} target_replay_ms=#{target_replay_ms.round(1)}\n"
 else
   puts "\nGenerating #{n_gen} tokens greedily..."
   decode_t0 = Time.instant

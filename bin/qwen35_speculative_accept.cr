@@ -51,6 +51,7 @@ ngram_risk_min_size = (ENV["QWEN35_SPEC_NGRAM_RISK_MIN_SIZE"]? || "16").to_i
 ngram_risk_gate = ENV["QWEN35_SPEC_NGRAM_RISK_GATE"]? == "1"
 ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
+ngram_replay_on_reject = ENV["QWEN35_SPEC_NGRAM_REPLAY_ON_REJECT"]? == "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
@@ -85,6 +86,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-risk-gate", "Research: skip n-gram chunks whose candidate-token shape matches known bad repeat tails") { ngram_risk_gate = true }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
+  parser.on("--ngram-replay-on-reject", "Research: skip n-gram state backups and rebuild exact target state only after a non-final reject") { ngram_replay_on_reject = true }
   parser.on("--no-warm-verifier", "Do not warm the target chunk-verifier route before decode timing") { warm_verifier = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
@@ -215,6 +217,18 @@ def target_prefill_top1s_for_future(weights : ML::GGUF::Qwen35Weights,
   verify_ids = token_ids[0, verify_len]
   return [] of {Int32, Float32} if verify_ids.empty?
   target_prefill_top1s_exact(weights, verify_ids, start_pos, state, allow_guarded_verifier)
+end
+
+def replay_target_state(weights : ML::GGUF::Qwen35Weights,
+                        prompt_ids : Array(Int32),
+                        generated_ids : Array(Int32),
+                        max_seq : Int32,
+                        prepare_state_metal : Bool) : {ML::GGUF::Qwen35CPU::State, Int32}
+  replay_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(replay_state, weights.hparams) if prepare_state_metal
+  replay_ids = prompt_ids.dup
+  replay_ids.concat(generated_ids)
+  {replay_state, prefill_next(weights, replay_ids, replay_state)}
 end
 
 def fnv1a64_hex(bytes : Bytes) : String
@@ -444,7 +458,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -496,6 +510,7 @@ ngram_router_score_sum = 0.0
 target_verify_ms = 0.0
 draft_ms = 0.0
 target_backup_ms = 0.0
+target_replay_ms = 0.0
 draft_backup_ms = 0.0
 draft_resync_ms = 0.0
 current_gamma = gamma
@@ -565,9 +580,11 @@ while generated_ids.size < n_gen
         stage_start_pos = cycle_start_pos + ngram_offset
         stage_correction_or_accepted = [] of Int32
 
-        tb0 = Time.instant
-        target_backup_state.copy_from!(target_state)
-        target_backup_ms += (Time.instant - tb0).total_milliseconds
+        unless ngram_replay_on_reject
+          tb0 = Time.instant
+          target_backup_state.copy_from!(target_state)
+          target_backup_ms += (Time.instant - tb0).total_milliseconds
+        end
         tv0 = Time.instant
         target_nexts = target_prefill_top1s_for_future(target, stage_candidates, stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size, n_gen)
         target_verify_ms += (Time.instant - tv0).total_milliseconds
@@ -599,11 +616,17 @@ while generated_ids.size < n_gen
         if rejected
           ngram_disabled = true if ngram_disable_after_reject
           if generated_ids.size < n_gen
-            target_state.copy_from!(target_backup_state)
-            tv1 = Time.instant
-            corrected = target_prefill_top1s_for_future(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size - stage_correction_or_accepted.size, n_gen)
-            target_verify_ms += (Time.instant - tv1).total_milliseconds
-            target_next = corrected[-1][0]
+            if ngram_replay_on_reject
+              tr0 = Time.instant
+              target_state, target_next = replay_target_state(target, prompt_ids, generated_ids, max_seq, prepare_state_metal)
+              target_replay_ms += (Time.instant - tr0).total_milliseconds
+            else
+              target_state.copy_from!(target_backup_state)
+              tv1 = Time.instant
+              corrected = target_prefill_top1s_for_future(target, stage_correction_or_accepted, stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size - stage_correction_or_accepted.size, n_gen)
+              target_verify_ms += (Time.instant - tv1).total_milliseconds
+              target_next = corrected[-1][0]
+            end
           end
           pos += stage_correction_or_accepted.size
           break
@@ -1097,7 +1120,7 @@ puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s, decode_only=true)"
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
-puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
+puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms target_replay=#{target_replay_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
 puts profile_report.not_nil! if profile_report
 puts "note=exact speculative probe; speedup still needs lower draft cost and/or verifier rollback overhead removal"
 puts "generated=#{tok.decode(generated_ids).inspect}"
