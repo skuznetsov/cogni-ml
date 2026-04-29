@@ -159,6 +159,24 @@ kernel void simd_mv_q8_0_dual_f32(
 
 constant short MV8_TOP_ROWS_PER_TG = 12;
 
+static inline void qwen35_update_top2(float v,
+                                      uint id,
+                                      thread float &best,
+                                      thread uint &best_id,
+                                      thread float &second,
+                                      thread uint &second_id)
+{
+    if (v > best || (v == best && id < best_id)) {
+        second = best;
+        second_id = best_id;
+        best = v;
+        best_id = id;
+    } else if (id != best_id && (v > second || (v == second && id < second_id))) {
+        second = v;
+        second_id = id;
+    }
+}
+
 kernel void simd_mv_q8_0_top1_tiles_f32(
     device const uint8_t* w_raw       [[buffer(0)]],
     device const float*   x           [[buffer(1)]],
@@ -515,6 +533,75 @@ kernel void simd_mv_q6k_f32_add(
     }
 }
 
+kernel void simd_mv_q8_0_top2_tiles_f32(
+    device const uint8_t* w_raw              [[buffer(0)]],
+    device const float*   x                  [[buffer(1)]],
+    device       float*   tile_values        [[buffer(2)]],
+    device       uint*    tile_ids           [[buffer(3)]],
+    device       float*   tile_second_values [[buffer(4)]],
+    device       uint*    tile_second_ids    [[buffer(5)]],
+    constant     uint&    in_dim             [[buffer(6)]],
+    constant     uint&    out_dim            [[buffer(7)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint nb = in_dim / Q8_0_QK;
+    const uint row_bytes = nb * 34;
+
+    threadgroup float sg_values[MV8_NSG];
+    threadgroup uint  sg_ids[MV8_NSG];
+    threadgroup float sg_second_values[MV8_NSG];
+    threadgroup uint  sg_second_ids[MV8_NSG];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+    float second = -INFINITY;
+    uint second_id = 0;
+
+    for (short tile_row = 0; tile_row < (MV8_TOP_ROWS_PER_TG + MV8_NSG - 1) / MV8_NSG; ++tile_row) {
+        const uint row_id = tgpig.x * MV8_TOP_ROWS_PER_TG + tile_row * MV8_NSG + sgitg;
+        if (row_id >= out_dim) continue;
+
+        float sumf = 0.0f;
+        for (uint ib = 0; ib < nb; ++ib) {
+            device const block_q8_0_56 * blk =
+                (device const block_q8_0_56 *)(w_raw + row_id * row_bytes) + ib;
+            sumf += (float)blk->d * x[ib * Q8_0_QK + tiisg] * (float)blk->qs[tiisg];
+        }
+
+        const float total = simd_sum(sumf);
+        if (tiisg == 0) {
+            qwen35_update_top2(total, row_id, best, best_id, second, second_id);
+        }
+    }
+
+    if (tiisg == 0) {
+        sg_values[sgitg] = best;
+        sg_ids[sgitg] = best_id;
+        sg_second_values[sgitg] = second;
+        sg_second_ids[sgitg] = second_id;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0 && tiisg == 0) {
+        float group_best = -INFINITY;
+        uint group_best_id = 0;
+        float group_second = -INFINITY;
+        uint group_second_id = 0;
+        for (uint i = 0; i < MV8_NSG; ++i) {
+            qwen35_update_top2(sg_values[i], sg_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+            qwen35_update_top2(sg_second_values[i], sg_second_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+        }
+        tile_values[tgpig.x] = group_best;
+        tile_ids[tgpig.x] = group_best_id;
+        tile_second_values[tgpig.x] = group_second;
+        tile_second_ids[tgpig.x] = group_second_id;
+    }
+}
+
 // Q6_K lm-head greedy top1. This computes the same per-row dot products as
 // `simd_mv_q6k_f32`, but each threadgroup emits only the best row in a small
 // tile instead of materializing the full vocab logits vector. It is intended
@@ -620,6 +707,117 @@ kernel void simd_mv_q6k_top1_tiles_f32(
         }
         tile_values[tgpig.x] = group_best;
         tile_ids[tgpig.x] = group_best_id;
+    }
+}
+
+kernel void simd_mv_q6k_top2_tiles_f32(
+    device const uint8_t* w_raw              [[buffer(0)]],
+    device const float*   x                  [[buffer(1)]],
+    device       float*   tile_values        [[buffer(2)]],
+    device       uint*    tile_ids           [[buffer(3)]],
+    device       float*   tile_second_values [[buffer(4)]],
+    device       uint*    tile_second_ids    [[buffer(5)]],
+    constant     uint&    in_dim             [[buffer(6)]],
+    constant     uint&    out_dim            [[buffer(7)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    constexpr uint8_t kmask1 = 0x03;
+    constexpr uint8_t kmask2 = 0x0C;
+    constexpr uint8_t kmask3 = 0x30;
+    constexpr uint8_t kmask4 = 0xC0;
+
+    const uint nb = in_dim / Q56K_QK_K;
+    const uint row_bytes = nb * 210;
+
+    const short tid = tiisg / 2;
+    const short ix  = tiisg % 2;
+    const short ip  = tid / 8;
+    const short il  = tid % 8;
+    const short l0  = 4 * il;
+    const short is  = 8 * ip + l0 / 16;
+
+    const short y_offset   = 128 * ip + l0;
+    const short q_offset_l =  64 * ip + l0;
+    const short q_offset_h =  32 * ip + l0;
+
+    threadgroup float sg_values[MV6_NSG];
+    threadgroup uint  sg_ids[MV6_NSG];
+    threadgroup float sg_second_values[MV6_NSG];
+    threadgroup uint  sg_second_ids[MV6_NSG];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+    float second = -INFINITY;
+    uint second_id = 0;
+
+    for (short tile_row = 0; tile_row < MV6_TOP_ROWS_PER_TG / MV6_NSG; ++tile_row) {
+        const uint row_id = tgpig.x * MV6_TOP_ROWS_PER_TG + tile_row * MV6_NSG + sgitg;
+        if (row_id >= out_dim) continue;
+
+        float sumf = 0.0f;
+        float yl[16];
+
+        for (uint i = ix; i < nb; i += 2) {
+            device const float * y = x + i * Q56K_QK_K + y_offset;
+            for (short l = 0; l < 4; ++l) {
+                yl[4*l + 0] = y[l +  0];
+                yl[4*l + 1] = y[l + 32];
+                yl[4*l + 2] = y[l + 64];
+                yl[4*l + 3] = y[l + 96];
+            }
+
+            device const block_q6_K_56 * blk =
+                (device const block_q6_K_56 *)(w_raw + row_id * row_bytes) + i;
+
+            device const uint8_t * q1 = blk->ql + q_offset_l;
+            device const uint8_t * q2 = q1 + 32;
+            device const uint8_t * qh = blk->qh + q_offset_h;
+            device const int8_t  * sc = blk->scales + is;
+            device const half    * dh = &blk->d;
+
+            float4 sums = {0.f, 0.f, 0.f, 0.f};
+            FOR_UNROLL for (short l = 0; l < 4; ++l) {
+                sums[0] += yl[4*l + 0] * ((int8_t)((q1[l] & 0xF) | ((qh[l] & kmask1) << 4)) - 32);
+                sums[1] += yl[4*l + 1] * ((int8_t)((q2[l] & 0xF) | ((qh[l] & kmask2) << 2)) - 32);
+                sums[2] += yl[4*l + 2] * ((int8_t)((q1[l]  >> 4) | ((qh[l] & kmask3) << 0)) - 32);
+                sums[3] += yl[4*l + 3] * ((int8_t)((q2[l]  >> 4) | ((qh[l] & kmask4) >> 2)) - 32);
+            }
+
+            sumf += dh[0] * (sums[0] * sc[0] + sums[1] * sc[2] +
+                             sums[2] * sc[4] + sums[3] * sc[6]);
+        }
+
+        const float total = simd_sum(sumf);
+        if (tiisg == 0) {
+            qwen35_update_top2(total, row_id, best, best_id, second, second_id);
+        }
+    }
+
+    if (tiisg == 0) {
+        sg_values[sgitg] = best;
+        sg_ids[sgitg] = best_id;
+        sg_second_values[sgitg] = second;
+        sg_second_ids[sgitg] = second_id;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0 && tiisg == 0) {
+        float group_best = -INFINITY;
+        uint group_best_id = 0;
+        float group_second = -INFINITY;
+        uint group_second_id = 0;
+        for (uint i = 0; i < MV6_NSG; ++i) {
+            qwen35_update_top2(sg_values[i], sg_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+            qwen35_update_top2(sg_second_values[i], sg_second_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+        }
+        tile_values[tgpig.x] = group_best;
+        tile_ids[tgpig.x] = group_best_id;
+        tile_second_values[tgpig.x] = group_second;
+        tile_second_ids[tgpig.x] = group_second_id;
     }
 }
 
@@ -771,6 +969,56 @@ kernel void qwen35_top1_reduce_tiles(
     }
 }
 
+kernel void qwen35_top2_reduce_tiles(
+    device const float* tile_values        [[buffer(0)]],
+    device const uint*  tile_ids           [[buffer(1)]],
+    device const float* tile_second_values [[buffer(2)]],
+    device const uint*  tile_second_ids    [[buffer(3)]],
+    device       uint*  top_id             [[buffer(4)]],
+    device       float* top_value          [[buffer(5)]],
+    device       uint*  second_id          [[buffer(6)]],
+    device       float* second_value       [[buffer(7)]],
+    constant     uint&  tile_count         [[buffer(8)]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float local_best_values[256];
+    threadgroup uint  local_best_ids[256];
+    threadgroup float local_second_values[256];
+    threadgroup uint  local_second_ids[256];
+
+    float best = -INFINITY;
+    uint best_id = 0;
+    float second = -INFINITY;
+    uint second_id_local = 0;
+    for (uint i = tid; i < tile_count; i += 256) {
+        qwen35_update_top2(tile_values[i], tile_ids[i], best, best_id, second, second_id_local);
+        qwen35_update_top2(tile_second_values[i], tile_second_ids[i], best, best_id, second, second_id_local);
+    }
+
+    local_best_values[tid] = best;
+    local_best_ids[tid] = best_id;
+    local_second_values[tid] = second;
+    local_second_ids[tid] = second_id_local;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid == 0) {
+        float group_best = -INFINITY;
+        uint group_best_id = 0;
+        float group_second = -INFINITY;
+        uint group_second_id = 0;
+        for (uint i = 0; i < 256; ++i) {
+            qwen35_update_top2(local_best_values[i], local_best_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+            qwen35_update_top2(local_second_values[i], local_second_ids[i],
+                               group_best, group_best_id, group_second, group_second_id);
+        }
+        top_id[0] = group_best_id;
+        top_value[0] = group_best;
+        second_id[0] = group_second_id;
+        second_value[0] = group_second;
+    }
+}
+
 kernel void qwen35_top1_reduce_tiles_batch(
     device const float* tile_values [[buffer(0)]],
     device const uint*  tile_ids    [[buffer(1)]],
@@ -854,24 +1102,6 @@ kernel void qwen35_top1_reduce_f16_rows(
         }
         top_id[row] = group_best_id;
         top_value[row] = group_best;
-    }
-}
-
-static inline void qwen35_update_top2(float v,
-                                      uint id,
-                                      thread float &best,
-                                      thread uint &best_id,
-                                      thread float &second,
-                                      thread uint &second_id)
-{
-    if (v > best || (v == best && id < best_id)) {
-        second = best;
-        second_id = best_id;
-        best = v;
-        best_id = id;
-    } else if (id != best_id && (v > second || (v == second && id < second_id))) {
-        second = v;
-        second_id = id;
     }
 }
 

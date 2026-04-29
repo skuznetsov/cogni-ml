@@ -1659,6 +1659,26 @@ module ML::GGUF
       end
     end
 
+    private def top2_from_logits(logits : Array(Float32)) : {Int32, Float32, Int32, Float32}
+      best = -Float32::INFINITY
+      second = -Float32::INFINITY
+      best_id = 0_i32
+      second_id = 0_i32
+      logits.each_with_index do |v, id|
+        id32 = id.to_i32
+        if v > best || (v == best && id32 < best_id)
+          second = best
+          second_id = best_id
+          best = v
+          best_id = id32
+        elsif id32 != best_id && (v > second || (v == second && id32 < second_id))
+          second = v
+          second_id = id32
+        end
+      end
+      {best_id, best, second_id, second}
+    end
+
     # Greedy decode helper. By default, the Metal wave path avoids
     # materializing full lm-head logits and returns only top-1. Set
     # `QWEN35_HEAD_TOP1_FUSED=0` to force the full-logit fallback.
@@ -1676,6 +1696,21 @@ module ML::GGUF
       logits = forward(weights, token_id, pos, state)
       maxv = logits.max
       {logits.index(maxv).not_nil!.to_i32, maxv}
+    end
+
+    def forward_top2(weights : Qwen35Weights, token_id : Int32, pos : Int32,
+                     state : State) : {Int32, Float32, Int32, Float32}
+      if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top2: true)
+        if packed.size == 4
+          return {packed[0].to_i32, packed[1], packed[2].to_i32, packed[3]}
+        elsif packed.size == 2
+          return {packed[0].to_i32, packed[1], -1_i32, -Float32::INFINITY}
+        end
+
+        return top2_from_logits(packed)
+      end
+
+      top2_from_logits(forward(weights, token_id, pos, state))
     end
 
     {% unless flag?(:cpu_only) %}
@@ -1740,6 +1775,44 @@ module ML::GGUF
         {packed[0].to_i32, packed[1]}
       end
 
+      def forward_self_draft_top2(weights : Qwen35Weights,
+                                  token_id : Int32,
+                                  pos : Int32,
+                                  state : State,
+                                  lowrank_layer_indices : Set(Int32),
+                                  lowrank_state_bufs : Hash(Int32, ML::MetalBuffer),
+                                  lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
+                                  lowrank_rank : Int32,
+                                  lowrank_skip_ffn : Bool = false,
+                                  skip_recurrent_ffn : Bool = false,
+                                  lowrank_skip_ffn_layer_indices : Set(Int32)? = nil,
+                                  lowrank_updown_x_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                  lowrank_updown_c_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                  lowrank_updown_coeff_w_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                  lowrank_updown_down_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                  lowrank_updown_rank : Int32 = 0,
+                                  lowrank_updown_layer_indices : Set(Int32)? = nil) : {Int32, Float32, Int32, Float32}?
+        submission = forward_decode_wave_routed_async(weights, token_id, pos, state,
+          top1: true, top2: true, emit_head: true,
+          lowrank_layer_indices: lowrank_layer_indices,
+          lowrank_state_bufs: lowrank_state_bufs,
+          lowrank_basis_bufs: lowrank_basis_bufs,
+          lowrank_rank: lowrank_rank,
+          lowrank_skip_ffn: lowrank_skip_ffn,
+          skip_recurrent_ffn: skip_recurrent_ffn,
+          lowrank_skip_ffn_layer_indices: lowrank_skip_ffn_layer_indices,
+          lowrank_updown_x_mean_bufs: lowrank_updown_x_mean_bufs,
+          lowrank_updown_c_mean_bufs: lowrank_updown_c_mean_bufs,
+          lowrank_updown_coeff_w_bufs: lowrank_updown_coeff_w_bufs,
+          lowrank_updown_down_bufs: lowrank_updown_down_bufs,
+          lowrank_updown_rank: lowrank_updown_rank,
+          lowrank_updown_layer_indices: lowrank_updown_layer_indices)
+        return nil unless submission
+        packed = Qwen35Metal.wait_forward_decode_wave(submission)
+        raise "self-draft top2 decode returned #{packed.size} values" unless packed.size == 4
+        {packed[0].to_i32, packed[1], packed[2].to_i32, packed[3]}
+      end
+
       def forward_self_draft_top1_from_token_buf_async(weights : Qwen35Weights,
                                                        token_ids_buf : ML::MetalBuffer,
                                                        token_index : Int32,
@@ -1763,6 +1836,49 @@ module ML::GGUF
                                                        append_command_buffer : ML::Metal::CommandBuffer? = nil) : Qwen35Metal::DecodeWaveSubmission?
         forward_decode_wave_routed_async(weights, 0, pos, state,
           top1: true, emit_head: true,
+          scratch_namespace: scratch_namespace,
+          lowrank_layer_indices: lowrank_layer_indices,
+          lowrank_state_bufs: lowrank_state_bufs,
+          lowrank_basis_bufs: lowrank_basis_bufs,
+          lowrank_rank: lowrank_rank,
+          lowrank_skip_ffn: lowrank_skip_ffn,
+          skip_recurrent_ffn: skip_recurrent_ffn,
+          lowrank_skip_ffn_layer_indices: lowrank_skip_ffn_layer_indices,
+          lowrank_updown_x_mean_bufs: lowrank_updown_x_mean_bufs,
+          lowrank_updown_c_mean_bufs: lowrank_updown_c_mean_bufs,
+          lowrank_updown_coeff_w_bufs: lowrank_updown_coeff_w_bufs,
+          lowrank_updown_down_bufs: lowrank_updown_down_bufs,
+          lowrank_updown_rank: lowrank_updown_rank,
+          lowrank_updown_layer_indices: lowrank_updown_layer_indices,
+          token_ids_buf: token_ids_buf,
+          token_index: token_index,
+          command_queue_name: command_queue_name,
+          append_command_buffer: append_command_buffer)
+      end
+
+      def forward_self_draft_top2_from_token_buf_async(weights : Qwen35Weights,
+                                                       token_ids_buf : ML::MetalBuffer,
+                                                       token_index : Int32,
+                                                       pos : Int32,
+                                                       state : State,
+                                                       lowrank_layer_indices : Set(Int32),
+                                                       lowrank_state_bufs : Hash(Int32, ML::MetalBuffer),
+                                                       lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer),
+                                                       lowrank_rank : Int32,
+                                                       lowrank_skip_ffn : Bool = false,
+                                                       skip_recurrent_ffn : Bool = false,
+                                                       lowrank_updown_x_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                       lowrank_updown_c_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                       lowrank_updown_coeff_w_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                       lowrank_updown_down_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                                       lowrank_updown_rank : Int32 = 0,
+                                                       lowrank_skip_ffn_layer_indices : Set(Int32)? = nil,
+                                                       lowrank_updown_layer_indices : Set(Int32)? = nil,
+                                                       scratch_namespace : String? = nil,
+                                                       command_queue_name : String? = nil,
+                                                       append_command_buffer : ML::Metal::CommandBuffer? = nil) : Qwen35Metal::DecodeWaveSubmission?
+        forward_decode_wave_routed_async(weights, 0, pos, state,
+          top1: true, top2: true, emit_head: true,
           scratch_namespace: scratch_namespace,
           lowrank_layer_indices: lowrank_layer_indices,
           lowrank_state_bufs: lowrank_state_bufs,
@@ -2163,9 +2279,10 @@ module ML::GGUF
                                            pos : Int32,
                                            state : State,
                                            top1 : Bool = false,
+                                           top2 : Bool = false,
                                            emit_head : Bool = true) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
-        if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, emit_head: emit_head)
+        if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, top2: top2, emit_head: emit_head)
           return Qwen35Metal.wait_forward_decode_wave(submission)
         end
       {% end %}
@@ -2177,6 +2294,7 @@ module ML::GGUF
                                                  pos : Int32,
                                                  state : State,
                                                  top1 : Bool = false,
+                                                 top2 : Bool = false,
                                                  emit_head : Bool = true,
                                                  fresh_scratch : Bool = false,
                                                  scratch_namespace : String? = nil,
@@ -2278,6 +2396,7 @@ module ML::GGUF
           emb, weights.layers,
           k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
           weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head,
+          top2: top2,
           fresh_scratch: fresh_scratch, scratch_namespace: scratch_namespace,
           lowrank_layer_indices: lowrank_layer_indices,
           lowrank_state_bufs: lowrank_state_bufs,

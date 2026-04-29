@@ -105,9 +105,12 @@ module ML
         @@mv8_add_pipeline : ML::Metal::ComputePipeline?
         @@mv8_dual_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline?
+        @@mv8_top2_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline?
+        @@mv6_top2_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_batch_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_tiles_pipeline : ML::Metal::ComputePipeline?
+        @@top2_reduce_tiles_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_tiles_batch_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
         @@top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
@@ -768,6 +771,12 @@ module ML
           }
         end
 
+        private def self.mv6_top2_tiles_pipeline : ML::Metal::ComputePipeline
+          @@mv6_top2_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top2_tiles_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q6k_top2_tiles_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.mv6_top1_tiles_batch_pipeline : ML::Metal::ComputePipeline
           @@mv6_top1_tiles_batch_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_tiles_batch_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_tiles_batch_f32", GEMM_Q56K_SOURCE)
@@ -780,9 +789,21 @@ module ML
           }
         end
 
+        private def self.mv8_top2_tiles_pipeline : ML::Metal::ComputePipeline
+          @@mv8_top2_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q8_0_top2_tiles_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q8_0_top2_tiles_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.top1_reduce_tiles_pipeline : ML::Metal::ComputePipeline
           @@top1_reduce_tiles_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top1_reduce_tiles") {
             ML::Metal::ComputePipeline.new("qwen35_top1_reduce_tiles", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.top2_reduce_tiles_pipeline : ML::Metal::ComputePipeline
+          @@top2_reduce_tiles_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top2_reduce_tiles") {
+            ML::Metal::ComputePipeline.new("qwen35_top2_reduce_tiles", GEMM_Q56K_SOURCE)
           }
         end
 
@@ -1133,7 +1154,7 @@ module ML
 
         private def self.gemv_threads_per_tg_for(pipeline : ML::Metal::ComputePipeline) : Int32
           case pipeline
-          when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline)
+          when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline), .same?(mv8_top2_tiles_pipeline)
             MV_Q8_NSG * 32
           else
             64
@@ -1144,9 +1165,9 @@ module ML
           case pipeline
           when .same?(mv5_pipeline)
             {"Q5_K", Q5K_BLOCK_BYTES, QK_K}
-          when .same?(mv6_pipeline), .same?(mv6_add_pipeline), .same?(mv6_top1_tiles_pipeline)
+          when .same?(mv6_pipeline), .same?(mv6_add_pipeline), .same?(mv6_top1_tiles_pipeline), .same?(mv6_top2_tiles_pipeline)
             {"Q6_K", Q6K_BLOCK_BYTES, QK_K}
-          when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline)
+          when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline), .same?(mv8_top2_tiles_pipeline)
             {"Q8_0", Q8_0_BLOCK_BYTES, Q8_0_QK}
           else
             {"Q4_K", Q4K_BLOCK_BYTES, QK_K}
@@ -1768,6 +1789,17 @@ module ML
           [id.to_f32, value]
         end
 
+        private def self.read_shared_top2(id_buf : ML::MetalBuffer,
+                                          value_buf : ML::MetalBuffer,
+                                          second_id_buf : ML::MetalBuffer,
+                                          second_value_buf : ML::MetalBuffer) : Array(Float32)
+          id = id_buf.contents.as(Pointer(UInt32)).value
+          value = value_buf.contents.as(Pointer(Float32)).value
+          second_id = second_id_buf.contents.as(Pointer(UInt32)).value
+          second_value = second_value_buf.contents.as(Pointer(Float32)).value
+          [id.to_f32, value, second_id.to_f32, second_value]
+        end
+
         private def self.read_shared_top1_rows(id_buf : ML::MetalBuffer, value_buf : ML::MetalBuffer, rows : Int32) : Array({Int32, Float32})
           ids = id_buf.contents.as(Pointer(UInt32))
           values = value_buf.contents.as(Pointer(Float32))
@@ -1781,9 +1813,12 @@ module ML
           pending_cmds : Array(ML::Metal::CommandBuffer),
           emit_head : Bool,
           use_head_top1 : Bool,
+          use_head_top2 : Bool,
           logits_buf : ML::MetalBuffer?,
           top1_id_buf : ML::MetalBuffer?,
           top1_value_buf : ML::MetalBuffer?,
+          second_id_buf : ML::MetalBuffer?,
+          second_value_buf : ML::MetalBuffer?,
           output_dim : Int32,
           retained_bufs : Array(ML::MetalBuffer),
           profile_t0 : Time::Instant?,
@@ -1794,7 +1829,10 @@ module ML
           submission.cmd.wait
           t_wait = Time.instant if Profile.enabled?
           result = if submission.emit_head
-                     if submission.use_head_top1
+                     if submission.use_head_top2
+                       read_shared_top2(submission.top1_id_buf.not_nil!, submission.top1_value_buf.not_nil!,
+                         submission.second_id_buf.not_nil!, submission.second_value_buf.not_nil!)
+                     elsif submission.use_head_top1
                        read_shared_top1(submission.top1_id_buf.not_nil!, submission.top1_value_buf.not_nil!)
                      else
                        read_shared_f32(submission.logits_buf.not_nil!, submission.output_dim)
@@ -6208,6 +6246,7 @@ module ML
                                            hp : Qwen35Hparams,
                                            pos : Int32,
                                            top1 : Bool = false,
+                                           top2 : Bool = false,
                                            emit_head : Bool = true,
                                            fresh_scratch : Bool = false,
                                            scratch_namespace : String? = nil,
@@ -6238,7 +6277,7 @@ module ML
                 emb, layers,
                 k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                 output_norm, output_qw, hp, pos,
-                top1: top1, emit_head: emit_head, fresh_scratch: false, retained_scratch: retained,
+                top1: top1, top2: top2, emit_head: emit_head, fresh_scratch: false, retained_scratch: retained,
                 lowrank_layer_indices: lowrank_layer_indices,
                 lowrank_state_bufs: lowrank_state_bufs,
                 lowrank_basis_bufs: lowrank_basis_bufs,
@@ -6265,7 +6304,7 @@ module ML
                 emb, layers,
                 k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                 output_norm, output_qw, hp, pos,
-                top1: top1, emit_head: emit_head, scratch_namespace: nil, retained_scratch: retained_scratch,
+                top1: top1, top2: top2, emit_head: emit_head, scratch_namespace: nil, retained_scratch: retained_scratch,
                 lowrank_layer_indices: lowrank_layer_indices,
                 lowrank_state_bufs: lowrank_state_bufs,
                 lowrank_basis_bufs: lowrank_basis_bufs,
@@ -6287,6 +6326,7 @@ module ML
             end
           end
 
+          top1 = true if top2
           out_pipe = gemv_pipeline_for(output_qw)
           return nil if emit_head && out_pipe.nil?
 
@@ -6317,8 +6357,12 @@ module ML
           tile_count = emit_head ? ((output_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG) : 0
           top1_tile_values_buf = emit_head ? Scratch.get(:wave_top1_tile_values, tile_count.to_i64 * sizeof(Float32)) : nil
           top1_tile_ids_buf = emit_head ? Scratch.get(:wave_top1_tile_ids, tile_count.to_i64 * sizeof(UInt32)) : nil
+          second_tile_values_buf = (emit_head && top2) ? Scratch.get(:wave_top2_tile_values, tile_count.to_i64 * sizeof(Float32)) : nil
+          second_tile_ids_buf = (emit_head && top2) ? Scratch.get(:wave_top2_tile_ids, tile_count.to_i64 * sizeof(UInt32)) : nil
           top1_id_buf = emit_head ? Scratch.get(:wave_top1_id, sizeof(UInt32).to_i64) : nil
           top1_value_buf = emit_head ? Scratch.get(:wave_top1_value, sizeof(Float32).to_i64) : nil
+          second_id_buf = (emit_head && top2) ? Scratch.get(:wave_second_id, sizeof(UInt32).to_i64) : nil
+          second_value_buf = (emit_head && top2) ? Scratch.get(:wave_second_value, sizeof(Float32).to_i64) : nil
 
           # Full-attention scratch.
           qfull_buf = Scratch.get(:wave_qfull, (2 * q_dim).to_i64 * sizeof(Float32))
@@ -6956,6 +7000,7 @@ module ML
           end
 
           use_head_top1 = false
+          use_head_top2 = false
           if emit_head
             Profile.trace("head") do
               Profile.trace("head.norm") do
@@ -6965,26 +7010,50 @@ module ML
               end
 
               use_head_top1 = top1 && can_use_head_top1_fused?(output_qw)
+              use_head_top2 = top2 && can_use_head_top1_fused?(output_qw)
               if use_head_top1
-                Profile.trace("head.top1") do
+                Profile.trace(use_head_top2 ? "head.top2" : "head.top1") do
                   head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  head_top1_enc.set_pipeline(output_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
+                  head_top1_enc.set_pipeline(
+                    if use_head_top2
+                      output_qw.type.q8_0? ? mv8_top2_tiles_pipeline : mv6_top2_tiles_pipeline
+                    else
+                      output_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline
+                    end
+                  )
                   head_top1_enc.set_buffer(out_w_buf.not_nil!, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
                   head_top1_enc.set_buffer(pre_norm_buf, 1)
                   head_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
                   head_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
-                  head_top1_enc.set_value(output_qw.in_dim.to_u32, 4)
-                  head_top1_enc.set_value(output_qw.out_dim.to_u32, 5)
+                  if use_head_top2
+                    head_top1_enc.set_buffer(second_tile_values_buf.not_nil!, 4, ML::Metal::BufferAccess::Write)
+                    head_top1_enc.set_buffer(second_tile_ids_buf.not_nil!, 5, ML::Metal::BufferAccess::Write)
+                    head_top1_enc.set_value(output_qw.in_dim.to_u32, 6)
+                    head_top1_enc.set_value(output_qw.out_dim.to_u32, 7)
+                  else
+                    head_top1_enc.set_value(output_qw.in_dim.to_u32, 4)
+                    head_top1_enc.set_value(output_qw.out_dim.to_u32, 5)
+                  end
                   head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {output_qw.type.q8_0? ? MV_Q8_NSG * 32 : 64, 1, 1})
                   head_top1_enc.end_encoding
 
                   reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  reduce_top1_enc.set_pipeline(top1_reduce_tiles_pipeline)
+                  reduce_top1_enc.set_pipeline(use_head_top2 ? top2_reduce_tiles_pipeline : top1_reduce_tiles_pipeline)
                   reduce_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 0)
                   reduce_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 1)
-                  reduce_top1_enc.set_buffer(top1_id_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
-                  reduce_top1_enc.set_buffer(top1_value_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
-                  reduce_top1_enc.set_value(tile_count.to_u32, 4)
+                  if use_head_top2
+                    reduce_top1_enc.set_buffer(second_tile_values_buf.not_nil!, 2)
+                    reduce_top1_enc.set_buffer(second_tile_ids_buf.not_nil!, 3)
+                    reduce_top1_enc.set_buffer(top1_id_buf.not_nil!, 4, ML::Metal::BufferAccess::Write)
+                    reduce_top1_enc.set_buffer(top1_value_buf.not_nil!, 5, ML::Metal::BufferAccess::Write)
+                    reduce_top1_enc.set_buffer(second_id_buf.not_nil!, 6, ML::Metal::BufferAccess::Write)
+                    reduce_top1_enc.set_buffer(second_value_buf.not_nil!, 7, ML::Metal::BufferAccess::Write)
+                    reduce_top1_enc.set_value(tile_count.to_u32, 8)
+                  else
+                    reduce_top1_enc.set_buffer(top1_id_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
+                    reduce_top1_enc.set_buffer(top1_value_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
+                    reduce_top1_enc.set_value(tile_count.to_u32, 4)
+                  end
                   reduce_top1_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
                   reduce_top1_enc.end_encoding
                 end
@@ -7001,8 +7070,8 @@ module ML
           t_enc = Time.instant if Profile.enabled?
           cmd.commit unless append_command_buffer
           DecodeWaveSubmission.new(
-            cmd, pending_cmds, emit_head, use_head_top1,
-            logits_buf, top1_id_buf, top1_value_buf, output_qw.out_dim,
+            cmd, pending_cmds, emit_head, use_head_top1, use_head_top2,
+            logits_buf, top1_id_buf, top1_value_buf, second_id_buf, second_value_buf, output_qw.out_dim,
             retained_scratch || [] of ML::MetalBuffer, t0, t_enc)
         end
 
