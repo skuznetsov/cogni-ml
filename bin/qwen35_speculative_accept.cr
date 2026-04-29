@@ -122,17 +122,21 @@ end
 
 def greedy_sequence(weights : ML::GGUF::Qwen35Weights,
                     prompt_ids : Array(Int32),
-                    n_gen : Int32) : Array(Int32)
+                    n_gen : Int32) : {Array(Int32), Float64, Float64}
   state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + n_gen + 8)
+  prefill0 = Time.instant
   next_id = prefill_next(weights, prompt_ids, state)
+  prefill_ms = (Time.instant - prefill0).total_milliseconds
   pos = prompt_ids.size
   ids = [] of Int32
+  decode0 = Time.instant
   n_gen.times do
     ids << next_id
     next_id = advance_next(weights, next_id, pos, state)
     pos += 1
   end
-  ids
+  decode_ms = (Time.instant - decode0).total_milliseconds
+  {ids, decode_ms, prefill_ms}
 end
 
 def resync_draft!(weights : ML::GGUF::Qwen35Weights,
@@ -830,9 +834,7 @@ while generated_ids.size < n_gen
 end
 wall_ms = (Time.instant - wall0).total_milliseconds
 
-plain0 = Time.instant
-plain = greedy_sequence(target, prompt_ids, n_gen)
-plain_ms = (Time.instant - plain0).total_milliseconds
+plain, plain_ms, plain_prefill_ms = greedy_sequence(target, prompt_ids, n_gen)
 unless plain == generated_ids
   first_diff = plain.zip(generated_ids).index { |(a, b)| a != b } || Math.min(plain.size, generated_ids.size)
   raise "speculative output diverged from target greedy at #{first_diff}: plain=#{plain.inspect} speculative=#{generated_ids.inspect}"
@@ -866,7 +868,8 @@ end
 avg_gamma = cycles > 0 ? (gamma_sum.to_f64 / cycles.to_f64).round(2) : 0.0
 puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects} single_fast=#{single_accept_fast} plain_fallback=#{plain_fallback_tokens} draft_skip=#{draft_skips_before_fallback} draft_backup_skip=#{draft_backup_skips}"
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
-puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s)"
+puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s, decode_only=true)"
+puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
 puts "note=exact speculative probe; speedup still needs lower draft cost and/or verifier rollback overhead removal"
 puts "generated=#{tok.decode(generated_ids).inspect}"
