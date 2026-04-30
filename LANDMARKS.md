@@ -6159,3 +6159,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next frame is aggregate route selection by prompt/block/margin, not one-off manual log reading.
 - maieutic: The scoreboard's score is only a ranking convenience; promotion still requires parity, accept stability, and wall-cost evidence.
 - adversary: Smoke accept rates are not conclusions because the smoke used deliberately small `rank12/calib12/gen4`; treat it as tooling verification only.
+
+### [LM-QWEN35-LATE-BLOCK-SURROGATE-REAL-SUITE-2] Late block-band `26:27/gamma8` is the current best surrogate candidate
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "On Qwen3.5-9B with `tokens=32`, `calib=16`, `rank=16`, `gen=8`, `gamma=8`, and default/code/json/reasoning prompts, single late layers `25:25`, `26:26`, and `27:27` kept `parity_all=true`, `verifier_parity_all=true`, `accept_mean=100%`, `accept_min=100%`, and `0` rejects. Layer `28:28` was near-clean (`96.88%` mean, `87.5%` min, one reject), while `24:24`, `29:29`, and `30:30` had much lower prompt-min accept."
+  source: `/tmp/qwen35_block_suite_real_20260430_065728.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt text, token limit, calibration count, rank, gamma, generated length, model file, or block-surrogate suite semantics change
+- claim: "At the same small-suite shape, late bands `26:27`, `25:27`, and `25:26` preserved parity on all four prompts with `96.88%` mean / `87.5%` min accept and one reject each. Band `25:28` was refuted as too wide at rank16: `78.46%` mean accept, `53.85%` min accept, `3` rejects, and top2/top5 minima dropped to `87.5%`."
+  source: `/tmp/qwen35_block_suite_bands_20260430_073556.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt text, token limit, calibration count, rank, gamma, generated length, model file, or block-surrogate suite semantics change
+- claim: "A longer `tokens=40`, `calib=16`, `gen=16` stress run promoted `26:27/gamma8` as the best current band candidate: aggregate accept mean `92.89%`, min `83.33%`, `2` rejects, top5 min `100%`, and parity all true. Fixed `gamma16` regressed for the same band (`77.14%` mean, `60.0%` min), and `25:27` was weaker (`81.64%` mean at gamma8; `68.75%` at gamma16)."
+  source: `/tmp/qwen35_block_suite_bands_stress_20260430_075807.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt text, token limit, calibration count, rank, gamma, generated length, model file, or block-surrogate suite semantics change
+**decision:** Use `26:27` with short/progressive chunks as the next block-surrogate implementation/cost candidate. Keep `25:25`, `26:26`, and `27:27` as single-layer controls. Do not promote `25:28` or fixed `gamma16` at rank16 without a stronger adapter or route-risk gate.
+**quadrumvirate:**
+- cassandra: Wider late bands expose prompt-margin failures quickly; rejects remain exact but can erase speed.
+- daedalus: The useful frame is not "replace the last third", but "replace the largest safe late band under exact self-spec with short chunks."
+- maieutic: The acceptance gate is about proposal quality, not target replacement; exact verification preserves output parity but does not guarantee a wall-clock win.
+- adversary: This is still a CPU/probe acceptance result on a four-prompt suite. Speed claims require GPU-resident surrogate kernels and same-prompt wall-clock comparison against plain decode/llama.cpp.
