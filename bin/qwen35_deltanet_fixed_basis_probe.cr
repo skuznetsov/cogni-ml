@@ -3629,6 +3629,171 @@ private def simulate_block_surrogate_greedy_policy(weights : ML::GGUF::Qwen35Wei
   }
 end
 
+private def exact_greedy_ids_with_block_policy(weights : ML::GGUF::Qwen35Weights,
+                                               prompt_ids : Array(Int32),
+                                               gen_tokens : Int32,
+                                               block_start : Int32,
+                                               block_end : Int32,
+                                               adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                               calib_count : Int32,
+                                               state_mode : String,
+                                               max_seq : Int32) : Array(Int32)
+  state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
+  logits = [] of Float32
+  prompt_ids.each_with_index do |token_id, pos|
+    logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, state,
+      block_start, block_end, adapter, calib_count, false, state_mode)
+  end
+
+  ids = [] of Int32
+  gen_tokens.times do |step|
+    id = top1(logits)
+    ids << id
+    if step + 1 < gen_tokens
+      pos = prompt_ids.size + step
+      logits = logits_with_block_surrogate_policy(weights, id, pos.to_i32, state,
+        block_start, block_end, adapter, calib_count, false, state_mode)
+    end
+  end
+  ids
+end
+
+private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
+                                                      prompt_ids : Array(Int32),
+                                                      gen_tokens : Int32,
+                                                      gamma : Int32,
+                                                      block_start : Int32,
+                                                      block_end : Int32,
+                                                      adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                                      calib_count : Int32,
+                                                      state_mode : String) : NamedTuple(chunks: Int32, full_accept_chunks: Int32, rejections: Int32, emitted_tokens: Int32, proposed_tokens: Int32, accepted_draft_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, accept_rate: Float64, avg_accept: Float64, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, gamma_history: Array(Int32), accept_history: Array(Int32), draft_min_margin_history: Array(Float64), parity: Bool, verifier_parity: Bool, exact_ids: Array(Int32), emitted_ids: Array(Int32), baseline_ids: Array(Int32), draft_ids: Array(Int32))
+  raise "block surrogate self-spec gamma must be positive" unless gamma > 0
+  raise "block surrogate self-spec needs positive gen_tokens" unless gen_tokens > 0
+  raise "block surrogate self-spec needs a non-empty prompt" if prompt_ids.empty?
+
+  hp = weights.hparams
+  max_seq = prompt_ids.size + gen_tokens + gamma + 4
+  verifier_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  exact_logits = [] of Float32
+  state_before_last = verifier_state.fork
+  last_token = prompt_ids[0]
+  pos_last = 0
+
+  prompt_ids.each_with_index do |token_id, pos|
+    state_before_last = verifier_state.fork
+    last_token = token_id
+    pos_last = pos.to_i32
+    exact_logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, verifier_state,
+      block_start, block_end, adapter, calib_count, false, state_mode)
+  end
+
+  chunks = 0
+  full_accept_chunks = 0
+  rejections = 0
+  proposed_tokens = 0
+  accepted_draft_tokens = 0
+  verifier_tokens = 0
+  correction_steps = 0
+  draft_top2_hits = 0
+  draft_top5_hits = 0
+  gamma_history = [] of Int32
+  accept_history = [] of Int32
+  draft_min_margin_history = [] of Float64
+  exact_ids = [] of Int32
+  emitted_ids = [] of Int32
+  draft_ids = [] of Int32
+
+  while emitted_ids.size < gen_tokens
+    chunks += 1
+    proposal_limit = Math.min(gamma, gen_tokens - emitted_ids.size)
+    gamma_history << proposal_limit
+
+    draft_state = state_before_last.fork
+    draft_logits = logits_with_block_surrogate_policy(weights, last_token, pos_last, draft_state,
+      block_start, block_end, adapter, calib_count, true, state_mode)
+    proposal = [] of Int32
+    proposal_top2 = [] of Array(Int32)
+    proposal_top5 = [] of Array(Int32)
+    min_draft_margin = Float64::INFINITY
+    proposal_limit.times do |i|
+      candidate = top1(draft_logits)
+      proposal << candidate
+      draft_ids << candidate
+      proposed_tokens += 1
+      proposal_top2 << top_k_indices(draft_logits, 2)
+      proposal_top5 << top_k_indices(draft_logits, 5)
+      margin = top1_margin(draft_logits)
+      min_draft_margin = margin if margin < min_draft_margin
+      if i + 1 < proposal_limit
+        draft_pos = prompt_ids.size + emitted_ids.size + i
+        draft_logits = logits_with_block_surrogate_policy(weights, candidate, draft_pos.to_i32, draft_state,
+          block_start, block_end, adapter, calib_count, true, state_mode)
+      end
+    end
+    draft_min_margin_history << min_draft_margin
+
+    rejected = false
+    accepted_this = 0
+    proposal.each_with_index do |candidate, i|
+      expected = top1(exact_logits)
+      exact_ids << expected
+      draft_top2_hits += 1 if proposal_top2[i].includes?(expected)
+      draft_top5_hits += 1 if proposal_top5[i].includes?(expected)
+
+      verify_pos = prompt_ids.size + emitted_ids.size
+      emitted_ids << expected
+      verifier_tokens += 1
+      if candidate == expected
+        accepted_draft_tokens += 1
+        accepted_this += 1
+      else
+        rejections += 1
+        correction_steps += 1
+        rejected = true
+      end
+
+      last_token = expected
+      pos_last = verify_pos.to_i32
+      if emitted_ids.size < gen_tokens
+        state_before_last = verifier_state.fork
+        exact_logits = logits_with_block_surrogate_policy(weights, expected, verify_pos.to_i32, verifier_state,
+          block_start, block_end, adapter, calib_count, false, state_mode)
+      end
+
+      break if rejected || emitted_ids.size >= gen_tokens
+    end
+
+    full_accept_chunks += 1 unless rejected
+    accept_history << accepted_this
+  end
+
+  baseline_ids = exact_greedy_ids_with_block_policy(weights, prompt_ids, gen_tokens,
+    block_start, block_end, adapter, calib_count, state_mode, max_seq)
+  {
+    chunks:                   chunks,
+    full_accept_chunks:       full_accept_chunks,
+    rejections:               rejections,
+    emitted_tokens:           emitted_ids.size,
+    proposed_tokens:          proposed_tokens,
+    accepted_draft_tokens:    accepted_draft_tokens,
+    verifier_tokens:          verifier_tokens,
+    correction_steps:         correction_steps,
+    accept_rate:              proposed_tokens > 0 ? 100.0 * accepted_draft_tokens / proposed_tokens : 0.0,
+    avg_accept:               chunks > 0 ? accepted_draft_tokens.to_f64 / chunks : 0.0,
+    draft_top2_hit_rate:      verifier_tokens > 0 ? 100.0 * draft_top2_hits / verifier_tokens : 0.0,
+    draft_top5_hit_rate:      verifier_tokens > 0 ? 100.0 * draft_top5_hits / verifier_tokens : 0.0,
+    gamma_history:            gamma_history,
+    accept_history:           accept_history,
+    draft_min_margin_history: draft_min_margin_history,
+    parity:                   emitted_ids == baseline_ids,
+    verifier_parity:          exact_ids == baseline_ids,
+    exact_ids:                exact_ids,
+    emitted_ids:              emitted_ids,
+    baseline_ids:             baseline_ids,
+    draft_ids:                draft_ids,
+  }
+end
+
 private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
                                       prompt_ids : Array(Int32),
                                       gen_tokens : Int32,
@@ -6572,6 +6737,7 @@ simulate_block_surrogate_rank : Int32? = nil
 simulate_block_surrogate_clusters = 1
 simulate_block_surrogate_policy = false
 simulate_block_surrogate_state_mode = "skip"
+simulate_block_surrogate_self_spec_gammas = [] of Int32
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -6689,6 +6855,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--block-surrogate-clusters=N", "Train N local residual adapters selected by nearest input centroid for --simulate-block-residual-surrogate") { |v| simulate_block_surrogate_clusters = v.to_i }
   p.on("--simulate-block-surrogate-policy", "Also substitute the trained block surrogate into the full model and report logit/greedy top-k drift") { simulate_block_surrogate_policy = true }
   p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
+  p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
   p.on("--simulate-lowrank-metal-chunk-thread-overlap", "Overlap one async low-rank layer chunk with chunk-major verifier in a worker thread") { simulate_lowrank_metal_chunk_thread_overlap = true }
   p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
@@ -6791,6 +6958,11 @@ raise "block surrogate clusters must be positive" unless simulate_block_surrogat
 unless {"skip", "shadow"}.includes?(simulate_block_surrogate_state_mode)
   raise "--block-surrogate-state-mode must be skip or shadow"
 end
+unless simulate_block_surrogate_self_spec_gammas.empty?
+  raise "--simulate-block-surrogate-self-spec-gammas requires --simulate-block-residual-surrogate" unless simulate_block_surrogate_start && simulate_block_surrogate_end
+  raise "--simulate-block-surrogate-self-spec-gammas requires --simulate-generate=N" unless simulate_generate_tokens > 0
+  raise "block surrogate self-spec gamma values must be positive" if simulate_block_surrogate_self_spec_gammas.any? { |v| v <= 0 }
+end
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
@@ -6845,6 +7017,10 @@ if block_start = simulate_block_surrogate_start
         puts "block_surrogate_greedy_policy block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} gen_tokens=#{simulate_generate_tokens} top1_match=#{mix_gen[:top1_match].round(2)}% top5_hit=#{mix_gen[:top5_hit].round(2)}% mean_cos=#{mix_gen[:mean_cos].round(8)} min_cos=#{mix_gen[:min_cos].round(8)} mean_kl=#{mix_gen[:mean_kl].round(8)} max_kl=#{mix_gen[:max_kl].round(8)} min_margin=#{mix_gen[:min_margin].round(6)} confident_mismatches=#{mix_gen[:confident_mismatches]} approx_blocks=#{mix_gen[:approx_blocks]} skipped_layers=#{mix_gen[:skipped_layers]} exact_ids=#{mix_gen[:exact_ids].join(',')} approx_ids=#{mix_gen[:approx_ids].join(',')}"
       end
     end
+    simulate_block_surrogate_self_spec_gammas.each do |gamma|
+      spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
+      puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
+    end
   end
   if simulate_block_surrogate_policy
     logit = simulate_block_surrogate_logits_policy(weights, token_ids, block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
@@ -6853,6 +7029,10 @@ if block_start = simulate_block_surrogate_start
       gen = simulate_block_surrogate_greedy_policy(weights, token_ids, simulate_generate_tokens, block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
       puts "block_surrogate_greedy_policy block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 gen_tokens=#{simulate_generate_tokens} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_blocks=#{gen[:approx_blocks]} skipped_layers=#{gen[:skipped_layers]} exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
     end
+  end
+  simulate_block_surrogate_self_spec_gammas.each do |gamma|
+    spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
+    puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
   end
 end
 

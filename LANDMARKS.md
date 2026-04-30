@@ -6071,3 +6071,35 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   decay_trigger: top2 spec, block-surrogate policy CLI, Metal bridge, or decode top2 path changes
 **decision:** Continue only through exact self-spec acceptance gates, starting with late single-layer candidates (`25:25`, `28:28`) and small chunks. Do not build Metal for block residual maps until a candidate improves exact self-spec acceptance/cost, because hidden cosine and prompt top5 are too weak as promotion metrics.
 **adversary_update:** These are small-prompt/small-gen gates. Positive late-layer rows are hypotheses for self-spec proposal quality, not production speed claims.
+
+### [LM-QWEN35-BLOCK-SURROGATE-SELF-SPEC-GATE-1] Late single-layer block surrogates pass the first exact acceptance gate
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-self-spec-gammas=LIST` now runs a CPU exact self-spec acceptance gate for block residual surrogates. The gate drafts with the approximate block policy, verifies proposals against exact greedy logits, and separately checks emitted ids against an independent exact-greedy baseline via `parity` plus `verifier_parity`."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_selfspec_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_selfspec_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: block-surrogate policy path, self-spec controller, exact greedy baseline semantics, or decode position accounting changes
+- claim: "On Qwen3.5-9B default prompt with `tokens=32`, `calib=16`, `rank=16`, `gen=8`, state mode `skip`, layer `25:25` preserved `parity=true` and `verifier_parity=true` with `100%` accept for `gamma=2`, `gamma=4`, and `gamma=8`."
+  source: `/tmp/qwen35_block_selfspec_25_25_r16_t32_g8.log` and `/tmp/qwen35_block_selfspec_25_25_r16_t32_g8_gamma8.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, generated length, gamma, state mode, model file, or block selection changes
+- claim: "On the same gate, layer `28:28` also preserved `parity=true` and `verifier_parity=true` with `100%` accept for `gamma=2`, `gamma=4`, and `gamma=8`."
+  source: `/tmp/qwen35_block_selfspec_28_28_r16_t32_g8.log` and `/tmp/qwen35_block_selfspec_28_28_r16_t32_g8_gamma8.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, generated length, gamma, state mode, model file, or block selection changes
+- claim: "Layer `24:24` is a useful negative/control candidate: it preserved parity but had one rejection over 8 generated tokens for both `gamma=2` and `gamma=4`, with `accept_rate=77.78%`."
+  source: `/tmp/qwen35_block_selfspec_24_24_r16_t32_g8.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, generated length, gamma, state mode, model file, or block selection changes
+- claim: "Focused regression spec still passes after adding the block-surrogate self-spec gate."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_selfspec_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
+  verified_at: 2026-04-29
+  decay_trigger: top2 spec, block-surrogate self-spec CLI, Metal bridge, or decode top2 path changes
+**decision:** Promote `25:25` and `28:28` to larger prompt-suite / longer-generation gates before any Metal implementation. Keep `24:24` as a reject-control case. This is an acceptance finding, not a speed finding: the current gate is CPU/probe code and does not prove a wall-clock win until a GPU-resident draft body exists.
+**quadrumvirate:**
+- cassandra: The main failure mode is prompt-local overfit; `tokens=32/calib=16/gen=8` is too narrow for production trust.
+- daedalus: The frame shift is valid so far: replacing one late layer with a cheap surrogate can preserve greedy proposals better than early/multi-layer maps.
+- maieutic: Hidden cosine was not enough, but exact self-spec acceptance is the right next predicate because exact verification preserves output parity.
+- adversary: Do not generalize beyond this prompt/model/rank; require suite prompts, longer `gen`, and cost attribution before implementation work.
