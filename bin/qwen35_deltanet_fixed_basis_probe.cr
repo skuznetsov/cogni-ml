@@ -2326,6 +2326,24 @@ private def token_ids_for_prompt(tok, prompt : String, tokens_limit : Int32) : A
   token_ids[0, tokens_limit]
 end
 
+private def exact_greedy_generated_ids(weights : ML::GGUF::Qwen35Weights,
+                                       prompt_ids : Array(Int32),
+                                       gen_tokens : Int32) : Array(Int32)
+  raise "oracle generated calibration needs a non-empty prompt" if prompt_ids.empty?
+  return [] of Int32 if gen_tokens <= 0
+
+  state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + gen_tokens + 4)
+  next_id, _ = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
+  ids = [] of Int32
+  gen_tokens.times do |i|
+    ids << next_id
+    if i + 1 < gen_tokens
+      next_id, _ = ML::GGUF::Qwen35CPU.forward_top1(weights, next_id, prompt_ids.size + i, state)
+    end
+  end
+  ids
+end
+
 private def collect_block_residual_samples(weights : ML::GGUF::Qwen35Weights,
                                            token_ids : Array(Int32),
                                            block_start : Int32,
@@ -4031,30 +4049,34 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
                                       gen_tokens : Int32,
                                       gammas : Array(Int32),
                                       cluster_count : Int32,
-                                      state_mode : String) : Array(BlockSurrogateSuiteRow)
+                                      state_mode : String,
+                                      oracle_gen_calib : Int32) : Array(BlockSurrogateSuiteRow)
   rows = [] of BlockSurrogateSuiteRow
   token_sets.each do |prompt_case|
     prompt_name = prompt_case[:name]
     ids = prompt_case[:token_ids]
     prompt_calib_count = Math.min(calib_tokens, ids.size - 1)
     raise "block surrogate suite prompt #{prompt_name.inspect} needs at least one held-out token" unless prompt_calib_count > 0 && prompt_calib_count < ids.size
-    puts "block_surrogate_suite_prompt name=#{prompt_name} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} blocks=#{blocks.map { |b| layer_block_label(b[:start], b[:end]) }.join(',')} gammas=#{gammas.join(',')}"
+    oracle_ids = oracle_gen_calib > 0 ? exact_greedy_generated_ids(weights, ids, oracle_gen_calib) : [] of Int32
+    sample_ids = ids + oracle_ids
+    train_count = Math.min(prompt_calib_count + oracle_ids.size, sample_ids.size - 1)
+    puts "block_surrogate_suite_prompt name=#{prompt_name} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} sample_vectors=#{sample_ids.size} blocks=#{blocks.map { |b| layer_block_label(b[:start], b[:end]) }.join(',')} gammas=#{gammas.join(',')}"
 
     blocks.each do |block|
       block_start = block[:start]
       block_end = block[:end]
       raise "block surrogate suite end must be within layer count" unless block_end < weights.layers.size
       t0 = Time.instant
-      samples = collect_block_residual_samples(weights, ids, block_start, block_end)
+      samples = collect_block_residual_samples(weights, sample_ids, block_start, block_end)
       collect_ms = (Time.instant - t0).total_milliseconds
-      train_samples = samples[0, prompt_calib_count]
+      train_samples = samples[0, train_count]
 
       t_train = Time.instant
       adapter = train_block_residual_surrogate(train_samples, block_start, block_end, block_rank, pca_iters)
       train_ms = (Time.instant - t_train).total_milliseconds
-      stats = block_residual_surrogate_stats(samples, adapter, prompt_calib_count)
+      stats = block_residual_surrogate_stats(samples, adapter, train_count)
       block_label = layer_block_label(block_start, block_end)
-      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=global rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
+      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=global rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
         adapter, stats, "global", block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode)
 
@@ -4063,8 +4085,8 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       t_mix = Time.instant
       mixture = train_block_residual_mixture(train_samples, block_start, block_end, block_rank, cluster_count, pca_iters)
       mix_train_ms = (Time.instant - t_mix).total_milliseconds
-      mix_stats = block_residual_mixture_stats(samples, mixture, prompt_calib_count)
-      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{prompt_calib_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} train_ms=#{mix_train_ms.round(3)}"
+      mix_stats = block_residual_mixture_stats(samples, mixture, train_count)
+      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} train_ms=#{mix_train_ms.round(3)}"
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
         mixture, mix_stats, "mixture", block_rank, mixture.centroids.size, prompt_calib_count, gen_tokens, gammas, state_mode)
     end
@@ -7043,6 +7065,7 @@ simulate_block_surrogate_state_mode = "skip"
 simulate_block_surrogate_self_spec_gammas = [] of Int32
 simulate_block_surrogate_suite_blocks = [] of LayerBlock
 simulate_block_surrogate_suite_prompts = [] of NamedPrompt
+simulate_block_surrogate_oracle_gen_calib = 0
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -7172,6 +7195,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--block-surrogate-clusters=N", "Train N local residual adapters selected by nearest input centroid for --simulate-block-residual-surrogate") { |v| simulate_block_surrogate_clusters = v.to_i }
   p.on("--simulate-block-surrogate-policy", "Also substitute the trained block surrogate into the full model and report logit/greedy top-k drift") { simulate_block_surrogate_policy = true }
   p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
+  p.on("--block-surrogate-oracle-gen-calib=N", "Probe-only upper bound: add N exact generated-token block samples to training while still drafting from the original prompt boundary") { |v| simulate_block_surrogate_oracle_gen_calib = v.to_i }
   p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
   p.on("--simulate-block-surrogate-suite-blocks=LIST", "Run one-process block-surrogate suite over blocks; use 24-30 for singletons or START:END items") { |v| simulate_block_surrogate_suite_blocks = parse_layer_block_list(v) }
   p.on("--simulate-block-surrogate-suite-prompt=NAME::TEXT", "Additional prompt for block-surrogate suite; main --prompt is always included") do |v|
@@ -7283,6 +7307,7 @@ if simulate_block_surrogate_start || simulate_block_surrogate_end
   raise "--simulate-block-residual-surrogate must set both start and end" unless simulate_block_surrogate_start && simulate_block_surrogate_end
 end
 raise "block surrogate clusters must be positive" unless simulate_block_surrogate_clusters > 0
+raise "block surrogate oracle generated calibration must be non-negative" unless simulate_block_surrogate_oracle_gen_calib >= 0
 unless {"skip", "shadow"}.includes?(simulate_block_surrogate_state_mode)
   raise "--block-surrogate-state-mode must be skip or shadow"
 end
@@ -7334,7 +7359,7 @@ unless simulate_block_surrogate_suite_blocks.empty?
   run_block_surrogate_suite(weights, suite_token_sets, simulate_block_surrogate_suite_blocks,
     block_rank, pca_iters, calib_tokens, simulate_generate_tokens,
     simulate_block_surrogate_self_spec_gammas, simulate_block_surrogate_clusters,
-    simulate_block_surrogate_state_mode)
+    simulate_block_surrogate_state_mode, simulate_block_surrogate_oracle_gen_calib)
 end
 
 if block_start = simulate_block_surrogate_start

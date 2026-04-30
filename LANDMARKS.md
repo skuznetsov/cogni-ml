@@ -6211,3 +6211,39 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "promote the best accepting band" to "make proposal body materially cheaper or replace a wider band safely."
 - maieutic: The core assumption that two skipped late layers can beat exact decode is false in this measurement; exact verifier guarantees quality but doubles work unless draft is hidden or much cheaper.
 - adversary: CPU timings do not prove Metal production speed, but they are strong enough to block an immediate GPU rewrite without a clearer cost-reduction mechanism.
+
+### [LM-QWEN35-STATIC-BLOCK-SURROGATE-DRIFT-1] Static block residual maps drift after the first short horizon
+**status:** verified
+**trust:** {F:0.86, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "The block-surrogate suite has a probe-only oracle upper-bound flag, `--block-surrogate-oracle-gen-calib=N`. It appends N exact generated-token block samples to adapter training while preserving the original prompt-boundary draft start. This tests whether generated-token residuals are locally compressible; it is not a valid production policy because it leaks future exact samples."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_oracle_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_oracle_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-04-30
+  verified_at: 2026-04-30
+  decay_trigger: block-surrogate suite training path, oracle calibration flag, or exact generation helper changes
+- claim: "A broad `20:27/rank48` route can look promising over the first 8 generated tokens: with `tokens=64`, `calib=48`, `gen=8`, `gamma=4`, main+reason both kept `100%` accept/parity; draft body was cheaper than exact baseline (`~4310ms` draft mean versus `~4967ms` baseline mean), and ideal overlap was about break-even (`0.9959x`)."
+  source: `/tmp/qwen35_block_wall_broad_rank48_20260430_140509.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt suite, generated length, token boundary, rank/calibration, or timing implementation changes
+- claim: "The same `20:27/rank48` route is not stable at `gen=16`: four-prompt aggregate at `gamma=2` fell to `70.69%` mean accept, `52.63%` min accept, and `14` rejects; `gamma=4` fell to `57.75%` mean, `34.62%` min, and `16` rejects. Exact parity still held because verifier correction worked."
+  source: `/tmp/qwen35_block_wall_20_27_rank48_gen16_20260430_145207.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt suite, generated length, token boundary, rank/calibration, or self-spec acceptance semantics changes
+- claim: "The safer `25:28/rank32` fallback also drifts at `gen=16`: four-prompt aggregate at `gamma=4` had `88.76%` mean accept, `78.95%` min accept, `4` rejects, and ideal-overlap speed `0.9451x`."
+  source: `/tmp/qwen35_block_wall_25_28_rank32_gen16_20260430_151230.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt suite, generated length, token boundary, rank/calibration, or timing implementation changes
+- claim: "Nearest-centroid mixture adapters did not fix the broad route: on main/code/reason, `20:27/rank48/K=4` regressed versus global (`85.19%` mean accept versus `92.59%`), and `20:30` stayed poor (`57.37%` mixture mean, `38.46%` min)."
+  source: `/tmp/qwen35_block_wall_mixture_rank48_20260430_142435.log`
+  verified_at: 2026-04-30
+  decay_trigger: mixture selector, rank/calibration, prompt suite, or generated length changes
+- claim: "Oracle generated calibration did not fix `gen16` drift. With `20:27/rank48/oracle_gen_calib=8`, the four-prompt aggregate remained weak: `gamma=2` had `69.12%` mean accept, `52.63%` min accept, and `15` rejects; `gamma=4` had `57.34%` mean, `38.46%` min, and `15` rejects."
+  source: `/tmp/qwen35_block_oracle_20_27_rank48_gen16_20260430_152656.log`
+  verified_at: 2026-04-30
+  decay_trigger: oracle calibration implementation, prompt suite, generated length, rank/calibration, or self-spec acceptance semantics changes
+**decision:** Do not build a superfused kernel for the current static block-residual surrogate. The first-8-token success is a short-horizon/dataset-shift signal, not a stable proposal body. Next speed work should pivot to a candidate source with stable `gen16+` acceptance: route-gated learned proposal head, exact top-k/tree branch reuse on already-working lowrank routes, or a fundamentally different online model rather than nearest-centroid/static residual maps.
+**quadrumvirate:**
+- cassandra: The repeated failure mode is generated-distribution drift after the first short horizon.
+- daedalus: The frame shifts from "fuse this static block map" to "find a proposal source that remains stable after generated tokens leave the prompt manifold."
+- maieutic: Exact parity is guaranteed by verification, but speed requires high acceptance and a draft body cheaper than full decode over more than one or two chunks.
+- adversary: Oracle calibration was an upper bound; because it failed, a naive online retrain is not worth implementing before a stronger model/selector is found.
