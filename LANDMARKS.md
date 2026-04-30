@@ -6103,3 +6103,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shift is valid so far: replacing one late layer with a cheap surrogate can preserve greedy proposals better than early/multi-layer maps.
 - maieutic: Hidden cosine was not enough, but exact self-spec acceptance is the right next predicate because exact verification preserves output parity.
 - adversary: Do not generalize beyond this prompt/model/rank; require suite prompts, longer `gen`, and cost attribution before implementation work.
+
+### [LM-QWEN35-LATE-BLOCK-SURROGATE-SUITE-1] Late single-layer surrogates are promising but margin-sensitive
+**status:** verified
+**trust:** {F:0.82, G:low, R:0.82}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "On Qwen3.5-9B `tokens=32`, `calib=16`, `rank=16`, `gen=8`, `gamma=8`, state mode `skip`, late single-layer block surrogates kept exact parity across code, JSON, and reasoning prompts. Code and JSON were easy: blocks `25:25`, `28:28`, and `24:24` all had `100%` accept and `parity=true`."
+  source: `/tmp/qwen35_block_selfspec_suite_20260429_231317.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt text, token limit, calibration count, rank, gamma, generated length, model file, or block-surrogate semantics change
+- claim: "The reasoning prompt separated the candidates at the same small calibration: `28:28` had `100%` accept, `25:25` had one reject (`77.78%` accept), and `24:24` had two rejects (`50.0%` accept). All rows preserved `parity=true` because exact verification corrected rejected proposals."
+  source: `/tmp/qwen35_block_selfspec_suite_20260429_231317.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt text, token limit, calibration count, rank, gamma, generated length, model file, or block-surrogate semantics change
+- claim: "On the same reasoning prompt, extending `28:28` to `gen=16` with `tokens=32/calib=16/rank16` produced one reject for both `gamma=8` and `gamma=16` (`accept_rate=88.24%`, `parity=true`, `draft_top5_hit=93.75%`). The miss was therefore recoverable by exact verification but not free."
+  source: `/tmp/qwen35_block_selfspec_28_28_reason_r16_t32_g16_gamma8_16.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt text, token limit, calibration count, rank, gamma, generated length, model file, or block-surrogate semantics change
+- claim: "A longer prompt boundary (`tokens=48`) passed `100%` accept/parity on the reasoning prompt for `28:28` at `calib=16/rank16/gamma16`, and also for `25:25`, `28:28`, and `24:24` at `calib=24/rank24/gamma16`. This is not clean evidence that rank alone fixed the reject, because `tokens=48` changes the generated segment."
+  source: `/tmp/qwen35_block_selfspec_28_28_reason_r16_t48_g16_gamma16.log`, `/tmp/qwen35_block_selfspec_28_28_reason_r24_t48_g16_gamma8_16.log`, `/tmp/qwen35_block_selfspec_25_25_reason_r24_t48_g16_gamma8_16.log`, `/tmp/qwen35_block_selfspec_24_24_reason_r24_t48_g16_gamma16.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt boundary, calibration count, rank, gamma, generated length, model file, or block-surrogate semantics change
+**decision:** Treat `28:28` as the strongest current late-single candidate, `25:25` as promising but more margin-sensitive, and `24:24` as a control/risky boundary. The next useful implementation step is in-process block-surrogate prompt-suite tooling plus cost/microbench attribution, not immediate default promotion.
+**quadrumvirate:**
+- cassandra: Late layers look safer on high-margin code/JSON starts, but reasoning low-margin spans create rejects.
+- daedalus: The useful route may be "late surrogate with confidence/offramp" rather than "surrogate whole last third."
+- maieutic: The token stream segment matters as much as the prompt class; changing `tokens_limit` changes the generated ids and can hide a failure.
+- adversary: `parity=true` protects quality, but rejects still cost verifier/replay work; speed claims require wall-cost measurement.
