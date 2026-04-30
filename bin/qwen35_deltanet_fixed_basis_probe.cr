@@ -21,7 +21,7 @@ private alias LayerBlock = NamedTuple(start: Int32, end: Int32)
 private alias NamedPrompt = NamedTuple(name: String, text: String)
 private alias PromptTokenSet = NamedTuple(name: String, token_ids: Array(Int32))
 private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, parity: Bool, verifier_parity: Bool, accept_rate: Float64, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, chunks: Int32, full_accept_chunks: Int32, correction_steps: Int32, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, draft_margin_min: Float64, baseline_decode_ms: Float64, draft_ms: Float64, verifier_ms: Float64, self_seq_decode_ms: Float64, ideal_overlap_decode_ms: Float64, cpu_seq_speedup: Float64, ideal_overlap_speedup: Float64, hidden_cos_mean: Float64, hidden_cos_min: Float64, rel_rmse: Float64, delta_rel_rmse: Float64)
-private alias BlockSurrogateTreeSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, top_k: Int32, parity: Bool, full_rescue_chunks: Int32, chunks: Int32, misses: Int32, draft_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, branch_tokens_rank: Int32, branch_tokens_full: Int32, correction_steps: Int32, hidden_cos_mean: Float64, rel_rmse: Float64)
+private alias BlockSurrogateTreeSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, top_k: Int32, warmup_tokens: Int32, parity: Bool, full_rescue_chunks: Int32, chunks: Int32, misses: Int32, draft_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, branch_tokens_rank: Int32, branch_tokens_full: Int32, correction_steps: Int32, hidden_cos_mean: Float64, rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
 
@@ -3892,13 +3892,15 @@ private def simulate_block_surrogate_tree_oracle(weights : ML::GGUF::Qwen35Weigh
                                                  block_end : Int32,
                                                  adapter : BlockResidualSurrogate | BlockResidualMixture,
                                                  calib_count : Int32,
-                                                 state_mode : String) : NamedTuple(chunks: Int32, full_rescue_chunks: Int32, misses: Int32, emitted_tokens: Int32, draft_steps: Int32, top1_hits: Int32, topk_hits: Int32, branch_tokens_rank: Int32, branch_tokens_full: Int32, correction_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, schedule_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32))
+                                                 state_mode : String,
+                                                 warmup_tokens : Int32 = 0) : NamedTuple(chunks: Int32, full_rescue_chunks: Int32, misses: Int32, emitted_tokens: Int32, warmup_tokens: Int32, draft_steps: Int32, top1_hits: Int32, topk_hits: Int32, branch_tokens_rank: Int32, branch_tokens_full: Int32, correction_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, schedule_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32))
   raise "block surrogate tree top_k must be >= 2" unless top_k >= 2
   raise "block surrogate tree top_k must be <= 16" unless top_k <= 16
   raise "block surrogate tree schedule must not be empty" if progressive_schedule.empty?
   raise "block surrogate tree schedule values must be positive" if progressive_schedule.any? { |v| v <= 0 }
   raise "block surrogate tree needs positive gen_tokens" unless gen_tokens > 0
   raise "block surrogate tree needs a non-empty prompt" if prompt_ids.empty?
+  raise "block surrogate tree warmup must be non-negative" unless warmup_tokens >= 0
 
   hp = weights.hparams
   max_gamma = progressive_schedule.max
@@ -3933,6 +3935,21 @@ private def simulate_block_surrogate_tree_oracle(weights : ML::GGUF::Qwen35Weigh
   emitted_ids = [] of Int32
 
   while emitted_tokens < gen_tokens
+    if emitted_tokens < warmup_tokens
+      exact_top1 = top1(exact_logits)
+      exact_ids << exact_top1
+      emitted_tokens += 1
+      emitted_ids << exact_top1
+      state_before_last = exact_state.fork
+      last_token = exact_top1
+      pos_last = (prompt_ids.size + emitted_tokens - 1).to_i32
+      if emitted_tokens < gen_tokens
+        exact_logits = logits_with_block_surrogate_policy(weights, exact_top1, pos_last, exact_state,
+          block_start, block_end, adapter, calib_count, false, state_mode)
+      end
+      next
+    end
+
     chunks += 1
     chunk_gamma = Math.min(progressive_schedule[progressive_index], gen_tokens - emitted_tokens)
     schedule_history << chunk_gamma
@@ -3987,20 +4004,148 @@ private def simulate_block_surrogate_tree_oracle(weights : ML::GGUF::Qwen35Weigh
     full_rescue_chunks:     full_rescue_chunks,
     misses:                 misses,
     emitted_tokens:         emitted_tokens,
+    warmup_tokens:          Math.min(warmup_tokens, gen_tokens),
     draft_steps:            draft_steps,
     top1_hits:              top1_hits,
     topk_hits:              topk_hits,
     branch_tokens_rank:     branch_tokens_rank,
     branch_tokens_full:     branch_tokens_full,
     correction_steps:       correction_steps,
-    top1_rate:              emitted_tokens > 0 ? 100.0 * top1_hits / emitted_tokens : 0.0,
-    topk_rate:              emitted_tokens > 0 ? 100.0 * topk_hits / emitted_tokens : 0.0,
-    avg_rank_branch_tokens: emitted_tokens > 0 ? branch_tokens_rank.to_f64 / emitted_tokens : 0.0,
-    avg_full_branch_tokens: emitted_tokens > 0 ? branch_tokens_full.to_f64 / emitted_tokens : 0.0,
+    top1_rate:              draft_steps > 0 ? 100.0 * top1_hits / draft_steps : 0.0,
+    topk_rate:              draft_steps > 0 ? 100.0 * topk_hits / draft_steps : 0.0,
+    avg_rank_branch_tokens: draft_steps > 0 ? branch_tokens_rank.to_f64 / draft_steps : 0.0,
+    avg_full_branch_tokens: draft_steps > 0 ? branch_tokens_full.to_f64 / draft_steps : 0.0,
     schedule_history:       schedule_history,
     exact_ids:              exact_ids,
     emitted_ids:            emitted_ids,
   }
+end
+
+private def simulate_block_surrogate_topk_oracle_calibration(weights : ML::GGUF::Qwen35Weights,
+                                                            prompt_ids : Array(Int32),
+                                                            gen_tokens : Int32,
+                                                            top_k : Int32,
+                                                            train_tokens : Int32?,
+                                                            block_start : Int32,
+                                                            block_end : Int32,
+                                                            adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                                            calib_count : Int32,
+                                                            state_mode : String) : NamedTuple(samples: Int32, train_samples: Int32, test_samples: Int32, best_token_scale: Float64, best_rank_scale: Float64, best_margin_threshold: Float64, train_top1_rate: Float64, train_topk_rate: Float64, train_avg_branch_tokens: Float64, baseline_top1_rate: Float64, baseline_topk_rate: Float64, baseline_avg_branch_tokens: Float64, calibrated_top1_rate: Float64, calibrated_topk_rate: Float64, calibrated_avg_branch_tokens: Float64, margin_gate_rate: Float64, margin_gate_topk_rate: Float64, margin_gate_avg_branch_tokens: Float64, margin_gate_misses: Int32, margin_gate_cost: Float64, baseline_misses: Int32, calibrated_misses: Int32, exact_ids: Array(Int32))
+  raise "block surrogate topK oracle top_k must be >= 2" unless top_k >= 2
+  raise "block surrogate topK oracle top_k must be <= 16" unless top_k <= 16
+  raise "block surrogate topK oracle gen_tokens must be >= 4" unless gen_tokens >= 4
+  raise "block surrogate topK oracle needs a non-empty prompt" if prompt_ids.empty?
+
+  hp = weights.hparams
+  max_seq = prompt_ids.size + gen_tokens + 4
+  exact_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  exact_logits = [] of Float32
+  state_before_last = exact_state.fork
+  last_token = prompt_ids[0]
+  pos_last = 0
+
+  prompt_ids.each_with_index do |token_id, pos|
+    state_before_last = exact_state.fork
+    last_token = token_id
+    pos_last = pos.to_i32
+    exact_logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, exact_state,
+      block_start, block_end, adapter, calib_count, false, state_mode)
+  end
+
+  draft_state = state_before_last.fork
+  draft_logits = logits_with_block_surrogate_policy(weights, last_token, pos_last, draft_state,
+    block_start, block_end, adapter, calib_count, true, state_mode)
+
+  samples = [] of TopKOracleSample
+  exact_ids = [] of Int32
+  gen_tokens.times do |step|
+    exact_top1 = top1(exact_logits)
+    samples << topk_oracle_sample(draft_logits, exact_top1, top_k)
+    exact_ids << exact_top1
+
+    pos_last = (prompt_ids.size + step).to_i32
+    break if step == gen_tokens - 1
+
+    exact_logits = logits_with_block_surrogate_policy(weights, exact_top1, pos_last, exact_state,
+      block_start, block_end, adapter, calib_count, false, state_mode)
+    draft_logits = logits_with_block_surrogate_policy(weights, exact_top1, pos_last, draft_state,
+      block_start, block_end, adapter, calib_count, true, state_mode)
+  end
+
+  requested_train = train_tokens || (samples.size // 2)
+  train_count = requested_train.clamp(1, samples.size - 1)
+  train = samples[0, train_count]
+  test = samples[train_count, samples.size - train_count]
+  biases = train_topk_oracle_biases(train, top_k)
+  zero_token_bias = {} of Int32 => Float64
+  zero_rank_bias = Array(Float64).new(top_k, 0.0)
+  baseline = eval_topk_oracle_samples(test, zero_token_bias, zero_rank_bias, 0.0, 0.0)
+
+  token_scales = [0.0, 0.25, 0.5, 1.0, 2.0]
+  rank_scales = [0.0, 0.25, 0.5, 1.0]
+  best_token_scale = 0.0
+  best_rank_scale = 0.0
+  best_train = eval_topk_oracle_samples(train, biases[:token_bias], biases[:rank_bias], 0.0, 0.0)
+  token_scales.each do |ts|
+    rank_scales.each do |rs|
+      cur = eval_topk_oracle_samples(train, biases[:token_bias], biases[:rank_bias], ts, rs)
+      if cur[:avg_branch_tokens] < best_train[:avg_branch_tokens] ||
+         (cur[:avg_branch_tokens] == best_train[:avg_branch_tokens] && cur[:top1_rate] > best_train[:top1_rate])
+        best_train = cur
+        best_token_scale = ts
+        best_rank_scale = rs
+      end
+    end
+  end
+
+  calibrated = eval_topk_oracle_samples(test, biases[:token_bias], biases[:rank_bias], best_token_scale, best_rank_scale)
+  correction_penalty = top_k.to_f64
+  thresholds = [-1.0] + train.map(&.margin).uniq.sort + [Float64::INFINITY]
+  best_margin_threshold = thresholds[0]
+  best_margin_train = eval_topk_margin_gate(train, best_margin_threshold, correction_penalty)
+  thresholds.each do |threshold|
+    cur = eval_topk_margin_gate(train, threshold, correction_penalty)
+    if cur[:estimated_cost] < best_margin_train[:estimated_cost] ||
+       (cur[:estimated_cost] == best_margin_train[:estimated_cost] && cur[:gated_steps] < best_margin_train[:gated_steps])
+      best_margin_train = cur
+      best_margin_threshold = threshold
+    end
+  end
+  margin_gate = eval_topk_margin_gate(test, best_margin_threshold, correction_penalty)
+
+  {
+    samples:                       samples.size,
+    train_samples:                 train.size,
+    test_samples:                  test.size,
+    best_token_scale:              best_token_scale,
+    best_rank_scale:               best_rank_scale,
+    best_margin_threshold:         best_margin_threshold,
+    train_top1_rate:               best_train[:top1_rate],
+    train_topk_rate:               best_train[:topk_rate],
+    train_avg_branch_tokens:       best_train[:avg_branch_tokens],
+    baseline_top1_rate:            baseline[:top1_rate],
+    baseline_topk_rate:            baseline[:topk_rate],
+    baseline_avg_branch_tokens:    baseline[:avg_branch_tokens],
+    calibrated_top1_rate:          calibrated[:top1_rate],
+    calibrated_topk_rate:          calibrated[:topk_rate],
+    calibrated_avg_branch_tokens:  calibrated[:avg_branch_tokens],
+    margin_gate_rate:              margin_gate[:gate_rate],
+    margin_gate_topk_rate:         margin_gate[:topk_rate],
+    margin_gate_avg_branch_tokens: margin_gate[:avg_branch_tokens],
+    margin_gate_misses:            margin_gate[:misses],
+    margin_gate_cost:              margin_gate[:estimated_cost],
+    baseline_misses:               baseline[:misses],
+    calibrated_misses:             calibrated[:misses],
+    exact_ids:                     exact_ids,
+  }
+end
+
+private def print_block_surrogate_topk_oracle(prefix : String,
+                                              oracle,
+                                              top_k : Int32,
+                                              gen_tokens : Int32) : Nil
+  delta_branch = oracle[:baseline_avg_branch_tokens] - oracle[:calibrated_avg_branch_tokens]
+  puts "#{prefix} top_k=#{top_k} gen_tokens=#{gen_tokens} samples=#{oracle[:samples]} train=#{oracle[:train_samples]} test=#{oracle[:test_samples]} best_token_scale=#{oracle[:best_token_scale]} best_rank_scale=#{oracle[:best_rank_scale]} best_margin_threshold=#{oracle[:best_margin_threshold].round(4)} train_top1=#{oracle[:train_top1_rate].round(2)}% train_topk=#{oracle[:train_topk_rate].round(2)}% train_avg_branch=#{oracle[:train_avg_branch_tokens].round(3)} baseline_top1=#{oracle[:baseline_top1_rate].round(2)}% baseline_topk=#{oracle[:baseline_topk_rate].round(2)}% baseline_avg_branch=#{oracle[:baseline_avg_branch_tokens].round(3)} baseline_misses=#{oracle[:baseline_misses]} calibrated_top1=#{oracle[:calibrated_top1_rate].round(2)}% calibrated_topk=#{oracle[:calibrated_topk_rate].round(2)}% calibrated_avg_branch=#{oracle[:calibrated_avg_branch_tokens].round(3)} calibrated_misses=#{oracle[:calibrated_misses]} delta_avg_branch=#{delta_branch.round(3)} margin_gate_rate=#{oracle[:margin_gate_rate].round(2)}% margin_gate_topk=#{oracle[:margin_gate_topk_rate].round(2)}% margin_gate_avg_branch=#{oracle[:margin_gate_avg_branch_tokens].round(3)} margin_gate_misses=#{oracle[:margin_gate_misses]} margin_gate_cost=#{oracle[:margin_gate_cost].round(3)} exact_ids=#{oracle[:exact_ids].join(',')}"
 end
 
 private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRow),
@@ -4019,7 +4164,10 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
                                              gammas : Array(Int32),
                                              state_mode : String,
                                              tree_rows : Array(BlockSurrogateTreeSuiteRow),
-                                             tree_top_k : Int32?) : Nil
+                                             tree_top_k : Int32?,
+                                             tree_warmup_tokens : Int32,
+                                             topk_oracle_k : Int32?,
+                                             topk_oracle_train_tokens : Int32?) : Nil
   block = layer_block_label(block_start, block_end)
   gammas.each do |gamma|
     spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, gen_tokens, gamma,
@@ -4058,9 +4206,9 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
     }
     if top_k = tree_top_k
       tree = simulate_block_surrogate_tree_oracle(weights, token_ids, gen_tokens, top_k, [gamma],
-        block_start, block_end, adapter, calib_count, state_mode)
+        block_start, block_end, adapter, calib_count, state_mode, tree_warmup_tokens)
       parity = tree[:exact_ids] == tree[:emitted_ids]
-      puts "block_surrogate_tree_oracle prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} top_k=#{top_k} gamma=#{gamma} gen_tokens=#{gen_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+      puts "block_surrogate_tree_oracle prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} top_k=#{top_k} gamma=#{gamma} gen_tokens=#{gen_tokens} warmup_tokens=#{tree[:warmup_tokens]} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
       tree_rows << {
         prompt:                 prompt_name,
         block:                  block,
@@ -4068,6 +4216,7 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
         rank:                   rank,
         gamma:                  gamma,
         top_k:                  top_k,
+        warmup_tokens:          tree[:warmup_tokens],
         parity:                 parity,
         full_rescue_chunks:     tree[:full_rescue_chunks],
         chunks:                 tree[:chunks],
@@ -4084,6 +4233,12 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
         rel_rmse:               stats[:rel_rmse],
       }
     end
+  end
+  if top_k = topk_oracle_k
+    oracle = simulate_block_surrogate_topk_oracle_calibration(weights, token_ids, gen_tokens, top_k,
+      topk_oracle_train_tokens, block_start, block_end, adapter, calib_count, state_mode)
+    print_block_surrogate_topk_oracle("block_surrogate_topk_oracle prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters}",
+      oracle, top_k, gen_tokens)
   end
 end
 
@@ -4196,7 +4351,7 @@ private def print_block_surrogate_tree_scoreboard(rows : Array(BlockSurrogateTre
 
   groups = Hash(String, Array(BlockSurrogateTreeSuiteRow)).new { |h, k| h[k] = [] of BlockSurrogateTreeSuiteRow }
   rows.each do |row|
-    groups["#{row[:block]}|#{row[:mode]}|#{row[:rank]}|#{row[:gamma]}|#{row[:top_k]}"] << row
+    groups["#{row[:block]}|#{row[:mode]}|#{row[:rank]}|#{row[:gamma]}|#{row[:top_k]}|#{row[:warmup_tokens]}"] << row
   end
 
   summaries = [] of NamedTuple(
@@ -4257,10 +4412,10 @@ private def print_block_surrogate_tree_scoreboard(rows : Array(BlockSurrogateTre
 
   ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
   puts "block_surrogate_tree_aggregate groups=#{summaries.size} limit=#{limit}"
-  puts "rank block mode adapter_rank gamma top_k prompts parity_all top1_mean top1_min topk_mean topk_min misses correction_steps draft_steps full_rescue_chunks chunks avg_rank_branch_tokens avg_full_branch_tokens hidden_cos_mean rel_rmse_mean score"
+  puts "rank block mode adapter_rank gamma top_k warmup prompts parity_all top1_mean top1_min topk_mean topk_min misses correction_steps draft_steps full_rescue_chunks chunks avg_rank_branch_tokens avg_full_branch_tokens hidden_cos_mean rel_rmse_mean score"
   ranked.first(limit).each_with_index do |row, i|
-    block, mode, adapter_rank, gamma, top_k = row[:key].split('|')
-    puts "#{i + 1} #{block} #{mode} #{adapter_rank} #{gamma} #{top_k} #{row[:prompts]} #{row[:parity_all]} #{row[:top1_mean].round(2)} #{row[:top1_min].round(2)} #{row[:topk_mean].round(2)} #{row[:topk_min].round(2)} #{row[:misses]} #{row[:correction_steps]} #{row[:draft_steps]} #{row[:full_rescue_chunks]} #{row[:chunks]} #{row[:avg_rank_branch_tokens].round(3)} #{row[:avg_full_branch_tokens].round(3)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse_mean].round(6)} #{row[:score].round(4)}"
+    block, mode, adapter_rank, gamma, top_k, warmup = row[:key].split('|')
+    puts "#{i + 1} #{block} #{mode} #{adapter_rank} #{gamma} #{top_k} #{warmup} #{row[:prompts]} #{row[:parity_all]} #{row[:top1_mean].round(2)} #{row[:top1_min].round(2)} #{row[:topk_mean].round(2)} #{row[:topk_min].round(2)} #{row[:misses]} #{row[:correction_steps]} #{row[:draft_steps]} #{row[:full_rescue_chunks]} #{row[:chunks]} #{row[:avg_rank_branch_tokens].round(3)} #{row[:avg_full_branch_tokens].round(3)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse_mean].round(6)} #{row[:score].round(4)}"
   end
 end
 
@@ -4275,7 +4430,10 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
                                       cluster_count : Int32,
                                       state_mode : String,
                                       oracle_gen_calib : Int32,
-                                      tree_top_k : Int32?) : Array(BlockSurrogateSuiteRow)
+                                      tree_top_k : Int32?,
+                                      tree_warmup_tokens : Int32,
+                                      topk_oracle_k : Int32?,
+                                      topk_oracle_train_tokens : Int32?) : Array(BlockSurrogateSuiteRow)
   rows = [] of BlockSurrogateSuiteRow
   tree_rows = [] of BlockSurrogateTreeSuiteRow
   token_sets.each do |prompt_case|
@@ -4305,7 +4463,7 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=global rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
         adapter, stats, "global", block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode,
-        tree_rows, tree_top_k)
+        tree_rows, tree_top_k, tree_warmup_tokens, topk_oracle_k, topk_oracle_train_tokens)
 
       next unless cluster_count > 1
 
@@ -4316,7 +4474,7 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} train_ms=#{mix_train_ms.round(3)}"
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
         mixture, mix_stats, "mixture", block_rank, mixture.centroids.size, prompt_calib_count, gen_tokens,
-        gammas, state_mode, tree_rows, tree_top_k)
+        gammas, state_mode, tree_rows, tree_top_k, tree_warmup_tokens, topk_oracle_k, topk_oracle_train_tokens)
     end
   end
 
@@ -7296,6 +7454,9 @@ simulate_block_surrogate_suite_blocks = [] of LayerBlock
 simulate_block_surrogate_suite_prompts = [] of NamedPrompt
 simulate_block_surrogate_oracle_gen_calib = 0
 simulate_block_surrogate_tree_oracle_k : Int32? = nil
+simulate_block_surrogate_tree_warmup_tokens = 0
+simulate_block_surrogate_topk_oracle_k : Int32? = nil
+simulate_block_surrogate_topk_oracle_train_tokens : Int32? = nil
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -7428,6 +7589,9 @@ OptionParser.parse(ARGV) do |p|
   p.on("--block-surrogate-oracle-gen-calib=N", "Probe-only upper bound: add N exact generated-token block samples to training while still drafting from the original prompt boundary") { |v| simulate_block_surrogate_oracle_gen_calib = v.to_i }
   p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
   p.on("--simulate-block-surrogate-tree-oracle=K", "Run block-surrogate top-K tree oracle using --simulate-block-surrogate-self-spec-gammas as fixed chunk schedules") { |v| simulate_block_surrogate_tree_oracle_k = v.to_i }
+  p.on("--simulate-block-surrogate-tree-warmup=N", "Decode the first N generated tokens exactly before enabling block-surrogate tree oracle") { |v| simulate_block_surrogate_tree_warmup_tokens = v.to_i }
+  p.on("--simulate-block-surrogate-topk-oracle=K", "Train/test a lightweight token/rank-bias reranker inside block-surrogate draft top-K") { |v| simulate_block_surrogate_topk_oracle_k = v.to_i }
+  p.on("--simulate-block-surrogate-topk-oracle-train-tokens=N", "Training samples from the start of --simulate-generate for --simulate-block-surrogate-topk-oracle") { |v| simulate_block_surrogate_topk_oracle_train_tokens = v.to_i }
   p.on("--simulate-block-surrogate-suite-blocks=LIST", "Run one-process block-surrogate suite over blocks; use 24-30 for singletons or START:END items") { |v| simulate_block_surrogate_suite_blocks = parse_layer_block_list(v) }
   p.on("--simulate-block-surrogate-suite-prompt=NAME::TEXT", "Additional prompt for block-surrogate suite; main --prompt is always included") do |v|
     add_block_surrogate_suite_prompt.call(v)
@@ -7556,6 +7720,15 @@ if tree_k = simulate_block_surrogate_tree_oracle_k
   raise "--simulate-block-surrogate-tree-oracle requires --simulate-block-surrogate-self-spec-gammas=LIST as fixed schedules" if simulate_block_surrogate_self_spec_gammas.empty?
   raise "--simulate-block-surrogate-tree-oracle requires --simulate-generate=N" unless simulate_generate_tokens > 0
 end
+raise "--simulate-block-surrogate-tree-warmup must be non-negative" unless simulate_block_surrogate_tree_warmup_tokens >= 0
+if topk_oracle_k = simulate_block_surrogate_topk_oracle_k
+  raise "--simulate-block-surrogate-topk-oracle requires K between 2 and 16" unless topk_oracle_k >= 2 && topk_oracle_k <= 16
+  raise "--simulate-block-surrogate-topk-oracle requires --simulate-generate=N>=4" unless simulate_generate_tokens >= 4
+  raise "--simulate-block-surrogate-topk-oracle requires --simulate-block-residual-surrogate or --simulate-block-surrogate-suite-blocks" unless (simulate_block_surrogate_start && simulate_block_surrogate_end) || !simulate_block_surrogate_suite_blocks.empty?
+end
+if train_tokens = simulate_block_surrogate_topk_oracle_train_tokens
+  raise "--simulate-block-surrogate-topk-oracle-train-tokens must be positive" unless train_tokens > 0
+end
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
@@ -7596,7 +7769,8 @@ unless simulate_block_surrogate_suite_blocks.empty?
     block_rank, pca_iters, calib_tokens, simulate_generate_tokens,
     simulate_block_surrogate_self_spec_gammas, simulate_block_surrogate_clusters,
     simulate_block_surrogate_state_mode, simulate_block_surrogate_oracle_gen_calib,
-    simulate_block_surrogate_tree_oracle_k)
+    simulate_block_surrogate_tree_oracle_k, simulate_block_surrogate_tree_warmup_tokens,
+    simulate_block_surrogate_topk_oracle_k, simulate_block_surrogate_topk_oracle_train_tokens)
 end
 
 if block_start = simulate_block_surrogate_start
@@ -7632,10 +7806,18 @@ if block_start = simulate_block_surrogate_start
       puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
       if top_k = simulate_block_surrogate_tree_oracle_k
         tree = simulate_block_surrogate_tree_oracle(weights, token_ids, simulate_generate_tokens, top_k, [gamma],
-          block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
+          block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode,
+          simulate_block_surrogate_tree_warmup_tokens)
         parity = tree[:exact_ids] == tree[:emitted_ids]
-        puts "block_surrogate_tree_oracle block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} top_k=#{top_k} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+        puts "block_surrogate_tree_oracle block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} top_k=#{top_k} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} warmup_tokens=#{tree[:warmup_tokens]} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
       end
+    end
+    if top_k = simulate_block_surrogate_topk_oracle_k
+      oracle = simulate_block_surrogate_topk_oracle_calibration(weights, token_ids, simulate_generate_tokens, top_k,
+        simulate_block_surrogate_topk_oracle_train_tokens, block_start, block_end, mixture, calib_count,
+        simulate_block_surrogate_state_mode)
+      print_block_surrogate_topk_oracle("block_surrogate_topk_oracle block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size}",
+        oracle, top_k, simulate_generate_tokens)
     end
   end
   if simulate_block_surrogate_policy
@@ -7651,10 +7833,18 @@ if block_start = simulate_block_surrogate_start
     puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
     if top_k = simulate_block_surrogate_tree_oracle_k
       tree = simulate_block_surrogate_tree_oracle(weights, token_ids, simulate_generate_tokens, top_k, [gamma],
-        block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
+        block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode,
+        simulate_block_surrogate_tree_warmup_tokens)
       parity = tree[:exact_ids] == tree[:emitted_ids]
-      puts "block_surrogate_tree_oracle block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 top_k=#{top_k} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+      puts "block_surrogate_tree_oracle block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 top_k=#{top_k} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} warmup_tokens=#{tree[:warmup_tokens]} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
     end
+  end
+  if top_k = simulate_block_surrogate_topk_oracle_k
+    oracle = simulate_block_surrogate_topk_oracle_calibration(weights, token_ids, simulate_generate_tokens, top_k,
+      simulate_block_surrogate_topk_oracle_train_tokens, block_start, block_end, block_adapter, calib_count,
+      simulate_block_surrogate_state_mode)
+    print_block_surrogate_topk_oracle("block_surrogate_topk_oracle block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1",
+      oracle, top_k, simulate_generate_tokens)
   end
 end
 

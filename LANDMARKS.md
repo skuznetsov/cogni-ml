@@ -6275,3 +6275,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "static block residual as the draft body" to "static block residual as one feature/candidate source for a branch-ranked proposal system."
 - maieutic: Fusing the surrogate only lowers the skipped-block cost; it does not eliminate the remaining exact layers or the branch verifier cost.
 - adversary: This is an oracle upper bound, not production tree scheduling. A real branch implementation must account for branch-state copies, rank-ordered verifier work, and failure fallback before any speed claim.
+
+### [LM-QWEN35-BLOCK-SURROGATE-WARMUP-GATE-1] Exact warmup rescues main-prompt block tree but not code prompts
+**status:** verified
+**trust:** {F:0.86, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-topk-oracle=K` / `--simulate-block-surrogate-topk-oracle-train-tokens=N` train and test a lightweight token/rank-bias reranker inside block-surrogate top-K proposals. `--simulate-block-surrogate-tree-warmup=N` decodes the first N generated tokens exactly before enabling the block-surrogate tree oracle."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_warmup_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_warmup_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` and spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_warmup_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-04-30
+  verified_at: 2026-04-30
+  decay_trigger: block-surrogate topK oracle, warmup semantics, top2 spec, or decode position accounting changes
+- claim: "On the main prompt, `25:28/rank32/top5/gen16` has one cold-start miss without warmup, but exact warmup of one generated token makes the remaining drafted span top-5 clean: warmup1 has `topK=100%`, `misses=0`, `draft_steps=15`, `top1=66.67%`, and average rank-ordered branch cost `1.733`. Warmup2/4/8 are also clean with average rank branch `1.571/1.583/1.5`."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup1_main_gen16_20260430_193412.log`, `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup2_main_gen16_20260430_192833.log`, `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup4_main_gen16_20260430_192242.log`, `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup8_main_gen16_20260430_191656.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt text, generated length, warmup count, rank/calibration, top_k, or block policy changes
+- claim: "The simple token/rank-bias reranker did not improve the main-prompt held-out branch cost. With train8/test8, top5 held-out was already `100%` with average branch `1.5`; K8 and K16 still failed to recover the cold miss in the train half, and K16 slightly worsened held-out average branch (`1.625`)."
+  source: `/tmp/qwen35_block_topk_25_28_rank32_k5_train8_main_gen16_20260430_190247.log`, `/tmp/qwen35_block_topk_25_28_rank32_k8_train8_main_gen16_20260430_190543.log`, `/tmp/qwen35_block_topk_25_28_rank32_k16_train8_main_gen16_20260430_190831.log`
+  verified_at: 2026-04-30
+  decay_trigger: reranker feature set, train/test split, prompt text, generated length, or top_k changes
+- claim: "The code prompt refutes global promotion of the warmup1 static block tree. With `25:28/rank32/top5/warmup1/gen16`, top-K coverage is only `86.67%` with `2` misses; increasing to top16 still leaves `1` miss (`93.33%`) and raises average rank branch to `2.467`."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup1_code_gen16_20260430_193958.log`, `/tmp/qwen35_block_tree_25_28_rank32_k16_warmup1_code_gen16_20260430_194546.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt class, generated length, warmup count, top_k, rank/calibration, or block policy changes
+**decision:** Keep exact warmup + block-surrogate tree as a prompt/risk-routed candidate, not a default route. The next useful branch is a route-risk classifier or additive candidate source for code-like spans; increasing K or applying a simple token/rank reranker is insufficient.
+**quadrumvirate:**
+- cassandra: Main-prompt success was a cold-start issue, but the code prompt shows a deeper candidate-distribution failure.
+- daedalus: The correct frame is "when to enable this candidate source" rather than "make static block residual universally accurate."
+- maieutic: Exact warmup buys stability only when the later candidate distribution is already close; it does not fix prompts where exact ids are outside top16.
+- adversary: These are CPU/probe oracle results. A production claim still needs real branch-state verifier cost, multi-prompt gates, and same-run comparison to plain exact decode.
