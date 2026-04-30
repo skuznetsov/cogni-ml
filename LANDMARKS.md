@@ -5971,3 +5971,51 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   verified_at: 2026-04-29
   decay_trigger: reject controller, final-tail semantics, verifier replay semantics, paired-serial boundary, or exact state ownership changes
   adversary_update: This only fixes normal reject final-tail overcount. Staged/tree-specific branches already had their own final-token guards, but should be re-audited if their replay code changes.
+
+### [LM-QWEN35-SELF-DRAFT-BLOCK-SURROGATE-PLAN] Same-weight self-draft should move to block-level math
+**status:** proposed
+**trust:** {F:0.55, G:medium, R:0.45}
+**context:** ml (same-weight self-speculative decode)
+**decision:** The next self-draft branch should test cheap mathematical proposal bodies over layer bands, not another external 0.8B-style drafter and not more local micro-tuning of the current low-rank route.
+**evidence:**
+- claim: "The current cost table says verifier is no longer the primary limiter: known-span exact verifier can run near `k16≈8.021 ms/tok` while serial decode is `≈21.679 ms/tok`, but low-rank GPU-chain proposal remains `≈21.592 ms/tok`."
+  source: local `--simulate-cost-truth-table=1,2,4,8,16` run recorded in session notes before this landmark
+  verified_at: 2026-04-29
+  decay_trigger: cost-truth harness, self-spec scheduler, host load, selected prompt, rank/layer set, or model file changes
+- claim: "PCA-updown and projected-K DeltaNet show compressed subspaces exist, but free-run drift and route sensitivity mean cosine/teacher-forced quality is insufficient; acceptance, parity, and plain-speedup must be the promotion metrics."
+  source: prior `pca-updown`, route-scoreboard, long-reasoning, and cost-truth landmarks in this file
+  verified_at: 2026-04-29
+  decay_trigger: prompt suite, route policy, adapter calibration, projected-K fallback semantics, or verifier implementation changes
+**quadrumvirate:**
+- cassandra: Local low-rank/kernel tweaks likely yield only incremental gains; the likely failure mode for block math is teacher-forced quality that collapses in free-run.
+- daedalus: Frame shift from "accelerate one layer" to "replace a band of layers with a cheap proposal surrogate that the exact verifier can accept or reject."
+- maieutic: The draft does not have to reproduce Qwen's architecture, only propose likely exact-greedy tokens cheaply enough.
+- adversary: Static block hidden drift is only a first falsifier; it is not a production route because recurrent/KV state replacement and exact self-spec acceptance are still unproven.
+**next_tests:**
+- `--simulate-block-residual-surrogate=START:END --block-surrogate-rank=R` for early and late layer bands.
+- Mixture PCA-updown adapters after the static block gate, then state-aware/free-run self-spec only if hidden drift is small.
+- Score all candidates by exact self-spec `acceptance`, `parity`, and `plain_speedup`, not hidden cosine alone.
+
+### [LM-QWEN35-BLOCK-SURROGATE-STATIC-GATE-1] Simple static block residual maps are weak on first 9B smokes
+**status:** verified
+**trust:** {F:0.82, G:low, R:0.82}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-residual-surrogate` now exists as a CPU-only probe. It collects `h_in` and `h_out` for a contiguous layer block on the exact teacher-forced trajectory, trains a low-rank residual map, and reports held-out hidden drift. The probe is intentionally not a production draft route because it does not replace or update recurrent/KV state."
+  source: code inspection plus build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_surrogate_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_surrogate_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: block-surrogate probe implementation, layer forward semantics, or hidden-state capture boundary changes
+- claim: "First early-block smoke is negative for a single global low-rank residual map: Qwen3.5-9B block `0:2`, `tokens=16`, `calib=8`, `rank=8`, `pca_iters=4` reports `hidden_cos_mean=0.87877045`, `hidden_cos_min=0.84190077`, `rel_rmse=0.52917588`, and `delta_rel_rmse=0.53329797`."
+  source: `/tmp/qwen35_block_surrogate_rank8_smoke.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, PCA iterations, model file, or block selection changes
+- claim: "First late-block smoke is also weak at tiny calibration: Qwen3.5-9B block `24:30`, `tokens=12`, `calib=6`, `rank=4`, `pca_iters=2` reports `hidden_cos_mean=0.83147114`, `hidden_cos_min=0.79578851`, `rel_rmse=0.55382686`, and `delta_rel_rmse=0.75094524`."
+  source: `/tmp/qwen35_block_surrogate_late_smoke.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, PCA iterations, model file, or block selection changes
+- claim: "Focused regression spec still passes after adding the probe."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_surrogate_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
+  verified_at: 2026-04-29
+  decay_trigger: top2 spec, probe CLI setup, Metal bridge, or decode top2 path changes
+**decision:** Do not spend Metal/kernel work on a single global static block-residual map. The next mathematically coherent branch is route-local/mixture block adapters or state-aware free-run self-spec measurement, where acceptance rather than hidden cosine decides usefulness.
+**adversary_update:** This is a narrow negative result, not a refutation of block-level self-drafting. The calibration set is tiny and the probe is static/teacher-forced; a mixture or online risk-gated route may still work.

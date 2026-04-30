@@ -16,6 +16,7 @@ private alias BasisSet = Array(Array(Array(Float64)))
 private alias LayerVectorMap = Hash(Int32, BasisSet)
 private alias LayerBasisMap = Hash(Int32, BasisSet)
 private alias FFNBasisMap = Hash(Int32, Array(Array(Float64)))
+private alias BlockResidualSample = NamedTuple(inp: Array(Float64), out: Array(Float64), delta: Array(Float64))
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
 
@@ -82,6 +83,25 @@ private struct FFNUpDownAdapter
 end
 
 private alias FFNUpDownAdapterMap = Hash(Int32, FFNUpDownAdapter)
+
+private struct BlockResidualSurrogate
+  getter block_start : Int32
+  getter block_end : Int32
+  getter x_mean : Array(Float64)
+  getter delta_mean : Array(Float64)
+  getter input_basis : Array(Array(Float64))
+  getter delta_basis : Array(Array(Float64))
+  getter coeff_weights : Array(Array(Float64))
+
+  def initialize(@block_start : Int32,
+                 @block_end : Int32,
+                 @x_mean : Array(Float64),
+                 @delta_mean : Array(Float64),
+                 @input_basis : Array(Array(Float64)),
+                 @delta_basis : Array(Array(Float64)),
+                 @coeff_weights : Array(Array(Float64)))
+  end
+end
 
 private class WbaTrace
   @base : Time::Instant
@@ -2285,6 +2305,113 @@ private def token_ids_for_prompt(tok, prompt : String, tokens_limit : Int32) : A
   token_ids[0, tokens_limit]
 end
 
+private def collect_block_residual_samples(weights : ML::GGUF::Qwen35Weights,
+                                           token_ids : Array(Int32),
+                                           block_start : Int32,
+                                           block_end : Int32) : Array(BlockResidualSample)
+  hp = weights.hparams
+  raise "block start must be within layers" unless block_start >= 0 && block_start < weights.layers.size
+  raise "block end must be within layers" unless block_end >= 0 && block_end < weights.layers.size
+  raise "block start must be <= block end" unless block_start <= block_end
+
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: token_ids.size + 2)
+  samples = [] of BlockResidualSample
+  token_ids.each_with_index do |token_id, pos|
+    x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+    block_in = nil.as(Array(Float32)?)
+    block_out = nil.as(Array(Float32)?)
+
+    weights.layers.each_with_index do |layer, il|
+      block_in = x.dup if il == block_start
+      case layer
+      in ML::GGUF::Qwen35FullAttnWeights
+        x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(x, pos.to_i32, layer, state.layers[il], hp, state.max_seq)
+      in ML::GGUF::Qwen35RecurrentWeights
+        x = recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
+      end
+      if il == block_end
+        block_out = x.dup
+        break
+      end
+    end
+
+    inp_vec = block_in || raise "block input was not captured"
+    out_vec = block_out || raise "block output was not captured"
+    samples << {
+      inp:   inp_vec.map(&.to_f64),
+      out:   out_vec.map(&.to_f64),
+      delta: Array(Float64).new(out_vec.size) { |i| out_vec[i].to_f64 - inp_vec[i].to_f64 },
+    }
+  end
+  samples
+end
+
+private def cosine64(a : Array(Float64), b : Array(Float64)) : Float64
+  dot = 0.0
+  aa = 0.0
+  bb = 0.0
+  a.size.times do |i|
+    dot += a[i] * b[i]
+    aa += a[i] * a[i]
+    bb += b[i] * b[i]
+  end
+  return 0.0 if aa <= 0.0 || bb <= 0.0
+
+  dot / Math.sqrt(aa * bb)
+end
+
+private def block_residual_surrogate_stats(samples : Array(BlockResidualSample),
+                                           adapter : BlockResidualSurrogate,
+                                           eval_start : Int32)
+  raise "block surrogate needs held-out samples" unless eval_start < samples.size
+  heldout = samples[eval_start, samples.size - eval_start]
+  dim = heldout[0][:out].size
+  cos_sum = 0.0
+  delta_cos_sum = 0.0
+  min_cos = Float64::INFINITY
+  err_sq = 0.0
+  delta_err_sq = 0.0
+  exact_sq = 0.0
+  delta_sq = 0.0
+  max_delta = 0.0
+
+  heldout.each do |sample|
+    pred_delta = predict_block_residual(adapter, sample[:inp])
+    approx_out = Array(Float64).new(dim) { |i| sample[:inp][i] + pred_delta[i] }
+    cos = cosine64(approx_out, sample[:out])
+    delta_cos = cosine64(pred_delta, sample[:delta])
+    cos_sum += cos
+    delta_cos_sum += delta_cos
+    min_cos = cos if cos < min_cos
+    dim.times do |i|
+      out_i = sample[:out][i]
+      delta_i = sample[:delta][i]
+      err = approx_out[i] - out_i
+      delta_err = pred_delta[i] - delta_i
+      abs_err = err.abs
+      max_delta = abs_err if abs_err > max_delta
+      err_sq += err * err
+      delta_err_sq += delta_err * delta_err
+      exact_sq += out_i * out_i
+      delta_sq += delta_i * delta_i
+    end
+  end
+
+  count = heldout.size
+  denom = Math.max(1, count * dim)
+  {
+    count:           count,
+    mean_cos:        cos_sum / count,
+    min_cos:         min_cos,
+    mean_delta_cos:  delta_cos_sum / count,
+    rmse:            Math.sqrt(err_sq / denom),
+    rel_rmse:        exact_sq > 0.0 ? Math.sqrt(err_sq / exact_sq) : 0.0,
+    delta_rel_rmse:  delta_sq > 0.0 ? Math.sqrt(delta_err_sq / delta_sq) : 0.0,
+    residual_energy: exact_sq > 0.0 ? Math.sqrt(delta_sq / exact_sq) : 0.0,
+    max_delta:       max_delta,
+  }
+end
+
 private def ffn_activation_vectors_for_token_sets(weights : ML::GGUF::Qwen35Weights,
                                                   token_sets : Array(Array(Int32)),
                                                   layer_indices : Array(Int32),
@@ -2370,6 +2497,105 @@ private def solve_linear_system(a_in : Array(Array(Float64)), b_in : Array(Float
     end
   end
   b
+end
+
+private def mean_vector(vectors : Array(Array(Float64))) : Array(Float64)
+  raise "need at least one vector" if vectors.empty?
+  dim = vectors[0].size
+  mean = Array(Float64).new(dim, 0.0)
+  vectors.each do |v|
+    raise "vector dimension mismatch" unless v.size == dim
+    dim.times { |d| mean[d] += v[d] }
+  end
+  dim.times { |d| mean[d] /= vectors.size }
+  mean
+end
+
+private def centered_vectors(vectors : Array(Array(Float64)), mean : Array(Float64)) : Array(Array(Float64))
+  vectors.map do |v|
+    raise "vector dimension mismatch" unless v.size == mean.size
+    Array(Float64).new(v.size) { |d| v[d] - mean[d] }
+  end
+end
+
+private def train_block_residual_surrogate(samples : Array(BlockResidualSample),
+                                           block_start : Int32,
+                                           block_end : Int32,
+                                           rank : Int32,
+                                           pca_iters : Int32,
+                                           ridge : Float64 = 1.0e-3) : BlockResidualSurrogate
+  raise "block surrogate rank must be positive" unless rank > 0
+  raise "need block residual samples" if samples.empty?
+
+  inputs = samples.map { |sample| sample[:inp] }
+  deltas = samples.map { |sample| sample[:delta] }
+  x_mean = mean_vector(inputs)
+  delta_mean = mean_vector(deltas)
+  centered_inputs = centered_vectors(inputs, x_mean)
+  centered_deltas = centered_vectors(deltas, delta_mean)
+  input_basis = pca_basis(centered_inputs, rank, pca_iters)
+  delta_basis = pca_basis(centered_deltas, rank, pca_iters)
+  input_rank = Math.min(rank, input_basis.size)
+  delta_rank = Math.min(rank, delta_basis.size)
+  raise "block surrogate needs non-empty input and delta PCA bases" unless input_rank > 0 && delta_rank > 0
+
+  x_coeffs = Array.new(samples.size) { Array(Float64).new(input_rank, 0.0) }
+  y_coeffs = Array.new(samples.size) { Array(Float64).new(delta_rank, 0.0) }
+  samples.each_with_index do |sample, si|
+    input_rank.times { |i| x_coeffs[si][i] = dot(centered_inputs[si], input_basis[i]) }
+    delta_rank.times { |j| y_coeffs[si][j] = dot(centered_deltas[si], delta_basis[j]) }
+  end
+
+  xtx = Array.new(input_rank) { Array(Float64).new(input_rank, 0.0) }
+  input_rank.times do |i|
+    i.upto(input_rank - 1) do |k|
+      acc = 0.0
+      samples.size.times { |si| acc += x_coeffs[si][i] * x_coeffs[si][k] }
+      xtx[i][k] = acc
+      xtx[k][i] = acc
+    end
+    xtx[i][i] += ridge
+  end
+
+  coeff_weights = Array.new(input_rank) { Array(Float64).new(delta_rank, 0.0) }
+  delta_rank.times do |j|
+    xty = Array(Float64).new(input_rank, 0.0)
+    input_rank.times do |i|
+      samples.size.times { |si| xty[i] += x_coeffs[si][i] * y_coeffs[si][j] }
+    end
+    solution = solve_linear_system(xtx, xty)
+    input_rank.times { |i| coeff_weights[i][j] = solution[i] }
+  end
+
+  BlockResidualSurrogate.new(block_start, block_end, x_mean, delta_mean,
+    input_basis[0, input_rank], delta_basis[0, delta_rank], coeff_weights)
+end
+
+private def predict_block_residual(adapter : BlockResidualSurrogate, inp : Array(Float64)) : Array(Float64)
+  raise "block surrogate input dimension mismatch" unless inp.size == adapter.x_mean.size
+  input_rank = adapter.input_basis.size
+  delta_rank = adapter.delta_basis.size
+  x_coeff = Array(Float64).new(input_rank, 0.0)
+  input_rank.times do |i|
+    basis = adapter.input_basis[i]
+    acc = 0.0
+    inp.size.times { |d| acc += (inp[d] - adapter.x_mean[d]) * basis[d] }
+    x_coeff[i] = acc
+  end
+
+  y_coeff = Array(Float64).new(delta_rank, 0.0)
+  input_rank.times do |i|
+    row = adapter.coeff_weights[i]
+    delta_rank.times { |j| y_coeff[j] += x_coeff[i] * row[j] }
+  end
+
+  out = adapter.delta_mean.dup
+  delta_rank.times do |j|
+    basis = adapter.delta_basis[j]
+    coeff = y_coeff[j]
+    out.size.times { |d| out[d] += coeff * basis[d] }
+  end
+  out
 end
 
 private def train_ffn_updown_adapter(samples : Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))),
@@ -3851,6 +4077,28 @@ end
 
 private def parse_int_list(value : String) : Array(Int32)
   value.split(',').map(&.strip).reject(&.empty?).map(&.to_i)
+end
+
+private def parse_layer_block(value : String)
+  raw = value.strip
+  if raw.includes?(":")
+    parts = raw.split(':').map(&.strip)
+    raise "layer block expects START:END" unless parts.size == 2
+    start_layer = parts[0].to_i
+    end_layer = parts[1].to_i
+  elsif raw.includes?("..")
+    parts = raw.split("..").map(&.strip)
+    raise "layer block expects START..END" unless parts.size == 2
+    start_layer = parts[0].to_i
+    end_layer = parts[1].to_i
+  else
+    layers = parse_int_list(raw)
+    raise "layer block list must not be empty" if layers.empty?
+    start_layer = layers.min
+    end_layer = layers.max
+  end
+  raise "layer block start must be <= end" unless start_layer <= end_layer
+  {start: start_layer.to_i32, end: end_layer.to_i32}
 end
 
 private def cheap_draft_variant_valid?(variant : String) : Bool
@@ -6005,6 +6253,9 @@ simulate_exact_verifier_ltp = false
 simulate_cost_truth_chunks = [] of Int32
 simulate_cost_truth_updown_rank : Int32? = nil
 simulate_cost_truth_updown_layers = [] of Int32
+simulate_block_surrogate_start : Int32? = nil
+simulate_block_surrogate_end : Int32? = nil
+simulate_block_surrogate_rank : Int32? = nil
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -6113,6 +6364,12 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-cost-truth-table=LIST", "Print normalized cost table for exact decode, chunk verifier, low-rank draft, and optional pca-updown draft over chunk sizes") { |v| simulate_cost_truth_chunks = parse_int_list(v) }
   p.on("--simulate-cost-truth-updown=R", "Include resident FFN pca-updown rank R in --simulate-cost-truth-table") { |v| simulate_cost_truth_updown_rank = v.to_i }
   p.on("--simulate-cost-truth-updown-layers=LIST", "Apply pca-updown cost-table rows only to the listed low-rank recurrent draft layers") { |v| simulate_cost_truth_updown_layers = parse_int_list(v) }
+  p.on("--simulate-block-residual-surrogate=START:END", "Probe a static low-rank residual surrogate for a contiguous layer block on exact teacher-forced trajectory") do |v|
+    block = parse_layer_block(v)
+    simulate_block_surrogate_start = block[:start]
+    simulate_block_surrogate_end = block[:end]
+  end
+  p.on("--block-surrogate-rank=N", "Rank for --simulate-block-residual-surrogate; defaults to --simulate-logits-rank or max --ranks") { |v| simulate_block_surrogate_rank = v.to_i }
   p.on("--simulate-lowrank-metal-chunk-thread-overlap", "Overlap one async low-rank layer chunk with chunk-major verifier in a worker thread") { simulate_lowrank_metal_chunk_thread_overlap = true }
   p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
@@ -6208,6 +6465,9 @@ if !simulate_cost_truth_chunks.empty?
   raise "--simulate-cost-truth-table requires --simulate-logits-rank" if simulate_logit_rank.nil?
   raise "--simulate-cost-truth-table requires --simulate-logits-layers" if simulate_logit_layers.empty?
 end
+if simulate_block_surrogate_start || simulate_block_surrogate_end
+  raise "--simulate-block-residual-surrogate must set both start and end" unless simulate_block_surrogate_start && simulate_block_surrogate_end
+end
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
@@ -6233,6 +6493,22 @@ puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.joi
 puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first calib_tokens; reports held-out L2 residual for normalized K vectors"
 puts basis_rank_note(bases, max_rank)
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
+
+if block_start = simulate_block_surrogate_start
+  block_end = simulate_block_surrogate_end.not_nil!
+  block_rank = simulate_block_surrogate_rank || simulate_logit_rank || ranks.max
+  raise "block surrogate rank must be positive" unless block_rank > 0
+  raise "block surrogate end must be within layer count" unless block_end < weights.layers.size
+  t0 = Time.instant
+  block_samples = collect_block_residual_samples(weights, token_ids, block_start, block_end)
+  collect_ms = (Time.instant - t0).total_milliseconds
+  train_samples = block_samples[0, calib_count]
+  t_train = Time.instant
+  block_adapter = train_block_residual_surrogate(train_samples, block_start, block_end, block_rank, pca_iters)
+  train_ms = (Time.instant - t_train).total_milliseconds
+  stats = block_residual_surrogate_stats(block_samples, block_adapter, calib_count)
+  puts "block_residual_surrogate_static block=#{block_start}:#{block_end} rank=#{block_rank} effective_input_rank=#{block_adapter.input_basis.size} effective_delta_rank=#{block_adapter.delta_basis.size} calib=#{calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rmse=#{stats[:rmse].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} residual_energy=#{stats[:residual_energy].round(8)} max_delta=#{stats[:max_delta].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)} note=teacher_forced_exact_trajectory_not_state_replacement"
+end
 
 if rank = simulate_logit_rank
   if simulate_logit_layers.empty?
