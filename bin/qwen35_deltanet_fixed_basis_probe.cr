@@ -103,6 +103,23 @@ private struct BlockResidualSurrogate
   end
 end
 
+private struct BlockResidualMixture
+  getter centroids : Array(Array(Float64))
+  getter adapters : Array(BlockResidualSurrogate)
+  getter cluster_sizes : Array(Int32)
+  getter global_adapter : BlockResidualSurrogate
+  getter feature_mean : Array(Float64)
+  getter feature_basis : Array(Array(Float64))
+
+  def initialize(@centroids : Array(Array(Float64)),
+                 @adapters : Array(BlockResidualSurrogate),
+                 @cluster_sizes : Array(Int32),
+                 @global_adapter : BlockResidualSurrogate,
+                 @feature_mean : Array(Float64),
+                 @feature_basis : Array(Array(Float64)))
+  end
+end
+
 private class WbaTrace
   @base : Time::Instant
   @events = [] of String
@@ -2360,9 +2377,8 @@ private def cosine64(a : Array(Float64), b : Array(Float64)) : Float64
   dot / Math.sqrt(aa * bb)
 end
 
-private def block_residual_surrogate_stats(samples : Array(BlockResidualSample),
-                                           adapter : BlockResidualSurrogate,
-                                           eval_start : Int32)
+private def block_residual_prediction_stats(samples : Array(BlockResidualSample),
+                                            eval_start : Int32)
   raise "block surrogate needs held-out samples" unless eval_start < samples.size
   heldout = samples[eval_start, samples.size - eval_start]
   dim = heldout[0][:out].size
@@ -2376,7 +2392,7 @@ private def block_residual_surrogate_stats(samples : Array(BlockResidualSample),
   max_delta = 0.0
 
   heldout.each do |sample|
-    pred_delta = predict_block_residual(adapter, sample[:inp])
+    pred_delta = yield sample[:inp]
     approx_out = Array(Float64).new(dim) { |i| sample[:inp][i] + pred_delta[i] }
     cos = cosine64(approx_out, sample[:out])
     delta_cos = cosine64(pred_delta, sample[:delta])
@@ -2410,6 +2426,22 @@ private def block_residual_surrogate_stats(samples : Array(BlockResidualSample),
     residual_energy: exact_sq > 0.0 ? Math.sqrt(delta_sq / exact_sq) : 0.0,
     max_delta:       max_delta,
   }
+end
+
+private def block_residual_surrogate_stats(samples : Array(BlockResidualSample),
+                                           adapter : BlockResidualSurrogate,
+                                           eval_start : Int32)
+  block_residual_prediction_stats(samples, eval_start) do |inp|
+    predict_block_residual(adapter, inp)
+  end
+end
+
+private def block_residual_mixture_stats(samples : Array(BlockResidualSample),
+                                         mixture : BlockResidualMixture,
+                                         eval_start : Int32)
+  block_residual_prediction_stats(samples, eval_start) do |inp|
+    predict_block_residual(mixture, inp)
+  end
 end
 
 private def ffn_activation_vectors_for_token_sets(weights : ML::GGUF::Qwen35Weights,
@@ -2518,6 +2550,60 @@ private def centered_vectors(vectors : Array(Array(Float64)), mean : Array(Float
   end
 end
 
+private def squared_distance(a : Array(Float64), b : Array(Float64)) : Float64
+  raise "vector dimension mismatch" unless a.size == b.size
+  acc = 0.0
+  a.size.times do |i|
+    d = a[i] - b[i]
+    acc += d * d
+  end
+  acc
+end
+
+private def nearest_centroid_index(v : Array(Float64), centroids : Array(Array(Float64))) : Int32
+  best = 0
+  best_dist = squared_distance(v, centroids[0])
+  1.upto(centroids.size - 1) do |i|
+    dist = squared_distance(v, centroids[i])
+    if dist < best_dist
+      best = i
+      best_dist = dist
+    end
+  end
+  best.to_i32
+end
+
+private def kmeans_assignments(vectors : Array(Array(Float64)), cluster_count : Int32, iters : Int32 = 12)
+  raise "need vectors for k-means" if vectors.empty?
+  raise "cluster count must be positive" unless cluster_count > 0
+  k = Math.min(cluster_count, vectors.size)
+  dim = vectors[0].size
+  centroids = Array.new(k) do |i|
+    vectors[(i * vectors.size // k).clamp(0, vectors.size - 1)].dup
+  end
+  assignments = Array(Int32).new(vectors.size, 0)
+
+  iters.times do
+    vectors.each_with_index do |v, i|
+      assignments[i] = nearest_centroid_index(v, centroids)
+    end
+
+    sums = Array.new(k) { Array(Float64).new(dim, 0.0) }
+    counts = Array(Int32).new(k, 0)
+    vectors.each_with_index do |v, i|
+      c = assignments[i]
+      counts[c] += 1
+      dim.times { |d| sums[c][d] += v[d] }
+    end
+    k.times do |c|
+      next if counts[c] == 0
+      dim.times { |d| centroids[c][d] = sums[c][d] / counts[c] }
+    end
+  end
+
+  {assignments: assignments, centroids: centroids}
+end
+
 private def train_block_residual_surrogate(samples : Array(BlockResidualSample),
                                            block_start : Int32,
                                            block_end : Int32,
@@ -2571,6 +2657,47 @@ private def train_block_residual_surrogate(samples : Array(BlockResidualSample),
     input_basis[0, input_rank], delta_basis[0, delta_rank], coeff_weights)
 end
 
+private def train_block_residual_mixture(samples : Array(BlockResidualSample),
+                                         block_start : Int32,
+                                         block_end : Int32,
+                                         rank : Int32,
+                                         cluster_count : Int32,
+                                         pca_iters : Int32,
+                                         ridge : Float64 = 1.0e-3) : BlockResidualMixture
+  raise "block surrogate cluster count must be positive" unless cluster_count > 0
+  global = train_block_residual_surrogate(samples, block_start, block_end, rank, pca_iters, ridge)
+  return BlockResidualMixture.new([[] of Float64], [global], [samples.size], global, global.x_mean, global.input_basis) if cluster_count <= 1
+
+  features = samples.map { |sample| block_residual_mixture_features(sample[:inp], global.x_mean, global.input_basis) }
+  clustered = kmeans_assignments(features, cluster_count)
+  assignments = clustered[:assignments]
+  centroids = clustered[:centroids]
+  groups = Array.new(centroids.size) { [] of BlockResidualSample }
+  samples.each_with_index { |sample, i| groups[assignments[i]] << sample }
+  adapters = [] of BlockResidualSurrogate
+  cluster_sizes = [] of Int32
+  groups.each do |group|
+    cluster_sizes << group.size
+    adapters << if group.size >= 2
+                  train_block_residual_surrogate(group, block_start, block_end, rank, pca_iters, ridge)
+                else
+                  global
+                end
+  end
+
+  BlockResidualMixture.new(centroids, adapters, cluster_sizes, global, global.x_mean, global.input_basis)
+end
+
+private def block_residual_mixture_features(inp : Array(Float64),
+                                            mean : Array(Float64),
+                                            basis : Array(Array(Float64))) : Array(Float64)
+  basis.map do |b|
+    acc = 0.0
+    inp.size.times { |d| acc += (inp[d] - mean[d]) * b[d] }
+    acc
+  end
+end
+
 private def predict_block_residual(adapter : BlockResidualSurrogate, inp : Array(Float64)) : Array(Float64)
   raise "block surrogate input dimension mismatch" unless inp.size == adapter.x_mean.size
   input_rank = adapter.input_basis.size
@@ -2596,6 +2723,13 @@ private def predict_block_residual(adapter : BlockResidualSurrogate, inp : Array
     out.size.times { |d| out[d] += coeff * basis[d] }
   end
   out
+end
+
+private def predict_block_residual(mixture : BlockResidualMixture, inp : Array(Float64)) : Array(Float64)
+  features = block_residual_mixture_features(inp, mixture.feature_mean, mixture.feature_basis)
+  cluster = nearest_centroid_index(features, mixture.centroids)
+  adapter = mixture.adapters[cluster]? || mixture.global_adapter
+  predict_block_residual(adapter, inp)
 end
 
 private def train_ffn_updown_adapter(samples : Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))),
@@ -6256,6 +6390,7 @@ simulate_cost_truth_updown_layers = [] of Int32
 simulate_block_surrogate_start : Int32? = nil
 simulate_block_surrogate_end : Int32? = nil
 simulate_block_surrogate_rank : Int32? = nil
+simulate_block_surrogate_clusters = 1
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -6370,6 +6505,7 @@ OptionParser.parse(ARGV) do |p|
     simulate_block_surrogate_end = block[:end]
   end
   p.on("--block-surrogate-rank=N", "Rank for --simulate-block-residual-surrogate; defaults to --simulate-logits-rank or max --ranks") { |v| simulate_block_surrogate_rank = v.to_i }
+  p.on("--block-surrogate-clusters=N", "Train N local residual adapters selected by nearest input centroid for --simulate-block-residual-surrogate") { |v| simulate_block_surrogate_clusters = v.to_i }
   p.on("--simulate-lowrank-metal-chunk-thread-overlap", "Overlap one async low-rank layer chunk with chunk-major verifier in a worker thread") { simulate_lowrank_metal_chunk_thread_overlap = true }
   p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
@@ -6468,6 +6604,7 @@ end
 if simulate_block_surrogate_start || simulate_block_surrogate_end
   raise "--simulate-block-residual-surrogate must set both start and end" unless simulate_block_surrogate_start && simulate_block_surrogate_end
 end
+raise "block surrogate clusters must be positive" unless simulate_block_surrogate_clusters > 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
@@ -6508,6 +6645,13 @@ if block_start = simulate_block_surrogate_start
   train_ms = (Time.instant - t_train).total_milliseconds
   stats = block_residual_surrogate_stats(block_samples, block_adapter, calib_count)
   puts "block_residual_surrogate_static block=#{block_start}:#{block_end} rank=#{block_rank} effective_input_rank=#{block_adapter.input_basis.size} effective_delta_rank=#{block_adapter.delta_basis.size} calib=#{calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rmse=#{stats[:rmse].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} residual_energy=#{stats[:residual_energy].round(8)} max_delta=#{stats[:max_delta].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)} note=teacher_forced_exact_trajectory_not_state_replacement"
+  if simulate_block_surrogate_clusters > 1
+    t_mix = Time.instant
+    mixture = train_block_residual_mixture(train_samples, block_start, block_end, block_rank, simulate_block_surrogate_clusters, pca_iters)
+    mix_train_ms = (Time.instant - t_mix).total_milliseconds
+    mix_stats = block_residual_mixture_stats(block_samples, mixture, calib_count)
+    puts "block_residual_surrogate_mixture block=#{block_start}:#{block_end} rank=#{block_rank} clusters=#{mixture.centroids.size} requested_clusters=#{simulate_block_surrogate_clusters} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{calib_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rmse=#{mix_stats[:rmse].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} residual_energy=#{mix_stats[:residual_energy].round(8)} max_delta=#{mix_stats[:max_delta].round(6)} train_ms=#{mix_train_ms.round(3)} note=nearest_input_pca_centroid_teacher_forced_static"
+  end
 end
 
 if rank = simulate_logit_rank

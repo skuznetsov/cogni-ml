@@ -6021,9 +6021,21 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen35_block_surrogate_layer0_rank32_t64.log`
   verified_at: 2026-04-29
   decay_trigger: prompt, token count, calibration count, rank, PCA iterations, model file, or block selection changes
+- claim: "`--block-surrogate-clusters=N` adds a nearest-centroid local-adapter probe. The selector clusters calibration samples in the global input-PCA coefficient space, trains one residual adapter per populated cluster, and falls back to the global adapter for tiny clusters."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_mix_build3 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_mix_probe3 --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: mixture selector, cluster feature space, adapter training, or block-surrogate CLI changes
+- claim: "Naive mixture does not rescue the weak multi-layer static block. On 9B block `0:2`, `tokens=32`, `calib=16`, `rank=16`, `K=4` regressed slightly versus the global map (`rel_rmse 0.48091272 -> 0.48431038`, `hidden_cos_mean 0.88470143 -> 0.88289246`). With `tokens=64`, `calib=32`, `rank=32`, `K=4` was effectively flat (`rel_rmse 0.5314368 -> 0.53049244`, `hidden_cos_mean 0.91606286 -> 0.91536961`)."
+  source: `/tmp/qwen35_block_mix2_0_2_rank16_k4.log` and `/tmp/qwen35_block_mix2_0_2_rank32_k4_t64.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, cluster count, selector feature space, model file, or block selection changes
+- claim: "Naive mixture also does not improve the clean single-layer case. On 9B block `0:0`, `tokens=64`, `calib=32`, `rank=32`, `K=4` regressed slightly versus the global map (`rel_rmse 0.18394975 -> 0.18493534`, `hidden_cos_mean 0.98652766 -> 0.9863866`)."
+  source: `/tmp/qwen35_block_mix2_0_0_rank32_k4.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, cluster count, selector feature space, model file, or block selection changes
 - claim: "Focused regression spec still passes after adding the probe."
-  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_surrogate_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_surrogate_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_mix_spec2 crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
   verified_at: 2026-04-29
   decay_trigger: top2 spec, probe CLI setup, Metal bridge, or decode top2 path changes
-**decision:** Do not spend Metal/kernel work on a single global multi-layer static block-residual map. The next mathematically coherent branch is layer-local or mixture residual adapters, then state-aware free-run self-spec measurement where acceptance rather than hidden cosine decides usefulness.
-**adversary_update:** This is a narrow negative result, not a refutation of block-level self-drafting. The calibration set is tiny and the probe is static/teacher-forced; a mixture or online risk-gated route may still work.
+**decision:** Do not spend Metal/kernel work on global or nearest-centroid static block-residual maps. The next coherent branch is state-aware/free-run layer-local acceptance, or a materially different nonlinear/online selector. Acceptance rather than hidden cosine decides usefulness.
+**adversary_update:** This is still not a refutation of block-level self-drafting. It refutes the cheap static linear map and nearest-centroid static mixture under small local gates.
