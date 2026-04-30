@@ -20,7 +20,7 @@ private alias BlockResidualSample = NamedTuple(inp: Array(Float64), out: Array(F
 private alias LayerBlock = NamedTuple(start: Int32, end: Int32)
 private alias NamedPrompt = NamedTuple(name: String, text: String)
 private alias PromptTokenSet = NamedTuple(name: String, token_ids: Array(Int32))
-private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, parity: Bool, verifier_parity: Bool, accept_rate: Float64, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, chunks: Int32, full_accept_chunks: Int32, correction_steps: Int32, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, draft_margin_min: Float64, hidden_cos_mean: Float64, hidden_cos_min: Float64, rel_rmse: Float64, delta_rel_rmse: Float64)
+private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, parity: Bool, verifier_parity: Bool, accept_rate: Float64, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, chunks: Int32, full_accept_chunks: Int32, correction_steps: Int32, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, draft_margin_min: Float64, baseline_decode_ms: Float64, draft_ms: Float64, verifier_ms: Float64, self_seq_decode_ms: Float64, ideal_overlap_decode_ms: Float64, cpu_seq_speedup: Float64, ideal_overlap_speedup: Float64, hidden_cos_mean: Float64, hidden_cos_min: Float64, rel_rmse: Float64, delta_rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
 
@@ -3662,6 +3662,40 @@ private def exact_greedy_ids_with_block_policy(weights : ML::GGUF::Qwen35Weights
   ids
 end
 
+private def exact_greedy_decode_with_block_policy_timed(weights : ML::GGUF::Qwen35Weights,
+                                                        prompt_ids : Array(Int32),
+                                                        gen_tokens : Int32,
+                                                        block_start : Int32,
+                                                        block_end : Int32,
+                                                        adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                                        calib_count : Int32,
+                                                        state_mode : String,
+                                                        max_seq : Int32)
+  state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
+  logits = [] of Float32
+  t_prompt = Time.instant
+  prompt_ids.each_with_index do |token_id, pos|
+    logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, state,
+      block_start, block_end, adapter, calib_count, false, state_mode)
+  end
+  prompt_ms = (Time.instant - t_prompt).total_milliseconds
+
+  ids = [] of Int32
+  t_decode = Time.instant
+  gen_tokens.times do |step|
+    id = top1(logits)
+    ids << id
+    if step + 1 < gen_tokens
+      pos = prompt_ids.size + step
+      logits = logits_with_block_surrogate_policy(weights, id, pos.to_i32, state,
+        block_start, block_end, adapter, calib_count, false, state_mode)
+    end
+  end
+  decode_ms = (Time.instant - t_decode).total_milliseconds
+
+  {ids: ids, prompt_ms: prompt_ms, decode_ms: decode_ms}
+end
+
 private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
                                                       prompt_ids : Array(Int32),
                                                       gen_tokens : Int32,
@@ -3670,7 +3704,7 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
                                                       block_end : Int32,
                                                       adapter : BlockResidualSurrogate | BlockResidualMixture,
                                                       calib_count : Int32,
-                                                      state_mode : String) : NamedTuple(chunks: Int32, full_accept_chunks: Int32, rejections: Int32, emitted_tokens: Int32, proposed_tokens: Int32, accepted_draft_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, accept_rate: Float64, avg_accept: Float64, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, gamma_history: Array(Int32), accept_history: Array(Int32), draft_min_margin_history: Array(Float64), parity: Bool, verifier_parity: Bool, exact_ids: Array(Int32), emitted_ids: Array(Int32), baseline_ids: Array(Int32), draft_ids: Array(Int32))
+                                                      state_mode : String)
   raise "block surrogate self-spec gamma must be positive" unless gamma > 0
   raise "block surrogate self-spec needs positive gen_tokens" unless gen_tokens > 0
   raise "block surrogate self-spec needs a non-empty prompt" if prompt_ids.empty?
@@ -3683,6 +3717,13 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
   last_token = prompt_ids[0]
   pos_last = 0
 
+  prompt_ms = 0.0
+  draft_fork_ms = 0.0
+  draft_ms = 0.0
+  verifier_fork_ms = 0.0
+  verifier_ms = 0.0
+
+  t_prompt = Time.instant
   prompt_ids.each_with_index do |token_id, pos|
     state_before_last = verifier_state.fork
     last_token = token_id
@@ -3690,6 +3731,7 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
     exact_logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, verifier_state,
       block_start, block_end, adapter, calib_count, false, state_mode)
   end
+  prompt_ms = (Time.instant - t_prompt).total_milliseconds
 
   chunks = 0
   full_accept_chunks = 0
@@ -3712,7 +3754,10 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
     proposal_limit = Math.min(gamma, gen_tokens - emitted_ids.size)
     gamma_history << proposal_limit
 
+    t_draft_fork = Time.instant
     draft_state = state_before_last.fork
+    draft_fork_ms += (Time.instant - t_draft_fork).total_milliseconds
+    t_draft = Time.instant
     draft_logits = logits_with_block_surrogate_policy(weights, last_token, pos_last, draft_state,
       block_start, block_end, adapter, calib_count, true, state_mode)
     proposal = [] of Int32
@@ -3734,12 +3779,15 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
           block_start, block_end, adapter, calib_count, true, state_mode)
       end
     end
+    draft_ms += (Time.instant - t_draft).total_milliseconds
     draft_min_margin_history << min_draft_margin
 
     rejected = false
     accepted_this = 0
     proposal.each_with_index do |candidate, i|
+      t_verify_top = Time.instant
       expected = top1(exact_logits)
+      verifier_ms += (Time.instant - t_verify_top).total_milliseconds
       exact_ids << expected
       draft_top2_hits += 1 if proposal_top2[i].includes?(expected)
       draft_top5_hits += 1 if proposal_top5[i].includes?(expected)
@@ -3759,9 +3807,13 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
       last_token = expected
       pos_last = verify_pos.to_i32
       if emitted_ids.size < gen_tokens
+        t_verify_fork = Time.instant
         state_before_last = verifier_state.fork
+        verifier_fork_ms += (Time.instant - t_verify_fork).total_milliseconds
+        t_verify = Time.instant
         exact_logits = logits_with_block_surrogate_policy(weights, expected, verify_pos.to_i32, verifier_state,
           block_start, block_end, adapter, calib_count, false, state_mode)
+        verifier_ms += (Time.instant - t_verify).total_milliseconds
       end
 
       break if rejected || emitted_ids.size >= gen_tokens
@@ -3771,8 +3823,11 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
     accept_history << accepted_this
   end
 
-  baseline_ids = exact_greedy_ids_with_block_policy(weights, prompt_ids, gen_tokens,
+  baseline = exact_greedy_decode_with_block_policy_timed(weights, prompt_ids, gen_tokens,
     block_start, block_end, adapter, calib_count, state_mode, max_seq)
+  baseline_ids = baseline[:ids]
+  self_seq_decode_ms = draft_fork_ms + draft_ms + verifier_fork_ms + verifier_ms
+  ideal_overlap_decode_ms = Math.max(draft_fork_ms + draft_ms, verifier_fork_ms + verifier_ms)
   {
     chunks:                   chunks,
     full_accept_chunks:       full_accept_chunks,
@@ -3789,6 +3844,17 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
     gamma_history:            gamma_history,
     accept_history:           accept_history,
     draft_min_margin_history: draft_min_margin_history,
+    prompt_ms:                prompt_ms,
+    baseline_prompt_ms:       baseline[:prompt_ms],
+    baseline_decode_ms:       baseline[:decode_ms],
+    draft_ms:                 draft_ms,
+    draft_fork_ms:            draft_fork_ms,
+    verifier_ms:              verifier_ms,
+    verifier_fork_ms:         verifier_fork_ms,
+    self_seq_decode_ms:       self_seq_decode_ms,
+    ideal_overlap_decode_ms:  ideal_overlap_decode_ms,
+    cpu_seq_speedup:          self_seq_decode_ms > 0.0 ? baseline[:decode_ms] / self_seq_decode_ms : 0.0,
+    ideal_overlap_speedup:    ideal_overlap_decode_ms > 0.0 ? baseline[:decode_ms] / ideal_overlap_decode_ms : 0.0,
     parity:                   emitted_ids == baseline_ids,
     verifier_parity:          exact_ids == baseline_ids,
     exact_ids:                exact_ids,
@@ -3818,7 +3884,7 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
     spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, gen_tokens, gamma,
       block_start, block_end, adapter, calib_count, state_mode)
     draft_margin_min = spec[:draft_min_margin_history].empty? ? 0.0 : spec[:draft_min_margin_history].min
-    puts "block_surrogate_suite_self_spec prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} gamma=#{gamma} gen_tokens=#{gen_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% draft_margin_min=#{draft_margin_min.round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')}"
+    puts "block_surrogate_suite_self_spec prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} gamma=#{gamma} gen_tokens=#{gen_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% draft_margin_min=#{draft_margin_min.round(4)} baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} draft_fork_ms=#{spec[:draft_fork_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} verifier_fork_ms=#{spec[:verifier_fork_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')}"
     rows << {
       prompt:                prompt_name,
       block:                 block,
@@ -3837,6 +3903,13 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
       draft_top2_hit_rate:   spec[:draft_top2_hit_rate],
       draft_top5_hit_rate:   spec[:draft_top5_hit_rate],
       draft_margin_min:      draft_margin_min,
+      baseline_decode_ms:    spec[:baseline_decode_ms],
+      draft_ms:              spec[:draft_ms],
+      verifier_ms:           spec[:verifier_ms],
+      self_seq_decode_ms:    spec[:self_seq_decode_ms],
+      ideal_overlap_decode_ms: spec[:ideal_overlap_decode_ms],
+      cpu_seq_speedup:       spec[:cpu_seq_speedup],
+      ideal_overlap_speedup: spec[:ideal_overlap_speedup],
       hidden_cos_mean:       stats[:mean_cos],
       hidden_cos_min:        stats[:min_cos],
       rel_rmse:              stats[:rel_rmse],
@@ -3856,9 +3929,9 @@ private def print_block_surrogate_suite_scoreboard(rows : Array(BlockSurrogateSu
 
   ranked = rows.sort { |a, b| block_surrogate_suite_row_score(b) <=> block_surrogate_suite_row_score(a) }
   puts "block_surrogate_suite_scoreboard rows=#{rows.size} limit=#{limit}"
-  puts "rank prompt block mode gamma parity verifier_parity accept% rejections accepted proposed chunks full_accept margin_min top2% top5% hidden_cos rel_rmse delta_rel_rmse score"
+  puts "rank prompt block mode gamma parity verifier_parity accept% rejections accepted proposed chunks full_accept margin_min top2% top5% base_ms draft_ms verify_ms seq_ms ideal_ms cpu_x ideal_x hidden_cos rel_rmse delta_rel_rmse score"
   ranked.first(limit).each_with_index do |row, i|
-    puts "#{i + 1} #{row[:prompt]} #{row[:block]} #{row[:mode]} #{row[:gamma]} #{row[:parity]} #{row[:verifier_parity]} #{row[:accept_rate].round(2)} #{row[:rejections]} #{row[:accepted_draft_tokens]} #{row[:proposed_tokens]} #{row[:chunks]} #{row[:full_accept_chunks]} #{row[:draft_margin_min].round(4)} #{row[:draft_top2_hit_rate].round(2)} #{row[:draft_top5_hit_rate].round(2)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse].round(6)} #{row[:delta_rel_rmse].round(6)} #{block_surrogate_suite_row_score(row).round(4)}"
+    puts "#{i + 1} #{row[:prompt]} #{row[:block]} #{row[:mode]} #{row[:gamma]} #{row[:parity]} #{row[:verifier_parity]} #{row[:accept_rate].round(2)} #{row[:rejections]} #{row[:accepted_draft_tokens]} #{row[:proposed_tokens]} #{row[:chunks]} #{row[:full_accept_chunks]} #{row[:draft_margin_min].round(4)} #{row[:draft_top2_hit_rate].round(2)} #{row[:draft_top5_hit_rate].round(2)} #{row[:baseline_decode_ms].round(3)} #{row[:draft_ms].round(3)} #{row[:verifier_ms].round(3)} #{row[:self_seq_decode_ms].round(3)} #{row[:ideal_overlap_decode_ms].round(3)} #{row[:cpu_seq_speedup].round(4)} #{row[:ideal_overlap_speedup].round(4)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse].round(6)} #{row[:delta_rel_rmse].round(6)} #{block_surrogate_suite_row_score(row).round(4)}"
   end
 
   groups = Hash(String, Array(BlockSurrogateSuiteRow)).new { |h, k| h[k] = [] of BlockSurrogateSuiteRow }
@@ -3879,6 +3952,13 @@ private def print_block_surrogate_suite_scoreboard(rows : Array(BlockSurrogateSu
     top2_min: Float64,
     top5_min: Float64,
     margin_min: Float64,
+    base_ms_mean: Float64,
+    draft_ms_mean: Float64,
+    verify_ms_mean: Float64,
+    seq_ms_mean: Float64,
+    ideal_ms_mean: Float64,
+    cpu_seq_speedup_mean: Float64,
+    ideal_overlap_speedup_mean: Float64,
     hidden_cos_mean: Float64,
     rel_rmse_mean: Float64,
     delta_rel_rmse_mean: Float64,
@@ -3895,6 +3975,13 @@ private def print_block_surrogate_suite_scoreboard(rows : Array(BlockSurrogateSu
     top2_min = group.min_of { |row| row[:draft_top2_hit_rate] }
     top5_min = group.min_of { |row| row[:draft_top5_hit_rate] }
     margin_min = group.min_of { |row| row[:draft_margin_min] }
+    base_ms_mean = group.sum { |row| row[:baseline_decode_ms] } / prompts
+    draft_ms_mean = group.sum { |row| row[:draft_ms] } / prompts
+    verify_ms_mean = group.sum { |row| row[:verifier_ms] } / prompts
+    seq_ms_mean = group.sum { |row| row[:self_seq_decode_ms] } / prompts
+    ideal_ms_mean = group.sum { |row| row[:ideal_overlap_decode_ms] } / prompts
+    cpu_seq_speedup_mean = group.sum { |row| row[:cpu_seq_speedup] } / prompts
+    ideal_overlap_speedup_mean = group.sum { |row| row[:ideal_overlap_speedup] } / prompts
     hidden_cos_mean = group.sum { |row| row[:hidden_cos_mean] } / prompts
     rel_rmse_mean = group.sum { |row| row[:rel_rmse] } / prompts
     delta_rel_rmse_mean = group.sum { |row| row[:delta_rel_rmse] } / prompts
@@ -3912,6 +3999,13 @@ private def print_block_surrogate_suite_scoreboard(rows : Array(BlockSurrogateSu
       top2_min:             top2_min,
       top5_min:             top5_min,
       margin_min:           margin_min,
+      base_ms_mean:         base_ms_mean,
+      draft_ms_mean:        draft_ms_mean,
+      verify_ms_mean:       verify_ms_mean,
+      seq_ms_mean:          seq_ms_mean,
+      ideal_ms_mean:        ideal_ms_mean,
+      cpu_seq_speedup_mean: cpu_seq_speedup_mean,
+      ideal_overlap_speedup_mean: ideal_overlap_speedup_mean,
       hidden_cos_mean:      hidden_cos_mean,
       rel_rmse_mean:        rel_rmse_mean,
       delta_rel_rmse_mean:  delta_rel_rmse_mean,
@@ -3921,10 +4015,10 @@ private def print_block_surrogate_suite_scoreboard(rows : Array(BlockSurrogateSu
 
   ranked_summaries = summaries.sort { |a, b| b[:score] <=> a[:score] }
   puts "block_surrogate_suite_aggregate groups=#{summaries.size} limit=#{limit}"
-  puts "rank block mode adapter_rank gamma prompts parity_all verifier_parity_all accept_mean accept_min rejections accepted proposed top2_min top5_min margin_min hidden_cos_mean rel_rmse_mean delta_rel_rmse_mean score"
+  puts "rank block mode adapter_rank gamma prompts parity_all verifier_parity_all accept_mean accept_min rejections accepted proposed top2_min top5_min margin_min base_ms draft_ms verify_ms seq_ms ideal_ms cpu_x ideal_x hidden_cos_mean rel_rmse_mean delta_rel_rmse_mean score"
   ranked_summaries.first(limit).each_with_index do |row, i|
     block, mode, adapter_rank, gamma = row[:key].split('|')
-    puts "#{i + 1} #{block} #{mode} #{adapter_rank} #{gamma} #{row[:prompts]} #{row[:parity_all]} #{row[:verifier_parity_all]} #{row[:accept_mean].round(2)} #{row[:accept_min].round(2)} #{row[:rejections]} #{row[:accepted]} #{row[:proposed]} #{row[:top2_min].round(2)} #{row[:top5_min].round(2)} #{row[:margin_min].round(4)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse_mean].round(6)} #{row[:delta_rel_rmse_mean].round(6)} #{row[:score].round(4)}"
+    puts "#{i + 1} #{block} #{mode} #{adapter_rank} #{gamma} #{row[:prompts]} #{row[:parity_all]} #{row[:verifier_parity_all]} #{row[:accept_mean].round(2)} #{row[:accept_min].round(2)} #{row[:rejections]} #{row[:accepted]} #{row[:proposed]} #{row[:top2_min].round(2)} #{row[:top5_min].round(2)} #{row[:margin_min].round(4)} #{row[:base_ms_mean].round(3)} #{row[:draft_ms_mean].round(3)} #{row[:verify_ms_mean].round(3)} #{row[:seq_ms_mean].round(3)} #{row[:ideal_ms_mean].round(3)} #{row[:cpu_seq_speedup_mean].round(4)} #{row[:ideal_overlap_speedup_mean].round(4)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse_mean].round(6)} #{row[:delta_rel_rmse_mean].round(6)} #{row[:score].round(4)}"
   end
 end
 
@@ -7273,7 +7367,7 @@ if block_start = simulate_block_surrogate_start
     end
     simulate_block_surrogate_self_spec_gammas.each do |gamma|
       spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
-      puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
+      puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
     end
   end
   if simulate_block_surrogate_policy
@@ -7286,7 +7380,7 @@ if block_start = simulate_block_surrogate_start
   end
   simulate_block_surrogate_self_spec_gammas.each do |gamma|
     spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
-    puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
+    puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
   end
 end
 

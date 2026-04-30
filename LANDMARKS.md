@@ -6183,3 +6183,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame is not "replace the last third", but "replace the largest safe late band under exact self-spec with short chunks."
 - maieutic: The acceptance gate is about proposal quality, not target replacement; exact verification preserves output parity but does not guarantee a wall-clock win.
 - adversary: This is still a CPU/probe acceptance result on a four-prompt suite. Speed claims require GPU-resident surrogate kernels and same-prompt wall-clock comparison against plain decode/llama.cpp.
+
+### [LM-QWEN35-BLOCK-SURROGATE-WALL-COST-1] `26:27` acceptance does not yet imply speed
+**status:** verified
+**trust:** {F:0.86, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "Block-surrogate suite rows now include decode timing attribution: exact baseline decode, draft proposal body, draft state fork, verifier body, verifier state fork, sequential self-spec decode, optimistic ideal-overlap decode, and corresponding speedup ratios. The timing is CPU/probe-local and is intended as a cost sanity check, not a production Metal benchmark."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_wall_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_wall_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-04-30
+  verified_at: 2026-04-30
+  decay_trigger: block-surrogate suite output schema, timing attribution, or decode loop semantics change
+- claim: "Focused Qwen3.5-9B `26:27` gate with `tokens=40`, `calib=16`, `rank=16`, `gen=16`, `gamma=8`, and default/code/json/reasoning prompts preserved exact parity and reproduced the acceptance aggregate (`accept_mean=92.89%`, `accept_min=83.33%`, `2` rejects, `top5_min=100%`)."
+  source: `/tmp/qwen35_block_wall_26_27_20260430_121058.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt text, token limit, calibration count, rank, gamma, generated length, model file, or block-surrogate suite semantics change
+- claim: "The same focused gate refuted immediate speed promotion for the current CPU/probe route: mean baseline decode was `10727.532ms`, mean draft body `11737.840ms`, mean verifier body `11237.966ms`, mean sequential self-spec decode `23565.809ms` (`0.4553x`), and even the optimistic ideal-overlap ratio was only `0.8764x`."
+  source: `/tmp/qwen35_block_wall_26_27_20260430_121058.log`
+  verified_at: 2026-04-30
+  decay_trigger: host load, CPU/probe implementation, prompt suite, generated length, or timing schema changes
+- claim: "Focused top2 regression spec still passes after adding timing attribution."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_wall_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
+  verified_at: 2026-04-30
+  decay_trigger: top2 spec, Metal bridge, decode top2 path, or probe dependencies change
+**decision:** Do not build a production `26:27` route expecting a speedup from skipping only two late layers. Keep `26:27` as the best acceptance candidate, but the next speed branch must remove more work: a wider/risk-gated adapter, a fused GPU-resident surrogate body with cheap head/top-k, or reuse of the optimized chunk-verifier path rather than the CPU/probe decode route.
+**quadrumvirate:**
+- cassandra: The trap was acceptance optimism; proposal body cost remained close to full decode.
+- daedalus: Pivot from "promote the best accepting band" to "make proposal body materially cheaper or replace a wider band safely."
+- maieutic: The core assumption that two skipped late layers can beat exact decode is false in this measurement; exact verifier guarantees quality but doubles work unless draft is hidden or much cheaper.
+- adversary: CPU timings do not prove Metal production speed, but they are strong enough to block an immediate GPU rewrite without a clearer cost-reduction mechanism.
