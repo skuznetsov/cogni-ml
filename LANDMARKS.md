@@ -6013,9 +6013,17 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen35_block_surrogate_late_smoke.log`
   verified_at: 2026-04-29
   decay_trigger: prompt, token count, calibration count, rank, PCA iterations, model file, or block selection changes
+- claim: "Increasing rank/calibration does not rescue an early multi-layer static map: Qwen3.5-9B block `0:2`, `tokens=32`, `calib=16`, `rank=16`, `pca_iters=4` reports `hidden_cos_mean=0.88470143`, `hidden_cos_min=0.82960191`, `rel_rmse=0.48091272`, and `delta_rel_rmse=0.48587198`."
+  source: `/tmp/qwen35_block_surrogate_early_rank16_t32.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, PCA iterations, model file, or block selection changes
+- claim: "A single-layer residual map is much cleaner than the `0:2` block but still not a production route by itself: Qwen3.5-9B block `0:0`, `tokens=64`, `calib=32`, `rank=32`, `pca_iters=4` reports `hidden_cos_mean=0.98652766`, `hidden_cos_min=0.95875907`, `rel_rmse=0.18394975`, and `delta_rel_rmse=0.18615344`."
+  source: `/tmp/qwen35_block_surrogate_layer0_rank32_t64.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, PCA iterations, model file, or block selection changes
 - claim: "Focused regression spec still passes after adding the probe."
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_surrogate_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
   verified_at: 2026-04-29
   decay_trigger: top2 spec, probe CLI setup, Metal bridge, or decode top2 path changes
-**decision:** Do not spend Metal/kernel work on a single global static block-residual map. The next mathematically coherent branch is route-local/mixture block adapters or state-aware free-run self-spec measurement, where acceptance rather than hidden cosine decides usefulness.
+**decision:** Do not spend Metal/kernel work on a single global multi-layer static block-residual map. The next mathematically coherent branch is layer-local or mixture residual adapters, then state-aware free-run self-spec measurement where acceptance rather than hidden cosine decides usefulness.
 **adversary_update:** This is a narrow negative result, not a refutation of block-level self-drafting. The calibration set is tiny and the probe is static/teacher-forced; a mixture or online risk-gated route may still work.
