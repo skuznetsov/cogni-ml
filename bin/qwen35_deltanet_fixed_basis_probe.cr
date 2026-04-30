@@ -21,6 +21,7 @@ private alias LayerBlock = NamedTuple(start: Int32, end: Int32)
 private alias NamedPrompt = NamedTuple(name: String, text: String)
 private alias PromptTokenSet = NamedTuple(name: String, token_ids: Array(Int32))
 private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, parity: Bool, verifier_parity: Bool, accept_rate: Float64, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, chunks: Int32, full_accept_chunks: Int32, correction_steps: Int32, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, draft_margin_min: Float64, baseline_decode_ms: Float64, draft_ms: Float64, verifier_ms: Float64, self_seq_decode_ms: Float64, ideal_overlap_decode_ms: Float64, cpu_seq_speedup: Float64, ideal_overlap_speedup: Float64, hidden_cos_mean: Float64, hidden_cos_min: Float64, rel_rmse: Float64, delta_rel_rmse: Float64)
+private alias BlockSurrogateTreeSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, top_k: Int32, parity: Bool, full_rescue_chunks: Int32, chunks: Int32, misses: Int32, draft_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, branch_tokens_rank: Int32, branch_tokens_full: Int32, correction_steps: Int32, hidden_cos_mean: Float64, rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
 
@@ -3882,6 +3883,126 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
   }
 end
 
+private def simulate_block_surrogate_tree_oracle(weights : ML::GGUF::Qwen35Weights,
+                                                 prompt_ids : Array(Int32),
+                                                 gen_tokens : Int32,
+                                                 top_k : Int32,
+                                                 progressive_schedule : Array(Int32),
+                                                 block_start : Int32,
+                                                 block_end : Int32,
+                                                 adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                                 calib_count : Int32,
+                                                 state_mode : String) : NamedTuple(chunks: Int32, full_rescue_chunks: Int32, misses: Int32, emitted_tokens: Int32, draft_steps: Int32, top1_hits: Int32, topk_hits: Int32, branch_tokens_rank: Int32, branch_tokens_full: Int32, correction_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, schedule_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32))
+  raise "block surrogate tree top_k must be >= 2" unless top_k >= 2
+  raise "block surrogate tree top_k must be <= 16" unless top_k <= 16
+  raise "block surrogate tree schedule must not be empty" if progressive_schedule.empty?
+  raise "block surrogate tree schedule values must be positive" if progressive_schedule.any? { |v| v <= 0 }
+  raise "block surrogate tree needs positive gen_tokens" unless gen_tokens > 0
+  raise "block surrogate tree needs a non-empty prompt" if prompt_ids.empty?
+
+  hp = weights.hparams
+  max_gamma = progressive_schedule.max
+  max_seq = prompt_ids.size + gen_tokens + max_gamma + 4
+  exact_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  exact_logits = [] of Float32
+  state_before_last = exact_state.fork
+  last_token = prompt_ids[0]
+  pos_last = 0
+
+  prompt_ids.each_with_index do |token_id, pos|
+    state_before_last = exact_state.fork
+    last_token = token_id
+    pos_last = pos.to_i32
+    exact_logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, exact_state,
+      block_start, block_end, adapter, calib_count, false, state_mode)
+  end
+
+  chunks = 0
+  full_rescue_chunks = 0
+  misses = 0
+  emitted_tokens = 0
+  draft_steps = 0
+  top1_hits = 0
+  topk_hits = 0
+  branch_tokens_rank = 0
+  branch_tokens_full = 0
+  correction_steps = 0
+  progressive_index = 0
+  schedule_history = [] of Int32
+  exact_ids = [] of Int32
+  emitted_ids = [] of Int32
+
+  while emitted_tokens < gen_tokens
+    chunks += 1
+    chunk_gamma = Math.min(progressive_schedule[progressive_index], gen_tokens - emitted_tokens)
+    schedule_history << chunk_gamma
+    draft_state = state_before_last.fork
+    draft_logits = logits_with_block_surrogate_policy(weights, last_token, pos_last, draft_state,
+      block_start, block_end, adapter, calib_count, true, state_mode)
+
+    rescued_chunk = true
+    chunk_gamma.times do |j|
+      exact_top1 = top1(exact_logits)
+      exact_ids << exact_top1
+      draft_topk = top_k_indices(draft_logits, top_k)
+      draft_steps += 1
+      if draft_topk[0]? == exact_top1
+        top1_hits += 1
+        topk_hits += 1
+        branch_tokens_rank += 1
+        branch_tokens_full += 1
+      elsif idx = draft_topk.index(exact_top1)
+        topk_hits += 1
+        branch_tokens_rank += idx + 1
+        branch_tokens_full += top_k
+      else
+        misses += 1
+        correction_steps += 1
+        branch_tokens_rank += top_k
+        branch_tokens_full += top_k
+        rescued_chunk = false
+      end
+
+      emitted_tokens += 1
+      emitted_ids << exact_top1
+      state_before_last = exact_state.fork
+      last_token = exact_top1
+      pos_last = (prompt_ids.size + emitted_tokens - 1).to_i32
+      if emitted_tokens < gen_tokens
+        exact_logits = logits_with_block_surrogate_policy(weights, exact_top1, pos_last, exact_state,
+          block_start, block_end, adapter, calib_count, false, state_mode)
+      end
+      break if !rescued_chunk || emitted_tokens >= gen_tokens || j == chunk_gamma - 1
+
+      draft_logits = logits_with_block_surrogate_policy(weights, exact_top1, pos_last, draft_state,
+        block_start, block_end, adapter, calib_count, true, state_mode)
+    end
+
+    full_rescue_chunks += 1 if rescued_chunk
+    progressive_index = rescued_chunk ? ((progressive_index + 1) % progressive_schedule.size) : 0
+  end
+
+  {
+    chunks:                 chunks,
+    full_rescue_chunks:     full_rescue_chunks,
+    misses:                 misses,
+    emitted_tokens:         emitted_tokens,
+    draft_steps:            draft_steps,
+    top1_hits:              top1_hits,
+    topk_hits:              topk_hits,
+    branch_tokens_rank:     branch_tokens_rank,
+    branch_tokens_full:     branch_tokens_full,
+    correction_steps:       correction_steps,
+    top1_rate:              emitted_tokens > 0 ? 100.0 * top1_hits / emitted_tokens : 0.0,
+    topk_rate:              emitted_tokens > 0 ? 100.0 * topk_hits / emitted_tokens : 0.0,
+    avg_rank_branch_tokens: emitted_tokens > 0 ? branch_tokens_rank.to_f64 / emitted_tokens : 0.0,
+    avg_full_branch_tokens: emitted_tokens > 0 ? branch_tokens_full.to_f64 / emitted_tokens : 0.0,
+    schedule_history:       schedule_history,
+    exact_ids:              exact_ids,
+    emitted_ids:            emitted_ids,
+  }
+end
+
 private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRow),
                                              weights,
                                              prompt_name : String,
@@ -3896,7 +4017,9 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
                                              calib_count : Int32,
                                              gen_tokens : Int32,
                                              gammas : Array(Int32),
-                                             state_mode : String) : Nil
+                                             state_mode : String,
+                                             tree_rows : Array(BlockSurrogateTreeSuiteRow),
+                                             tree_top_k : Int32?) : Nil
   block = layer_block_label(block_start, block_end)
   gammas.each do |gamma|
     spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, gen_tokens, gamma,
@@ -3933,6 +4056,34 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
       rel_rmse:              stats[:rel_rmse],
       delta_rel_rmse:        stats[:delta_rel_rmse],
     }
+    if top_k = tree_top_k
+      tree = simulate_block_surrogate_tree_oracle(weights, token_ids, gen_tokens, top_k, [gamma],
+        block_start, block_end, adapter, calib_count, state_mode)
+      parity = tree[:exact_ids] == tree[:emitted_ids]
+      puts "block_surrogate_tree_oracle prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} top_k=#{top_k} gamma=#{gamma} gen_tokens=#{gen_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+      tree_rows << {
+        prompt:                 prompt_name,
+        block:                  block,
+        mode:                   mode,
+        rank:                   rank,
+        gamma:                  gamma,
+        top_k:                  top_k,
+        parity:                 parity,
+        full_rescue_chunks:     tree[:full_rescue_chunks],
+        chunks:                 tree[:chunks],
+        misses:                 tree[:misses],
+        draft_steps:            tree[:draft_steps],
+        top1_rate:              tree[:top1_rate],
+        topk_rate:              tree[:topk_rate],
+        avg_rank_branch_tokens: tree[:avg_rank_branch_tokens],
+        avg_full_branch_tokens: tree[:avg_full_branch_tokens],
+        branch_tokens_rank:     tree[:branch_tokens_rank],
+        branch_tokens_full:     tree[:branch_tokens_full],
+        correction_steps:       tree[:correction_steps],
+        hidden_cos_mean:        stats[:mean_cos],
+        rel_rmse:               stats[:rel_rmse],
+      }
+    end
   end
 end
 
@@ -4040,6 +4191,79 @@ private def print_block_surrogate_suite_scoreboard(rows : Array(BlockSurrogateSu
   end
 end
 
+private def print_block_surrogate_tree_scoreboard(rows : Array(BlockSurrogateTreeSuiteRow), limit : Int32 = 50) : Nil
+  return if rows.empty?
+
+  groups = Hash(String, Array(BlockSurrogateTreeSuiteRow)).new { |h, k| h[k] = [] of BlockSurrogateTreeSuiteRow }
+  rows.each do |row|
+    groups["#{row[:block]}|#{row[:mode]}|#{row[:rank]}|#{row[:gamma]}|#{row[:top_k]}"] << row
+  end
+
+  summaries = [] of NamedTuple(
+    key: String,
+    prompts: Int32,
+    parity_all: Bool,
+    top1_mean: Float64,
+    top1_min: Float64,
+    topk_mean: Float64,
+    topk_min: Float64,
+    misses: Int32,
+    correction_steps: Int32,
+    draft_steps: Int32,
+    full_rescue_chunks: Int32,
+    chunks: Int32,
+    avg_rank_branch_tokens: Float64,
+    avg_full_branch_tokens: Float64,
+    hidden_cos_mean: Float64,
+    rel_rmse_mean: Float64,
+    score: Float64)
+  groups.each do |key, group|
+    prompts = group.size
+    parity_all = group.all? { |row| row[:parity] }
+    top1_mean = group.sum { |row| row[:top1_rate] } / prompts
+    top1_min = group.min_of { |row| row[:top1_rate] }
+    topk_mean = group.sum { |row| row[:topk_rate] } / prompts
+    topk_min = group.min_of { |row| row[:topk_rate] }
+    misses = group.sum { |row| row[:misses] }
+    correction_steps = group.sum { |row| row[:correction_steps] }
+    draft_steps = group.sum { |row| row[:draft_steps] }
+    full_rescue_chunks = group.sum { |row| row[:full_rescue_chunks] }
+    chunks = group.sum { |row| row[:chunks] }
+    avg_rank_branch_tokens = group.sum { |row| row[:avg_rank_branch_tokens] } / prompts
+    avg_full_branch_tokens = group.sum { |row| row[:avg_full_branch_tokens] } / prompts
+    hidden_cos_mean = group.sum { |row| row[:hidden_cos_mean] } / prompts
+    rel_rmse_mean = group.sum { |row| row[:rel_rmse] } / prompts
+    score = parity_all ? (topk_min + topk_mean / 100.0 - misses * 3.0 - avg_rank_branch_tokens * 0.5) : -1.0e9
+    summaries << {
+      key:                    key,
+      prompts:                prompts,
+      parity_all:             parity_all,
+      top1_mean:              top1_mean,
+      top1_min:               top1_min,
+      topk_mean:              topk_mean,
+      topk_min:               topk_min,
+      misses:                 misses,
+      correction_steps:       correction_steps,
+      draft_steps:            draft_steps,
+      full_rescue_chunks:     full_rescue_chunks,
+      chunks:                 chunks,
+      avg_rank_branch_tokens: avg_rank_branch_tokens,
+      avg_full_branch_tokens: avg_full_branch_tokens,
+      hidden_cos_mean:        hidden_cos_mean,
+      rel_rmse_mean:          rel_rmse_mean,
+      score:                  score,
+    }
+  end
+
+  ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
+  puts "block_surrogate_tree_aggregate groups=#{summaries.size} limit=#{limit}"
+  puts "rank block mode adapter_rank gamma top_k prompts parity_all top1_mean top1_min topk_mean topk_min misses correction_steps draft_steps full_rescue_chunks chunks avg_rank_branch_tokens avg_full_branch_tokens hidden_cos_mean rel_rmse_mean score"
+  ranked.first(limit).each_with_index do |row, i|
+    block, mode, adapter_rank, gamma, top_k = row[:key].split('|')
+    puts "#{i + 1} #{block} #{mode} #{adapter_rank} #{gamma} #{top_k} #{row[:prompts]} #{row[:parity_all]} #{row[:top1_mean].round(2)} #{row[:top1_min].round(2)} #{row[:topk_mean].round(2)} #{row[:topk_min].round(2)} #{row[:misses]} #{row[:correction_steps]} #{row[:draft_steps]} #{row[:full_rescue_chunks]} #{row[:chunks]} #{row[:avg_rank_branch_tokens].round(3)} #{row[:avg_full_branch_tokens].round(3)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse_mean].round(6)} #{row[:score].round(4)}"
+  end
+end
+
 private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
                                       token_sets : Array(PromptTokenSet),
                                       blocks : Array(LayerBlock),
@@ -4050,8 +4274,10 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
                                       gammas : Array(Int32),
                                       cluster_count : Int32,
                                       state_mode : String,
-                                      oracle_gen_calib : Int32) : Array(BlockSurrogateSuiteRow)
+                                      oracle_gen_calib : Int32,
+                                      tree_top_k : Int32?) : Array(BlockSurrogateSuiteRow)
   rows = [] of BlockSurrogateSuiteRow
+  tree_rows = [] of BlockSurrogateTreeSuiteRow
   token_sets.each do |prompt_case|
     prompt_name = prompt_case[:name]
     ids = prompt_case[:token_ids]
@@ -4078,7 +4304,8 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       block_label = layer_block_label(block_start, block_end)
       puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=global rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
-        adapter, stats, "global", block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode)
+        adapter, stats, "global", block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode,
+        tree_rows, tree_top_k)
 
       next unless cluster_count > 1
 
@@ -4088,11 +4315,13 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       mix_stats = block_residual_mixture_stats(samples, mixture, train_count)
       puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} train_ms=#{mix_train_ms.round(3)}"
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
-        mixture, mix_stats, "mixture", block_rank, mixture.centroids.size, prompt_calib_count, gen_tokens, gammas, state_mode)
+        mixture, mix_stats, "mixture", block_rank, mixture.centroids.size, prompt_calib_count, gen_tokens,
+        gammas, state_mode, tree_rows, tree_top_k)
     end
   end
 
   print_block_surrogate_suite_scoreboard(rows)
+  print_block_surrogate_tree_scoreboard(tree_rows)
   rows
 end
 
@@ -7066,6 +7295,7 @@ simulate_block_surrogate_self_spec_gammas = [] of Int32
 simulate_block_surrogate_suite_blocks = [] of LayerBlock
 simulate_block_surrogate_suite_prompts = [] of NamedPrompt
 simulate_block_surrogate_oracle_gen_calib = 0
+simulate_block_surrogate_tree_oracle_k : Int32? = nil
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -7197,6 +7427,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
   p.on("--block-surrogate-oracle-gen-calib=N", "Probe-only upper bound: add N exact generated-token block samples to training while still drafting from the original prompt boundary") { |v| simulate_block_surrogate_oracle_gen_calib = v.to_i }
   p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
+  p.on("--simulate-block-surrogate-tree-oracle=K", "Run block-surrogate top-K tree oracle using --simulate-block-surrogate-self-spec-gammas as fixed chunk schedules") { |v| simulate_block_surrogate_tree_oracle_k = v.to_i }
   p.on("--simulate-block-surrogate-suite-blocks=LIST", "Run one-process block-surrogate suite over blocks; use 24-30 for singletons or START:END items") { |v| simulate_block_surrogate_suite_blocks = parse_layer_block_list(v) }
   p.on("--simulate-block-surrogate-suite-prompt=NAME::TEXT", "Additional prompt for block-surrogate suite; main --prompt is always included") do |v|
     add_block_surrogate_suite_prompt.call(v)
@@ -7320,6 +7551,11 @@ unless simulate_block_surrogate_self_spec_gammas.empty?
   raise "--simulate-block-surrogate-self-spec-gammas requires --simulate-generate=N" unless simulate_generate_tokens > 0
   raise "block surrogate self-spec gamma values must be positive" if simulate_block_surrogate_self_spec_gammas.any? { |v| v <= 0 }
 end
+if tree_k = simulate_block_surrogate_tree_oracle_k
+  raise "--simulate-block-surrogate-tree-oracle requires K between 2 and 16" unless tree_k >= 2 && tree_k <= 16
+  raise "--simulate-block-surrogate-tree-oracle requires --simulate-block-surrogate-self-spec-gammas=LIST as fixed schedules" if simulate_block_surrogate_self_spec_gammas.empty?
+  raise "--simulate-block-surrogate-tree-oracle requires --simulate-generate=N" unless simulate_generate_tokens > 0
+end
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
@@ -7359,7 +7595,8 @@ unless simulate_block_surrogate_suite_blocks.empty?
   run_block_surrogate_suite(weights, suite_token_sets, simulate_block_surrogate_suite_blocks,
     block_rank, pca_iters, calib_tokens, simulate_generate_tokens,
     simulate_block_surrogate_self_spec_gammas, simulate_block_surrogate_clusters,
-    simulate_block_surrogate_state_mode, simulate_block_surrogate_oracle_gen_calib)
+    simulate_block_surrogate_state_mode, simulate_block_surrogate_oracle_gen_calib,
+    simulate_block_surrogate_tree_oracle_k)
 end
 
 if block_start = simulate_block_surrogate_start
@@ -7393,6 +7630,12 @@ if block_start = simulate_block_surrogate_start
     simulate_block_surrogate_self_spec_gammas.each do |gamma|
       spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
       puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
+      if top_k = simulate_block_surrogate_tree_oracle_k
+        tree = simulate_block_surrogate_tree_oracle(weights, token_ids, simulate_generate_tokens, top_k, [gamma],
+          block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
+        parity = tree[:exact_ids] == tree[:emitted_ids]
+        puts "block_surrogate_tree_oracle block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} top_k=#{top_k} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+      end
     end
   end
   if simulate_block_surrogate_policy
@@ -7406,6 +7649,12 @@ if block_start = simulate_block_surrogate_start
   simulate_block_surrogate_self_spec_gammas.each do |gamma|
     spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, simulate_generate_tokens, gamma, block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
     puts "block_surrogate_self_spec block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')} baseline_ids=#{spec[:baseline_ids].join(',')} draft_ids=#{spec[:draft_ids].join(',')}"
+    if top_k = simulate_block_surrogate_tree_oracle_k
+      tree = simulate_block_surrogate_tree_oracle(weights, token_ids, simulate_generate_tokens, top_k, [gamma],
+        block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
+      parity = tree[:exact_ids] == tree[:emitted_ids]
+      puts "block_surrogate_tree_oracle block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 top_k=#{top_k} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} schedule_history=#{tree[:schedule_history].join(',')} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+    end
   end
 end
 

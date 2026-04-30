@@ -6247,3 +6247,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "fuse this static block map" to "find a proposal source that remains stable after generated tokens leave the prompt manifold."
 - maieutic: Exact parity is guaranteed by verification, but speed requires high acceptance and a draft body cheaper than full decode over more than one or two chunks.
 - adversary: Oracle calibration was an upper bound; because it failed, a naive online retrain is not worth implementing before a stronger model/selector is found.
+
+### [LM-QWEN35-BLOCK-SURROGATE-TREE-ORACLE-1] Static block residual has useful top-K mass but is not yet a speed route
+**status:** verified
+**trust:** {F:0.86, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-tree-oracle=K` is implemented for block-surrogate probes. It keeps exact verifier parity, scores the approximate block policy as a top-K branch upper bound, and reports per-row `block_surrogate_tree_oracle` plus grouped `block_surrogate_tree_aggregate` metrics: top1/topK rates, misses, full-rescue chunks, rank-ordered branch tokens, and full branch tokens."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_tree_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_tree_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` and spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_tree_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-04-30
+  verified_at: 2026-04-30
+  decay_trigger: block-surrogate tree oracle semantics, top-K ranking, suite output schema, or exact verifier baseline changes
+- claim: "The broad `20:27/rank48` route is refuted as a flexible static block candidate on main/gen16. With top-2 tree oracle and fixed gamma4, it had only `56.25%` top-K coverage, `7` misses, `50.0%` top1, and average rank-branch cost `1.5`; self-spec top1 accept was only `26.67%`."
+  source: `/tmp/qwen35_block_tree_rank48_k2_gen16_20260430_182527.log` (interrupted after the `20:27` refutation row)
+  verified_at: 2026-04-30
+  decay_trigger: prompt, generated length, rank/calibration, block selection, top_k, or block-surrogate policy changes
+- claim: "The safer `25:28/rank32` route shows useful candidate mass but is still not promotion-ready. On main/gen16/gamma4, top1 self-spec accept was `45.83%`, but top-5 tree oracle covered `93.75%` with `1` miss, `4/5` full-rescue chunks, and average rank-ordered branch cost `1.75`."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_main_gen16_20260430_183337.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt, generated length, rank/calibration, block selection, top_k, or block-surrogate policy changes
+- claim: "Increasing `25:28` to rank48 did not remove the miss: top-5 stayed `93.75%`, misses stayed `1`, and average rank-ordered branch cost worsened slightly to `1.812`. Probe-only oracle generated calibration with `oracle_gen_calib=8` also did not remove the miss: top-5 stayed `93.75%`, misses stayed `1`, and average rank-ordered branch cost was `1.812`."
+  source: `/tmp/qwen35_block_tree_25_28_rank48_k5_main_gen16_20260430_183931.log` and `/tmp/qwen35_block_tree_25_28_rank32_k5_oracle8_suite_main_gen16_20260430_184710.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt, generated length, rank/calibration, oracle calibration path, top_k, or block-surrogate policy changes
+**decision:** Continue top-K/tree branch reuse and candidate-source research, but do not build a Metal superfused static block residual kernel yet. The current map has enough top-5 mass to justify a learned reranker/proposal-head experiment, but it still needs too much verifier/branch work to beat plain exact decode if the draft body remains "all other layers plus a four-layer skip."
+**quadrumvirate:**
+- cassandra: Top-K mass can hide top1 drift, but one persistent miss at `gen16` is enough to erase speculative speed unless a fallback is cheap and predicted early.
+- daedalus: The frame shifts from "static block residual as the draft body" to "static block residual as one feature/candidate source for a branch-ranked proposal system."
+- maieutic: Fusing the surrogate only lowers the skipped-block cost; it does not eliminate the remaining exact layers or the branch verifier cost.
+- adversary: This is an oracle upper bound, not production tree scheduling. A real branch implementation must account for branch-state copies, rank-ordered verifier work, and failure fallback before any speed claim.
