@@ -6039,3 +6039,35 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   decay_trigger: top2 spec, probe CLI setup, Metal bridge, or decode top2 path changes
 **decision:** Do not spend Metal/kernel work on global or nearest-centroid static block-residual maps. The next coherent branch is state-aware/free-run layer-local acceptance, or a materially different nonlinear/online selector. Acceptance rather than hidden cosine decides usefulness.
 **adversary_update:** This is still not a refutation of block-level self-drafting. It refutes the cheap static linear map and nearest-centroid static mixture under small local gates.
+
+### [LM-QWEN35-BLOCK-SURROGATE-POLICY-GATE-1] Block surrogate must be scored by top-k acceptance, not hidden cosine
+**status:** verified
+**trust:** {F:0.82, G:low, R:0.82}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-policy` substitutes a trained block residual surrogate into the full forward path and reports top1/top5/KL for prompt logits plus optional teacher-forced greedy drift via `--simulate-generate`. `--block-surrogate-state-mode=skip|shadow` distinguishes cheap stateless skipping from exact state-update diagnostics."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_policy_build2 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_policy_probe2 --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: block-surrogate policy path, state-mode semantics, output metric schema, or layer forward implementation changes
+- claim: "Good hidden cosine is not enough. On 9B layer `0:0`, `tokens=48/calib=24/rank24`, hidden cosine mean is `0.9795881`, but stateless policy prompt top1 is only `37.5%` and 8-token greedy top1 is `37.5%`. Increasing to `tokens=64/calib=32/rank32` improves short greedy to `100%` over 4 tokens, but prompt top1 is still only `68.75%`."
+  source: `/tmp/qwen35_block_policy_0_0_r24_t48_g8.log` and `/tmp/qwen35_block_policy_0_0_r32_t64_g4.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, generated length, model file, or block selection changes
+- claim: "Exact shadow state update does not improve layer `0:0` versus stateless skip in the checked shape; both `skip` and `shadow` report prompt top1 `43.75%` and 4-token greedy top1 `75%` at `tokens=32/calib=16/rank16`. The local output approximation/downstream propagation, not only missing recurrent state update, is enough to cause drift."
+  source: `/tmp/qwen35_block_policy_0_0_r16_t32_g4_skip.log` and `/tmp/qwen35_block_policy_0_0_r16_t32_g4_shadow.log`
+  verified_at: 2026-04-29
+  decay_trigger: state-mode implementation, prompt, token count, calibration count, rank, generated length, model file, or block selection changes
+- claim: "Early/mid single-layer residual surrogates are not robust at small rank/calibration. On 9B `tokens=32/calib=16/rank16/gen2`, layers `1:1`, `2:2`, and `4:4` have prompt top1 `75%` and top5 `100%`, but each fails one of two greedy tokens (`50%` top1)."
+  source: `/tmp/qwen35_block_policy_1_1_r16_t32_g2.log`, `/tmp/qwen35_block_policy_2_2_r16_t32_g2.log`, `/tmp/qwen35_block_policy_4_4_r16_t32_g2.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, generated length, model file, or block selection changes
+- claim: "Late single-layer residual surrogates are more promising but still not default-safe. On 9B `tokens=32/calib=16/rank16`, layer `24:24` has 8-token greedy top1 `87.5%`, layers `25:25` and `28:28` have 4-token greedy top1 `100%`, while layer `30:30` drops to `75%`. A two-layer late block `24:25` also drops to `75%` over 4 generated tokens."
+  source: `/tmp/qwen35_block_policy_24_24_r16_t32_g8.log`, `/tmp/qwen35_block_policy_25_25_r16_t32_g4.log`, `/tmp/qwen35_block_policy_28_28_r16_t32_g4.log`, `/tmp/qwen35_block_policy_30_30_r16_t32_g4.log`, `/tmp/qwen35_block_policy_24_25_r16_t32_g4.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, token count, calibration count, rank, generated length, model file, or block selection changes
+- claim: "Focused regression spec still passes after adding the block-surrogate policy gate."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_policy_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
+  verified_at: 2026-04-29
+  decay_trigger: top2 spec, block-surrogate policy CLI, Metal bridge, or decode top2 path changes
+**decision:** Continue only through exact self-spec acceptance gates, starting with late single-layer candidates (`25:25`, `28:28`) and small chunks. Do not build Metal for block residual maps until a candidate improves exact self-spec acceptance/cost, because hidden cosine and prompt top5 are too weak as promotion metrics.
+**adversary_update:** These are small-prompt/small-gen gates. Positive late-layer rows are hypotheses for self-spec proposal quality, not production speed claims.

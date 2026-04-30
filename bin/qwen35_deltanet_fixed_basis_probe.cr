@@ -2732,6 +2732,72 @@ private def predict_block_residual(mixture : BlockResidualMixture, inp : Array(F
   predict_block_residual(adapter, inp)
 end
 
+private def logits_with_block_surrogate_policy(weights : ML::GGUF::Qwen35Weights,
+                                               token_id : Int32,
+                                               pos : Int32,
+                                               state : ML::GGUF::Qwen35CPU::State,
+                                               block_start : Int32,
+                                               block_end : Int32,
+                                               adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                               calib_count : Int32,
+                                               approximate : Bool,
+                                               state_mode : String = "skip") : Array(Float32)
+  hp = weights.hparams
+  x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+  il = 0
+  while il < weights.layers.size
+    if approximate && pos >= calib_count && il == block_start
+      if state_mode == "shadow"
+        exact_x = x
+        j = block_start
+        while j <= block_end
+          case layer = weights.layers[j]
+          in ML::GGUF::Qwen35FullAttnWeights
+            exact_x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(exact_x, pos, layer, state.layers[j], hp, state.max_seq)
+          in ML::GGUF::Qwen35RecurrentWeights
+            exact_x = recurrent_layer_cpu_exact(exact_x, layer, state.layers[j], hp)
+          end
+          j += 1
+        end
+      elsif state_mode != "skip"
+        raise "unsupported block surrogate state mode #{state_mode.inspect}; expected skip or shadow"
+      end
+      delta = predict_block_residual(adapter, x.map(&.to_f64))
+      x = Array(Float32).new(x.size) { |d| (x[d].to_f64 + delta[d]).to_f32 }
+      il = block_end + 1
+      next
+    end
+
+    case layer = weights.layers[il]
+    in ML::GGUF::Qwen35FullAttnWeights
+      x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(x, pos, layer, state.layers[il], hp, state.max_seq)
+    in ML::GGUF::Qwen35RecurrentWeights
+      x = recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
+    end
+    il += 1
+  end
+  x = ML::GGUF::Qwen35CPU.rms_norm(x, weights.output_norm, hp.rms_eps)
+  ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
+end
+
+private def compare_logit_rows(exact : Array(Float32),
+                               approx : Array(Float32),
+                               cosines : Array(Float64),
+                               kls : Array(Float64)) : NamedTuple(max_delta: Float64, top1_match: Bool, top5_hit: Bool, margin: Float64, confident_mismatch: Bool)
+  cosines << cosine(exact, approx)
+  kls << softmax_kl(exact, approx)
+  exact_top1 = top1(exact)
+  approx_top1 = top1(approx)
+  margin = top1_margin(exact)
+  {
+    max_delta:          max_abs_delta(exact, approx),
+    top1_match:         exact_top1 == approx_top1,
+    top5_hit:           top_k_indices(approx, 5).includes?(exact_top1),
+    margin:             margin,
+    confident_mismatch: exact_top1 != approx_top1 && margin >= 0.5,
+  }
+end
+
 private def train_ffn_updown_adapter(samples : Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))),
                                      basis : Array(Array(Float64)),
                                      down_basis : Array(Array(Float32)),
@@ -3445,6 +3511,119 @@ private def simulate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
     approx_steps:         lr_states.values.sum(&.approx_steps),
     fallback_steps:       lr_states.values.sum(&.fallback_steps),
     output_fallbacks:     output_fallbacks,
+    exact_ids:            exact_ids,
+    approx_ids:           approx_ids,
+  }
+end
+
+private def simulate_block_surrogate_logits_policy(weights : ML::GGUF::Qwen35Weights,
+                                                   token_ids : Array(Int32),
+                                                   block_start : Int32,
+                                                   block_end : Int32,
+                                                   adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                                   calib_count : Int32,
+                                                   state_mode : String) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_blocks: Int32, skipped_layers: Int32)
+  exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
+  approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: token_ids.size + 2)
+  cosines = [] of Float64
+  kls = [] of Float64
+  max_delta = 0.0
+  top_matches = 0
+  top5_hits = 0
+  min_margin = Float64::INFINITY
+  confident_mismatches = 0
+  compared = 0
+
+  token_ids.each_with_index do |token_id, pos|
+    exact = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, exact_state, block_start, block_end, adapter, calib_count, false, state_mode)
+    approx = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, approx_state, block_start, block_end, adapter, calib_count, true, state_mode)
+    next if pos < calib_count
+
+    cmp = compare_logit_rows(exact, approx, cosines, kls)
+    max_delta = cmp[:max_delta] if cmp[:max_delta] > max_delta
+    top_matches += 1 if cmp[:top1_match]
+    top5_hits += 1 if cmp[:top5_hit]
+    min_margin = cmp[:margin] if cmp[:margin] < min_margin
+    confident_mismatches += 1 if cmp[:confident_mismatch]
+    compared += 1
+  end
+
+  {
+    mean_cos:             cosines.sum / cosines.size,
+    min_cos:              cosines.min,
+    max_delta:            max_delta,
+    top1_match:           100.0 * top_matches / compared,
+    top5_hit:             100.0 * top5_hits / compared,
+    mean_kl:              kls.sum / kls.size,
+    max_kl:               kls.max,
+    min_margin:           min_margin,
+    confident_mismatches: confident_mismatches,
+    approx_blocks:        compared,
+    skipped_layers:       compared * (block_end - block_start + 1),
+  }
+end
+
+private def simulate_block_surrogate_greedy_policy(weights : ML::GGUF::Qwen35Weights,
+                                                   prompt_ids : Array(Int32),
+                                                   gen_tokens : Int32,
+                                                   block_start : Int32,
+                                                   block_end : Int32,
+                                                   adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                                   calib_count : Int32,
+                                                   state_mode : String) : NamedTuple(mean_cos: Float64, min_cos: Float64, max_delta: Float64, top1_match: Float64, top5_hit: Float64, mean_kl: Float64, max_kl: Float64, min_margin: Float64, confident_mismatches: Int32, approx_blocks: Int32, skipped_layers: Int32, exact_ids: Array(Int32), approx_ids: Array(Int32))
+  exact_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + gen_tokens + 2)
+  approx_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + gen_tokens + 2)
+  exact_logits = [] of Float32
+  approx_logits = [] of Float32
+
+  prompt_ids.each_with_index do |token_id, pos|
+    exact_logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, exact_state, block_start, block_end, adapter, calib_count, false, state_mode)
+    approx_logits = logits_with_block_surrogate_policy(weights, token_id, pos.to_i32, approx_state, block_start, block_end, adapter, calib_count, true, state_mode)
+  end
+
+  cosines = [] of Float64
+  kls = [] of Float64
+  max_delta = 0.0
+  top_matches = 0
+  top5_hits = 0
+  min_margin = Float64::INFINITY
+  confident_mismatches = 0
+  exact_ids = [] of Int32
+  approx_ids = [] of Int32
+
+  gen_tokens.times do |step|
+    exact_top1 = top1(exact_logits)
+    approx_top1 = top1(approx_logits)
+    exact_ids << exact_top1
+    approx_ids << approx_top1
+
+    cmp = compare_logit_rows(exact_logits, approx_logits, cosines, kls)
+    max_delta = cmp[:max_delta] if cmp[:max_delta] > max_delta
+    top_matches += 1 if cmp[:top1_match]
+    top5_hits += 1 if cmp[:top5_hit]
+    min_margin = cmp[:margin] if cmp[:margin] < min_margin
+    confident_mismatches += 1 if cmp[:confident_mismatch]
+
+    pos = prompt_ids.size + step
+    exact_logits = logits_with_block_surrogate_policy(weights, exact_top1, pos.to_i32, exact_state, block_start, block_end, adapter, calib_count, false, state_mode)
+    # Teacher-forced on the exact greedy token to isolate hidden/state drift
+    # from different-token cascade.
+    approx_logits = logits_with_block_surrogate_policy(weights, exact_top1, pos.to_i32, approx_state, block_start, block_end, adapter, calib_count, true, state_mode)
+  end
+
+  approx_blocks = gen_tokens + prompt_ids.size - calib_count
+  {
+    mean_cos:             cosines.sum / cosines.size,
+    min_cos:              cosines.min,
+    max_delta:            max_delta,
+    top1_match:           100.0 * top_matches / gen_tokens,
+    top5_hit:             100.0 * top5_hits / gen_tokens,
+    mean_kl:              kls.sum / kls.size,
+    max_kl:               kls.max,
+    min_margin:           min_margin,
+    confident_mismatches: confident_mismatches,
+    approx_blocks:        approx_blocks,
+    skipped_layers:       approx_blocks * (block_end - block_start + 1),
     exact_ids:            exact_ids,
     approx_ids:           approx_ids,
   }
@@ -6391,6 +6570,8 @@ simulate_block_surrogate_start : Int32? = nil
 simulate_block_surrogate_end : Int32? = nil
 simulate_block_surrogate_rank : Int32? = nil
 simulate_block_surrogate_clusters = 1
+simulate_block_surrogate_policy = false
+simulate_block_surrogate_state_mode = "skip"
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -6506,6 +6687,8 @@ OptionParser.parse(ARGV) do |p|
   end
   p.on("--block-surrogate-rank=N", "Rank for --simulate-block-residual-surrogate; defaults to --simulate-logits-rank or max --ranks") { |v| simulate_block_surrogate_rank = v.to_i }
   p.on("--block-surrogate-clusters=N", "Train N local residual adapters selected by nearest input centroid for --simulate-block-residual-surrogate") { |v| simulate_block_surrogate_clusters = v.to_i }
+  p.on("--simulate-block-surrogate-policy", "Also substitute the trained block surrogate into the full model and report logit/greedy top-k drift") { simulate_block_surrogate_policy = true }
+  p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
   p.on("--simulate-lowrank-metal-chunk-thread-overlap", "Overlap one async low-rank layer chunk with chunk-major verifier in a worker thread") { simulate_lowrank_metal_chunk_thread_overlap = true }
   p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
@@ -6605,6 +6788,9 @@ if simulate_block_surrogate_start || simulate_block_surrogate_end
   raise "--simulate-block-residual-surrogate must set both start and end" unless simulate_block_surrogate_start && simulate_block_surrogate_end
 end
 raise "block surrogate clusters must be positive" unless simulate_block_surrogate_clusters > 0
+unless {"skip", "shadow"}.includes?(simulate_block_surrogate_state_mode)
+  raise "--block-surrogate-state-mode must be skip or shadow"
+end
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
@@ -6651,6 +6837,22 @@ if block_start = simulate_block_surrogate_start
     mix_train_ms = (Time.instant - t_mix).total_milliseconds
     mix_stats = block_residual_mixture_stats(block_samples, mixture, calib_count)
     puts "block_residual_surrogate_mixture block=#{block_start}:#{block_end} rank=#{block_rank} clusters=#{mixture.centroids.size} requested_clusters=#{simulate_block_surrogate_clusters} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{calib_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rmse=#{mix_stats[:rmse].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} residual_energy=#{mix_stats[:residual_energy].round(8)} max_delta=#{mix_stats[:max_delta].round(6)} train_ms=#{mix_train_ms.round(3)} note=nearest_input_pca_centroid_teacher_forced_static"
+    if simulate_block_surrogate_policy
+      mix_logit = simulate_block_surrogate_logits_policy(weights, token_ids, block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
+      puts "block_surrogate_logit_policy block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} top1_match=#{mix_logit[:top1_match].round(2)}% top5_hit=#{mix_logit[:top5_hit].round(2)}% mean_cos=#{mix_logit[:mean_cos].round(8)} min_cos=#{mix_logit[:min_cos].round(8)} mean_kl=#{mix_logit[:mean_kl].round(8)} max_kl=#{mix_logit[:max_kl].round(8)} min_margin=#{mix_logit[:min_margin].round(6)} confident_mismatches=#{mix_logit[:confident_mismatches]} approx_blocks=#{mix_logit[:approx_blocks]} skipped_layers=#{mix_logit[:skipped_layers]}"
+      if simulate_generate_tokens > 0
+        mix_gen = simulate_block_surrogate_greedy_policy(weights, token_ids, simulate_generate_tokens, block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
+        puts "block_surrogate_greedy_policy block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} gen_tokens=#{simulate_generate_tokens} top1_match=#{mix_gen[:top1_match].round(2)}% top5_hit=#{mix_gen[:top5_hit].round(2)}% mean_cos=#{mix_gen[:mean_cos].round(8)} min_cos=#{mix_gen[:min_cos].round(8)} mean_kl=#{mix_gen[:mean_kl].round(8)} max_kl=#{mix_gen[:max_kl].round(8)} min_margin=#{mix_gen[:min_margin].round(6)} confident_mismatches=#{mix_gen[:confident_mismatches]} approx_blocks=#{mix_gen[:approx_blocks]} skipped_layers=#{mix_gen[:skipped_layers]} exact_ids=#{mix_gen[:exact_ids].join(',')} approx_ids=#{mix_gen[:approx_ids].join(',')}"
+      end
+    end
+  end
+  if simulate_block_surrogate_policy
+    logit = simulate_block_surrogate_logits_policy(weights, token_ids, block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
+    puts "block_surrogate_logit_policy block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 top1_match=#{logit[:top1_match].round(2)}% top5_hit=#{logit[:top5_hit].round(2)}% mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} mean_kl=#{logit[:mean_kl].round(8)} max_kl=#{logit[:max_kl].round(8)} min_margin=#{logit[:min_margin].round(6)} confident_mismatches=#{logit[:confident_mismatches]} approx_blocks=#{logit[:approx_blocks]} skipped_layers=#{logit[:skipped_layers]}"
+    if simulate_generate_tokens > 0
+      gen = simulate_block_surrogate_greedy_policy(weights, token_ids, simulate_generate_tokens, block_start, block_end, block_adapter, calib_count, simulate_block_surrogate_state_mode)
+      puts "block_surrogate_greedy_policy block=#{block_start}:#{block_end} mode=global state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=1 gen_tokens=#{simulate_generate_tokens} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_blocks=#{gen[:approx_blocks]} skipped_layers=#{gen[:skipped_layers]} exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
+    end
   end
 end
 
