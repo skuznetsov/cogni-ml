@@ -6131,3 +6131,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful route may be "late surrogate with confidence/offramp" rather than "surrogate whole last third."
 - maieutic: The token stream segment matters as much as the prompt class; changing `tokens_limit` changes the generated ids and can hide a failure.
 - adversary: `parity=true` protects quality, but rejects still cost verifier/replay work; speed claims require wall-cost measurement.
+
+### [LM-QWEN35-BLOCK-SURROGATE-SUITE-TOOLING-1] In-process block-surrogate suite scoreboard is available
+**status:** verified
+**trust:** {F:0.86, G:medium, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-suite-blocks=LIST` now runs block-surrogate self-spec gates in one model load across multiple blocks and prompts. The main prompt is included automatically; extra prompts can be supplied with `--simulate-block-surrogate-suite-prompt=NAME::TEXT` or `--simulate-block-surrogate-suite-prompts-file=PATH`."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_suite_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_suite_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-04-29
+  verified_at: 2026-04-29
+  decay_trigger: block-surrogate CLI, prompt tokenization, suite runner, or self-spec gate semantics change
+- claim: "The suite prints per-row `block_surrogate_suite_scoreboard` and grouped `block_surrogate_suite_aggregate` tables. The aggregate hard-surfaces `parity_all`, `verifier_parity_all`, accept mean/min, reject count, accepted/proposed totals, top2/top5 minima, draft margin minimum, hidden cosine, and RMSE for each block/mode/rank/gamma."
+  source: `/tmp/qwen35_block_suite_smoke.log`
+  verified_at: 2026-04-29
+  decay_trigger: suite scoreboard schema, score function, metric names, or self-spec gate output changes
+- claim: "Tooling smoke with blocks `25:25,28:28`, main+code prompts, `rank12`, `gen4`, `gamma4` emitted row and aggregate scoreboards and preserved `parity=true` on all rows. The smoke intentionally used a weak rank/short calibration, so its accept rates are tooling evidence only, not model-quality conclusions."
+  source: `/tmp/qwen35_block_suite_smoke.log`
+  verified_at: 2026-04-29
+  decay_trigger: prompt, rank, token count, calibration count, generated length, model file, or suite runner changes
+- claim: "Focused regression spec still passes after adding the suite tooling."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_suite_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`
+  verified_at: 2026-04-29
+  decay_trigger: top2 spec, Metal bridge, decode top2 path, or probe dependencies change
+**decision:** Use this suite runner for the next real late-block screen (`24-30`, default/code/json/reasoning, `rank16/24`, `gen8/16`) before building a GPU-resident surrogate route.
+**quadrumvirate:**
+- cassandra: The suite reduces model reload noise and makes prompt-local overfit easier to see, but the current CPU runner still does not prove speed.
+- daedalus: The next frame is aggregate route selection by prompt/block/margin, not one-off manual log reading.
+- maieutic: The scoreboard's score is only a ranking convenience; promotion still requires parity, accept stability, and wall-cost evidence.
+- adversary: Smoke accept rates are not conclusions because the smoke used deliberately small `rank12/calib12/gen4`; treat it as tooling verification only.

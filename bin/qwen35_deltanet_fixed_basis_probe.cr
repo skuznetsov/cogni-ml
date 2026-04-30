@@ -17,6 +17,10 @@ private alias LayerVectorMap = Hash(Int32, BasisSet)
 private alias LayerBasisMap = Hash(Int32, BasisSet)
 private alias FFNBasisMap = Hash(Int32, Array(Array(Float64)))
 private alias BlockResidualSample = NamedTuple(inp: Array(Float64), out: Array(Float64), delta: Array(Float64))
+private alias LayerBlock = NamedTuple(start: Int32, end: Int32)
+private alias NamedPrompt = NamedTuple(name: String, text: String)
+private alias PromptTokenSet = NamedTuple(name: String, token_ids: Array(Int32))
+private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, parity: Bool, verifier_parity: Bool, accept_rate: Float64, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, chunks: Int32, full_accept_chunks: Int32, correction_steps: Int32, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, draft_margin_min: Float64, hidden_cos_mean: Float64, hidden_cos_min: Float64, rel_rmse: Float64, delta_rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
 
@@ -3794,6 +3798,188 @@ private def simulate_block_surrogate_self_spec_policy(weights : ML::GGUF::Qwen35
   }
 end
 
+private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRow),
+                                             weights,
+                                             prompt_name : String,
+                                             token_ids : Array(Int32),
+                                             block_start : Int32,
+                                             block_end : Int32,
+                                             adapter,
+                                             stats,
+                                             mode : String,
+                                             rank : Int32,
+                                             clusters : Int32,
+                                             calib_count : Int32,
+                                             gen_tokens : Int32,
+                                             gammas : Array(Int32),
+                                             state_mode : String) : Nil
+  block = layer_block_label(block_start, block_end)
+  gammas.each do |gamma|
+    spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, gen_tokens, gamma,
+      block_start, block_end, adapter, calib_count, state_mode)
+    draft_margin_min = spec[:draft_min_margin_history].empty? ? 0.0 : spec[:draft_min_margin_history].min
+    puts "block_surrogate_suite_self_spec prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} gamma=#{gamma} gen_tokens=#{gen_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% draft_margin_min=#{draft_margin_min.round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')}"
+    rows << {
+      prompt:                prompt_name,
+      block:                 block,
+      mode:                  mode,
+      rank:                  rank,
+      gamma:                 gamma,
+      parity:                spec[:parity],
+      verifier_parity:       spec[:verifier_parity],
+      accept_rate:           spec[:accept_rate],
+      rejections:            spec[:rejections],
+      accepted_draft_tokens: spec[:accepted_draft_tokens],
+      proposed_tokens:       spec[:proposed_tokens],
+      chunks:                spec[:chunks],
+      full_accept_chunks:    spec[:full_accept_chunks],
+      correction_steps:      spec[:correction_steps],
+      draft_top2_hit_rate:   spec[:draft_top2_hit_rate],
+      draft_top5_hit_rate:   spec[:draft_top5_hit_rate],
+      draft_margin_min:      draft_margin_min,
+      hidden_cos_mean:       stats[:mean_cos],
+      hidden_cos_min:        stats[:min_cos],
+      rel_rmse:              stats[:rel_rmse],
+      delta_rel_rmse:        stats[:delta_rel_rmse],
+    }
+  end
+end
+
+private def block_surrogate_suite_row_score(row : BlockSurrogateSuiteRow) : Float64
+  return -1.0e9 unless row[:parity] && row[:verifier_parity]
+
+  row[:accept_rate] - (row[:rejections] * 5.0) + Math.min(row[:draft_margin_min], 10.0) * 0.05
+end
+
+private def print_block_surrogate_suite_scoreboard(rows : Array(BlockSurrogateSuiteRow), limit : Int32 = 50) : Nil
+  return if rows.empty?
+
+  ranked = rows.sort { |a, b| block_surrogate_suite_row_score(b) <=> block_surrogate_suite_row_score(a) }
+  puts "block_surrogate_suite_scoreboard rows=#{rows.size} limit=#{limit}"
+  puts "rank prompt block mode gamma parity verifier_parity accept% rejections accepted proposed chunks full_accept margin_min top2% top5% hidden_cos rel_rmse delta_rel_rmse score"
+  ranked.first(limit).each_with_index do |row, i|
+    puts "#{i + 1} #{row[:prompt]} #{row[:block]} #{row[:mode]} #{row[:gamma]} #{row[:parity]} #{row[:verifier_parity]} #{row[:accept_rate].round(2)} #{row[:rejections]} #{row[:accepted_draft_tokens]} #{row[:proposed_tokens]} #{row[:chunks]} #{row[:full_accept_chunks]} #{row[:draft_margin_min].round(4)} #{row[:draft_top2_hit_rate].round(2)} #{row[:draft_top5_hit_rate].round(2)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse].round(6)} #{row[:delta_rel_rmse].round(6)} #{block_surrogate_suite_row_score(row).round(4)}"
+  end
+
+  groups = Hash(String, Array(BlockSurrogateSuiteRow)).new { |h, k| h[k] = [] of BlockSurrogateSuiteRow }
+  rows.each do |row|
+    groups["#{row[:block]}|#{row[:mode]}|#{row[:rank]}|#{row[:gamma]}"] << row
+  end
+
+  summaries = [] of NamedTuple(
+    key: String,
+    prompts: Int32,
+    parity_all: Bool,
+    verifier_parity_all: Bool,
+    accept_mean: Float64,
+    accept_min: Float64,
+    rejections: Int32,
+    accepted: Int32,
+    proposed: Int32,
+    top2_min: Float64,
+    top5_min: Float64,
+    margin_min: Float64,
+    hidden_cos_mean: Float64,
+    rel_rmse_mean: Float64,
+    delta_rel_rmse_mean: Float64,
+    score: Float64)
+  groups.each do |key, group|
+    prompts = group.size
+    parity_all = group.all? { |row| row[:parity] }
+    verifier_parity_all = group.all? { |row| row[:verifier_parity] }
+    accept_mean = group.sum { |row| row[:accept_rate] } / prompts
+    accept_min = group.min_of { |row| row[:accept_rate] }
+    rejections = group.sum { |row| row[:rejections] }
+    accepted = group.sum { |row| row[:accepted_draft_tokens] }
+    proposed = group.sum { |row| row[:proposed_tokens] }
+    top2_min = group.min_of { |row| row[:draft_top2_hit_rate] }
+    top5_min = group.min_of { |row| row[:draft_top5_hit_rate] }
+    margin_min = group.min_of { |row| row[:draft_margin_min] }
+    hidden_cos_mean = group.sum { |row| row[:hidden_cos_mean] } / prompts
+    rel_rmse_mean = group.sum { |row| row[:rel_rmse] } / prompts
+    delta_rel_rmse_mean = group.sum { |row| row[:delta_rel_rmse] } / prompts
+    score = (parity_all && verifier_parity_all) ? (accept_min + accept_mean / 100.0 - rejections * 2.0 + Math.min(margin_min, 10.0) * 0.05) : -1.0e9
+    summaries << {
+      key:                  key,
+      prompts:              prompts,
+      parity_all:           parity_all,
+      verifier_parity_all:  verifier_parity_all,
+      accept_mean:          accept_mean,
+      accept_min:           accept_min,
+      rejections:           rejections,
+      accepted:             accepted,
+      proposed:             proposed,
+      top2_min:             top2_min,
+      top5_min:             top5_min,
+      margin_min:           margin_min,
+      hidden_cos_mean:      hidden_cos_mean,
+      rel_rmse_mean:        rel_rmse_mean,
+      delta_rel_rmse_mean:  delta_rel_rmse_mean,
+      score:                score,
+    }
+  end
+
+  ranked_summaries = summaries.sort { |a, b| b[:score] <=> a[:score] }
+  puts "block_surrogate_suite_aggregate groups=#{summaries.size} limit=#{limit}"
+  puts "rank block mode adapter_rank gamma prompts parity_all verifier_parity_all accept_mean accept_min rejections accepted proposed top2_min top5_min margin_min hidden_cos_mean rel_rmse_mean delta_rel_rmse_mean score"
+  ranked_summaries.first(limit).each_with_index do |row, i|
+    block, mode, adapter_rank, gamma = row[:key].split('|')
+    puts "#{i + 1} #{block} #{mode} #{adapter_rank} #{gamma} #{row[:prompts]} #{row[:parity_all]} #{row[:verifier_parity_all]} #{row[:accept_mean].round(2)} #{row[:accept_min].round(2)} #{row[:rejections]} #{row[:accepted]} #{row[:proposed]} #{row[:top2_min].round(2)} #{row[:top5_min].round(2)} #{row[:margin_min].round(4)} #{row[:hidden_cos_mean].round(6)} #{row[:rel_rmse_mean].round(6)} #{row[:delta_rel_rmse_mean].round(6)} #{row[:score].round(4)}"
+  end
+end
+
+private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
+                                      token_sets : Array(PromptTokenSet),
+                                      blocks : Array(LayerBlock),
+                                      block_rank : Int32,
+                                      pca_iters : Int32,
+                                      calib_tokens : Int32,
+                                      gen_tokens : Int32,
+                                      gammas : Array(Int32),
+                                      cluster_count : Int32,
+                                      state_mode : String) : Array(BlockSurrogateSuiteRow)
+  rows = [] of BlockSurrogateSuiteRow
+  token_sets.each do |prompt_case|
+    prompt_name = prompt_case[:name]
+    ids = prompt_case[:token_ids]
+    prompt_calib_count = Math.min(calib_tokens, ids.size - 1)
+    raise "block surrogate suite prompt #{prompt_name.inspect} needs at least one held-out token" unless prompt_calib_count > 0 && prompt_calib_count < ids.size
+    puts "block_surrogate_suite_prompt name=#{prompt_name} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} blocks=#{blocks.map { |b| layer_block_label(b[:start], b[:end]) }.join(',')} gammas=#{gammas.join(',')}"
+
+    blocks.each do |block|
+      block_start = block[:start]
+      block_end = block[:end]
+      raise "block surrogate suite end must be within layer count" unless block_end < weights.layers.size
+      t0 = Time.instant
+      samples = collect_block_residual_samples(weights, ids, block_start, block_end)
+      collect_ms = (Time.instant - t0).total_milliseconds
+      train_samples = samples[0, prompt_calib_count]
+
+      t_train = Time.instant
+      adapter = train_block_residual_surrogate(train_samples, block_start, block_end, block_rank, pca_iters)
+      train_ms = (Time.instant - t_train).total_milliseconds
+      stats = block_residual_surrogate_stats(samples, adapter, prompt_calib_count)
+      block_label = layer_block_label(block_start, block_end)
+      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=global rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
+      append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
+        adapter, stats, "global", block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode)
+
+      next unless cluster_count > 1
+
+      t_mix = Time.instant
+      mixture = train_block_residual_mixture(train_samples, block_start, block_end, block_rank, cluster_count, pca_iters)
+      mix_train_ms = (Time.instant - t_mix).total_milliseconds
+      mix_stats = block_residual_mixture_stats(samples, mixture, prompt_calib_count)
+      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{prompt_calib_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} train_ms=#{mix_train_ms.round(3)}"
+      append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
+        mixture, mix_stats, "mixture", block_rank, mixture.centroids.size, prompt_calib_count, gen_tokens, gammas, state_mode)
+    end
+  end
+
+  print_block_surrogate_suite_scoreboard(rows)
+  rows
+end
+
 private def simulate_self_spec_policy(weights : ML::GGUF::Qwen35Weights,
                                       prompt_ids : Array(Int32),
                                       gen_tokens : Int32,
@@ -4577,6 +4763,29 @@ private def parse_layer_block(value : String)
   end
   raise "layer block start must be <= end" unless start_layer <= end_layer
   {start: start_layer.to_i32, end: end_layer.to_i32}
+end
+
+private def parse_layer_block_list(value : String) : Array(LayerBlock)
+  blocks = [] of LayerBlock
+  value.split(/[,;]/).map(&.strip).reject(&.empty?).each do |raw|
+    if raw.includes?("-") && !raw.includes?(":") && !raw.includes?("..")
+      parts = raw.split('-').map(&.strip)
+      raise "block suite range expects START-END" unless parts.size == 2
+      first = parts[0].to_i
+      last = parts[1].to_i
+      raise "block suite range start must be <= end" unless first <= last
+      first.upto(last) { |il| blocks << {start: il.to_i32, end: il.to_i32} }
+    else
+      block = parse_layer_block(raw)
+      blocks << {start: block[:start], end: block[:end]}
+    end
+  end
+  raise "block suite block list must not be empty" if blocks.empty?
+  blocks.uniq
+end
+
+private def layer_block_label(block_start : Int32, block_end : Int32) : String
+  "#{block_start}:#{block_end}"
 end
 
 private def cheap_draft_variant_valid?(variant : String) : Bool
@@ -6738,6 +6947,8 @@ simulate_block_surrogate_clusters = 1
 simulate_block_surrogate_policy = false
 simulate_block_surrogate_state_mode = "skip"
 simulate_block_surrogate_self_spec_gammas = [] of Int32
+simulate_block_surrogate_suite_blocks = [] of LayerBlock
+simulate_block_surrogate_suite_prompts = [] of NamedPrompt
 simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
@@ -6818,6 +7029,18 @@ add_self_spec_suite_prompt = ->(raw : String) {
   simulate_self_spec_gpu_pipeline_suite_prompts << {name: safe_name, text: text}
 }
 
+add_block_surrogate_suite_prompt = ->(raw : String) {
+  if sep = raw.index("::")
+    name = raw[0, sep]
+    text = raw[(sep + 2)..]
+  else
+    name = "suite#{simulate_block_surrogate_suite_prompts.size + 1}"
+    text = raw
+  end
+  safe_name = name.empty? ? "suite#{simulate_block_surrogate_suite_prompts.size + 1}" : name.gsub(/[^A-Za-z0-9_.-]/, "_")
+  simulate_block_surrogate_suite_prompts << {name: safe_name, text: text}
+}
+
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
@@ -6856,6 +7079,17 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-block-surrogate-policy", "Also substitute the trained block surrogate into the full model and report logit/greedy top-k drift") { simulate_block_surrogate_policy = true }
   p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
   p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
+  p.on("--simulate-block-surrogate-suite-blocks=LIST", "Run one-process block-surrogate suite over blocks; use 24-30 for singletons or START:END items") { |v| simulate_block_surrogate_suite_blocks = parse_layer_block_list(v) }
+  p.on("--simulate-block-surrogate-suite-prompt=NAME::TEXT", "Additional prompt for block-surrogate suite; main --prompt is always included") do |v|
+    add_block_surrogate_suite_prompt.call(v)
+  end
+  p.on("--simulate-block-surrogate-suite-prompts-file=PATH", "Read block-surrogate suite prompts from UTF-8 lines: NAME::TEXT or TEXT") do |path|
+    File.each_line(path) do |line|
+      raw = line.strip
+      next if raw.empty? || raw.starts_with?("#")
+      add_block_surrogate_suite_prompt.call(raw)
+    end
+  end
   p.on("--simulate-lowrank-metal-chunk-thread-overlap", "Overlap one async low-rank layer chunk with chunk-major verifier in a worker thread") { simulate_lowrank_metal_chunk_thread_overlap = true }
   p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
@@ -6958,8 +7192,12 @@ raise "block surrogate clusters must be positive" unless simulate_block_surrogat
 unless {"skip", "shadow"}.includes?(simulate_block_surrogate_state_mode)
   raise "--block-surrogate-state-mode must be skip or shadow"
 end
+unless simulate_block_surrogate_suite_blocks.empty?
+  raise "--simulate-block-surrogate-suite-blocks requires --simulate-generate=N" unless simulate_generate_tokens > 0
+  raise "--simulate-block-surrogate-suite-blocks requires --simulate-block-surrogate-self-spec-gammas=LIST" if simulate_block_surrogate_self_spec_gammas.empty?
+end
 unless simulate_block_surrogate_self_spec_gammas.empty?
-  raise "--simulate-block-surrogate-self-spec-gammas requires --simulate-block-residual-surrogate" unless simulate_block_surrogate_start && simulate_block_surrogate_end
+  raise "--simulate-block-surrogate-self-spec-gammas requires --simulate-block-residual-surrogate or --simulate-block-surrogate-suite-blocks" unless (simulate_block_surrogate_start && simulate_block_surrogate_end) || !simulate_block_surrogate_suite_blocks.empty?
   raise "--simulate-block-surrogate-self-spec-gammas requires --simulate-generate=N" unless simulate_generate_tokens > 0
   raise "block surrogate self-spec gamma values must be positive" if simulate_block_surrogate_self_spec_gammas.any? { |v| v <= 0 }
 end
@@ -6988,6 +7226,22 @@ puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.joi
 puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first calib_tokens; reports held-out L2 residual for normalized K vectors"
 puts basis_rank_note(bases, max_rank)
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
+
+unless simulate_block_surrogate_suite_blocks.empty?
+  block_rank = simulate_block_surrogate_rank || simulate_logit_rank || ranks.max
+  raise "block surrogate rank must be positive" unless block_rank > 0
+  suite_token_sets = [{name: "main", token_ids: token_ids}] of PromptTokenSet
+  simulate_block_surrogate_suite_prompts.each do |suite_prompt|
+    suite_token_sets << {
+      name:      suite_prompt[:name],
+      token_ids: token_ids_for_prompt(tok, suite_prompt[:text], tokens_limit),
+    }
+  end
+  run_block_surrogate_suite(weights, suite_token_sets, simulate_block_surrogate_suite_blocks,
+    block_rank, pca_iters, calib_tokens, simulate_generate_tokens,
+    simulate_block_surrogate_self_spec_gammas, simulate_block_surrogate_clusters,
+    simulate_block_surrogate_state_mode)
+end
 
 if block_start = simulate_block_surrogate_start
   block_end = simulate_block_surrogate_end.not_nil!
