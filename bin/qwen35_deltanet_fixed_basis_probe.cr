@@ -11,11 +11,13 @@ DEFAULT_TOKENIZER = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tok
 DEFAULT_PROMPT    = "The quick brown fox jumps over the lazy dog. Describe this scene in detail, then explain how weather, geometry, and memory interact in a compact machine learning runtime. " \
                     "Use precise technical language and include several short code-like phrases so the token stream is varied."
 DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS = 1
+DEFAULT_FFN_SPARSE_BLOCK_SIZE                     = 256
 
 private alias BasisSet = Array(Array(Array(Float64)))
 private alias LayerVectorMap = Hash(Int32, BasisSet)
 private alias LayerBasisMap = Hash(Int32, BasisSet)
 private alias FFNBasisMap = Hash(Int32, Array(Array(Float64)))
+private alias FFNBlockSparsityLayerStats = NamedTuple(layer: Int32, vectors: Int32, dim: Int32, block_size: Int32, blocks: Int32, read90_mean: Float64, read95_mean: Float64, read99_mean: Float64)
 private alias BlockResidualSample = NamedTuple(inp: Array(Float64), out: Array(Float64), delta: Array(Float64))
 private alias LayerBlock = NamedTuple(start: Int32, end: Int32)
 private alias NamedPrompt = NamedTuple(name: String, text: String)
@@ -2546,6 +2548,110 @@ private def ffn_activation_vectors_for_token_sets(weights : ML::GGUF::Qwen35Weig
   merged
 end
 
+private def percentile(values : Array(Float64), q : Float64) : Float64
+  return 0.0 if values.empty?
+
+  sorted = values.sort
+  clamped = Math.max(0.0, Math.min(1.0, q))
+  idx = ((sorted.size - 1).to_f64 * clamped).round.to_i
+  sorted[idx]
+end
+
+private def mean(values : Array(Float64)) : Float64
+  return 0.0 if values.empty?
+
+  values.sum / values.size
+end
+
+private def ffn_block_sparsity_layer_stats(layer_id : Int32,
+                                           vectors : Array(Array(Float64)),
+                                           block_size : Int32) : FFNBlockSparsityLayerStats
+  raise "FFN block size must be positive" unless block_size > 0
+  raise "FFN block sparsity needs at least one activation vector" if vectors.empty?
+
+  dim = vectors[0].size
+  raise "FFN activation vector is empty" if dim <= 0
+  blocks = (dim + block_size - 1) // block_size
+  thresholds = [0.50, 0.80, 0.90, 0.95, 0.99]
+  fixed_pcts = [0.05, 0.10, 0.20, 0.40]
+  counts_by_threshold = Hash(Float64, Array(Float64)).new { |h, k| h[k] = [] of Float64 }
+  energy_by_fixed_pct = Hash(Float64, Array(Float64)).new { |h, k| h[k] = [] of Float64 }
+
+  vectors.each do |vec|
+    raise "mixed FFN activation dimensions in layer #{layer_id}" unless vec.size == dim
+
+    block_energy = Array(Float64).new(blocks, 0.0)
+    vec.each_with_index do |value, i|
+      block_energy[i // block_size] += value * value
+    end
+    total_energy = block_energy.sum
+    sorted_energy = block_energy.sort.reverse!
+
+    thresholds.each do |target|
+      if total_energy <= 0.0
+        counts_by_threshold[target] << 0.0
+      else
+        acc = 0.0
+        needed = 0
+        sorted_energy.each do |energy|
+          needed += 1
+          acc += energy
+          break if acc >= total_energy * target
+        end
+        counts_by_threshold[target] << needed.to_f64
+      end
+    end
+
+    fixed_pcts.each do |pct|
+      keep_blocks = Math.max(1, (blocks.to_f64 * pct).ceil.to_i)
+      retained = total_energy > 0.0 ? sorted_energy[0, keep_blocks].sum * 100.0 / total_energy : 0.0
+      energy_by_fixed_pct[pct] << retained
+    end
+  end
+
+  count_notes = thresholds.map do |target|
+    values = counts_by_threshold[target]
+    mean_blocks = mean(values)
+    mean_read = mean_blocks * 100.0 / blocks
+    "b#{(target * 100).round.to_i}=mean:#{mean_blocks.round(2)},p50:#{percentile(values, 0.50).round(2)},p90:#{percentile(values, 0.90).round(2)},read:#{mean_read.round(2)}%"
+  end
+  energy_notes = fixed_pcts.map do |pct|
+    values = energy_by_fixed_pct[pct]
+    "top#{(pct * 100).round.to_i}%=mean:#{mean(values).round(2)}%,p50:#{percentile(values, 0.50).round(2)}%,p10:#{percentile(values, 0.10).round(2)}%"
+  end
+  read90 = mean(counts_by_threshold[0.90]) * 100.0 / blocks
+  read95 = mean(counts_by_threshold[0.95]) * 100.0 / blocks
+  read99 = mean(counts_by_threshold[0.99]) * 100.0 / blocks
+  puts "ffn_block_sparsity layer=#{layer_id} vectors=#{vectors.size} dim=#{dim} block_size=#{block_size} blocks=#{blocks} thresholds=#{count_notes.join(' ')} fixed_block_energy=#{energy_notes.join(' ')}"
+
+  {
+    layer:       layer_id,
+    vectors:     vectors.size,
+    dim:         dim,
+    block_size:  block_size,
+    blocks:      blocks,
+    read90_mean: read90,
+    read95_mean: read95,
+    read99_mean: read99,
+  }
+end
+
+private def print_ffn_block_sparsity_summary(stats : Array(FFNBlockSparsityLayerStats)) : Nil
+  return if stats.empty?
+
+  read90 = mean(stats.map { |row| row[:read90_mean] })
+  read95 = mean(stats.map { |row| row[:read95_mean] })
+  read99 = mean(stats.map { |row| row[:read99_mean] })
+  verdict = if read95 <= 35.0
+              "promising"
+            elsif read95 <= 60.0
+              "borderline"
+            else
+              "refute_sparse_down"
+            end
+  puts "ffn_block_sparsity_summary layers=#{stats.map { |row| row[:layer] }.join(',')} block_size=#{stats[0][:block_size]} read90_mean=#{read90.round(2)}% read95_mean=#{read95.round(2)}% read99_mean=#{read99.round(2)}% verdict=#{verdict}"
+end
+
 private def ffn_updown_samples_for_token_sets(weights : ML::GGUF::Qwen35Weights,
                                               token_sets : Array(Array(Int32)),
                                               layer_indices : Array(Int32),
@@ -3067,6 +3173,9 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
   if percent = draft_variant_ffn_top_percent(draft_variant)
     keep_top_abs_percent!(combined, percent)
   end
+  if percent = draft_variant_ffn_block_top_percent(draft_variant)
+    keep_top_energy_blocks!(combined, percent, DEFAULT_FFN_SPARSE_BLOCK_SIZE)
+  end
   if pca_rank = draft_variant_ffn_pca_rank(draft_variant)
     basis = ffn_basis || raise "draft variant #{draft_variant.inspect} requires FFN activation basis"
     project_vector_with_basis!(combined, basis, pca_rank)
@@ -3256,6 +3365,14 @@ private def draft_variant_ffn_top_percent(variant : String) : Int32?
   percent
 end
 
+private def draft_variant_ffn_block_top_percent(variant : String) : Int32?
+  return nil unless variant.starts_with?("lowrank-ffn-blocktop-")
+
+  percent = variant["lowrank-ffn-blocktop-".size..].to_i? || raise "invalid FFN block-top variant #{variant.inspect}"
+  raise "FFN block-top percent must be in 1..100" unless percent >= 1 && percent <= 100
+  percent
+end
+
 private def draft_variant_ffn_pca_rank(variant : String) : Int32?
   return nil unless variant.starts_with?("lowrank-ffn-pca-")
   return nil if variant.starts_with?("lowrank-ffn-pca-down-")
@@ -3296,6 +3413,30 @@ private def keep_top_abs_percent!(values : Array(Float32), percent : Int32) : Ni
     else
       values[i] = 0.0_f32
     end
+  end
+end
+
+private def keep_top_energy_blocks!(values : Array(Float32), percent : Int32, block_size : Int32) : Nil
+  return if percent >= 100
+  raise "FFN block size must be positive" unless block_size > 0
+
+  blocks = (values.size + block_size - 1) // block_size
+  keep_blocks = Math.max(1, (blocks.to_i64 * percent + 99) // 100).to_i
+  return if keep_blocks >= blocks
+
+  energies = Array(Float64).new(blocks, 0.0)
+  values.each_with_index do |value, i|
+    energies[i // block_size] += value.to_f64 * value.to_f64
+  end
+  order = (0...blocks).to_a
+  order.sort_by! { |block| -energies[block] }
+  keep = Set(Int32).new(order[0, keep_blocks])
+  blocks.times do |block|
+    next if keep.includes?(block)
+
+    start = block * block_size
+    stop = Math.min(start + block_size, values.size)
+    start.upto(stop - 1) { |i| values[i] = 0.0_f32 }
   end
 end
 
@@ -5515,6 +5656,7 @@ end
 private def cheap_draft_variant_valid?(variant : String) : Bool
   return true if {"lowrank", "lowrank-no-ffn", "skip-layer"}.includes?(variant)
   return true if draft_variant_ffn_top_percent(variant)
+  return true if draft_variant_ffn_block_top_percent(variant)
   return true if draft_variant_ffn_pca_rank(variant)
   return true if draft_variant_ffn_pca_down_rank(variant)
   return true if draft_variant_ffn_pca_updown_rank(variant)
@@ -7708,6 +7850,8 @@ simulate_self_spec_progressive = [] of Int32
 simulate_self_spec_wall_progressive = [] of Int32
 simulate_cheap_self_draft_variants = [] of String
 ffn_pca_calib_prompts = [] of String
+simulate_ffn_block_sparsity_layers = [] of Int32
+simulate_ffn_block_size = 256
 simulate_self_spec_gpu_pipeline_suite_prompts = [] of NamedTuple(name: String, text: String)
 simulate_ffn_updown_metal_rank : Int32? = nil
 simulate_self_spec_wall_metal_lowrank = false
@@ -7860,8 +8004,10 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-topk-oracle-train-tokens=N", "Training samples from the start of --simulate-generate for --simulate-topk-oracle") { |v| simulate_topk_oracle_train_tokens = v.to_i }
   p.on("--simulate-self-spec-progressive=LIST", "Run progressive self-spec verifier chunks with a repeating comma-separated schedule, e.g. 4,4,8") { |v| simulate_self_spec_progressive = parse_int_list(v) }
   p.on("--simulate-self-spec-wall-progressive=LIST", "Measure wall-clock low-rank draft plus exact chunk verifier for a progressive schedule") { |v| simulate_self_spec_wall_progressive = parse_int_list(v) }
-  p.on("--simulate-cheap-self-draft-variants=LIST", "Run wall self-spec with comma-separated draft variants: lowrank,lowrank-no-ffn,skip-layer,early-exit-N,lowrank-ffn-top-P,lowrank-ffn-pca-R,lowrank-ffn-pca-down-R,lowrank-ffn-pca-updown-R") { |v| simulate_cheap_self_draft_variants = v.split(',').map(&.strip).reject(&.empty?) }
+  p.on("--simulate-cheap-self-draft-variants=LIST", "Run wall self-spec with comma-separated draft variants: lowrank,lowrank-no-ffn,skip-layer,early-exit-N,lowrank-ffn-top-P,lowrank-ffn-blocktop-P,lowrank-ffn-pca-R,lowrank-ffn-pca-down-R,lowrank-ffn-pca-updown-R") { |v| simulate_cheap_self_draft_variants = v.split(',').map(&.strip).reject(&.empty?) }
   p.on("--ffn-pca-calib-prompt=TEXT", "Additional prompt used to build FFN PCA/PCA-down basis; may be repeated") { |v| ffn_pca_calib_prompts << v }
+  p.on("--simulate-ffn-block-sparsity=LIST", "Measure how many FFN-down quant blocks retain SwiGLU activation energy for listed recurrent layers") { |v| simulate_ffn_block_sparsity_layers = parse_int_list(v) }
+  p.on("--ffn-block-size=N", "Activation channels per FFN-down sparse block for --simulate-ffn-block-sparsity (default: 256)") { |v| simulate_ffn_block_size = v.to_i }
   p.on("--simulate-ffn-updown-metal=R", "Run Metal microkernel gate for FFN pca-updown rank R") { |v| simulate_ffn_updown_metal_rank = v.to_i }
   p.on("--simulate-self-spec-wall-metal-lowrank", "Use the Metal low-rank DeltaNet core inside wall-clock self-spec draft proposals") { simulate_self_spec_wall_metal_lowrank = true }
   p.on("--simulate-self-spec-wall-metal-project", "Also compute Q/K low-rank coefficients on Metal before the Metal low-rank step") { simulate_self_spec_wall_metal_lowrank = true; simulate_self_spec_wall_metal_project = true }
@@ -7923,6 +8069,7 @@ raise "tokens must be positive" unless tokens_limit > 0
 raise "calib-tokens must be positive" unless calib_tokens > 0
 raise "ranks must not be empty" if ranks.empty?
 raise "pca-iters must be positive" unless pca_iters > 0
+raise "FFN block size must be positive" unless simulate_ffn_block_size > 0
 if !simulate_cost_truth_chunks.empty?
   raise "--simulate-cost-truth-table requires --simulate-logits-rank" if simulate_logit_rank.nil?
   raise "--simulate-cost-truth-table requires --simulate-logits-layers" if simulate_logit_layers.empty?
@@ -7984,6 +8131,26 @@ puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.joi
 puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first calib_tokens; reports held-out L2 residual for normalized K vectors"
 puts basis_rank_note(bases, max_rank)
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
+
+unless simulate_ffn_block_sparsity_layers.empty?
+  sparse_layers = simulate_ffn_block_sparsity_layers.uniq.sort
+  sparse_layers.each do |il|
+    raise "--simulate-ffn-block-sparsity layer #{il} is out of range" unless il >= 0 && il < weights.layers.size
+    raise "--simulate-ffn-block-sparsity layer #{il} is not recurrent" unless weights.layers[il].is_a?(ML::GGUF::Qwen35RecurrentWeights)
+  end
+  ffn_vectors = if ffn_pca_calib_token_sets.empty?
+                  ffn_activation_vectors_for_prompt(weights, token_ids[0, calib_count], sparse_layers, calib_count)
+                else
+                  ffn_activation_vectors_for_token_sets(weights, ffn_pca_calib_token_sets, sparse_layers, calib_tokens)
+                end
+  sparsity_stats = [] of FFNBlockSparsityLayerStats
+  sparse_layers.each do |il|
+    vectors = ffn_vectors[il]? || [] of Array(Float64)
+    raise "no FFN activation vectors captured for layer #{il}" if vectors.empty?
+    sparsity_stats << ffn_block_sparsity_layer_stats(il, vectors, simulate_ffn_block_size)
+  end
+  print_ffn_block_sparsity_summary(sparsity_stats)
+end
 
 unless simulate_block_surrogate_suite_blocks.empty?
   block_rank = simulate_block_surrogate_rank || simulate_logit_rank || ranks.max

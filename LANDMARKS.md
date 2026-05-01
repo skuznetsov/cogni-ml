@@ -6427,3 +6427,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts away from "online bias correction" toward "change candidate source or skip work structurally."
 - maieutic: Hidden RMSE improvement is only a proxy; the observed gains are too small to justify a logits/tree integration before higher-ROI branches.
 - adversary: The probe uses exact observed residuals, so even the small gains are optimistic relative to a production scheduler.
+
+### [LM-QWEN35-FFN-BLOCK-SPARSITY-1] FFN activation sparsity is not naturally Q4_K-block-local, but block-top quality survives short gates
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-ffn-block-sparsity=LIST` measures how many contiguous FFN activation blocks are needed to retain `SwiGLU = silu(gate) * up` energy before `ffn_down`. It reports per-layer block counts/read percentages for energy thresholds and fixed top-block percentages. The same change adds probe-only `lowrank-ffn-blocktop-P`, which keeps only the top-P percent of 256-channel activation blocks by energy inside the low-rank draft FFN path before exact verification."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_block_sparsity_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_ffn_block_sparsity_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_block_sparsity_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: FFN activation collection, low-rank draft variants, Q4_K block layout, or sparse-down block size changes
+- claim: "On the default prompt with `tokens96/calib48`, layers `0,2,4,6,8,10,24,25,26,28,29,30`, and block size `256`, the block-energy probe needs `read90_mean=77.04%`, `read95_mean=87.55%`, and `read99_mean=97.67%` of FFN blocks. This refutes a direct energy-preserving Q4_K block-skip sparse-down kernel as a high-ROI route."
+  source: `/tmp/qwen35_ffn_block_sparsity_main_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt text, layer set, calibration count, block size, or activation distribution changes
+- claim: "The code prompt shows the same structure at block size `256`: `read90_mean=76.66%`, `read95_mean=87.25%`, and `read99_mean=97.48%`. A hypothetical finer `64`-channel prepack on the default prompt still needs `read95_mean=82.14%`, so the problem is not only the exact 256-channel quant-block granularity."
+  source: `/tmp/qwen35_ffn_block_sparsity_code_20260501.log`, `/tmp/qwen35_ffn_block_sparsity_main_b64_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt class, layer set, block size, prepack format, or activation distribution changes
+- claim: "Despite poor 95%-energy locality, short self-spec quality gates are positive: with `layers=0,2,4`, `rank64`, `gen8`, and schedule `4`, `lowrank-ffn-blocktop-40/20/10` all kept `100%` accept and `parity=true` on both default and code prompts. The late bucket `24,25,26,28,29,30` also kept `100%` accept/parity for `blocktop-20` and `blocktop-10`."
+  source: `/tmp/qwen35_ffn_blocktop_accept_024_20260501.log`, `/tmp/qwen35_ffn_blocktop_accept_024_code_20260501.log`, `/tmp/qwen35_ffn_blocktop_accept_late_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt suite, generation length, layer set, rank, schedule, or block-top percent changes
+**decision:** Do not implement a naive energy-preserving sparse `ffn_down` kernel yet; it would read most Q4_K blocks. Keep block-top FFN alive as an approximate candidate-source branch because exact verification tolerated aggressive block masking in short gates. Next required falsifier is a broader prompt suite with `blocktop-10/20` and route-scoreboard economics; only if that holds should we write a Metal block-sparse down kernel.
+**quadrumvirate:**
+- cassandra: Unstructured top-P sparsity did not imply contiguous quant-block sparsity; the energy probe confirmed this failure mode.
+- daedalus: The useful frame shifts from "preserve activation energy" to "preserve next-token acceptance under exact verification while reading fewer blocks."
+- maieutic: Quality and speed are still separate claims. Current block-top acceptance uses dense `ffn_down`, so wall time is not sparse-kernel evidence.
+- adversary: Short `gen8` gates and prompt-local bases are low-generality. Require larger prompt classes and real sparse-down cost before promotion.
