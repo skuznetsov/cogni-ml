@@ -6540,3 +6540,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from approximate self-draft only to a trained same-family internal drafter; exact verification remains the quality guard.
 - maieutic: Nothing prevents simplifying MTP mathematically, but the first assumption to test is whether unmodified MTP is already faster and high-acceptance on M2 Max.
 - adversary: Current evidence proves weight recovery and shape compatibility only. It does not yet prove MTP forward correctness, acceptance, or speed.
+
+### [LM-QWEN36-MTP-FORWARD-ORACLE-1] Qwen3.6 MTP first-token formula is wired and partially accepted
+**status:** verified
+**trust:** {F:0.86, G:low, R:0.86}
+**context:** ml (Qwen3.6 native MTP / exact speculative decode)
+**evidence:**
+- claim: "`Qwen35MTP.forward_one_hidden/logits/top1` implements a CPU/BF16 formula oracle for one Qwen3.6 MTP step using the sidecar weights, shared GGUF token embedding, and shared GGUF lm-head. `bin/qwen35_mtp_sidecar_probe.cr --run-forward` now computes prompt hidden, exact target token 1, MTP token 2, exact verifier token 2, acceptance, top5, and timings."
+  source: `src/ml/gguf/qwen35_mtp.cr`, `src/ml/gguf/qwen35_cpu.cr`, `bin/qwen35_mtp_sidecar_probe.cr`; build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_probe_build crystal build bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_sidecar_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_spec crystal spec spec/qwen35_mtp_spec.cr` (`5 examples, 0 failures`), on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: MTP formula, sidecar tensor loader, Qwen35 hidden helper, target output-head path, or upstream Qwen3.5/Qwen3.6 MTP semantics change
+- claim: "The critical MTP semantic fix is Qwen3.5 sidecar RMSNorm: HF raw safetensors store one-centered deltas and the runtime applies `(1 + weight)`. Without this, the first smoke rejected badly (`France -> Paris`, exact token2 `.` but MTP top1 token `154470`); after applying `1 + weight`, the same smoke accepts token2 `.`."
+  source: HF Transformers `Qwen3_5RMSNorm.forward` (`output = output * (1.0 + self.weight.float())`), official `Qwen/Qwen3.6-27B` config (`text_config.mtp_num_hidden_layers=1`, `mtp_use_dedicated_embeddings=false`), and local before/after `/tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "The capital of France is"`
+  verified_at: 2026-05-01
+  decay_trigger: HF Qwen3.5 RMSNorm implementation changes, converter starts pre-centering MTP norm weights, or sidecar extraction changes
+- claim: "First acceptance smokes on 27B are mixed but promising for topK/tree verification. `The capital of France is` accepts token2 `.` (`exact_y2=13`, `mtp_y2=13`); `def fibonacci(n):` accepts indentation token (`exact_y2=262`, `mtp_y2=262`); `Once upon a time` rejects top1 (`exact_y2=1017`/`there`, `mtp_y2=303`/`in`) but exact token is MTP top2/top5 (`there` logit `17.797855` vs top1 `in` logit `18.054195`)."
+  source: `/tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "The capital of France is"`; `/tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "def fibonacci(n):"`; `/tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "Once upon a time"`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: prompt suite, tokenizer, model quant, MTP implementation, topK extraction, or exact target verifier changes
+- claim: "The CPU/BF16 oracle is not a speed path. The one-token MTP formula costs about `10.1-10.5s` in the sequential smokes, while exact one-token verifier is about `69-72ms`; this only validates semantics and topK quality before a Metal BF16/fused implementation."
+  source: sequential probe timings: France `mtp_cpu_bf16=10541.785ms`, story `mtp_cpu_bf16=10114.96ms`; exact verifier `72.002ms` and `69.462ms`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: CPU oracle optimized, Metal BF16 MTP path implemented, timing boundary changes, host load, or model changes
+**decision:** Keep MTP as a first-class candidate source, but do not claim speed until a Metal resident MTP path exists. The next gates are (1) a multi-prompt acceptance/topK suite and (2) fused Metal MTP matvec/topK. Because the story prompt shows exact token in top2 while top1 rejects, MTP should be designed with topK/tree rescue in mind rather than plain greedy-only acceptance.
+**quadrumvirate:**
+- cassandra: The first rejection after the raw-RMSNorm fix is expected; MTP is a proposal model, not guaranteed top1 identity. TopK coverage is the useful early signal.
+- daedalus: The frame shifts from "does MTP top1 always match?" to "can a trained MTP topK source reduce verifier work with exact tree/chunk verification?"
+- maieutic: The current proof assumes one MTP layer and one-token MTP cache. This matches the downloaded config (`mtp_num_hidden_layers=1`) but is only a baseline for `num_speculative_tokens=1`.
+- adversary: Generality is low: three short prompts, one token ahead, CPU oracle, no wall-speed claim. Require prompt-suite parity and Metal timings before promotion.

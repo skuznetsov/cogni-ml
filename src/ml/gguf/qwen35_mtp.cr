@@ -1,4 +1,5 @@
 require "./qwen35_meta"
+require "./qwen35_cpu"
 require "./safetensors"
 
 module ML::GGUF
@@ -129,6 +130,181 @@ module ML::GGUF
     private def expect_vector(name : String, values : Array(Float32), dim : Int32) : Nil
       return if values.size == dim
       raise "qwen35_mtp: #{name} size #{values.size} != expected #{dim}"
+    end
+  end
+
+  module Qwen35MTP
+    extend self
+
+    def bf16_at(raw : Bytes, i : Int32) : Float32
+      off = i * 2
+      bits = (raw[off + 1].to_u32 << 24) | (raw[off].to_u32 << 16)
+      bits.unsafe_as(Float32)
+    end
+
+    def matvec_bf16(w : DenseBF16Weight, x : Array(Float32)) : Array(Float32)
+      raise ArgumentError.new("#{w.name}: expected input #{w.in_dim}, got #{x.size}") unless x.size == w.in_dim
+      expected = w.out_dim.to_i64 * w.in_dim.to_i64 * 2_i64
+      raise "#{w.name}: raw size #{w.raw.size} != expected #{expected}" unless w.raw.size.to_i64 == expected
+
+      out = Array(Float32).new(w.out_dim, 0.0_f32)
+      w.out_dim.times do |row|
+        base = row * w.in_dim
+        sum = 0.0_f32
+        w.in_dim.times do |col|
+          sum += bf16_at(w.raw, base + col) * x[col]
+        end
+        out[row] = sum
+      end
+      out
+    end
+
+    # HF Qwen3.5 RMSNorm stores a learned delta and applies `(1 + weight)`.
+    # GGUF target norms are converted for llama.cpp, but the MTP sidecar is raw
+    # safetensors, so the sidecar path must apply the +1 here.
+    def rms_norm_sidecar(x : Array(Float32), w : Array(Float32), eps : Float32) : Array(Float32)
+      dim = x.size
+      raise ArgumentError.new("rms_norm_sidecar weight size #{w.size} != #{dim}") unless w.size == dim
+      ss = 0.0_f64
+      dim.times { |j| ss += x[j].to_f64 * x[j].to_f64 }
+      inv_rms = (1.0 / Math.sqrt(ss / dim.to_f64 + eps.to_f64)).to_f32
+      Array(Float32).new(dim) { |j| x[j] * inv_rms * (1.0_f32 + w[j]) }
+    end
+
+    def rms_norm_sidecar_slice!(x : Array(Float32), offset : Int32, len : Int32,
+                                w : Array(Float32), eps : Float32) : Nil
+      raise ArgumentError.new("rms_norm_sidecar_slice weight size #{w.size} != #{len}") unless w.size == len
+      ss = 0.0_f64
+      len.times { |j| ss += x[offset + j].to_f64 * x[offset + j].to_f64 }
+      inv_rms = (1.0 / Math.sqrt(ss / len.to_f64 + eps.to_f64)).to_f32
+      len.times { |j| x[offset + j] = x[offset + j] * inv_rms * (1.0_f32 + w[j]) }
+    end
+
+    # CPU/BF16 formula oracle for one Qwen3.6 MTP layer.
+    #
+    # This follows the Qwen3.5/Qwen3.6 MTP predictor shape:
+    #   fc(cat(pre_fc_norm_embedding(embed(input_id)),
+    #          pre_fc_norm_hidden(previous_target_hidden)))
+    #   -> full-attention decoder layer -> mtp.norm
+    #
+    # The current baseline covers num_nextn_predict_layers=1 and a single MTP
+    # token, where the MTP attention cache length is one. That means softmax is
+    # exactly 1 for each query head and the attention value is the current V
+    # head after GQA broadcast. This is enough to validate the first acceptance
+    # step before building a resident Metal kernel/cache path.
+    def forward_one_hidden(weights : Qwen35Weights,
+                           mtp : Qwen35MTPWeights,
+                           prev_hidden : Array(Float32),
+                           token_id : Int32,
+                           pos : Int32) : Array(Float32)
+      hp = weights.hparams
+      hidden = hp.n_embd
+      raise ArgumentError.new("prev_hidden size #{prev_hidden.size} != #{hidden}") unless prev_hidden.size == hidden
+
+      emb = Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+      emb_norm = rms_norm_sidecar(emb, mtp.pre_fc_norm_embedding, hp.rms_eps)
+      hidden_norm = rms_norm_sidecar(prev_hidden, mtp.pre_fc_norm_hidden, hp.rms_eps)
+
+      fc_in = Array(Float32).new(hidden * 2, 0.0_f32)
+      hidden.times do |i|
+        fc_in[i] = emb_norm[i]
+        fc_in[hidden + i] = hidden_norm[i]
+      end
+
+      residual = matvec_bf16(mtp.fc, fc_in)
+      cur = rms_norm_sidecar(residual, mtp.input_layernorm, hp.rms_eps)
+
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv
+      head_dim = hp.head_dim
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      heads_per_group = n_head // n_head_kv
+
+      q_full = matvec_bf16(mtp.q_proj, cur)
+      k = matvec_bf16(mtp.k_proj, cur)
+      v = matvec_bf16(mtp.v_proj, cur)
+      raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+      raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
+      raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+
+      q = Array(Float32).new(q_dim, 0.0_f32)
+      gate = Array(Float32).new(q_dim, 0.0_f32)
+      n_head.times do |h|
+        src_base = h * 2 * head_dim
+        dst_base = h * head_dim
+        head_dim.times do |d|
+          q[dst_base + d] = q_full[src_base + d]
+          gate[dst_base + d] = q_full[src_base + head_dim + d]
+        end
+      end
+
+      n_head.times do |h|
+        rms_norm_sidecar_slice!(q, h * head_dim, head_dim, mtp.q_norm, hp.rms_eps)
+        Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+      end
+      n_head_kv.times do |h|
+        rms_norm_sidecar_slice!(k, h * head_dim, head_dim, mtp.k_norm, hp.rms_eps)
+        Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+      end
+
+      attn_o = Array(Float32).new(q_dim, 0.0_f32)
+      n_head.times do |h|
+        kvh = h // heads_per_group
+        q_base = h * head_dim
+        kv_base = kvh * head_dim
+        head_dim.times do |d|
+          attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(gate[q_base + d])
+        end
+      end
+
+      attn_out = matvec_bf16(mtp.o_proj, attn_o)
+      after_attn = Array(Float32).new(hidden) { |i| residual[i] + attn_out[i] }
+      cur2 = rms_norm_sidecar(after_attn, mtp.post_attention_layernorm, hp.rms_eps)
+
+      gate_ff = matvec_bf16(mtp.ffn_gate, cur2)
+      up_ff = matvec_bf16(mtp.ffn_up, cur2)
+      Qwen35CPU.silu!(gate_ff)
+      combined = Array(Float32).new(gate_ff.size) { |i| gate_ff[i] * up_ff[i] }
+      ffn_out = matvec_bf16(mtp.ffn_down, combined)
+      after_ffn = Array(Float32).new(hidden) { |i| after_attn[i] + ffn_out[i] }
+
+      rms_norm_sidecar(after_ffn, mtp.norm, hp.rms_eps)
+    end
+
+    def forward_one_logits(weights : Qwen35Weights,
+                           mtp : Qwen35MTPWeights,
+                           prev_hidden : Array(Float32),
+                           token_id : Int32,
+                           pos : Int32) : Array(Float32)
+      hidden = forward_one_hidden(weights, mtp, prev_hidden, token_id, pos)
+      Qwen35CPU.qmatvec_nobias(weights.output, hidden)
+    end
+
+    def top_k(logits : Array(Float32), k : Int32) : Array({Int32, Float32})
+      raise ArgumentError.new("top_k must be positive") unless k > 0
+      best = [] of {Int32, Float32}
+      logits.each_with_index do |v, id|
+        id32 = id.to_i32
+        if best.size < k || v > best[-1][1] || (v == best[-1][1] && id32 < best[-1][0])
+          best << {id32, v}
+          best.sort! do |a, b|
+            cmp = b[1] <=> a[1]
+            cmp == 0 ? (a[0] <=> b[0]) : cmp
+          end
+          best.pop if best.size > k
+        end
+      end
+      best
+    end
+
+    def forward_one_top1(weights : Qwen35Weights,
+                         mtp : Qwen35MTPWeights,
+                         prev_hidden : Array(Float32),
+                         token_id : Int32,
+                         pos : Int32) : {Int32, Float32}
+      logits = forward_one_logits(weights, mtp, prev_hidden, token_id, pos)
+      top_k(logits, 1)[0]
     end
   end
 end

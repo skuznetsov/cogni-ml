@@ -1659,6 +1659,45 @@ module ML::GGUF
       end
     end
 
+    # Full decoder body for one token, returning the pre-output-norm hidden.
+    #
+    # This intentionally bypasses the fused decode-wave route because that route
+    # can update state without materializing the final hidden vector. It is a
+    # correctness/probe helper, not the hot decode path.
+    def forward_hidden(weights : Qwen35Weights, token_id : Int32, pos : Int32,
+                       state : State) : Array(Float32)
+      hp = weights.hparams
+      max_seq = state.max_seq
+
+      x = embedding_lookup(weights.token_embd, token_id)
+
+      weights.layers.each_with_index do |lw, il|
+        case lw
+        in Qwen35FullAttnWeights
+          x = forward_full_attn_layer(x, pos, lw, state.layers[il], hp, max_seq)
+        in Qwen35RecurrentWeights
+          x = forward_recurrent_layer(x, pos, lw, state.layers[il], hp, max_seq)
+        end
+      end
+
+      x
+    end
+
+    # Project a pre-output-norm hidden through the normal Qwen output head.
+    # The input is duplicated because the CPU fallback RMSNorm mutates in place.
+    def hidden_top1(weights : Qwen35Weights, hidden : Array(Float32)) : {Int32, Float32}
+      hp = weights.hparams
+      x = hidden.dup
+      if top1 = output_project_top1_routed(x, weights.output_norm, weights.output, hp.rms_eps)
+        return top1
+      end
+
+      rms_norm!(x, weights.output_norm, hp.rms_eps)
+      logits = qmatvec_nobias(weights.output, x)
+      maxv = logits.max
+      {logits.index(maxv).not_nil!.to_i32, maxv}
+    end
+
     private def top2_from_logits(logits : Array(Float32)) : {Int32, Float32, Int32, Float32}
       best = -Float32::INFINITY
       second = -Float32::INFINITY
@@ -2099,6 +2138,27 @@ module ML::GGUF
         end
       end
       results
+    end
+
+    # Process a known prompt span and return the final pre-output-norm hidden.
+    # This is useful for MTP/self-draft probes that need the exact target
+    # hidden at the prompt boundary without paying an extra lm-head pass.
+    def prefill_tokens_last_hidden(weights : Qwen35Weights,
+                                   token_ids : Array(Int32),
+                                   start_pos : Int32,
+                                   state : State) : Array(Float32)
+      raise ArgumentError.new("prefill_tokens_last_hidden token_ids must not be empty") if token_ids.empty?
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard { prefill_tokens_last_hidden(weights, token_ids, start_pos, state) }
+      end
+
+      return forward_hidden(weights, token_ids[0], start_pos, state) if token_ids.size == 1
+
+      hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
+      hp = weights.hparams
+      rows = hidden.size // hp.n_embd
+      raise "prefill_tokens_last_hidden: invalid hidden rows" if rows <= 0
+      hidden[(rows - 1) * hp.n_embd, hp.n_embd]
     end
 
     private def prefill_tokens_hidden(weights : Qwen35Weights,

@@ -112,3 +112,27 @@ describe ML::GGUF::Qwen35MTPWeights do
     end
   end
 end
+
+describe ML::GGUF::Qwen35MTP do
+  it "multiplies BF16 dense row-major matrices" do
+    raw = bf16_bytes([
+      1.0_f32, 2.0_f32, 3.0_f32,
+      -1.0_f32, 0.5_f32, 4.0_f32,
+    ])
+    w = ML::GGUF::DenseBF16Weight.new("fixture", raw, 2, 3)
+    out = ML::GGUF::Qwen35MTP.matvec_bf16(w, [2.0_f32, -1.0_f32, 0.25_f32])
+    out[0].should be_close(0.75_f32, 1e-6_f32)
+    out[1].should be_close(-1.5_f32, 1e-6_f32)
+  end
+
+  it "applies Qwen3.5 sidecar RMSNorm with one-centered weights" do
+    out = ML::GGUF::Qwen35MTP.rms_norm_sidecar([3.0_f32, 4.0_f32], [0.0_f32, 1.0_f32], 0.0_f32)
+    out[0].should be_close(0.84852815_f32, 1e-6_f32)
+    out[1].should be_close(2.2627418_f32, 1e-6_f32)
+  end
+
+  it "extracts stable top-k logits" do
+    top = ML::GGUF::Qwen35MTP.top_k([0.5_f32, 3.0_f32, 3.0_f32, -1.0_f32], 3)
+    top.should eq([{1, 3.0_f32}, {2, 3.0_f32}, {0, 0.5_f32}])
+  end
+end
