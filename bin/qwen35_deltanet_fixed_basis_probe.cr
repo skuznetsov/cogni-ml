@@ -2652,6 +2652,87 @@ private def print_ffn_block_sparsity_summary(stats : Array(FFNBlockSparsityLayer
   puts "ffn_block_sparsity_summary layers=#{stats.map { |row| row[:layer] }.join(',')} block_size=#{stats[0][:block_size]} read90_mean=#{read90.round(2)}% read95_mean=#{read95.round(2)}% read99_mean=#{read99.round(2)}% verdict=#{verdict}"
 end
 
+private def top_energy_block_indices(values : Array(Float64), percent : Int32, block_size : Int32) : Set(Int32)
+  raise "FFN block-top percent must be in 1..100" unless percent >= 1 && percent <= 100
+  raise "FFN block size must be positive" unless block_size > 0
+
+  blocks = (values.size + block_size - 1) // block_size
+  keep_blocks = Math.max(1, (blocks.to_i64 * percent + 99) // 100).to_i
+  energies = Array(Float64).new(blocks, 0.0)
+  values.each_with_index do |value, i|
+    energies[i // block_size] += value * value
+  end
+  order = (0...blocks).to_a
+  order.sort_by! { |block| -energies[block] }
+  Set(Int32).new(order[0, keep_blocks])
+end
+
+private def retained_energy_for_blocks(values : Array(Float64), selected : Set(Int32), block_size : Int32) : Float64
+  total = 0.0
+  retained = 0.0
+  values.each_with_index do |value, i|
+    energy = value * value
+    total += energy
+    retained += energy if selected.includes?(i // block_size)
+  end
+  total > 0.0 ? retained * 100.0 / total : 0.0
+end
+
+private def nearest_ffn_input_index(train : Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))),
+                                    query : Array(Float64)) : Int32
+  best_i = 0
+  best_dist = Float64::INFINITY
+  train.each_with_index do |sample, i|
+    x = sample[:ffn_in]
+    raise "mixed FFN input dimensions in block selector" unless x.size == query.size
+
+    dist = 0.0
+    x.size.times do |d|
+      delta = x[d] - query[d]
+      dist += delta * delta
+    end
+    if dist < best_dist
+      best_dist = dist
+      best_i = i
+    end
+  end
+  best_i
+end
+
+private def print_ffn_block_selector_stats(layer_id : Int32,
+                                           samples : Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))),
+                                           train_count : Int32,
+                                           block_size : Int32,
+                                           percents : Array(Int32)) : Nil
+  raise "FFN block selector needs held-out samples" unless train_count > 0 && train_count < samples.size
+  train = samples[0, train_count]
+  eval = samples[train_count, samples.size - train_count]
+  dim = samples[0][:activation].size
+  blocks = (dim + block_size - 1) // block_size
+
+  percents.each do |percent|
+    pred_energy = [] of Float64
+    oracle_energy = [] of Float64
+    jaccard = [] of Float64
+    recall = [] of Float64
+    eval.each do |sample|
+      nearest = train[nearest_ffn_input_index(train, sample[:ffn_in])]
+      predicted = top_energy_block_indices(nearest[:activation], percent, block_size)
+      oracle = top_energy_block_indices(sample[:activation], percent, block_size)
+      intersection = predicted.count { |block| oracle.includes?(block) }
+      union = predicted.size + oracle.size - intersection
+      jaccard << (union > 0 ? intersection.to_f64 / union : 0.0)
+      recall << (oracle.size > 0 ? intersection.to_f64 / oracle.size : 0.0)
+      pred_energy << retained_energy_for_blocks(sample[:activation], predicted, block_size)
+      oracle_energy << retained_energy_for_blocks(sample[:activation], oracle, block_size)
+    end
+    oracle_mean = mean(oracle_energy)
+    pred_mean = mean(pred_energy)
+    ratio = oracle_mean > 0.0 ? pred_mean * 100.0 / oracle_mean : 0.0
+    puts "ffn_block_selector layer=#{layer_id} percent=#{percent} train=#{train.size} eval=#{eval.size} dim=#{dim} block_size=#{block_size} blocks=#{blocks} pred_energy_mean=#{pred_mean.round(2)}% pred_energy_p10=#{percentile(pred_energy, 0.10).round(2)}% oracle_energy_mean=#{oracle_mean.round(2)}% pred_oracle_ratio=#{ratio.round(2)}% jaccard_mean=#{mean(jaccard).round(4)} recall_mean=#{mean(recall).round(4)}"
+  end
+end
+
 private def ffn_updown_samples_for_token_sets(weights : ML::GGUF::Qwen35Weights,
                                               token_sets : Array(Array(Int32)),
                                               layer_indices : Array(Int32),
@@ -7851,6 +7932,8 @@ simulate_self_spec_wall_progressive = [] of Int32
 simulate_cheap_self_draft_variants = [] of String
 ffn_pca_calib_prompts = [] of String
 simulate_ffn_block_sparsity_layers = [] of Int32
+simulate_ffn_block_selector_layers = [] of Int32
+simulate_ffn_block_selector_percents = [10, 20]
 simulate_ffn_block_size = 256
 simulate_self_spec_gpu_pipeline_suite_prompts = [] of NamedTuple(name: String, text: String)
 simulate_ffn_updown_metal_rank : Int32? = nil
@@ -8007,6 +8090,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-cheap-self-draft-variants=LIST", "Run wall self-spec with comma-separated draft variants: lowrank,lowrank-no-ffn,skip-layer,early-exit-N,lowrank-ffn-top-P,lowrank-ffn-blocktop-P,lowrank-ffn-pca-R,lowrank-ffn-pca-down-R,lowrank-ffn-pca-updown-R") { |v| simulate_cheap_self_draft_variants = v.split(',').map(&.strip).reject(&.empty?) }
   p.on("--ffn-pca-calib-prompt=TEXT", "Additional prompt used to build FFN PCA/PCA-down basis; may be repeated") { |v| ffn_pca_calib_prompts << v }
   p.on("--simulate-ffn-block-sparsity=LIST", "Measure how many FFN-down quant blocks retain SwiGLU activation energy for listed recurrent layers") { |v| simulate_ffn_block_sparsity_layers = parse_int_list(v) }
+  p.on("--simulate-ffn-block-selector=LIST", "Nearest-neighbor probe: predict top FFN activation blocks from ffn_in for listed recurrent layers") { |v| simulate_ffn_block_selector_layers = parse_int_list(v) }
+  p.on("--ffn-block-selector-percents=LIST", "Top-block percentages for --simulate-ffn-block-selector (default: 10,20)") { |v| simulate_ffn_block_selector_percents = parse_int_list(v) }
   p.on("--ffn-block-size=N", "Activation channels per FFN-down sparse block for --simulate-ffn-block-sparsity (default: 256)") { |v| simulate_ffn_block_size = v.to_i }
   p.on("--simulate-ffn-updown-metal=R", "Run Metal microkernel gate for FFN pca-updown rank R") { |v| simulate_ffn_updown_metal_rank = v.to_i }
   p.on("--simulate-self-spec-wall-metal-lowrank", "Use the Metal low-rank DeltaNet core inside wall-clock self-spec draft proposals") { simulate_self_spec_wall_metal_lowrank = true }
@@ -8070,6 +8155,7 @@ raise "calib-tokens must be positive" unless calib_tokens > 0
 raise "ranks must not be empty" if ranks.empty?
 raise "pca-iters must be positive" unless pca_iters > 0
 raise "FFN block size must be positive" unless simulate_ffn_block_size > 0
+raise "FFN block selector percentages must be in 1..100" if simulate_ffn_block_selector_percents.any? { |v| v < 1 || v > 100 }
 if !simulate_cost_truth_chunks.empty?
   raise "--simulate-cost-truth-table requires --simulate-logits-rank" if simulate_logit_rank.nil?
   raise "--simulate-cost-truth-table requires --simulate-logits-layers" if simulate_logit_layers.empty?
@@ -8150,6 +8236,21 @@ unless simulate_ffn_block_sparsity_layers.empty?
     sparsity_stats << ffn_block_sparsity_layer_stats(il, vectors, simulate_ffn_block_size)
   end
   print_ffn_block_sparsity_summary(sparsity_stats)
+end
+
+unless simulate_ffn_block_selector_layers.empty?
+  selector_layers = simulate_ffn_block_selector_layers.uniq.sort
+  selector_layers.each do |il|
+    raise "--simulate-ffn-block-selector layer #{il} is out of range" unless il >= 0 && il < weights.layers.size
+    raise "--simulate-ffn-block-selector layer #{il} is not recurrent" unless weights.layers[il].is_a?(ML::GGUF::Qwen35RecurrentWeights)
+  end
+  selector_samples = ffn_updown_samples_for_token_sets(weights, [token_ids], selector_layers, token_ids.size)
+  selector_layers.each do |il|
+    layer_samples = selector_samples[il]? || [] of NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))
+    train_count = Math.min(calib_count, layer_samples.size - 1)
+    raise "no held-out FFN selector samples captured for layer #{il}" unless train_count > 0 && train_count < layer_samples.size
+    print_ffn_block_selector_stats(il, layer_samples, train_count, simulate_ffn_block_size, simulate_ffn_block_selector_percents)
+  end
 end
 
 unless simulate_block_surrogate_suite_blocks.empty?

@@ -23,6 +23,7 @@ Thumbs.db
 
 # Local Codex agent state
 .agents/
+.cogniformerus/
 
 # Build artifacts
 bridge.o

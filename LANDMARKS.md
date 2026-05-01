@@ -6449,9 +6449,42 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen35_ffn_blocktop_accept_024_20260501.log`, `/tmp/qwen35_ffn_blocktop_accept_024_code_20260501.log`, `/tmp/qwen35_ffn_blocktop_accept_late_20260501.log`
   verified_at: 2026-05-01
   decay_trigger: prompt suite, generation length, layer set, rank, schedule, or block-top percent changes
+- claim: "A broader 9B `gen16`, `layers=0,2,4`, `rank64`, schedule `4` prompt suite keeps `blocktop` alive as a quality route but exposes one replay-risk case. Baseline lowrank kept `100%` accept/parity on default/code/json/reasoning. `lowrank-ffn-blocktop-20` and `lowrank-ffn-blocktop-10` kept parity on all four prompts; code/json/reasoning stayed `100%` accept, while default had one correction (`93.75%` accept) for both blocktop variants."
+  source: `/tmp/qwen35_ffn_blocktop_suite_024_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt suite, generation length, layer set, rank, schedule, or block-top percent changes
 **decision:** Do not implement a naive energy-preserving sparse `ffn_down` kernel yet; it would read most Q4_K blocks. Keep block-top FFN alive as an approximate candidate-source branch because exact verification tolerated aggressive block masking in short gates. Next required falsifier is a broader prompt suite with `blocktop-10/20` and route-scoreboard economics; only if that holds should we write a Metal block-sparse down kernel.
 **quadrumvirate:**
 - cassandra: Unstructured top-P sparsity did not imply contiguous quant-block sparsity; the energy probe confirmed this failure mode.
 - daedalus: The useful frame shifts from "preserve activation energy" to "preserve next-token acceptance under exact verification while reading fewer blocks."
 - maieutic: Quality and speed are still separate claims. Current block-top acceptance uses dense `ffn_down`, so wall time is not sparse-kernel evidence.
 - adversary: Short `gen8` gates and prompt-local bases are low-generality. Require larger prompt classes and real sparse-down cost before promotion.
+
+### [LM-QWEN35-DECISION-BOUNDARY-SPARSE-DRAFT-1] Same-weight draft should optimize verifier acceptance, not FFN energy
+**status:** proposed
+**trust:** {F:0.72, G:medium-low, R:0.72}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "The current hidden lever is likely objective mismatch: preserving FFN activation energy, hidden cosine, or RMSE is not the same as preserving the next-token decision boundary under exact verification. The strongest evidence is that 95% FFN block-energy retention needs most blocks (`~87%` at block size 256), while aggressive `blocktop-10/20` still preserves `100%` accept/parity in short default/code/late gates."
+  source: `LM-QWEN35-FFN-BLOCK-SPARSITY-1`, `/tmp/qwen35_ffn_block_sparsity_main_20260501.log`, `/tmp/qwen35_ffn_block_sparsity_code_20260501.log`, `/tmp/qwen35_ffn_blocktop_accept_024_20260501.log`, `/tmp/qwen35_ffn_blocktop_accept_024_code_20260501.log`, `/tmp/qwen35_ffn_blocktop_accept_late_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: broad prompt suite refutes blocktop acceptance, draft verifier objective changes, or sparse FFN implementation changes
+- claim: "The most useful FFN sparse-draft route is not `dense gate/up -> mask activation -> dense ffn_down`; that remains a quality probe. A real speed route must predict selected FFN blocks from `ffn_in` before dense `gate/up`, then compute only selected gate/up/SwiGLU/down blocks in the draft lane."
+  source: synthesis from `LM-QWEN35-FFN-BLOCK-SPARSITY-1`, `LM-QWEN35-BLOCK-SURROGATE-ERROR-FEEDBACK-1`, self-draft no-head falsifier, and corrected self-spec cost truth table
+  verified_at: 2026-05-01
+  decay_trigger: an implementation shows dense gate/up is not the FFN draft bottleneck, or a different candidate source beats the route
+- claim: "`--simulate-ffn-block-selector=LIST` now probes whether top FFN activation blocks are predictable from `ffn_in` before dense `gate/up`, using a nearest-neighbor calibration baseline. On 9B `tokens96/calib48`, early layers look predictable: default prompt top10 predicted/oracle energy ratio is `96.64%` for layer `0` and `94.09%` for layer `2`; code prompt is `98.99%` and `97.56%`. Layer `4` is weaker (`66.06%` default, `75.93%` code). The late bucket is mostly weak except layer `26` (`76.83%` top10 ratio), with layers `24/28/30` around `41-48%`."
+  source: `/tmp/qwen35_ffn_block_selector_024_default_20260501.log`, `/tmp/qwen35_ffn_block_selector_024_code_20260501.log`, `/tmp/qwen35_ffn_block_selector_late_default_20260501.log`; build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_selector_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_ffn_selector_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_selector_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`)
+  verified_at: 2026-05-01
+  decay_trigger: selector rule, prompt suite, layer set, calibration size, or block size changes
+- claim: "Mismatch-only top2/tree rescue should start from exact verifier mismatch state rather than pre-advancing branches. Prior rank-order and select-advance block-tree probes showed branch selection can remove wasted attempts, but standalone per-token exact branch advancement remains too expensive."
+  source: `LM-QWEN35-BLOCK-SURROGATE-BRANCH-VERIFY-1`, `LM-QWEN35-BLOCK-SURROGATE-SELECT-ADVANCE-1`, long-reasoning `tree2_first` gates
+  verified_at: 2026-05-01
+  decay_trigger: branch-state verifier implementation changes, Metal state-copy cost changes, or top2 coverage changes
+**decision:** Prioritize decision-boundary falsifiers before more kernel work. The immediate next route should be a predicted-block acceptance variant for layers `0,2` first, because nearest-neighbor `ffn_in` selection is strong there and weak for many late layers. Score by verifier acceptance/topK/margin and replay tax, not energy. Mismatch-only top2 rescue remains the parallel branch once candidate coverage holds. Do not write a sparse Metal FFN kernel until predicted block selection shows stable acceptance and enough theoretical block-read reduction.
+**cfmem:** stored as project decision `d968d995-3cb1-45c3-975b-ec975d140d27` and landmark `project:b7d75b69b034:pattern:a1b7c7c7f2121f0046a190643c11f3d4`.
+**quadrumvirate:**
+- cassandra: The recurring failure pattern is proxy optimization. Hidden cosine, RMSE, and energy can improve while `plain_speedup` or acceptance regresses.
+- daedalus: The pivot is from "speed up a kernel after computing dense activations" to "avoid computing dense activations by predicting the small subset that preserves argmax/topK."
+- maieutic: Draft does not need to reproduce Qwen hidden trajectory; it only needs accepted candidates under exact verifier. This permits sidecar selectors and approximate FFN bodies derived from the same weights.
+- adversary: Current evidence is short-gate and prompt-local. A route is not promotable until long-reasoning/code/json/default gates show parity, high acceptance, and no replay spikes.
