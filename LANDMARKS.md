@@ -6403,3 +6403,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "try more top-K branches" to "avoid advancing branches unless the main verifier already found a mismatch."
 - maieutic: The useful artifact is a reusable exact verifier state at the mismatch boundary; advancing every token from scratch repeats the verifier body.
 - adversary: Main top5 success is still low-generality and code top2 still has misses. Do not promote static block-tree fusion until a real scheduler shows wall-clock speedup over plain exact decode.
+
+### [LM-QWEN35-BLOCK-SURROGATE-ERROR-FEEDBACK-1] One-token residual feedback is only a weak diagnostic, not a speed lever
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--block-surrogate-error-feedback=LIST` is implemented for block-residual probes. It evaluates a one-token-lag EWMA residual-error observer: after exact verification observes a block residual, the probe carries a smoothed error estimate into the next surrogate prediction. This tests adaptive-filter/control-theory structure in the surrogate error, but does not claim production speed."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_feedback_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_feedback_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_feedback_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: block-surrogate prediction path, residual-feedback update rule, or block-residual sample collection changes
+- claim: "On the main prompt, `25:28/rank32/tokens96/calib48`, fast last-error feedback is harmful (`decay=0` worsens rel RMSE by `20.08%`), while slow EWMA is only modestly positive: `decay=0.8` improves rel RMSE by `5.64%`; `decay=0.95` improves by `6.23%`."
+  source: `/tmp/qwen35_block_feedback_25_28_rank32_main_20260501_101928.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt text, block/rank/calibration, PCA iterations, or feedback decays change
+- claim: "On the code prompt, the same `25:28/rank32/tokens96/calib48` gate is weaker: `decay=0/0.25/0.5` all regress rel RMSE, `decay=0.8` is slightly negative (`-0.44%` gain), and `decay=0.95` improves only `2.39%`."
+  source: `/tmp/qwen35_block_feedback_25_28_rank32_code_20260501_102103.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt class, block/rank/calibration, PCA iterations, or feedback decays change
+**decision:** Do not pursue residual-error feedback as the next performance path unless a different observer shows much larger logit/top-K gains. The useful negative result is that static block-surrogate error is not a simple low-frequency bias; faster adjacent-science branches are more likely in compressive-sensing FFN sparsity, decision-theoretic mismatch-only top2 rescue, and list-decoding/candidate-fusion routes.
+**quadrumvirate:**
+- cassandra: If the error were slowly varying, last-error or moderate EWMA would improve strongly; instead aggressive feedback regresses.
+- daedalus: The frame shifts away from "online bias correction" toward "change candidate source or skip work structurally."
+- maieutic: Hidden RMSE improvement is only a proxy; the observed gains are too small to justify a logits/tree integration before higher-ROI branches.
+- adversary: The probe uses exact observed residuals, so even the small gains are optimistic relative to a production scheduler.

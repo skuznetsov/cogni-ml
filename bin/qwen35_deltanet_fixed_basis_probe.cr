@@ -2467,6 +2467,68 @@ private def block_residual_mixture_stats(samples : Array(BlockResidualSample),
   end
 end
 
+private def block_residual_error_feedback_stats(samples : Array(BlockResidualSample),
+                                                adapter : BlockResidualSurrogate | BlockResidualMixture,
+                                                eval_start : Int32,
+                                                decay : Float64)
+  raise "block surrogate feedback decay must be in [0, 1]" unless decay >= 0.0 && decay <= 1.0
+  raise "block surrogate needs held-out samples" unless eval_start < samples.size
+
+  dim = samples[0][:out].size
+  bias = Array(Float64).new(dim, 0.0)
+  cos_sum = 0.0
+  delta_cos_sum = 0.0
+  min_cos = Float64::INFINITY
+  err_sq = 0.0
+  delta_err_sq = 0.0
+  exact_sq = 0.0
+  delta_sq = 0.0
+  max_delta = 0.0
+  compared = 0
+
+  samples.each_with_index do |sample, idx|
+    pred_delta = predict_block_residual(adapter, sample[:inp])
+    corrected_delta = Array(Float64).new(dim) { |i| pred_delta[i] + bias[i] }
+    if idx >= eval_start
+      approx_out = Array(Float64).new(dim) { |i| sample[:inp][i] + corrected_delta[i] }
+      cos = cosine64(approx_out, sample[:out])
+      delta_cos = cosine64(corrected_delta, sample[:delta])
+      cos_sum += cos
+      delta_cos_sum += delta_cos
+      min_cos = cos if cos < min_cos
+      dim.times do |i|
+        out_i = sample[:out][i]
+        delta_i = sample[:delta][i]
+        err = approx_out[i] - out_i
+        delta_err = corrected_delta[i] - delta_i
+        abs_err = err.abs
+        max_delta = abs_err if abs_err > max_delta
+        err_sq += err * err
+        delta_err_sq += delta_err * delta_err
+        exact_sq += out_i * out_i
+        delta_sq += delta_i * delta_i
+      end
+      compared += 1
+    end
+
+    # One-token-lag adaptive filter: after exact verification observes this
+    # block residual, carry a smoothed residual-error estimate to the next token.
+    dim.times { |i| bias[i] = decay * bias[i] + (1.0 - decay) * (sample[:delta][i] - pred_delta[i]) }
+  end
+
+  denom = Math.max(1, compared * dim)
+  {
+    count:          compared,
+    mean_cos:       cos_sum / compared,
+    min_cos:        min_cos,
+    mean_delta_cos: delta_cos_sum / compared,
+    rmse:           Math.sqrt(err_sq / denom),
+    rel_rmse:       exact_sq > 0.0 ? Math.sqrt(err_sq / exact_sq) : 0.0,
+    delta_rel_rmse: delta_sq > 0.0 ? Math.sqrt(delta_err_sq / delta_sq) : 0.0,
+    max_delta:      max_delta,
+  }
+end
+
 private def ffn_activation_vectors_for_token_sets(weights : ML::GGUF::Qwen35Weights,
                                                   token_sets : Array(Array(Int32)),
                                                   layer_indices : Array(Int32),
@@ -5401,6 +5463,10 @@ private def parse_int_list(value : String) : Array(Int32)
   value.split(',').map(&.strip).reject(&.empty?).map(&.to_i)
 end
 
+private def parse_float_list(value : String) : Array(Float64)
+  value.split(',').map(&.strip).reject(&.empty?).map(&.to_f64)
+end
+
 private def parse_layer_block(value : String)
   raw = value.strip
   if raw.includes?(":")
@@ -7604,6 +7670,7 @@ simulate_block_surrogate_rank : Int32? = nil
 simulate_block_surrogate_clusters = 1
 simulate_block_surrogate_policy = false
 simulate_block_surrogate_state_mode = "skip"
+simulate_block_surrogate_error_feedback_decays = [] of Float64
 simulate_block_surrogate_self_spec_gammas = [] of Int32
 simulate_block_surrogate_suite_blocks = [] of LayerBlock
 simulate_block_surrogate_suite_prompts = [] of NamedPrompt
@@ -7744,6 +7811,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--block-surrogate-clusters=N", "Train N local residual adapters selected by nearest input centroid for --simulate-block-residual-surrogate") { |v| simulate_block_surrogate_clusters = v.to_i }
   p.on("--simulate-block-surrogate-policy", "Also substitute the trained block surrogate into the full model and report logit/greedy top-k drift") { simulate_block_surrogate_policy = true }
   p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
+  p.on("--block-surrogate-error-feedback=LIST", "Probe one-token-lag EWMA residual-error correction decays for block residual predictions, e.g. 0,0.5,0.9") { |v| simulate_block_surrogate_error_feedback_decays = parse_float_list(v) }
   p.on("--block-surrogate-oracle-gen-calib=N", "Probe-only upper bound: add N exact generated-token block samples to training while still drafting from the original prompt boundary") { |v| simulate_block_surrogate_oracle_gen_calib = v.to_i }
   p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
   p.on("--simulate-block-surrogate-tree-oracle=K", "Run block-surrogate top-K tree oracle using --simulate-block-surrogate-self-spec-gammas as fixed chunk schedules") { |v| simulate_block_surrogate_tree_oracle_k = v.to_i }
@@ -7951,12 +8019,24 @@ if block_start = simulate_block_surrogate_start
   train_ms = (Time.instant - t_train).total_milliseconds
   stats = block_residual_surrogate_stats(block_samples, block_adapter, calib_count)
   puts "block_residual_surrogate_static block=#{block_start}:#{block_end} rank=#{block_rank} effective_input_rank=#{block_adapter.input_basis.size} effective_delta_rank=#{block_adapter.delta_basis.size} calib=#{calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rmse=#{stats[:rmse].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} residual_energy=#{stats[:residual_energy].round(8)} max_delta=#{stats[:max_delta].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)} note=teacher_forced_exact_trajectory_not_state_replacement"
+  simulate_block_surrogate_error_feedback_decays.each do |decay|
+    fb = block_residual_error_feedback_stats(block_samples, block_adapter, calib_count, decay)
+    rel_gain = stats[:rel_rmse] > 0.0 ? 100.0 * (stats[:rel_rmse] - fb[:rel_rmse]) / stats[:rel_rmse] : 0.0
+    delta_gain = stats[:delta_rel_rmse] > 0.0 ? 100.0 * (stats[:delta_rel_rmse] - fb[:delta_rel_rmse]) / stats[:delta_rel_rmse] : 0.0
+    puts "block_residual_error_feedback block=#{block_start}:#{block_end} mode=global rank=#{block_rank} decay=#{decay} calib_warmup=#{calib_count} heldout=#{fb[:count]} hidden_cos_mean=#{fb[:mean_cos].round(8)} hidden_cos_min=#{fb[:min_cos].round(8)} delta_cos_mean=#{fb[:mean_delta_cos].round(8)} rmse=#{fb[:rmse].round(8)} rel_rmse=#{fb[:rel_rmse].round(8)} delta_rel_rmse=#{fb[:delta_rel_rmse].round(8)} max_delta=#{fb[:max_delta].round(6)} rel_rmse_gain_pct=#{rel_gain.round(2)} delta_rel_rmse_gain_pct=#{delta_gain.round(2)} note=one_token_lag_adaptive_filter_exact_observations"
+  end
   if simulate_block_surrogate_clusters > 1
     t_mix = Time.instant
     mixture = train_block_residual_mixture(train_samples, block_start, block_end, block_rank, simulate_block_surrogate_clusters, pca_iters)
     mix_train_ms = (Time.instant - t_mix).total_milliseconds
     mix_stats = block_residual_mixture_stats(block_samples, mixture, calib_count)
     puts "block_residual_surrogate_mixture block=#{block_start}:#{block_end} rank=#{block_rank} clusters=#{mixture.centroids.size} requested_clusters=#{simulate_block_surrogate_clusters} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{calib_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rmse=#{mix_stats[:rmse].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} residual_energy=#{mix_stats[:residual_energy].round(8)} max_delta=#{mix_stats[:max_delta].round(6)} train_ms=#{mix_train_ms.round(3)} note=nearest_input_pca_centroid_teacher_forced_static"
+    simulate_block_surrogate_error_feedback_decays.each do |decay|
+      fb = block_residual_error_feedback_stats(block_samples, mixture, calib_count, decay)
+      rel_gain = mix_stats[:rel_rmse] > 0.0 ? 100.0 * (mix_stats[:rel_rmse] - fb[:rel_rmse]) / mix_stats[:rel_rmse] : 0.0
+      delta_gain = mix_stats[:delta_rel_rmse] > 0.0 ? 100.0 * (mix_stats[:delta_rel_rmse] - fb[:delta_rel_rmse]) / mix_stats[:delta_rel_rmse] : 0.0
+      puts "block_residual_error_feedback block=#{block_start}:#{block_end} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} decay=#{decay} calib_warmup=#{calib_count} heldout=#{fb[:count]} hidden_cos_mean=#{fb[:mean_cos].round(8)} hidden_cos_min=#{fb[:min_cos].round(8)} delta_cos_mean=#{fb[:mean_delta_cos].round(8)} rmse=#{fb[:rmse].round(8)} rel_rmse=#{fb[:rel_rmse].round(8)} delta_rel_rmse=#{fb[:delta_rel_rmse].round(8)} max_delta=#{fb[:max_delta].round(6)} rel_rmse_gain_pct=#{rel_gain.round(2)} delta_rel_rmse_gain_pct=#{delta_gain.round(2)} note=one_token_lag_adaptive_filter_exact_observations"
+    end
     if simulate_block_surrogate_policy
       mix_logit = simulate_block_surrogate_logits_policy(weights, token_ids, block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)
       puts "block_surrogate_logit_policy block=#{block_start}:#{block_end} mode=mixture state_mode=#{simulate_block_surrogate_state_mode} rank=#{block_rank} clusters=#{mixture.centroids.size} top1_match=#{mix_logit[:top1_match].round(2)}% top5_hit=#{mix_logit[:top5_hit].round(2)}% mean_cos=#{mix_logit[:mean_cos].round(8)} min_cos=#{mix_logit[:min_cos].round(8)} mean_kl=#{mix_logit[:mean_kl].round(8)} max_kl=#{mix_logit[:max_kl].round(8)} min_margin=#{mix_logit[:min_margin].round(6)} confident_mismatches=#{mix_logit[:confident_mismatches]} approx_blocks=#{mix_logit[:approx_blocks]} skipped_layers=#{mix_logit[:skipped_layers]}"
