@@ -6375,3 +6375,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "can top-K rescue misses?" to "can we reduce branch attempts enough that rescue is cheaper than plain verifier work?"
 - maieutic: Exact state after a selected token is the real artifact; final-token tail skip means not every oracle token should pay branch advance.
 - adversary: Main clean coverage still fails the cost adversary; code remains a candidate-source falsifier.
+
+### [LM-QWEN35-BLOCK-SURROGATE-SELECT-ADVANCE-1] Select-advance removes wasted branches but not exact advance cost
+**status:** verified
+**trust:** {F:0.87, G:low, R:0.86}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-tree-select-advance` is implemented for the block-surrogate tree oracle. It is mutually exclusive with `--simulate-block-surrogate-tree-branch-verify`; instead of rank-order advancing draft top-K candidates, it advances only the exact selected token branch from the exact pre-token state and reports the same branch timing fields. This is a lower-bound/cost-accounting probe for mismatch-only rescue, not a production scheduler."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_select_advance_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_select_advance_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; no-select smoke `/tmp/qwen35_block_tree_25_28_rank16_k5_select_advance_off_smoke_20260501_095110.log`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_select_advance_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: select-advance semantics, block-surrogate tree output schema, CPU State fork semantics, or top2 spec changes
+- claim: "On the main prompt, `25:28/rank32/top2/gen16/prefill_seed` stays exact under select-advance but only covers `80.0%` of drafted tokens (`3` misses/corrections). It performs `14` exact branch advances for `15` tree tokens and costs `10007.261 ms` in the CPU probe (`9828.713 ms` forward, `178.499 ms` forks)."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k2_select_advance_main_gen16_20260501_095312.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt text, block/rank/top_k, generated length, select-advance implementation, or CPU/GPU verifier implementation changes
+- claim: "On the main prompt, `25:28/rank32/top5/gen16/prefill_seed` is clean under select-advance (`topK=100%`, `misses=0`, parity true) and removes rank-order wasted attempts versus the prior branch verifier (`25 -> 14` attempts), but still costs `10576.738 ms` (`9940.561 ms` forward, `636.128 ms` forks) because every non-final tree token still needs one exact state advance."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_select_advance_main_gen16_20260501_095851.log`, compared with `/tmp/qwen35_block_tree_25_28_rank32_k5_branch_verify_main_gen16_20260501_065642.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt text, branch verification route, block/rank/top_k, generated length, or CPU/GPU verifier implementation changes
+- claim: "On the code prompt, `25:28/rank32/top2/gen16/prefill_seed` remains a candidate-quality warning: `topK=86.67%`, `2` misses/corrections, parity true, and `10626.742 ms` branch time (`10032.461 ms` forward, `594.241 ms` forks)."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k2_select_advance_code_gen16_20260501_100438.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt class, block/rank/top_k, generated length, select-advance route, or surrogate candidate source changes
+**decision:** Keep select-advance as a lower-bound probe and accounting anchor. It proves that good branch selection removes wasted rank-order branches, but it does not create a standalone speed path because the probe still pays one exact full-model state advance per non-final tree token. The next implementation target is mismatch-only top2 rescue on top of an already-paid chunk verifier state, or a GPU-resident branch-state verifier that avoids CPU fork/forward serialization.
+**quadrumvirate:**
+- cassandra: Top-K coverage without branch-cost accounting was optimistic; select-advance shows the remaining floor is exact state advancement, not just wrong candidate order.
+- daedalus: The frame shifts from "try more top-K branches" to "avoid advancing branches unless the main verifier already found a mismatch."
+- maieutic: The useful artifact is a reusable exact verifier state at the mismatch boundary; advancing every token from scratch repeats the verifier body.
+- adversary: Main top5 success is still low-generality and code top2 still has misses. Do not promote static block-tree fusion until a real scheduler shows wall-clock speedup over plain exact decode.
