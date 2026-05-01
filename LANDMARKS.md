@@ -6488,3 +6488,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The pivot is from "speed up a kernel after computing dense activations" to "avoid computing dense activations by predicting the small subset that preserves argmax/topK."
 - maieutic: Draft does not need to reproduce Qwen hidden trajectory; it only needs accepted candidates under exact verifier. This permits sidecar selectors and approximate FFN bodies derived from the same weights.
 - adversary: Current evidence is short-gate and prompt-local. A route is not promotable until long-reasoning/code/json/default gates show parity, high acceptance, and no replay spikes.
+
+### [LM-QWEN35-FFN-BLOCKPRED-1] Predicted FFN blocks are viable only as a narrow quality gate so far
+**status:** verified
+**trust:** {F:0.82, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`lowrank-ffn-blockpred-P` is implemented as a probe-only cheap self-draft variant. It trains a nearest-neighbor selector from calibration `ffn_in` rows to top SwiGLU activation blocks, predicts selected blocks before dense `gate/up`, then masks dense activation blocks before `ffn_down`. This tests candidate quality for a future sparse FFN kernel; it is not itself speed evidence because dense `gate/up` and CPU nearest-neighbor lookup still run."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_blockpred_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_ffn_blockpred_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_blockpred_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: draft variant parser, FFN block selector training, low-rank draft path, or self-spec wall accounting changes
+- claim: "On 9B default prompt with `layers=0,2`, `rank64`, `tokens96/calib48`, `gen16`, and schedule `4`, baseline lowrank kept `100%` accept/parity. `lowrank-ffn-blockpred-10` also kept `100%` accept/parity, while `blockpred-20` had one correction (`93.75%` accept) but still parity."
+  source: `/tmp/qwen35_ffn_blockpred_02_default_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt text, layer set, rank, generation length, schedule, selector rule, or block size changes
+- claim: "On the code prompt with the same `layers=0,2/rank64/gen16/schedule4` gate, `lowrank-ffn-blockpred-20` and `lowrank-ffn-blockpred-10` both kept `100%` accept/parity."
+  source: `/tmp/qwen35_ffn_blockpred_02_code_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt class, layer set, rank, generation length, schedule, selector rule, or block size changes
+- claim: "Adding layer `4` is a negative gate: on the default prompt with `layers=0,2,4/rank64/gen16/schedule4`, both `blockpred-20` and `blockpred-10` had one correction (`93.75%` accept), while baseline lowrank stayed `100%` accept/parity."
+  source: `/tmp/qwen35_ffn_blockpred_024_default_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: layer set, prompt text, selector rule, calibration size, generation length, or block size changes
+**decision:** Do not promote uniform predicted-block FFN sparsity. Keep `0,2` as the next narrow candidate for a real sparse-FFN speed prototype, and treat layer `4` as requiring either a better selector, a router, or fallback. The immediate speed work should replace CPU nearest-neighbor and dense gate/up with a cheap pre-FFN selector plus selected-block projection; otherwise this remains a quality probe.
+**quadrumvirate:**
+- cassandra: Strong selector-energy ratios on layers `0,2` predicted the positive code/default quality gates, but layer `4` remained a failure mode.
+- daedalus: The useful pivot is from all-layer sparsity to layer-specific or routed sparse draft bodies.
+- maieutic: The draft objective is accepted next tokens, not activation reconstruction; `blockpred-10` beating `blockpred-20` on default shows the selector/proposal interaction is non-monotonic.
+- adversary: Current logs are short and prompt-prefix-calibrated. A real speed claim needs a sparse Metal implementation and a broader prompt suite with replay-tax accounting.

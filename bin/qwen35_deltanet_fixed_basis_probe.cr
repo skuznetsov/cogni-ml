@@ -17,6 +17,7 @@ private alias BasisSet = Array(Array(Array(Float64)))
 private alias LayerVectorMap = Hash(Int32, BasisSet)
 private alias LayerBasisMap = Hash(Int32, BasisSet)
 private alias FFNBasisMap = Hash(Int32, Array(Array(Float64)))
+private alias FFNActivationSample = NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))
 private alias FFNBlockSparsityLayerStats = NamedTuple(layer: Int32, vectors: Int32, dim: Int32, block_size: Int32, blocks: Int32, read90_mean: Float64, read95_mean: Float64, read99_mean: Float64)
 private alias BlockResidualSample = NamedTuple(inp: Array(Float64), out: Array(Float64), delta: Array(Float64))
 private alias LayerBlock = NamedTuple(start: Int32, end: Int32)
@@ -90,6 +91,19 @@ private struct FFNUpDownAdapter
 end
 
 private alias FFNUpDownAdapterMap = Hash(Int32, FFNUpDownAdapter)
+
+private struct FFNBlockSelector
+  getter samples : Array(FFNActivationSample)
+  getter blocks_by_percent : Hash(Int32, Array(Set(Int32)))
+  getter block_size : Int32
+
+  def initialize(@samples : Array(FFNActivationSample),
+                 @blocks_by_percent : Hash(Int32, Array(Set(Int32))),
+                 @block_size : Int32)
+  end
+end
+
+private alias FFNBlockSelectorMap = Hash(Int32, FFNBlockSelector)
 
 private struct BlockResidualSurrogate
   getter block_start : Int32
@@ -2700,7 +2714,7 @@ private def nearest_ffn_input_index(train : Array(NamedTuple(ffn_in: Array(Float
 end
 
 private def print_ffn_block_selector_stats(layer_id : Int32,
-                                           samples : Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))),
+                                           samples : Array(FFNActivationSample),
                                            train_count : Int32,
                                            block_size : Int32,
                                            percents : Array(Int32)) : Nil
@@ -2733,14 +2747,36 @@ private def print_ffn_block_selector_stats(layer_id : Int32,
   end
 end
 
+private def train_ffn_block_selector(samples : Array(FFNActivationSample),
+                                     percents : Array(Int32),
+                                     block_size : Int32) : FFNBlockSelector
+  raise "FFN block selector needs at least one sample" if samples.empty?
+  raise "FFN block size must be positive" unless block_size > 0
+
+  by_percent = {} of Int32 => Array(Set(Int32))
+  percents.uniq.each do |percent|
+    by_percent[percent] = samples.map { |sample| top_energy_block_indices(sample[:activation], percent, block_size) }
+  end
+  FFNBlockSelector.new(samples, by_percent, block_size)
+end
+
+private def select_ffn_blocks_from_input(selector : FFNBlockSelector,
+                                         ffn_in : Array(Float32),
+                                         percent : Int32) : Set(Int32)
+  blocks = selector.blocks_by_percent[percent]? || raise "FFN block selector missing percent #{percent}"
+  query = ffn_in.map(&.to_f64)
+  index = nearest_ffn_input_index(selector.samples, query)
+  blocks[index]? || raise "FFN block selector index #{index} out of range"
+end
+
 private def ffn_updown_samples_for_token_sets(weights : ML::GGUF::Qwen35Weights,
                                               token_sets : Array(Array(Int32)),
                                               layer_indices : Array(Int32),
-                                              calib_tokens : Int32) : Hash(Int32, Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))))
+                                              calib_tokens : Int32) : Hash(Int32, Array(FFNActivationSample))
   hp = weights.hparams
   wanted = Set(Int32).new(layer_indices)
-  samples = Hash(Int32, Array(NamedTuple(ffn_in: Array(Float64), activation: Array(Float64)))).new do |h, k|
-    h[k] = [] of NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))
+  samples = Hash(Int32, Array(FFNActivationSample)).new do |h, k|
+    h[k] = [] of FFNActivationSample
   end
 
   token_sets.each do |token_ids|
@@ -3139,7 +3175,8 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
                                         draft_variant : String = "lowrank",
                                         ffn_basis : Array(Array(Float64))? = nil,
                                         ffn_adapter : FFNAdapter? = nil,
-                                        ffn_updown_adapter : FFNUpDownAdapter? = nil) : Array(Float32)
+                                        ffn_updown_adapter : FFNUpDownAdapter? = nil,
+                                        ffn_block_selector : FFNBlockSelector? = nil) : Array(Float32)
   return inpSA if draft_variant == "skip-layer"
 
   h_k = hp.ssm_group_count
@@ -3241,6 +3278,11 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
   return inp_l2 if draft_variant == "lowrank-no-ffn"
 
   ffn_in = ML::GGUF::Qwen35CPU.rms_norm(inp_l2, lw.post_attention_norm, hp.rms_eps)
+  blockpred_blocks = nil.as(Set(Int32)?)
+  if percent = draft_variant_ffn_block_pred_percent(draft_variant)
+    selector = ffn_block_selector || raise "draft variant #{draft_variant.inspect} requires FFN block selector"
+    blockpred_blocks = select_ffn_blocks_from_input(selector, ffn_in, percent)
+  end
   if pca_updown_rank = draft_variant_ffn_pca_updown_rank(draft_variant)
     adapter = ffn_updown_adapter || raise "draft variant #{draft_variant.inspect} requires FFN up/down adapter"
     ffn_out = ffn_out_from_updown_adapter(ffn_in, adapter, pca_updown_rank)
@@ -3256,6 +3298,10 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
   end
   if percent = draft_variant_ffn_block_top_percent(draft_variant)
     keep_top_energy_blocks!(combined, percent, DEFAULT_FFN_SPARSE_BLOCK_SIZE)
+  end
+  if selected = blockpred_blocks
+    selector = ffn_block_selector || raise "draft variant #{draft_variant.inspect} requires FFN block selector"
+    zero_except_blocks!(combined, selected, selector.block_size)
   end
   if pca_rank = draft_variant_ffn_pca_rank(draft_variant)
     basis = ffn_basis || raise "draft variant #{draft_variant.inspect} requires FFN activation basis"
@@ -3319,7 +3365,8 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
                                        draft_variant : String = "lowrank",
                                        ffn_bases : FFNBasisMap? = nil,
                                        ffn_adapters : FFNAdapterMap? = nil,
-                                       ffn_updown_adapters : FFNUpDownAdapterMap? = nil) : Array(Float32)
+                                       ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
+                                       ffn_block_selectors : FFNBlockSelectorMap? = nil) : Array(Float32)
   hp = weights.hparams
   x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
   early_exit_layers = approximate ? cheap_draft_early_exit_layers(draft_variant) : nil
@@ -3339,7 +3386,8 @@ private def logits_with_lowrank_policy(weights : ML::GGUF::Qwen35Weights,
               ffn_basis = ffn_bases ? ffn_bases.not_nil![il]? : nil
               ffn_adapter = ffn_adapters ? ffn_adapters.not_nil![il]? : nil
               ffn_updown_adapter = ffn_updown_adapters ? ffn_updown_adapters.not_nil![il]? : nil
-              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state, fallback_threshold, force_refresh, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_basis, ffn_adapter, ffn_updown_adapter)
+              ffn_block_selector = ffn_block_selectors ? ffn_block_selectors.not_nil![il]? : nil
+              recurrent_layer_cpu_lowrank(x, layer, state.layers[il], hp, bases, rank, lr_state, fallback_threshold, force_refresh, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_basis, ffn_adapter, ffn_updown_adapter, ffn_block_selector)
             else
               recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
             end
@@ -3454,6 +3502,14 @@ private def draft_variant_ffn_block_top_percent(variant : String) : Int32?
   percent
 end
 
+private def draft_variant_ffn_block_pred_percent(variant : String) : Int32?
+  return nil unless variant.starts_with?("lowrank-ffn-blockpred-")
+
+  percent = variant["lowrank-ffn-blockpred-".size..].to_i? || raise "invalid FFN block-pred variant #{variant.inspect}"
+  raise "FFN block-pred percent must be in 1..100" unless percent >= 1 && percent <= 100
+  percent
+end
+
 private def draft_variant_ffn_pca_rank(variant : String) : Int32?
   return nil unless variant.starts_with?("lowrank-ffn-pca-")
   return nil if variant.starts_with?("lowrank-ffn-pca-down-")
@@ -3514,6 +3570,19 @@ private def keep_top_energy_blocks!(values : Array(Float32), percent : Int32, bl
   keep = Set(Int32).new(order[0, keep_blocks])
   blocks.times do |block|
     next if keep.includes?(block)
+
+    start = block * block_size
+    stop = Math.min(start + block_size, values.size)
+    start.upto(stop - 1) { |i| values[i] = 0.0_f32 }
+  end
+end
+
+private def zero_except_blocks!(values : Array(Float32), selected : Set(Int32), block_size : Int32) : Nil
+  raise "FFN block size must be positive" unless block_size > 0
+
+  blocks = (values.size + block_size - 1) // block_size
+  blocks.times do |block|
+    next if selected.includes?(block)
 
     start = block * block_size
     stop = Math.min(start + block_size, values.size)
@@ -5532,7 +5601,8 @@ private def simulate_self_spec_wall_policy(weights : ML::GGUF::Qwen35Weights,
                                            draft_variant : String = "lowrank",
                                            ffn_bases : FFNBasisMap? = nil,
                                            ffn_adapters : FFNAdapterMap? = nil,
-                                           ffn_updown_adapters : FFNUpDownAdapterMap? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, draft_ms: Float64, verifier_ms: Float64, replay_ms: Float64, serial_ms: Float64, overlap_est_ms: Float64, speedup_est: Float64, accept_rate: Float64, exact_ids: Array(Int32), emitted_ids: Array(Int32))
+                                           ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
+                                           ffn_block_selectors : FFNBlockSelectorMap? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, verifier_tokens: Int32, correction_steps: Int32, draft_ms: Float64, verifier_ms: Float64, replay_ms: Float64, serial_ms: Float64, overlap_est_ms: Float64, speedup_est: Float64, accept_rate: Float64, exact_ids: Array(Int32), emitted_ids: Array(Int32))
   raise "wall self-spec requires a non-empty progressive schedule" if progressive_schedule.empty?
   raise "wall self-spec schedule values must be positive" if progressive_schedule.any? { |v| v <= 0 }
 
@@ -5588,14 +5658,14 @@ private def simulate_self_spec_wall_policy(weights : ML::GGUF::Qwen35Weights,
     draft_lr_states = {} of Int32 => LowRankState
     sync_lowrank_shadow!(draft_state, state_before_last, layer_bases, draft_lr_states, rank, hp)
     draft_logits = logits_with_lowrank_policy(weights, last_token, pos_last.to_i32, draft_state,
-      layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_bases, ffn_adapters, ffn_updown_adapters)
+      layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_bases, ffn_adapters, ffn_updown_adapters, ffn_block_selectors)
     proposal = [] of Int32
     chunk_gamma.times do |j|
       proposed = top1(draft_logits)
       proposal << proposed
       break if j == chunk_gamma - 1
       draft_logits = logits_with_lowrank_policy(weights, proposed, (pos_last + 1 + j).to_i32, draft_state,
-        layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_bases, ffn_adapters, ffn_updown_adapters)
+        layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, refresh_interval, true, use_metal_lowrank, project_coeffs_on_gpu, use_metal_layer_updown, draft_variant, ffn_bases, ffn_adapters, ffn_updown_adapters, ffn_block_selectors)
     end
     dt_draft = (Time.instant - t_draft).total_milliseconds
     draft_ms += dt_draft
@@ -5738,6 +5808,7 @@ private def cheap_draft_variant_valid?(variant : String) : Bool
   return true if {"lowrank", "lowrank-no-ffn", "skip-layer"}.includes?(variant)
   return true if draft_variant_ffn_top_percent(variant)
   return true if draft_variant_ffn_block_top_percent(variant)
+  return true if draft_variant_ffn_block_pred_percent(variant)
   return true if draft_variant_ffn_pca_rank(variant)
   return true if draft_variant_ffn_pca_down_rank(variant)
   return true if draft_variant_ffn_pca_updown_rank(variant)
@@ -8087,7 +8158,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-topk-oracle-train-tokens=N", "Training samples from the start of --simulate-generate for --simulate-topk-oracle") { |v| simulate_topk_oracle_train_tokens = v.to_i }
   p.on("--simulate-self-spec-progressive=LIST", "Run progressive self-spec verifier chunks with a repeating comma-separated schedule, e.g. 4,4,8") { |v| simulate_self_spec_progressive = parse_int_list(v) }
   p.on("--simulate-self-spec-wall-progressive=LIST", "Measure wall-clock low-rank draft plus exact chunk verifier for a progressive schedule") { |v| simulate_self_spec_wall_progressive = parse_int_list(v) }
-  p.on("--simulate-cheap-self-draft-variants=LIST", "Run wall self-spec with comma-separated draft variants: lowrank,lowrank-no-ffn,skip-layer,early-exit-N,lowrank-ffn-top-P,lowrank-ffn-blocktop-P,lowrank-ffn-pca-R,lowrank-ffn-pca-down-R,lowrank-ffn-pca-updown-R") { |v| simulate_cheap_self_draft_variants = v.split(',').map(&.strip).reject(&.empty?) }
+  p.on("--simulate-cheap-self-draft-variants=LIST", "Run wall self-spec with comma-separated draft variants: lowrank,lowrank-no-ffn,skip-layer,early-exit-N,lowrank-ffn-top-P,lowrank-ffn-blocktop-P,lowrank-ffn-blockpred-P,lowrank-ffn-pca-R,lowrank-ffn-pca-down-R,lowrank-ffn-pca-updown-R") { |v| simulate_cheap_self_draft_variants = v.split(',').map(&.strip).reject(&.empty?) }
   p.on("--ffn-pca-calib-prompt=TEXT", "Additional prompt used to build FFN PCA/PCA-down basis; may be repeated") { |v| ffn_pca_calib_prompts << v }
   p.on("--simulate-ffn-block-sparsity=LIST", "Measure how many FFN-down quant blocks retain SwiGLU activation energy for listed recurrent layers") { |v| simulate_ffn_block_sparsity_layers = parse_int_list(v) }
   p.on("--simulate-ffn-block-selector=LIST", "Nearest-neighbor probe: predict top FFN activation blocks from ffn_in for listed recurrent layers") { |v| simulate_ffn_block_selector_layers = parse_int_list(v) }
@@ -8392,6 +8463,7 @@ if rank = simulate_logit_rank
     ffn_pca_ranks = [] of Int32
     ffn_pca_down_ranks = [] of Int32
     ffn_pca_updown_ranks = [] of Int32
+    ffn_block_pred_percents = [] of Int32
     if metal_updown_rank = simulate_ffn_updown_metal_rank
       ffn_pca_updown_ranks << metal_updown_rank
     end
@@ -8417,10 +8489,28 @@ if rank = simulate_logit_rank
       if pca_updown_rank = draft_variant_ffn_pca_updown_rank(variant)
         ffn_pca_updown_ranks << pca_updown_rank
       end
+      if block_pred_percent = draft_variant_ffn_block_pred_percent(variant)
+        ffn_block_pred_percents << block_pred_percent
+      end
     end
     ffn_activation_bases = nil.as(FFNBasisMap?)
     ffn_down_adapters = nil.as(FFNAdapterMap?)
     ffn_updown_adapters = nil.as(FFNUpDownAdapterMap?)
+    ffn_block_selectors = nil.as(FFNBlockSelectorMap?)
+    unless ffn_block_pred_percents.empty?
+      selector_token_sets = ffn_pca_calib_token_sets.empty? ? [token_ids[0, calib_count]] : ffn_pca_calib_token_sets
+      selector_token_count = ffn_pca_calib_token_sets.empty? ? calib_count : calib_tokens
+      selector_samples = ffn_updown_samples_for_token_sets(weights, selector_token_sets, sorted_simulate_logit_layers, selector_token_count)
+      selectors = {} of Int32 => FFNBlockSelector
+      sorted_simulate_logit_layers.each do |il|
+        samples_for_layer = selector_samples[il]? || [] of FFNActivationSample
+        raise "no FFN block selector samples captured for layer #{il}" if samples_for_layer.empty?
+        selectors[il] = train_ffn_block_selector(samples_for_layer, ffn_block_pred_percents, simulate_ffn_block_size)
+      end
+      ffn_block_selectors = selectors
+      calib_source = ffn_pca_calib_token_sets.empty? ? "eval_prompt_prefix" : "external_prompts:#{ffn_pca_calib_token_sets.size}"
+      puts "ffn_block_selector_adapter source=#{calib_source} layers=#{selectors.keys.sort.join(',')} percents=#{ffn_block_pred_percents.uniq.sort.join(',')} block_size=#{simulate_ffn_block_size} samples=#{selector_samples.map { |il, s| "#{il}:#{s.size}" }.join(',')}"
+    end
     all_ffn_pca_ranks = ffn_pca_ranks + ffn_pca_down_ranks + ffn_pca_updown_ranks
     unless all_ffn_pca_ranks.empty?
       max_ffn_pca_rank = all_ffn_pca_ranks.max
@@ -8621,7 +8711,7 @@ if rank = simulate_logit_rank
           unless cheap_draft_variant_valid?(variant)
             raise "unknown cheap self-draft variant #{variant.inspect}"
           end
-          wall = simulate_self_spec_wall_policy(weights, token_ids, simulate_generate_tokens, simulate_self_spec_wall_progressive, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_self_spec_wall_metal_lowrank, simulate_self_spec_wall_metal_project, simulate_self_spec_wall_metal_layer_updown, variant, ffn_activation_bases, ffn_down_adapters, ffn_updown_adapters)
+          wall = simulate_self_spec_wall_policy(weights, token_ids, simulate_generate_tokens, simulate_self_spec_wall_progressive, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_self_spec_wall_metal_lowrank, simulate_self_spec_wall_metal_project, simulate_self_spec_wall_metal_layer_updown, variant, ffn_activation_bases, ffn_down_adapters, ffn_updown_adapters, ffn_block_selectors)
           metal_note = simulate_self_spec_wall_metal_layer_updown ? " metal_project=1 metal_layer_updown=1" : (simulate_self_spec_wall_metal_project ? " metal_project=1" : (simulate_self_spec_wall_metal_lowrank ? " metal_lowrank=1" : ""))
           parity = wall[:exact_ids] == wall[:emitted_ids]
           puts "cheap_self_draft_variant=#{variant} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_wall_progressive.join(',')}#{metal_note} gen_tokens=#{simulate_generate_tokens} chunks=#{wall[:chunks]} rejections=#{wall[:rejections]} accepted_draft_tokens=#{wall[:accepted_draft_tokens]} proposed_tokens=#{wall[:proposed_tokens]} accept_rate=#{wall[:accept_rate].round(2)}% parity=#{parity} verifier_tokens=#{wall[:verifier_tokens]} correction_steps=#{wall[:correction_steps]} draft_ms=#{wall[:draft_ms].round(3)} verifier_ms=#{wall[:verifier_ms].round(3)} replay_ms=#{wall[:replay_ms].round(3)} serial_ms=#{wall[:serial_ms].round(3)} overlap_est_ms=#{wall[:overlap_est_ms].round(3)} speedup_est=#{wall[:speedup_est].round(4)}x exact_ids=#{wall[:exact_ids].join(',')} emitted_ids=#{wall[:emitted_ids].join(',')}"
