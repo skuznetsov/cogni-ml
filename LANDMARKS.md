@@ -6303,3 +6303,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The correct frame is "when to enable this candidate source" rather than "make static block residual universally accurate."
 - maieutic: Exact warmup buys stability only when the later candidate distribution is already close; it does not fix prompts where exact ids are outside top16.
 - adversary: These are CPU/probe oracle results. A production claim still needs real branch-state verifier cost, multi-prompt gates, and same-run comparison to plain exact decode.
+
+### [LM-QWEN35-PREFILL-SEED-FOR-BLOCK-TREE-1] Prefill seed helps, full-prompt calibration alone does not
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "Training the `25:28/rank32` block surrogate on almost the whole prompt (`tokens=96`, `calib=95`) improves held-out hidden reconstruction but does not remove the main-prompt no-warmup top-5 miss. The run still reports top-5 `93.75%`, `1` miss, and average rank-ordered branch cost `1.75`."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_calib95_main_gen16_20260430_204528.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt length, calibration split, block/rank, top_k, generated length, or surrogate training path changes
+- claim: "The main-prompt warmup win is better interpreted as using the exact prefill seed/final prompt logits rather than as ordinary serial-decode magic. In a real generator, the first generated token can come from the exact final prompt logits already produced by prefill; block-tree speculation can start from the second generated token without paying a separate full decode step."
+  source: compare `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup1_main_gen16_20260430_193412.log` with `/tmp/qwen35_block_tree_25_28_rank32_k5_calib95_main_gen16_20260430_204528.log`
+  verified_at: 2026-04-30
+  decay_trigger: generator timing boundary, final prompt logits availability, prefill API, or block-tree scheduler changes
+- claim: "On the code prompt, exact state shadowing does not fix `25:28/rank32/top5/warmup1`: `state_mode=shadow` still reports top-5 `86.67%` and `2` misses, the same failure pattern as skip mode. This means the code failures are output/candidate-distribution misses, not merely stale skipped block state."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup1_shadow_code_gen16_20260430_205130.log`, compared with `/tmp/qwen35_block_tree_25_28_rank32_k5_warmup1_code_gen16_20260430_193958.log`
+  verified_at: 2026-04-30
+  decay_trigger: state_mode semantics, code prompt text, block/rank, top_k, generated length, or surrogate output path changes
+**decision:** Use exact prefill final logits as the natural one-token seed for block-tree routes, but do not expect prompt-only calibration or exact block-state shadowing to solve code-like misses. The next implementation target is a scheduler/probe that treats first-token exact output as free prefill seed and then measures branch-state verifier cost from token 2 onward; in parallel, code-like spans need another candidate source or risk router.
+**quadrumvirate:**
+- cassandra: More prefill samples reduce reconstruction drift but do not guarantee candidate coverage at the final prompt boundary.
+- daedalus: The pivot is from "serial warmup improves quality" to "prefill already owns token 1; start speculative block-tree at token 2."
+- maieutic: The assumption that state staleness caused code misses was falsified by shadow mode.
+- adversary: This is still a probe interpretation. Production timing must ensure first-token logits are outside the measured decode loop and that branch-state setup from the prefill state is exact.
