@@ -159,6 +159,48 @@ module ML::GGUF
       out
     end
 
+    def matvec_bf16_rows(w : DenseBF16Weight, x : Array(Float32), rows : Array(Int32)) : Array(Float32)
+      raise ArgumentError.new("#{w.name}: expected input #{w.in_dim}, got #{x.size}") unless x.size == w.in_dim
+      expected = w.out_dim.to_i64 * w.in_dim.to_i64 * 2_i64
+      raise "#{w.name}: raw size #{w.raw.size} != expected #{expected}" unless w.raw.size.to_i64 == expected
+
+      out = Array(Float32).new(rows.size, 0.0_f32)
+      rows.each_with_index do |row, out_i|
+        raise ArgumentError.new("#{w.name}: row #{row} out of range 0...#{w.out_dim}") if row < 0 || row >= w.out_dim
+        base = row * w.in_dim
+        sum = 0.0_f32
+        w.in_dim.times do |col|
+          sum += bf16_at(w.raw, base + col) * x[col]
+        end
+        out[out_i] = sum
+      end
+      out
+    end
+
+    def matvec_bf16_q_gate_rows(w : DenseBF16Weight, x : Array(Float32),
+                                n_head : Int32, head_dim : Int32) : Array(Float32)
+      q_dim = n_head * head_dim
+      raise ArgumentError.new("#{w.name}: expected input #{w.in_dim}, got #{x.size}") unless x.size == w.in_dim
+      raise ArgumentError.new("#{w.name}: expected q_proj rows #{q_dim * 2}, got #{w.out_dim}") unless w.out_dim == q_dim * 2
+      expected = w.out_dim.to_i64 * w.in_dim.to_i64 * 2_i64
+      raise "#{w.name}: raw size #{w.raw.size} != expected #{expected}" unless w.raw.size.to_i64 == expected
+
+      out = Array(Float32).new(q_dim, 0.0_f32)
+      n_head.times do |h|
+        src_base = h * 2 * head_dim + head_dim
+        dst_base = h * head_dim
+        head_dim.times do |d|
+          row_base = (src_base + d) * w.in_dim
+          sum = 0.0_f32
+          w.in_dim.times do |col|
+            sum += bf16_at(w.raw, row_base + col) * x[col]
+          end
+          out[dst_base + d] = sum
+        end
+      end
+      out
+    end
+
     # HF Qwen3.5 RMSNorm stores a learned delta and applies `(1 + weight)`.
     # GGUF target norms are converted for llama.cpp, but the MTP sidecar is raw
     # safetensors, so the sidecar path must apply the +1 here.
@@ -221,32 +263,46 @@ module ML::GGUF
       kv_dim = n_head_kv * head_dim
       heads_per_group = n_head // n_head_kv
 
-      q_full = matvec_bf16(mtp.q_proj, cur)
-      k = matvec_bf16(mtp.k_proj, cur)
       v = matvec_bf16(mtp.v_proj, cur)
-      raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
-      raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
       raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
 
-      q = Array(Float32).new(q_dim, 0.0_f32)
-      gate = Array(Float32).new(q_dim, 0.0_f32)
-      n_head.times do |h|
-        src_base = h * 2 * head_dim
-        dst_base = h * head_dim
-        head_dim.times do |d|
-          q[dst_base + d] = q_full[src_base + d]
-          gate[dst_base + d] = q_full[src_base + head_dim + d]
-        end
-      end
+      gate = if ENV["QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF"]? == "1"
+               # Full formula path for adversary A/B. For a one-token MTP cache,
+               # Q/K and RoPE do not affect softmax, but keeping this branch
+               # makes it easy to catch future multi-token misuse.
+               q_full = matvec_bf16(mtp.q_proj, cur)
+               k = matvec_bf16(mtp.k_proj, cur)
+               raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+               raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
 
-      n_head.times do |h|
-        rms_norm_sidecar_slice!(q, h * head_dim, head_dim, mtp.q_norm, hp.rms_eps)
-        Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
-      end
-      n_head_kv.times do |h|
-        rms_norm_sidecar_slice!(k, h * head_dim, head_dim, mtp.k_norm, hp.rms_eps)
-        Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
-      end
+               q = Array(Float32).new(q_dim, 0.0_f32)
+               gate_full = Array(Float32).new(q_dim, 0.0_f32)
+               n_head.times do |h|
+                 src_base = h * 2 * head_dim
+                 dst_base = h * head_dim
+                 head_dim.times do |d|
+                   q[dst_base + d] = q_full[src_base + d]
+                   gate_full[dst_base + d] = q_full[src_base + head_dim + d]
+                 end
+               end
+
+               n_head.times do |h|
+                 rms_norm_sidecar_slice!(q, h * head_dim, head_dim, mtp.q_norm, hp.rms_eps)
+                 Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+               end
+               n_head_kv.times do |h|
+                 rms_norm_sidecar_slice!(k, h * head_dim, head_dim, mtp.k_norm, hp.rms_eps)
+                 Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+               end
+               gate_full
+             else
+               # Exact one-token shortcut: with only the current MTP token in
+               # the MTP KV-cache, attention softmax is 1. Q/K/RoPE cannot
+               # change the output; only V and the output gate are needed.
+               matvec_bf16_q_gate_rows(mtp.q_proj, cur, n_head, head_dim)
+             end
+
+      raise "mtp gate produced #{gate.size}, expected #{q_dim}" unless gate.size == q_dim
 
       attn_o = Array(Float32).new(q_dim, 0.0_f32)
       n_head.times do |h|

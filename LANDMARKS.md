@@ -6568,3 +6568,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "does MTP top1 always match?" to "can a trained MTP topK source reduce verifier work with exact tree/chunk verification?"
 - maieutic: The current proof assumes one MTP layer and one-token MTP cache. This matches the downloaded config (`mtp_num_hidden_layers=1`) but is only a baseline for `num_speculative_tokens=1`.
 - adversary: Generality is low: three short prompts, one token ahead, CPU oracle, no wall-speed claim. Require prompt-suite parity and Metal timings before promotion.
+
+### [LM-QWEN36-MTP-ONE-TOKEN-SHORTCUT-1] One-token MTP can skip Q/K/RoPE exactly, but CPU oracle remains FFN/body-bound
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (Qwen3.6 native MTP / exact speculative decode)
+**evidence:**
+- claim: "For `num_speculative_tokens=1`, the MTP full-attention cache contains only the current MTP token, so attention softmax is exactly `1` per query head. Q/K/q_norm/k_norm/RoPE cannot affect the output; only the Q-proj gate rows and V/O are needed for the attention sublayer. `Qwen35MTP.forward_one_hidden` now uses this exact shortcut by default and keeps `QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF=1` for full-formula A/B."
+  source: `src/ml/gguf/qwen35_mtp.cr`; focused spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_spec crystal spec spec/qwen35_mtp_spec.cr` (`7 examples, 0 failures`); build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_probe_build crystal build bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_sidecar_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: MTP multi-token cache support, MTP attention formula changes, or shortcut path changes
+- claim: "The shortcut preserves first-token MTP outputs/top5 in checked smokes. France prompt stays accepted with identical MTP top5 (`.` top1); story prompt still rejects top1 (`in` vs exact `there`) but exact token remains MTP top2/top5."
+  source: `/tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "The capital of France is"`; `QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF=1 /tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "The capital of France is"`; `/tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "Once upon a time"`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: prompt suite, tokenizer/model, MTP implementation, topK extraction, or target verifier changes
+- claim: "Logical BF16 MTP body traffic for one-token shortcut drops from `810 MiB` to `740 MiB`: `fc=100 MiB`, `gate rows=60 MiB`, `v=10 MiB`, `o=60 MiB`, and FFN gate/up/down `170 MiB` each. The removed exact-dead work is only `70 MiB`, while FFN remains `510 MiB` of the shortcut body, so the main Metal/quant target is FFN plus `fc/o/gate`, not Q/K."
+  source: shape arithmetic from MTP tensor dimensions in `Qwen35MTPWeights.validate_for_qwen35!` and `bin/qwen35_mtp_sidecar_probe.cr` shape output, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: MTP tensor shapes, quant format, multi-token path, or fused body design changes
+- claim: "CPU oracle timing confirms this is not a CPU breakthrough: one sequential France A/B measured shortcut `mtp_cpu_bf16=9503.176ms` versus full formula `9626.004ms`, with identical tokens/top5. Previous runs were noisy around `10-11s`, so treat the timing as small/noisy."
+  source: sequential A/B `/tmp/qwen35_mtp_sidecar_probe --run-forward --prompt "The capital of France is"` and `QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF=1 ...`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: CPU oracle implementation, host load, compiler/runtime, or Metal path implementation
+**decision:** Preserve the one-token shortcut as an exact design constraint for the Metal MTP kernel, but do not claim user-facing speed from the CPU oracle. The next production lever is a resident Metal BF16/mixed-quant body, with FFN gate/up/down dominating byte traffic; Q/K/RoPE can be skipped only for `num_speculative_tokens=1` and must return for multi-token MTP cache.
+**quadrumvirate:**
+- cassandra: Eliminating Q/K looked attractive but only removes about `8.6%` of BF16 body traffic; CPU noise can hide or reverse the gain.
+- daedalus: The optimization frame shifts from "remove attention math" to "make the remaining FFN-heavy proposal body resident and eventually quantized/sparse."
+- maieutic: The shortcut assumes exactly one MTP token in the sidecar attention cache. It is not valid for `num_speculative_tokens>1` without real MTP KV handling.
+- adversary: The proof is shape/formula-based and smoke-tested, but the timing evidence is low-generality. Promote only as an implementation constraint, not as a speed claim.

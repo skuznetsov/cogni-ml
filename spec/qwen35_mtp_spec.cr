@@ -125,6 +125,31 @@ describe ML::GGUF::Qwen35MTP do
     out[1].should be_close(-1.5_f32, 1e-6_f32)
   end
 
+  it "multiplies selected BF16 rows" do
+    raw = bf16_bytes([
+      1.0_f32, 2.0_f32, 3.0_f32,
+      -1.0_f32, 0.5_f32, 4.0_f32,
+      0.25_f32, -2.0_f32, 1.0_f32,
+    ])
+    w = ML::GGUF::DenseBF16Weight.new("fixture", raw, 3, 3)
+    out = ML::GGUF::Qwen35MTP.matvec_bf16_rows(w, [2.0_f32, -1.0_f32, 0.25_f32], [2, 0])
+    out[0].should be_close(2.75_f32, 1e-6_f32)
+    out[1].should be_close(0.75_f32, 1e-6_f32)
+  end
+
+  it "extracts interleaved q-proj gate rows" do
+    # Two heads, head_dim=1, q_proj rows are [q0, gate0, q1, gate1].
+    raw = bf16_bytes([
+      10.0_f32, 0.0_f32,
+      1.0_f32, 2.0_f32,
+      20.0_f32, 0.0_f32,
+      -1.0_f32, 4.0_f32,
+    ])
+    w = ML::GGUF::DenseBF16Weight.new("q_proj", raw, 4, 2)
+    out = ML::GGUF::Qwen35MTP.matvec_bf16_q_gate_rows(w, [3.0_f32, 0.5_f32], 2, 1)
+    out.should eq([4.0_f32, -1.0_f32])
+  end
+
   it "applies Qwen3.5 sidecar RMSNorm with one-centered weights" do
     out = ML::GGUF::Qwen35MTP.rms_norm_sidecar([3.0_f32, 4.0_f32], [0.0_f32, 1.0_f32], 0.0_f32)
     out[0].should be_close(0.84852815_f32, 1e-6_f32)
