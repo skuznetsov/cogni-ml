@@ -6327,3 +6327,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The pivot is from "serial warmup improves quality" to "prefill already owns token 1; start speculative block-tree at token 2."
 - maieutic: The assumption that state staleness caused code misses was falsified by shadow mode.
 - adversary: This is still a probe interpretation. Production timing must ensure first-token logits are outside the measured decode loop and that branch-state setup from the prefill state is exact.
+
+### [LM-QWEN35-BLOCK-SURROGATE-PREFILL-SEED-2] Prefill seed boundary is now explicit in block-tree probes
+**status:** verified
+**trust:** {F:0.86, G:low, R:0.86}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-prefill-seed` is implemented for the block-surrogate tree oracle. It treats the first generated token as coming from exact final prompt logits, then measures the block-tree drafted span from token 2 onward with explicit `prefill_seed`, `prefill_seed_tokens`, `tree_tokens`, and total branch-pressure metrics. The no-flag path still reports `prefill_seed=false` and unchanged tree-token accounting."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_prefill_seed_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_prefill_seed_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; no-flag smoke `/tmp/qwen35_block_tree_25_28_rank16_k5_no_prefill_seed_smoke_20260430_212137.log`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_prefill_seed_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-04-30
+  verified_at: 2026-04-30
+  decay_trigger: block-surrogate tree oracle schema, prefill timing boundary, exact state advance, or top2 spec changes
+- claim: "On the main prompt, explicit prefill seed reproduces the prior warmup1 positive result for `25:28/rank32/top5/gen16`: `prefill_seed=true`, `prefill_seed_tokens=1`, `tree_tokens=15`, `topK=100%`, `misses=0`, `top1=66.67%`, average rank branch `1.733`, and total average rank branch pressure `1.625` over all 16 generated tokens."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_prefill_seed_main_gen16_20260430_211020.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt text, generated length, block/rank, top_k, prefill seed semantics, or surrogate path changes
+- claim: "On the code prompt, explicit prefill seed does not rescue the static `25:28/rank32/top5/gen16` block tree: the drafted span still has `86.67%` top-K coverage and `2` misses. This confirms that the code failure is candidate-distribution quality, not just a missing first-token boundary."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_prefill_seed_code_gen16_20260430_211559.log`
+  verified_at: 2026-04-30
+  decay_trigger: prompt class, generated length, block/rank, top_k, state mode, or surrogate candidate source changes
+**decision:** Keep prefill seed accounting in the probe and use it for scheduler cost modeling. Do not promote static `25:28` block-tree globally: main-like prompts can benefit from starting at token 2, while code-like spans still require a risk router or an additive candidate source before any superfused kernel.
+**quadrumvirate:**
+- cassandra: The seed boundary helps only when the post-seed proposal distribution is already close.
+- daedalus: The useful frame is cost-boundary accounting, not another serial warmup knob.
+- maieutic: Token selection from final prompt logits and exact state advance through token 1 are distinct; the probe now exposes that distinction.
+- adversary: The code-prompt negative case and no-flag smoke prevent overclaiming the main-prompt result.
