@@ -6351,3 +6351,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame is cost-boundary accounting, not another serial warmup knob.
 - maieutic: Token selection from final prompt logits and exact state advance through token 1 are distinct; the probe now exposes that distinction.
 - adversary: The code-prompt negative case and no-flag smoke prevent overclaiming the main-prompt result.
+
+### [LM-QWEN35-BLOCK-SURROGATE-BRANCH-VERIFY-1] Rank-order branch verification is exact but too costly for static block tree as-is
+**status:** verified
+**trust:** {F:0.86, G:low, R:0.84}
+**context:** ml (same-weight self-speculative decode)
+**evidence:**
+- claim: "`--simulate-block-surrogate-tree-branch-verify` is implemented for the block-surrogate tree oracle. In this mode the probe no longer only scores `exact_top1 in draft_topK`; for non-final generated tokens it forks the exact pre-token state and advances draft top-K candidates rank-order until the exact token is found, or falls back to a correction branch on top-K miss. Output reports `branch_verify_attempts`, wasted attempts, correction branches, and fork/forward wall time."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_branch_verify_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_block_branch_verify_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; no-branch smoke `/tmp/qwen35_block_tree_25_28_rank16_k5_branch_verify_off_smoke_20260501_070824.log`; spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_block_branch_verify_spec crystal spec spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`1 examples, 0 failures`) on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: branch verifier semantics, block-surrogate tree output schema, CPU State fork semantics, or top2 spec changes
+- claim: "On the main prompt, `25:28/rank32/top5/gen16/prefill_seed` stays exact and clean under real branch advancement (`topK=100%`, `misses=0`, parity true), but rank-order verification needs `25` exact branch attempts for `15` tree tokens (`11` wasted) and costs `18373.747 ms` in the CPU probe (`17716.040 ms` exact forward, `657.643 ms` forks)."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_branch_verify_main_gen16_20260501_065642.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt text, branch verification route, block/rank/top_k, generated length, or CPU/GPU verifier implementation changes
+- claim: "On the code prompt, branch verification preserves parity but keeps the prior negative candidate-quality signal: `topK=86.67%`, `2` misses, `2` correction branches, `25` attempts, `11` wasted, and `17879.441 ms` branch verifier time."
+  source: `/tmp/qwen35_block_tree_25_28_rank32_k5_branch_verify_code_gen16_20260501_070238.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt class, branch verification route, block/rank/top_k, generated length, or surrogate candidate source changes
+**decision:** Do not build a superfused static `25:28` branch-tree kernel yet. Real rank-order branch advancement validates exactness and tail-skip accounting, but it also shows the route needs either a much better candidate order/reranker, lower K, a risk router that only enables branch verification on high-confidence spans, or a cheap GPU branch-state verifier before it can beat plain decode.
+**quadrumvirate:**
+- cassandra: Oracle top-K coverage overestimated speed potential because it hid wasted exact branch advances.
+- daedalus: The frame shifts from "can top-K rescue misses?" to "can we reduce branch attempts enough that rescue is cheaper than plain verifier work?"
+- maieutic: Exact state after a selected token is the real artifact; final-token tail skip means not every oracle token should pay branch advance.
+- adversary: Main clean coverage still fails the cost adversary; code remains a candidate-source falsifier.
