@@ -6516,3 +6516,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful pivot is from all-layer sparsity to layer-specific or routed sparse draft bodies.
 - maieutic: The draft objective is accepted next tokens, not activation reconstruction; `blockpred-10` beating `blockpred-20` on default shows the selector/proposal interaction is non-monotonic.
 - adversary: Current logs are short and prompt-prefix-calibrated. A real speed claim needs a sparse Metal implementation and a broader prompt suite with replay-tax accounting.
+
+### [LM-QWEN36-MTP-SIDECAR-1] Qwen3.6 MTP weights can be recovered as a compact sidecar
+**status:** verified
+**trust:** {F:0.90, G:medium, R:0.90}
+**context:** ml (Qwen3.6 native MTP / exact speculative decode)
+**evidence:**
+- claim: "The official HF Qwen3.6-27B checkpoint contains built-in MTP tensors (`mtp.fc`, one `mtp.layers.0` full-attention/FFN layer, `mtp.norm`, and `mtp.pre_fc_norm_*`), but the local LM Studio GGUF contains no `mtp`/`nextn` tensors and exactly `851` ordinary Qwen35 core tensors."
+  source: HF `Qwen/Qwen3.6-27B` `config.json` / `model.safetensors.index.json`; local `llama-gguf /Users/sergey/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf r n`; structured tensor scan of `/tmp/qwen36_27b_gguf_meta_check.txt`
+  verified_at: 2026-05-01
+  decay_trigger: new local GGUF quant with MTP tensors, upstream checkpoint layout changes, or converter changes
+- claim: "`scripts/qwen36_extract_mtp_sidecar.py` range-downloads only `mtp.*` byte ranges from the official HF safetensors shards and repacks them into `/Users/sergey/.cache/cogni-ml/qwen36_mtp/Qwen3.6-27B-mtp.safetensors`. The extracted sidecar has `15` BF16 tensors and `810.05 MiB` payload, avoiding full shard downloads (`model-00013` is `~3.72 GiB`, `model-00015` is `~485 MiB`)."
+  source: `python3 scripts/qwen36_extract_mtp_sidecar.py --dry-run`; `python3 scripts/qwen36_extract_mtp_sidecar.py --out /Users/sergey/.cache/cogni-ml/qwen36_mtp/Qwen3.6-27B-mtp.safetensors`
+  verified_at: 2026-05-01
+  decay_trigger: extractor changes, HF range-download behavior, checkpoint revision, or sidecar path changes
+- claim: "The Crystal sidecar reader and loader validate the extracted MTP tensor shapes against the local Qwen3.6-27B GGUF hparams: hidden `5120`, layers `64`, heads `24`, KV heads `4`, head_dim `256`, FFN `17408`; MTP matrices are `fc=5120x10240`, `q=12288x5120`, `k/v=1024x5120`, `o=5120x6144`, and FFN `gate/up=17408x5120`, `down=5120x17408`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_spec crystal spec spec/qwen35_mtp_spec.cr` (`2 examples, 0 failures`); `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_probe_build crystal build bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_sidecar_probe`; `/tmp/qwen35_mtp_sidecar_probe --model /Users/sergey/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf --mtp /Users/sergey/.cache/cogni-ml/qwen36_mtp/Qwen3.6-27B-mtp.safetensors`
+  verified_at: 2026-05-01
+  decay_trigger: MTP loader, hparam parser, sidecar format, or local target model changes
+**decision:** Use the MTP sidecar as the next candidate source for exact speculative decode. First implement a baseline `num_speculative_tokens=1` MTP forward/acceptance probe before applying mathematical simplifications. The promising simplification targets are low-rank `mtp.fc`, sparse/selected MTP FFN blocks, and head shortlist/low-rank head, but any such branch must be scored by exact verifier acceptance and plain wall speedup.
+**quadrumvirate:**
+- cassandra: The main failure mode is treating MTP as "free"; the sidecar is 810 MiB and includes large BF16 FFN/head-adjacent work, so a baseline cost probe is mandatory.
+- daedalus: The frame shifts from approximate self-draft only to a trained same-family internal drafter; exact verification remains the quality guard.
+- maieutic: Nothing prevents simplifying MTP mathematically, but the first assumption to test is whether unmodified MTP is already faster and high-acceptance on M2 Max.
+- adversary: Current evidence proves weight recovery and shape compatibility only. It does not yet prove MTP forward correctness, acceptance, or speed.
