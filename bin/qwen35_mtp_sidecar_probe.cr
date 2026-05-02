@@ -17,6 +17,7 @@ mtp_path = DEFAULT_MTP
 llama_tokenize = DEFAULT_LLAMA_TOKENIZE
 prompt = "The capital of France is"
 run_forward = false
+top1_only = false
 max_seq = 128_i32
 
 private def elapsed_ms(start : Time::Instant) : Float64
@@ -31,6 +32,7 @@ OptionParser.parse do |p|
   p.on("--prompt TEXT", "Prompt for the MTP acceptance smoke") { |v| prompt = v }
   p.on("--max-seq N", "State max sequence length for forward smoke") { |v| max_seq = v.to_i32 }
   p.on("--run-forward", "Run a first-token MTP formula/acceptance smoke") { run_forward = true }
+  p.on("--top1-only", "Run the MTP greedy top1 path without full-logits/top5 readback") { top1_only = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -80,9 +82,14 @@ exact_y2, exact_y2_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, y1, token_i
 verify_ms = elapsed_ms(verify_start)
 
 mtp_start = Time.instant
-mtp_logits = ML::GGUF::Qwen35MTP.forward_one_logits(weights, mtp, hidden, y1, token_ids.size)
-mtp_top5 = ML::GGUF::Qwen35MTP.top_k(mtp_logits, 5)
-mtp_y2, mtp_y2_logit = mtp_top5[0]
+if top1_only
+  mtp_y2, mtp_y2_logit = ML::GGUF::Qwen35MTP.forward_one_top1(weights, mtp, hidden, y1, token_ids.size)
+  mtp_top5 = [] of {Int32, Float32}
+else
+  mtp_logits = ML::GGUF::Qwen35MTP.forward_one_logits(weights, mtp, hidden, y1, token_ids.size)
+  mtp_top5 = ML::GGUF::Qwen35MTP.top_k(mtp_logits, 5)
+  mtp_y2, mtp_y2_logit = mtp_top5[0]
+end
 mtp_ms = elapsed_ms(mtp_start)
 mtp_backend = ML::GGUF::Qwen35MTP.bf16_backend_label
 
@@ -93,6 +100,8 @@ puts "exact_y1=#{y1} text=#{tokenizer.decode_single(y1).inspect} logit=#{y1_logi
 puts "exact_y2=#{exact_y2} text=#{tokenizer.decode_single(exact_y2).inspect} logit=#{exact_y2_logit}"
 puts "mtp_y2=#{mtp_y2} text=#{tokenizer.decode_single(mtp_y2).inspect} logit=#{mtp_y2_logit}"
 puts "accepted=#{mtp_y2 == exact_y2}"
-puts "exact_in_mtp_top5=#{mtp_top5.any? { |id, _| id == exact_y2 }}"
-puts "mtp_top5=#{mtp_top5.map { |id, logit| "#{id}:#{tokenizer.decode_single(id).inspect}:#{logit}" }.join(" | ")}"
-puts "timing_ms prefill=#{prefill_ms.round(3)} exact_verify=#{verify_ms.round(3)} mtp_#{mtp_backend}=#{mtp_ms.round(3)}"
+unless top1_only
+  puts "exact_in_mtp_top5=#{mtp_top5.any? { |id, _| id == exact_y2 }}"
+  puts "mtp_top5=#{mtp_top5.map { |id, logit| "#{id}:#{tokenizer.decode_single(id).inspect}:#{logit}" }.join(" | ")}"
+end
+puts "timing_ms prefill=#{prefill_ms.round(3)} exact_verify=#{verify_ms.round(3)} mtp_#{mtp_backend}#{top1_only ? "_top1" : ""}=#{mtp_ms.round(3)}"

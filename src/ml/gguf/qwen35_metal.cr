@@ -96,6 +96,11 @@ module ML
 
         def self.clear_bf16_weight_cache : Nil
         end
+
+        def self.project_top1_no_norm(out_qw : QuantWeight,
+                                      x : Array(Float32)) : Array(Float32)?
+          nil
+        end
       {% else %}
         GEMM_Q4K_SOURCE  = {{ read_file("#{__DIR__}/kernels/gemm_q4k.metal") }}
         GEMM_Q56K_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }}
@@ -5922,6 +5927,63 @@ module ML
           head_top1_enc.set_pipeline(out_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
           head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
           head_top1_enc.set_buffer(normed_buf, 1)
+          head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_value(out_qw.in_dim.to_u32, 4)
+          head_top1_enc.set_value(out_qw.out_dim.to_u32, 5)
+          head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {out_qw.type.q8_0? ? MV_Q8_NSG * 32 : 64, 1, 1})
+          head_top1_enc.end_encoding
+
+          reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          reduce_top1_enc.set_pipeline(top1_reduce_tiles_pipeline)
+          reduce_top1_enc.set_buffer(tile_values_buf, 0)
+          reduce_top1_enc.set_buffer(tile_ids_buf, 1)
+          reduce_top1_enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_value(tile_count.to_u32, 4)
+          reduce_top1_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          reduce_top1_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_top1(top1_id_buf, top1_value_buf)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
+        end
+
+        def self.project_top1_no_norm(out_qw : QuantWeight,
+                                      x : Array(Float32)) : Array(Float32)?
+          return nil unless can_use_head_top1_fused?(out_qw)
+          raise "project_top1_no_norm input mismatch: expected #{out_qw.in_dim}, got #{x.size}" unless x.size == out_qw.in_dim
+
+          ML::Metal::Device.init!
+
+          tile_count = (out_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+          x_buf = Scratch.get(:head_top1_nonorm_x, out_qw.in_dim.to_i64 * sizeof(Float32))
+          tile_values_buf = Scratch.get(:head_top1_nonorm_tile_values, tile_count.to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:head_top1_nonorm_tile_ids, tile_count.to_i64 * sizeof(UInt32))
+          top1_id_buf = Scratch.get(:head_top1_nonorm_id, sizeof(UInt32).to_i64)
+          top1_value_buf = Scratch.get(:head_top1_nonorm_value, sizeof(Float32).to_i64)
+          x_buf.write(x)
+
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+
+          head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          head_top1_enc.set_pipeline(out_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
+          head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          head_top1_enc.set_buffer(x_buf, 1)
           head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
           head_top1_enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
           head_top1_enc.set_value(out_qw.in_dim.to_u32, 4)

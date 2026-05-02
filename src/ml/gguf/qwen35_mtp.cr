@@ -395,7 +395,15 @@ module ML::GGUF
                          prev_hidden : Array(Float32),
                          token_id : Int32,
                          pos : Int32) : {Int32, Float32}
-      logits = forward_one_logits(weights, mtp, prev_hidden, token_id, pos)
+      hidden = forward_one_hidden(weights, mtp, prev_hidden, token_id, pos)
+      {% if flag?(:qwen35_mtp_metal) %}
+        if ENV["QWEN35_MTP_TOP1_METAL_OFF"]? != "1" && Qwen35Metal.available?
+          if top1 = Qwen35Metal.project_top1_no_norm(weights.output, hidden)
+            return {top1[0].to_i32, top1[1]}
+          end
+        end
+      {% end %}
+      logits = Qwen35CPU.qmatvec_nobias(weights.output, hidden)
       top_k(logits, 1)[0]
     end
   end
