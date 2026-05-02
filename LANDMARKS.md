@@ -6628,3 +6628,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "can we evaluate MTP at all?" to "can we reduce MTP body bytes or fuse whole FFN/attention diamonds enough to become a practical candidate source?"
 - maieutic: The speed claim is scoped to one MTP body call in fresh-process smokes, not end-to-end speculative decode.
 - adversary: Generality remains low: two short prompts, one-token MTP, BF16 sidecar, no verifier-loop suite yet. Require multi-prompt acceptance and end-to-end plain-speedup before promoting MTP as a decode win.
+
+### [LM-QWEN36-MTP-WARM-SUITE-1] MTP warm body is fast, but top1 coverage is prompt-sensitive
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.83}
+**context:** ml (Qwen3.6 native MTP / exact speculative decode)
+**evidence:**
+- claim: "`bin/qwen35_mtp_sidecar_probe.cr` now has reusable first-step suite controls: `--suite-prompt NAME::TEXT`, `--mtp-warmup N`, and `--mtp-repeats N`. It prints per-repeat MTP timing, per-row min/p50/max/avg timing, accept/top5 status, and aggregate suite rates, so cold sidecar upload can be separated from steady-state proposal cost."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_spec crystal spec spec/qwen35_mtp_spec.cr` (`7 examples, 0 failures`); `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_probe_build crystal build bin/qwen35_mtp_sidecar_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_mtp_sidecar_probe_metal --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen36_mtp_probe_p50_smoke_20260501.log`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: MTP probe CLI, timing boundary, BF16 Metal path, or sidecar cache behavior changes
+- claim: "The official probe reproduces the cold-to-warm timing cliff on 27B France top1-only: repeats in one process measured `177.942 ms`, `10.402 ms`, and `11.480 ms` for the same accepted MTP token `.`. The average `66.608 ms` is therefore a misleading cold+warm mixture unless `--mtp-warmup` is used."
+  source: `/tmp/qwen36_mtp_warm_repeats_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: sidecar MetalBuffer cache, host load, MTP path, timing label, or benchmark command changes
+- claim: "With one explicit warmup, the 27B top1-only MTP body usually measures around `10-11 ms` per proposal on short prompts: suite rows measured `france=10.656 ms`, `code=10.151 ms`, `story=10.492 ms`; the JSON suite row had one host/GPU outlier (`145.561 ms`), but a focused JSON retry measured `10.152 ms` average over five repeats."
+  source: `/tmp/qwen36_mtp_top1_suite_warm_20260501.log`; `/tmp/qwen36_mtp_top1_json_warm_retry_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: host load, prompt mix, MTP body implementation, Metal scheduler, or timing statistic changes
+- claim: "A 4-prompt full-logits/top5 first-step suite on 27B found top1 acceptance `2/4` (`france`, `code`) and exact token in MTP top5 `4/4` (`story` exact `there` at top2; JSON exact quote at top2). Full-logits/top5 path is much slower than top1-only after cache warmup, but it shows that topK/tree rescue is a real quality lever."
+  source: `/tmp/qwen36_mtp_accept_suite_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt suite, tokenizer/model, MTP logits path, exact verifier, or topK extraction changes
+**decision:** Promote MTP from "can run" to "worth integrating into an exact verifier loop", but not as a greedy-only replacement. The immediate next branch should be a multi-token MTP acceptance/replay probe: determine whether MTP can chain recursively, whether topK/tree rescue pays for itself, and whether warm `~10 ms` proposal cost can beat the current 27B exact decode wall after verifier replay.
+**quadrumvirate:**
+- cassandra: Warm MTP cost is low enough to matter, but greedy top1 misses on story/JSON mean a plain top1 loop will waste verifier work on broad prompts.
+- daedalus: The optimization frame shifts from single-call kernel speed to candidate-source economics: proposal cost, acceptance/topK rank, and replay tax.
+- maieutic: First-step top5 coverage does not prove multi-token acceptance. It only proves the trained MTP head often ranks the exact next token nearby.
+- adversary: Generality is still low: four short prompts, one token ahead, and no end-to-end speculative loop. Require gen32-64 parity/speedup before claiming user-visible decode acceleration.
