@@ -278,7 +278,8 @@ module ML::GGUF
                            mtp : Qwen35MTPWeights,
                            prev_hidden : Array(Float32),
                            token_id : Int32,
-                           pos : Int32) : Array(Float32)
+                           pos : Int32,
+                           normalized : Bool = true) : Array(Float32)
       hp = weights.hparams
       hidden = hp.n_embd
       raise ArgumentError.new("prev_hidden size #{prev_hidden.size} != #{hidden}") unless prev_hidden.size == hidden
@@ -303,6 +304,7 @@ module ML::GGUF
       {% if flag?(:qwen35_mtp_metal) %}
         if ENV["QWEN35_MTP_BODY_METAL"]? == "1" &&
            ENV["QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF"]? != "1" &&
+           normalized &&
            use_metal_bf16?(mtp.fc)
           if body = Qwen35Metal.mtp_one_token_hidden_from_fc_in(
                fc_in,
@@ -394,6 +396,8 @@ module ML::GGUF
       combined = Array(Float32).new(gate_ff.size) { |i| gate_ff[i] * up_ff[i] }
       ffn_out = matvec_bf16(mtp.ffn_down, combined)
       after_ffn = Array(Float32).new(hidden) { |i| after_attn[i] + ffn_out[i] }
+
+      return after_ffn unless normalized
 
       rms_norm_sidecar(after_ffn, mtp.norm, hp.rms_eps)
     end

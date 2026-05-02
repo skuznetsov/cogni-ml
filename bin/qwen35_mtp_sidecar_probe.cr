@@ -31,16 +31,21 @@ private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
 end
 
-private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k)
+private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k, next_hidden_raw)
   start = Time.instant
-  hidden = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos)
+  next_hidden = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos, normalized: !next_hidden_raw)
+  project_hidden = if next_hidden_raw
+                     ML::GGUF::Qwen35MTP.rms_norm_sidecar(next_hidden, mtp.norm, weights.hparams.rms_eps)
+                   else
+                     next_hidden
+                   end
   topk = if k == 1
-           [ML::GGUF::Qwen35MTP.hidden_top1(weights, hidden)]
+           [ML::GGUF::Qwen35MTP.hidden_top1(weights, project_hidden)]
          else
-           logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, hidden)
+           logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, project_hidden)
            ML::GGUF::Qwen35MTP.top_k(logits, k)
          end
-  {hidden, topk, elapsed_ms(start)}
+  {next_hidden, topk, elapsed_ms(start)}
 end
 
 private def rank_in_topk(topk : Array({Int32, Float32}), target : Int32) : Int32
@@ -68,7 +73,7 @@ OptionParser.parse do |p|
   p.on("--mtp-repeats N", "Timed MTP repeats after warmup") { |v| mtp_repeats = v.to_i32 }
   p.on("--mtp-chain-tokens N", "Run an exact-sequence MTP chain quality probe for N future tokens") { |v| mtp_chain_tokens = v.to_i32 }
   p.on("--mtp-chain-topk K", "MTP chain top-K coverage to measure; K=1 uses fast top1 head") { |v| mtp_chain_topk = v.to_i32 }
-  p.on("--mtp-chain-mode MODE", "MTP chain mode: teacher, recursive, or both") { |v| mtp_chain_mode = v }
+  p.on("--mtp-chain-mode MODE", "MTP chain mode: teacher, recursive, recursive_raw, both, or all") { |v| mtp_chain_mode = v }
   p.on("--mtp-chain-trace", "Print every MTP chain step") { mtp_chain_trace = true }
   p.on("-h", "--help", "Show help") do
     puts p
@@ -104,10 +109,14 @@ chain_modes = case mtp_chain_mode
                 ["teacher"]
               when "recursive"
                 ["recursive"]
+              when "recursive_raw"
+                ["recursive_raw"]
               when "both"
                 ["teacher", "recursive"]
+              when "all"
+                ["teacher", "recursive", "recursive_raw"]
               else
-                abort "--mtp-chain-mode must be teacher, recursive, or both"
+                abort "--mtp-chain-mode must be teacher, recursive, recursive_raw, both, or all"
               end
 
 load_start = Time.instant
@@ -233,7 +242,7 @@ rows.each do |label, prompt_text|
     chain_candidates = [] of Int32
 
     mtp_chain_tokens.times do |i|
-      mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk)
+      mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk, mode == "recursive_raw")
       chain_ms << step_ms
       candidate = mtp_topk[0][0]
       exact_id = exact_nexts[i][0]

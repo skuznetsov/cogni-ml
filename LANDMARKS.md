@@ -6662,7 +6662,7 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 **trust:** {F:0.82, G:low, R:0.82}
 **context:** ml (Qwen3.6 native MTP / exact speculative decode)
 **evidence:**
-- claim: "`bin/qwen35_mtp_sidecar_probe.cr` now has a multi-token chain quality probe: `--mtp-chain-tokens N`, `--mtp-chain-mode teacher|recursive|both`, `--mtp-chain-topk K`, and optional `--mtp-chain-trace`. The exact comparison sequence uses `forward_hidden` intentionally as an oracle, so `exact_hidden_oracle_ms` is not a hot decode speed metric."
+- claim: "`bin/qwen35_mtp_sidecar_probe.cr` now has a multi-token chain quality probe: `--mtp-chain-tokens N`, `--mtp-chain-mode teacher|recursive|recursive_raw|both|all`, `--mtp-chain-topk K`, and optional `--mtp-chain-trace`. The exact comparison sequence uses `forward_hidden` intentionally as an oracle, so `exact_hidden_oracle_ms` is not a hot decode speed metric."
   source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_chain_spec crystal spec spec/qwen35_mtp_spec.cr` (`7 examples, 0 failures`); `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_chain_build crystal build bin/qwen35_mtp_sidecar_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_mtp_sidecar_probe_metal --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen36_mtp_chain_label_smoke_20260501.log`, on 2026-05-01
   verified_at: 2026-05-01
   decay_trigger: MTP chain probe semantics, exact hidden helper, timing labels, or target hidden projection changes
@@ -6674,7 +6674,11 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_mtp_chain_suite_top5_20260501.log`
   verified_at: 2026-05-01
   decay_trigger: prompt suite, model/quant, chain mode, topK, generated length, or exact target sequence changes
-**decision:** Do not build the next speed path around naive recursive MTP gamma>1. Built-in Qwen3.6 MTP is valuable as a one-step exact-hidden candidate source and topK/reranking signal, but using MTP hidden as a replacement for the next exact target hidden is unstable. The next plausible branches are (1) exact verifier loop with topK/tree rescue and measured replay tax, (2) a learned or linear hidden predictor/corrector that maps MTP hidden toward target hidden, and (3) MTP-body simplification only after the verifier economics justify it.
+- claim: "The obvious hidden-space variant does not rescue recursion. Feeding the next recursive MTP step with pre-`mtp.norm` body hidden (`recursive_raw`) instead of normalized MTP logits hidden still totals only `3/32` top1 and `7/32` top5 hits on the same 4-prompt `gen8/top5` suite."
+  source: `/tmp/qwen36_mtp_chain_suite_top5_raw_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: recursive hidden mode, MTP body formula, prompt suite, topK, or generated length changes
+**decision:** Do not build the next speed path around naive recursive MTP gamma>1. Built-in Qwen3.6 MTP is valuable as a one-step exact-hidden candidate source and topK/reranking signal, but using MTP hidden as a replacement for the next exact target hidden is unstable, and pre/post-`mtp.norm` choice is not the missing fix. The next plausible branches are (1) exact verifier loop with topK/tree rescue and measured replay tax, (2) a learned or linear hidden predictor/corrector that maps MTP hidden toward target hidden, and (3) MTP-body simplification only after the verifier economics justify it.
 **quadrumvirate:**
 - cassandra: The trained MTP head stays close when anchored to exact target hidden, but free-running hidden distribution drift is immediate and prompt-sensitive.
 - daedalus: The frame shifts from "MTP as a draft model" to "MTP as a one-step proposal/ranker unless we add a hidden-state bridge."
