@@ -27,14 +27,31 @@ mtp_chain_topk = 1_i32
 mtp_chain_mode = "teacher"
 mtp_chain_trace = false
 mtp_chain_raw_blends = [] of Float32
+mtp_chain_diag_bridge = false
+mtp_chain_diag_clamp = 4.0_f32
+mtp_chain_diag_ridge = 1.0e-5_f32
+
+struct DiagBridge
+  getter scale : Array(Float32)
+  getter bias : Array(Float32)
+  getter pairs : Int32
+
+  def initialize(@scale, @bias, @pairs)
+  end
+
+  def apply(x : Array(Float32)) : Array(Float32)
+    raise ArgumentError.new("diag bridge input size #{x.size} != #{@scale.size}") unless x.size == @scale.size
+    Array(Float32).new(x.size) { |i| @scale[i] * x[i] + @bias[i] }
+  end
+end
 
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
 end
 
-private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k, next_hidden_raw)
+private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k, next_hidden_raw, mtp_state)
   start = Time.instant
-  next_hidden = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos, normalized: !next_hidden_raw)
+  next_hidden = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos, normalized: !next_hidden_raw, mtp_state: mtp_state)
   project_hidden = if next_hidden_raw
                      ML::GGUF::Qwen35MTP.rms_norm_sidecar(next_hidden, mtp.norm, weights.hparams.rms_eps)
                    else
@@ -61,6 +78,72 @@ private def blend_hidden(a : Array(Float32), b : Array(Float32), alpha : Float32
   Array(Float32).new(a.size) { |i| a[i] + alpha * (b[i] - a[i]) }
 end
 
+private def target_hidden_topk(weights, hidden : Array(Float32), k : Int32) : Array({Int32, Float32})
+  if k == 1
+    [ML::GGUF::Qwen35CPU.hidden_top1(weights, hidden)]
+  else
+    x = hidden.dup
+    ML::GGUF::Qwen35CPU.rms_norm!(x, weights.output_norm, weights.hparams.rms_eps)
+    logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
+    ML::GGUF::Qwen35MTP.top_k(logits, k)
+  end
+end
+
+private def prompt_hidden_rows(weights, token_ids : Array(Int32), max_seq : Int32) : Array(Array(Float32))
+  state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams)
+  Array(Array(Float32)).new(token_ids.size) do |i|
+    ML::GGUF::Qwen35CPU.forward_hidden(weights, token_ids[i], i, state)
+  end
+end
+
+private def train_diag_bridge(weights, mtp, token_ids : Array(Int32), max_seq : Int32,
+                              ridge : Float32, clamp : Float32) : DiagBridge?
+  return nil if token_ids.size < 2
+
+  hiddens = prompt_hidden_rows(weights, token_ids, max_seq)
+  dim = weights.hparams.n_embd
+  sum_x = Array(Float64).new(dim, 0.0)
+  sum_y = Array(Float64).new(dim, 0.0)
+  sum_xx = Array(Float64).new(dim, 0.0)
+  sum_xy = Array(Float64).new(dim, 0.0)
+  pairs = token_ids.size - 1
+
+  pairs.times do |i|
+    raw = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, hiddens[i], token_ids[i + 1], i + 1, normalized: false)
+    y = hiddens[i + 1]
+    dim.times do |j|
+      xj = raw[j].to_f64
+      yj = y[j].to_f64
+      sum_x[j] += xj
+      sum_y[j] += yj
+      sum_xx[j] += xj * xj
+      sum_xy[j] += xj * yj
+    end
+  end
+
+  n = pairs.to_f64
+  scale = Array(Float32).new(dim, 1.0_f32)
+  bias = Array(Float32).new(dim, 0.0_f32)
+  dim.times do |j|
+    mean_x = sum_x[j] / n
+    mean_y = sum_y[j] / n
+    if pairs == 1
+      scale[j] = 1.0_f32
+      bias[j] = (mean_y - mean_x).to_f32
+      next
+    end
+
+    var_x = sum_xx[j] / n - mean_x * mean_x
+    cov_xy = sum_xy[j] / n - mean_x * mean_y
+    s = (cov_xy / (var_x + ridge.to_f64)).clamp(-clamp.to_f64, clamp.to_f64)
+    scale[j] = s.to_f32
+    bias[j] = (mean_y - s * mean_x).to_f32
+  end
+
+  DiagBridge.new(scale, bias, pairs.to_i32)
+end
+
 OptionParser.parse do |p|
   p.banner = "Usage: qwen35_mtp_sidecar_probe [--model GGUF] [--mtp SIDE_SAFETENSORS] [--run-forward]"
   p.on("--model PATH", "Qwen3.6 GGUF target model path") { |v| model_path = v }
@@ -79,11 +162,14 @@ OptionParser.parse do |p|
   p.on("--mtp-repeats N", "Timed MTP repeats after warmup") { |v| mtp_repeats = v.to_i32 }
   p.on("--mtp-chain-tokens N", "Run an exact-sequence MTP chain quality probe for N future tokens") { |v| mtp_chain_tokens = v.to_i32 }
   p.on("--mtp-chain-topk K", "MTP chain top-K coverage to measure; K=1 uses fast top1 head") { |v| mtp_chain_topk = v.to_i32 }
-  p.on("--mtp-chain-mode MODE", "MTP chain mode: teacher, recursive, recursive_raw, both, or all") { |v| mtp_chain_mode = v }
+  p.on("--mtp-chain-mode MODE", "MTP chain mode: teacher, recursive, recursive_raw, recursive_cached, both, or all") { |v| mtp_chain_mode = v }
   p.on("--mtp-chain-trace", "Print every MTP chain step") { mtp_chain_trace = true }
   p.on("--mtp-chain-raw-blends LIST", "Comma-separated alpha values for recursive pre-norm hidden blend probes") do |v|
     mtp_chain_raw_blends = v.split(",").reject(&.empty?).map(&.to_f32)
   end
+  p.on("--mtp-chain-diag-bridge", "Train prompt-local diagonal raw-MTP-hidden -> target-hidden bridge and test recursive_diag") { mtp_chain_diag_bridge = true }
+  p.on("--mtp-chain-diag-clamp X", "Clamp diagonal bridge scale to +/-X") { |v| mtp_chain_diag_clamp = v.to_f32 }
+  p.on("--mtp-chain-diag-ridge X", "Diagonal bridge ridge term") { |v| mtp_chain_diag_ridge = v.to_f32 }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -113,6 +199,8 @@ abort "--mtp-warmup must be non-negative" if mtp_warmup < 0
 abort "--mtp-repeats must be positive" if mtp_repeats <= 0
 abort "--mtp-chain-tokens must be non-negative" if mtp_chain_tokens < 0
 abort "--mtp-chain-topk must be positive" if mtp_chain_topk <= 0
+abort "--mtp-chain-diag-clamp must be positive" if mtp_chain_diag_clamp <= 0.0_f32
+abort "--mtp-chain-diag-ridge must be non-negative" if mtp_chain_diag_ridge < 0.0_f32
 chain_modes = case mtp_chain_mode
               when "teacher"
                 ["teacher"]
@@ -120,16 +208,19 @@ chain_modes = case mtp_chain_mode
                 ["recursive"]
               when "recursive_raw"
                 ["recursive_raw"]
+              when "recursive_cached"
+                ["recursive_cached"]
               when "both"
                 ["teacher", "recursive"]
               when "all"
-                ["teacher", "recursive", "recursive_raw"]
+                ["teacher", "recursive", "recursive_raw", "recursive_cached"]
               else
-                abort "--mtp-chain-mode must be teacher, recursive, recursive_raw, both, or all"
+                abort "--mtp-chain-mode must be teacher, recursive, recursive_raw, recursive_cached, both, or all"
               end
 chain_runs = [] of {String, Float32?}
 chain_modes.each { |mode| chain_runs << {mode, nil} }
 mtp_chain_raw_blends.each { |alpha| chain_runs << {"recursive_raw_blend#{alpha}", alpha} }
+chain_runs << {"recursive_diag", nil} if mtp_chain_diag_bridge
 
 load_start = Time.instant
 weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
@@ -243,10 +334,24 @@ rows.each do |label, prompt_text|
   exact_text = exact_nexts.map { |id, _| tokenizer.decode_single(id) }.join
   puts "mtp_chain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} start_y1=#{y1} exact_ids=#{exact_nexts.map(&.[0]).join(",")} exact_text=#{exact_text.inspect} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)}"
 
+  diag_bridge = nil.as(DiagBridge?)
+  if mtp_chain_diag_bridge
+    bridge_start = Time.instant
+    diag_bridge = train_diag_bridge(weights, mtp, token_ids, max_seq, mtp_chain_diag_ridge, mtp_chain_diag_clamp)
+    if bridge = diag_bridge
+      puts "mtp_chain_diag_bridge label=#{label.inspect} pairs=#{bridge.pairs} train_ms=#{elapsed_ms(bridge_start).round(3)} ridge=#{mtp_chain_diag_ridge} clamp=#{mtp_chain_diag_clamp}"
+    else
+      puts "mtp_chain_diag_bridge label=#{label.inspect} pairs=0 skipped=true"
+    end
+  end
+
   chain_runs.each do |(mode, blend_alpha)|
+    next if mode == "recursive_diag" && diag_bridge.nil?
+
     chain_prev_hidden = hidden
     chain_prev_token = y1
     chain_pos = token_ids.size
+    chain_cache = mode == "recursive_cached" ? ML::GGUF::Qwen35MTP::State.new(mtp_chain_tokens, weights.hparams.head_dim * weights.hparams.n_head_kv) : nil
     chain_ms = [] of Float64
     chain_top1_hits = 0
     chain_topk_hits = 0
@@ -254,8 +359,18 @@ rows.each do |label, prompt_text|
     chain_candidates = [] of Int32
 
     mtp_chain_tokens.times do |i|
-      raw_next_hidden = mode == "recursive_raw" || !blend_alpha.nil?
-      mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk, raw_next_hidden)
+      if mode == "recursive_diag"
+        step_start = Time.instant
+        raw = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, normalized: false)
+        mtp_hidden = diag_bridge.not_nil!.apply(raw)
+        mtp_topk = target_hidden_topk(weights, mtp_hidden, mtp_chain_topk)
+        step_ms = elapsed_ms(step_start)
+      elsif cache = chain_cache
+        mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk, false, cache)
+      else
+        raw_next_hidden = mode == "recursive_raw" || !blend_alpha.nil?
+        mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk, raw_next_hidden, nil)
+      end
       chain_ms << step_ms
       candidate = mtp_topk[0][0]
       exact_id = exact_nexts[i][0]

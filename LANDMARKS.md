@@ -6682,7 +6682,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_mtp_chain_blend_sweep_20260501.log`
   verified_at: 2026-05-01
   decay_trigger: blend alpha list, prompt suite, chain mode, topK, generated length, or hidden formula changes
-**decision:** Do not build the next speed path around naive recursive MTP gamma>1. Built-in Qwen3.6 MTP is valuable as a one-step exact-hidden candidate source and topK/reranking signal, but using MTP hidden as a replacement for the next exact target hidden is unstable; pre/post-`mtp.norm` choice and scalar hidden blending are not the missing fixes. The next plausible branches are (1) exact verifier loop with topK/tree rescue and measured replay tax, (2) a learned/low-rank hidden predictor/corrector that maps MTP hidden toward target hidden, and (3) MTP-body simplification only after the verifier economics justify it.
+- claim: "Prompt-local diagonal hidden correction is not robust. `--mtp-chain-diag-bridge` fits a diagonal raw-MTP-hidden to target-hidden map from prompt transitions, but on the 4-prompt `gen8/top5` suite `recursive_diag` totals only `1/32` top1 and `8/32` top5, and calibration costs about `0.5-2.0s` on these short prompts."
+  source: `/tmp/qwen36_mtp_chain_diag_bridge_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: bridge training data, prompt length, ridge/clamp, chain mode, topK, or hidden formula changes
+- claim: "The one-token shortcut is not valid for recursive gamma>1, per primary implementation evidence: vLLM's Qwen3Next MTP uses a full-attention decoder layer with positions and MTP layer cycling. A local `recursive_cached` oracle with MTP K/V cache was added, but on the 4-prompt `gen8/top5` suite it still totals only `3/32` top1 and `7/32` top5, while per-proposal cost rises to roughly `26-39ms` because Q/K and causal attention are computed."
+  source: vLLM `qwen3_next_mtp.py` raw source (`Qwen3NextMultiTokenPredictor.forward`); `/tmp/qwen36_mtp_chain_cached_france_20260502.log`; `/tmp/qwen36_mtp_chain_cached_suite_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: upstream MTP implementation, local MTP cache oracle, prompt suite, generated length, or topK changes
+**decision:** Do not build the next speed path around naive recursive MTP gamma>1. Built-in Qwen3.6 MTP is valuable as a one-step exact-hidden candidate source and topK/reranking signal, but using MTP hidden as a replacement for the next exact target hidden is unstable; pre/post-`mtp.norm`, scalar hidden blending, prompt-local diagonal correction, and a first exact MTP K/V cache oracle are not enough. The next plausible branches are (1) exact verifier loop with one-step MTP topK/tree rescue and measured replay tax, (2) a trained low-rank/EAGLE-style hidden predictor using more than prompt-local diagonal statistics, and (3) MTP-body simplification only after verifier economics justify it.
 **quadrumvirate:**
 - cassandra: The trained MTP head stays close when anchored to exact target hidden, but free-running hidden distribution drift is immediate and prompt-sensitive.
 - daedalus: The frame shifts from "MTP as a draft model" to "MTP as a one-step proposal/ranker unless we add a hidden-state bridge."

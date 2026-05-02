@@ -142,6 +142,33 @@ module ML::GGUF
 
     MTP_METAL_MIN_BYTES = 1_048_576
 
+    class State
+      getter k_cache : Array(Float32)
+      getter v_cache : Array(Float32)
+      getter kv_dim : Int32
+      getter max_seq : Int32
+      property length : Int32 = 0
+
+      def initialize(@max_seq : Int32, @kv_dim : Int32)
+        @k_cache = Array(Float32).new(@max_seq * @kv_dim, 0.0_f32)
+        @v_cache = Array(Float32).new(@max_seq * @kv_dim, 0.0_f32)
+      end
+
+      def append!(k : Array(Float32), v : Array(Float32)) : Int32
+        raise ArgumentError.new("mtp state full: #{@length} >= #{@max_seq}") if @length >= @max_seq
+        raise ArgumentError.new("mtp k size #{k.size} != #{@kv_dim}") unless k.size == @kv_dim
+        raise ArgumentError.new("mtp v size #{v.size} != #{@kv_dim}") unless v.size == @kv_dim
+
+        base = @length * @kv_dim
+        @kv_dim.times do |i|
+          @k_cache[base + i] = k[i]
+          @v_cache[base + i] = v[i]
+        end
+        @length += 1
+        @length - 1
+      end
+    end
+
     def bf16_at(raw : Bytes, i : Int32) : Float32
       off = i * 2
       bits = (raw[off + 1].to_u32 << 24) | (raw[off].to_u32 << 16)
@@ -279,7 +306,8 @@ module ML::GGUF
                            prev_hidden : Array(Float32),
                            token_id : Int32,
                            pos : Int32,
-                           normalized : Bool = true) : Array(Float32)
+                           normalized : Bool = true,
+                           mtp_state : State? = nil) : Array(Float32)
       hp = weights.hparams
       hidden = hp.n_embd
       raise ArgumentError.new("prev_hidden size #{prev_hidden.size} != #{hidden}") unless prev_hidden.size == hidden
@@ -305,6 +333,7 @@ module ML::GGUF
         if ENV["QWEN35_MTP_BODY_METAL"]? == "1" &&
            ENV["QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF"]? != "1" &&
            normalized &&
+           mtp_state.nil? &&
            use_metal_bf16?(mtp.fc)
           if body = Qwen35Metal.mtp_one_token_hidden_from_fc_in(
                fc_in,
@@ -338,51 +367,117 @@ module ML::GGUF
       v = matvec_bf16(mtp.v_proj, cur)
       raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
 
-      gate = if ENV["QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF"]? == "1"
-               # Full formula path for adversary A/B. For a one-token MTP cache,
-               # Q/K and RoPE do not affect softmax, but keeping this branch
-               # makes it easy to catch future multi-token misuse.
-               q_full = matvec_bf16(mtp.q_proj, cur)
-               k = matvec_bf16(mtp.k_proj, cur)
-               raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
-               raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
-
-               q = Array(Float32).new(q_dim, 0.0_f32)
-               gate_full = Array(Float32).new(q_dim, 0.0_f32)
-               n_head.times do |h|
-                 src_base = h * 2 * head_dim
-                 dst_base = h * head_dim
-                 head_dim.times do |d|
-                   q[dst_base + d] = q_full[src_base + d]
-                   gate_full[dst_base + d] = q_full[src_base + head_dim + d]
-                 end
-               end
-
-               n_head.times do |h|
-                 rms_norm_sidecar_slice!(q, h * head_dim, head_dim, mtp.q_norm, hp.rms_eps)
-                 Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
-               end
-               n_head_kv.times do |h|
-                 rms_norm_sidecar_slice!(k, h * head_dim, head_dim, mtp.k_norm, hp.rms_eps)
-                 Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
-               end
-               gate_full
-             else
-               # Exact one-token shortcut: with only the current MTP token in
-               # the MTP KV-cache, attention softmax is 1. Q/K/RoPE cannot
-               # change the output; only V and the output gate are needed.
-               matvec_bf16_q_gate_rows(mtp.q_proj, cur, n_head, head_dim)
-             end
-
-      raise "mtp gate produced #{gate.size}, expected #{q_dim}" unless gate.size == q_dim
-
       attn_o = Array(Float32).new(q_dim, 0.0_f32)
-      n_head.times do |h|
-        kvh = h // heads_per_group
-        q_base = h * head_dim
-        kv_base = kvh * head_dim
-        head_dim.times do |d|
-          attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(gate[q_base + d])
+
+      if cache = mtp_state
+        raise "mtp state kv_dim #{cache.kv_dim} != expected #{kv_dim}" unless cache.kv_dim == kv_dim
+
+        q_full = matvec_bf16(mtp.q_proj, cur)
+        k = matvec_bf16(mtp.k_proj, cur)
+        raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+        raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
+
+        q = Array(Float32).new(q_dim, 0.0_f32)
+        gate = Array(Float32).new(q_dim, 0.0_f32)
+        n_head.times do |h|
+          src_base = h * 2 * head_dim
+          dst_base = h * head_dim
+          head_dim.times do |d|
+            q[dst_base + d] = q_full[src_base + d]
+            gate[dst_base + d] = q_full[src_base + head_dim + d]
+          end
+        end
+
+        n_head.times do |h|
+          rms_norm_sidecar_slice!(q, h * head_dim, head_dim, mtp.q_norm, hp.rms_eps)
+          Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+        end
+        n_head_kv.times do |h|
+          rms_norm_sidecar_slice!(k, h * head_dim, head_dim, mtp.k_norm, hp.rms_eps)
+          Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+        end
+
+        cache.append!(k, v)
+        scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+        scores = Array(Float32).new(cache.length, 0.0_f32)
+        probs = Array(Float32).new(cache.length, 0.0_f32)
+
+        n_head.times do |h|
+          kvh = h // heads_per_group
+          q_base = h * head_dim
+          max_score = -Float32::INFINITY
+          cache.length.times do |t|
+            k_base = t * kv_dim + kvh * head_dim
+            dot = 0.0_f32
+            head_dim.times { |d| dot += q[q_base + d] * cache.k_cache[k_base + d] }
+            score = dot * scale
+            scores[t] = score
+            max_score = score if score > max_score
+          end
+
+          denom = 0.0_f32
+          cache.length.times do |t|
+            p = Math.exp((scores[t] - max_score).to_f64).to_f32
+            probs[t] = p
+            denom += p
+          end
+          inv_denom = 1.0_f32 / denom
+
+          head_dim.times do |d|
+            sum = 0.0_f32
+            cache.length.times do |t|
+              v_base = t * kv_dim + kvh * head_dim
+              sum += probs[t] * inv_denom * cache.v_cache[v_base + d]
+            end
+            attn_o[q_base + d] = sum * Qwen35CPU.sigmoid(gate[q_base + d])
+          end
+        end
+      else
+        gate = if ENV["QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF"]? == "1"
+                 # Full formula path for adversary A/B. For a one-token MTP cache,
+                 # Q/K and RoPE do not affect softmax, but keeping this branch
+                 # makes it easy to catch future multi-token misuse.
+                 q_full = matvec_bf16(mtp.q_proj, cur)
+                 k = matvec_bf16(mtp.k_proj, cur)
+                 raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+                 raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
+
+                 q = Array(Float32).new(q_dim, 0.0_f32)
+                 gate_full = Array(Float32).new(q_dim, 0.0_f32)
+                 n_head.times do |h|
+                   src_base = h * 2 * head_dim
+                   dst_base = h * head_dim
+                   head_dim.times do |d|
+                     q[dst_base + d] = q_full[src_base + d]
+                     gate_full[dst_base + d] = q_full[src_base + head_dim + d]
+                   end
+                 end
+
+                 n_head.times do |h|
+                   rms_norm_sidecar_slice!(q, h * head_dim, head_dim, mtp.q_norm, hp.rms_eps)
+                   Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+                 end
+                 n_head_kv.times do |h|
+                   rms_norm_sidecar_slice!(k, h * head_dim, head_dim, mtp.k_norm, hp.rms_eps)
+                   Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+                 end
+                 gate_full
+               else
+                 # Exact one-token shortcut: with only the current MTP token in
+                 # the MTP KV-cache, attention softmax is 1. Q/K/RoPE cannot
+                 # change the output; only V and the output gate are needed.
+                 matvec_bf16_q_gate_rows(mtp.q_proj, cur, n_head, head_dim)
+               end
+
+        raise "mtp gate produced #{gate.size}, expected #{q_dim}" unless gate.size == q_dim
+
+        n_head.times do |h|
+          kvh = h // heads_per_group
+          q_base = h * head_dim
+          kv_base = kvh * head_dim
+          head_dim.times do |d|
+            attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(gate[q_base + d])
+          end
         end
       end
 
