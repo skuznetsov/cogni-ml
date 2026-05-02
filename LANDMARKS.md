@@ -6894,3 +6894,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next frame shift is from candidate-quality accounting to stateful controller economics: copy/replay/resync must be charged where the policy branches.
 - maieutic: This is still exact-position route accounting, not a production pipeline. It answers branch pressure, not final wall speed.
 - adversary: Generality is low: one easy negative and one stressed positive prompt. Require prompt suite plus real pipeline `plain_speedup` before claiming performance.
+
+**decision_update_2:** Do not promote naive global `tree2_first` or simple margin-guard splitting from partial boundary wins. A full-prompt 27B `gen32` run falsified the global speed claim: on the default prompt, `tree2_first` did not rescue either of two rejects and slightly regressed wall (`overlap_ms 4610.976 -> 4632.390`, replay `295.957 -> 300.932`); on the code prompt, baseline already accepted `32/32`, so `tree2_first` was inert/noise (`3310.078 -> 3338.299`, `tree2_first_rescues=0`). A separate `tree2_margin_guard=0.5` default run reached drift summaries and then produced no `self_spec_gpu_pipeline` row for minutes before being killed, so that path is a debug target, not a tunable policy.
+**evidence_update_2:**
+- claim: "Full-prompt `tree2_first` is not a universal improvement; it can be inert or slightly slower when rejects are not first-token top2 candidates, or when there are no rejects."
+  source: `/tmp/qwen36_pipeline_tree2_first_suite_full_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, controller tree2-first semantics, timing accounting, model/quant, or generated length changes
+- claim: "The simple `tree2_margin_guard=0.5` scheduler path is pathological on the tested 27B default `gen32` route: it emitted `logit_drift_policy` and `greedy_drift_policy`, then did not reach a pipeline row before manual kill."
+  source: `/tmp/qwen36_pipeline_margin_guard_default_single_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: margin guard implementation, prompt, model/quant, route, or scheduler timing changes
+**quadrumvirate_update_2:**
+- cassandra: Boundary-local wins do not generalize to full-prompt policy unless the mismatch position and second-choice coverage are stable.
+- daedalus: The next frame is not "enable more tree2" but "predict exactly when branch work avoids replay"; otherwise guard splitting repeats verifier work.
+- maieutic: The key assumption that low margin implies profitable verifier splitting is unproven; current evidence only says margin is diagnostic.
+- adversary: Long 27B cold suites are noisy and slow. Use smaller reproductions or in-process suite support before more policy tuning.
