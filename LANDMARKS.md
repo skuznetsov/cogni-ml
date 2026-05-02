@@ -6878,6 +6878,10 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_mtp_self_route_policy_code_gen32_20260502.log`
   verified_at: 2026-05-02
   decay_trigger: prompt, layer/rank route, generated length, MTP topK, model/quant, or verifier attempt model changes
+- claim: "A broader 5-prompt 27B `gen32/K2` route-pressure suite over default/reason/code/json/math keeps the policy sparse and positive. Reason/json/math had self-top2 `32/32` and MTP calls `0/32`; default improved `31/32 -> 32/32` with one MTP call; code improved `24/32 -> 29/32` with eight MTP calls. Aggregate self-top2 resolved `151/160`, while MTP-K2-on-self-top2-miss resolved `157/160` with only `9/160` MTP calls."
+  source: `/tmp/qwen36_mtp_self_route_policy_suite_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer/rank route, generated length, MTP topK, model/quant, or self-draft route changes
 **decision:** Implement the next wall-clock experiment as `self top2 first, MTP K2 only on unresolved self-top2 miss/risk`. The branch should enter the actual pipeline controller only after preserving exact parity and measuring whether reduced unresolved misses compensate for MTP call latency and resync/replay work. Do not default to K5 unless a broader suite shows K2-specific unresolved misses dominate.
 **quadrumvirate:**
 - cassandra: Sparse invocation avoids the repeated always-on MTP cost trap; the risk is that oracle attempts understate real resync/controller overhead.
