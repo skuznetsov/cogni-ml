@@ -6796,3 +6796,35 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "combine all candidate sources" to "make the first candidate source cheap and only invoke auxiliary rankers on risk/miss paths."
 - maieutic: These are short `gen16` probes; they prove oracle accounting and local behavior, not end-to-end decode speed.
 - adversary: Generality is low: two prompt classes and prompt-local pca-updown calibration. Require multi-prompt `gen32-64`, real pipeline `plain_speedup`, and mismatch cases before promoting a production policy.
+
+### [LM-QWEN36-MTP-SELF-HYBRID-ACCOUNTING-1] MTP is useful as mismatch-only self-draft rescue; raw agreement is not safe enough
+**status:** verified
+**trust:** {F:0.82, G:low, R:0.82}
+**context:** ml (Qwen3.6 MTP + same-weight self-draft hybrid routing)
+**evidence:**
+- claim: "`bin/qwen35_deltanet_fixed_basis_probe.cr` now prints hybrid accounting rows for the existing MTP/self-draft fusion probe. `policy=self_first_mtp_on_miss` reports MTP calls only on self-draft misses, rescue hits, unresolved misses, average verifier-attempt pressure, and modeled saved MTP cost. `policy=agreement_guard` reports how often self top1 and MTP top1 agree, selected precision, false selected cases, and fallback rate."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_hybrid_build2 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_deltanet_fixed_basis_probe_mtp_hybrid --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_hybrid_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`), on 2026-05-02
+  verified_at: 2026-05-02
+  decay_trigger: MTP/self-draft fusion probe schema, self-draft chain semantics, MTP topK path, or verifier-routing semantics changes
+- claim: "On a 3-prompt 27B stress gate with rank8/layers `0,2,4,6,8,10`, `gen16`, and `K=5`, easy/default had no self misses (`16/16`) and mismatch-only MTP would call MTP `0/16` times. The reason prompt had `3` self misses, with MTP rescuing `1/3`; the code prompt had `7` self misses, with MTP rescuing `4/7`. This is the desired conditional pattern: MTP pays only where self-draft is already at risk."
+  source: `/tmp/qwen36_mtp_self_hybrid_rank8_early6_gen16_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer/rank route, generated length, MTP topK, model/quant, or MTP formula changes
+- claim: "On the same gate, `K=2` preserved the same mismatch-only rescue counts as `K=5` for the tested prompts (`reason: 1/3`, `code: 4/7`) while reducing attempt pressure (`reason self_first_avg_attempts 1.688 -> 1.312`, `code 2.125 -> 1.562`). This makes `K=2` the right first hybrid rescue width; wider K should be justified by new misses, not used by default."
+  source: `/tmp/qwen36_mtp_self_hybrid_rank8_early6_k2_gen16_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer/rank route, generated length, MTP topK, model/quant, or verifier attempt model changes
+- claim: "Raw self/MTP top1 agreement is not robust enough as a standalone accept router. On default and reason it selected only true hits (`10/10` and `5/5`), but on code it selected `7` tokens with `2` false cases (`71.43%` precision) for both `K=2` and `K=5`. Agreement can be a risk feature, but exact verification or a stronger classifier is still required."
+  source: `/tmp/qwen36_mtp_self_hybrid_rank8_early6_gen16_20260502.log`; `/tmp/qwen36_mtp_self_hybrid_rank8_early6_k2_gen16_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, route, generated length, agreement definition, or MTP/self candidate source changes
+- claim: "The attempted 27B `pca-updown16` early6 fusion run was stopped as too expensive in the current probe path after PCA setup and before a result; it is not a refutation of pca-updown. Re-test it with shorter `gen4/8` or in the real GPU pipeline rather than treating this stopped run as evidence."
+  source: `/tmp/qwen36_mtp_self_hybrid_rank8_early6_updown16_gen16_20260502.log` partial log
+  verified_at: 2026-05-02
+  decay_trigger: pca-updown probe implementation, route, prompt, or runtime pipeline changes
+**decision:** Promote the next real hybrid branch as `self-first + MTP K=2 on miss/risk`, not always-on MTP and not raw agreement accept. The first production experiment should reuse verifier mismatch/risk signals: run self-draft normally, invoke MTP top2 only after a self-draft miss or high-risk boundary, and compare replay/resync tax against the existing top2 tree path. Do not spend time on K5/K8 or agreement-only routing until a prompt suite shows K2 misses that wider K uniquely rescues.
+**quadrumvirate:**
+- cassandra: The branch-pressure trap is avoided if MTP calls are sparse and K starts at 2; otherwise fusion repeats the earlier always-on MTP cost failure.
+- daedalus: The useful hybrid is not "combine drafters" but "pay auxiliary candidate source only when primary self-draft already failed or looks risky."
+- maieutic: These are exact-position oracle accounting rows, not a resyncing wall-clock runtime. A real implementation must regenerate self proposals after boundary resync and measure plain wall speed.
+- adversary: Generality is low: three prompts, `gen16`, one stressed route, no long `gen64`, and stopped pca-updown run. Require a real pipeline A/B before default policy promotion.

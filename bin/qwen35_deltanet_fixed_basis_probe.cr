@@ -6105,6 +6105,11 @@ private def tuple_topk_rank(topk : Array({Int32, Float32}), target : Int32) : In
   0
 end
 
+private def pct_count(num : Int32, den : Int32) : Float64
+  return 0.0 if den == 0
+  100.0 * num / den
+end
+
 private def mtp_hidden_topk_for_fusion(weights : ML::GGUF::Qwen35Weights,
                                        mtp : ML::GGUF::Qwen35MTPWeights,
                                        prev_hidden : Array(Float32),
@@ -8929,6 +8934,16 @@ if rank = simulate_logit_rank
       mtp_extra_hits = fusion[:union_hits] - fusion[:self_hits]
       updown_note = fusion[:draft_updown_rank] > 0 ? " draft_pca_updown_rank=#{fusion[:draft_updown_rank]} draft_pca_updown_layers=#{simulate_mtp_self_draft_fusion_updown_layers.empty? ? "all" : simulate_mtp_self_draft_fusion_updown_layers.join(',')}" : ""
       puts "mtp_self_draft_fusion layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_topk=#{fusion[:mtp_topk]} self_hits=#{fusion[:self_hits]} self_rate=#{(100.0 * fusion[:self_hits] / steps).round(2)} mtp_hits=#{fusion[:mtp_hits]} mtp_rate=#{(100.0 * fusion[:mtp_hits] / steps).round(2)} union_hits=#{fusion[:union_hits]} union_rate=#{(100.0 * fusion[:union_hits] / steps).round(2)} mtp_extra_hits=#{mtp_extra_hits} self_only_hits=#{fusion[:additive_hits]} agreement=#{fusion[:agreement]} agreement_hits=#{fusion[:agreement_hits]} agreement_false=#{fusion[:agreement_false]} self_first_attempts=#{fusion[:self_first_attempts_total]} self_first_avg_attempts=#{self_first_avg.round(3)} mtp_first_attempts=#{fusion[:mtp_first_attempts_total]} mtp_first_avg_attempts=#{mtp_first_avg.round(3)} self_chain_ms=#{fusion[:self_chain_ms].round(3)} mtp_ms=#{fusion[:mtp_ms].round(3)} exact_ms=#{fusion[:self_exact_ms].round(3)} self_ids=#{fusion[:self_ids].join(',')} exact_ids=#{fusion[:exact_ids].join(',')}"
+      fusion_rows = fusion[:rows]
+      self_misses = steps - fusion[:self_hits]
+      mtp_rescue_hits = fusion_rows.count { |row| !row[:self_hit] && row[:mtp_hit] }
+      mtp_unresolved_misses = fusion_rows.count { |row| !row[:self_hit] && !row[:mtp_hit] }
+      mismatch_mtp_ms = fusion[:mtp_ms] * self_misses.to_f64 / steps
+      mismatch_saved_ms = fusion[:mtp_ms] - mismatch_mtp_ms
+      agreement_selected = fusion[:agreement]
+      agreement_fallback = steps - agreement_selected
+      puts "mtp_self_draft_hybrid_policy policy=self_first_mtp_on_miss layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_topk=#{fusion[:mtp_topk]} self_misses=#{self_misses} mtp_calls=#{self_misses} mtp_call_rate=#{pct_count(self_misses, steps).round(2)} mtp_rescue_hits=#{mtp_rescue_hits} mtp_rescue_rate=#{pct_count(mtp_rescue_hits, self_misses).round(2)} unresolved_misses=#{mtp_unresolved_misses} self_first_attempts=#{fusion[:self_first_attempts_total]} self_first_avg_attempts=#{self_first_avg.round(3)} modeled_mtp_ms=#{mismatch_mtp_ms.round(3)} saved_mtp_ms=#{mismatch_saved_ms.round(3)} note=oracle_accounting_exact_positions_not_resyncing_wall_runtime"
+      puts "mtp_self_draft_hybrid_policy policy=agreement_guard layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_topk=#{fusion[:mtp_topk]} mtp_calls=#{steps} selected=#{agreement_selected} selected_rate=#{pct_count(agreement_selected, steps).round(2)} selected_hits=#{fusion[:agreement_hits]} selected_false=#{fusion[:agreement_false]} precision=#{pct_count(fusion[:agreement_hits], agreement_selected).round(2)} fallback=#{agreement_fallback} fallback_rate=#{pct_count(agreement_fallback, steps).round(2)} note=agreement_requires_always_on_mtp_unless_used_as_calibration_feature"
       fusion[:rows].each do |row|
         puts "mtp_self_draft_fusion_step i=#{row[:index]} exact=#{row[:exact]} self=#{row[:self_id]} mtp_rank=#{row[:mtp_rank]} self_hit=#{row[:self_hit]} mtp_hit=#{row[:mtp_hit]} union_hit=#{row[:union_hit]} agreement=#{row[:agreement]} union_size=#{row[:union_size]} self_first_attempts=#{row[:self_first_attempts]} mtp_first_attempts=#{row[:mtp_first_attempts]}"
       end
