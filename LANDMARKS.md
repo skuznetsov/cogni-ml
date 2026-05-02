@@ -6856,3 +6856,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame is not "more candidates" but "non-overlapping candidates per unit of verifier pressure."
 - maieutic: This is oracle accounting at exact positions; it does not yet prove wall speed or a resyncing runtime.
 - adversary: Generality is still low: four focused cases plus one K5 stress rerun, no `gen64`, and no real pipeline. Treat the landmark as routing guidance, not a speed claim.
+
+### [LM-QWEN36-MTP-SELF-TOP2-ROUTE-PRESSURE-1] Self-top2-first MTP K2 improves stressed coverage with sparse MTP calls
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (Qwen3.6 MTP + same-weight self-draft route economics)
+**evidence:**
+- claim: "`bin/qwen35_deltanet_fixed_basis_probe.cr` now prints `mtp_self_draft_route_policy` rows for `self_top2_only`, `self_top2_first_mtp_k2_on_miss`, and `self_top2_first_mtp_topk_on_miss`. These rows report resolved hits, unresolved misses, route attempts, MTP calls/call rate, MTP rescue rate, and modeled MTP time paid only on self-top2 misses."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_route_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_deltanet_fixed_basis_probe_mtp_route --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_route_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`), on 2026-05-02
+  verified_at: 2026-05-02
+  decay_trigger: route-policy schema, self-draft top2 head path, MTP topK path, or verifier attempt model changes
+- claim: "On the easy 27B default prompt at rank8/early6 `gen16/K2`, `self_top2_only` resolves `16/16` with `16` attempts and MTP-on-miss calls MTP `0/16` times while preserving `16/16`. This preserves the easy-span falsifier: the policy is sparse and does not pay MTP when self-top2 already covers the span."
+  source: `/tmp/qwen36_mtp_self_route_policy_default_gen16_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt, layer/rank route, generated length, MTP topK, model/quant, or self-draft route changes
+- claim: "On the stressed 27B code prompt at rank8/early6 `gen32/K2`, `self_top2_only` resolves `24/32` with `41` route attempts (`1.281/token`). `self_top2_first_mtp_k2_on_miss` resolves `29/32`, calls MTP only `8/32` times, rescues `5/8` self-top2 misses, and uses `52` attempts (`1.625/token`)."
+  source: `/tmp/qwen36_mtp_self_route_policy_code_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt, layer/rank route, generated length, MTP topK, model/quant, or self-draft route changes
+- claim: "On the same code stress prompt, `self_top2_first_mtp_topk_on_miss` with `K=5` resolves `30/32`, only one more than K2, but uses `59` attempts (`1.844/token`). K5 remains a later fallback, not the first implementation width."
+  source: `/tmp/qwen36_mtp_self_route_policy_code_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt, layer/rank route, generated length, MTP topK, model/quant, or verifier attempt model changes
+**decision:** Implement the next wall-clock experiment as `self top2 first, MTP K2 only on unresolved self-top2 miss/risk`. The branch should enter the actual pipeline controller only after preserving exact parity and measuring whether reduced unresolved misses compensate for MTP call latency and resync/replay work. Do not default to K5 unless a broader suite shows K2-specific unresolved misses dominate.
+**quadrumvirate:**
+- cassandra: Sparse invocation avoids the repeated always-on MTP cost trap; the risk is that oracle attempts understate real resync/controller overhead.
+- daedalus: The next frame shift is from candidate-quality accounting to stateful controller economics: copy/replay/resync must be charged where the policy branches.
+- maieutic: This is still exact-position route accounting, not a production pipeline. It answers branch pressure, not final wall speed.
+- adversary: Generality is low: one easy negative and one stressed positive prompt. Require prompt suite plus real pipeline `plain_speedup` before claiming performance.

@@ -9010,13 +9010,41 @@ if rank = simulate_logit_rank
       mtp_rescue_hits = fusion_rows.count { |row| !row[:self_hit] && row[:mtp_hit] }
       mtp_unresolved_misses = fusion_rows.count { |row| !row[:self_hit] && !row[:mtp_hit] }
       avg_union_k2_width = fusion[:union_k2_size_total].to_f64 / steps
+      mtp_k2_width = Math.min(2, fusion[:mtp_topk])
+      self_top2_attempts_total = fusion_rows.sum { |row| row[:self_hit] ? 1 : 2 }
+      self_top2_unresolved = steps - fusion[:self_top2_hits]
+      self_top2_mtp_k2_attempts_total = fusion_rows.sum do |row|
+        if row[:self_hit]
+          1
+        elsif row[:self_top2_hit]
+          2
+        else
+          2 + (row[:mtp_k2_hit] ? row[:mtp_rank] : mtp_k2_width)
+        end
+      end
+      self_top2_mtp_topk_attempts_total = fusion_rows.sum do |row|
+        if row[:self_hit]
+          1
+        elsif row[:self_top2_hit]
+          2
+        else
+          2 + (row[:mtp_hit] ? row[:mtp_rank] : fusion[:mtp_topk])
+        end
+      end
+      self_top2_mtp_k2_rescues = fusion_rows.count { |row| !row[:self_top2_hit] && row[:mtp_k2_hit] }
+      self_top2_mtp_topk_rescues = fusion_rows.count { |row| !row[:self_top2_hit] && row[:mtp_hit] }
       mismatch_mtp_ms = fusion[:mtp_ms] * self_misses.to_f64 / steps
+      self_top2_mismatch_mtp_ms = fusion[:mtp_ms] * self_top2_unresolved.to_f64 / steps
       mismatch_saved_ms = fusion[:mtp_ms] - mismatch_mtp_ms
+      self_top2_mismatch_saved_ms = fusion[:mtp_ms] - self_top2_mismatch_mtp_ms
       agreement_selected = fusion[:agreement]
       agreement_fallback = steps - agreement_selected
       puts "mtp_self_draft_hybrid_policy policy=self_first_mtp_on_miss layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_topk=#{fusion[:mtp_topk]} self_misses=#{self_misses} mtp_calls=#{self_misses} mtp_call_rate=#{pct_count(self_misses, steps).round(2)} mtp_rescue_hits=#{mtp_rescue_hits} mtp_rescue_rate=#{pct_count(mtp_rescue_hits, self_misses).round(2)} unresolved_misses=#{mtp_unresolved_misses} self_first_attempts=#{fusion[:self_first_attempts_total]} self_first_avg_attempts=#{self_first_avg.round(3)} modeled_mtp_ms=#{mismatch_mtp_ms.round(3)} saved_mtp_ms=#{mismatch_saved_ms.round(3)} note=oracle_accounting_exact_positions_not_resyncing_wall_runtime"
       puts "mtp_self_draft_hybrid_policy policy=agreement_guard layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_topk=#{fusion[:mtp_topk]} mtp_calls=#{steps} selected=#{agreement_selected} selected_rate=#{pct_count(agreement_selected, steps).round(2)} selected_hits=#{fusion[:agreement_hits]} selected_false=#{fusion[:agreement_false]} precision=#{pct_count(fusion[:agreement_hits], agreement_selected).round(2)} fallback=#{agreement_fallback} fallback_rate=#{pct_count(agreement_fallback, steps).round(2)} note=agreement_requires_always_on_mtp_unless_used_as_calibration_feature"
       puts "mtp_self_draft_candidate_union layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_topk=#{fusion[:mtp_topk]} self_top2_hits=#{fusion[:self_top2_hits]} self_top2_rate=#{pct_count(fusion[:self_top2_hits], steps).round(2)} mtp_k2_hits=#{fusion[:mtp_k2_hits]} mtp_k2_rate=#{pct_count(fusion[:mtp_k2_hits], steps).round(2)} union_k2_hits=#{fusion[:union_k2_hits]} union_k2_rate=#{pct_count(fusion[:union_k2_hits], steps).round(2)} union_topk_hits=#{fusion[:union_topk_with_self_top2_hits]} union_topk_rate=#{pct_count(fusion[:union_topk_with_self_top2_hits], steps).round(2)} mtp_extra_over_self_top2=#{fusion[:mtp_extra_over_self_top2]} mtp_extra_over_self_top2_topk=#{fusion[:mtp_extra_over_self_top2_topk]} self_top2_extra_over_mtp_k2=#{fusion[:self_top2_extra_over_mtp_k2]} self_top2_extra_over_mtp_topk=#{fusion[:self_top2_extra_over_mtp_topk]} both_top2_hits=#{fusion[:both_top2_hits]} avg_union_k2_width=#{avg_union_k2_width.round(3)} note=oracle_accounting_compares_existing_self_top2_against_mtp_top2_and_topk"
+      puts "mtp_self_draft_route_policy policy=self_top2_only layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} resolved_hits=#{fusion[:self_top2_hits]} resolved_rate=#{pct_count(fusion[:self_top2_hits], steps).round(2)} unresolved=#{self_top2_unresolved} attempts=#{self_top2_attempts_total} avg_attempts=#{(self_top2_attempts_total.to_f64 / steps).round(3)} mtp_calls=0 modeled_mtp_ms=0.0 note=baseline_existing_tree2_candidate_pressure"
+      puts "mtp_self_draft_route_policy policy=self_top2_first_mtp_k2_on_miss layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_width=#{mtp_k2_width} resolved_hits=#{fusion[:union_k2_hits]} resolved_rate=#{pct_count(fusion[:union_k2_hits], steps).round(2)} unresolved=#{steps - fusion[:union_k2_hits]} mtp_calls=#{self_top2_unresolved} mtp_call_rate=#{pct_count(self_top2_unresolved, steps).round(2)} mtp_rescue_hits=#{self_top2_mtp_k2_rescues} mtp_rescue_rate=#{pct_count(self_top2_mtp_k2_rescues, self_top2_unresolved).round(2)} attempts=#{self_top2_mtp_k2_attempts_total} avg_attempts=#{(self_top2_mtp_k2_attempts_total.to_f64 / steps).round(3)} modeled_mtp_ms=#{self_top2_mismatch_mtp_ms.round(3)} saved_mtp_ms=#{self_top2_mismatch_saved_ms.round(3)} note=oracle_policy_pressure_exact_positions_not_resyncing_wall_runtime"
+      puts "mtp_self_draft_route_policy policy=self_top2_first_mtp_topk_on_miss layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_width=#{fusion[:mtp_topk]} resolved_hits=#{fusion[:union_topk_with_self_top2_hits]} resolved_rate=#{pct_count(fusion[:union_topk_with_self_top2_hits], steps).round(2)} unresolved=#{steps - fusion[:union_topk_with_self_top2_hits]} mtp_calls=#{self_top2_unresolved} mtp_call_rate=#{pct_count(self_top2_unresolved, steps).round(2)} mtp_rescue_hits=#{self_top2_mtp_topk_rescues} mtp_rescue_rate=#{pct_count(self_top2_mtp_topk_rescues, self_top2_unresolved).round(2)} attempts=#{self_top2_mtp_topk_attempts_total} avg_attempts=#{(self_top2_mtp_topk_attempts_total.to_f64 / steps).round(3)} modeled_mtp_ms=#{self_top2_mismatch_mtp_ms.round(3)} saved_mtp_ms=#{self_top2_mismatch_saved_ms.round(3)} note=oracle_policy_pressure_exact_positions_not_resyncing_wall_runtime"
       fusion[:rows].each do |row|
         puts "mtp_self_draft_fusion_step i=#{row[:index]} exact=#{row[:exact]} self=#{row[:self_id]} self_second=#{row[:self_second_id]} mtp_rank=#{row[:mtp_rank]} self_hit=#{row[:self_hit]} self_top2_hit=#{row[:self_top2_hit]} mtp_hit=#{row[:mtp_hit]} mtp_k2_hit=#{row[:mtp_k2_hit]} union_hit=#{row[:union_hit]} union_k2_hit=#{row[:union_k2_hit]} agreement=#{row[:agreement]} union_size=#{row[:union_size]} union_k2_size=#{row[:union_k2_size]} self_first_attempts=#{row[:self_first_attempts]} mtp_first_attempts=#{row[:mtp_first_attempts]}"
       end
