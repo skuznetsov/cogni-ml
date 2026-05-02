@@ -6737,6 +6737,34 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - maieutic: Exact hidden availability is still downstream of the target verifier. Branch-cost accounting is only a verifier-economics probe, not a decode speed claim.
 - adversary: Generality remains low: four prompts, `gen8`, teacher-forced exact hiddens. Require `gen32-64` and wall-clock parity/speedup before promoting policy defaults.
 
+### [LM-QWEN36-MTP-VLLM-ACCOUNTING-1] Exact-resync MTP has a real multi-token pass-rate signal, but needs a target verifier path
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (Qwen3.6 native MTP / vLLM-style speculative decoding economics)
+**evidence:**
+- claim: "`bin/qwen35_mtp_sidecar_probe.cr` now has vLLM-style MTP speculative accounting via `--mtp-spec-gammas LIST`. It simulates greedy exact speculative decoding with exact-boundary resync: each target pass emits the accepted MTP prefix plus either the corrected mismatch token or the target bonus token, then reports passes, emitted tokens, accepted drafts, `tokens_per_pass`, target-pass speedup bound, additive wall model, and ideal-overlap wall model."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_vllm_probe_build crystal build bin/qwen35_mtp_sidecar_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_mtp_sidecar_probe_metal --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_vllm_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`), on 2026-05-02
+  verified_at: 2026-05-02
+  decay_trigger: MTP spec accounting semantics, greedy verifier semantics, target hidden oracle, or MTP top1 path changes
+- claim: "On a short 3-prompt 27B `gen16` suite (`france`, `code`, `reason`), exact-resync MTP accounting shows a strong upper-bound signal: `gamma=8` emitted `48` tokens in `16` target passes (`3.0 tokens/pass`), accepted `34/47` drafted tokens (`72.34%`), and had an additive serial-cost model of `2.167x` versus exact-hidden oracle cost."
+  source: live run of `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --max-seq 160 --mtp-chain-tokens 16 --mtp-chain-topk 1 --mtp-chain-mode teacher --mtp-spec-gammas 1,2,4,8 ...`, on 2026-05-02
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, generated length, gamma list, target-pass cost model, or MTP formula changes
+- claim: "On a longer 3-prompt 27B `gen64` suite (`reason_long`, `code_long`, `structured`), the signal remains but is lower and plateaus: `gamma=8` emitted `192` tokens in `78` target passes (`2.462 tokens/pass`), accepted `117/192` drafted tokens (`60.94%`), and the additive model is `1.872x`; `gamma=16` has the same pass count and no useful extra token/pass gain."
+  source: `/tmp/qwen36_mtp_spec_exact_resync_long_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, generated length, gamma list, target-pass cost model, or MTP formula changes
+- claim: "The accounting explains the vLLM claim without contradicting the recursive-chain falsifier: MTP is useful when each speculative attempt starts from exact target hidden state; naive free-running MTP hidden replacement still drifts. The remaining speed blocker is not proposal quality alone, but implementing a verifier pass whose cost tracks target passes/chunks rather than serial exact tokens plus separate MTP cost."
+  source: `/tmp/qwen36_mtp_spec_exact_resync_long_20260502.log`; `LM-QWEN36-MTP-CHAIN-FALSIFIER-1`
+  verified_at: 2026-05-02
+  decay_trigger: target verifier batching/chunking implementation, MTP hidden bridge, prompt suite, or recursive MTP semantics changes
+**decision:** Promote an exact-resync MTP verifier-loop experiment ahead of more raw MTP body tuning. The next implementation should use `gamma=4/8` first, because `gamma=8` improved pass-rate on both short and long suites while `gamma=16` plateaued. Do not claim an end-to-end decode win yet: the current metric is a cost model over an exact hidden oracle, not a wall-clock target verifier. The production path needs a real chunk/batched verifier or GPU-resident verifier that can validate speculative spans and commit the exact state/bonus token without paying full serial decode per output token.
+**quadrumvirate:**
+- cassandra: The high pass-rate can be erased if target verification remains serial or if MTP and verifier cannot overlap on Metal.
+- daedalus: The frame shifts from "make recursive MTP not drift" to "start every proposal from exact verifier state and reduce target-pass count".
+- maieutic: The key assumption is that a target pass over a speculative span can be made cheaper than serial decode for the same number of emitted tokens; this is not proven by the sidecar probe.
+- adversary: Generality is still low: three long prompts, one model/quant, greedy top1 only, and modeled target-pass cost. Require a real verifier-loop wall-clock gate before changing runtime defaults.
+
 ### [LM-QWEN36-MTP-SELF-DRAFT-FUSION-1] MTP/self-draft fusion is a router signal, not an always-on speed path
 **status:** verified
 **trust:** {F:0.80, G:low, R:0.82}

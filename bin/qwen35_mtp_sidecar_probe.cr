@@ -31,6 +31,7 @@ mtp_chain_diag_bridge = false
 mtp_chain_diag_clamp = 4.0_f32
 mtp_chain_diag_ridge = 1.0e-5_f32
 mtp_chain_margin_thresholds = [] of Float64
+mtp_spec_gammas = [] of Int32
 
 struct DiagBridge
   getter scale : Array(Float32)
@@ -101,6 +102,30 @@ class MarginRouterAggregate
     @selected = 0
     @selected_hits = 0
     @false_accepts = 0
+  end
+end
+
+class MtpSpecAggregate
+  property rows : Int32
+  property tokens : Int32
+  property passes : Int32
+  property emitted : Int32
+  property draft_tokens : Int32
+  property accepted : Int32
+  property mtp_ms_sum : Float64
+  property exact_ms_sum : Float64
+  property target_pass_model_ms_sum : Float64
+
+  def initialize
+    @rows = 0
+    @tokens = 0
+    @passes = 0
+    @emitted = 0
+    @draft_tokens = 0
+    @accepted = 0
+    @mtp_ms_sum = 0.0
+    @exact_ms_sum = 0.0
+    @target_pass_model_ms_sum = 0.0
   end
 end
 
@@ -250,6 +275,9 @@ OptionParser.parse do |p|
   p.on("--mtp-chain-margin-thresholds LIST", "Comma-separated MTP top1/top2 margin thresholds for top1 confidence-router attribution") do |v|
     mtp_chain_margin_thresholds = v.split(",").reject(&.empty?).map(&.to_f64)
   end
+  p.on("--mtp-spec-gammas LIST", "Comma-separated vLLM-style MTP speculative accounting gammas; requires --mtp-chain-tokens") do |v|
+    mtp_spec_gammas = v.split(",").reject(&.empty?).map(&.to_i32)
+  end
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -283,6 +311,9 @@ abort "--mtp-chain-diag-clamp must be positive" if mtp_chain_diag_clamp <= 0.0_f
 abort "--mtp-chain-diag-ridge must be non-negative" if mtp_chain_diag_ridge < 0.0_f32
 mtp_chain_margin_thresholds = mtp_chain_margin_thresholds.sort.uniq
 abort "--mtp-chain-margin-thresholds requires --mtp-chain-topk >= 2" if !mtp_chain_margin_thresholds.empty? && mtp_chain_topk < 2
+mtp_spec_gammas = mtp_spec_gammas.sort.uniq
+abort "--mtp-spec-gammas requires --mtp-chain-tokens > 0" if !mtp_spec_gammas.empty? && mtp_chain_tokens <= 0
+abort "--mtp-spec-gammas values must be positive" if mtp_spec_gammas.any? { |gamma| gamma <= 0 }
 chain_modes = case mtp_chain_mode
               when "teacher"
                 ["teacher"]
@@ -320,6 +351,7 @@ chain_aggregates = Hash(String, ChainAggregate).new { |hash, key| hash[key] = Ch
 margin_router_aggregates = Hash(String, Array(MarginRouterAggregate)).new do |hash, key|
   hash[key] = Array(MarginRouterAggregate).new(mtp_chain_margin_thresholds.size) { MarginRouterAggregate.new }
 end
+mtp_spec_aggregates = Hash(Int32, MtpSpecAggregate).new { |hash, key| hash[key] = MtpSpecAggregate.new }
 
 rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
@@ -419,6 +451,68 @@ rows.each do |label, prompt_text|
   exact_hidden_oracle_ms = elapsed_ms(exact_chain_start)
   exact_text = exact_nexts.map { |id, _| tokenizer.decode_single(id) }.join
   puts "mtp_chain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} start_y1=#{y1} exact_ids=#{exact_nexts.map(&.[0]).join(",")} exact_text=#{exact_text.inspect} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)}"
+
+  mtp_spec_gammas.each do |gamma|
+    spec_i = 0
+    spec_passes = 0
+    spec_emitted = 0
+    spec_draft_tokens = 0
+    spec_accepted = 0
+    spec_mtp_ms = 0.0_f64
+
+    while spec_i < mtp_chain_tokens
+      spec_passes += 1
+      prev_hidden = spec_i == 0 ? hidden : exact_hiddens[spec_i - 1]
+      prev_token = spec_i == 0 ? y1 : exact_nexts[spec_i - 1][0]
+      segment_pos = token_ids.size + spec_i
+      segment_state = gamma > 1 ? ML::GGUF::Qwen35MTP::State.new(gamma, weights.hparams.head_dim * weights.hparams.n_head_kv) : nil
+      accepted_this_pass = 0
+
+      gamma.times do |j|
+        exact_i = spec_i + j
+        break if exact_i >= mtp_chain_tokens
+
+        mtp_hidden, mtp_top1, step_ms = mtp_hidden_topk(weights, mtp, prev_hidden, prev_token, segment_pos + j, 1, false, segment_state)
+        spec_draft_tokens += 1
+        spec_mtp_ms += step_ms
+
+        candidate = mtp_top1[0][0]
+        break unless candidate == exact_nexts[exact_i][0]
+
+        spec_accepted += 1
+        accepted_this_pass += 1
+        prev_hidden = mtp_hidden
+        prev_token = candidate
+      end
+
+      # Greedy exact speculative decoding emits the accepted prefix plus either
+      # the corrected mismatch token or the target bonus token.
+      emitted_this_pass = accepted_this_pass + 1
+      remaining = mtp_chain_tokens - spec_i
+      emitted_this_pass = remaining if emitted_this_pass > remaining
+      spec_emitted += emitted_this_pass
+      spec_i += emitted_this_pass
+    end
+
+    exact_avg_ms = exact_hidden_oracle_ms / mtp_chain_tokens
+    target_pass_model_ms = exact_avg_ms * spec_passes
+    additive_wall_ms = target_pass_model_ms + spec_mtp_ms
+    overlap_wall_ms = target_pass_model_ms > spec_mtp_ms ? target_pass_model_ms : spec_mtp_ms
+    target_pass_speedup_bound = mtp_chain_tokens.to_f64 / spec_passes
+
+    agg = mtp_spec_aggregates[gamma]
+    agg.rows += 1
+    agg.tokens += mtp_chain_tokens
+    agg.passes += spec_passes
+    agg.emitted += spec_emitted
+    agg.draft_tokens += spec_draft_tokens
+    agg.accepted += spec_accepted
+    agg.mtp_ms_sum += spec_mtp_ms
+    agg.exact_ms_sum += exact_hidden_oracle_ms
+    agg.target_pass_model_ms_sum += target_pass_model_ms
+
+    puts "mtp_spec_summary label=#{label.inspect} mode=exact_resync gamma=#{gamma} tokens=#{mtp_chain_tokens} passes=#{spec_passes} emitted=#{spec_emitted} draft_tokens=#{spec_draft_tokens} accepted=#{spec_accepted} accept_rate=#{pct(spec_accepted, spec_draft_tokens).round(2)} tokens_per_pass=#{(spec_emitted.to_f64 / spec_passes).round(3)} target_pass_speedup_bound=#{target_pass_speedup_bound.round(3)} mtp_ms=#{spec_mtp_ms.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} target_pass_model_ms=#{target_pass_model_ms.round(3)} additive_wall_model_ms=#{additive_wall_ms.round(3)} additive_speedup_model=#{(exact_hidden_oracle_ms / additive_wall_ms).round(3)} ideal_overlap_wall_model_ms=#{overlap_wall_ms.round(3)} ideal_overlap_speedup_model=#{(exact_hidden_oracle_ms / overlap_wall_ms).round(3)}"
+  end
 
   diag_bridge = nil.as(DiagBridge?)
   if mtp_chain_diag_bridge
@@ -634,4 +728,12 @@ margin_router_aggregates.keys.sort.each do |mode|
     fallback = agg.tokens - agg.selected
     puts "mtp_chain_margin_router_suite mode=#{mode} threshold=#{threshold} rows=#{agg.rows} tokens=#{agg.tokens} selected=#{agg.selected} selected_rate=#{pct(agg.selected, agg.tokens).round(2)} selected_hits=#{agg.selected_hits} false_accepts=#{agg.false_accepts} precision=#{pct(agg.selected_hits, agg.selected).round(2)} fallback=#{fallback} hit_recall=#{pct(agg.selected_hits, agg.top1_hits).round(2)}"
   end
+end
+mtp_spec_aggregates.keys.sort.each do |gamma|
+  agg = mtp_spec_aggregates[gamma]
+  next if agg.tokens == 0
+
+  additive_wall_ms = agg.target_pass_model_ms_sum + agg.mtp_ms_sum
+  overlap_wall_ms = agg.target_pass_model_ms_sum > agg.mtp_ms_sum ? agg.target_pass_model_ms_sum : agg.mtp_ms_sum
+  puts "mtp_spec_suite_summary mode=exact_resync gamma=#{gamma} rows=#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} target_pass_speedup_bound=#{(agg.tokens.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} exact_hidden_oracle_ms=#{agg.exact_ms_sum.round(3)} target_pass_model_ms=#{agg.target_pass_model_ms_sum.round(3)} additive_wall_model_ms=#{additive_wall_ms.round(3)} additive_speedup_model=#{(agg.exact_ms_sum / additive_wall_ms).round(3)} ideal_overlap_wall_model_ms=#{overlap_wall_ms.round(3)} ideal_overlap_speedup_model=#{(agg.exact_ms_sum / overlap_wall_ms).round(3)}"
 end
