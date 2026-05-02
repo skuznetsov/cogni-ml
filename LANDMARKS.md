@@ -6736,3 +6736,35 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "use a wider tree" to "pay almost no branch work unless the verifier already found a mismatch or a router predicts high confidence."
 - maieutic: Exact hidden availability is still downstream of the target verifier. Branch-cost accounting is only a verifier-economics probe, not a decode speed claim.
 - adversary: Generality remains low: four prompts, `gen8`, teacher-forced exact hiddens. Require `gen32-64` and wall-clock parity/speedup before promoting policy defaults.
+
+### [LM-QWEN36-MTP-SELF-DRAFT-FUSION-1] MTP/self-draft fusion is a router signal, not an always-on speed path
+**status:** verified
+**trust:** {F:0.80, G:low, R:0.82}
+**context:** ml (Qwen3.6 native MTP + same-weight self-draft)
+**evidence:**
+- claim: "`bin/qwen35_deltanet_fixed_basis_probe.cr` now has an MTP/self-draft fusion oracle: `--simulate-mtp-self-draft-fusion=N`, `--simulate-mtp-self-draft-fusion-topk=K`, and optional `--simulate-mtp-self-draft-fusion-updown=R` / `--simulate-mtp-self-draft-fusion-updown-layers=LIST`. It reports self-draft hits, MTP topK hits, union hits, agreement, and self-first vs MTP-first verifier attempt pressure."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_self_fusion_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_deltanet_fixed_basis_probe_mtp_fusion --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_self_fusion_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`), on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: fusion probe schema, self-draft chain semantics, MTP sidecar path, or Metal topK/head paths change
+- claim: "On Qwen3.6-27B default prompt with rank16/layers `0,2,4`, `gen16`, self-draft already hit `16/16`; MTP top5 hit `15/16`; union added `0` extra hits. Self-first verifier pressure was exactly `1.0` attempt/token, while MTP-first would be `1.375` attempts/token."
+  source: `/tmp/qwen36_mtp_self_draft_fusion_rank16_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt, rank/layer set, generated length, MTP topK, model/quant, or self-draft route changes
+- claim: "Even after stressing the self-draft route on the default prompt with rank8/layers `0,2,4,6,8,10`, `gen16`, self-draft stayed `16/16`; MTP top5 stayed `15/16`; union again added `0` hits. This refutes always-on MTP fusion for easy spans."
+  source: `/tmp/qwen36_mtp_self_draft_fusion_rank8_layers6_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt, rank/layer set, generated length, MTP topK, model/quant, or self-draft route changes
+- claim: "On the code prompt with rank8/layers `0,2,4,6,8,10`, baseline lowrank self-draft and MTP both hit `16/16`, so union still added `0` hits. Baseline lowrank chain was slower than exact (`2003.272 ms` vs `1086.125 ms`), which points back to draft body cost rather than branch coverage."
+  source: `/tmp/qwen36_mtp_self_draft_fusion_code_rank8_layers6_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt, rank/layer set, generated length, MTP topK, model/quant, or self-draft route changes
+- claim: "The useful positive signal came from the cheap self-draft body: with `--simulate-mtp-self-draft-fusion-updown=16` on the same code prompt and rank8/layers `0,2,4,6,8,10`, pca-updown self-draft still hit `16/16` and reduced chain wall from baseline lowrank `2003.272 ms` to `932.370 ms`, close to exact `958.511 ms`. MTP topK still added no extra hits."
+  source: `/tmp/qwen36_mtp_self_draft_fusion_code_rank8_layers6_updown16_gen16_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: pca-updown adapter training, prompt-local calibration, rank/layer set, generated length, model/quant, or self-draft route changes
+**decision:** Do not pay MTP on every token while self-draft already has high top1 agreement. Treat MTP as a mismatch-only rescue/reranker or confidence feature after the verifier/self-draft detects risk. The immediate speed branch is cheaper pca-updown self-draft body plus prompt-suite stability; only after that should MTP topK be fused into the verifier loop.
+**quadrumvirate:**
+- cassandra: Fusion can look smart while adding only cost if the primary self-draft source is already correct. The repeated failure mode is paying a second candidate source before a mismatch exists.
+- daedalus: The frame shifts from "combine all candidate sources" to "make the first candidate source cheap and only invoke auxiliary rankers on risk/miss paths."
+- maieutic: These are short `gen16` probes; they prove oracle accounting and local behavior, not end-to-end decode speed.
+- adversary: Generality is low: two prompt classes and prompt-local pca-updown calibration. Require multi-prompt `gen32-64`, real pipeline `plain_speedup`, and mismatch cases before promoting a production policy.

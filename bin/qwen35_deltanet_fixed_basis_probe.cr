@@ -3,10 +3,12 @@
 require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
 DEFAULT_MODEL     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+DEFAULT_MTP       = "#{ENV["HOME"]}/.cache/cogni-ml/qwen36_mtp/Qwen3.6-27B-mtp.safetensors"
 DEFAULT_TOKENIZER = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 DEFAULT_PROMPT    = "The quick brown fox jumps over the lazy dog. Describe this scene in detail, then explain how weather, geometry, and memory interact in a compact machine learning runtime. " \
                     "Use precise technical language and include several short code-like phrases so the token stream is varied."
@@ -27,6 +29,7 @@ private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String,
 private alias BlockSurrogateTreeSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, top_k: Int32, prefill_seed: Bool, branch_verify: Bool, select_advance: Bool, warmup_tokens: Int32, prefill_seed_tokens: Int32, tree_tokens: Int32, parity: Bool, full_rescue_chunks: Int32, chunks: Int32, misses: Int32, draft_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, avg_rank_branch_tokens_total: Float64, avg_full_branch_tokens_total: Float64, branch_tokens_rank: Int32, branch_tokens_full: Int32, branch_verify_attempts: Int32, branch_verify_wasted_attempts: Int32, branch_verify_corrections: Int32, branch_verify_ms: Float64, branch_verify_fork_ms: Float64, branch_verify_forward_ms: Float64, correction_steps: Int32, hidden_cos_mean: Float64, rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
+private alias MtpSelfDraftFusionRow = NamedTuple(index: Int32, exact: Int32, self_id: Int32, mtp_rank: Int32, self_hit: Bool, mtp_hit: Bool, union_hit: Bool, agreement: Bool, union_size: Int32, mtp_first_attempts: Int32, self_first_attempts: Int32)
 
 private struct RecurrentSample
   getter inp : Array(Float32)
@@ -6095,6 +6098,163 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
   }
 end
 
+private def tuple_topk_rank(topk : Array({Int32, Float32}), target : Int32) : Int32
+  topk.each_with_index do |(id, _), i|
+    return i + 1 if id == target
+  end
+  0
+end
+
+private def mtp_hidden_topk_for_fusion(weights : ML::GGUF::Qwen35Weights,
+                                       mtp : ML::GGUF::Qwen35MTPWeights,
+                                       prev_hidden : Array(Float32),
+                                       token_id : Int32,
+                                       pos : Int32,
+                                       k : Int32)
+  start = Time.instant
+  next_hidden = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos, normalized: true)
+  topk = if k == 1
+           [ML::GGUF::Qwen35MTP.hidden_top1(weights, next_hidden)]
+         else
+           logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, next_hidden)
+           ML::GGUF::Qwen35MTP.top_k(logits, k)
+         end
+  {hidden: next_hidden, topk: topk, ms: (Time.instant - start).total_milliseconds}
+end
+
+private def self_first_attempt_count(self_id : Int32, exact_id : Int32, mtp_topk : Array({Int32, Float32})) : Int32
+  return 1 if self_id == exact_id
+
+  mtp_rank = tuple_topk_rank(mtp_topk, exact_id)
+  mtp_ids = mtp_topk.map(&.[0])
+  union_size = mtp_ids.includes?(self_id) ? mtp_topk.size : mtp_topk.size + 1
+  return union_size if mtp_rank == 0
+
+  self_rank = tuple_topk_rank(mtp_topk, self_id)
+  skipped_before_exact = self_rank > 0 && self_rank < mtp_rank ? 1 : 0
+  1 + mtp_rank - skipped_before_exact
+end
+
+private def simulate_mtp_self_draft_fusion_run(weights : ML::GGUF::Qwen35Weights,
+                                               mtp : ML::GGUF::Qwen35MTPWeights,
+                                               token_ids : Array(Int32),
+                                               calib_count : Int32,
+                                               n_draft : Int32,
+                                               layer_bases : LayerBasisMap,
+                                               rank : Int32,
+                                               mtp_topk : Int32,
+                                               draft_updown_rank : Int32? = nil,
+                                               ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
+                                               draft_updown_layer_indices : Set(Int32)? = nil)
+  raise "MTP/self-draft fusion requires at least one held-out token" unless n_draft > 0
+  raise "MTP/self-draft fusion requires positive MTP top-K" unless mtp_topk > 0
+
+  chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, n_draft, layer_bases, rank,
+    draft_updown_rank, ffn_updown_adapters, draft_updown_layer_indices)
+  hp = weights.hparams
+  prefix_ids = token_ids[0, calib_count]
+  first_token = token_ids[calib_count]
+  max_seq = token_ids.size + n_draft + 8
+
+  prefix_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(prefix_state, hp)
+  prefix_hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(weights, prefix_ids, 0, prefix_state)
+
+  exact_state = prefix_state.fork
+  exact_hiddens = [] of Array(Float32)
+  exact_ids = [] of Int32
+  exact_tok = first_token
+  n_draft.times do |i|
+    hidden = ML::GGUF::Qwen35CPU.forward_hidden(weights, exact_tok, calib_count + i, exact_state)
+    exact_id, _ = ML::GGUF::Qwen35CPU.hidden_top1(weights, hidden)
+    exact_hiddens << hidden
+    exact_ids << exact_id
+    exact_tok = exact_id
+  end
+  raise "self-draft exact chain mismatch" unless exact_ids == chain[:exact_ids]
+
+  rows = [] of MtpSelfDraftFusionRow
+  mtp_prev_hidden = prefix_hidden
+  mtp_prev_token = first_token
+  mtp_pos = calib_count
+  mtp_ms = 0.0
+  self_hits = 0
+  mtp_hits = 0
+  union_hits = 0
+  agreement = 0
+  agreement_hits = 0
+  agreement_false = 0
+  additive_hits = 0
+  mtp_first_attempts_total = 0
+  self_first_attempts_total = 0
+
+  n_draft.times do |i|
+    mtp_out = mtp_hidden_topk_for_fusion(weights, mtp, mtp_prev_hidden, mtp_prev_token, mtp_pos, mtp_topk)
+    mtp_ms += mtp_out[:ms]
+    mtp_top = mtp_out[:topk]
+    mtp_ids = mtp_top.map(&.[0])
+    exact_id = exact_ids[i]
+    self_id = chain[:chain_ids][i]
+    mtp_rank = tuple_topk_rank(mtp_top, exact_id)
+    self_hit = self_id == exact_id
+    mtp_hit = mtp_rank > 0
+    union_hit = self_hit || mtp_hit
+    agrees = self_id == mtp_top[0][0]
+    union_size = mtp_ids.includes?(self_id) ? mtp_top.size : mtp_top.size + 1
+    mtp_first_attempts = mtp_hit ? mtp_rank : union_size
+    self_first_attempts = self_first_attempt_count(self_id, exact_id, mtp_top)
+
+    self_hits += 1 if self_hit
+    mtp_hits += 1 if mtp_hit
+    union_hits += 1 if union_hit
+    additive_hits += 1 if self_hit && !mtp_hit
+    agreement += 1 if agrees
+    agreement_hits += 1 if agrees && self_hit
+    agreement_false += 1 if agrees && !self_hit
+    mtp_first_attempts_total += mtp_first_attempts
+    self_first_attempts_total += self_first_attempts
+    rows << {
+      index:               i.to_i32,
+      exact:               exact_id,
+      self_id:             self_id,
+      mtp_rank:            mtp_rank,
+      self_hit:            self_hit,
+      mtp_hit:             mtp_hit,
+      union_hit:           union_hit,
+      agreement:           agrees,
+      union_size:          union_size,
+      mtp_first_attempts:  mtp_first_attempts,
+      self_first_attempts: self_first_attempts,
+    }
+
+    mtp_prev_hidden = exact_hiddens[i]
+    mtp_prev_token = exact_id
+    mtp_pos += 1
+  end
+
+  {
+    steps:                     n_draft,
+    rank:                      rank,
+    mtp_topk:                  mtp_topk,
+    self_hits:                 self_hits,
+    mtp_hits:                  mtp_hits,
+    union_hits:                union_hits,
+    agreement:                 agreement,
+    agreement_hits:            agreement_hits,
+    agreement_false:           agreement_false,
+    additive_hits:             additive_hits,
+    mtp_first_attempts_total:  mtp_first_attempts_total,
+    self_first_attempts_total: self_first_attempts_total,
+    self_chain_ms:             chain[:chain_ms],
+    self_exact_ms:             chain[:exact_ms],
+    mtp_ms:                    mtp_ms,
+    draft_updown_rank:         chain[:updown_rank],
+    rows:                      rows,
+    self_ids:                  chain[:chain_ids],
+    exact_ids:                 exact_ids,
+  }
+end
+
 private def simulate_self_draft_gpu_state_only_run(weights : ML::GGUF::Qwen35Weights,
                                                    token_ids : Array(Int32),
                                                    calib_count : Int32,
@@ -7933,6 +8093,7 @@ private def print_route_oracle_scoreboard(rows : Array(RouteScoreRow), limit : I
 end
 
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
+mtp_path = ENV["QWEN35_MTP"]? || DEFAULT_MTP
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = DEFAULT_PROMPT
 tokens_limit = 96
@@ -8015,6 +8176,10 @@ simulate_self_draft_metal_baseline = 0
 simulate_self_draft_gpu_chain = 0
 simulate_self_draft_gpu_state_only = 0
 simulate_self_draft_gpu_chain_overlap = 0
+simulate_mtp_self_draft_fusion = 0
+simulate_mtp_self_draft_fusion_topk = 5
+simulate_mtp_self_draft_fusion_updown_rank : Int32? = nil
+simulate_mtp_self_draft_fusion_updown_layers = [] of Int32
 simulate_self_spec_gpu_pipeline = 0
 simulate_self_spec_gpu_pipeline_gammas = [] of Int32
 simulate_self_spec_gpu_pipeline_schedules = [] of Array(Int32)
@@ -8075,6 +8240,7 @@ add_block_surrogate_suite_prompt = ->(raw : String) {
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
+  p.on("--mtp=PATH", "Qwen3.6 MTP safetensors sidecar path for MTP/self-draft fusion probes") { |v| mtp_path = v }
   p.on("--tokenizer=PATH", "llama-tokenize path") { |v| tokenizer_bin = v }
   p.on("--prompt=TEXT", "Prompt text") { |v| prompt = v }
   p.on("--tokens=N", "Max prompt tokens to use") { |v| tokens_limit = v.to_i }
@@ -8172,6 +8338,10 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-draft-gpu-chain=N", "Queue N low-rank self-draft top1 steps with GPU top1_id -> next embedding and no intermediate CPU readback") { |v| simulate_self_draft_gpu_chain = v.to_i }
   p.on("--simulate-self-draft-gpu-state-only=N", "Queue N known-token low-rank draft state updates without lm-head/top1; lower-bound ablation for draft head/control cost") { |v| simulate_self_draft_gpu_state_only = v.to_i }
   p.on("--simulate-self-draft-gpu-chain-overlap=N", "Run GPU self-draft chain on a lane queue while chunk-major verifier runs on the default queue") { |v| simulate_self_draft_gpu_chain_overlap = v.to_i }
+  p.on("--simulate-mtp-self-draft-fusion=N", "Probe MTP top-K as a verifier-rescue/fusion source over N GPU self-draft steps") { |v| simulate_mtp_self_draft_fusion = v.to_i }
+  p.on("--simulate-mtp-self-draft-fusion-topk=K", "MTP top-K width for --simulate-mtp-self-draft-fusion (default: 5)") { |v| simulate_mtp_self_draft_fusion_topk = v.to_i }
+  p.on("--simulate-mtp-self-draft-fusion-updown=R", "Use resident FFN pca-updown rank R in the self-draft side of the MTP fusion probe") { |v| simulate_mtp_self_draft_fusion_updown_rank = v.to_i }
+  p.on("--simulate-mtp-self-draft-fusion-updown-layers=LIST", "Apply MTP fusion pca-updown only to the listed low-rank recurrent draft layers") { |v| simulate_mtp_self_draft_fusion_updown_layers = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline=N", "Run real fixed-gamma self-spec block pipeline: draft[k+1] on lane queue while verifier validates draft[k]") { |v| simulate_self_spec_gpu_pipeline = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-gammas=LIST", "Run real GPU self-spec pipeline for comma-separated fixed gammas in one model load") { |v| simulate_self_spec_gpu_pipeline_gammas = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-schedule=LIST", "Run real GPU self-spec pipeline with a repeating gamma schedule that resets on reject, e.g. 4,4,8") { |v| simulate_self_spec_gpu_pipeline_schedules << parse_int_list(v) }
@@ -8227,6 +8397,15 @@ raise "ranks must not be empty" if ranks.empty?
 raise "pca-iters must be positive" unless pca_iters > 0
 raise "FFN block size must be positive" unless simulate_ffn_block_size > 0
 raise "FFN block selector percentages must be in 1..100" if simulate_ffn_block_selector_percents.any? { |v| v < 1 || v > 100 }
+if simulate_mtp_self_draft_fusion > 0
+  raise "MTP sidecar not found: #{mtp_path}" unless File.exists?(mtp_path)
+  raise "--simulate-mtp-self-draft-fusion requires --simulate-logits-rank" if simulate_logit_rank.nil?
+  raise "--simulate-mtp-self-draft-fusion requires --simulate-logits-layers" if simulate_logit_layers.empty?
+  raise "--simulate-mtp-self-draft-fusion-topk must be positive" unless simulate_mtp_self_draft_fusion_topk > 0
+  if rank = simulate_mtp_self_draft_fusion_updown_rank
+    raise "--simulate-mtp-self-draft-fusion-updown must be positive" unless rank > 0
+  end
+end
 if !simulate_cost_truth_chunks.empty?
   raise "--simulate-cost-truth-table requires --simulate-logits-rank" if simulate_logit_rank.nil?
   raise "--simulate-cost-truth-table requires --simulate-logits-layers" if simulate_logit_layers.empty?
@@ -8475,6 +8654,9 @@ if rank = simulate_logit_rank
     end
     if pipeline_updown_rank = simulate_self_spec_gpu_pipeline_draft_updown_rank
       ffn_pca_updown_ranks << pipeline_updown_rank
+    end
+    if fusion_updown_rank = simulate_mtp_self_draft_fusion_updown_rank
+      ffn_pca_updown_ranks << fusion_updown_rank
     end
     simulate_self_spec_gpu_pipeline_draft_updown_ranks.each do |pipeline_updown_rank|
       ffn_pca_updown_ranks << pipeline_updown_rank if pipeline_updown_rank > 0
@@ -8733,6 +8915,23 @@ if rank = simulate_logit_rank
     if simulate_self_draft_gpu_chain_overlap > 0
       ov = simulate_self_draft_gpu_chain_overlap_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain_overlap, layer_bases, rank)
       puts "self_draft_gpu_chain_overlap layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{ov[:steps]} draft_alone_ms=#{ov[:draft_alone_ms].round(3)} verifier_ms=#{ov[:verifier_ms].round(3)} overlap_ms=#{ov[:overlap_ms].round(3)} draft_submit_ms=#{ov[:draft_submit_ms].round(3)} draft_wait_ms=#{ov[:draft_wait_ms].round(3)} hidden_ms=#{ov[:hidden_ms].round(3)} speedup=#{ov[:speedup].round(4)} agreement=#{ov[:agreement]}/#{ov[:steps]} draft_ids=#{ov[:draft_ids].join(',')} exact_ids=#{ov[:exact_ids].join(',')} verifier_ids=#{ov[:verifier_ids].join(',')}"
+    end
+    if simulate_mtp_self_draft_fusion > 0
+      mtp = ML::GGUF::Qwen35MTPWeights.from_safetensors(mtp_path)
+      mtp.validate_for_qwen35!(weights.hparams)
+      fusion_updown_layer_set = simulate_mtp_self_draft_fusion_updown_layers.empty? ? nil : Set(Int32).new(simulate_mtp_self_draft_fusion_updown_layers)
+      fusion = simulate_mtp_self_draft_fusion_run(weights, mtp, token_ids, calib_count, simulate_mtp_self_draft_fusion,
+        layer_bases, rank, simulate_mtp_self_draft_fusion_topk, simulate_mtp_self_draft_fusion_updown_rank,
+        ffn_updown_adapters, fusion_updown_layer_set)
+      steps = fusion[:steps]
+      self_first_avg = fusion[:self_first_attempts_total].to_f64 / steps
+      mtp_first_avg = fusion[:mtp_first_attempts_total].to_f64 / steps
+      mtp_extra_hits = fusion[:union_hits] - fusion[:self_hits]
+      updown_note = fusion[:draft_updown_rank] > 0 ? " draft_pca_updown_rank=#{fusion[:draft_updown_rank]} draft_pca_updown_layers=#{simulate_mtp_self_draft_fusion_updown_layers.empty? ? "all" : simulate_mtp_self_draft_fusion_updown_layers.join(',')}" : ""
+      puts "mtp_self_draft_fusion layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_topk=#{fusion[:mtp_topk]} self_hits=#{fusion[:self_hits]} self_rate=#{(100.0 * fusion[:self_hits] / steps).round(2)} mtp_hits=#{fusion[:mtp_hits]} mtp_rate=#{(100.0 * fusion[:mtp_hits] / steps).round(2)} union_hits=#{fusion[:union_hits]} union_rate=#{(100.0 * fusion[:union_hits] / steps).round(2)} mtp_extra_hits=#{mtp_extra_hits} self_only_hits=#{fusion[:additive_hits]} agreement=#{fusion[:agreement]} agreement_hits=#{fusion[:agreement_hits]} agreement_false=#{fusion[:agreement_false]} self_first_attempts=#{fusion[:self_first_attempts_total]} self_first_avg_attempts=#{self_first_avg.round(3)} mtp_first_attempts=#{fusion[:mtp_first_attempts_total]} mtp_first_avg_attempts=#{mtp_first_avg.round(3)} self_chain_ms=#{fusion[:self_chain_ms].round(3)} mtp_ms=#{fusion[:mtp_ms].round(3)} exact_ms=#{fusion[:self_exact_ms].round(3)} self_ids=#{fusion[:self_ids].join(',')} exact_ids=#{fusion[:exact_ids].join(',')}"
+      fusion[:rows].each do |row|
+        puts "mtp_self_draft_fusion_step i=#{row[:index]} exact=#{row[:exact]} self=#{row[:self_id]} mtp_rank=#{row[:mtp_rank]} self_hit=#{row[:self_hit]} mtp_hit=#{row[:mtp_hit]} union_hit=#{row[:union_hit]} agreement=#{row[:agreement]} union_size=#{row[:union_size]} self_first_attempts=#{row[:self_first_attempts]} mtp_first_attempts=#{row[:mtp_first_attempts]}"
+      end
     end
     draft_no_ffn_layer_set = simulate_self_spec_gpu_pipeline_draft_no_ffn_layers.empty? ? nil : Set(Int32).new(simulate_self_spec_gpu_pipeline_draft_no_ffn_layers)
     draft_updown_layer_set = simulate_self_spec_gpu_pipeline_draft_updown_layers.empty? ? nil : Set(Int32).new(simulate_self_spec_gpu_pipeline_draft_updown_layers)
