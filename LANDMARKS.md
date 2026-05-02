@@ -6718,7 +6718,11 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_mtp_teacher_pipeline_k5_20260502.log`
   verified_at: 2026-05-02
   decay_trigger: MTP timing boundaries, exact-hidden oracle route, Metal scheduler overlap behavior, prompt suite, or generated length changes
-**decision:** Do not implement a blind rank-order K8 MTP verifier as the next speed path. The useful next branch is low-K mismatch-only rescue or branch selection/routing: `K=2` has much lower attempt pressure and still covers most exact tokens, while `K=5` is a quality upper bound that needs a selector to avoid wasted rank-order branches. MTP should be treated as a one-step exact-hidden candidate/ranker until a learned hidden bridge or another draft source uses it to avoid replay/branch work.
+- claim: "Raw MTP top1/top2 margin is not a safe standalone confidence router on this suite. `K=5` margin attribution shows hits have higher average margin than misses (`3.700` vs `0.987`), but the distributions overlap (`hit_margin_min=0.580`, `miss_margin_max=5.241`), so a threshold would either reject good tokens or accept bad ones."
+  source: `/tmp/qwen36_mtp_teacher_margin_k5_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: margin definition, topK logits path, prompt suite, generated length, or MTP formula changes
+**decision:** Do not implement a blind rank-order K8 MTP verifier as the next speed path. The useful next branch is low-K mismatch-only rescue or branch selection/routing: `K=2` has much lower attempt pressure and still covers most exact tokens, while `K=5` is a quality upper bound that needs a selector to avoid wasted rank-order branches. MTP should be treated as a one-step exact-hidden candidate/ranker until a learned hidden bridge or another draft source uses it to avoid replay/branch work. Raw MTP margin alone is not that selector; test richer confidence features such as candidate-source agreement, prompt/rank history, verifier-local signals, or a calibrated classifier.
 **quadrumvirate:**
 - cassandra: TopK coverage alone again overstates speed; the repeated failure pattern is branch work hidden behind oracle scoring.
 - daedalus: The frame shifts from "use a wider tree" to "pay almost no branch work unless the verifier already found a mismatch or a router predicts high confidence."

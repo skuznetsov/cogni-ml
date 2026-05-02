@@ -54,6 +54,14 @@ class ChainAggregate
   property full_topk_attempts : Int32
   property mtp_ms_sum : Float64
   property exact_hidden_oracle_ms_sum : Float64
+  property top1_margin_sum : Float64
+  property top1_margin_count : Int32
+  property top1_hit_margin_sum : Float64
+  property top1_hit_margin_count : Int32
+  property top1_miss_margin_sum : Float64
+  property top1_miss_margin_count : Int32
+  property top1_hit_margin_min : Float64?
+  property top1_miss_margin_max : Float64?
   getter rank_hist : Hash(Int32, Int32)
 
   def initialize
@@ -65,6 +73,14 @@ class ChainAggregate
     @full_topk_attempts = 0
     @mtp_ms_sum = 0.0
     @exact_hidden_oracle_ms_sum = 0.0
+    @top1_margin_sum = 0.0
+    @top1_margin_count = 0
+    @top1_hit_margin_sum = 0.0
+    @top1_hit_margin_count = 0
+    @top1_miss_margin_sum = 0.0
+    @top1_miss_margin_count = 0
+    @top1_hit_margin_min = nil
+    @top1_miss_margin_max = nil
     @rank_hist = Hash(Int32, Int32).new(0)
   end
 end
@@ -104,6 +120,10 @@ private def rank_hist_string(hist : Hash(Int32, Int32)) : String
     parts << "#{label}:#{hist[rank]}"
   end
   parts.empty? ? "none" : parts.join(",")
+end
+
+private def fmt3(v : Float64?) : String
+  v.nil? ? "na" : v.round(3).to_s
 end
 
 private def blend_hidden(a : Array(Float32), b : Array(Float32), alpha : Float32) : Array(Float32)
@@ -392,6 +412,14 @@ rows.each do |label, prompt_text|
     chain_first_miss = -1
     chain_rank_hist = Hash(Int32, Int32).new(0)
     chain_rank_order_attempts = 0
+    chain_margin_sum = 0.0_f64
+    chain_margin_count = 0
+    chain_hit_margin_sum = 0.0_f64
+    chain_hit_margin_count = 0
+    chain_miss_margin_sum = 0.0_f64
+    chain_miss_margin_count = 0
+    chain_hit_margin_min = nil.as(Float64?)
+    chain_miss_margin_max = nil.as(Float64?)
     chain_candidates = [] of Int32
 
     mtp_chain_tokens.times do |i|
@@ -419,6 +447,29 @@ rows.each do |label, prompt_text|
       chain_topk_hits += 1 if topk_hit
       chain_first_miss = i if chain_first_miss < 0 && !top1_hit
       chain_candidates << candidate
+
+      if mtp_topk.size >= 2
+        margin = (mtp_topk[0][1] - mtp_topk[1][1]).to_f64
+        chain_margin_sum += margin
+        chain_margin_count += 1
+        if top1_hit
+          chain_hit_margin_sum += margin
+          chain_hit_margin_count += 1
+          chain_hit_margin_min = if min = chain_hit_margin_min
+                                   margin < min ? margin : min
+                                 else
+                                   margin
+                                 end
+        else
+          chain_miss_margin_sum += margin
+          chain_miss_margin_count += 1
+          chain_miss_margin_max = if max = chain_miss_margin_max
+                                    margin > max ? margin : max
+                                  else
+                                    margin
+                                  end
+        end
+      end
 
       if mtp_chain_trace
         puts "mtp_chain_step label=#{label.inspect} mode=#{mode} i=#{i} pos=#{chain_pos} ms=#{step_ms.round(3)} exact=#{exact_id}:#{tokenizer.decode_single(exact_id).inspect} mtp=#{candidate}:#{tokenizer.decode_single(candidate).inspect} top1_hit=#{top1_hit} topk_rank=#{rank}"
@@ -450,6 +501,9 @@ rows.each do |label, prompt_text|
     chain_avg_oracle_attempts = chain_oracle_select_attempts.to_f64 / mtp_chain_tokens
     chain_serial_exact_plus_mtp_ms = exact_hidden_oracle_ms + chain_mtp_ms_sum
     chain_ideal_overlap_ms = exact_hidden_oracle_ms > chain_mtp_ms_sum ? exact_hidden_oracle_ms : chain_mtp_ms_sum
+    chain_margin_avg = chain_margin_count > 0 ? chain_margin_sum / chain_margin_count : nil
+    chain_hit_margin_avg = chain_hit_margin_count > 0 ? chain_hit_margin_sum / chain_hit_margin_count : nil
+    chain_miss_margin_avg = chain_miss_margin_count > 0 ? chain_miss_margin_sum / chain_miss_margin_count : nil
 
     agg = chain_aggregates[mode]
     agg.rows += 1
@@ -461,8 +515,28 @@ rows.each do |label, prompt_text|
     agg.mtp_ms_sum += chain_mtp_ms_sum
     agg.exact_hidden_oracle_ms_sum += exact_hidden_oracle_ms
     chain_rank_hist.each { |rank, count| agg.rank_hist[rank] += count }
+    agg.top1_margin_sum += chain_margin_sum
+    agg.top1_margin_count += chain_margin_count
+    agg.top1_hit_margin_sum += chain_hit_margin_sum
+    agg.top1_hit_margin_count += chain_hit_margin_count
+    agg.top1_miss_margin_sum += chain_miss_margin_sum
+    agg.top1_miss_margin_count += chain_miss_margin_count
+    if min = chain_hit_margin_min
+      agg.top1_hit_margin_min = if agg_min = agg.top1_hit_margin_min
+                                  min < agg_min ? min : agg_min
+                                else
+                                  min
+                                end
+    end
+    if max = chain_miss_margin_max
+      agg.top1_miss_margin_max = if agg_max = agg.top1_miss_margin_max
+                                   max > agg_max ? max : agg_max
+                                 else
+                                   max
+                                 end
+    end
 
-    puts "mtp_chain_summary label=#{label.inspect} mode=#{mode} tokens=#{mtp_chain_tokens} topk=#{mtp_chain_topk} top1_hits=#{chain_top1_hits} top1_rate=#{(chain_top1_hits * 100.0 / mtp_chain_tokens).round(2)} topk_hits=#{chain_topk_hits} topk_rate=#{(chain_topk_hits * 100.0 / mtp_chain_tokens).round(2)} topk_misses=#{chain_topk_misses} first_miss=#{chain_first_miss} rank_hist=#{rank_hist_string(chain_rank_hist)} rank_order_attempts=#{chain_rank_order_attempts} avg_rank_order_attempts=#{chain_avg_rank_attempts.round(3)} rank_order_wasted=#{chain_rank_order_wasted} full_topk_attempts=#{chain_full_topk_attempts} avg_full_topk_attempts=#{chain_avg_full_attempts.round(3)} oracle_select_attempts=#{chain_oracle_select_attempts} avg_oracle_select_attempts=#{chain_avg_oracle_attempts.round(3)} mtp_avg_ms=#{(chain_mtp_ms_sum / chain_ms.size).round(3)} mtp_min=#{sorted_chain_ms.first.round(3)} mtp_p50=#{chain_p50_ms.round(3)} mtp_max=#{sorted_chain_ms.last.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} exact_hidden_oracle_avg_ms=#{(exact_hidden_oracle_ms / mtp_chain_tokens).round(3)} serial_exact_plus_mtp_ms=#{chain_serial_exact_plus_mtp_ms.round(3)} serial_vs_exact=#{(chain_serial_exact_plus_mtp_ms / exact_hidden_oracle_ms).round(3)} ideal_overlap_ms=#{chain_ideal_overlap_ms.round(3)} ideal_overlap_vs_exact=#{(chain_ideal_overlap_ms / exact_hidden_oracle_ms).round(3)} candidate_ids=#{chain_candidates.join(",")} candidate_text=#{chain_text.inspect}"
+    puts "mtp_chain_summary label=#{label.inspect} mode=#{mode} tokens=#{mtp_chain_tokens} topk=#{mtp_chain_topk} top1_hits=#{chain_top1_hits} top1_rate=#{(chain_top1_hits * 100.0 / mtp_chain_tokens).round(2)} topk_hits=#{chain_topk_hits} topk_rate=#{(chain_topk_hits * 100.0 / mtp_chain_tokens).round(2)} topk_misses=#{chain_topk_misses} first_miss=#{chain_first_miss} rank_hist=#{rank_hist_string(chain_rank_hist)} rank_order_attempts=#{chain_rank_order_attempts} avg_rank_order_attempts=#{chain_avg_rank_attempts.round(3)} rank_order_wasted=#{chain_rank_order_wasted} full_topk_attempts=#{chain_full_topk_attempts} avg_full_topk_attempts=#{chain_avg_full_attempts.round(3)} oracle_select_attempts=#{chain_oracle_select_attempts} avg_oracle_select_attempts=#{chain_avg_oracle_attempts.round(3)} top1_margin_avg=#{fmt3(chain_margin_avg)} hit_margin_avg=#{fmt3(chain_hit_margin_avg)} miss_margin_avg=#{fmt3(chain_miss_margin_avg)} hit_margin_min=#{fmt3(chain_hit_margin_min)} miss_margin_max=#{fmt3(chain_miss_margin_max)} mtp_avg_ms=#{(chain_mtp_ms_sum / chain_ms.size).round(3)} mtp_min=#{sorted_chain_ms.first.round(3)} mtp_p50=#{chain_p50_ms.round(3)} mtp_max=#{sorted_chain_ms.last.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} exact_hidden_oracle_avg_ms=#{(exact_hidden_oracle_ms / mtp_chain_tokens).round(3)} serial_exact_plus_mtp_ms=#{chain_serial_exact_plus_mtp_ms.round(3)} serial_vs_exact=#{(chain_serial_exact_plus_mtp_ms / exact_hidden_oracle_ms).round(3)} ideal_overlap_ms=#{chain_ideal_overlap_ms.round(3)} ideal_overlap_vs_exact=#{(chain_ideal_overlap_ms / exact_hidden_oracle_ms).round(3)} candidate_ids=#{chain_candidates.join(",")} candidate_text=#{chain_text.inspect}"
   end
 end
 
@@ -475,5 +549,8 @@ chain_aggregates.keys.sort.each do |mode|
   oracle_select_attempts = agg.topk_hits
   serial_exact_plus_mtp_ms = agg.exact_hidden_oracle_ms_sum + agg.mtp_ms_sum
   ideal_overlap_ms = agg.exact_hidden_oracle_ms_sum > agg.mtp_ms_sum ? agg.exact_hidden_oracle_ms_sum : agg.mtp_ms_sum
-  puts "mtp_chain_suite_summary mode=#{mode} rows=#{agg.rows} tokens=#{agg.tokens} topk=#{mtp_chain_topk} top1_hits=#{agg.top1_hits} top1_rate=#{(agg.top1_hits * 100.0 / agg.tokens).round(2)} topk_hits=#{agg.topk_hits} topk_rate=#{(agg.topk_hits * 100.0 / agg.tokens).round(2)} topk_misses=#{agg.tokens - agg.topk_hits} rank_hist=#{rank_hist_string(agg.rank_hist)} rank_order_attempts=#{agg.rank_order_attempts} avg_rank_order_attempts=#{(agg.rank_order_attempts.to_f64 / agg.tokens).round(3)} rank_order_wasted=#{rank_order_wasted} full_topk_attempts=#{agg.full_topk_attempts} avg_full_topk_attempts=#{(agg.full_topk_attempts.to_f64 / agg.tokens).round(3)} oracle_select_attempts=#{oracle_select_attempts} avg_oracle_select_attempts=#{(oracle_select_attempts.to_f64 / agg.tokens).round(3)} mtp_avg_ms=#{(agg.mtp_ms_sum / agg.tokens).round(3)} mtp_total_ms=#{agg.mtp_ms_sum.round(3)} exact_hidden_oracle_ms=#{agg.exact_hidden_oracle_ms_sum.round(3)} exact_hidden_oracle_avg_ms=#{(agg.exact_hidden_oracle_ms_sum / agg.tokens).round(3)} serial_exact_plus_mtp_ms=#{serial_exact_plus_mtp_ms.round(3)} serial_vs_exact=#{(serial_exact_plus_mtp_ms / agg.exact_hidden_oracle_ms_sum).round(3)} ideal_overlap_ms=#{ideal_overlap_ms.round(3)} ideal_overlap_vs_exact=#{(ideal_overlap_ms / agg.exact_hidden_oracle_ms_sum).round(3)}"
+  margin_avg = agg.top1_margin_count > 0 ? agg.top1_margin_sum / agg.top1_margin_count : nil
+  hit_margin_avg = agg.top1_hit_margin_count > 0 ? agg.top1_hit_margin_sum / agg.top1_hit_margin_count : nil
+  miss_margin_avg = agg.top1_miss_margin_count > 0 ? agg.top1_miss_margin_sum / agg.top1_miss_margin_count : nil
+  puts "mtp_chain_suite_summary mode=#{mode} rows=#{agg.rows} tokens=#{agg.tokens} topk=#{mtp_chain_topk} top1_hits=#{agg.top1_hits} top1_rate=#{(agg.top1_hits * 100.0 / agg.tokens).round(2)} topk_hits=#{agg.topk_hits} topk_rate=#{(agg.topk_hits * 100.0 / agg.tokens).round(2)} topk_misses=#{agg.tokens - agg.topk_hits} rank_hist=#{rank_hist_string(agg.rank_hist)} rank_order_attempts=#{agg.rank_order_attempts} avg_rank_order_attempts=#{(agg.rank_order_attempts.to_f64 / agg.tokens).round(3)} rank_order_wasted=#{rank_order_wasted} full_topk_attempts=#{agg.full_topk_attempts} avg_full_topk_attempts=#{(agg.full_topk_attempts.to_f64 / agg.tokens).round(3)} oracle_select_attempts=#{oracle_select_attempts} avg_oracle_select_attempts=#{(oracle_select_attempts.to_f64 / agg.tokens).round(3)} top1_margin_avg=#{fmt3(margin_avg)} hit_margin_avg=#{fmt3(hit_margin_avg)} miss_margin_avg=#{fmt3(miss_margin_avg)} hit_margin_min=#{fmt3(agg.top1_hit_margin_min)} miss_margin_max=#{fmt3(agg.top1_miss_margin_max)} mtp_avg_ms=#{(agg.mtp_ms_sum / agg.tokens).round(3)} mtp_total_ms=#{agg.mtp_ms_sum.round(3)} exact_hidden_oracle_ms=#{agg.exact_hidden_oracle_ms_sum.round(3)} exact_hidden_oracle_avg_ms=#{(agg.exact_hidden_oracle_ms_sum / agg.tokens).round(3)} serial_exact_plus_mtp_ms=#{serial_exact_plus_mtp_ms.round(3)} serial_vs_exact=#{(serial_exact_plus_mtp_ms / agg.exact_hidden_oracle_ms_sum).round(3)} ideal_overlap_ms=#{ideal_overlap_ms.round(3)} ideal_overlap_vs_exact=#{(ideal_overlap_ms / agg.exact_hidden_oracle_ms_sum).round(3)}"
 end
