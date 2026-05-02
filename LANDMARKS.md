@@ -6828,3 +6828,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful hybrid is not "combine drafters" but "pay auxiliary candidate source only when primary self-draft already failed or looks risky."
 - maieutic: These are exact-position oracle accounting rows, not a resyncing wall-clock runtime. A real implementation must regenerate self proposals after boundary resync and measure plain wall speed.
 - adversary: Generality is low: three prompts, `gen16`, one stressed route, no long `gen64`, and stopped pca-updown run. Require a real pipeline A/B before default policy promotion.
+
+### [LM-QWEN36-MTP-SELF-TOP2-UNION-1] MTP K2 adds real rescue beyond self-draft top2 only on stressed spans
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (Qwen3.6 MTP + same-weight self-draft candidate routing)
+**evidence:**
+- claim: "`bin/qwen35_deltanet_fixed_basis_probe.cr` now compares existing self-draft top2 against MTP top2/topK inside the MTP/self-draft fusion oracle. `simulate_self_draft_gpu_chain_run(..., capture_top2: true)` records draft second choices without changing normal top1 callers, and `mtp_self_draft_candidate_union` reports `self_top2_hits`, `mtp_k2_hits`, `union_k2_hits`, `union_topk_hits`, MTP-only rescue beyond self-top2, and self-top2-only hits."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_union_build2 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_deltanet_fixed_basis_probe_mtp_union2 --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_union_spec2 crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`), on 2026-05-02
+  verified_at: 2026-05-02
+  decay_trigger: fusion probe schema, self-draft top2 head path, MTP topK path, or verifier-routing semantics changes
+- claim: "A 27B rank8/early6 `gen16/K2` three-prompt gate was too easy for the route: default, reason, and code all had self top1/top2 `16/16`, so `mtp_extra_over_self_top2=0`. This is another falsifier for always-on MTP on easy spans."
+  source: `/tmp/qwen36_mtp_self_union_rank8_early6_k2_gen16_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer/rank route, generated length, MTP topK, model/quant, or self-draft route changes
+- claim: "A harder 27B code prompt at rank8/early6 `gen32/K2` produced the desired incremental signal: self top1 hit `23/32`, self top2 hit `24/32`, MTP K2 hit `21/32`, and `self_top2 union MTP K2` hit `29/32`. MTP contributed `5` rescues not already covered by self-top2, while self-top2 contributed `8` hits not covered by MTP K2."
+  source: `/tmp/qwen36_mtp_self_union_stress_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer/rank route, generated length, MTP topK, model/quant, or self-draft route changes
+- claim: "On the same harder code prompt with `K=5`, full MTP topK added only one extra rescue beyond K2 over self-top2 (`mtp_extra_over_self_top2_topk=6` vs K2 `5`) while increasing self-first attempt pressure (`1.406 -> 1.719`). K2 remains the first real implementation width; K5 should be conditional on evidence that K2 misses matter for a wider suite."
+  source: `/tmp/qwen36_mtp_self_union_code_k5_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer/rank route, generated length, MTP topK, model/quant, or verifier attempt model changes
+**decision:** The next hybrid implementation should not run MTP eagerly and should not duplicate work already covered by self top2. Build the real route as `self top1/top2 first -> exact verifier/risk signal -> MTP K2 rescue only on miss/risk`, then measure replay/resync wall cost against the existing top2 tree path. K5 remains a later fallback if a prompt suite shows K2-specific unresolved misses.
+**quadrumvirate:**
+- cassandra: The easy-span trap is real: candidate union can look better in aggregate while MTP adds zero over self top2. The stressed code span is the first positive incremental case.
+- daedalus: The useful frame is not "more candidates" but "non-overlapping candidates per unit of verifier pressure."
+- maieutic: This is oracle accounting at exact positions; it does not yet prove wall speed or a resyncing runtime.
+- adversary: Generality is still low: four focused cases plus one K5 stress rerun, no `gen64`, and no real pipeline. Treat the landmark as routing guidance, not a speed claim.
