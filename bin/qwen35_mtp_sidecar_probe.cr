@@ -22,9 +22,32 @@ top1_only = false
 max_seq = 128_i32
 mtp_warmup = 0_i32
 mtp_repeats = 1_i32
+mtp_chain_tokens = 0_i32
+mtp_chain_topk = 1_i32
+mtp_chain_mode = "teacher"
+mtp_chain_trace = false
 
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
+end
+
+private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k)
+  start = Time.instant
+  hidden = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos)
+  topk = if k == 1
+           [ML::GGUF::Qwen35MTP.hidden_top1(weights, hidden)]
+         else
+           logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, hidden)
+           ML::GGUF::Qwen35MTP.top_k(logits, k)
+         end
+  {hidden, topk, elapsed_ms(start)}
+end
+
+private def rank_in_topk(topk : Array({Int32, Float32}), target : Int32) : Int32
+  topk.each_with_index do |(id, _), i|
+    return i + 1 if id == target
+  end
+  0
 end
 
 OptionParser.parse do |p|
@@ -43,6 +66,10 @@ OptionParser.parse do |p|
   p.on("--top1-only", "Run the MTP greedy top1 path without full-logits/top5 readback") { top1_only = true }
   p.on("--mtp-warmup N", "Untimed MTP warmup calls after prompt prefill") { |v| mtp_warmup = v.to_i32 }
   p.on("--mtp-repeats N", "Timed MTP repeats after warmup") { |v| mtp_repeats = v.to_i32 }
+  p.on("--mtp-chain-tokens N", "Run an exact-sequence MTP chain quality probe for N future tokens") { |v| mtp_chain_tokens = v.to_i32 }
+  p.on("--mtp-chain-topk K", "MTP chain top-K coverage to measure; K=1 uses fast top1 head") { |v| mtp_chain_topk = v.to_i32 }
+  p.on("--mtp-chain-mode MODE", "MTP chain mode: teacher, recursive, or both") { |v| mtp_chain_mode = v }
+  p.on("--mtp-chain-trace", "Print every MTP chain step") { mtp_chain_trace = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -70,6 +97,18 @@ exit unless run_forward
 abort "llama-tokenize not found: #{llama_tokenize}" unless File.exists?(llama_tokenize)
 abort "--mtp-warmup must be non-negative" if mtp_warmup < 0
 abort "--mtp-repeats must be positive" if mtp_repeats <= 0
+abort "--mtp-chain-tokens must be non-negative" if mtp_chain_tokens < 0
+abort "--mtp-chain-topk must be positive" if mtp_chain_topk <= 0
+chain_modes = case mtp_chain_mode
+              when "teacher"
+                ["teacher"]
+              when "recursive"
+                ["recursive"]
+              when "both"
+                ["teacher", "recursive"]
+              else
+                abort "--mtp-chain-mode must be teacher, recursive, or both"
+              end
 
 load_start = Time.instant
 weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
@@ -87,7 +126,8 @@ timed_ms = 0.0_f64
 rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
   abort "prompt #{label.inspect} encoded to no tokens" if token_ids.empty?
-  abort "prompt #{label.inspect} length #{token_ids.size} exceeds max_seq #{max_seq}" if token_ids.size + 2 > max_seq
+  needed_seq = token_ids.size + (mtp_chain_tokens > 0 ? mtp_chain_tokens + 1 : 2)
+  abort "prompt #{label.inspect} needs max_seq >= #{needed_seq}, got #{max_seq}" if needed_seq > max_seq
 
   state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams)
@@ -161,6 +201,69 @@ rows.each do |label, prompt_text|
   sorted_ms = row_ms.sort
   p50_ms = sorted_ms[sorted_ms.size // 2]
   puts "timing_ms label=#{label.inspect} prefill=#{prefill_ms.round(3)} exact_verify=#{verify_ms.round(3)} mtp_#{mtp_backend}#{top1_only ? "_top1" : ""}_avg=#{avg_ms.round(3)} min=#{sorted_ms.first.round(3)} p50=#{p50_ms.round(3)} max=#{sorted_ms.last.round(3)} repeats=#{mtp_repeats} warmup=#{mtp_warmup}"
+
+  next unless mtp_chain_tokens > 0
+
+  exact_state = state.fork
+  exact_hiddens = [] of Array(Float32)
+  exact_nexts = [] of {Int32, Float32}
+  exact_prev = y1
+  exact_pos = token_ids.size
+  exact_chain_start = Time.instant
+  mtp_chain_tokens.times do
+    exact_hidden = ML::GGUF::Qwen35CPU.forward_hidden(weights, exact_prev, exact_pos, exact_state)
+    exact_next, exact_logit = ML::GGUF::Qwen35CPU.hidden_top1(weights, exact_hidden)
+    exact_hiddens << exact_hidden
+    exact_nexts << {exact_next, exact_logit}
+    exact_prev = exact_next
+    exact_pos += 1
+  end
+  exact_hidden_oracle_ms = elapsed_ms(exact_chain_start)
+  exact_text = exact_nexts.map { |id, _| tokenizer.decode_single(id) }.join
+  puts "mtp_chain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} start_y1=#{y1} exact_ids=#{exact_nexts.map(&.[0]).join(",")} exact_text=#{exact_text.inspect} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)}"
+
+  chain_modes.each do |mode|
+    chain_prev_hidden = hidden
+    chain_prev_token = y1
+    chain_pos = token_ids.size
+    chain_ms = [] of Float64
+    chain_top1_hits = 0
+    chain_topk_hits = 0
+    chain_first_miss = -1
+    chain_candidates = [] of Int32
+
+    mtp_chain_tokens.times do |i|
+      mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk)
+      chain_ms << step_ms
+      candidate = mtp_topk[0][0]
+      exact_id = exact_nexts[i][0]
+      rank = rank_in_topk(mtp_topk, exact_id)
+      top1_hit = candidate == exact_id
+      topk_hit = rank > 0
+      chain_top1_hits += 1 if top1_hit
+      chain_topk_hits += 1 if topk_hit
+      chain_first_miss = i if chain_first_miss < 0 && !top1_hit
+      chain_candidates << candidate
+
+      if mtp_chain_trace
+        puts "mtp_chain_step label=#{label.inspect} mode=#{mode} i=#{i} pos=#{chain_pos} ms=#{step_ms.round(3)} exact=#{exact_id}:#{tokenizer.decode_single(exact_id).inspect} mtp=#{candidate}:#{tokenizer.decode_single(candidate).inspect} top1_hit=#{top1_hit} topk_rank=#{rank}"
+      end
+
+      if mode == "teacher"
+        chain_prev_hidden = exact_hiddens[i]
+        chain_prev_token = exact_id
+      else
+        chain_prev_hidden = mtp_hidden
+        chain_prev_token = candidate
+      end
+      chain_pos += 1
+    end
+
+    sorted_chain_ms = chain_ms.sort
+    chain_p50_ms = sorted_chain_ms[sorted_chain_ms.size // 2]
+    chain_text = chain_candidates.map { |id| tokenizer.decode_single(id) }.join
+    puts "mtp_chain_summary label=#{label.inspect} mode=#{mode} tokens=#{mtp_chain_tokens} topk=#{mtp_chain_topk} top1_hits=#{chain_top1_hits} top1_rate=#{(chain_top1_hits * 100.0 / mtp_chain_tokens).round(2)} topk_hits=#{chain_topk_hits} topk_rate=#{(chain_topk_hits * 100.0 / mtp_chain_tokens).round(2)} first_miss=#{chain_first_miss} mtp_avg_ms=#{(chain_ms.sum / chain_ms.size).round(3)} mtp_min=#{sorted_chain_ms.first.round(3)} mtp_p50=#{chain_p50_ms.round(3)} mtp_max=#{sorted_chain_ms.last.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} candidate_ids=#{chain_candidates.join(",")} candidate_text=#{chain_text.inspect}"
+  end
 end
 
 puts "mtp_suite_summary rows=#{total_rows} top1_hits=#{top1_hits} top1_rate=#{(top1_hits * 100.0 / total_rows).round(2)} top5_or_top1_hits=#{top5_hits} top5_or_top1_rate=#{(top5_hits * 100.0 / total_rows).round(2)} timed_calls=#{timed_calls} avg_mtp_ms=#{(timed_ms / timed_calls).round(3)} backend=#{mtp_backend} top1_only=#{top1_only}"

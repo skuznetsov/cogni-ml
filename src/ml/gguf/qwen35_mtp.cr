@@ -407,6 +407,22 @@ module ML::GGUF
       Qwen35CPU.qmatvec_nobias(weights.output, hidden)
     end
 
+    # Project an already MTP-normalized hidden through the shared output head.
+    # Unlike target hidden projection, MTP hidden has already passed `mtp.norm`,
+    # so applying the target output RMSNorm here would double-normalize it.
+    def hidden_top1(weights : Qwen35Weights, hidden : Array(Float32)) : {Int32, Float32}
+      {% if flag?(:qwen35_mtp_metal) %}
+        if ENV["QWEN35_MTP_TOP1_METAL_OFF"]? != "1" && Qwen35Metal.available?
+          if top1 = Qwen35Metal.project_top1_no_norm(weights.output, hidden)
+            return {top1[0].to_i32, top1[1]}
+          end
+        end
+      {% end %}
+
+      logits = Qwen35CPU.qmatvec_nobias(weights.output, hidden)
+      top_k(logits, 1)[0]
+    end
+
     def top_k(logits : Array(Float32), k : Int32) : Array({Int32, Float32})
       raise ArgumentError.new("top_k must be positive") unless k > 0
       best = [] of {Int32, Float32}
@@ -430,15 +446,7 @@ module ML::GGUF
                          token_id : Int32,
                          pos : Int32) : {Int32, Float32}
       hidden = forward_one_hidden(weights, mtp, prev_hidden, token_id, pos)
-      {% if flag?(:qwen35_mtp_metal) %}
-        if ENV["QWEN35_MTP_TOP1_METAL_OFF"]? != "1" && Qwen35Metal.available?
-          if top1 = Qwen35Metal.project_top1_no_norm(weights.output, hidden)
-            return {top1[0].to_i32, top1[1]}
-          end
-        end
-      {% end %}
-      logits = Qwen35CPU.qmatvec_nobias(weights.output, hidden)
-      top_k(logits, 1)[0]
+      hidden_top1(weights, hidden)
     end
   end
 end

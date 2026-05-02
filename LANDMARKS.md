@@ -6656,3 +6656,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The optimization frame shifts from single-call kernel speed to candidate-source economics: proposal cost, acceptance/topK rank, and replay tax.
 - maieutic: First-step top5 coverage does not prove multi-token acceptance. It only proves the trained MTP head often ranks the exact next token nearby.
 - adversary: Generality is still low: four short prompts, one token ahead, and no end-to-end speculative loop. Require gen32-64 parity/speedup before claiming user-visible decode acceleration.
+
+### [LM-QWEN36-MTP-CHAIN-FALSIFIER-1] Recursive MTP chaining drifts; exact-hidden MTP topK remains useful
+**status:** verified
+**trust:** {F:0.82, G:low, R:0.82}
+**context:** ml (Qwen3.6 native MTP / exact speculative decode)
+**evidence:**
+- claim: "`bin/qwen35_mtp_sidecar_probe.cr` now has a multi-token chain quality probe: `--mtp-chain-tokens N`, `--mtp-chain-mode teacher|recursive|both`, `--mtp-chain-topk K`, and optional `--mtp-chain-trace`. The exact comparison sequence uses `forward_hidden` intentionally as an oracle, so `exact_hidden_oracle_ms` is not a hot decode speed metric."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_chain_spec crystal spec spec/qwen35_mtp_spec.cr` (`7 examples, 0 failures`); `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_chain_build crystal build bin/qwen35_mtp_sidecar_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_mtp_sidecar_probe_metal --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen36_mtp_chain_label_smoke_20260501.log`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: MTP chain probe semantics, exact hidden helper, timing labels, or target hidden projection changes
+- claim: "On 27B France with `gen8/top5`, teacher-forced MTP over exact target hiddens gets `5/8` top1 and `7/8` top5 hits, but recursive MTP chaining gets only `1/8` top1 and `2/8` top5 hits. The recursive output quickly drifts into special/chat tokens."
+  source: `/tmp/qwen36_mtp_chain_france_top5_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt text, generated length, MTP chain mode, topK, tokenizer/model, or MTP formula changes
+- claim: "On a 4-prompt 27B `gen8/top5` suite (`france`, `code`, `story`, `json`), teacher-forced MTP totals `20/32` top1 and `29/32` top5 hits, while recursive MTP totals only `3/32` top1 and `8/32` top5 hits. Code is the teacher-forced positive case (`8/8` top1/top5), but story/JSON still need topK rescue from the first step."
+  source: `/tmp/qwen36_mtp_chain_suite_top5_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: prompt suite, model/quant, chain mode, topK, generated length, or exact target sequence changes
+**decision:** Do not build the next speed path around naive recursive MTP gamma>1. Built-in Qwen3.6 MTP is valuable as a one-step exact-hidden candidate source and topK/reranking signal, but using MTP hidden as a replacement for the next exact target hidden is unstable. The next plausible branches are (1) exact verifier loop with topK/tree rescue and measured replay tax, (2) a learned or linear hidden predictor/corrector that maps MTP hidden toward target hidden, and (3) MTP-body simplification only after the verifier economics justify it.
+**quadrumvirate:**
+- cassandra: The trained MTP head stays close when anchored to exact target hidden, but free-running hidden distribution drift is immediate and prompt-sensitive.
+- daedalus: The frame shifts from "MTP as a draft model" to "MTP as a one-step proposal/ranker unless we add a hidden-state bridge."
+- maieutic: A high teacher-forced top5 rate is not enough for speed because exact hidden availability is downstream of target verification.
+- adversary: This is still a short 4-prompt/gen8 suite. It refutes the naive recursive branch for now, but a hidden predictor, per-prompt router, or official multi-MTP-layer model could change the result.
