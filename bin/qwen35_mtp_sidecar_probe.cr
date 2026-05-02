@@ -45,6 +45,30 @@ struct DiagBridge
   end
 end
 
+class ChainAggregate
+  property rows : Int32
+  property tokens : Int32
+  property top1_hits : Int32
+  property topk_hits : Int32
+  property rank_order_attempts : Int32
+  property full_topk_attempts : Int32
+  property mtp_ms_sum : Float64
+  property exact_hidden_oracle_ms_sum : Float64
+  getter rank_hist : Hash(Int32, Int32)
+
+  def initialize
+    @rows = 0
+    @tokens = 0
+    @top1_hits = 0
+    @topk_hits = 0
+    @rank_order_attempts = 0
+    @full_topk_attempts = 0
+    @mtp_ms_sum = 0.0
+    @exact_hidden_oracle_ms_sum = 0.0
+    @rank_hist = Hash(Int32, Int32).new(0)
+  end
+end
+
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
 end
@@ -71,6 +95,15 @@ private def rank_in_topk(topk : Array({Int32, Float32}), target : Int32) : Int32
     return i + 1 if id == target
   end
   0
+end
+
+private def rank_hist_string(hist : Hash(Int32, Int32)) : String
+  parts = [] of String
+  hist.keys.sort.each do |rank|
+    label = rank == 0 ? "miss" : rank.to_s
+    parts << "#{label}:#{hist[rank]}"
+  end
+  parts.empty? ? "none" : parts.join(",")
 end
 
 private def blend_hidden(a : Array(Float32), b : Array(Float32), alpha : Float32) : Array(Float32)
@@ -234,6 +267,7 @@ top1_hits = 0
 top5_hits = 0
 timed_calls = 0
 timed_ms = 0.0_f64
+chain_aggregates = Hash(String, ChainAggregate).new { |hash, key| hash[key] = ChainAggregate.new }
 
 rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
@@ -356,6 +390,8 @@ rows.each do |label, prompt_text|
     chain_top1_hits = 0
     chain_topk_hits = 0
     chain_first_miss = -1
+    chain_rank_hist = Hash(Int32, Int32).new(0)
+    chain_rank_order_attempts = 0
     chain_candidates = [] of Int32
 
     mtp_chain_tokens.times do |i|
@@ -377,6 +413,8 @@ rows.each do |label, prompt_text|
       rank = rank_in_topk(mtp_topk, exact_id)
       top1_hit = candidate == exact_id
       topk_hit = rank > 0
+      chain_rank_hist[rank] += 1
+      chain_rank_order_attempts += topk_hit ? rank : mtp_chain_topk
       chain_top1_hits += 1 if top1_hit
       chain_topk_hits += 1 if topk_hit
       chain_first_miss = i if chain_first_miss < 0 && !top1_hit
@@ -402,8 +440,36 @@ rows.each do |label, prompt_text|
     sorted_chain_ms = chain_ms.sort
     chain_p50_ms = sorted_chain_ms[sorted_chain_ms.size // 2]
     chain_text = chain_candidates.map { |id| tokenizer.decode_single(id) }.join
-    puts "mtp_chain_summary label=#{label.inspect} mode=#{mode} tokens=#{mtp_chain_tokens} topk=#{mtp_chain_topk} top1_hits=#{chain_top1_hits} top1_rate=#{(chain_top1_hits * 100.0 / mtp_chain_tokens).round(2)} topk_hits=#{chain_topk_hits} topk_rate=#{(chain_topk_hits * 100.0 / mtp_chain_tokens).round(2)} first_miss=#{chain_first_miss} mtp_avg_ms=#{(chain_ms.sum / chain_ms.size).round(3)} mtp_min=#{sorted_chain_ms.first.round(3)} mtp_p50=#{chain_p50_ms.round(3)} mtp_max=#{sorted_chain_ms.last.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} candidate_ids=#{chain_candidates.join(",")} candidate_text=#{chain_text.inspect}"
+    chain_mtp_ms_sum = chain_ms.sum
+    chain_topk_misses = mtp_chain_tokens - chain_topk_hits
+    chain_full_topk_attempts = mtp_chain_tokens * mtp_chain_topk
+    chain_rank_order_wasted = chain_rank_order_attempts - chain_topk_hits
+    chain_oracle_select_attempts = chain_topk_hits
+    chain_avg_rank_attempts = chain_rank_order_attempts.to_f64 / mtp_chain_tokens
+    chain_avg_full_attempts = chain_full_topk_attempts.to_f64 / mtp_chain_tokens
+    chain_avg_oracle_attempts = chain_oracle_select_attempts.to_f64 / mtp_chain_tokens
+
+    agg = chain_aggregates[mode]
+    agg.rows += 1
+    agg.tokens += mtp_chain_tokens
+    agg.top1_hits += chain_top1_hits
+    agg.topk_hits += chain_topk_hits
+    agg.rank_order_attempts += chain_rank_order_attempts
+    agg.full_topk_attempts += chain_full_topk_attempts
+    agg.mtp_ms_sum += chain_mtp_ms_sum
+    agg.exact_hidden_oracle_ms_sum += exact_hidden_oracle_ms
+    chain_rank_hist.each { |rank, count| agg.rank_hist[rank] += count }
+
+    puts "mtp_chain_summary label=#{label.inspect} mode=#{mode} tokens=#{mtp_chain_tokens} topk=#{mtp_chain_topk} top1_hits=#{chain_top1_hits} top1_rate=#{(chain_top1_hits * 100.0 / mtp_chain_tokens).round(2)} topk_hits=#{chain_topk_hits} topk_rate=#{(chain_topk_hits * 100.0 / mtp_chain_tokens).round(2)} topk_misses=#{chain_topk_misses} first_miss=#{chain_first_miss} rank_hist=#{rank_hist_string(chain_rank_hist)} rank_order_attempts=#{chain_rank_order_attempts} avg_rank_order_attempts=#{chain_avg_rank_attempts.round(3)} rank_order_wasted=#{chain_rank_order_wasted} full_topk_attempts=#{chain_full_topk_attempts} avg_full_topk_attempts=#{chain_avg_full_attempts.round(3)} oracle_select_attempts=#{chain_oracle_select_attempts} avg_oracle_select_attempts=#{chain_avg_oracle_attempts.round(3)} mtp_avg_ms=#{(chain_mtp_ms_sum / chain_ms.size).round(3)} mtp_min=#{sorted_chain_ms.first.round(3)} mtp_p50=#{chain_p50_ms.round(3)} mtp_max=#{sorted_chain_ms.last.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} candidate_ids=#{chain_candidates.join(",")} candidate_text=#{chain_text.inspect}"
   end
 end
 
 puts "mtp_suite_summary rows=#{total_rows} top1_hits=#{top1_hits} top1_rate=#{(top1_hits * 100.0 / total_rows).round(2)} top5_or_top1_hits=#{top5_hits} top5_or_top1_rate=#{(top5_hits * 100.0 / total_rows).round(2)} timed_calls=#{timed_calls} avg_mtp_ms=#{(timed_ms / timed_calls).round(3)} backend=#{mtp_backend} top1_only=#{top1_only}"
+chain_aggregates.keys.sort.each do |mode|
+  agg = chain_aggregates[mode]
+  next if agg.tokens == 0
+
+  rank_order_wasted = agg.rank_order_attempts - agg.topk_hits
+  oracle_select_attempts = agg.topk_hits
+  puts "mtp_chain_suite_summary mode=#{mode} rows=#{agg.rows} tokens=#{agg.tokens} topk=#{mtp_chain_topk} top1_hits=#{agg.top1_hits} top1_rate=#{(agg.top1_hits * 100.0 / agg.tokens).round(2)} topk_hits=#{agg.topk_hits} topk_rate=#{(agg.topk_hits * 100.0 / agg.tokens).round(2)} topk_misses=#{agg.tokens - agg.topk_hits} rank_hist=#{rank_hist_string(agg.rank_hist)} rank_order_attempts=#{agg.rank_order_attempts} avg_rank_order_attempts=#{(agg.rank_order_attempts.to_f64 / agg.tokens).round(3)} rank_order_wasted=#{rank_order_wasted} full_topk_attempts=#{agg.full_topk_attempts} avg_full_topk_attempts=#{(agg.full_topk_attempts.to_f64 / agg.tokens).round(3)} oracle_select_attempts=#{oracle_select_attempts} avg_oracle_select_attempts=#{(oracle_select_attempts.to_f64 / agg.tokens).round(3)} mtp_avg_ms=#{(agg.mtp_ms_sum / agg.tokens).round(3)} exact_hidden_oracle_ms=#{agg.exact_hidden_oracle_ms_sum.round(3)}"
+end

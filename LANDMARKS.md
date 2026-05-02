@@ -6696,3 +6696,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "MTP as a draft model" to "MTP as a one-step proposal/ranker unless we add a hidden-state bridge."
 - maieutic: A high teacher-forced top5 rate is not enough for speed because exact hidden availability is downstream of target verification.
 - adversary: This is still a short 4-prompt/gen8 suite. It refutes the naive recursive branch for now, but a hidden predictor, per-prompt router, or official multi-MTP-layer model could change the result.
+
+### [LM-QWEN36-MTP-BRANCH-COST-1] MTP topK quality is real, but blind rank-order branch verification is too costly
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.83}
+**context:** ml (Qwen3.6 native MTP / exact speculative decode)
+**evidence:**
+- claim: "`bin/qwen35_mtp_sidecar_probe.cr` now attributes MTP chain branch economics. Per-row and suite summaries report rank histograms, topK misses, rank-order attempts/waste, full-topK attempts, and oracle-select lower-bound attempts, so topK coverage cannot be mistaken for speed."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_branch_spec crystal spec spec/qwen35_mtp_spec.cr` (`7 examples, 0 failures`); `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_branch_build crystal build bin/qwen35_mtp_sidecar_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_mtp_sidecar_probe_metal --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`, on 2026-05-02
+  verified_at: 2026-05-02
+  decay_trigger: MTP chain summary schema, branch-cost accounting, topK extraction, or verifier-loop semantics changes
+- claim: "On the 4-prompt 27B teacher-forced `gen8` suite, `K=2` covers `26/32` exact tokens (`81.25%`) with `44` rank-order attempts (`1.375/token`), while `K=5` covers `29/32` (`90.62%`) but raises pressure to `57` attempts (`1.781/token`)."
+  source: `/tmp/qwen36_mtp_teacher_branch_cost_k2_20260502.log`; `/tmp/qwen36_mtp_teacher_branch_cost_k5_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, generated length, topK, model/quant, MTP formula, or timing/accounting changes
+- claim: "Widening to `K=8` is not a clean speed route on this suite: coverage only improves from `29/32` to `30/32`, while rank-order attempts rise from `57` to `65` (`2.031/token`) and full-topK branch pressure becomes `256` attempts for `32` tokens."
+  source: `/tmp/qwen36_mtp_teacher_branch_cost_k8_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, generated length, topK, model/quant, MTP formula, or branch-verifier implementation changes
+**decision:** Do not implement a blind rank-order K8 MTP verifier as the next speed path. The useful next branch is low-K mismatch-only rescue or branch selection/routing: `K=2` has much lower attempt pressure and still covers most exact tokens, while `K=5` is a quality upper bound that needs a selector to avoid wasted rank-order branches. MTP should be treated as a one-step exact-hidden candidate/ranker until a learned hidden bridge or real verifier loop proves end-to-end speed.
+**quadrumvirate:**
+- cassandra: TopK coverage alone again overstates speed; the repeated failure pattern is branch work hidden behind oracle scoring.
+- daedalus: The frame shifts from "use a wider tree" to "pay almost no branch work unless the verifier already found a mismatch or a router predicts high confidence."
+- maieutic: Exact hidden availability is still downstream of the target verifier. Branch-cost accounting is only a verifier-economics probe, not a decode speed claim.
+- adversary: Generality remains low: four prompts, `gen8`, teacher-forced exact hiddens. Require `gen32-64` and wall-clock parity/speedup before promoting policy defaults.
