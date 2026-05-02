@@ -6884,7 +6884,13 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   decay_trigger: prompt suite, layer/rank route, generated length, MTP topK, model/quant, or self-draft route changes
 **decision:** Implement the next wall-clock experiment as `self top2 first, MTP K2 only on unresolved self-top2 miss/risk`. The branch should enter the actual pipeline controller only after preserving exact parity and measuring whether reduced unresolved misses compensate for MTP call latency and resync/replay work. Do not default to K5 unless a broader suite shows K2-specific unresolved misses dominate.
 **quadrumvirate:**
-- cassandra: Sparse invocation avoids the repeated always-on MTP cost trap; the risk is that oracle attempts understate real resync/controller overhead.
+- claim: "Real GPU pipeline checks show the held-out route-pressure chain overstates MTP need because it does not resync after the first correction. With the full code prompt, the real pipeline accepted `32/32` even at rank4/no-FFN stress. With an apples-to-apples `tokens=49/calib=48` boundary, baseline had one rejection, while `tree2_first` rescued it with draft second (`tree2_first_rescues=1`, misses `0`) and improved wall (`overlap_ms 4263.470 -> 3693.294`) by avoiding replay; `tree2_anywhere` was slower (`4463.879`) because serial verifier work dominated."
+  source: `/tmp/qwen36_pipeline_tree2_code_gen32_20260502.log`; `/tmp/qwen36_pipeline_tree2_code_rank4_gen32_20260502.log`; `/tmp/qwen36_pipeline_noffn_tree2_code_gen32_rerun_20260502.log`; `/tmp/qwen36_pipeline_boundary_code_t49_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: pipeline controller, prompt boundary, layer/rank route, tree2 route, MTP route, or verifier timing changes
+**decision_update:** Do not wire MTP after mismatch yet. In the current real resyncing pipeline, `tree2_first` is the practical near-term lever and MTP K2 should be reserved for a demonstrated real-pipeline self-top2 miss/risk case. The next implementation should tune/promote opt-in `tree2_first`/risk-boundary accounting before adding MTP controller complexity.
+**quadrumvirate_update:**
+- cassandra: Sparse invocation avoids the repeated always-on MTP cost trap, but the stronger risk is that oracle attempts understate real resync/controller recovery. That risk materialized: one correction can reset later misses away.
 - daedalus: The next frame shift is from candidate-quality accounting to stateful controller economics: copy/replay/resync must be charged where the policy branches.
 - maieutic: This is still exact-position route accounting, not a production pipeline. It answers branch pressure, not final wall speed.
 - adversary: Generality is low: one easy negative and one stressed positive prompt. Require prompt suite plus real pipeline `plain_speedup` before claiming performance.
