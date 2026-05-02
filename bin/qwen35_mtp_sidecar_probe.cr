@@ -8,8 +8,8 @@ require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
-DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf"
-DEFAULT_MTP   = "#{ENV["HOME"]}/.cache/cogni-ml/qwen36_mtp/Qwen3.6-27B-mtp.safetensors"
+DEFAULT_MODEL          = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf"
+DEFAULT_MTP            = "#{ENV["HOME"]}/.cache/cogni-ml/qwen36_mtp/Qwen3.6-27B-mtp.safetensors"
 DEFAULT_LLAMA_TOKENIZE = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 
 model_path = DEFAULT_MODEL
@@ -84,6 +84,7 @@ mtp_logits = ML::GGUF::Qwen35MTP.forward_one_logits(weights, mtp, hidden, y1, to
 mtp_top5 = ML::GGUF::Qwen35MTP.top_k(mtp_logits, 5)
 mtp_y2, mtp_y2_logit = mtp_top5[0]
 mtp_ms = elapsed_ms(mtp_start)
+mtp_backend = ML::GGUF::Qwen35MTP.bf16_backend_label
 
 puts "forward_smoke prompt_tokens=#{token_ids.size} max_seq=#{max_seq}"
 puts "prompt=#{prompt.inspect}"
@@ -94,4 +95,4 @@ puts "mtp_y2=#{mtp_y2} text=#{tokenizer.decode_single(mtp_y2).inspect} logit=#{m
 puts "accepted=#{mtp_y2 == exact_y2}"
 puts "exact_in_mtp_top5=#{mtp_top5.any? { |id, _| id == exact_y2 }}"
 puts "mtp_top5=#{mtp_top5.map { |id, logit| "#{id}:#{tokenizer.decode_single(id).inspect}:#{logit}" }.join(" | ")}"
-puts "timing_ms prefill=#{prefill_ms.round(3)} exact_verify=#{verify_ms.round(3)} mtp_cpu_bf16=#{mtp_ms.round(3)}"
+puts "timing_ms prefill=#{prefill_ms.round(3)} exact_verify=#{verify_ms.round(3)} mtp_#{mtp_backend}=#{mtp_ms.round(3)}"

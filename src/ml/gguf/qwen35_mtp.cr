@@ -74,6 +74,10 @@ module ML::GGUF
       @norm = load_vector("mtp.norm.weight")
       @pre_fc_norm_embedding = load_vector("mtp.pre_fc_norm_embedding.weight")
       @pre_fc_norm_hidden = load_vector("mtp.pre_fc_norm_hidden.weight")
+
+      {% if flag?(:qwen35_mtp_metal) %}
+        Qwen35Metal.clear_bf16_weight_cache
+      {% end %}
     end
 
     def self.from_safetensors(path : String) : Qwen35MTPWeights
@@ -136,16 +140,42 @@ module ML::GGUF
   module Qwen35MTP
     extend self
 
+    MTP_METAL_MIN_BYTES = 1_048_576
+
     def bf16_at(raw : Bytes, i : Int32) : Float32
       off = i * 2
       bits = (raw[off + 1].to_u32 << 24) | (raw[off].to_u32 << 16)
       bits.unsafe_as(Float32)
     end
 
+    private def use_metal_bf16?(w : DenseBF16Weight) : Bool
+      {% if flag?(:qwen35_mtp_metal) %}
+        return false if ENV["QWEN35_MTP_BF16_METAL_OFF"]? == "1"
+        return false unless ENV["QWEN35_MTP_BF16_METAL"]? == "1" || w.raw.size >= MTP_METAL_MIN_BYTES
+        Qwen35Metal.available?
+      {% else %}
+        false
+      {% end %}
+    end
+
+    def bf16_backend_label : String
+      {% if flag?(:qwen35_mtp_metal) %}
+        ENV["QWEN35_MTP_BF16_METAL_OFF"]? == "1" ? "cpu_bf16" : "metal_bf16"
+      {% else %}
+        "cpu_bf16"
+      {% end %}
+    end
+
     def matvec_bf16(w : DenseBF16Weight, x : Array(Float32)) : Array(Float32)
       raise ArgumentError.new("#{w.name}: expected input #{w.in_dim}, got #{x.size}") unless x.size == w.in_dim
       expected = w.out_dim.to_i64 * w.in_dim.to_i64 * 2_i64
       raise "#{w.name}: raw size #{w.raw.size} != expected #{expected}" unless w.raw.size.to_i64 == expected
+
+      {% if flag?(:qwen35_mtp_metal) %}
+        if use_metal_bf16?(w)
+          return Qwen35Metal.bf16_gemv(w.raw, w.in_dim, w.out_dim, x)
+        end
+      {% end %}
 
       out = Array(Float32).new(w.out_dim, 0.0_f32)
       w.out_dim.times do |row|
@@ -184,6 +214,12 @@ module ML::GGUF
       raise ArgumentError.new("#{w.name}: expected q_proj rows #{q_dim * 2}, got #{w.out_dim}") unless w.out_dim == q_dim * 2
       expected = w.out_dim.to_i64 * w.in_dim.to_i64 * 2_i64
       raise "#{w.name}: raw size #{w.raw.size} != expected #{expected}" unless w.raw.size.to_i64 == expected
+
+      {% if flag?(:qwen35_mtp_metal) %}
+        if use_metal_bf16?(w)
+          return Qwen35Metal.bf16_q_gate_gemv(w.raw, w.in_dim, q_dim, head_dim, x)
+        end
+      {% end %}
 
       out = Array(Float32).new(q_dim, 0.0_f32)
       n_head.times do |h|

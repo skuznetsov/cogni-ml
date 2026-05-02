@@ -78,6 +78,24 @@ module ML
                             batch : Int32) : Array(Float32)
           raise "Metal disabled (cpu_only)"
         end
+
+        def self.bf16_gemv(w_raw : Bytes,
+                           in_dim : Int32,
+                           out_dim : Int32,
+                           x : Array(Float32)) : Array(Float32)
+          raise "Metal disabled (cpu_only)"
+        end
+
+        def self.bf16_q_gate_gemv(w_raw : Bytes,
+                                  in_dim : Int32,
+                                  q_dim : Int32,
+                                  head_dim : Int32,
+                                  x : Array(Float32)) : Array(Float32)
+          raise "Metal disabled (cpu_only)"
+        end
+
+        def self.clear_bf16_weight_cache : Nil
+        end
       {% else %}
         GEMM_Q4K_SOURCE  = {{ read_file("#{__DIR__}/kernels/gemm_q4k.metal") }}
         GEMM_Q56K_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }}
@@ -87,6 +105,7 @@ module ML
         FFN_SOURCE = {{ read_file("#{__DIR__}/kernels/ffn_qwen35.metal") }}
         RECURRENT_SOURCE = {{ read_file("#{__DIR__}/kernels/recurrent_qwen35.metal") }}
         FULLATTN_SOURCE = {{ read_file("#{__DIR__}/kernels/fullattn_qwen35.metal") }}
+        MTP_SOURCE = {{ read_file("#{__DIR__}/kernels/mtp_qwen35.metal") }}
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
         @@mv_add_pipeline : ML::Metal::ComputePipeline?
@@ -114,6 +133,8 @@ module ML
         @@top1_reduce_tiles_batch_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
         @@top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
+        @@bf16_gemv_pipeline : ML::Metal::ComputePipeline?
+        @@bf16_q_gate_gemv_pipeline : ML::Metal::ComputePipeline?
         @@dn_pipeline   : ML::Metal::ComputePipeline?
         @@dn128_pipeline : ML::Metal::ComputePipeline?
         @@dn128_fused_pipeline : ML::Metal::ComputePipeline?
@@ -559,6 +580,8 @@ module ML
         @@mmap_base_addr : UInt64 = 0_u64
         @@mmap_size      : Int64  = 0_i64
         @@mmap_buf       : ML::MetalBuffer? = nil
+        @@bf16_weight_buffers = {} of String => ML::MetalBuffer
+        @@bf16_weight_mutex = Mutex.new
 
         def self.available? : Bool
           ML::Metal::Device.init!
@@ -822,6 +845,18 @@ module ML
         private def self.top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline
           @@top2_reduce_f16_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top2_reduce_f16_rows") {
             ML::Metal::ComputePipeline.new("qwen35_top2_reduce_f16_rows", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.bf16_gemv_pipeline : ML::Metal::ComputePipeline
+          @@bf16_gemv_pipeline ||= ML::Metal::PipelineCache.get("qwen35_bf16_gemv_f32") {
+            ML::Metal::ComputePipeline.new("qwen35_bf16_gemv_f32", MTP_SOURCE)
+          }
+        end
+
+        private def self.bf16_q_gate_gemv_pipeline : ML::Metal::ComputePipeline
+          @@bf16_q_gate_gemv_pipeline ||= ML::Metal::PipelineCache.get("qwen35_bf16_q_gate_gemv_f32") {
+            ML::Metal::ComputePipeline.new("qwen35_bf16_q_gate_gemv_f32", MTP_SOURCE)
           }
         end
 
@@ -7203,6 +7238,121 @@ module ML
           buf = ML::MetalBuffer.new(w_raw.size.to_i64)
           buf.write_bytes(w_raw.to_unsafe, w_raw.size)
           buf
+        end
+
+        # BF16 MTP sidecar tensors live in a separate safetensors mmap, outside
+        # the registered GGUF mmap. Cache one MetalBuffer per raw slice so the
+        # correctness probe does not re-upload 100-170 MiB weights per matvec.
+        private def self.bf16_weight_slot(w_raw : Bytes) : {ML::MetalBuffer, Int64}
+          if slot = mmap_slot_for(w_raw)
+            return slot
+          end
+
+          key = "#{w_raw.to_unsafe.address}:#{w_raw.size}"
+          @@bf16_weight_mutex.synchronize do
+            if buf = @@bf16_weight_buffers[key]?
+              {buf, 0_i64}
+            else
+              buf = upload_weights(w_raw)
+              @@bf16_weight_buffers[key] = buf
+              {buf, 0_i64}
+            end
+          end
+        end
+
+        def self.clear_bf16_weight_cache : Nil
+          @@bf16_weight_mutex.synchronize do
+            @@bf16_weight_buffers.clear
+          end
+        end
+
+        def self.bf16_gemv(w_raw : Bytes,
+                           in_dim : Int32,
+                           out_dim : Int32,
+                           x : Array(Float32)) : Array(Float32)
+          raise "bf16_gemv input mismatch: expected #{in_dim}, got #{x.size}" unless x.size == in_dim
+          expected_w = out_dim.to_i64 * in_dim.to_i64 * 2_i64
+          raise "bf16_gemv weight size mismatch: expected #{expected_w}, got #{w_raw.size}" unless w_raw.size.to_i64 == expected_w
+
+          ML::Metal::Device.init!
+          w_buf, w_off = bf16_weight_slot(w_raw)
+          x_buf = Scratch.get(:mtp_bf16_x, in_dim.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get("mtp_bf16_out_#{out_dim}", out_dim.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+
+          Profile.bump_matmul_shape("gemv BF16 #{in_dim}x#{out_dim} b1", expected_w)
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(bf16_gemv_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(out_dim.to_u32, 4)
+          rows_per_tg = 2
+          enc.dispatch_threadgroups({(out_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}, {64, 1, 1})
+          enc.end_encoding
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_f32(out_buf, out_dim)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
+        end
+
+        def self.bf16_q_gate_gemv(w_raw : Bytes,
+                                  in_dim : Int32,
+                                  q_dim : Int32,
+                                  head_dim : Int32,
+                                  x : Array(Float32)) : Array(Float32)
+          raise "bf16_q_gate_gemv input mismatch: expected #{in_dim}, got #{x.size}" unless x.size == in_dim
+          raise "bf16_q_gate_gemv q_dim must be divisible by head_dim" unless head_dim > 0 && q_dim % head_dim == 0
+          expected_w = q_dim.to_i64 * 2_i64 * in_dim.to_i64 * 2_i64
+          raise "bf16_q_gate_gemv weight size mismatch: expected #{expected_w}, got #{w_raw.size}" unless w_raw.size.to_i64 == expected_w
+
+          ML::Metal::Device.init!
+          w_buf, w_off = bf16_weight_slot(w_raw)
+          x_buf = Scratch.get(:mtp_bf16_x, in_dim.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get("mtp_bf16_q_gate_out_#{q_dim}", q_dim.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+
+          Profile.bump_matmul_shape("gemv BF16 q_gate #{in_dim}x#{q_dim} b1", expected_w // 2_i64)
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(bf16_q_gate_gemv_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(q_dim.to_u32, 4)
+          enc.set_value(head_dim.to_u32, 5)
+          rows_per_tg = 2
+          enc.dispatch_threadgroups({(q_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}, {64, 1, 1})
+          enc.end_encoding
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_f32(out_buf, q_dim)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
         end
 
         def self.matmul_q5k(x : Array(Float32),

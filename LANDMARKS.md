@@ -6596,3 +6596,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The optimization frame shifts from "remove attention math" to "make the remaining FFN-heavy proposal body resident and eventually quantized/sparse."
 - maieutic: The shortcut assumes exactly one MTP token in the sidecar attention cache. It is not valid for `num_speculative_tokens>1` without real MTP KV handling.
 - adversary: The proof is shape/formula-based and smoke-tested, but the timing evidence is low-generality. Promote only as an implementation constraint, not as a speed claim.
+
+### [LM-QWEN36-MTP-BF16-METAL-1] First Metal BF16 MTP GEMV path is correct and removes the CPU-oracle bottleneck
+**status:** verified
+**trust:** {F:0.84, G:low, R:0.84}
+**context:** ml (Qwen3.6 native MTP / exact speculative decode)
+**evidence:**
+- claim: "`src/ml/gguf/kernels/mtp_qwen35.metal` adds correctness-first row-major BF16 GEMV and q-proj gate-row GEMV. `Qwen35Metal.bf16_gemv` / `bf16_q_gate_gemv` cache sidecar weight uploads by raw slice, and `Qwen35MTP` routes large sidecar matvecs through Metal only when compiled with `-D qwen35_mtp_metal`; normal specs remain CPU-only and do not require Metal link flags."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_spec crystal spec spec/qwen35_mtp_spec.cr` -> `7 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_bf16_check crystal run tmp_bf16_check.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `bf16_metal_check ok [0.75, -1.5] [4.0, -1.0]`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: BF16 kernel, Metal wrapper/cache, compile flag, or sidecar routing changes
+- claim: "On the 27B France smoke, Metal BF16 preserved the accepted MTP token/top5 and reduced the MTP body timing from `mtp_cpu_bf16=9450.892 ms` to `mtp_metal_bf16=157.253 ms` in fresh-process runs. A story prompt also preserved the known top1 rejection/top2 coverage (`in` vs exact `there`, exact in top5) with `mtp_metal_bf16=175.904 ms`."
+  source: `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "The capital of France is" --max-seq 64`; `QWEN35_MTP_BF16_METAL_OFF=1 /tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "The capital of France is" --max-seq 64`; `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "Once upon a time" --max-seq 64`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: host load, MTP sidecar/model, Metal kernels, CPU fallback, timing label, or probe timing boundary changes
+**decision:** Treat this as the first usable MTP speed baseline, not the final MTP drafter. The remaining wall is dominated by per-matvec command buffers/readbacks plus unfused RMSNorm/SwiGLU/gating and the shared target lm-head; the next step is a resident fused MTP body that keeps `fc/v/qgate/o/gate/up/down` intermediates on GPU and emits topK without CPU round-trips.
+**quadrumvirate:**
+- cassandra: The CPU-oracle bottleneck is gone, but a per-matvec Metal path can still lose against exact decode because it performs many command-buffer/readback boundaries.
+- daedalus: The frame shifts from "can we evaluate MTP at all?" to "can we make MTP resident enough to become a practical candidate source?"
+- maieutic: The speed claim is scoped to one MTP body call in fresh-process smokes, not end-to-end speculative decode.
+- adversary: Generality remains low: two short prompts, one-token MTP, BF16 sidecar, no verifier-loop suite yet. Require multi-prompt acceptance and end-to-end plain-speedup before promoting MTP as a decode win.
