@@ -6910,3 +6910,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next frame is not "enable more tree2" but "predict exactly when branch work avoids replay"; otherwise guard splitting repeats verifier work.
 - maieutic: The key assumption that low margin implies profitable verifier splitting is unproven; current evidence only says margin is diagnostic.
 - adversary: Long 27B cold suites are noisy and slow. Use smaller reproductions or in-process suite support before more policy tuning.
+
+**decision_update_3:** The suspected `tree2_margin_guard=0.5` hang is not a reproducible deadlock. Re-running the exact 27B shape (`tokens80/calib48/rank8/layers0,2,4,6,8,10/gen32/gamma4`) completed in `136.582s` and emitted a normal `self_spec_gpu_pipeline` row. The apparent hang is a long silent interval: the probe prints only after drift checks, the full pipeline, plain exact, and paired serial accounting finish. As a speed branch, plain `tree2_margin_guard` is still not promoted: it split one low-margin prefix and rejected it, but did not improve wall versus same-shape baseline (`overlap_ms 4642.639 -> 4639.221`). `risk_offramp_margin=0.5` is a better frame because it avoids pre-submitting the next draft block when low margin predicts risk; on the same one-prompt gate it delayed one 4-token next block and improved wall to `4372.070ms`, while `guard+offramp` was weaker at `4447.924ms`.
+**evidence_update_3:**
+- claim: "`tree2_margin_guard=0.5` does not hang on the reproduced 27B gen32 shape; prior kill was a premature kill of a silent long-running probe, not evidence of deadlock."
+  source: `/tmp/qwen36_margin_guard_27b_t80_gen32_repro_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: probe output timing, model/quant, route, scheduler implementation, or host load changes
+- claim: "`risk_offramp_margin=0.5` has a narrow positive single-prompt signal by preventing one low-margin pre-submit, while `tree2_margin_guard` alone is neutral and `guard+offramp` loses part of the gain."
+  source: `/tmp/qwen36_margin_baseline_27b_t80_gen32_20260502.log`; `/tmp/qwen36_margin_guard_27b_t80_gen32_repro_20260502.log`; `/tmp/qwen36_margin_risk_offramp_0_5_27b_t80_gen32_20260502.log`; `/tmp/qwen36_margin_guard_plus_offramp_0_5_27b_t80_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, threshold, route, scheduler implementation, or timing/accounting changes
+**quadrumvirate_update_3:**
+- cassandra: A silent interval plus 27B cold-run variance can masquerade as a hang; require timed repro before labeling deadlock.
+- daedalus: The useful frame is not verifier splitting after low margin, but avoiding speculative work before a likely reject.
+- maieutic: One prompt is insufficient to promote `risk_offramp`; the claim is a candidate policy, not a default.
+- adversary: Same-shape comparison still includes host/GPU noise and cold-run setup. Next evidence needs a suite or in-process threshold sweep.
