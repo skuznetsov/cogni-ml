@@ -166,6 +166,10 @@ module ML::GGUF
       {% end %}
     end
 
+    private def sidecar_norm_weight(w : Array(Float32)) : Array(Float32)
+      Array(Float32).new(w.size) { |i| 1.0_f32 + w[i] }
+    end
+
     def matvec_bf16(w : DenseBF16Weight, x : Array(Float32)) : Array(Float32)
       raise ArgumentError.new("#{w.name}: expected input #{w.in_dim}, got #{x.size}") unless x.size == w.in_dim
       expected = w.out_dim.to_i64 * w.in_dim.to_i64 * 2_i64
@@ -289,15 +293,45 @@ module ML::GGUF
         fc_in[hidden + i] = hidden_norm[i]
       end
 
-      residual = matvec_bf16(mtp.fc, fc_in)
-      cur = rms_norm_sidecar(residual, mtp.input_layernorm, hp.rms_eps)
-
       n_head = hp.n_head
       n_head_kv = hp.n_head_kv
       head_dim = hp.head_dim
       q_dim = n_head * head_dim
       kv_dim = n_head_kv * head_dim
       heads_per_group = n_head // n_head_kv
+
+      {% if flag?(:qwen35_mtp_metal) %}
+        if ENV["QWEN35_MTP_BODY_METAL"]? == "1" &&
+           ENV["QWEN35_MTP_ONE_TOKEN_SHORTCUT_OFF"]? != "1" &&
+           use_metal_bf16?(mtp.fc)
+          if body = Qwen35Metal.mtp_one_token_hidden_from_fc_in(
+               fc_in,
+               mtp.fc.raw,
+               mtp.v_proj.raw,
+               mtp.q_proj.raw,
+               mtp.o_proj.raw,
+               mtp.ffn_gate.raw,
+               mtp.ffn_up.raw,
+               mtp.ffn_down.raw,
+               sidecar_norm_weight(mtp.input_layernorm),
+               sidecar_norm_weight(mtp.post_attention_layernorm),
+               sidecar_norm_weight(mtp.norm),
+               hidden,
+               q_dim,
+               kv_dim,
+               hp.n_ff,
+               n_head,
+               n_head_kv,
+               head_dim,
+               hp.rms_eps,
+             )
+            return body
+          end
+        end
+      {% end %}
+
+      residual = matvec_bf16(mtp.fc, fc_in)
+      cur = rms_norm_sidecar(residual, mtp.input_layernorm, hp.rms_eps)
 
       v = matvec_bf16(mtp.v_proj, cur)
       raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim

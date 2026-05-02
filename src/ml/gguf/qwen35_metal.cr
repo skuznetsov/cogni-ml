@@ -101,6 +101,28 @@ module ML
                                       x : Array(Float32)) : Array(Float32)?
           nil
         end
+
+        def self.mtp_one_token_hidden_from_fc_in(fc_in : Array(Float32),
+                                                 fc_raw : Bytes,
+                                                 v_raw : Bytes,
+                                                 q_raw : Bytes,
+                                                 o_raw : Bytes,
+                                                 ffn_gate_raw : Bytes,
+                                                 ffn_up_raw : Bytes,
+                                                 ffn_down_raw : Bytes,
+                                                 input_norm : Array(Float32),
+                                                 post_norm : Array(Float32),
+                                                 final_norm : Array(Float32),
+                                                 hidden_dim : Int32,
+                                                 q_dim : Int32,
+                                                 kv_dim : Int32,
+                                                 ffn_dim : Int32,
+                                                 n_head : Int32,
+                                                 n_head_kv : Int32,
+                                                 head_dim : Int32,
+                                                 eps : Float32) : Array(Float32)?
+          nil
+        end
       {% else %}
         GEMM_Q4K_SOURCE  = {{ read_file("#{__DIR__}/kernels/gemm_q4k.metal") }}
         GEMM_Q56K_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }}
@@ -140,6 +162,7 @@ module ML
         @@top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
         @@bf16_gemv_pipeline : ML::Metal::ComputePipeline?
         @@bf16_q_gate_gemv_pipeline : ML::Metal::ComputePipeline?
+        @@mtp_attn_gate_pipeline : ML::Metal::ComputePipeline?
         @@dn_pipeline   : ML::Metal::ComputePipeline?
         @@dn128_pipeline : ML::Metal::ComputePipeline?
         @@dn128_fused_pipeline : ML::Metal::ComputePipeline?
@@ -862,6 +885,12 @@ module ML
         private def self.bf16_q_gate_gemv_pipeline : ML::Metal::ComputePipeline
           @@bf16_q_gate_gemv_pipeline ||= ML::Metal::PipelineCache.get("qwen35_bf16_q_gate_gemv_f32") {
             ML::Metal::ComputePipeline.new("qwen35_bf16_q_gate_gemv_f32", MTP_SOURCE)
+          }
+        end
+
+        private def self.mtp_attn_gate_pipeline : ML::Metal::ComputePipeline
+          @@mtp_attn_gate_pipeline ||= ML::Metal::PipelineCache.get("qwen35_mtp_attn_gate_one") {
+            ML::Metal::ComputePipeline.new("qwen35_mtp_attn_gate_one", MTP_SOURCE)
           }
         end
 
@@ -7328,6 +7357,42 @@ module ML
           end
         end
 
+        private def self.encode_bf16_gemv(enc : ML::Metal::ComputeEncoder,
+                                          w_buf : ML::MetalBuffer,
+                                          w_off : Int64,
+                                          x_buf : ML::MetalBuffer,
+                                          out_buf : ML::MetalBuffer,
+                                          in_dim : Int32,
+                                          out_dim : Int32) : Nil
+          enc.set_pipeline(bf16_gemv_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(out_dim.to_u32, 4)
+          rows_per_tg = 2
+          enc.dispatch_threadgroups({(out_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}, {64, 1, 1})
+        end
+
+        private def self.encode_bf16_q_gate_gemv(enc : ML::Metal::ComputeEncoder,
+                                                 w_buf : ML::MetalBuffer,
+                                                 w_off : Int64,
+                                                 x_buf : ML::MetalBuffer,
+                                                 out_buf : ML::MetalBuffer,
+                                                 in_dim : Int32,
+                                                 q_dim : Int32,
+                                                 head_dim : Int32) : Nil
+          enc.set_pipeline(bf16_q_gate_gemv_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(q_dim.to_u32, 4)
+          enc.set_value(head_dim.to_u32, 5)
+          rows_per_tg = 2
+          enc.dispatch_threadgroups({(q_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}, {64, 1, 1})
+        end
+
         def self.bf16_gemv(w_raw : Bytes,
                            in_dim : Int32,
                            out_dim : Int32,
@@ -7406,6 +7471,171 @@ module ML
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
           result = read_shared_f32(out_buf, q_dim)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
+        end
+
+        def self.mtp_one_token_hidden_from_fc_in(fc_in : Array(Float32),
+                                                 fc_raw : Bytes,
+                                                 v_raw : Bytes,
+                                                 q_raw : Bytes,
+                                                 o_raw : Bytes,
+                                                 ffn_gate_raw : Bytes,
+                                                 ffn_up_raw : Bytes,
+                                                 ffn_down_raw : Bytes,
+                                                 input_norm : Array(Float32),
+                                                 post_norm : Array(Float32),
+                                                 final_norm : Array(Float32),
+                                                 hidden_dim : Int32,
+                                                 q_dim : Int32,
+                                                 kv_dim : Int32,
+                                                 ffn_dim : Int32,
+                                                 n_head : Int32,
+                                                 n_head_kv : Int32,
+                                                 head_dim : Int32,
+                                                 eps : Float32) : Array(Float32)?
+          raise "mtp_one_token_hidden fc_in mismatch" unless fc_in.size == hidden_dim * 2
+          raise "mtp_one_token_hidden norm size mismatch" unless input_norm.size == hidden_dim && post_norm.size == hidden_dim && final_norm.size == hidden_dim
+          raise "mtp_one_token_hidden q_dim mismatch" unless q_dim == n_head * head_dim
+          raise "mtp_one_token_hidden kv_dim mismatch" unless kv_dim == n_head_kv * head_dim
+          raise "mtp_one_token_hidden n_head must be divisible by n_head_kv" unless n_head_kv > 0 && n_head % n_head_kv == 0
+
+          expected_fc = hidden_dim.to_i64 * (hidden_dim * 2).to_i64 * 2_i64
+          expected_q = (q_dim * 2).to_i64 * hidden_dim.to_i64 * 2_i64
+          expected_v = kv_dim.to_i64 * hidden_dim.to_i64 * 2_i64
+          expected_o = hidden_dim.to_i64 * q_dim.to_i64 * 2_i64
+          expected_ffn = ffn_dim.to_i64 * hidden_dim.to_i64 * 2_i64
+          expected_down = hidden_dim.to_i64 * ffn_dim.to_i64 * 2_i64
+          raise "mtp fc weight size mismatch" unless fc_raw.size.to_i64 == expected_fc
+          raise "mtp q weight size mismatch" unless q_raw.size.to_i64 == expected_q
+          raise "mtp v weight size mismatch" unless v_raw.size.to_i64 == expected_v
+          raise "mtp o weight size mismatch" unless o_raw.size.to_i64 == expected_o
+          raise "mtp ffn gate weight size mismatch" unless ffn_gate_raw.size.to_i64 == expected_ffn
+          raise "mtp ffn up weight size mismatch" unless ffn_up_raw.size.to_i64 == expected_ffn
+          raise "mtp ffn down weight size mismatch" unless ffn_down_raw.size.to_i64 == expected_down
+
+          ML::Metal::Device.init!
+
+          fc_w, fc_off = bf16_weight_slot(fc_raw)
+          v_w, v_off = bf16_weight_slot(v_raw)
+          q_w, q_off = bf16_weight_slot(q_raw)
+          o_w, o_off = bf16_weight_slot(o_raw)
+          ffn_gate_w, ffn_gate_off = bf16_weight_slot(ffn_gate_raw)
+          ffn_up_w, ffn_up_off = bf16_weight_slot(ffn_up_raw)
+          ffn_down_w, ffn_down_off = bf16_weight_slot(ffn_down_raw)
+
+          hidden_bytes = hidden_dim.to_i64 * sizeof(Float32)
+          q_bytes = q_dim.to_i64 * sizeof(Float32)
+          kv_bytes = kv_dim.to_i64 * sizeof(Float32)
+          ffn_bytes = ffn_dim.to_i64 * sizeof(Float32)
+
+          fc_in_buf = Scratch.get(:mtp_body_fc_in, fc_in.size.to_i64 * sizeof(Float32))
+          residual_buf = Scratch.get(:mtp_body_residual, hidden_bytes)
+          input_norm_buf = Scratch.get(:mtp_body_input_norm_w, hidden_bytes)
+          post_norm_buf = Scratch.get(:mtp_body_post_norm_w, hidden_bytes)
+          final_norm_buf = Scratch.get(:mtp_body_final_norm_w, hidden_bytes)
+          cur_buf = Scratch.get(:mtp_body_cur, hidden_bytes)
+          v_buf = Scratch.get(:mtp_body_v, kv_bytes)
+          gate_buf = Scratch.get(:mtp_body_gate, q_bytes)
+          attn_o_buf = Scratch.get(:mtp_body_attn_o, q_bytes)
+          attn_out_buf = Scratch.get(:mtp_body_attn_out, hidden_bytes)
+          after_attn_buf = Scratch.get(:mtp_body_after_attn, hidden_bytes)
+          cur2_buf = Scratch.get(:mtp_body_cur2, hidden_bytes)
+          ffn_gate_buf = Scratch.get(:mtp_body_ffn_gate, ffn_bytes)
+          ffn_up_buf = Scratch.get(:mtp_body_ffn_up, ffn_bytes)
+          ffn_act_buf = Scratch.get(:mtp_body_ffn_act, ffn_bytes)
+          ffn_out_buf = Scratch.get(:mtp_body_ffn_out, hidden_bytes)
+          after_ffn_buf = Scratch.get(:mtp_body_after_ffn, hidden_bytes)
+          final_buf = Scratch.get(:mtp_body_final, hidden_bytes)
+
+          fc_in_buf.write(fc_in)
+          input_norm_buf.write(input_norm)
+          post_norm_buf.write(post_norm)
+          final_norm_buf.write(final_norm)
+
+          Profile.bump_matmul_shape("mtp_body gemv BF16 fc #{hidden_dim * 2}x#{hidden_dim} b1", expected_fc)
+          Profile.bump_matmul_shape("mtp_body gemv BF16 v #{hidden_dim}x#{kv_dim} b1", expected_v)
+          Profile.bump_matmul_shape("mtp_body gemv BF16 q_gate #{hidden_dim}x#{q_dim} b1", expected_q // 2_i64)
+          Profile.bump_matmul_shape("mtp_body gemv BF16 o #{q_dim}x#{hidden_dim} b1", expected_o)
+          Profile.bump_matmul_shape("mtp_body gemv BF16 ffn_gate #{hidden_dim}x#{ffn_dim} b1", expected_ffn)
+          Profile.bump_matmul_shape("mtp_body gemv BF16 ffn_up #{hidden_dim}x#{ffn_dim} b1", expected_ffn)
+          Profile.bump_matmul_shape("mtp_body gemv BF16 ffn_down #{ffn_dim}x#{hidden_dim} b1", expected_down)
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+
+          fc_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_bf16_gemv(fc_enc, fc_w, fc_off, fc_in_buf, residual_buf, hidden_dim * 2, hidden_dim)
+          fc_enc.end_encoding
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_rmsnorm_vec(norm_enc, residual_buf, input_norm_buf, cur_buf, hidden_dim, eps)
+          norm_enc.end_encoding
+
+          v_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_bf16_gemv(v_enc, v_w, v_off, cur_buf, v_buf, hidden_dim, kv_dim)
+          v_enc.end_encoding
+
+          gate_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_bf16_q_gate_gemv(gate_enc, q_w, q_off, cur_buf, gate_buf, hidden_dim, q_dim, head_dim)
+          gate_enc.end_encoding
+
+          attn_gate_enc = ML::Metal::ComputeEncoder.new(cmd)
+          attn_gate_enc.set_pipeline(mtp_attn_gate_pipeline)
+          attn_gate_enc.set_buffer(v_buf, 0)
+          attn_gate_enc.set_buffer(gate_buf, 1)
+          attn_gate_enc.set_buffer(attn_o_buf, 2, ML::Metal::BufferAccess::Write)
+          attn_gate_enc.set_value(head_dim.to_u32, 3)
+          attn_gate_enc.set_value(n_head.to_u32, 4)
+          attn_gate_enc.set_value(n_head_kv.to_u32, 5)
+          attn_gate_enc.dispatch_1d(q_dim, 256)
+          attn_gate_enc.end_encoding
+
+          o_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_bf16_gemv(o_enc, o_w, o_off, attn_o_buf, attn_out_buf, q_dim, hidden_dim)
+          o_enc.end_encoding
+
+          post_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_add_rmsnorm(post_enc, residual_buf, attn_out_buf, post_norm_buf, after_attn_buf, cur2_buf, hidden_dim, eps)
+          post_enc.end_encoding
+
+          ffn_gate_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_bf16_gemv(ffn_gate_enc, ffn_gate_w, ffn_gate_off, cur2_buf, ffn_gate_buf, hidden_dim, ffn_dim)
+          ffn_gate_enc.end_encoding
+
+          ffn_up_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_bf16_gemv(ffn_up_enc, ffn_up_w, ffn_up_off, cur2_buf, ffn_up_buf, hidden_dim, ffn_dim)
+          ffn_up_enc.end_encoding
+
+          swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+          swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
+          swiglu_enc.set_buffer(ffn_gate_buf, 0)
+          swiglu_enc.set_buffer(ffn_up_buf, 1)
+          swiglu_enc.set_buffer(ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
+          swiglu_enc.set_value(ffn_dim.to_u32, 3)
+          swiglu_enc.dispatch_1d(ffn_dim, 256)
+          swiglu_enc.end_encoding
+
+          ffn_down_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_bf16_gemv(ffn_down_enc, ffn_down_w, ffn_down_off, ffn_act_buf, ffn_out_buf, ffn_dim, hidden_dim)
+          ffn_down_enc.end_encoding
+
+          final_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_add_rmsnorm(final_enc, after_attn_buf, ffn_out_buf, final_norm_buf, after_ffn_buf, final_buf, hidden_dim, eps)
+          final_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_f32(final_buf, hidden_dim)
           if Profile.enabled?
             t_read = Time.instant
             Profile.bump_gemv(

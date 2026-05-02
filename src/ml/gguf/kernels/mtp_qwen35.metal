@@ -71,3 +71,24 @@ kernel void qwen35_bf16_q_gate_gemv_f32(
         output[dst_row] = total;
     }
 }
+
+kernel void qwen35_mtp_attn_gate_one(
+    device const float* v          [[buffer(0)]],
+    device const float* gate       [[buffer(1)]],
+    device       float* output     [[buffer(2)]],
+    constant     uint&  head_dim   [[buffer(3)]],
+    constant     uint&  n_head     [[buffer(4)]],
+    constant     uint&  n_head_kv  [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint q_dim = n_head * head_dim;
+    if (tid >= q_dim) return;
+
+    const uint heads_per_group = n_head / n_head_kv;
+    const uint h = tid / head_dim;
+    const uint d = tid - h * head_dim;
+    const uint kvh = h / heads_per_group;
+    const float g = gate[tid];
+    const float sig = 1.0f / (1.0f + exp(-g));
+    output[tid] = v[kvh * head_dim + d] * sig;
+}

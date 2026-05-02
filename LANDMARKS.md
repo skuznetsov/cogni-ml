@@ -6614,9 +6614,13 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "The capital of France is" --max-seq 64`; `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "The capital of France is" --max-seq 64`; `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "Once upon a time" --max-seq 64`, on 2026-05-01
   verified_at: 2026-05-01
   decay_trigger: top1 tile kernels, MTP norm semantics, output quant type, or probe timing boundary changes
-**decision:** Treat this as the first usable MTP speed baseline, not the final MTP drafter. Greedy proposals no longer need full-logit readback, but the remaining wall is still dominated by per-matvec command buffers/readbacks plus unfused RMSNorm/SwiGLU/gating; the next step is a resident fused MTP body that keeps `fc/v/qgate/o/gate/up/down` intermediates on GPU and emits candidates without CPU round-trips.
+- claim: "An opt-in resident MTP body prototype (`QWEN35_MTP_BODY_METAL=1`) keeps fc/RMSNorm/V/qgate/attention gate/O/addnorm/FFN/final norm GPU-resident and reads back only the final hidden. It preserved France acceptance, but did not show a stable speed win: one paired fresh-process top1 run measured default per-matvec `170.937 ms` versus resident `178.042 ms`; an earlier resident run was slower (`238.205 ms`)."
+  source: `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "The capital of France is" --max-seq 64`; `QWEN35_MTP_BODY_METAL=1 /tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "The capital of France is" --max-seq 64`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: resident MTP body scheduling, Metal command-buffer behavior, kernel fusion, or host load changes
+**decision:** Treat this as the first usable MTP speed baseline, not the final MTP drafter. Greedy proposals no longer need full-logit readback. The opt-in resident-body falsifier says command-buffer coalescing alone is not enough; the next speed route must fuse larger MTP kernels or reduce BF16 body bytes, not just chain the same GEMVs in one command buffer.
 **quadrumvirate:**
-- cassandra: The CPU-oracle bottleneck is gone, but a per-matvec Metal path can still lose against exact decode because it performs many command-buffer/readback boundaries.
-- daedalus: The frame shifts from "can we evaluate MTP at all?" to "can we make MTP resident enough to become a practical candidate source?"
+- cassandra: The CPU-oracle bottleneck is gone, but a per-matvec Metal path can still lose against exact decode because it performs many command-buffer/readback boundaries; the resident-body falsifier shows command-buffer coalescing alone is not sufficient.
+- daedalus: The frame shifts from "can we evaluate MTP at all?" to "can we reduce MTP body bytes or fuse whole FFN/attention diamonds enough to become a practical candidate source?"
 - maieutic: The speed claim is scoped to one MTP body call in fresh-process smokes, not end-to-end speculative decode.
 - adversary: Generality remains low: two short prompts, one-token MTP, BF16 sidecar, no verifier-loop suite yet. Require multi-prompt acceptance and end-to-end plain-speedup before promoting MTP as a decode win.
