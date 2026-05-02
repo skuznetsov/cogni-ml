@@ -6678,7 +6678,11 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_mtp_chain_suite_top5_raw_20260501.log`
   verified_at: 2026-05-01
   decay_trigger: recursive hidden mode, MTP body formula, prompt suite, topK, or generated length changes
-**decision:** Do not build the next speed path around naive recursive MTP gamma>1. Built-in Qwen3.6 MTP is valuable as a one-step exact-hidden candidate source and topK/reranking signal, but using MTP hidden as a replacement for the next exact target hidden is unstable, and pre/post-`mtp.norm` choice is not the missing fix. The next plausible branches are (1) exact verifier loop with topK/tree rescue and measured replay tax, (2) a learned or linear hidden predictor/corrector that maps MTP hidden toward target hidden, and (3) MTP-body simplification only after the verifier economics justify it.
+- claim: "Simple scalar hidden bridges are also insufficient. `--mtp-chain-raw-blends 0.25,0.5,0.75,1.25` only moves recursive MTP from baseline `3/32` top1 and `8/32` top5 to at best `4/32` top1 and `9/32` top5 on the 4-prompt `gen8/top5` suite."
+  source: `/tmp/qwen36_mtp_chain_blend_sweep_20260501.log`
+  verified_at: 2026-05-01
+  decay_trigger: blend alpha list, prompt suite, chain mode, topK, generated length, or hidden formula changes
+**decision:** Do not build the next speed path around naive recursive MTP gamma>1. Built-in Qwen3.6 MTP is valuable as a one-step exact-hidden candidate source and topK/reranking signal, but using MTP hidden as a replacement for the next exact target hidden is unstable; pre/post-`mtp.norm` choice and scalar hidden blending are not the missing fixes. The next plausible branches are (1) exact verifier loop with topK/tree rescue and measured replay tax, (2) a learned/low-rank hidden predictor/corrector that maps MTP hidden toward target hidden, and (3) MTP-body simplification only after the verifier economics justify it.
 **quadrumvirate:**
 - cassandra: The trained MTP head stays close when anchored to exact target hidden, but free-running hidden distribution drift is immediate and prompt-sensitive.
 - daedalus: The frame shifts from "MTP as a draft model" to "MTP as a one-step proposal/ranker unless we add a hidden-state bridge."

@@ -26,6 +26,7 @@ mtp_chain_tokens = 0_i32
 mtp_chain_topk = 1_i32
 mtp_chain_mode = "teacher"
 mtp_chain_trace = false
+mtp_chain_raw_blends = [] of Float32
 
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
@@ -55,6 +56,11 @@ private def rank_in_topk(topk : Array({Int32, Float32}), target : Int32) : Int32
   0
 end
 
+private def blend_hidden(a : Array(Float32), b : Array(Float32), alpha : Float32) : Array(Float32)
+  raise ArgumentError.new("blend hidden size mismatch #{a.size} != #{b.size}") unless a.size == b.size
+  Array(Float32).new(a.size) { |i| a[i] + alpha * (b[i] - a[i]) }
+end
+
 OptionParser.parse do |p|
   p.banner = "Usage: qwen35_mtp_sidecar_probe [--model GGUF] [--mtp SIDE_SAFETENSORS] [--run-forward]"
   p.on("--model PATH", "Qwen3.6 GGUF target model path") { |v| model_path = v }
@@ -75,6 +81,9 @@ OptionParser.parse do |p|
   p.on("--mtp-chain-topk K", "MTP chain top-K coverage to measure; K=1 uses fast top1 head") { |v| mtp_chain_topk = v.to_i32 }
   p.on("--mtp-chain-mode MODE", "MTP chain mode: teacher, recursive, recursive_raw, both, or all") { |v| mtp_chain_mode = v }
   p.on("--mtp-chain-trace", "Print every MTP chain step") { mtp_chain_trace = true }
+  p.on("--mtp-chain-raw-blends LIST", "Comma-separated alpha values for recursive pre-norm hidden blend probes") do |v|
+    mtp_chain_raw_blends = v.split(",").reject(&.empty?).map(&.to_f32)
+  end
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -118,6 +127,9 @@ chain_modes = case mtp_chain_mode
               else
                 abort "--mtp-chain-mode must be teacher, recursive, recursive_raw, both, or all"
               end
+chain_runs = [] of {String, Float32?}
+chain_modes.each { |mode| chain_runs << {mode, nil} }
+mtp_chain_raw_blends.each { |alpha| chain_runs << {"recursive_raw_blend#{alpha}", alpha} }
 
 load_start = Time.instant
 weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
@@ -231,7 +243,7 @@ rows.each do |label, prompt_text|
   exact_text = exact_nexts.map { |id, _| tokenizer.decode_single(id) }.join
   puts "mtp_chain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} start_y1=#{y1} exact_ids=#{exact_nexts.map(&.[0]).join(",")} exact_text=#{exact_text.inspect} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)}"
 
-  chain_modes.each do |mode|
+  chain_runs.each do |(mode, blend_alpha)|
     chain_prev_hidden = hidden
     chain_prev_token = y1
     chain_pos = token_ids.size
@@ -242,7 +254,8 @@ rows.each do |label, prompt_text|
     chain_candidates = [] of Int32
 
     mtp_chain_tokens.times do |i|
-      mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk, mode == "recursive_raw")
+      raw_next_hidden = mode == "recursive_raw" || !blend_alpha.nil?
+      mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, mtp_chain_topk, raw_next_hidden)
       chain_ms << step_ms
       candidate = mtp_topk[0][0]
       exact_id = exact_nexts[i][0]
@@ -261,6 +274,9 @@ rows.each do |label, prompt_text|
       if mode == "teacher"
         chain_prev_hidden = exact_hiddens[i]
         chain_prev_token = exact_id
+      elsif alpha = blend_alpha
+        chain_prev_hidden = blend_hidden(chain_prev_hidden, mtp_hidden, alpha)
+        chain_prev_token = candidate
       else
         chain_prev_hidden = mtp_hidden
         chain_prev_token = candidate
