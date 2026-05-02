@@ -6714,7 +6714,11 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_mtp_teacher_branch_cost_k8_20260502.log`
   verified_at: 2026-05-02
   decay_trigger: prompt suite, generated length, topK, model/quant, MTP formula, or branch-verifier implementation changes
-**decision:** Do not implement a blind rank-order K8 MTP verifier as the next speed path. The useful next branch is low-K mismatch-only rescue or branch selection/routing: `K=2` has much lower attempt pressure and still covers most exact tokens, while `K=5` is a quality upper bound that needs a selector to avoid wasted rank-order branches. MTP should be treated as a one-step exact-hidden candidate/ranker until a learned hidden bridge or real verifier loop proves end-to-end speed.
+- claim: "Pipeline economics confirm one-step MTP is not a standalone speedup path. On the 4-prompt 27B teacher-forced `gen8/K=5` suite, exact hidden oracle cost was `2784.512 ms`, MTP proposal cost was `534.022 ms`, serial exact+MTP would be `3318.534 ms` (`1.192x` slower than exact alone), and perfect overlap is only neutral (`ideal_overlap_vs_exact=1.0`)."
+  source: `/tmp/qwen36_mtp_teacher_pipeline_k5_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: MTP timing boundaries, exact-hidden oracle route, Metal scheduler overlap behavior, prompt suite, or generated length changes
+**decision:** Do not implement a blind rank-order K8 MTP verifier as the next speed path. The useful next branch is low-K mismatch-only rescue or branch selection/routing: `K=2` has much lower attempt pressure and still covers most exact tokens, while `K=5` is a quality upper bound that needs a selector to avoid wasted rank-order branches. MTP should be treated as a one-step exact-hidden candidate/ranker until a learned hidden bridge or another draft source uses it to avoid replay/branch work.
 **quadrumvirate:**
 - cassandra: TopK coverage alone again overstates speed; the repeated failure pattern is branch work hidden behind oracle scoring.
 - daedalus: The frame shifts from "use a wider tree" to "pay almost no branch work unless the verifier already found a mismatch or a router predicts high confidence."
