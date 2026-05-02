@@ -6610,6 +6610,10 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "The capital of France is" --max-seq 64`; `QWEN35_MTP_BF16_METAL_OFF=1 /tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "The capital of France is" --max-seq 64`; `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "Once upon a time" --max-seq 64`, on 2026-05-01
   verified_at: 2026-05-01
   decay_trigger: host load, MTP sidecar/model, Metal kernels, CPU fallback, timing label, or probe timing boundary changes
+- claim: "The fresh-process Metal MTP timings above are cold-upload timings, not steady-state body timings. In one process, the same 27B France top1 MTP call measured `173.768 ms` on the first call, then `11.229 ms` and `10.166 ms` on warm repeats with identical token/logit (`.` / `16.75336`). The cached sidecar MetalBuffer upload dominates the first call."
+  source: temporary in-process `tmp_mtp_warm_probe.cr` using `Qwen35MTP.forward_one_top1` three times after one prompt prefill, compiled with `-D qwen35_mtp_metal`, on 2026-05-01
+  verified_at: 2026-05-01
+  decay_trigger: BF16 sidecar cache, weight upload strategy, MTP probe timing boundary, or resident-body routing changes
 - claim: "For greedy MTP proposals, the shared lm-head can avoid full-logit readback because `mtp.norm` already produced the normalized hidden. `Qwen35Metal.project_top1_no_norm` uses the existing Q6/Q8 top1 tile reducers directly. France top1-only smoke preserved acceptance and measured `mtp_metal_bf16_top1=159.473 ms`; a nearby full-logits/top5 run measured `195.138 ms`. Story top1 preserved the known reject (`in` vs exact `there`)."
   source: `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "The capital of France is" --max-seq 64`; `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --prompt "The capital of France is" --max-seq 64`; `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "Once upon a time" --max-seq 64`, on 2026-05-01
   verified_at: 2026-05-01
@@ -6618,9 +6622,9 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "The capital of France is" --max-seq 64`; `QWEN35_MTP_BODY_METAL=1 /tmp/qwen35_mtp_sidecar_probe_metal --run-forward --top1-only --prompt "The capital of France is" --max-seq 64`, on 2026-05-01
   verified_at: 2026-05-01
   decay_trigger: resident MTP body scheduling, Metal command-buffer behavior, kernel fusion, or host load changes
-**decision:** Treat this as the first usable MTP speed baseline, not the final MTP drafter. Greedy proposals no longer need full-logit readback. The opt-in resident-body falsifier says command-buffer coalescing alone is not enough; the next speed route must fuse larger MTP kernels or reduce BF16 body bytes, not just chain the same GEMVs in one command buffer.
+**decision:** Treat warm cached MTP as a serious candidate source. Fresh-process smokes must not be used as steady-state speed evidence because sidecar upload dominates the first call. Greedy proposals no longer need full-logit readback. The opt-in resident-body falsifier says command-buffer coalescing alone is not enough after warmup; the next speed route is an in-process acceptance suite and then fusion/byte-reduction only where warm attribution says it matters.
 **quadrumvirate:**
-- cassandra: The CPU-oracle bottleneck is gone, but a per-matvec Metal path can still lose against exact decode because it performs many command-buffer/readback boundaries; the resident-body falsifier shows command-buffer coalescing alone is not sufficient.
+- cassandra: The CPU-oracle bottleneck is gone, and cold-upload timing was a misleading confounder. Warm cached MTP is fast enough to be useful if acceptance/replay is good; the resident-body falsifier shows command-buffer coalescing alone is not sufficient.
 - daedalus: The frame shifts from "can we evaluate MTP at all?" to "can we reduce MTP body bytes or fuse whole FFN/attention diamonds enough to become a practical candidate source?"
 - maieutic: The speed claim is scoped to one MTP body call in fresh-process smokes, not end-to-end speculative decode.
 - adversary: Generality remains low: two short prompts, one-token MTP, BF16 sidecar, no verifier-loop suite yet. Require multi-prompt acceptance and end-to-end plain-speedup before promoting MTP as a decode win.
