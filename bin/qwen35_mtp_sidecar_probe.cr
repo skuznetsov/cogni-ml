@@ -30,6 +30,7 @@ mtp_chain_raw_blends = [] of Float32
 mtp_chain_diag_bridge = false
 mtp_chain_diag_clamp = 4.0_f32
 mtp_chain_diag_ridge = 1.0e-5_f32
+mtp_chain_margin_thresholds = [] of Float64
 
 struct DiagBridge
   getter scale : Array(Float32)
@@ -85,6 +86,24 @@ class ChainAggregate
   end
 end
 
+class MarginRouterAggregate
+  property rows : Int32
+  property tokens : Int32
+  property top1_hits : Int32
+  property selected : Int32
+  property selected_hits : Int32
+  property false_accepts : Int32
+
+  def initialize
+    @rows = 0
+    @tokens = 0
+    @top1_hits = 0
+    @selected = 0
+    @selected_hits = 0
+    @false_accepts = 0
+  end
+end
+
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
 end
@@ -124,6 +143,11 @@ end
 
 private def fmt3(v : Float64?) : String
   v.nil? ? "na" : v.round(3).to_s
+end
+
+private def pct(num : Int32, den : Int32) : Float64
+  return 0.0 if den == 0
+  num * 100.0 / den
 end
 
 private def blend_hidden(a : Array(Float32), b : Array(Float32), alpha : Float32) : Array(Float32)
@@ -223,6 +247,9 @@ OptionParser.parse do |p|
   p.on("--mtp-chain-diag-bridge", "Train prompt-local diagonal raw-MTP-hidden -> target-hidden bridge and test recursive_diag") { mtp_chain_diag_bridge = true }
   p.on("--mtp-chain-diag-clamp X", "Clamp diagonal bridge scale to +/-X") { |v| mtp_chain_diag_clamp = v.to_f32 }
   p.on("--mtp-chain-diag-ridge X", "Diagonal bridge ridge term") { |v| mtp_chain_diag_ridge = v.to_f32 }
+  p.on("--mtp-chain-margin-thresholds LIST", "Comma-separated MTP top1/top2 margin thresholds for top1 confidence-router attribution") do |v|
+    mtp_chain_margin_thresholds = v.split(",").reject(&.empty?).map(&.to_f64)
+  end
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -254,6 +281,8 @@ abort "--mtp-chain-tokens must be non-negative" if mtp_chain_tokens < 0
 abort "--mtp-chain-topk must be positive" if mtp_chain_topk <= 0
 abort "--mtp-chain-diag-clamp must be positive" if mtp_chain_diag_clamp <= 0.0_f32
 abort "--mtp-chain-diag-ridge must be non-negative" if mtp_chain_diag_ridge < 0.0_f32
+mtp_chain_margin_thresholds = mtp_chain_margin_thresholds.sort.uniq
+abort "--mtp-chain-margin-thresholds requires --mtp-chain-topk >= 2" if !mtp_chain_margin_thresholds.empty? && mtp_chain_topk < 2
 chain_modes = case mtp_chain_mode
               when "teacher"
                 ["teacher"]
@@ -288,6 +317,9 @@ top5_hits = 0
 timed_calls = 0
 timed_ms = 0.0_f64
 chain_aggregates = Hash(String, ChainAggregate).new { |hash, key| hash[key] = ChainAggregate.new }
+margin_router_aggregates = Hash(String, Array(MarginRouterAggregate)).new do |hash, key|
+  hash[key] = Array(MarginRouterAggregate).new(mtp_chain_margin_thresholds.size) { MarginRouterAggregate.new }
+end
 
 rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
@@ -421,6 +453,11 @@ rows.each do |label, prompt_text|
     chain_hit_margin_min = nil.as(Float64?)
     chain_miss_margin_max = nil.as(Float64?)
     chain_candidates = [] of Int32
+    router_tokens = Array(Int32).new(mtp_chain_margin_thresholds.size, 0)
+    router_top1_hits = Array(Int32).new(mtp_chain_margin_thresholds.size, 0)
+    router_selected = Array(Int32).new(mtp_chain_margin_thresholds.size, 0)
+    router_selected_hits = Array(Int32).new(mtp_chain_margin_thresholds.size, 0)
+    router_false_accepts = Array(Int32).new(mtp_chain_margin_thresholds.size, 0)
 
     mtp_chain_tokens.times do |i|
       if mode == "recursive_diag"
@@ -468,6 +505,19 @@ rows.each do |label, prompt_text|
                                   else
                                     margin
                                   end
+        end
+
+        mtp_chain_margin_thresholds.each_with_index do |threshold, threshold_i|
+          router_tokens[threshold_i] += 1
+          router_top1_hits[threshold_i] += 1 if top1_hit
+          next unless margin >= threshold
+
+          router_selected[threshold_i] += 1
+          if top1_hit
+            router_selected_hits[threshold_i] += 1
+          else
+            router_false_accepts[threshold_i] += 1
+          end
         end
       end
 
@@ -537,6 +587,28 @@ rows.each do |label, prompt_text|
     end
 
     puts "mtp_chain_summary label=#{label.inspect} mode=#{mode} tokens=#{mtp_chain_tokens} topk=#{mtp_chain_topk} top1_hits=#{chain_top1_hits} top1_rate=#{(chain_top1_hits * 100.0 / mtp_chain_tokens).round(2)} topk_hits=#{chain_topk_hits} topk_rate=#{(chain_topk_hits * 100.0 / mtp_chain_tokens).round(2)} topk_misses=#{chain_topk_misses} first_miss=#{chain_first_miss} rank_hist=#{rank_hist_string(chain_rank_hist)} rank_order_attempts=#{chain_rank_order_attempts} avg_rank_order_attempts=#{chain_avg_rank_attempts.round(3)} rank_order_wasted=#{chain_rank_order_wasted} full_topk_attempts=#{chain_full_topk_attempts} avg_full_topk_attempts=#{chain_avg_full_attempts.round(3)} oracle_select_attempts=#{chain_oracle_select_attempts} avg_oracle_select_attempts=#{chain_avg_oracle_attempts.round(3)} top1_margin_avg=#{fmt3(chain_margin_avg)} hit_margin_avg=#{fmt3(chain_hit_margin_avg)} miss_margin_avg=#{fmt3(chain_miss_margin_avg)} hit_margin_min=#{fmt3(chain_hit_margin_min)} miss_margin_max=#{fmt3(chain_miss_margin_max)} mtp_avg_ms=#{(chain_mtp_ms_sum / chain_ms.size).round(3)} mtp_min=#{sorted_chain_ms.first.round(3)} mtp_p50=#{chain_p50_ms.round(3)} mtp_max=#{sorted_chain_ms.last.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} exact_hidden_oracle_avg_ms=#{(exact_hidden_oracle_ms / mtp_chain_tokens).round(3)} serial_exact_plus_mtp_ms=#{chain_serial_exact_plus_mtp_ms.round(3)} serial_vs_exact=#{(chain_serial_exact_plus_mtp_ms / exact_hidden_oracle_ms).round(3)} ideal_overlap_ms=#{chain_ideal_overlap_ms.round(3)} ideal_overlap_vs_exact=#{(chain_ideal_overlap_ms / exact_hidden_oracle_ms).round(3)} candidate_ids=#{chain_candidates.join(",")} candidate_text=#{chain_text.inspect}"
+
+    unless mtp_chain_margin_thresholds.empty?
+      router_agg = margin_router_aggregates[mode]
+      mtp_chain_margin_thresholds.each_with_index do |threshold, threshold_i|
+        tokens = router_tokens[threshold_i]
+        selected = router_selected[threshold_i]
+        selected_hits = router_selected_hits[threshold_i]
+        false_accepts = router_false_accepts[threshold_i]
+        top1_hit_count = router_top1_hits[threshold_i]
+        fallback = tokens - selected
+
+        agg_threshold = router_agg[threshold_i]
+        agg_threshold.rows += 1
+        agg_threshold.tokens += tokens
+        agg_threshold.top1_hits += top1_hit_count
+        agg_threshold.selected += selected
+        agg_threshold.selected_hits += selected_hits
+        agg_threshold.false_accepts += false_accepts
+
+        puts "mtp_chain_margin_router label=#{label.inspect} mode=#{mode} threshold=#{threshold} tokens=#{tokens} selected=#{selected} selected_rate=#{pct(selected, tokens).round(2)} selected_hits=#{selected_hits} false_accepts=#{false_accepts} precision=#{pct(selected_hits, selected).round(2)} fallback=#{fallback} hit_recall=#{pct(selected_hits, top1_hit_count).round(2)}"
+      end
+    end
   end
 end
 
@@ -553,4 +625,13 @@ chain_aggregates.keys.sort.each do |mode|
   hit_margin_avg = agg.top1_hit_margin_count > 0 ? agg.top1_hit_margin_sum / agg.top1_hit_margin_count : nil
   miss_margin_avg = agg.top1_miss_margin_count > 0 ? agg.top1_miss_margin_sum / agg.top1_miss_margin_count : nil
   puts "mtp_chain_suite_summary mode=#{mode} rows=#{agg.rows} tokens=#{agg.tokens} topk=#{mtp_chain_topk} top1_hits=#{agg.top1_hits} top1_rate=#{(agg.top1_hits * 100.0 / agg.tokens).round(2)} topk_hits=#{agg.topk_hits} topk_rate=#{(agg.topk_hits * 100.0 / agg.tokens).round(2)} topk_misses=#{agg.tokens - agg.topk_hits} rank_hist=#{rank_hist_string(agg.rank_hist)} rank_order_attempts=#{agg.rank_order_attempts} avg_rank_order_attempts=#{(agg.rank_order_attempts.to_f64 / agg.tokens).round(3)} rank_order_wasted=#{rank_order_wasted} full_topk_attempts=#{agg.full_topk_attempts} avg_full_topk_attempts=#{(agg.full_topk_attempts.to_f64 / agg.tokens).round(3)} oracle_select_attempts=#{oracle_select_attempts} avg_oracle_select_attempts=#{(oracle_select_attempts.to_f64 / agg.tokens).round(3)} top1_margin_avg=#{fmt3(margin_avg)} hit_margin_avg=#{fmt3(hit_margin_avg)} miss_margin_avg=#{fmt3(miss_margin_avg)} hit_margin_min=#{fmt3(agg.top1_hit_margin_min)} miss_margin_max=#{fmt3(agg.top1_miss_margin_max)} mtp_avg_ms=#{(agg.mtp_ms_sum / agg.tokens).round(3)} mtp_total_ms=#{agg.mtp_ms_sum.round(3)} exact_hidden_oracle_ms=#{agg.exact_hidden_oracle_ms_sum.round(3)} exact_hidden_oracle_avg_ms=#{(agg.exact_hidden_oracle_ms_sum / agg.tokens).round(3)} serial_exact_plus_mtp_ms=#{serial_exact_plus_mtp_ms.round(3)} serial_vs_exact=#{(serial_exact_plus_mtp_ms / agg.exact_hidden_oracle_ms_sum).round(3)} ideal_overlap_ms=#{ideal_overlap_ms.round(3)} ideal_overlap_vs_exact=#{(ideal_overlap_ms / agg.exact_hidden_oracle_ms_sum).round(3)}"
+end
+margin_router_aggregates.keys.sort.each do |mode|
+  margin_router_aggregates[mode].each_with_index do |agg, threshold_i|
+    next if agg.tokens == 0
+
+    threshold = mtp_chain_margin_thresholds[threshold_i]
+    fallback = agg.tokens - agg.selected
+    puts "mtp_chain_margin_router_suite mode=#{mode} threshold=#{threshold} rows=#{agg.rows} tokens=#{agg.tokens} selected=#{agg.selected} selected_rate=#{pct(agg.selected, agg.tokens).round(2)} selected_hits=#{agg.selected_hits} false_accepts=#{agg.false_accepts} precision=#{pct(agg.selected_hits, agg.selected).round(2)} fallback=#{fallback} hit_recall=#{pct(agg.selected_hits, agg.top1_hits).round(2)}"
+  end
 end

@@ -6722,6 +6722,10 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
   source: `/tmp/qwen36_mtp_teacher_margin_k5_20260502.log`
   verified_at: 2026-05-02
   decay_trigger: margin definition, topK logits path, prompt suite, generated length, or MTP formula changes
+- claim: "The explicit raw-margin router sweep confirms the same limitation. On the 4-prompt 27B teacher-forced `gen8/K=5` suite, thresholds `0.5/1/2/4` still select false top1 candidates (`5/3/2/1` false accepts). Threshold `5.5` is clean (`5/5`, `0` false accepts) but selects only `15.62%` of tokens and captures only `25%` of true top1 hits."
+  source: `/tmp/qwen36_mtp_margin_router_k5_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: margin threshold list, prompt suite, generated length, topK logits path, or MTP formula changes
 **decision:** Do not implement a blind rank-order K8 MTP verifier as the next speed path. The useful next branch is low-K mismatch-only rescue or branch selection/routing: `K=2` has much lower attempt pressure and still covers most exact tokens, while `K=5` is a quality upper bound that needs a selector to avoid wasted rank-order branches. MTP should be treated as a one-step exact-hidden candidate/ranker until a learned hidden bridge or another draft source uses it to avoid replay/branch work. Raw MTP margin alone is not that selector; test richer confidence features such as candidate-source agreement, prompt/rank history, verifier-local signals, or a calibrated classifier.
 **quadrumvirate:**
 - cassandra: TopK coverage alone again overstates speed; the repeated failure pattern is branch work hidden behind oracle scoring.
