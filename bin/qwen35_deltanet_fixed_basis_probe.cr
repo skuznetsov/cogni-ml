@@ -29,6 +29,7 @@ private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String,
 private alias BlockSurrogateTreeSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, top_k: Int32, prefill_seed: Bool, branch_verify: Bool, select_advance: Bool, warmup_tokens: Int32, prefill_seed_tokens: Int32, tree_tokens: Int32, parity: Bool, full_rescue_chunks: Int32, chunks: Int32, misses: Int32, draft_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, avg_rank_branch_tokens_total: Float64, avg_full_branch_tokens_total: Float64, branch_tokens_rank: Int32, branch_tokens_full: Int32, branch_verify_attempts: Int32, branch_verify_wasted_attempts: Int32, branch_verify_corrections: Int32, branch_verify_ms: Float64, branch_verify_fork_ms: Float64, branch_verify_forward_ms: Float64, correction_steps: Int32, hidden_cos_mean: Float64, rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
+private alias RiskOfframpScoreRow = NamedTuple(prompt: String, mode: String, split: String, threshold: String, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, risk_hits: Int32, delayed_blocks: Int32, delayed_tokens: Int32, margin_min: Float64, reject_margin_min: Float64)
 private alias MtpSelfDraftFusionRow = NamedTuple(index: Int32, exact: Int32, self_id: Int32, self_second_id: Int32, mtp_rank: Int32, self_hit: Bool, self_top2_hit: Bool, mtp_hit: Bool, mtp_k2_hit: Bool, union_hit: Bool, union_k2_hit: Bool, agreement: Bool, union_size: Int32, union_k2_size: Int32, mtp_first_attempts: Int32, self_first_attempts: Int32)
 
 private struct RecurrentSample
@@ -8016,6 +8017,144 @@ private def route_stability_key(row : RouteScoreRow) : String
   "#{row[:mode]}|#{row[:split]}|#{row[:route]}|#{updown}"
 end
 
+private def risk_offramp_threshold_label(value : Float64?) : String
+  value.nil? ? "baseline" : value.not_nil!.to_s
+end
+
+private def append_risk_offramp_score(rows : Array(RiskOfframpScoreRow),
+                                      prompt_name : String,
+                                      mode : String,
+                                      draft_split : Int32?,
+                                      threshold : Float64?,
+                                      pipe,
+                                      accept_rate : Float64)
+  rows << {
+    prompt:            prompt_name,
+    mode:              mode,
+    split:             draft_split.nil? ? "nil" : draft_split.to_s,
+    threshold:         risk_offramp_threshold_label(threshold),
+    parity:            pipe[:parity],
+    accept_rate:       accept_rate,
+    rejections:        pipe[:rejections],
+    plain_speedup:     pipe[:plain_speedup],
+    overlap_ms:        pipe[:overlap_ms],
+    plain_exact_ms:    pipe[:plain_exact_ms],
+    draft_wait_ms:     pipe[:draft_wait_ms],
+    replay_ms:         pipe[:replay_ms],
+    risk_hits:         pipe[:risk_offramp_hits],
+    delayed_blocks:    pipe[:risk_offramp_delayed_blocks],
+    delayed_tokens:    pipe[:risk_offramp_delayed_tokens],
+    margin_min:        pipe[:tree2_margin_min],
+    reject_margin_min: pipe[:tree2_reject_margin_min],
+  }
+end
+
+private def risk_offramp_baseline_key(row : RiskOfframpScoreRow) : String
+  "#{row[:prompt]}|#{row[:mode]}|#{row[:split]}"
+end
+
+private def risk_offramp_group_key(row : RiskOfframpScoreRow) : String
+  "#{row[:mode]}|#{row[:split]}|#{row[:threshold]}"
+end
+
+private def print_risk_offramp_scoreboard(rows : Array(RiskOfframpScoreRow), limit : Int32 = 40)
+  return if rows.empty?
+  baselines = {} of String => RiskOfframpScoreRow
+  rows.each do |row|
+    next unless row[:parity]
+    next unless row[:threshold] == "baseline"
+    baselines[risk_offramp_baseline_key(row)] = row
+  end
+
+  ranked = rows.sort do |a, b|
+    a_base = baselines[risk_offramp_baseline_key(a)]?
+    b_base = baselines[risk_offramp_baseline_key(b)]?
+    a_delta = a_base && a_base[:overlap_ms] > 0.0 ? ((a_base[:overlap_ms] - a[:overlap_ms]) * 100.0 / a_base[:overlap_ms]) : 0.0
+    b_delta = b_base && b_base[:overlap_ms] > 0.0 ? ((b_base[:overlap_ms] - b[:overlap_ms]) * 100.0 / b_base[:overlap_ms]) : 0.0
+    b_delta <=> a_delta
+  end
+
+  puts "self_spec_risk_offramp_scoreboard rows=#{rows.size} baselines=#{baselines.size} limit=#{limit}"
+  puts "rank prompt mode split threshold parity accept% plain_speedup overlap_ms baseline_delta% draft_wait_ms replay_ms replay_delta_ms rejections reject_delta risk_hits delayed_blocks delayed_tokens margin_min reject_margin_min"
+  ranked.first(limit).each_with_index do |row, i|
+    baseline = baselines[risk_offramp_baseline_key(row)]?
+    baseline_delta = baseline && baseline[:overlap_ms] > 0.0 ? ((baseline[:overlap_ms] - row[:overlap_ms]) * 100.0 / baseline[:overlap_ms]) : nil
+    replay_delta = baseline ? row[:replay_ms] - baseline[:replay_ms] : nil
+    reject_delta = baseline ? row[:rejections] - baseline[:rejections] : 0
+    delta_text = baseline_delta ? sprintf("%.2f", baseline_delta) : "na"
+    replay_delta_text = replay_delta ? sprintf("%.3f", replay_delta) : "na"
+    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:threshold]} #{row[:parity]} #{row[:accept_rate].round(2)} #{row[:plain_speedup].round(4)} #{row[:overlap_ms].round(3)} #{delta_text} #{row[:draft_wait_ms].round(3)} #{row[:replay_ms].round(3)} #{replay_delta_text} #{row[:rejections]} #{reject_delta} #{row[:risk_hits]} #{row[:delayed_blocks]} #{row[:delayed_tokens]} #{row[:margin_min].round(4)} #{row[:reject_margin_min].round(4)}"
+  end
+end
+
+private def print_risk_offramp_stability_scoreboard(rows : Array(RiskOfframpScoreRow), limit : Int32 = 20)
+  return if rows.empty?
+  baselines = {} of String => RiskOfframpScoreRow
+  rows.each do |row|
+    next unless row[:parity]
+    next unless row[:threshold] == "baseline"
+    baselines[risk_offramp_baseline_key(row)] = row
+  end
+
+  groups = Hash(String, Array(RiskOfframpScoreRow)).new { |h, k| h[k] = [] of RiskOfframpScoreRow }
+  rows.each { |row| groups[risk_offramp_group_key(row)] << row }
+
+  summaries = [] of NamedTuple(key: String, prompts: Int32, baselines: Int32, parity_all: Bool, accept_mean: Float64, delta_mean: Float64, delta_min: Float64, delta_max: Float64, plain_speedup_mean: Float64, replay_delta_mean: Float64, reject_delta_total: Int32, false_offramp_hits: Int32, risk_hits: Int32, delayed_tokens: Int32, overlap_total: Float64, score: Float64)
+  groups.each do |key, group|
+    prompts = group.size
+    parity_all = group.all? { |row| row[:parity] }
+    accept_mean = group.sum { |row| row[:accept_rate] } / prompts
+    plain_speedup_mean = group.sum { |row| row[:plain_speedup] } / prompts
+    overlap_total = group.sum { |row| row[:overlap_ms] }
+    deltas = [] of Float64
+    replay_deltas = [] of Float64
+    reject_delta_total = 0
+    false_offramp_hits = 0
+    group.each do |row|
+      if baseline = baselines[risk_offramp_baseline_key(row)]?
+        deltas << ((baseline[:overlap_ms] - row[:overlap_ms]) * 100.0 / baseline[:overlap_ms]) if baseline[:overlap_ms] > 0.0
+        replay_deltas << (row[:replay_ms] - baseline[:replay_ms])
+        reject_delta_total += row[:rejections] - baseline[:rejections]
+        false_offramp_hits += row[:risk_hits] if baseline[:rejections] == 0 && row[:rejections] == 0
+      end
+    end
+    baseline_count = deltas.size
+    delta_mean = deltas.empty? ? 0.0 : deltas.sum / deltas.size
+    delta_min = deltas.empty? ? 0.0 : deltas.min
+    delta_max = deltas.empty? ? 0.0 : deltas.max
+    replay_delta_mean = replay_deltas.empty? ? 0.0 : replay_deltas.sum / replay_deltas.size
+    risk_hits = group.sum { |row| row[:risk_hits] }
+    delayed_tokens = group.sum { |row| row[:delayed_tokens] }
+    score = parity_all ? (delta_mean + delta_min * 0.25 - false_offramp_hits * 0.25 - [replay_delta_mean, 0.0].max / 1000.0) : -1.0e9
+    summaries << {
+      key:                key,
+      prompts:            prompts,
+      baselines:          baseline_count,
+      parity_all:         parity_all,
+      accept_mean:        accept_mean,
+      delta_mean:         delta_mean,
+      delta_min:          delta_min,
+      delta_max:          delta_max,
+      plain_speedup_mean: plain_speedup_mean,
+      replay_delta_mean:  replay_delta_mean,
+      reject_delta_total: reject_delta_total,
+      false_offramp_hits: false_offramp_hits,
+      risk_hits:          risk_hits,
+      delayed_tokens:     delayed_tokens,
+      overlap_total:      overlap_total,
+      score:              score,
+    }
+  end
+
+  ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
+  puts "self_spec_risk_offramp_stability_scoreboard groups=#{summaries.size} baselines=#{baselines.size} limit=#{limit}"
+  puts "rank mode split threshold prompts baselines parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% baseline_delta_max% replay_delta_mean_ms reject_delta_total false_offramp_hits risk_hits delayed_tokens score"
+  ranked.first(limit).each_with_index do |row, i|
+    mode, split, threshold = row[:key].split('|')
+    puts "#{i + 1} #{mode} #{split} #{threshold} #{row[:prompts]} #{row[:baselines]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:delta_max].round(2)} #{row[:replay_delta_mean].round(3)} #{row[:reject_delta_total]} #{row[:false_offramp_hits]} #{row[:risk_hits]} #{row[:delayed_tokens]} #{row[:score].round(4)}"
+  end
+end
+
 private def route_score(row : RouteScoreRow, baseline_overlap : Float64?) : Float64
   return -1.0e9 unless row[:parity]
   speed_component = baseline_overlap && baseline_overlap > 0.0 ? baseline_overlap / row[:overlap_ms] : row[:plain_speedup]
@@ -9063,6 +9202,7 @@ if rank = simulate_logit_rank
       default_draft_split = ENV["QWEN35_DRAFT_BLOCK_TOKENS"]?.try(&.to_i?) || DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS
       pipeline_splits = simulate_self_spec_gpu_pipeline_draft_splits.empty? ? [default_draft_split.as(Int32?)] : simulate_self_spec_gpu_pipeline_draft_splits.map { |v| v.as(Int32?) }
       route_score_rows = [] of RouteScoreRow
+      risk_offramp_score_rows = [] of RiskOfframpScoreRow
       pipeline_updown_options = [] of Int32?
       if simulate_self_spec_gpu_pipeline_draft_updown_ranks.empty?
         pipeline_updown_options << simulate_self_spec_gpu_pipeline_draft_updown_rank
@@ -9158,6 +9298,7 @@ if rank = simulate_logit_rank
                 tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                 attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                append_risk_offramp_score(risk_offramp_score_rows, "main", "gamma=#{pipeline_gamma}", draft_split, risk_offramp_margin, pipe, accept_rate)
               end
             end
           end
@@ -9182,6 +9323,7 @@ if rank = simulate_logit_rank
                 tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                 attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                append_risk_offramp_score(risk_offramp_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", draft_split, risk_offramp_margin, pipe, accept_rate)
               end
             end
           end
@@ -9280,6 +9422,7 @@ if rank = simulate_logit_rank
                   tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                   attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                   puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                  append_risk_offramp_score(risk_offramp_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}", draft_split, risk_offramp_margin, pipe, accept_rate)
                 end
               end
             end
@@ -9304,6 +9447,7 @@ if rank = simulate_logit_rank
                   tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                   attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                   puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                  append_risk_offramp_score(risk_offramp_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", draft_split, risk_offramp_margin, pipe, accept_rate)
                 end
               end
             end
@@ -9316,6 +9460,10 @@ if rank = simulate_logit_rank
           print_route_stability_scoreboard(route_score_rows)
           print_route_oracle_scoreboard(route_score_rows)
         end
+      end
+      if !risk_offramp_score_rows.empty? && (!simulate_self_spec_gpu_pipeline_risk_offramp_margins.empty? || simulate_self_spec_gpu_pipeline_risk_offramp_margin)
+        print_risk_offramp_scoreboard(risk_offramp_score_rows)
+        print_risk_offramp_stability_scoreboard(risk_offramp_score_rows)
       end
     end
     if simulate_self_spec_gpu_pipeline_route_features && !pipeline_route_active && !simulate_self_spec_gpu_pipeline_suite_prompts.empty?

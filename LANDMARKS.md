@@ -6946,3 +6946,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The speed lever is not top2 rescue; it is avoiding queued wrong-or-risky next-block work before verifier outcome.
 - maieutic: The gen32 suite has only three prompt classes and one threshold. Promotion needs longer prompts, reasoning/code falsifiers, and possibly a learned/richer risk feature.
 - adversary: The rows are wall-clock noisy and still slower than plain exact decode. Treat this as a controller improvement inside current self-spec, not a plain-decode breakthrough.
+
+**decision_update_5:** A dedicated risk-offramp scoreboard is now implemented, and it weakens the previous promotion claim. The probe prints `self_spec_risk_offramp_scoreboard` for per-prompt baseline deltas and `self_spec_risk_offramp_stability_scoreboard` for threshold-level aggregates with penalties for false offramps and replay growth. The 9B smoke preserved parity and printed both scoreboards. A fresh Qwen3.6-27B `gen32` main/code/json sweep still ranks threshold `0.5` first, but only as a small/noisy aggregate signal: mean overlap delta `+1.71%`, min `-1.81%`, max `+6.76%`, with `false_offramp_hits=1`. Higher thresholds show the failure mode clearly (`1.0` score `-12.2666`, `2.0` score `-29.5363`). The critical adversary finding is that no-hit code rows still drifted heavily in wall time, up to `-61.14%` at threshold `2.0`, so order/thermal/host noise can swamp small controller deltas. Keep `risk_offramp=0.5` opt-in, not promoted to default.
+**evidence_update_5:**
+- claim: "Risk-offramp scoreboards are implemented for regular self-spec GPU pipeline/suite rows and verified by build, specs, and a 9B smoke."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_risk_score_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_risk_score_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_risk_score_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); `/tmp/qwen35_risk_score_smoke_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: pipeline route loops, risk-offramp metrics, score grouping, or CLI option semantics change
+- claim: "Fresh Qwen3.6-27B `gen32` scoreboarding ranks `risk_offramp=0.5` first but exposes the signal as too noisy for default promotion without paired/repeated timing."
+  source: `/tmp/qwen36_risk_score_suite_gen32_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, generated length, threshold list, host load, GPU scheduling, or timing harness changes
+**quadrumvirate_update_5:**
+- cassandra: The risk-offramp branch is vulnerable to wall-clock/order noise; no-hit controls are mandatory.
+- daedalus: The next optimization frame is measurement quality first, then controller policy. Otherwise tiny policy deltas chase scheduler noise.
+- maieutic: The key unproven assumption is that a single baseline row is enough for threshold ranking. Current evidence refutes that assumption for small deltas.
+- adversary: Do not call `risk_offramp=0.5` a robust speedup yet. Require ABBA or median repeats plus a no-hit false-trigger control.
