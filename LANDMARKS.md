@@ -7142,3 +7142,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from hand-written threshold routing to supervised/offline route scoring over prompt features, position/horizon, model/band identity, and verifier outcome.
 - maieutic: The useful question is not "is FFN rel-RMSE low enough?" but "for this remaining horizon and route, is expected replay risk lower than draft-body savings?"
 - adversary: The small `gen16` 9B positive deltas are too small for promotion and vanish or invert at longer horizon. Keep pca-updown default-off until ABBA/repeats show positive min-delta under the learned router.
+
+**decision_update_14:** The accumulated-drift hypothesis is now strongly supported for 9B, and layer-mask dependence is verified as a real axis. Added default-off `--simulate-self-spec-gpu-pipeline-draft-updown-max-chunks=N`, which caps pca-updown draft chunks before falling back to lowrank. On 9B wide late band (`24,25,26,28,29,30`, rank32, pca-updown16, `gen32`, `schedule=4,4,8`), always-on pca-updown had been a large regression. Capping the pca burst fixes the long-horizon cliff: `max_chunks=1` preserved parity/acceptance and scored `baseline_delta_mean=+1.23%` with min `-0.08%`; `max_chunks=2` scored `+1.62%` with min `-0.25%`; `max_chunks=4` crossed the cliff again with `baseline_delta_mean=-47.29%`, min `-91.34%`, and accept mean `83.73%`. Layer-mask split under the safe `max_chunks=2` shows prompt/layer interaction: `24,25,26` was safe/neutral (`accept_mean=97.14%`, min `-1.85%`), while `28,29,30` caused a main-prompt reject and aggregate regression (`accept_mean=96.36%`, min `-24.35%`). A focused 27B narrow-band (`24,25,26`) `gen16` gate did not inherit the 9B burst win: `max_chunks=1/2` still regressed aggregate (`-23.34%/-23.35%`) because main/code reject on the first pca chunk, while JSON/reasoning were near neutral/slightly positive. Conclusion: pca-updown should be treated as a route with a small safe burst budget and prompt/layer-specific first-chunk risk, not as a static body replacement. The next router must predict both `layer_mask` and `max_chunks` from prompt features, model/band identity, remaining horizon, and expected replay risk.
+**evidence_update_14:**
+- claim: "The pca-updown max-chunks cap is implemented and verified by build/spec/release build."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_max_pca_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_max_pca_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_max_pca_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); release build `/tmp/qwen35_max_pca_probe_release`
+  verified_at: 2026-05-03
+  decay_trigger: self-spec run signature, pca-updown controller semantics, paired serial route mirroring, or scoreboard grouping changes
+- claim: "9B wide late-band `gen32` confirms accumulated pca drift: small burst caps (`1/2`) are safe/slightly positive, while `4` pca chunks reintroduces rejects and large wall regression."
+  source: `/tmp/qwen35_max_pca_chunks1_wide_gen32_20260503121914.log`; `/tmp/qwen35_max_pca_chunks2_wide_gen32_20260503122158.log`; `/tmp/qwen35_max_pca_chunks4_wide_gen32_20260503122453.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, generated length, layer band, pca-updown rank, external calibration prompts, model/quant, host load, or scheduler implementation changes
+- claim: "9B layer-mask split with `max_chunks=2` shows `24,25,26` is safer than `28,29,30`; the latter causes a main-prompt reject."
+  source: `/tmp/qwen35_layer_mask_24_25_26_max2_gen32_20260503122808.log`; `/tmp/qwen35_layer_mask_28_29_30_max2_gen32_20260503123051.log`
+  verified_at: 2026-05-03
+  decay_trigger: layer mask set, prompt suite, generated length, pca rank, external calibration prompts, model/quant, or scheduler implementation changes
+- claim: "27B narrow-band `max_chunks=1/2` does not rescue pca-updown aggregate wall because main/code reject on the first pca chunk."
+  source: `/tmp/qwen36_max_pca_chunks1_narrow_gen16_20260503123348.log`; `/tmp/qwen36_max_pca_chunks2_narrow_gen16_20260503123729.log`
+  verified_at: 2026-05-03
+  decay_trigger: model/quant, layer band, generated length, prompt suite, external calibration prompts, host load, or scheduler implementation changes
+**quadrumvirate_update_14:**
+- cassandra: The 9B fix can be overgeneralized; 27B shows first-chunk risk still dominates some prompt/layer pairs.
+- daedalus: Pivot from "pca route on/off" to "choose a bounded pca burst budget and layer mask under expected replay risk."
+- maieutic: The critical predictive target is first-pca-chunk safety for a prompt/layer/model tuple, then safe burst length after the first accepted pca chunk.
+- adversary: 9B positive deltas are small and need repeats before promotion; 27B remains a strong falsifier for portable policy. Keep default-off.
