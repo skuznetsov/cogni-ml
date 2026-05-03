@@ -6978,3 +6978,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Stop optimizing the guard threshold; switch to large-effect routes or measurement isolation.
 - maieutic: The assumption that no-hit rows provide a cheap neutral control is valid and exposed the issue: when no-hit rows move heavily, the timing harness cannot rank small policies.
 - adversary: The ABBA run itself shows severe host/GPU variance, so treat its numeric deltas as a refutation of promotion, not as precise performance estimates.
+
+**decision_update_7:** Paired ABBA scoring is now available for the self-draft body itself, and the first release-only 27B gates make `pca-updown16` on a narrow late recurrent band the strongest current non-refuted speed lever. The probe prints `self_spec_draft_body_scoreboard` and `self_spec_draft_body_stability_scoreboard`, and `--simulate-self-spec-gpu-pipeline-draft-updown-repeats=N` expands lowrank-vs-updown rows in ABBA order while scoring against median lowrank baselines. A 9B smoke preserved parity and exposed bad `pca-updown8` as a negative control, so the scoreboard catches both wins and losses. On Qwen3.6-27B, layers `24,25,26`, DeltaNet rank32, external FFN calibration, `schedule=4,4,8`, and ABBA repeats=2, `pca-updown16` preserved parity and improved the 3-prompt suite. `gen16` improved aggregate overlap by `+14.86%` with min `+2.83%` and accept mean `97.92%` vs lowrank `89.39%`; `gen32` improved aggregate overlap by `+8.17%` with min `+3.51%` and accept mean `97.06%` vs lowrank `93.86%`, with every prompt class improving. Debug/non-release 27B ABBA is not an interactive path because CPU adapter prep is too slow; use release builds with `build/bridge.o` and cache external FFN adapters before larger sweeps.
+**evidence_update_7:**
+- claim: "Draft-body ABBA repeats and scoreboards are implemented for regular self-spec GPU pipeline/suite rows and verified by build, specs, and a 9B smoke."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_updown_abba_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_updown_abba_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_updown_abba_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); `/tmp/qwen35_updown_abba_smoke_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: pipeline updown option expansion, draft-body row schema, scoreboard grouping, or FFN adapter routing changes
+- claim: "Qwen3.6-27B release-only `gen16` ABBA gate shows `pca-updown16` on layers `24,25,26` improves overlap and acceptance versus median lowrank baselines while preserving parity."
+  source: `/tmp/qwen36_updown_abba_suite_gen16_small_release_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer band, updown rank, DeltaNet rank, generated length, model/quant, host load, or scheduler implementation changes
+- claim: "Qwen3.6-27B release-only `gen32` ABBA gate keeps the same direction with positive min delta across main/code/json, making this a larger and more reliable effect than the refuted small risk-offramp threshold tuning."
+  source: `/tmp/qwen36_updown_abba_suite_gen32_small_release_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, layer band, updown rank, DeltaNet rank, generated length, model/quant, host load, or scheduler implementation changes
+- claim: "Non-release 27B pca-updown ABBA runs are too slow for interactive sweeps because adapter preparation dominates before useful rows are emitted; release builds should link `build/bridge.o`."
+  source: `/tmp/qwen36_updown_abba_suite_gen32_20260502.log`; `/tmp/qwen36_updown_abba_suite_gen16_small_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: Crystal build mode, adapter preparation implementation, linker object path, or model target changes
+**quadrumvirate_update_7:**
+- cassandra: This is a large-effect branch with prompt-class coverage, so it is worth expanding; the main failure modes are wider-band acceptance cliffs and prep-cost contamination.
+- daedalus: The useful frame shifted from small controller timing deltas to making the proposal body cheaper while preserving exact verifier parity.
+- maieutic: The claim is still self-spec pipeline speed relative to lowrank body, not a plain-decode win over llama.cpp. Super-fusion is justified only if release ABBA keeps positive min-delta on larger bands/ranks.
+- adversary: Generality remains medium-low: three prompts, one narrow band, rank16 updown, `gen16/32`. Next gate must test wider late bands, ranks `16/32`, `gen32-64`, and code/json no-regression before default promotion.

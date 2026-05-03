@@ -29,6 +29,7 @@ private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String,
 private alias BlockSurrogateTreeSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, top_k: Int32, prefill_seed: Bool, branch_verify: Bool, select_advance: Bool, warmup_tokens: Int32, prefill_seed_tokens: Int32, tree_tokens: Int32, parity: Bool, full_rescue_chunks: Int32, chunks: Int32, misses: Int32, draft_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, avg_rank_branch_tokens_total: Float64, avg_full_branch_tokens_total: Float64, branch_tokens_rank: Int32, branch_tokens_full: Int32, branch_verify_attempts: Int32, branch_verify_wasted_attempts: Int32, branch_verify_corrections: Int32, branch_verify_ms: Float64, branch_verify_fork_ms: Float64, branch_verify_forward_ms: Float64, correction_steps: Int32, hidden_cos_mean: Float64, rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
 private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
+private alias DraftBodyScoreRow = NamedTuple(prompt: String, mode: String, split: String, body: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, draft_updown_chunks: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64)
 private alias RiskOfframpScoreRow = NamedTuple(prompt: String, mode: String, split: String, threshold: String, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, risk_hits: Int32, delayed_blocks: Int32, delayed_tokens: Int32, margin_min: Float64, reject_margin_min: Float64)
 private alias MtpSelfDraftFusionRow = NamedTuple(index: Int32, exact: Int32, self_id: Int32, self_second_id: Int32, mtp_rank: Int32, self_hit: Bool, self_top2_hit: Bool, mtp_hit: Bool, mtp_k2_hit: Bool, union_hit: Bool, union_k2_hit: Bool, agreement: Bool, union_size: Int32, union_k2_size: Int32, mtp_first_attempts: Int32, self_first_attempts: Int32)
 
@@ -8028,6 +8029,184 @@ private def median_float(values : Array(Float64)) : Float64
   sorted.size.odd? ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5
 end
 
+private def draft_body_label(rank : Int32?) : String
+  rank ? "pca_updown#{rank}" : "lowrank"
+end
+
+private def append_draft_body_score(rows : Array(DraftBodyScoreRow),
+                                    prompt_name : String,
+                                    mode : String,
+                                    draft_split : Int32?,
+                                    updown_rank : Int32?,
+                                    pipe,
+                                    accept_rate : Float64)
+  rows << {
+    prompt:               prompt_name,
+    mode:                 mode,
+    split:                draft_split.nil? ? "nil" : draft_split.to_s,
+    body:                 draft_body_label(updown_rank),
+    updown_rank:          updown_rank,
+    parity:               pipe[:parity],
+    accept_rate:          accept_rate,
+    rejections:           pipe[:rejections],
+    draft_updown_chunks:  pipe[:draft_updown_chunks],
+    plain_speedup:        pipe[:plain_speedup],
+    overlap_ms:           pipe[:overlap_ms],
+    plain_exact_ms:       pipe[:plain_exact_ms],
+    draft_next_ms:        pipe[:draft_next_ms],
+    verifier_ms:          pipe[:verifier_ms],
+    draft_wait_ms:        pipe[:draft_wait_ms],
+    replay_ms:            pipe[:replay_ms],
+  }
+end
+
+private def draft_body_baseline_key(row : DraftBodyScoreRow) : String
+  "#{row[:prompt]}|#{row[:mode]}|#{row[:split]}"
+end
+
+private def draft_body_group_key(row : DraftBodyScoreRow) : String
+  updown = row[:updown_rank] ? row[:updown_rank].to_s : "-"
+  "#{row[:mode]}|#{row[:split]}|#{row[:body]}|#{updown}"
+end
+
+private def draft_body_baseline_groups(rows : Array(DraftBodyScoreRow))
+  baselines = Hash(String, Array(DraftBodyScoreRow)).new { |h, k| h[k] = [] of DraftBodyScoreRow }
+  rows.each do |row|
+    next unless row[:parity]
+    next unless row[:updown_rank].nil?
+    baselines[draft_body_baseline_key(row)] << row
+  end
+  baselines
+end
+
+private def draft_body_baseline_sample_count(groups : Hash(String, Array(DraftBodyScoreRow))) : Int32
+  total = 0
+  groups.each_value { |group| total += group.size }
+  total
+end
+
+private def draft_body_baseline_overlap_ms(groups : Hash(String, Array(DraftBodyScoreRow)), key : String) : Float64?
+  group = groups[key]?
+  return nil unless group && !group.empty?
+  median_float(group.map { |row| row[:overlap_ms] })
+end
+
+private def draft_body_baseline_replay_ms(groups : Hash(String, Array(DraftBodyScoreRow)), key : String) : Float64?
+  group = groups[key]?
+  return nil unless group && !group.empty?
+  median_float(group.map { |row| row[:replay_ms] })
+end
+
+private def draft_body_baseline_rejections(groups : Hash(String, Array(DraftBodyScoreRow)), key : String) : Float64?
+  group = groups[key]?
+  return nil unless group && !group.empty?
+  median_float(group.map { |row| row[:rejections].to_f64 })
+end
+
+private def draft_body_baseline_accept_rate(groups : Hash(String, Array(DraftBodyScoreRow)), key : String) : Float64?
+  group = groups[key]?
+  return nil unless group && !group.empty?
+  median_float(group.map { |row| row[:accept_rate] })
+end
+
+private def print_draft_body_scoreboard(rows : Array(DraftBodyScoreRow), limit : Int32 = 40)
+  return if rows.empty?
+  baselines = draft_body_baseline_groups(rows)
+  baseline_samples = draft_body_baseline_sample_count(baselines)
+  ranked = rows.sort do |a, b|
+    a_base = draft_body_baseline_overlap_ms(baselines, draft_body_baseline_key(a))
+    b_base = draft_body_baseline_overlap_ms(baselines, draft_body_baseline_key(b))
+    a_delta = a_base && a_base > 0.0 ? ((a_base - a[:overlap_ms]) * 100.0 / a_base) : 0.0
+    b_delta = b_base && b_base > 0.0 ? ((b_base - b[:overlap_ms]) * 100.0 / b_base) : 0.0
+    b_delta <=> a_delta
+  end
+
+  puts "self_spec_draft_body_scoreboard rows=#{rows.size} baseline_groups=#{baselines.size} baseline_samples=#{baseline_samples} limit=#{limit}"
+  puts "rank prompt mode split body updown parity accept% accept_delta rejections reject_delta draft_updown_chunks plain_speedup overlap_ms baseline_delta% draft_next_ms verifier_ms draft_wait_ms replay_ms replay_delta_ms"
+  ranked.first(limit).each_with_index do |row, i|
+    baseline_key = draft_body_baseline_key(row)
+    baseline_overlap = draft_body_baseline_overlap_ms(baselines, baseline_key)
+    baseline_replay = draft_body_baseline_replay_ms(baselines, baseline_key)
+    baseline_rejections = draft_body_baseline_rejections(baselines, baseline_key)
+    baseline_accept = draft_body_baseline_accept_rate(baselines, baseline_key)
+    baseline_delta = baseline_overlap && baseline_overlap > 0.0 ? ((baseline_overlap - row[:overlap_ms]) * 100.0 / baseline_overlap) : nil
+    replay_delta = baseline_replay ? row[:replay_ms] - baseline_replay : nil
+    reject_delta = baseline_rejections ? row[:rejections].to_f64 - baseline_rejections : nil
+    accept_delta = baseline_accept ? row[:accept_rate] - baseline_accept : nil
+    updown_text = row[:updown_rank] ? row[:updown_rank].to_s : "-"
+    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:body]} #{updown_text} #{row[:parity]} #{row[:accept_rate].round(2)} #{accept_delta ? sprintf("%.2f", accept_delta) : "na"} #{row[:rejections]} #{reject_delta ? sprintf("%.2f", reject_delta) : "na"} #{row[:draft_updown_chunks]} #{row[:plain_speedup].round(4)} #{row[:overlap_ms].round(3)} #{baseline_delta ? sprintf("%.2f", baseline_delta) : "na"} #{row[:draft_next_ms].round(3)} #{row[:verifier_ms].round(3)} #{row[:draft_wait_ms].round(3)} #{row[:replay_ms].round(3)} #{replay_delta ? sprintf("%.3f", replay_delta) : "na"}"
+  end
+end
+
+private def print_draft_body_stability_scoreboard(rows : Array(DraftBodyScoreRow), limit : Int32 = 20)
+  return if rows.empty?
+  baselines = draft_body_baseline_groups(rows)
+  baseline_samples = draft_body_baseline_sample_count(baselines)
+  groups = Hash(String, Array(DraftBodyScoreRow)).new { |h, k| h[k] = [] of DraftBodyScoreRow }
+  rows.each { |row| groups[draft_body_group_key(row)] << row }
+
+  summaries = [] of NamedTuple(key: String, rows: Int32, baseline_samples: Int32, parity_all: Bool, accept_mean: Float64, accept_delta_mean: Float64, plain_speedup_mean: Float64, overlap_total: Float64, delta_mean: Float64, delta_min: Float64, replay_delta_mean: Float64, reject_delta_total: Float64, draft_updown_chunks: Int32, score: Float64)
+  groups.each do |key, group|
+    row_count = group.size
+    parity_all = group.all? { |row| row[:parity] }
+    accept_mean = group.sum { |row| row[:accept_rate] } / row_count
+    plain_speedup_mean = group.sum { |row| row[:plain_speedup] } / row_count
+    overlap_total = group.sum { |row| row[:overlap_ms] }
+    draft_updown_chunks = group.sum { |row| row[:draft_updown_chunks] }
+    deltas = [] of Float64
+    accept_deltas = [] of Float64
+    replay_deltas = [] of Float64
+    reject_delta_total = 0.0
+    baseline_count = 0
+    seen_baseline_keys = Set(String).new
+    group.each do |row|
+      baseline_key = draft_body_baseline_key(row)
+      if baseline_group = baselines[baseline_key]?
+        if seen_baseline_keys.add?(baseline_key)
+          baseline_count += baseline_group.size
+        end
+        baseline_overlap = draft_body_baseline_overlap_ms(baselines, baseline_key)
+        baseline_replay = draft_body_baseline_replay_ms(baselines, baseline_key)
+        baseline_rejections = draft_body_baseline_rejections(baselines, baseline_key)
+        baseline_accept = draft_body_baseline_accept_rate(baselines, baseline_key)
+        deltas << ((baseline_overlap - row[:overlap_ms]) * 100.0 / baseline_overlap) if baseline_overlap && baseline_overlap > 0.0
+        replay_deltas << (row[:replay_ms] - baseline_replay) if baseline_replay
+        reject_delta_total += row[:rejections].to_f64 - baseline_rejections if baseline_rejections
+        accept_deltas << (row[:accept_rate] - baseline_accept) if baseline_accept
+      end
+    end
+    delta_mean = deltas.empty? ? 0.0 : deltas.sum / deltas.size
+    delta_min = deltas.empty? ? 0.0 : deltas.min
+    replay_delta_mean = replay_deltas.empty? ? 0.0 : replay_deltas.sum / replay_deltas.size
+    accept_delta_mean = accept_deltas.empty? ? 0.0 : accept_deltas.sum / accept_deltas.size
+    score = parity_all ? (delta_mean + delta_min * 0.25 + accept_delta_mean * 0.1 - [replay_delta_mean, 0.0].max / 1000.0 - [reject_delta_total, 0.0].max * 0.5) : -1.0e9
+    summaries << {
+      key:                 key,
+      rows:                row_count,
+      baseline_samples:    baseline_count,
+      parity_all:          parity_all,
+      accept_mean:         accept_mean,
+      accept_delta_mean:   accept_delta_mean,
+      plain_speedup_mean:  plain_speedup_mean,
+      overlap_total:       overlap_total,
+      delta_mean:          delta_mean,
+      delta_min:           delta_min,
+      replay_delta_mean:   replay_delta_mean,
+      reject_delta_total:  reject_delta_total,
+      draft_updown_chunks: draft_updown_chunks,
+      score:               score,
+    }
+  end
+
+  ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
+  puts "self_spec_draft_body_stability_scoreboard groups=#{summaries.size} baseline_groups=#{baselines.size} baseline_samples=#{baseline_samples} limit=#{limit}"
+  puts "rank mode split body updown rows baseline_samples parity_all accept_mean accept_delta_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% replay_delta_mean_ms reject_delta_total draft_updown_chunks score"
+  ranked.first(limit).each_with_index do |row, i|
+    mode, split, body, updown = row[:key].split('|')
+    puts "#{i + 1} #{mode} #{split} #{body} #{updown} #{row[:rows]} #{row[:baseline_samples]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:accept_delta_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:replay_delta_mean].round(3)} #{row[:reject_delta_total].round(2)} #{row[:draft_updown_chunks]} #{row[:score].round(4)}"
+  end
+end
+
 private def append_risk_offramp_score(rows : Array(RiskOfframpScoreRow),
                                       prompt_name : String,
                                       mode : String,
@@ -8450,6 +8629,7 @@ simulate_self_spec_gpu_pipeline_draft_no_ffn_layers = [] of Int32
 simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn = false
 simulate_self_spec_gpu_pipeline_draft_updown_rank : Int32? = nil
 simulate_self_spec_gpu_pipeline_draft_updown_ranks = [] of Int32
+simulate_self_spec_gpu_pipeline_draft_updown_repeats = 1
 simulate_self_spec_gpu_pipeline_draft_updown_layers = [] of Int32
 simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject = false
 simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts = 0
@@ -8614,6 +8794,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-draft-skip-recurrent-ffn", "Research route: skip FFN on all recurrent draft layers; exact verifier still enforces parity") { simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown=R", "Use resident FFN pca-updown rank R on selected low-rank recurrent draft layers in the real GPU pipeline") { |v| simulate_self_spec_gpu_pipeline_draft_updown_rank = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updowns=LIST", "In-process A/B list for resident FFN pca-updown ranks in the real GPU pipeline; use 0 for lowrank baseline") { |v| simulate_self_spec_gpu_pipeline_draft_updown_ranks = parse_int_list(v) }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-updown-repeats=N", "Repeat draft body A/B in ABBA order and score against median lowrank baselines") { |v| simulate_self_spec_gpu_pipeline_draft_updown_repeats = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-layers=LIST", "Apply resident FFN pca-updown only to the listed low-rank recurrent draft layers; enables hybrid draft bodies") { |v| simulate_self_spec_gpu_pipeline_draft_updown_layers = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-fallback-on-reject", "After the first pca-updown draft rejection, resync future draft blocks with baseline lowrank") { simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-after-full-accepts=N", "Only enable pca-updown after N consecutive full-accept chunks; any reject disables and resets the streak") { |v| simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts = v.to_i }
@@ -9249,13 +9430,38 @@ if rank = simulate_logit_rank
       default_draft_split = ENV["QWEN35_DRAFT_BLOCK_TOKENS"]?.try(&.to_i?) || DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS
       pipeline_splits = simulate_self_spec_gpu_pipeline_draft_splits.empty? ? [default_draft_split.as(Int32?)] : simulate_self_spec_gpu_pipeline_draft_splits.map { |v| v.as(Int32?) }
       route_score_rows = [] of RouteScoreRow
+      draft_body_score_rows = [] of DraftBodyScoreRow
       risk_offramp_score_rows = [] of RiskOfframpScoreRow
-      pipeline_updown_options = [] of Int32?
+      raise "draft pca-updown repeats must be >= 1" if simulate_self_spec_gpu_pipeline_draft_updown_repeats < 1
+      pipeline_updown_base_options = [] of Int32?
       if simulate_self_spec_gpu_pipeline_draft_updown_ranks.empty?
-        pipeline_updown_options << simulate_self_spec_gpu_pipeline_draft_updown_rank
+        pipeline_updown_base_options << simulate_self_spec_gpu_pipeline_draft_updown_rank
       else
         simulate_self_spec_gpu_pipeline_draft_updown_ranks.each do |v|
-          pipeline_updown_options << (v > 0 ? v : nil)
+          option = v > 0 ? v : nil
+          pipeline_updown_base_options << option unless pipeline_updown_base_options.any? { |existing| existing == option }
+        end
+      end
+      pipeline_updown_options = [] of Int32?
+      if simulate_self_spec_gpu_pipeline_draft_updown_repeats <= 1
+        pipeline_updown_options.concat(pipeline_updown_base_options)
+      else
+        ranks = pipeline_updown_base_options.compact
+        if ranks.empty? && (single_rank = simulate_self_spec_gpu_pipeline_draft_updown_rank)
+          ranks << single_rank
+        end
+        if ranks.empty?
+          pipeline_updown_options.concat(pipeline_updown_base_options)
+        else
+          simulate_self_spec_gpu_pipeline_draft_updown_repeats.times do |repeat_i|
+            if repeat_i.even?
+              pipeline_updown_options << nil
+              ranks.each { |value| pipeline_updown_options << value }
+            else
+              ranks.reverse_each { |value| pipeline_updown_options << value }
+              pipeline_updown_options << nil
+            end
+          end
         end
       end
       if !simulate_self_spec_gpu_pipeline_suite_prompts.empty? && pipeline_updown_options.any? { |option| !option.nil? }
@@ -9297,6 +9503,9 @@ if rank = simulate_logit_rank
       end
       if simulate_self_spec_gpu_pipeline_hybrid_sweep && !simulate_self_spec_gpu_pipeline_risk_offramp_margins.empty?
         raise "risk-offramp margin sweep is not wired into hybrid route scoreboards yet; use a single --simulate-self-spec-gpu-pipeline-risk-offramp-margin=F or disable hybrid sweep"
+      end
+      if simulate_self_spec_gpu_pipeline_hybrid_sweep && simulate_self_spec_gpu_pipeline_draft_updown_repeats > 1
+        raise "draft pca-updown repeats are not wired into hybrid route scoreboards yet; disable hybrid sweep or set repeats=1"
       end
       if simulate_self_spec_gpu_pipeline_hybrid_sweep
         pipeline_gammas.each do |pipeline_gamma|
@@ -9368,6 +9577,7 @@ if rank = simulate_logit_rank
                 tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                 attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                append_draft_body_score(draft_body_score_rows, "main", "gamma=#{pipeline_gamma}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                 append_risk_offramp_score(risk_offramp_score_rows, "main", "gamma=#{pipeline_gamma}", draft_split, risk_offramp_margin, pipe, accept_rate)
               end
             end
@@ -9393,6 +9603,7 @@ if rank = simulate_logit_rank
                 tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                 attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                append_draft_body_score(draft_body_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                 append_risk_offramp_score(risk_offramp_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", draft_split, risk_offramp_margin, pipe, accept_rate)
               end
             end
@@ -9492,6 +9703,7 @@ if rank = simulate_logit_rank
                   tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                   attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                   puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                  append_draft_body_score(draft_body_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                   append_risk_offramp_score(risk_offramp_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}", draft_split, risk_offramp_margin, pipe, accept_rate)
                 end
               end
@@ -9517,6 +9729,7 @@ if rank = simulate_logit_rank
                   tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !risk_offramp_margin.nil?) ? self_spec_pipeline_tree2_note(pipe) : ""
                   attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                   puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{risk_offramp_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                  append_draft_body_score(draft_body_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                   append_risk_offramp_score(risk_offramp_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", draft_split, risk_offramp_margin, pipe, accept_rate)
                 end
               end
@@ -9530,6 +9743,10 @@ if rank = simulate_logit_rank
           print_route_stability_scoreboard(route_score_rows)
           print_route_oracle_scoreboard(route_score_rows)
         end
+      end
+      if !draft_body_score_rows.empty? && (simulate_self_spec_gpu_pipeline_draft_updown_rank || !simulate_self_spec_gpu_pipeline_draft_updown_ranks.empty?)
+        print_draft_body_scoreboard(draft_body_score_rows)
+        print_draft_body_stability_scoreboard(draft_body_score_rows)
       end
       if !risk_offramp_score_rows.empty? && (!simulate_self_spec_gpu_pipeline_risk_offramp_margins.empty? || simulate_self_spec_gpu_pipeline_risk_offramp_margin)
         print_risk_offramp_scoreboard(risk_offramp_score_rows)
