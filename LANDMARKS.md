@@ -6962,3 +6962,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next optimization frame is measurement quality first, then controller policy. Otherwise tiny policy deltas chase scheduler noise.
 - maieutic: The key unproven assumption is that a single baseline row is enough for threshold ranking. Current evidence refutes that assumption for small deltas.
 - adversary: Do not call `risk_offramp=0.5` a robust speedup yet. Require ABBA or median repeats plus a no-hit false-trigger control.
+
+**decision_update_6:** ABBA/repeated timing is now available for risk-offramp sweeps and it refutes promotion of `risk_offramp=0.5` under the current wall-clock environment. `--simulate-self-spec-gpu-pipeline-risk-offramp-repeats=N` repeats baseline/threshold rows in ABBA order and scoreboards compare against median baseline samples. The 9B ABBA smoke preserved parity. The 27B `gen32` main/code/json ABBA gate with threshold `0.5` preserved exact parity, but the aggregate threshold score was negative/noisy: mean overlap delta `-0.8%`, min `-45.98%`, max `+16.3%`, `false_offramp_hits=2`, `risk_hits=4`, delayed `16` tokens. The no-hit code control is the key falsifier: `risk_offramp=0.5` triggered no delays on code, yet the two threshold rows ranged from `+7.10%` to `-45.98%`, and the two code baselines themselves spanned `3633.324ms -> 16284.933ms`. This makes small controller deltas untrustworthy until host/GPU variance is controlled. Next speed work should target larger expected effects and must use ABBA/repeats for promotion.
+**evidence_update_6:**
+- claim: "Risk-offramp ABBA repeats are implemented and verified by build, specs, and a 9B smoke."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_risk_repeat_build2 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_risk_repeat_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_risk_repeat_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); `/tmp/qwen35_risk_repeat_smoke2_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: risk-offramp option expansion, scoreboard baseline grouping, or pipeline row schema changes
+- claim: "Qwen3.6-27B `gen32` ABBA gate refutes promotion of `risk_offramp=0.5` as a robust controller speedup in the current environment."
+  source: `/tmp/qwen36_risk_repeat_suite_gen32_t05_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: host load, power/thermal state, generated length, prompt suite, model/quant, or scheduler implementation changes
+**quadrumvirate_update_6:**
+- cassandra: Controller deltas below roughly 5-10% are currently below measurement noise unless repeated and paired.
+- daedalus: Stop optimizing the guard threshold; switch to large-effect routes or measurement isolation.
+- maieutic: The assumption that no-hit rows provide a cheap neutral control is valid and exposed the issue: when no-hit rows move heavily, the timing harness cannot rank small policies.
+- adversary: The ABBA run itself shows severe host/GPU variance, so treat its numeric deltas as a refutation of promotion, not as precise performance estimates.

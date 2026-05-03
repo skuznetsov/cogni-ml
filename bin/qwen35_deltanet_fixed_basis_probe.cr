@@ -8021,6 +8021,13 @@ private def risk_offramp_threshold_label(value : Float64?) : String
   value.nil? ? "baseline" : value.not_nil!.to_s
 end
 
+private def median_float(values : Array(Float64)) : Float64
+  return 0.0 if values.empty?
+  sorted = values.sort
+  mid = sorted.size // 2
+  sorted.size.odd? ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5
+end
+
 private def append_risk_offramp_score(rows : Array(RiskOfframpScoreRow),
                                       prompt_name : String,
                                       mode : String,
@@ -8057,68 +8064,106 @@ private def risk_offramp_group_key(row : RiskOfframpScoreRow) : String
   "#{row[:mode]}|#{row[:split]}|#{row[:threshold]}"
 end
 
-private def print_risk_offramp_scoreboard(rows : Array(RiskOfframpScoreRow), limit : Int32 = 40)
-  return if rows.empty?
-  baselines = {} of String => RiskOfframpScoreRow
+private def risk_offramp_baseline_groups(rows : Array(RiskOfframpScoreRow))
+  baselines = Hash(String, Array(RiskOfframpScoreRow)).new { |h, k| h[k] = [] of RiskOfframpScoreRow }
   rows.each do |row|
     next unless row[:parity]
     next unless row[:threshold] == "baseline"
-    baselines[risk_offramp_baseline_key(row)] = row
+    baselines[risk_offramp_baseline_key(row)] << row
   end
+  baselines
+end
+
+private def risk_offramp_baseline_sample_count(groups : Hash(String, Array(RiskOfframpScoreRow))) : Int32
+  total = 0
+  groups.each_value { |group| total += group.size }
+  total
+end
+
+private def risk_offramp_baseline_overlap_ms(groups : Hash(String, Array(RiskOfframpScoreRow)), key : String) : Float64?
+  group = groups[key]?
+  return nil unless group && !group.empty?
+  median_float(group.map { |row| row[:overlap_ms] })
+end
+
+private def risk_offramp_baseline_replay_ms(groups : Hash(String, Array(RiskOfframpScoreRow)), key : String) : Float64?
+  group = groups[key]?
+  return nil unless group && !group.empty?
+  median_float(group.map { |row| row[:replay_ms] })
+end
+
+private def risk_offramp_baseline_rejections(groups : Hash(String, Array(RiskOfframpScoreRow)), key : String) : Float64?
+  group = groups[key]?
+  return nil unless group && !group.empty?
+  median_float(group.map { |row| row[:rejections].to_f64 })
+end
+
+private def print_risk_offramp_scoreboard(rows : Array(RiskOfframpScoreRow), limit : Int32 = 40)
+  return if rows.empty?
+  baselines = risk_offramp_baseline_groups(rows)
+  baseline_samples = risk_offramp_baseline_sample_count(baselines)
 
   ranked = rows.sort do |a, b|
-    a_base = baselines[risk_offramp_baseline_key(a)]?
-    b_base = baselines[risk_offramp_baseline_key(b)]?
-    a_delta = a_base && a_base[:overlap_ms] > 0.0 ? ((a_base[:overlap_ms] - a[:overlap_ms]) * 100.0 / a_base[:overlap_ms]) : 0.0
-    b_delta = b_base && b_base[:overlap_ms] > 0.0 ? ((b_base[:overlap_ms] - b[:overlap_ms]) * 100.0 / b_base[:overlap_ms]) : 0.0
+    a_base = risk_offramp_baseline_overlap_ms(baselines, risk_offramp_baseline_key(a))
+    b_base = risk_offramp_baseline_overlap_ms(baselines, risk_offramp_baseline_key(b))
+    a_delta = a_base && a_base > 0.0 ? ((a_base - a[:overlap_ms]) * 100.0 / a_base) : 0.0
+    b_delta = b_base && b_base > 0.0 ? ((b_base - b[:overlap_ms]) * 100.0 / b_base) : 0.0
     b_delta <=> a_delta
   end
 
-  puts "self_spec_risk_offramp_scoreboard rows=#{rows.size} baselines=#{baselines.size} limit=#{limit}"
+  puts "self_spec_risk_offramp_scoreboard rows=#{rows.size} baseline_groups=#{baselines.size} baseline_samples=#{baseline_samples} limit=#{limit}"
   puts "rank prompt mode split threshold parity accept% plain_speedup overlap_ms baseline_delta% draft_wait_ms replay_ms replay_delta_ms rejections reject_delta risk_hits delayed_blocks delayed_tokens margin_min reject_margin_min"
   ranked.first(limit).each_with_index do |row, i|
-    baseline = baselines[risk_offramp_baseline_key(row)]?
-    baseline_delta = baseline && baseline[:overlap_ms] > 0.0 ? ((baseline[:overlap_ms] - row[:overlap_ms]) * 100.0 / baseline[:overlap_ms]) : nil
-    replay_delta = baseline ? row[:replay_ms] - baseline[:replay_ms] : nil
-    reject_delta = baseline ? row[:rejections] - baseline[:rejections] : 0
+    baseline_key = risk_offramp_baseline_key(row)
+    baseline_overlap = risk_offramp_baseline_overlap_ms(baselines, baseline_key)
+    baseline_replay = risk_offramp_baseline_replay_ms(baselines, baseline_key)
+    baseline_rejections = risk_offramp_baseline_rejections(baselines, baseline_key)
+    baseline_delta = baseline_overlap && baseline_overlap > 0.0 ? ((baseline_overlap - row[:overlap_ms]) * 100.0 / baseline_overlap) : nil
+    replay_delta = baseline_replay ? row[:replay_ms] - baseline_replay : nil
+    reject_delta = baseline_rejections ? row[:rejections].to_f64 - baseline_rejections : nil
     delta_text = baseline_delta ? sprintf("%.2f", baseline_delta) : "na"
     replay_delta_text = replay_delta ? sprintf("%.3f", replay_delta) : "na"
-    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:threshold]} #{row[:parity]} #{row[:accept_rate].round(2)} #{row[:plain_speedup].round(4)} #{row[:overlap_ms].round(3)} #{delta_text} #{row[:draft_wait_ms].round(3)} #{row[:replay_ms].round(3)} #{replay_delta_text} #{row[:rejections]} #{reject_delta} #{row[:risk_hits]} #{row[:delayed_blocks]} #{row[:delayed_tokens]} #{row[:margin_min].round(4)} #{row[:reject_margin_min].round(4)}"
+    reject_delta_text = reject_delta ? sprintf("%.2f", reject_delta) : "na"
+    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:threshold]} #{row[:parity]} #{row[:accept_rate].round(2)} #{row[:plain_speedup].round(4)} #{row[:overlap_ms].round(3)} #{delta_text} #{row[:draft_wait_ms].round(3)} #{row[:replay_ms].round(3)} #{replay_delta_text} #{row[:rejections]} #{reject_delta_text} #{row[:risk_hits]} #{row[:delayed_blocks]} #{row[:delayed_tokens]} #{row[:margin_min].round(4)} #{row[:reject_margin_min].round(4)}"
   end
 end
 
 private def print_risk_offramp_stability_scoreboard(rows : Array(RiskOfframpScoreRow), limit : Int32 = 20)
   return if rows.empty?
-  baselines = {} of String => RiskOfframpScoreRow
-  rows.each do |row|
-    next unless row[:parity]
-    next unless row[:threshold] == "baseline"
-    baselines[risk_offramp_baseline_key(row)] = row
-  end
+  baselines = risk_offramp_baseline_groups(rows)
+  baseline_samples = risk_offramp_baseline_sample_count(baselines)
 
   groups = Hash(String, Array(RiskOfframpScoreRow)).new { |h, k| h[k] = [] of RiskOfframpScoreRow }
   rows.each { |row| groups[risk_offramp_group_key(row)] << row }
 
-  summaries = [] of NamedTuple(key: String, prompts: Int32, baselines: Int32, parity_all: Bool, accept_mean: Float64, delta_mean: Float64, delta_min: Float64, delta_max: Float64, plain_speedup_mean: Float64, replay_delta_mean: Float64, reject_delta_total: Int32, false_offramp_hits: Int32, risk_hits: Int32, delayed_tokens: Int32, overlap_total: Float64, score: Float64)
+  summaries = [] of NamedTuple(key: String, rows: Int32, baseline_samples: Int32, parity_all: Bool, accept_mean: Float64, delta_mean: Float64, delta_min: Float64, delta_max: Float64, plain_speedup_mean: Float64, replay_delta_mean: Float64, reject_delta_total: Float64, false_offramp_hits: Int32, risk_hits: Int32, delayed_tokens: Int32, overlap_total: Float64, score: Float64)
   groups.each do |key, group|
-    prompts = group.size
+    row_count = group.size
     parity_all = group.all? { |row| row[:parity] }
-    accept_mean = group.sum { |row| row[:accept_rate] } / prompts
-    plain_speedup_mean = group.sum { |row| row[:plain_speedup] } / prompts
+    accept_mean = group.sum { |row| row[:accept_rate] } / row_count
+    plain_speedup_mean = group.sum { |row| row[:plain_speedup] } / row_count
     overlap_total = group.sum { |row| row[:overlap_ms] }
     deltas = [] of Float64
     replay_deltas = [] of Float64
-    reject_delta_total = 0
+    reject_delta_total = 0.0
     false_offramp_hits = 0
+    baseline_count = 0
+    seen_baseline_keys = Set(String).new
     group.each do |row|
-      if baseline = baselines[risk_offramp_baseline_key(row)]?
-        deltas << ((baseline[:overlap_ms] - row[:overlap_ms]) * 100.0 / baseline[:overlap_ms]) if baseline[:overlap_ms] > 0.0
-        replay_deltas << (row[:replay_ms] - baseline[:replay_ms])
-        reject_delta_total += row[:rejections] - baseline[:rejections]
-        false_offramp_hits += row[:risk_hits] if baseline[:rejections] == 0 && row[:rejections] == 0
+      baseline_key = risk_offramp_baseline_key(row)
+      if baseline_group = baselines[baseline_key]?
+        if seen_baseline_keys.add?(baseline_key)
+          baseline_count += baseline_group.size
+        end
+        baseline_overlap = risk_offramp_baseline_overlap_ms(baselines, baseline_key)
+        baseline_replay = risk_offramp_baseline_replay_ms(baselines, baseline_key)
+        baseline_rejections = risk_offramp_baseline_rejections(baselines, baseline_key)
+        deltas << ((baseline_overlap - row[:overlap_ms]) * 100.0 / baseline_overlap) if baseline_overlap && baseline_overlap > 0.0
+        replay_deltas << (row[:replay_ms] - baseline_replay) if baseline_replay
+        reject_delta_total += row[:rejections].to_f64 - baseline_rejections if baseline_rejections
+        false_offramp_hits += row[:risk_hits] if baseline_rejections && baseline_rejections <= 0.0 && row[:rejections] == 0
       end
     end
-    baseline_count = deltas.size
     delta_mean = deltas.empty? ? 0.0 : deltas.sum / deltas.size
     delta_min = deltas.empty? ? 0.0 : deltas.min
     delta_max = deltas.empty? ? 0.0 : deltas.max
@@ -8128,8 +8173,8 @@ private def print_risk_offramp_stability_scoreboard(rows : Array(RiskOfframpScor
     score = parity_all ? (delta_mean + delta_min * 0.25 - false_offramp_hits * 0.25 - [replay_delta_mean, 0.0].max / 1000.0) : -1.0e9
     summaries << {
       key:                key,
-      prompts:            prompts,
-      baselines:          baseline_count,
+      rows:               row_count,
+      baseline_samples:   baseline_count,
       parity_all:         parity_all,
       accept_mean:        accept_mean,
       delta_mean:         delta_mean,
@@ -8147,11 +8192,11 @@ private def print_risk_offramp_stability_scoreboard(rows : Array(RiskOfframpScor
   end
 
   ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
-  puts "self_spec_risk_offramp_stability_scoreboard groups=#{summaries.size} baselines=#{baselines.size} limit=#{limit}"
-  puts "rank mode split threshold prompts baselines parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% baseline_delta_max% replay_delta_mean_ms reject_delta_total false_offramp_hits risk_hits delayed_tokens score"
+  puts "self_spec_risk_offramp_stability_scoreboard groups=#{summaries.size} baseline_groups=#{baselines.size} baseline_samples=#{baseline_samples} limit=#{limit}"
+  puts "rank mode split threshold rows baseline_samples parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% baseline_delta_max% replay_delta_mean_ms reject_delta_total false_offramp_hits risk_hits delayed_tokens score"
   ranked.first(limit).each_with_index do |row, i|
     mode, split, threshold = row[:key].split('|')
-    puts "#{i + 1} #{mode} #{split} #{threshold} #{row[:prompts]} #{row[:baselines]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:delta_max].round(2)} #{row[:replay_delta_mean].round(3)} #{row[:reject_delta_total]} #{row[:false_offramp_hits]} #{row[:risk_hits]} #{row[:delayed_tokens]} #{row[:score].round(4)}"
+    puts "#{i + 1} #{mode} #{split} #{threshold} #{row[:rows]} #{row[:baseline_samples]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:delta_max].round(2)} #{row[:replay_delta_mean].round(3)} #{row[:reject_delta_total].round(2)} #{row[:false_offramp_hits]} #{row[:risk_hits]} #{row[:delayed_tokens]} #{row[:score].round(4)}"
   end
 end
 
@@ -8415,6 +8460,7 @@ simulate_self_spec_gpu_pipeline_tree2_staged_tokens = 0
 simulate_self_spec_gpu_pipeline_tree2_margin_guard : Float64? = nil
 simulate_self_spec_gpu_pipeline_risk_offramp_margin : Float64? = nil
 simulate_self_spec_gpu_pipeline_risk_offramp_margins = [] of Float64
+simulate_self_spec_gpu_pipeline_risk_offramp_repeats = 1
 simulate_self_spec_gpu_pipeline_attribution = ENV["QWEN35_SELF_SPEC_ATTR"]? == "1"
 simulate_self_spec_gpu_pipeline_hybrid_sweep = false
 simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = false
@@ -8578,6 +8624,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-margin-guard=F", "Use draft top1/top2 margin <= F to split exact verifier at the first low-margin token") { |v| simulate_self_spec_gpu_pipeline_tree2_margin_guard = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margin=F", "When draft top1/top2 margin <= F, do not pre-submit the next draft block before exact verification") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST", "In-process A/B list for risk-offramp thresholds; automatically includes the no-offramp baseline") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margins = parse_float_list(v) }
+  p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-repeats=N", "Repeat risk-offramp A/B in ABBA order and score against median no-offramp baselines") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_repeats = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-attribution", "Append WBA attribution counters for the real GPU self-spec pipeline") { simulate_self_spec_gpu_pipeline_attribution = true }
   p.on("--simulate-self-spec-gpu-pipeline-hybrid-sweep", "Run an in-process route sweep over pure/no-FFN/pca-updown hybrid layer masks") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true }
   p.on("--simulate-self-spec-gpu-pipeline-hybrid-rich-sweep", "Add per-layer, prefix/suffix, and alternating hybrid routes to the GPU self-spec layer-mode sweep") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = true }
@@ -9215,15 +9262,38 @@ if rank = simulate_logit_rank
         raise "GPU pipeline suite with pca-updown requires external --ffn-pca-calib-prompt so FFN adapters are not tied to the main prompt" if ffn_pca_calib_token_sets.empty?
       end
       state_backup_note = simulate_self_spec_gpu_pipeline_legacy_full_state_backup ? " state_backup=legacy_full" : " state_backup=live_blit"
-      risk_offramp_options = [] of Float64?
+      raise "risk-offramp repeats must be >= 1" if simulate_self_spec_gpu_pipeline_risk_offramp_repeats < 1
+      risk_offramp_base_options = [] of Float64?
       add_risk_offramp_option = ->(value : Float64?) {
-        risk_offramp_options << value unless risk_offramp_options.any? { |existing| existing == value }
+        risk_offramp_base_options << value unless risk_offramp_base_options.any? { |existing| existing == value }
       }
       if simulate_self_spec_gpu_pipeline_risk_offramp_margins.empty?
         add_risk_offramp_option.call(simulate_self_spec_gpu_pipeline_risk_offramp_margin)
       else
         add_risk_offramp_option.call(nil)
         simulate_self_spec_gpu_pipeline_risk_offramp_margins.each { |value| add_risk_offramp_option.call(value) }
+      end
+      risk_offramp_options = [] of Float64?
+      if simulate_self_spec_gpu_pipeline_risk_offramp_repeats <= 1
+        risk_offramp_options.concat(risk_offramp_base_options)
+      else
+        thresholds = risk_offramp_base_options.compact
+        if thresholds.empty? && (single_margin = simulate_self_spec_gpu_pipeline_risk_offramp_margin)
+          thresholds << single_margin
+        end
+        if thresholds.empty?
+          risk_offramp_options.concat(risk_offramp_base_options)
+        else
+          simulate_self_spec_gpu_pipeline_risk_offramp_repeats.times do |repeat_i|
+            if repeat_i.even?
+              risk_offramp_options << nil
+              thresholds.each { |value| risk_offramp_options << value }
+            else
+              thresholds.reverse_each { |value| risk_offramp_options << value }
+              risk_offramp_options << nil
+            end
+          end
+        end
       end
       if simulate_self_spec_gpu_pipeline_hybrid_sweep && !simulate_self_spec_gpu_pipeline_risk_offramp_margins.empty?
         raise "risk-offramp margin sweep is not wired into hybrid route scoreboards yet; use a single --simulate-self-spec-gpu-pipeline-risk-offramp-margin=F or disable hybrid sweep"
