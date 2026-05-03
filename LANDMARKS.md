@@ -7026,3 +7026,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next frame is not "fuse pca-updown harder"; it is "route cheap body only when expected verifier savings exceed reject/replay risk."
 - maieutic: The positive `gen32` evidence remains useful, but it does not generalize to long JSON spans. Claim scope must stay bounded by generated length and prompt class.
 - adversary: Wall-clock variance is still visible, but the `gen64` refutation is large and acceptance-correlated, so it is not just timing noise. Do not promote always-on pca-updown until a router passes both `gen32` and `gen64` ABBA.
+
+**decision_update_9:** The first pre-submit pca-updown router primitive is implemented, and it sharpens the next route boundary. `--simulate-self-spec-gpu-pipeline-draft-updown-min-margin=F` starts resident pca-updown routes in lowrank mode, then enables pca-updown only for future draft blocks after a full-accept chunk whose draft top1/top2 min-margin clears `F`; rejects disable it again. The paired serial baseline mirrors the same route so timing remains comparable. The simple threshold is not solved: `min_margin=0.5` is refuted on a Qwen3.6-27B JSON `gen64` gate because it still opened `5` pca chunks, dropped acceptance from `96.92%` to `89.86%`, and scored strongly negative. A stricter `min_margin=2.0` is the first viable conservative threshold: the same JSON `gen64` prompt left pca closed (`draft_updown_chunks=0`) and preserved parity/acceptance, while a focused main/code/json `gen32` gate opened pca on `3/4/3` chunks, preserved parity, and improved aggregate overlap by `+9.56%` with min `+3.65%`. This is a router primitive, not promotion. The next gate must run repeated ABBA for `min_margin=2.0`, add reasoning/long JSON falsifiers, and likely combine previous-chunk margin with position/prompt/route features before any superfused pca-updown kernel.
+**evidence_update_9:**
+- claim: "The pca-updown min-margin router is implemented and verified by release build, specs, and a 9B parity smoke."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_updown_router_release2 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr --release -D qwen35_mtp_metal -o /tmp/qwen35_updown_router_probe_release2 --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_updown_router_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); `/tmp/qwen35_updown_router_smoke_verify_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: self-spec run signature, top2 margin buffers, pca-updown route policy, serial baseline accounting, or row schema changes
+- claim: "A low pca-updown margin threshold (`0.5`) is insufficient for long JSON spans because it still enables risky pca chunks and worsens acceptance/wall."
+  source: `/tmp/qwen36_updown_router_wide_gen64_json_m05_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt, threshold, layer band, generated length, external FFN calibration, model/quant, host load, or scheduler implementation changes
+- claim: "A stricter threshold (`2.0`) keeps the JSON `gen64` gate conservative by disabling pca-updown chunks while preserving exact parity and acceptance."
+  source: `/tmp/qwen36_updown_router_wide_gen64_json_m20_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt, threshold, layer band, generated length, external FFN calibration, model/quant, host load, or scheduler implementation changes
+- claim: "The same strict threshold still opens pca-updown on a focused `gen32` main/code/json gate and gives a preliminary positive aggregate signal."
+  source: `/tmp/qwen36_updown_router_wide_gen32_suite_m20_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, threshold, layer band, generated length, external FFN calibration, model/quant, host load, or scheduler implementation changes
+**quadrumvirate_update_9:**
+- cassandra: The router is sensitive to threshold and prompt span; one low threshold repeats the exact delayed-cliff failure.
+- daedalus: The useful frame is not "margin means confidence" in isolation, but "previous accepted chunk margin is a conservative permission bit for the next cheaper body."
+- maieutic: The unproven assumption is that a scalar threshold generalizes. Current evidence suggests threshold `2.0` may separate short safe spans from long JSON risk, but only as a preliminary route.
+- adversary: Do not super-fuse or default this route yet. Positive evidence is one focused `gen32` suite without repeats; negative evidence shows the cliff is real. Require repeated ABBA and prompt-class falsifiers before promotion.
