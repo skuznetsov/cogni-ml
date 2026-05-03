@@ -6926,3 +6926,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame is not verifier splitting after low margin, but avoiding speculative work before a likely reject.
 - maieutic: One prompt is insufficient to promote `risk_offramp`; the claim is a candidate policy, not a default.
 - adversary: Same-shape comparison still includes host/GPU noise and cold-run setup. Next evidence needs a suite or in-process threshold sweep.
+
+**decision_update_4:** `risk_offramp=0.5` now has a small but real opt-in controller signal. The probe supports `--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST`, which automatically includes the no-offramp baseline and runs regular pipeline/suite A/B rows in one model load. On Qwen3.6-27B `gen16` over main/code/json, all rows accepted `100%`; this mostly tested false-trigger cost. Threshold `0.5` stayed safe/slightly positive on overlap (mean `+1.68%`), while `1.0` and `2.0` regressed on average. On the more relevant `gen32` main/code/json focused gate, `risk_offramp=0.5` preserved parity and improved every row: main `6177.154 -> 5357.480ms` (`+13.27%`), code `3897.356 -> 3740.302ms` (`+4.03%`), JSON `3860.430 -> 3598.133ms` (`+6.79%`), aggregate mean `+8.03%`.
+**evidence_update_4:**
+- claim: "The in-process risk-offramp threshold sweep is implemented and verified for regular GPU self-spec pipeline/suite rows. Hybrid scoreboards intentionally reject list sweeps until route-score grouping includes threshold identity."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_risk_sweep_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_risk_offramp_sweep_probe --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_risk_sweep_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="/tmp/cogni_ml_bridge_pipeline.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`)
+  verified_at: 2026-05-02
+  decay_trigger: CLI option parsing, pipeline route loops, hybrid scoreboards, or self-spec run signature changes
+- claim: "Qwen3.6-27B `gen16` main/code/json threshold sweep shows `0.5` is the only safe initial threshold among `0.5/1.0/2.0`; higher thresholds trigger more false offramps and regress average wall."
+  source: `/tmp/qwen36_risk_offramp_sweep_suite_gen16_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, threshold list, route, model/quant, host load, or scheduler implementation changes
+- claim: "Qwen3.6-27B `gen32` main/code/json focused suite shows `risk_offramp=0.5` improves overlap in all tested rows while preserving exact parity."
+  source: `/tmp/qwen36_risk_offramp_sweep_suite_gen32_t05_20260502.log`
+  verified_at: 2026-05-02
+  decay_trigger: prompt suite, generated length, threshold, route, model/quant, host load, or scheduler implementation changes
+**quadrumvirate_update_4:**
+- cassandra: The promising threshold is narrow. Higher thresholds confirm the false-offramp cost pattern.
+- daedalus: The speed lever is not top2 rescue; it is avoiding queued wrong-or-risky next-block work before verifier outcome.
+- maieutic: The gen32 suite has only three prompt classes and one threshold. Promotion needs longer prompts, reasoning/code falsifiers, and possibly a learned/richer risk feature.
+- adversary: The rows are wall-clock noisy and still slower than plain exact decode. Treat this as a controller improvement inside current self-spec, not a plain-decode breakthrough.
