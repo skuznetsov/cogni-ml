@@ -7166,3 +7166,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "pca route on/off" to "choose a bounded pca burst budget and layer mask under expected replay risk."
 - maieutic: The critical predictive target is first-pca-chunk safety for a prompt/layer/model tuple, then safe burst length after the first accepted pca chunk.
 - adversary: 9B positive deltas are small and need repeats before promotion; 27B remains a strong falsifier for portable policy. Keep default-off.
+
+**decision_update_15:** Exact-state refresh/no-carry after accepted pca-updown chunks is implemented and refuted as a production speed route. `--simulate-self-spec-gpu-pipeline-draft-updown-refresh-on-accept` discards approximate pca-updown carry state after a fully accepted pca chunk and seeds the next block from exact verifier state; the paired serial diagnostic path mirrors the same policy. On 9B wide late band, refresh reduces the worst `max_chunks=4` cliff but does not remove it (`baseline_delta_mean=-31.96%`, min `-52.07%`, accept mean `83.73%`, versus prior no-refresh `-47.29%`/`-91.34%`). On the previously safe 9B `max_chunks=2` route, refresh refutes promotion by turning the small win into a regression (`+1.62%` no-refresh -> `-4.86%` refresh) at unchanged acceptance, showing lost overlap/reseed cost dominates. On 27B narrow `24,25,26`, refresh reduces first-chunk damage (`-23.34%` -> `-9.35%`) but still regresses aggregate and code still rejects. Conclusion: approximate state carry is not the root blocker; pca-updown needs cheap first-chunk/layer/prompt risk routing, not exact refresh after accept.
+**evidence_update_15:**
+- claim: "Refresh-on-accept is implemented and build/spec/release verified."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_refresh_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_refresh_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_refresh_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); release build `/tmp/qwen35_refresh_probe_release`
+  verified_at: 2026-05-03
+  decay_trigger: self-spec run signature, verifier backup semantics, pca-updown controller semantics, paired serial timing, or route scoreboard changes
+- claim: "9B wide late-band refresh does not rescue the `max_chunks=4` cliff."
+  source: `/tmp/qwen35_refresh_accept_wide_gen32_max4_20260503151956.log` compared with `/tmp/qwen35_max_pca_chunks4_wide_gen32_20260503122453.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, generated length, layer band, pca rank, pca-updown rank, model/quant, host load, or scheduler implementation changes
+- claim: "9B `max_chunks=2` refresh loses the previous small positive burst result despite unchanged acceptance."
+  source: `/tmp/qwen35_refresh_accept_wide_gen32_max2_20260503152307.log` compared with `/tmp/qwen35_max_pca_chunks2_wide_gen32_20260503122158.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, generated length, layer band, pca rank, pca-updown rank, model/quant, host load, or scheduler implementation changes
+- claim: "27B narrow-band refresh reduces but does not eliminate first-pca-chunk risk."
+  source: `/tmp/qwen36_refresh_accept_narrow_gen16_max1_20260503152649.log` compared with `/tmp/qwen36_max_pca_chunks1_narrow_gen16_20260503123348.log`
+  verified_at: 2026-05-03
+  decay_trigger: model/quant, layer band, generated length, prompt suite, external FFN calibration prompts, host load, or scheduler implementation changes
+**quadrumvirate_update_15:**
+- cassandra: Refresh helps only where pca drift accumulates, and hurts the safe burst route by removing overlap; it cannot solve first-chunk risk.
+- daedalus: Pivot away from exact refresh and toward pre-submit risk prediction for whether to use pca at all on this prompt/layer/horizon.
+- maieutic: The refuted assumption was that accepted pca chunks are safe candidates but unsafe state carriers. Evidence says accepted pca state carry is only part of the issue; proposal correctness and scheduling cost dominate.
+- adversary: Parity is preserved by exact verification, but speed regresses or remains negative. Keep the flag default-off and do not super-fuse based on refresh.
