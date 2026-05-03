@@ -7050,3 +7050,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame is not "margin means confidence" in isolation, but "previous accepted chunk margin is a conservative permission bit for the next cheaper body."
 - maieutic: The unproven assumption is that a scalar threshold generalizes. Current evidence suggests threshold `2.0` may separate short safe spans from long JSON risk, but only as a preliminary route.
 - adversary: Do not super-fuse or default this route yet. Positive evidence is one focused `gen32` suite without repeats; negative evidence shows the cliff is real. Require repeated ABBA and prompt-class falsifiers before promotion.
+
+**decision_update_10:** Repeated validation refutes the scalar pca-updown router (`previous full-accept chunk min-margin`, even with accept streak) as a super-fusion candidate. The larger Qwen3.6-27B `gen32` main/code/json/reasoning ABBA gate with `min_margin=2.0` preserved exact parity, but `pca-updown16` regressed aggregate wall (`baseline_delta_mean=-13.43%`, `min=-30.74%`) and acceptance (`91.37%` vs lowrank `92.44%`). The important falsifier is code/reasoning: lowrank stayed clean, while pca-updown introduced rejects and replay. A focused `gen64` long-span gate over main/code/reasoning also regressed (`baseline_delta_mean=-15.65%`, `min=-27.92%`, accept `91.26%` vs lowrank `96.67%`). The strict JSON `gen64` row stayed safe only by leaving pca closed (`draft_updown_chunks=0`), and even that row was a small wall regression. Combining `min_margin=2.0` with `after_full_accepts=2` did not help; it reduced pca use but still regressed `gen32` (`baseline_delta_mean=-24.4%`, `min=-42.76%`, accept `85.53%`). Conclusion: pca-updown still has useful local candidate mass, but the current cheap permission bit cannot predict when the pca body itself will drift. Do not build a superfused pca-updown kernel until a richer route predictor passes release ABBA.
+**evidence_update_10:**
+- claim: "Release 27B `gen32` ABBA over main/code/json/reasoning refutes `min_margin=2.0` pca-updown routing as a promotion candidate."
+  source: `/tmp/qwen36_updown_router_abba_m20_gen32_suite4_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, threshold, layer band, generated length, external FFN calibration, model/quant, host load, scheduler implementation, or scoreboard formula changes
+- claim: "Focused `gen64` main/code/reasoning confirms the same route has a long-span acceptance/wall cliff beyond JSON."
+  source: `/tmp/qwen36_updown_router_m20_gen64_code_reason_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, threshold, layer band, generated length, external FFN calibration, model/quant, host load, scheduler implementation, or scoreboard formula changes
+- claim: "Strict-threshold JSON `gen64` is conservative rather than useful: pca stays closed and parity/acceptance are preserved, but wall still regresses versus lowrank."
+  source: `/tmp/qwen36_updown_router_wide_gen64_json_m20_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt, threshold, layer band, generated length, external FFN calibration, model/quant, host load, scheduler implementation, or scoreboard formula changes
+- claim: "`after_full_accepts=2` combined with `min_margin=2.0` does not rescue the route; it reduces pca use but still regresses wall and acceptance on `gen32`."
+  source: `/tmp/qwen36_updown_router_m20_after2_gen32_suite4_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: warmup/streak policy, prompt suite, threshold, layer band, generated length, external FFN calibration, model/quant, host load, scheduler implementation, or scoreboard formula changes
+**quadrumvirate_update_10:**
+- cassandra: The failure mode is not just "too many early pca chunks"; even stricter/streak-gated pca still opens on code/reasoning and causes rejects.
+- daedalus: Pivot from scalar threshold routing to either richer learned/diagnostic routing or a different exact speed lever. Current pca-updown fusion would optimize a route that cannot decide when to run.
+- maieutic: The hidden assumption was that lowrank confidence predicts pca-updown correctness. The evidence refutes that for code/reasoning; pca drift is route-specific, not captured by previous lowrank margin alone.
+- adversary: Parity remains protected by exact verification, but speed and acceptance are worse. Treat pca-updown as a candidate source for future router features, not as a near-term fused body.
