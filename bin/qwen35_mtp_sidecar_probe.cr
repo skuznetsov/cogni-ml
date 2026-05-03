@@ -35,6 +35,7 @@ mtp_spec_gammas = [] of Int32
 mtp_spec_wall_gammas = [] of Int32
 mtp_spec_wall_stage = 0_i32
 mtp_spec_wall_lazy_draft = false
+mtp_spec_wall_reject_offramp = 0_i32
 
 struct DiagBridge
   getter scale : Array(Float32)
@@ -144,10 +145,12 @@ class MtpSpecWallAggregate
   property verifier_calls : Int32
   property verifier_tokens : Int32
   property replay_tokens : Int32
+  property fallback_tokens : Int32
   property mtp_ms_sum : Float64
   property verifier_ms_sum : Float64
   property replay_ms_sum : Float64
   property backup_ms_sum : Float64
+  property fallback_ms_sum : Float64
   property wall_ms_sum : Float64
   property plain_exact_ms_sum : Float64
 
@@ -163,10 +166,12 @@ class MtpSpecWallAggregate
     @verifier_calls = 0
     @verifier_tokens = 0
     @replay_tokens = 0
+    @fallback_tokens = 0
     @mtp_ms_sum = 0.0
     @verifier_ms_sum = 0.0
     @replay_ms_sum = 0.0
     @backup_ms_sum = 0.0
+    @fallback_ms_sum = 0.0
     @wall_ms_sum = 0.0
     @plain_exact_ms_sum = 0.0
   end
@@ -326,6 +331,7 @@ OptionParser.parse do |p|
   end
   p.on("--mtp-spec-wall-stage N", "Verify MTP wall proposals in N-candidate stages; 0 verifies the full proposal in one chunk") { |v| mtp_spec_wall_stage = v.to_i32 }
   p.on("--mtp-spec-wall-lazy-draft", "Only draft the next staged MTP verifier chunk; avoids generating wrong tails after early rejection") { mtp_spec_wall_lazy_draft = true }
+  p.on("--mtp-spec-wall-reject-offramp N", "After N consecutive MTP wall rejects, finish the remaining tokens with exact greedy target decode; 0 disables") { |v| mtp_spec_wall_reject_offramp = v.to_i32 }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -367,6 +373,7 @@ abort "--mtp-spec-wall-gammas requires --mtp-chain-tokens > 0" if !mtp_spec_wall
 abort "--mtp-spec-wall-gammas values must be positive" if mtp_spec_wall_gammas.any? { |gamma| gamma <= 0 }
 abort "--mtp-spec-wall-stage must be non-negative" if mtp_spec_wall_stage < 0
 abort "--mtp-spec-wall-lazy-draft requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_lazy_draft && mtp_spec_wall_stage <= 0
+abort "--mtp-spec-wall-reject-offramp must be non-negative" if mtp_spec_wall_reject_offramp < 0
 chain_modes = case mtp_chain_mode
               when "teacher"
                 ["teacher"]
@@ -597,13 +604,16 @@ rows.each do |label, prompt_text|
     wall_verifier_calls = 0
     wall_verifier_tokens = 0
     wall_replay_tokens = 0
+    wall_fallback_tokens = 0
     wall_mtp_ms = 0.0_f64
     wall_verifier_ms = 0.0_f64
     wall_replay_ms = 0.0_f64
     wall_backup_ms = 0.0_f64
+    wall_fallback_ms = 0.0_f64
     wall_start = Time.instant
     backup_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq)
     ML::GGUF::Qwen35CPU.prepare_state_metal!(backup_state, weights.hparams)
+    consecutive_rejections = 0
 
     while wall_ids.size < mtp_chain_tokens
       wall_passes += 1
@@ -684,6 +694,7 @@ rows.each do |label, prompt_text|
         wall_accepted += accepted_stage
 
         if accepted_stage == stage_candidates.size
+          consecutive_rejections = 0
           stage_candidates.each do |id|
             break if wall_ids.size >= mtp_chain_tokens
             wall_ids << id
@@ -715,6 +726,7 @@ rows.each do |label, prompt_text|
         else
           pass_rejected = true
           wall_rejections += 1
+          consecutive_rejections += 1
           correction = top1s[accepted_stage][0]
           stage_candidates[0, accepted_stage].each do |id|
             break if wall_ids.size >= mtp_chain_tokens
@@ -740,6 +752,20 @@ rows.each do |label, prompt_text|
           wall_token = correction
           wall_pos = stage_pos + accepted_stage + 1
           wall_ids << correction if wall_ids.size < mtp_chain_tokens
+
+          if mtp_spec_wall_reject_offramp > 0 &&
+             consecutive_rejections >= mtp_spec_wall_reject_offramp &&
+             wall_ids.size < mtp_chain_tokens
+            fallback_start = Time.instant
+            while wall_ids.size < mtp_chain_tokens
+              next_id, _next_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, wall_token, wall_pos, wall_state)
+              wall_ids << next_id
+              wall_fallback_tokens += 1
+              wall_token = next_id
+              wall_pos += 1
+            end
+            wall_fallback_ms += elapsed_ms(fallback_start)
+          end
         end
       end
     end
@@ -762,14 +788,16 @@ rows.each do |label, prompt_text|
     agg.verifier_calls += wall_verifier_calls
     agg.verifier_tokens += wall_verifier_tokens
     agg.replay_tokens += wall_replay_tokens
+    agg.fallback_tokens += wall_fallback_tokens
     agg.mtp_ms_sum += wall_mtp_ms
     agg.verifier_ms_sum += wall_verifier_ms
     agg.replay_ms_sum += wall_replay_ms
     agg.backup_ms_sum += wall_backup_ms
+    agg.fallback_ms_sum += wall_fallback_ms
     agg.wall_ms_sum += wall_ms
     agg.plain_exact_ms_sum += plain_exact_ms
 
-    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} lazy_draft=#{mtp_spec_wall_lazy_draft} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
+    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
   end
 
   diag_bridge = nil.as(DiagBridge?)
@@ -999,5 +1027,5 @@ mtp_spec_wall_aggregates.keys.sort.each do |gamma|
   agg = mtp_spec_wall_aggregates[gamma]
   next if agg.tokens == 0
 
-  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} lazy_draft=#{mtp_spec_wall_lazy_draft} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
+  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
 end

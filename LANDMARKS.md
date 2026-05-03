@@ -7238,3 +7238,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "make MTP draft cheaper" to "make exact verifier commit/reject cheaper"; verifier wall now dominates after draft waste and backup waste were reduced.
 - maieutic: The hidden assumption that state backup required full fork was false; live-prefix Metal copy was already available and is the right branch-state primitive.
 - adversary: This is a 3-prompt/gen16 gate with host timing noise. It is enough to keep the implementation as a probe improvement, not enough to promote MTP as a default speed path.
+
+**decision_update_19:** Exact reject-offramp is implemented as fail-closed MTP controller plumbing, not as a broad speed breakthrough. `--mtp-spec-wall-reject-offramp=N` stops MTP proposals after N consecutive rejected staged verifier passes and finishes the requested suffix with exact greedy target decode from the current verifier boundary. This preserves parity and directly tests the user's "if unsure, go serial" frame. On a low-accept repeat/structured 27B suite (`alpha/csv/json/log`, `gen16`, `gamma8`, `stage3`, lazy draft), no-offramp was very poor (`plain_speedup=0.389`, `accept_rate=21.19%`), while `offramp=1` improved to `plain_speedup=0.852` by limiting wasted MTP/verifier work to one failed stage. On the natural `france/code/reason` gate, `offramp=2` was the best checked aggregate (`0.703x` no-offramp after the chunk-off fix -> `0.764x`), while `offramp=1` was too eager for France and `offramp=3` added extra rejected-stage cost. One code row reached `1.02x` with `offramp=3`, but aggregate remains below plain exact. Conclusion: reject-offramp is useful safety/controller machinery and a strong negative-case guard, but MTP still needs either a cheap pre-submit confidence/router or a fused target verifier before it can be promoted as a general decode speed path.
+**evidence_update_19:**
+- claim: "Reject-offramp is implemented in the MTP wall probe and preserves exact parity on natural and repeat/structured gates."
+  source: `/tmp/qwen36_mtp_wall_offramp1_natural_20260503170014.log`; `/tmp/qwen36_mtp_wall_offramp1_repeat_20260503170038.log`; `/tmp/qwen36_mtp_wall_offramp2_natural_20260503170120.log`; `/tmp/qwen36_mtp_wall_offramp3_natural_20260503170140.log`
+  verified_at: 2026-05-03
+  decay_trigger: MTP wall-loop reject semantics, fallback decode boundary, prompt suite, generated length, or target verifier implementation changes
+- claim: "Reject-offramp improves low-accept MTP spans substantially but does not make the aggregate natural gate a plain-decode win."
+  source: `/tmp/qwen36_mtp_wall_stage3_lazy_repeat_struct_20260503165750.log`; `/tmp/qwen36_mtp_wall_offramp1_repeat_20260503170038.log`; `/tmp/qwen36_mtp_wall_stage3_chunk_verifier_afterfix_20260503165606.log`; `/tmp/qwen36_mtp_wall_offramp2_natural_20260503170120.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt mix, host load, gamma/stage/offramp threshold, MTP sidecar, or verifier/fallback route changes
+**quadrumvirate_update_19:**
+- cassandra: Offramp protects low-accept prompts, but any threshold trades early false fallback against repeated reject overhead.
+- daedalus: The productive frame is now "fail closed until confidence is earned"; low-accept MTP should not be repeatedly retried.
+- maieutic: The rejected assumption was that high-accept routing exists trivially by prompt type; repeat/structured prompts were actually low MTP-accept in this probe.
+- adversary: Single-row wins are not enough. Keep this as opt-in probe/controller instrumentation until a router/fused verifier passes broader ABBA gates.
