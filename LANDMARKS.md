@@ -7002,3 +7002,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame shifted from small controller timing deltas to making the proposal body cheaper while preserving exact verifier parity.
 - maieutic: The claim is still self-spec pipeline speed relative to lowrank body, not a plain-decode win over llama.cpp. Super-fusion is justified only if release ABBA keeps positive min-delta on larger bands/ranks.
 - adversary: Generality remains medium-low: three prompts, one narrow band, rank16 updown, `gen16/32`. Next gate must test wider late bands, ranks `16/32`, `gen32-64`, and code/json no-regression before default promotion.
+
+**decision_update_8:** Expanded release-only ABBA makes the pca-updown decision sharper: `pca-updown16` is a real short/medium-span lever, but always-on pca-updown is not robust enough for `gen64` or super-fusion. On Qwen3.6-27B, wide recurrent band `24,25,26,28,29,30`, DeltaNet rank32, external FFN calibration, `schedule=4,4,8`, `gen32`, and ABBA repeats=2, `pca-updown16` preserved parity and passed the promotion-style gate (`baseline_delta_mean=+14.09%`, `baseline_delta_min=+4.06%`, accept mean `97.06%` vs lowrank `89.92%`). `pca-updown32` was refuted in the same run because JSON regressed (`baseline_delta_min=-27.69%`, JSON accept `81.58%`). The long-span falsifier is stronger: wide `pca-updown16` at `gen64` regressed aggregate wall (`baseline_delta_mean=-10.34%`, min `-22.46%`) and acceptance (`92.55%` vs lowrank `98.46%`), while narrow `24,25,26` at `gen64` was worse (`baseline_delta_mean=-20.86%`, min `-47.24%`, accept `88.84%` vs lowrank `98.97%`). JSON-only wide `gen64` with `fallback-on-reject` also regressed (`baseline_delta_mean=-6.03%`, accept `88.41%` vs lowrank `95.38%`), so first-reject fallback is not sufficient. The next viable route is a pre-submit router/risk model that decides when to use pca-updown before launching the draft block; always-on pca-updown should stay default-off.
+**evidence_update_8:**
+- claim: "Wide late-band `pca-updown16` passes the `gen32` ABBA gate, while `pca-updown32` is refuted by JSON instability."
+  source: `/tmp/qwen36_updown_abba_wide_gen32_r32_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, layer band, updown rank, DeltaNet rank, generated length, model/quant, host load, scheduler implementation, or scoreboard formula changes
+- claim: "Wide late-band `pca-updown16` fails the `gen64` ABBA gate despite preserving parity: JSON acceptance/replay dominates and aggregate wall regresses."
+  source: `/tmp/qwen36_updown_abba_wide_gen64_r32_up16_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, layer band, generated length, external FFN calibration, host load, or scheduler implementation changes
+- claim: "Narrow late-band `24,25,26` `pca-updown16` also fails `gen64`, so the long-span cliff is not only caused by the wider band."
+  source: `/tmp/qwen36_updown_abba_narrow_gen64_r32_up16_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, layer band, generated length, external FFN calibration, host load, or scheduler implementation changes
+- claim: "First-reject fallback does not rescue JSON `gen64`; it still lowers acceptance and wall speed versus lowrank."
+  source: `/tmp/qwen36_updown_abba_wide_gen64_json_fallback_release_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: fallback policy, prompt, layer band, generated length, external FFN calibration, host load, or scheduler implementation changes
+**quadrumvirate_update_8:**
+- cassandra: The failure pattern is a delayed acceptance cliff, not numerical parity failure. Longer spans need a before-submit risk gate; after-reject fallback pays too much replay.
+- daedalus: The next frame is not "fuse pca-updown harder"; it is "route cheap body only when expected verifier savings exceed reject/replay risk."
+- maieutic: The positive `gen32` evidence remains useful, but it does not generalize to long JSON spans. Claim scope must stay bounded by generated length and prompt class.
+- adversary: Wall-clock variance is still visible, but the `gen64` refutation is large and acceptance-correlated, so it is not just timing noise. Do not promote always-on pca-updown until a router passes both `gen32` and `gen64` ABBA.
