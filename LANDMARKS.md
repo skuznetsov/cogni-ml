@@ -7190,3 +7190,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot away from exact refresh and toward pre-submit risk prediction for whether to use pca at all on this prompt/layer/horizon.
 - maieutic: The refuted assumption was that accepted pca chunks are safe candidates but unsafe state carriers. Evidence says accepted pca state carry is only part of the issue; proposal correctness and scheduling cost dominate.
 - adversary: Parity is preserved by exact verification, but speed regresses or remains negative. Keep the flag default-off and do not super-fuse based on refresh.
+
+**decision_update_16:** Alternate Qwen3.6-27B pca-updown layer masks were tested after the refresh refutation, and static mask promotion remains refuted. On 27B `gen16/max_chunks=1`, moving the pca band from `24,25,26` to `28,29,30` avoids the main-prompt reject but still regresses aggregate (`baseline_delta_mean=-9.21%`, min `-36.48%`) because code still rejects. The wide band `24,25,26,28,29,30` creates positive rows on JSON and reasoning (`+3.02%` and `+12.63%`) but makes main/code reject-heavy (`-52.30%` and `-40.14%`) and regresses aggregate (`-19.2%`). Conclusion: pca-updown has prompt/layer-specific positive mass, but static layer masks are not enough; a useful policy must predict prompt/layer first-chunk risk or defer to non-pca exact levers.
+**evidence_update_16:**
+- claim: "27B `28,29,30/max_chunks=1` is not a production pca-updown route."
+  source: `/tmp/qwen36_layer_mask_28_29_30_max1_gen16_20260503153452.log`
+  verified_at: 2026-05-03
+  decay_trigger: model/quant, layer band, generated length, prompt suite, pca-updown rank, host load, or scheduler implementation changes
+- claim: "27B wide late-band `max_chunks=1` has positive JSON/reasoning rows but aggregate-negative main/code first-chunk risk."
+  source: `/tmp/qwen36_layer_mask_wide_max1_gen16_20260503153902.log`
+  verified_at: 2026-05-03
+  decay_trigger: model/quant, layer band, generated length, prompt suite, pca-updown rank, host load, or scheduler implementation changes
+**quadrumvirate_update_16:**
+- cassandra: The search can overfit prompt classes; code/main are strong falsifiers against static masks.
+- daedalus: Positive JSON/reasoning rows suggest candidate mass exists, but the frame should shift from static body replacement to prompt/layer risk routing or different exact candidate sources.
+- maieutic: The hidden assumption was that another late band might be globally safer. Evidence says safety is prompt-class dependent.
+- adversary: The gains are row-local and not ABBA-repeated; do not promote or fuse until a router has positive min-delta across prompt classes.
