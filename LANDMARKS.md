@@ -7254,3 +7254,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The productive frame is now "fail closed until confidence is earned"; low-accept MTP should not be repeatedly retried.
 - maieutic: The rejected assumption was that high-accept routing exists trivially by prompt type; repeat/structured prompts were actually low MTP-accept in this probe.
 - adversary: Single-row wins are not enough. Keep this as opt-in probe/controller instrumentation until a router/fused verifier passes broader ABBA gates.
+
+**decision_update_20:** First-guard staged verifier scheduling is implemented as an opt-in MTP wall probe and remains a controller experiment, not a promoted policy. `--mtp-spec-wall-stage-once` uses `--mtp-spec-wall-stage=N` only for the first guard stage; if that guard accepts, the remaining proposal tail is drafted/verified as one chunk. This mirrors the older external-draft `--verify staged --stage-gate` shape and tests whether repeated equal-size stages were creating unnecessary verifier calls. On the natural Qwen3.6-27B `france/code/reason` gate, `stage_once=3` preserved parity and slightly improved fixed `stage=3` (`plain_speedup ~=0.703-0.716` to `0.722`) by reducing verifier calls from `21` to `19` at the same `60` verifier tokens. `stage_once=1/2` were worse aggregate because tail overruns grew. Combining `stage_once=3` with `reject_offramp=1` produced the best checked natural fail-closed aggregate (`plain_speedup=0.885`) but still below plain exact and timing-noise sensitive. The repeat/structured check preserved parity but had severe host-noise spikes in both plain and fallback times, so it is only a correctness guard, not speed evidence. Conclusion: stage-once is useful instrumentation for progressive verifier control, but the next real breakthrough still requires fused target verifier or learned pre-submit routing; no more scalar stage-threshold tuning without ABBA/repeats.
+**evidence_update_20:**
+- claim: "First-guard stage-once mode is implemented and build/spec verified."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_stage_once_build crystal build bin/qwen35_mtp_sidecar_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_mtp_stage_once_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_stage_once_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`)
+  verified_at: 2026-05-03
+  decay_trigger: MTP wall-loop staged verifier semantics, lazy draft state, reject-offramp semantics, or target verifier implementation changes
+- claim: "Stage-once is a small/probe-level improvement, not a stable MTP speed breakthrough."
+  source: `/tmp/qwen36_mtp_wall_stage_once3_natural_20260503170621.log`; `/tmp/qwen36_mtp_wall_stage_once3_off1_natural_20260503170751.log`; `/tmp/qwen36_mtp_wall_stage_once3_off1_repeat_20260503170859.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, host load, gamma/stage/offramp threshold, MTP sidecar, or verifier/fallback route changes
+**quadrumvirate_update_20:**
+- cassandra: Stage-once can reduce verifier calls, but it increases wrong-tail risk unless paired with a guard/offramp.
+- daedalus: This exhausts the scalar stage-controller family for now; further gains need a different observation level.
+- maieutic: The useful property is not "large tail chunks are good" but "large tail chunks are good only after a guard survives."
+- adversary: Host noise and row-local wins remain too large. Require ABBA/repeats before treating any stage-once configuration as a speed claim.

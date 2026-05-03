@@ -36,6 +36,7 @@ mtp_spec_wall_gammas = [] of Int32
 mtp_spec_wall_stage = 0_i32
 mtp_spec_wall_lazy_draft = false
 mtp_spec_wall_reject_offramp = 0_i32
+mtp_spec_wall_stage_once = false
 
 struct DiagBridge
   getter scale : Array(Float32)
@@ -330,6 +331,7 @@ OptionParser.parse do |p|
     mtp_spec_wall_gammas = v.split(",").reject(&.empty?).map(&.to_i32)
   end
   p.on("--mtp-spec-wall-stage N", "Verify MTP wall proposals in N-candidate stages; 0 verifies the full proposal in one chunk") { |v| mtp_spec_wall_stage = v.to_i32 }
+  p.on("--mtp-spec-wall-stage-once", "Use --mtp-spec-wall-stage as a first guard, then verify the remaining proposal tail in one chunk") { mtp_spec_wall_stage_once = true }
   p.on("--mtp-spec-wall-lazy-draft", "Only draft the next staged MTP verifier chunk; avoids generating wrong tails after early rejection") { mtp_spec_wall_lazy_draft = true }
   p.on("--mtp-spec-wall-reject-offramp N", "After N consecutive MTP wall rejects, finish the remaining tokens with exact greedy target decode; 0 disables") { |v| mtp_spec_wall_reject_offramp = v.to_i32 }
   p.on("-h", "--help", "Show help") do
@@ -373,6 +375,7 @@ abort "--mtp-spec-wall-gammas requires --mtp-chain-tokens > 0" if !mtp_spec_wall
 abort "--mtp-spec-wall-gammas values must be positive" if mtp_spec_wall_gammas.any? { |gamma| gamma <= 0 }
 abort "--mtp-spec-wall-stage must be non-negative" if mtp_spec_wall_stage < 0
 abort "--mtp-spec-wall-lazy-draft requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_lazy_draft && mtp_spec_wall_stage <= 0
+abort "--mtp-spec-wall-stage-once requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_stage_once && mtp_spec_wall_stage <= 0
 abort "--mtp-spec-wall-reject-offramp must be non-negative" if mtp_spec_wall_reject_offramp < 0
 chain_modes = case mtp_chain_mode
               when "teacher"
@@ -651,7 +654,11 @@ rows.each do |label, prompt_text|
         if mtp_spec_wall_lazy_draft
           break if draft_generated >= draft_steps
 
-          current_stage = Math.min(stage_size, draft_steps - draft_generated)
+          current_stage = if mtp_spec_wall_stage_once && draft_generated > 0
+                            draft_steps - draft_generated
+                          else
+                            Math.min(stage_size, draft_steps - draft_generated)
+                          end
           stage_candidates = [] of Int32
           current_stage.times do
             mtp_hidden, mtp_top1, step_ms = mtp_hidden_topk(weights, mtp, draft_hidden, draft_token, draft_pos, 1, false, draft_state)
@@ -668,7 +675,11 @@ rows.each do |label, prompt_text|
         else
           break if candidate_offset >= candidates.size
 
-          current_stage = Math.min(stage_size, candidates.size - candidate_offset)
+          current_stage = if mtp_spec_wall_stage_once && candidate_offset > 0
+                            candidates.size - candidate_offset
+                          else
+                            Math.min(stage_size, candidates.size - candidate_offset)
+                          end
           stage_candidates = candidates[candidate_offset, current_stage]
           final_stage = candidate_offset + current_stage >= candidates.size
         end
@@ -797,7 +808,7 @@ rows.each do |label, prompt_text|
     agg.wall_ms_sum += wall_ms
     agg.plain_exact_ms_sum += plain_exact_ms
 
-    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
+    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
   end
 
   diag_bridge = nil.as(DiagBridge?)
@@ -1027,5 +1038,5 @@ mtp_spec_wall_aggregates.keys.sort.each do |gamma|
   agg = mtp_spec_wall_aggregates[gamma]
   next if agg.tokens == 0
 
-  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
+  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
 end
