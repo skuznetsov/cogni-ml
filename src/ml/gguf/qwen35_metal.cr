@@ -44,7 +44,10 @@ module ML
       MM_SHMEM = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
 
       # Above this batch, use GEMM. At or below, GEMV is faster.
-      GEMM_BATCH_THRESHOLD = 8
+      # The default is deliberately conservative; small speculative verifier
+      # chunks can lower it via env for bounded A/B without changing the normal
+      # prefill/decode policy.
+      GEMM_BATCH_THRESHOLD = ENV["QWEN35_GEMM_BATCH_THRESHOLD"]?.try(&.to_i?) || 8
 
       # Reusing one F32->F16 activation conversion across FFN gate/up now
       # pays even at pp64 after the later H16 routing cleanups.

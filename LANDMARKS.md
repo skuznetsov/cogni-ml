@@ -7270,3 +7270,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: This exhausts the scalar stage-controller family for now; further gains need a different observation level.
 - maieutic: The useful property is not "large tail chunks are good" but "large tail chunks are good only after a guard survives."
 - adversary: Host noise and row-local wins remain too large. Require ABBA/repeats before treating any stage-once configuration as a speed claim.
+
+**decision_update_21:** Verifier-only profiling and small-batch fusion falsifiers narrow the next MTP exact-resync target. `--mtp-spec-wall-profile` now enables `Qwen35Metal::Profile` only around target verifier calls, so MTP draft, backup, replay, and baseline timings do not pollute verifier attribution. On Qwen3.6-27B France with `gamma8/stage3/stage_once/lazy`, the verifier consumed `925.738ms` and reported `123` Metal syncs for `21` verifier tokens: `96` DN/group calls, `21` head GEMV calls, and only tiny readback time. The grouped full+recurrent chunks dominate; LM-head row batching and CPU hidden readback are not the first-order wall. Lowering the GEMM threshold for verifier-sized batches is refuted: default `wall_ms=1364.551`, while `QWEN35_GEMM_BATCH_THRESHOLD=2` regressed to `2171.901ms` and threshold `0` to `2368.588ms`, both with parity true. `stage=2+stage_once` improved the France row but failed the natural 3-prompt aggregate (`plain_speedup=0.517` vs `0.736` for `stage=3`). Stateless MTP proposals plus existing one-token body fusion reduced MTP proposal time but lowered reasoning acceptance and failed to improve aggregate wall (`plain_speedup=0.705` vs `0.716` for stateful). Conclusion: keep `--mtp-draft-state-off` and GEMM threshold as default-off probes only. The next real fusion branch should be a GPU-resident/chunk-major target verifier or exact branch-state snapshots to remove reject replay, not more scalar controller retuning.
+**evidence_update_21:**
+- claim: "Verifier-only MTP wall profiling is implemented and build/release checked."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_fuse_stateless crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_fuse_probe_stateless --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`
+  verified_at: 2026-05-03
+  decay_trigger: MTP wall-loop verifier calls, Profile counters, or qwen35 prefill routing changes
+- claim: "Target verifier wall is dominated by grouped full+recurrent chunk work, not LM-head/readback."
+  source: `/tmp/qwen36_mtp_wall_fuse_profile_france_metal_20260503192250.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, model, stage/gamma, verifier route, head route, or host load changes
+- claim: "Forcing GEMM on verifier-sized b3/b6 chunks is slower despite preserving parity."
+  source: `/tmp/qwen36_mtp_wall_thr_default_france_20260503192416.log`; `/tmp/qwen36_mtp_wall_thr_2_france_20260503192422.log`; `/tmp/qwen36_mtp_wall_thr_0_france_20260503192430.log`
+  verified_at: 2026-05-03
+  decay_trigger: GEMM/GEMV kernels, threshold policy, model, prompt, or host load changes
+- claim: "Stage=2 and stateless MTP are not aggregate wins on the natural 3-prompt gate."
+  source: `/tmp/qwen36_mtp_wall_stage_once_2_suite_20260503192542.log`; `/tmp/qwen36_mtp_wall_stage_once_3_suite_20260503192612.log`; `/tmp/qwen36_mtp_state_suite_20260503193029.log`; `/tmp/qwen36_mtp_stateless_body_suite_20260503193135.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, MTP state semantics, body fusion, stage policy, or host load changes
+**quadrumvirate_update_21:**
+- cassandra: The micro-optimization trap is active; small threshold/fallback/controller changes can win one row while losing aggregate.
+- daedalus: Shift from "retune verifier chunks" to "change target verifier execution model" by keeping layer-group work resident or snapshotting branch states.
+- maieutic: The key false assumption was that b3/b6 could become cheap just by routing to GEMM; local evidence says these tiny chunks are still better as GEMV.
+- adversary: Evidence is mostly one-shot and host-noisy, but the regressions are large enough to refute default promotion. Keep new knobs probe-only.

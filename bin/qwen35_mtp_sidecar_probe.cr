@@ -37,6 +37,8 @@ mtp_spec_wall_stage = 0_i32
 mtp_spec_wall_lazy_draft = false
 mtp_spec_wall_reject_offramp = 0_i32
 mtp_spec_wall_stage_once = false
+mtp_spec_wall_profile = false
+mtp_draft_state_off = false
 
 struct DiagBridge
   getter scale : Array(Float32)
@@ -334,6 +336,8 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-wall-stage-once", "Use --mtp-spec-wall-stage as a first guard, then verify the remaining proposal tail in one chunk") { mtp_spec_wall_stage_once = true }
   p.on("--mtp-spec-wall-lazy-draft", "Only draft the next staged MTP verifier chunk; avoids generating wrong tails after early rejection") { mtp_spec_wall_lazy_draft = true }
   p.on("--mtp-spec-wall-reject-offramp N", "After N consecutive MTP wall rejects, finish the remaining tokens with exact greedy target decode; 0 disables") { |v| mtp_spec_wall_reject_offramp = v.to_i32 }
+  p.on("--mtp-spec-wall-profile", "Profile only target verifier calls inside the exact-resync MTP wall loop") { mtp_spec_wall_profile = true }
+  p.on("--mtp-draft-state-off", "Use stateless one-token MTP proposals inside wall/spec probes (proposal-only; target verifier remains exact)") { mtp_draft_state_off = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -614,6 +618,9 @@ rows.each do |label, prompt_text|
     wall_backup_ms = 0.0_f64
     wall_fallback_ms = 0.0_f64
     wall_start = Time.instant
+    if mtp_spec_wall_profile
+      ML::GGUF::Qwen35Metal::Profile.reset
+    end
     backup_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq)
     ML::GGUF::Qwen35CPU.prepare_state_metal!(backup_state, weights.hparams)
     consecutive_rejections = 0
@@ -626,7 +633,8 @@ rows.each do |label, prompt_text|
       draft_hidden = wall_hidden
       draft_token = wall_token
       draft_pos = wall_pos
-      draft_state = draft_steps > 1 ? ML::GGUF::Qwen35MTP::State.new(draft_steps, weights.hparams.head_dim * weights.hparams.n_head_kv) : nil
+      stateless_mtp_draft = mtp_draft_state_off || ENV["QWEN35_MTP_DRAFT_STATE_OFF"]? == "1"
+      draft_state = (!stateless_mtp_draft && draft_steps > 1) ? ML::GGUF::Qwen35MTP::State.new(draft_steps, weights.hparams.head_dim * weights.hparams.n_head_kv) : nil
       draft_generated = 0
 
       unless mtp_spec_wall_lazy_draft
@@ -690,7 +698,14 @@ rows.each do |label, prompt_text|
         wall_backup_ms += elapsed_ms(backup_start)
 
         verifier_start = Time.instant
-        verified = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, verify_tokens, stage_pos, wall_state)
+        if mtp_spec_wall_profile
+          ML::GGUF::Qwen35Metal::Profile.enable!
+        end
+        verified = begin
+          ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, verify_tokens, stage_pos, wall_state)
+        ensure
+          ML::GGUF::Qwen35Metal::Profile.disable! if mtp_spec_wall_profile
+        end
         wall_verifier_ms += elapsed_ms(verifier_start)
         wall_verifier_calls += 1
         wall_verifier_tokens += verify_tokens.size
@@ -809,6 +824,10 @@ rows.each do |label, prompt_text|
     agg.plain_exact_ms_sum += plain_exact_ms
 
     puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
+    if mtp_spec_wall_profile
+      puts "mtp_spec_wall_profile label=#{label.inspect} gamma=#{gamma} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens}"
+      puts ML::GGUF::Qwen35Metal::Profile.report_io
+    end
   end
 
   diag_bridge = nil.as(DiagBridge?)
