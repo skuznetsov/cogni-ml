@@ -7098,3 +7098,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful pivot is "derive a cheap predictor from agreement evidence" rather than "run agreement online before every block".
 - maieutic: The refuted assumption is that same-boundary first-token agreement predicts the whole pca draft block. Prefix agreement is stronger but too expensive.
 - adversary: Exact parity remains protected, but production speed regresses sharply. Keep the flag for diagnostics and router feature mining only; do not super-fuse pca-updown from this route.
+
+**decision_update_12:** Router-feature mining now has two additional diagnostics, and both narrow the pca-updown path. Agreement-margin sweeps are implemented through `--simulate-self-spec-gpu-pipeline-draft-updown-agreement-margin-thresholds=LIST`, scoring same-boundary lowrank top1/top2 margins against pca-updown agreement outcomes without changing exact verification. The signal is not reliable enough as a scalar online selector: on one 9B short smoke, the failing pca-updown block had a higher margin than the passing block (`fail_avg=0.2836` vs `pass_avg=0.1773`), while a larger easy 9B `gen8` row passed every check with high margin and a focused 27B row had no failures but high thresholds selected nothing. Held-out FFN up/down route features are also implemented through `--simulate-self-spec-gpu-pipeline-ffn-updown-route-features`; they report direct reconstruction residual/cosine for the pca-updown FFN surrogate on prompt-heldout samples. The first 9B/27B checks show very rough FFN reconstruction (`rel_rmse_mean ~=0.96..1.00`, low cosine) even when logit top1 remains clean, so this is a warning/router-training feature rather than proof that pca-updown is unusable. Next router should combine route residuals, FFN reconstruction error, prompt/position class, and exact-verifier outcome into a cheap pre-submit predictor; do not add another online controller that runs both candidate bodies.
+**evidence_update_12:**
+- claim: "Agreement-margin sweeps are implemented and build/spec verified."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_agree_margin_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_agree_margin_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_agree_margin_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`)
+  verified_at: 2026-05-03
+  decay_trigger: agreement gate semantics, top2 margin capture, pca-updown routing, or run signature changes
+- claim: "Lowrank margin alone is an inconsistent pca-updown safety signal on current short gates."
+  source: `/tmp/qwen35_updown_agree_margin_steps2_smoke_20260503.log`; `/tmp/qwen35_updown_agree_margin_steps2_gen8_20260503.log`; `/tmp/qwen36_updown_agree_margin_steps2_gen4_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt, generated length, layer band, pca rank, model/quant, host load, or threshold scoring changes
+- claim: "Held-out FFN pca-updown reconstruction feature reporting is implemented and build/spec verified."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_updown_features_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_ffn_updown_features_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ffn_updown_features_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`)
+  verified_at: 2026-05-03
+  decay_trigger: FFN updown adapter schema, sample capture, feature output schema, or CLI option changes
+- claim: "First FFN reconstruction checks show rough surrogate hidden-space reconstruction despite clean downstream top1 drift on tiny samples."
+  source: 9B mini check with `rel_rmse_mean=0.964124`, `cos_mean=0.29123847`, `top1_match=100%`; 27B mini check with `rel_rmse_mean=1.003749`, `cos_mean=0.21942193`, `top1_match=100%`
+  verified_at: 2026-05-03
+  decay_trigger: prompt, layer, rank, calibration length, model/quant, or FFN adapter training changes
+**quadrumvirate_update_12:**
+- cassandra: Scalar confidence proxies are brittle; pca-updown drift is route-specific and can hide behind clean top1 drift on tiny samples.
+- daedalus: The useful frame is now offline feature attribution and cheap pre-submit prediction, not another online guard that duplicates draft work.
+- maieutic: The critical assumption to test next is whether rough FFN reconstruction error correlates with future verifier rejects across prompt classes, not whether one prompt's logits stay clean.
+- adversary: Current evidence is small-sample and diagnostic. Do not promote, fuse, or default pca-updown from these features until release ABBA confirms positive min-delta across main/code/json/reasoning at `gen32/64`.
