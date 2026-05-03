@@ -7074,3 +7074,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from scalar threshold routing to either richer learned/diagnostic routing or a different exact speed lever. Current pca-updown fusion would optimize a route that cannot decide when to run.
 - maieutic: The hidden assumption was that lowrank confidence predicts pca-updown correctness. The evidence refutes that for code/reasoning; pca drift is route-specific, not captured by previous lowrank margin alone.
 - adversary: Parity remains protected by exact verification, but speed and acceptance are worse. Treat pca-updown as a candidate source for future router features, not as a near-term fused body.
+
+**decision_update_11:** Same-boundary pca-updown agreement probes are implemented as default-off diagnostics, and they refute the direct "probe before run" route as a production speed path. `--simulate-self-spec-gpu-pipeline-draft-updown-agreement-gate` compares lowrank and pca-updown from the same draft boundary before allowing pca-updown; `--simulate-self-spec-gpu-pipeline-draft-updown-agreement-steps=N` can extend the comparison across a block prefix. The implementation probes on forked draft states with separate lowrank state buffers, so the probe does not contaminate the final draft state. On 9B, one-step agreement passed all checks (`3/3`) but still let pca-updown introduce an exact rejection inside the 2-token block (`accept_rate=75%` vs lowrank `100%`), proving first-token agreement is insufficient. Two-step prefix agreement fixed that short smoke's acceptance (`100%`, parity true) by closing one risky pca block, but the probe overhead dominated wall (`377.2ms` vs lowrank `171.123ms`, `agreement_probe_ms=215.632ms`). On 27B, the same two-step gate preserved acceptance/parity but was still much slower (`1060.432ms` vs lowrank `480.386ms`, `agreement_probe_ms=599.847ms`). Conclusion: agreement is useful as an oracle/feature source, not as an online route unless it becomes much cheaper or is fused into an already-needed computation.
+**evidence_update_11:**
+- claim: "Same-boundary pca-updown agreement probes are implemented and verified by build/specs."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_updown_agree_build2 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_updown_agree_probe2 --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_updown_agree_spec2 crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`)
+  verified_at: 2026-05-03
+  decay_trigger: self-spec run signature, draft state fork/copy semantics, lowrank projection buffers, pca-updown routing, or top2 capture changes
+- claim: "One-step agreement is an insufficient pca-updown safety signal: it can pass while a later token in the same draft block causes a rejection."
+  source: 9B smoke with `--simulate-self-spec-gpu-pipeline-draft-updown-agreement-gate` and `gamma=2`, showing `agreement_checks=3`, `passes=3`, `accept_rate=75%`, `rejections=1`, `parity=true`
+  verified_at: 2026-05-03
+  decay_trigger: prompt, layer band, pca rank, generated length, or agreement semantics change
+- claim: "Two-step prefix agreement can prevent that local rejection but costs more than it saves on 9B."
+  source: 9B smoke with `--simulate-self-spec-gpu-pipeline-draft-updown-agreement-steps=2`, showing lowrank `overlap_ms=171.123` vs pca-updown route `377.2`, `accept_rate=100%`, `agreement_probe_ms=215.632`
+  verified_at: 2026-05-03
+  decay_trigger: prompt, layer band, pca rank, generated length, or probe implementation changes
+- claim: "The same two-step agreement route is also too expensive on a focused Qwen3.6-27B gate."
+  source: `/tmp/qwen36_updown_agree_steps2_gen4_20260503.log`
+  verified_at: 2026-05-03
+  decay_trigger: model/quant, prompt, layer band, pca rank, generated length, host load, or probe implementation changes
+**quadrumvirate_update_11:**
+- cassandra: Direct agreement probes add the cost of both candidate bodies and therefore need a very large downstream saving to win; current short gates do not have that budget.
+- daedalus: The useful pivot is "derive a cheap predictor from agreement evidence" rather than "run agreement online before every block".
+- maieutic: The refuted assumption is that same-boundary first-token agreement predicts the whole pca draft block. Prefix agreement is stronger but too expensive.
+- adversary: Exact parity remains protected, but production speed regresses sharply. Keep the flag for diagnostics and router feature mining only; do not super-fuse pca-updown from this route.
