@@ -2213,13 +2213,25 @@ module ML::GGUF
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
 
       if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
-        last_x = nil.as(Array(Float32)?)
+        hp = weights.hparams
+        max_seq = state.max_seq
+        layer_limit = stop_layer || weights.layers.size
+        hidden = Array(Float32).new(token_ids.size * hp.n_embd, 0.0_f32)
         token_ids.each_with_index do |token_id, i|
           pos = start_pos + i
-          prefill_token(weights, token_id, pos, state)
-          last_x = embedding_lookup(weights.token_embd, token_id) if i == token_ids.size - 1
+          x = embedding_lookup(weights.token_embd, token_id)
+          layer_limit.times do |il|
+            lw = weights.layers[il]
+            case lw
+            in Qwen35FullAttnWeights
+              x = forward_full_attn_layer(x, pos, lw, state.layers[il], hp, max_seq)
+            in Qwen35RecurrentWeights
+              x = forward_recurrent_layer(x, pos, lw, state.layers[il], hp, max_seq)
+            end
+          end
+          hp.n_embd.times { |j| hidden[i * hp.n_embd + j] = x[j] }
         end
-        return last_x.not_nil!
+        return hidden
       end
 
       hp = weights.hparams

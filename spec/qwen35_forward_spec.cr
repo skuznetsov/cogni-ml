@@ -369,6 +369,38 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "chunk-off last hidden matches the chunked prompt boundary" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32]
+
+    old = ENV["QWEN35_PREFILL_CHUNK_OFF"]?
+    begin
+      ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+      chunk_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      chunk_hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(w, prompt, 0, chunk_state)
+      chunk_top, chunk_logit = ML::GGUF::Qwen35CPU.hidden_top1(w, chunk_hidden)
+      chunk_next_top, chunk_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, chunk_top, prompt.size.to_i32, chunk_state)
+
+      ENV["QWEN35_PREFILL_CHUNK_OFF"] = "1"
+      serial_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      serial_hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(w, prompt, 0, serial_state)
+      serial_top, serial_logit = ML::GGUF::Qwen35CPU.hidden_top1(w, serial_hidden)
+      serial_next_top, serial_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, serial_top, prompt.size.to_i32, serial_state)
+
+      serial_top.should eq(chunk_top)
+      serial_logit.should be_close(chunk_logit, 1e-4_f32)
+      serial_next_top.should eq(chunk_next_top)
+      serial_next_logit.should be_close(chunk_next_logit, 1e-4_f32)
+    ensure
+      if old
+        ENV["QWEN35_PREFILL_CHUNK_OFF"] = old
+      else
+        ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+      end
+    end
+  end
+
   it "keeps chunk verifier constants model-specific across target and draft models" do
     pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
     target = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
