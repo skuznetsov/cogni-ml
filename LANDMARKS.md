@@ -7206,3 +7206,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Positive JSON/reasoning rows suggest candidate mass exists, but the frame should shift from static body replacement to prompt/layer risk routing or different exact candidate sources.
 - maieutic: The hidden assumption was that another late band might be globally safer. Evidence says safety is prompt-class dependent.
 - adversary: The gains are row-local and not ABBA-repeated; do not promote or fuse until a router has positive min-delta across prompt classes.
+
+**decision_update_17:** The first real wall-clock exact-resync MTP verifier loop is implemented and refutes the current verifier plumbing as a speed path. `--mtp-spec-wall-gammas` starts each MTP proposal from an exact target hidden boundary, generates a full gamma draft, verifies with the target known-span verifier, restores/replays exact state on reject, and reports parity plus MTP/verifier/backup/replay wall. On Qwen3.6-27B over `france/code/reason`, `gen16`, `gamma=4/8`, exact parity holds for every row. The previous exact-resync accounting still shows strong pass-rate economics (`tokens_per_pass=2.526/2.824`, additive model `1.934x/2.125x`), but real wall is much slower than plain greedy (`plain_speedup=0.46x/0.371x`). Bottleneck attribution: verifier costs `3.77s/4.75s`, replay `1.51s/1.47s`, and full-gamma MTP wasted after early mismatches costs `0.68s/1.23s`. Conclusion: MTP quality is not the blocker; the next speed work must reduce wrong-tail verifier/replay via staged verification, branch-state slots, or fused target verifier plumbing.
+**evidence_update_17:**
+- claim: "Real wall-clock exact-resync MTP loop is implemented and build/spec/release verified."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_wall_build crystal build bin/qwen35_mtp_sidecar_probe.cr -D qwen35_mtp_metal -o /tmp/qwen35_mtp_wall_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_wall_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); release build `/tmp/qwen35_mtp_wall_probe_release`
+  verified_at: 2026-05-03
+  decay_trigger: MTP sidecar path, target verifier helper, wall-loop accounting, Metal top1 path, or state restore semantics changes
+- claim: "Current exact-resync MTP verifier wall is slower than plain greedy despite preserving parity and pass-rate economics."
+  source: `/tmp/qwen36_mtp_wall_exact_resync_gen16_20260503161548.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, generated length, gamma list, MTP warmup, verifier route, host load, or branch-state implementation changes
+**quadrumvirate_update_17:**
+- cassandra: The accounting/wall gap is explained by wrong-tail verifier and replay costs; more raw MTP body tuning cannot close it alone.
+- daedalus: Pivot from proposal quality to verifier control flow: stage, branch, or fuse the target verifier before optimizing MTP kernels further.
+- maieutic: The refuted assumption was that target pass count alone predicts wall. It does not unless each pass is cheap and rejects stop before wrong tails.
+- adversary: The gate is only 3 prompts/gen16, but it is sufficient to reject current plumbing as a speed route because every row is far below plain speed.

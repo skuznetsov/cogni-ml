@@ -32,6 +32,7 @@ mtp_chain_diag_clamp = 4.0_f32
 mtp_chain_diag_ridge = 1.0e-5_f32
 mtp_chain_margin_thresholds = [] of Float64
 mtp_spec_gammas = [] of Int32
+mtp_spec_wall_gammas = [] of Int32
 
 struct DiagBridge
   getter scale : Array(Float32)
@@ -126,6 +127,40 @@ class MtpSpecAggregate
     @mtp_ms_sum = 0.0
     @exact_ms_sum = 0.0
     @target_pass_model_ms_sum = 0.0
+  end
+end
+
+class MtpSpecWallAggregate
+  property rows : Int32
+  property tokens : Int32
+  property passes : Int32
+  property emitted : Int32
+  property draft_tokens : Int32
+  property accepted : Int32
+  property rejections : Int32
+  property parity_ok : Int32
+  property mtp_ms_sum : Float64
+  property verifier_ms_sum : Float64
+  property replay_ms_sum : Float64
+  property backup_ms_sum : Float64
+  property wall_ms_sum : Float64
+  property plain_exact_ms_sum : Float64
+
+  def initialize
+    @rows = 0
+    @tokens = 0
+    @passes = 0
+    @emitted = 0
+    @draft_tokens = 0
+    @accepted = 0
+    @rejections = 0
+    @parity_ok = 0
+    @mtp_ms_sum = 0.0
+    @verifier_ms_sum = 0.0
+    @replay_ms_sum = 0.0
+    @backup_ms_sum = 0.0
+    @wall_ms_sum = 0.0
+    @plain_exact_ms_sum = 0.0
   end
 end
 
@@ -278,6 +313,9 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-gammas LIST", "Comma-separated vLLM-style MTP speculative accounting gammas; requires --mtp-chain-tokens") do |v|
     mtp_spec_gammas = v.split(",").reject(&.empty?).map(&.to_i32)
   end
+  p.on("--mtp-spec-wall-gammas LIST", "Comma-separated real wall-clock exact-resync MTP verifier gammas; requires --mtp-chain-tokens") do |v|
+    mtp_spec_wall_gammas = v.split(",").reject(&.empty?).map(&.to_i32)
+  end
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -314,6 +352,9 @@ abort "--mtp-chain-margin-thresholds requires --mtp-chain-topk >= 2" if !mtp_cha
 mtp_spec_gammas = mtp_spec_gammas.sort.uniq
 abort "--mtp-spec-gammas requires --mtp-chain-tokens > 0" if !mtp_spec_gammas.empty? && mtp_chain_tokens <= 0
 abort "--mtp-spec-gammas values must be positive" if mtp_spec_gammas.any? { |gamma| gamma <= 0 }
+mtp_spec_wall_gammas = mtp_spec_wall_gammas.sort.uniq
+abort "--mtp-spec-wall-gammas requires --mtp-chain-tokens > 0" if !mtp_spec_wall_gammas.empty? && mtp_chain_tokens <= 0
+abort "--mtp-spec-wall-gammas values must be positive" if mtp_spec_wall_gammas.any? { |gamma| gamma <= 0 }
 chain_modes = case mtp_chain_mode
               when "teacher"
                 ["teacher"]
@@ -352,6 +393,7 @@ margin_router_aggregates = Hash(String, Array(MarginRouterAggregate)).new do |ha
   hash[key] = Array(MarginRouterAggregate).new(mtp_chain_margin_thresholds.size) { MarginRouterAggregate.new }
 end
 mtp_spec_aggregates = Hash(Int32, MtpSpecAggregate).new { |hash, key| hash[key] = MtpSpecAggregate.new }
+mtp_spec_wall_aggregates = Hash(Int32, MtpSpecWallAggregate).new { |hash, key| hash[key] = MtpSpecWallAggregate.new }
 
 rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
@@ -452,6 +494,22 @@ rows.each do |label, prompt_text|
   exact_text = exact_nexts.map { |id, _| tokenizer.decode_single(id) }.join
   puts "mtp_chain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} start_y1=#{y1} exact_ids=#{exact_nexts.map(&.[0]).join(",")} exact_text=#{exact_text.inspect} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)}"
 
+  plain_state = state.fork
+  plain_prev = y1
+  plain_pos = token_ids.size
+  plain_ids = [] of Int32
+  plain_start = Time.instant
+  mtp_chain_tokens.times do
+    id, _ = ML::GGUF::Qwen35CPU.forward_top1(weights, plain_prev, plain_pos, plain_state)
+    plain_ids << id
+    plain_prev = id
+    plain_pos += 1
+  end
+  plain_exact_ms = elapsed_ms(plain_start)
+  exact_ids = exact_nexts.map(&.[0])
+  raise "plain exact ids mismatch" unless plain_ids == exact_ids
+  puts "mtp_plain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} plain_exact_ms=#{plain_exact_ms.round(3)} ids=#{plain_ids.join(",")}"
+
   mtp_spec_gammas.each do |gamma|
     spec_i = 0
     spec_passes = 0
@@ -512,6 +570,117 @@ rows.each do |label, prompt_text|
     agg.target_pass_model_ms_sum += target_pass_model_ms
 
     puts "mtp_spec_summary label=#{label.inspect} mode=exact_resync gamma=#{gamma} tokens=#{mtp_chain_tokens} passes=#{spec_passes} emitted=#{spec_emitted} draft_tokens=#{spec_draft_tokens} accepted=#{spec_accepted} accept_rate=#{pct(spec_accepted, spec_draft_tokens).round(2)} tokens_per_pass=#{(spec_emitted.to_f64 / spec_passes).round(3)} target_pass_speedup_bound=#{target_pass_speedup_bound.round(3)} mtp_ms=#{spec_mtp_ms.round(3)} exact_hidden_oracle_ms=#{exact_hidden_oracle_ms.round(3)} target_pass_model_ms=#{target_pass_model_ms.round(3)} additive_wall_model_ms=#{additive_wall_ms.round(3)} additive_speedup_model=#{(exact_hidden_oracle_ms / additive_wall_ms).round(3)} ideal_overlap_wall_model_ms=#{overlap_wall_ms.round(3)} ideal_overlap_speedup_model=#{(exact_hidden_oracle_ms / overlap_wall_ms).round(3)}"
+  end
+
+  mtp_spec_wall_gammas.each do |gamma|
+    wall_state = state.fork
+    wall_hidden = hidden
+    wall_token = y1
+    wall_pos = token_ids.size
+    wall_ids = [] of Int32
+    wall_passes = 0
+    wall_draft_tokens = 0
+    wall_accepted = 0
+    wall_rejections = 0
+    wall_mtp_ms = 0.0_f64
+    wall_verifier_ms = 0.0_f64
+    wall_replay_ms = 0.0_f64
+    wall_backup_ms = 0.0_f64
+    wall_start = Time.instant
+
+    while wall_ids.size < mtp_chain_tokens
+      wall_passes += 1
+      remaining = mtp_chain_tokens - wall_ids.size
+      draft_steps = Math.min(gamma, remaining)
+      candidates = [] of Int32
+      draft_hidden = wall_hidden
+      draft_token = wall_token
+      draft_pos = wall_pos
+      draft_state = draft_steps > 1 ? ML::GGUF::Qwen35MTP::State.new(draft_steps, weights.hparams.head_dim * weights.hparams.n_head_kv) : nil
+
+      draft_steps.times do
+        mtp_hidden, mtp_top1, step_ms = mtp_hidden_topk(weights, mtp, draft_hidden, draft_token, draft_pos, 1, false, draft_state)
+        candidate = mtp_top1[0][0]
+        candidates << candidate
+        wall_draft_tokens += 1
+        wall_mtp_ms += step_ms
+        draft_hidden = mtp_hidden
+        draft_token = candidate
+        draft_pos += 1
+      end
+
+      need_bonus = wall_ids.size + draft_steps < mtp_chain_tokens
+      verify_tokens = [wall_token] + (need_bonus ? candidates : candidates[0, Math.max(draft_steps - 1, 0)])
+      backup_start = Time.instant
+      backup_state = wall_state.fork
+      wall_backup_ms += elapsed_ms(backup_start)
+
+      verifier_start = Time.instant
+      verified = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, verify_tokens, wall_pos, wall_state)
+      wall_verifier_ms += elapsed_ms(verifier_start)
+      top1s = verified[:top1s]
+      hidden_rows = verified[:hidden]
+
+      accepted_this_pass = 0
+      candidates.each_with_index do |candidate, i|
+        break unless candidate == top1s[i][0]
+        accepted_this_pass += 1
+      end
+      wall_accepted += accepted_this_pass
+
+      if accepted_this_pass == candidates.size
+        candidates.each do |id|
+          break if wall_ids.size >= mtp_chain_tokens
+          wall_ids << id
+        end
+
+        if need_bonus && wall_ids.size < mtp_chain_tokens
+          bonus = top1s[accepted_this_pass][0]
+          row_base = accepted_this_pass * weights.hparams.n_embd
+          wall_hidden = hidden_rows[row_base, weights.hparams.n_embd]
+          wall_token = bonus
+          wall_pos += accepted_this_pass + 1
+          wall_ids << bonus
+        end
+      else
+        wall_rejections += 1
+        correction = top1s[accepted_this_pass][0]
+        candidates[0, accepted_this_pass].each do |id|
+          break if wall_ids.size >= mtp_chain_tokens
+          wall_ids << id
+        end
+
+        wall_state = backup_state
+        replay_tokens = verify_tokens[0, accepted_this_pass + 1]
+        replay_start = Time.instant
+        wall_hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(weights, replay_tokens, wall_pos, wall_state)
+        wall_replay_ms += elapsed_ms(replay_start)
+        wall_token = correction
+        wall_pos += accepted_this_pass + 1
+        wall_ids << correction if wall_ids.size < mtp_chain_tokens
+      end
+    end
+
+    wall_ms = elapsed_ms(wall_start)
+    parity = wall_ids == exact_ids
+    raise "mtp spec wall ids mismatch for #{label} gamma #{gamma}" unless parity
+    agg = mtp_spec_wall_aggregates[gamma]
+    agg.rows += 1
+    agg.tokens += mtp_chain_tokens
+    agg.passes += wall_passes
+    agg.emitted += wall_ids.size
+    agg.draft_tokens += wall_draft_tokens
+    agg.accepted += wall_accepted
+    agg.rejections += wall_rejections
+    agg.parity_ok += 1 if parity
+    agg.mtp_ms_sum += wall_mtp_ms
+    agg.verifier_ms_sum += wall_verifier_ms
+    agg.replay_ms_sum += wall_replay_ms
+    agg.backup_ms_sum += wall_backup_ms
+    agg.wall_ms_sum += wall_ms
+    agg.plain_exact_ms_sum += plain_exact_ms
+
+    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall gamma=#{gamma} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
   end
 
   diag_bridge = nil.as(DiagBridge?)
@@ -736,4 +905,10 @@ mtp_spec_aggregates.keys.sort.each do |gamma|
   additive_wall_ms = agg.target_pass_model_ms_sum + agg.mtp_ms_sum
   overlap_wall_ms = agg.target_pass_model_ms_sum > agg.mtp_ms_sum ? agg.target_pass_model_ms_sum : agg.mtp_ms_sum
   puts "mtp_spec_suite_summary mode=exact_resync gamma=#{gamma} rows=#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} target_pass_speedup_bound=#{(agg.tokens.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} exact_hidden_oracle_ms=#{agg.exact_ms_sum.round(3)} target_pass_model_ms=#{agg.target_pass_model_ms_sum.round(3)} additive_wall_model_ms=#{additive_wall_ms.round(3)} additive_speedup_model=#{(agg.exact_ms_sum / additive_wall_ms).round(3)} ideal_overlap_wall_model_ms=#{overlap_wall_ms.round(3)} ideal_overlap_speedup_model=#{(agg.exact_ms_sum / overlap_wall_ms).round(3)}"
+end
+mtp_spec_wall_aggregates.keys.sort.each do |gamma|
+  agg = mtp_spec_wall_aggregates[gamma]
+  next if agg.tokens == 0
+
+  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall gamma=#{gamma} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
 end

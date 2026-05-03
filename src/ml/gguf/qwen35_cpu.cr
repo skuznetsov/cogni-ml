@@ -2140,6 +2140,50 @@ module ML::GGUF
       results
     end
 
+    # Process a known span and return both pre-output-norm hidden rows and the
+    # greedy next-token prediction after each consumed token. This is a probe
+    # primitive for speculative verifier loops that need the exact next boundary
+    # hidden without running the decoder body twice.
+    def prefill_tokens_hidden_top1s(weights : Qwen35Weights,
+                                    token_ids : Array(Int32),
+                                    start_pos : Int32,
+                                    state : State) : NamedTuple(hidden: Array(Float32), top1s: Array({Int32, Float32}))
+      raise ArgumentError.new("prefill_tokens_hidden_top1s token_ids must not be empty") if token_ids.empty?
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard { prefill_tokens_hidden_top1s(weights, token_ids, start_pos, state) }
+      end
+
+      hp = weights.hparams
+      if token_ids.size == 1
+        hidden = forward_hidden(weights, token_ids[0], start_pos, state)
+        return {hidden: hidden, top1s: [hidden_top1(weights, hidden)]}
+      end
+
+      if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1"
+        hidden = Array(Float32).new(token_ids.size * hp.n_embd, 0.0_f32)
+        top1s = [] of {Int32, Float32}
+        token_ids.each_with_index do |token_id, i|
+          row = forward_hidden(weights, token_id, start_pos + i, state)
+          hp.n_embd.times { |j| hidden[i * hp.n_embd + j] = row[j] }
+          top1s << hidden_top1(weights, row)
+        end
+        return {hidden: hidden, top1s: top1s}
+      end
+
+      hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
+      top1s = if routed = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
+                routed
+              else
+                results = [] of {Int32, Float32}
+                token_ids.size.times do |i|
+                  row = hidden[i * hp.n_embd, hp.n_embd]
+                  results << hidden_top1(weights, row)
+                end
+                results
+              end
+      {hidden: hidden, top1s: top1s}
+    end
+
     # Process a known prompt span and return the final pre-output-norm hidden.
     # This is useful for MTP/self-draft probes that need the exact target
     # hidden at the prompt boundary without paying an extra lm-head pass.
