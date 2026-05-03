@@ -7122,3 +7122,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame is now offline feature attribution and cheap pre-submit prediction, not another online guard that duplicates draft work.
 - maieutic: The critical assumption to test next is whether rough FFN reconstruction error correlates with future verifier rejects across prompt classes, not whether one prompt's logits stay clean.
 - adversary: Current evidence is small-sample and diagnostic. Do not promote, fuse, or default pca-updown from these features until release ABBA confirms positive min-delta across main/code/json/reasoning at `gen32/64`.
+
+**decision_update_13:** The first feature-derived pca-updown router hypothesis was tested and refuted as a simple static threshold, while keeping the feature path alive for learned/horizon-aware routing. On 9B wide late band (`24,25,26,28,29,30`, DeltaNet rank32, pca-updown16, external FFN calibration, `schedule=4,4,8`), prompt-level route features separated short-horizon `gen16` outcomes: `code/json` had lower K residual and FFN rel-RMSE (`0.236/0.772`, `0.242/0.784`) and pca-updown preserved `100%` acceptance with small positive wall deltas (`+1.42%`, `+1.97%`), while `main/reasoning` had higher features (`0.281/0.838`, `0.307/0.887`) and pca-updown rejected heavily (`52%/56%` accept, `-104.88%/-80.71%` wall deltas). The same feature split does not survive a longer horizon: at 9B `gen32`, all pca-updown rows regressed, including `code/json` (`76.92%/72.5%` accept, `-32.81%/-26.06%` wall deltas). A focused 27B narrow-band (`24,25,26`) `gen16` run also refuted portable absolute thresholds: features still ordered prompts, but aggregate pca-updown regressed (`baseline_delta_mean=-29.97%`, min `-52.33%`), with only JSON slightly positive because baseline already had one reject. Conclusion: route features are useful, but the next router must include horizon/position/model/band context and be trained/scored against verifier outcomes; hand-written residual/FFN thresholds should not be promoted.
+**evidence_update_13:**
+- claim: "9B `gen16` feature suite shows route residual + FFN rel-RMSE separate pca-updown clean prompts from reject-heavy prompts on the tested wide late band."
+  source: `/tmp/qwen35_router_features_suite_gen16_20260503093932.log`
+  verified_at: 2026-05-03
+  decay_trigger: prompt suite, generated length, layer band, pca-updown rank, external calibration prompts, model/quant, host load, or scoreboard formula changes
+- claim: "The same 9B feature split fails as a static router at `gen32`; even code/json pca-updown rows regress."
+  source: `/tmp/qwen35_router_features_suite_gen32_20260503094302.log`
+  verified_at: 2026-05-03
+  decay_trigger: generated length, prompt suite, layer band, pca-updown rank, external calibration prompts, model/quant, host load, or scoreboard formula changes
+- claim: "A focused 27B narrow-band `gen16` gate refutes portable absolute feature thresholds; pca-updown aggregate wall regresses despite prompt feature ordering."
+  source: `/tmp/qwen36_router_features_narrow_gen16_20260503094658.log`
+  verified_at: 2026-05-03
+  decay_trigger: model/quant, layer band, generated length, prompt suite, external calibration prompts, host load, or scheduler implementation changes
+**quadrumvirate_update_13:**
+- cassandra: The failure pattern is horizon drift and model/band calibration drift, not just a bad numeric threshold.
+- daedalus: Pivot from hand-written threshold routing to supervised/offline route scoring over prompt features, position/horizon, model/band identity, and verifier outcome.
+- maieutic: The useful question is not "is FFN rel-RMSE low enough?" but "for this remaining horizon and route, is expected replay risk lower than draft-body savings?"
+- adversary: The small `gen16` 9B positive deltas are too small for promotion and vanish or invert at longer horizon. Keep pca-updown default-off until ABBA/repeats show positive min-delta under the learned router.
