@@ -7294,3 +7294,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Shift from "retune verifier chunks" to "change target verifier execution model" by keeping layer-group work resident or snapshotting branch states.
 - maieutic: The key false assumption was that b3/b6 could become cheap just by routing to GEMM; local evidence says these tiny chunks are still better as GEMV.
 - adversary: Evidence is mostly one-shot and host-noisy, but the regressions are large enough to refute default promotion. Keep new knobs probe-only.
+
+**decision_update_22:** The wall-specific serial early verifier falsifier is implemented and refutes serial exact-body verification as the next MTP speed route. `--mtp-spec-wall-serial-early-verify` verifies a staged MTP proposal token-by-token with `forward_hidden + hidden_top1`, stops at the first candidate mismatch, and keeps the mutated exact state when it stops at the correction boundary. This preserves parity and measures whether removing wrong-tail verifier/replay is enough without a Metal verifier rewrite. On Qwen3.6-27B `france/code/reason`, `gen16`, `gamma=8`, `stage=3`, `stage_once=true`, `lazy_draft=true`, default chunk verification measured `wall_ms=3931.311`, `plain_speedup=0.729`, `verifier_ms=2695.444`, `replay_ms=531.336`, `verifier_tokens=60`, `replay_tokens=9`. Serial-early measured `wall_ms=6385.100`, `plain_speedup=0.459`, `verifier_ms=5603.053`, `replay_ms=0`, `verifier_tokens=48`. Conclusion: the control-flow target is valid but the serial route destroys chunk fusion; the next useful branch must expose correction-boundary state while keeping chunk/full+recurrent grouped execution resident.
+**evidence_update_22:**
+- claim: "Serial early verifier mode is implemented as a default-off MTP wall probe and preserves parity on the 27B natural gate."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_serial_early_build crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_serial_early_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_serial_early_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`); `/tmp/qwen36_mtp_serial_early_gate_20260504_192257.log`
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall-loop verifier mode, `forward_hidden`, `prefill_tokens_hidden_top1s`, prompt suite, model, or host load changes
+- claim: "Serial early verification removes replay work but is slower than chunk verification because it bypasses fused/chunk prefill execution."
+  source: `/tmp/qwen36_mtp_chunk_gate_20260504_192056.log`; `/tmp/qwen36_mtp_serial_early_gate_20260504_192257.log`
+  verified_at: 2026-05-04
+  decay_trigger: chunk verifier implementation, serial decode route, prompt suite, model, stage/gamma policy, or host load changes
+**quadrumvirate_update_22:**
+- cassandra: The predicted failure happened: fewer verifier/replay tokens did not matter because serial per-token exact body lost the dominant chunk fusion.
+- daedalus: Pivot from "stop earlier by serializing" to "stop earlier without serializing": branch-state slots or chunk-major verifier snapshots.
+- maieutic: The corrected assumption is that replay avoidance is useful only if the verifier keeps the same execution class as chunk prefill.
+- adversary: Parity is strong, but the speed regression is large enough to keep the flag probe-only and not retest this branch without a new fused implementation.
