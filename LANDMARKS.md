@@ -7326,3 +7326,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful pivot is not "snapshot everything and declare victory"; it is "use snapshots to make rejects cheap, then reduce verifier waste or route only high-probability MTP spans."
 - maieutic: The hidden assumption that snapshots must copy full KV was false for decode continuation; recurrent state dominates and future KV rows can be ignored by position/overwrite.
 - adversary: This is a blit lower-bound, not a real exact boundary snapshot. True kernels will pay extra writes during recurrent chunk execution and need parity proof before any speed claim.
+
+**decision_update_24:** Snapshot counterfactual accounting is now explicit in MTP wall summaries, and it should be used as a pre-kernel filter. With `--mtp-spec-wall-snapshot-cost-probe`, rows and suites report `snapshot_modeled_wall_ms = wall_ms - replay_ms + snapshot_sim_ms` plus `snapshot_modeled_speedup`. This is a lower-bound estimate for a future exact boundary snapshot implementation, not a real runtime. Sequential `offramp=1` on Qwen3.6-27B `france/code/reason`, `gen16/gamma8/stage3/stage_once/lazy` stayed below plain even under the counterfactual (`snapshot_modeled_speedup=0.781`), so aggressive fail-closed fallback is not a good snapshot-kernel target. A later `offramp=2` run printed `snapshot_modeled_speedup=1.144`, but its `plain_exact_ms=9473.207` for 48 tokens was anomalously high, so it is a hypothesis requiring ABBA/repeats, not evidence. Decision: do not start a broad snapshot kernel for all policies; first use the modeled metric to pick a stable controller that wins under replay replacement on repeated runs.
+**evidence_update_24:**
+- claim: "MTP wall summaries now include snapshot-modeled wall and speedup metrics when the snapshot cost probe is enabled."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_snapshot_model_build crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_snapshot_model_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_snapshot_model_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`)
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall summary format, snapshot cost probe semantics, or replay accounting changes
+- claim: "The snapshot counterfactual refutes `offramp=1` as a kernel target on the current natural gate and leaves `offramp=2` as noisy/hypothesis-only."
+  source: `/tmp/qwen36_mtp_snapshot_model_off1_seq_20260504_194455.log`; `/tmp/qwen36_mtp_snapshot_model_off2_seq_20260504_194543.log`
+  verified_at: 2026-05-04
+  decay_trigger: host load, prompt suite, gamma/stage/offramp policy, plain exact timing, or MTP wall-loop implementation changes
+**quadrumvirate_update_24:**
+- cassandra: Host timing noise can falsely promote policies; require ABBA/repeats before treating modeled speedup above 1.0 as a real target.
+- daedalus: The next decision should be controller selection under the snapshot counterfactual, not kernel work first.
+- maieutic: The model answers "would replay removal be enough for this policy?" It does not answer "can the snapshot kernel be implemented at this exact cost?"
+- adversary: Because snapshot modeled speedup depends on same-run plain exact timing, anomalous plain rows must be discarded or repeated.
