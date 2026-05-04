@@ -7310,3 +7310,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "stop earlier by serializing" to "stop earlier without serializing": branch-state slots or chunk-major verifier snapshots.
 - maieutic: The corrected assumption is that replay avoidance is useful only if the verifier keeps the same execution class as chunk prefill.
 - adversary: Parity is strong, but the speed regression is large enough to keep the flag probe-only and not retest this branch without a new fused implementation.
+
+**decision_update_23:** Branch-state snapshot copy economics are measured and keep the exact snapshot branch alive, but only as part of a larger verifier/routing fix. `--mtp-spec-wall-snapshot-cost-probe` allocates recurrent-state snapshot slots, leaves normal MTP wall timing unchanged, then simulates one `rec_only` state blit per verified row and reports `snapshot_sim_ms`. On Qwen3.6-27B, a correction-boundary recurrent snapshot is about `149.75 MiB`: `48` recurrent layers each carry `3.0 MiB` SSM state plus small conv state; full-attention KV is only about `0.125 MiB/token` across the model and can be handled by position/overwrite instead of copying. On the natural `france/code/reason` `gen16/gamma8/stage3/stage_once/lazy` gate, `60` simulated recurrent snapshots cost `135.742ms`, while replay cost was `590.092ms`. Single France row measured `21` snapshots at `40.411ms` versus `247.012ms` replay. Conclusion: exact boundary snapshots are memory-heavy but plausible; replacing replay with snapshots could save roughly `~450ms` on this gate, not enough alone to beat plain decode, but enough to justify a bounded Metal snapshot prototype if paired with MTP routing or verifier fusion.
+**evidence_update_23:**
+- claim: "Snapshot cost probe is implemented as default-off instrumentation and does not pollute normal MTP wall timing."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_snapshot_probe_build crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_snapshot_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_snapshot_probe_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`8 examples, 0 failures`)
+  verified_at: 2026-05-04
+  decay_trigger: state layout, `copy_state_metal_used!`, MTP wall-loop timing, or snapshot-cost flag changes
+- claim: "Recurrent branch-state blits are substantially cheaper than replay on the current 27B natural gate, but not enough alone to beat plain decode."
+  source: `/tmp/qwen36_mtp_snapshot_cost_france_20260504_193259.log`; `/tmp/qwen36_mtp_snapshot_cost_suite_20260504_193320.log`; `/tmp/qwen36_mtp_off1_current_suite_20260504_193408.log`
+  verified_at: 2026-05-04
+  decay_trigger: prompt suite, model, host load, state copy bandwidth, verifier policy, or replay implementation changes
+**quadrumvirate_update_23:**
+- cassandra: Snapshot copying is cheap enough to matter, but the remaining gap after removing replay still leaves MTP below plain exact on the natural gate.
+- daedalus: The useful pivot is not "snapshot everything and declare victory"; it is "use snapshots to make rejects cheap, then reduce verifier waste or route only high-probability MTP spans."
+- maieutic: The hidden assumption that snapshots must copy full KV was false for decode continuation; recurrent state dominates and future KV rows can be ignored by position/overwrite.
+- adversary: This is a blit lower-bound, not a real exact boundary snapshot. True kernels will pay extra writes during recurrent chunk execution and need parity proof before any speed claim.
