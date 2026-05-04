@@ -7342,3 +7342,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot away from scalar off-ramp threshold work; the next candidate must either route high-accept spans before MTP or change verifier execution itself.
 - maieutic: The model answers "would replay removal be enough for this policy?" It does not answer "can the snapshot kernel be implemented at this exact cost?"
 - adversary: Because snapshot modeled speedup depends on same-run plain exact timing, anomalous plain rows must be discarded or repeated.
+
+**decision_update_25:** Naive chunk-major MTP verification is refuted before a wide Metal rewrite. The current target verifier already uses a chunk-major layer-group primitive: `full_attn_then_recurrent_chunk_project_many` fuses one full-attention layer plus the following recurrent run into one command buffer, so the remaining first-order cost is repeated FFN/projection weight traffic on small chunks rather than a missing single-layer fusion. A full `stage=0` gamma chunk increases batch size but also verifies/generates long wrong tails; on Qwen3.6-27B natural `france/code/reason`, `gen16/gamma8`, parity held but `draft_tokens=120`, `verifier_tokens=131`, and `snapshot_modeled_speedup=0.442`. Guard-stage sweep with snapshot counterfactual keeps `stage=3 + stage_once + lazy` as the best scalar controller (`snapshot_modeled_speedup=0.770`), while `stage=2/4/5` score `0.566/0.672/0.616`. Conclusion: do not start a broad fused/chunk-major Metal rewrite under the current low-accept MTP controller. The next fused/chunk-major target needs a high-accept router/candidate source, or it must batch only spans predicted likely-correct.
+**evidence_update_25:**
+- claim: "Full gamma chunk-major MTP verification is slower even under replay-to-snapshot counterfactual."
+  source: `/tmp/qwen36_mtp_snapshot_model_stage0_suite_20260504_195546.log`
+  verified_at: 2026-05-04
+  decay_trigger: MTP acceptance, gamma/stage policy, snapshot accounting, verifier route, prompt suite, or model changes
+- claim: "Among scalar guard-stage policies checked under snapshot counterfactual, stage=3+stage_once+lazy remains best but still below plain exact."
+  source: `/tmp/qwen36_mtp_snapshot_stage_sweep_20260504_195631.txt`; `/tmp/qwen36_mtp_snapshot_stage2_20260504_195631.log`; `/tmp/qwen36_mtp_snapshot_stage3_20260504_195701.log`; `/tmp/qwen36_mtp_snapshot_stage4_20260504_195731.log`; `/tmp/qwen36_mtp_snapshot_stage5_20260504_195805.log`
+  verified_at: 2026-05-04
+  decay_trigger: host load, prompt suite, gamma/stage policy, snapshot accounting, or verifier implementation changes
+**quadrumvirate_update_25:**
+- cassandra: Batch-size-only chunk-major tuning is a local-optimization trap when proposal acceptance is low; wrong-tail work grows faster than GEMM efficiency.
+- daedalus: Shift fused/chunk-major target from "make current MTP stages larger" to "find high-accept spans first, then batch/fuse those spans."
+- maieutic: The hidden false assumption was that verifier chunk size is the primary limiter. Local evidence says candidate quality/routing determines whether larger chunks help or explode work.
+- adversary: This refutes scalar MTP chunk-major policies on a 3-prompt gate, not all future fused verifier designs. A high-accept self-draft/router route can still make chunk-major fusion valuable.
