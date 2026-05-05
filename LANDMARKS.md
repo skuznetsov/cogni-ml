@@ -7390,3 +7390,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "always add exact bonus" to "only branch/bonus when confidence is high or replay is eliminated by resident branch-state slots."
 - maieutic: The false assumption was that exact boundary refresh is always valuable. It is only valuable when the refresh cost is lower than the extra verifier/replay tail.
 - adversary: This is a one-shot 3-prompt gate, but the regression is large and counter-supported by token counters, so the flag remains default-off and should not be retuned without a new guard.
+
+**decision_update_28:** MTP wall top2 accounting is implemented and provides a quantitative gate for resident branch-state/top2 work. `--mtp-spec-wall-top2-accounting` requests MTP K2 during exact-resync wall drafting and records whether a rejected exact correction equals the MTP second candidate. It does not change emitted ids or verifier semantics. On Qwen3.6-27B natural `france/code/reason`, `gamma8`, `stage3`, `stage_once`, `lazy`, `gen16`, top2 covered `5/14` reject corrections and `328.646ms` of `605.311ms` replay. On `gen32`, top2 covered `13/31` corrections and `1140.957ms` of `2813.53ms` replay. This validates top2 as a real branch signal, but refutes a top2-only branch-state kernel as the next standalone speed feature: even a narrow counterfactual deleting all top2-associated replay from the `gen32` row would only move plain speed from `0.395x` to about `0.427x`, while the broader replay-to-snapshot counterfactual is still only `0.477x`. Conclusion: top2 should feed a broader router/branch verifier, not be built as an isolated kernel path.
+**evidence_update_28:**
+- claim: "MTP wall top2 accounting is implemented as default-off instrumentation and preserves parity."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_account_build crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_top2_account_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_account_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`9 examples, 0 failures`); `/tmp/qwen36_mtp_top2_accounting_gate_20260504_202505.log`; `/tmp/qwen36_mtp_top2_accounting_gen32_gate_20260504_202610.log`
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall loop, hidden_top2 projection, staged verifier policy, model, prompt suite, or host load changes
+- claim: "Top2 covers a meaningful fraction of reject corrections but not enough replay/wall to justify a top2-only branch-state implementation."
+  source: `gen16 top2_rescues=5/14 top2_replay_ms=328.646/605.311`; `gen32 top2_rescues=13/31 top2_replay_ms=1140.957/2813.53`; `gen32 plain_speedup=0.395 snapshot_modeled_speedup=0.477`
+  verified_at: 2026-05-04
+  decay_trigger: acceptance profile, gamma/stage policy, branch-state implementation cost, or prompt/model changes
+**quadrumvirate_update_28:**
+- cassandra: The branch signal exists, but LOCAL_OPTIMIZATION risk remains: rescuing only top2 reject replay cannot overcome verifier/draft body cost.
+- daedalus: Pivot from "top2 branch kernel" to "high-accept routing plus branch-state verifier"; top2 is one feature, not the route.
+- maieutic: The question shifted from "can top2 rescue corrections?" to "does the rescued replay dominate wall?" The answer is no on this gate.
+- adversary: The accounting is a counterfactual, not a measured branch-state implementation. Any future speed claim must include real branch-state costs and ABBA/repeated timing.
