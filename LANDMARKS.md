@@ -7522,3 +7522,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Stop optimizing MTP top2 projection order. The next frame remains fused/resident verifier or cleaner self-draft chunks.
 - maieutic: The assumption tested was that eager K2 projection was a meaningful part of the near-plain overhead. Evidence says it is not the limiting term.
 - adversary: The wall number is single-run/noisy, but the unchanged counters and non-lower `mtp_ms` are enough to avoid promoting this route.
+
+**decision_update_36:** The exact-first + chunk-tail hybrid (`stage=1 + stage_once + lazy + top2-miss-offramp`) is refuted as the missing MTP controller. It preserves parity, but it is worse than both the pure exact-first guard and the prior top2-miss off-ramp because it pays a first-token guard, then still pays chunk verification/replay/fallback on low-cleanliness proposals. On Qwen3.6-27B natural `france/code/reason`, `gen32/gamma8`, it measured `plain_speedup=0.761`, `wall_ms=7649.483`, `plain_exact_ms=5822.991`, `passes=6`, `draft_tokens=34`, `accepted=7`, `rejections=6`, `verifier_tokens=38`, `replay_tokens=7`, and `fallback_tokens=83`, with parity `3/3`. Conclusion: staged scalar controller variants are now locally exhausted; the speed path needs either cleaner proposal chunks or an execution-model change that makes guards/verifier/resync resident and cheap.
+**evidence_update_36:**
+- claim: "Stage1 plus stage_once plus top2-miss off-ramp preserves exact parity but is not a speed route."
+  source: `/tmp/qwen36_mtp_stage1_once_top2_offramp_gen32_20260505_090711.log` (`plain_speedup=0.761`, parity `3/3`)
+  verified_at: 2026-05-05
+  decay_trigger: MTP wall staging semantics, top2 off-ramp semantics, prompt suite, host load, or exact verifier route changes
+- claim: "The focused DeltaNet associative-scan algebra still passes after the current MTP work and remains a research scaffold rather than a near-term production route."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_dn_scan_specs crystal spec spec/qwen35_deltanet_affine_scan_spec.cr spec/qwen35_deltanet_scan_model_spec.cr` -> `18 examples, 0 failures` on 2026-05-05
+  verified_at: 2026-05-05
+  decay_trigger: DeltaNet recurrence helpers, scan model, block-scan algebra, or compact-summary representation changes
+**quadrumvirate_update_36:**
+- cassandra: The predicted local-optimization trap recurred: mixing token guard and chunk tail does not create clean chunks, it just combines overhead classes.
+- daedalus: Pivot from scalar MTP staging to two higher-level branches: high-accept same-weight/self-draft proposals, and exact long-prefill DeltaNet scan only if a rank-stable/fused formulation changes the cost model.
+- maieutic: The false assumption was that one exact first-token guard is enough to make the remaining tail profitable. Evidence says tail cleanliness is prompt-dependent and often too low.
+- adversary: This is a 3-prompt single-run gate, so do not overfit exact milliseconds. The robust signal is structural counters: accepted tokens are too few relative to verifier/fallback work.
