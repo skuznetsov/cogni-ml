@@ -7438,3 +7438,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Shift the frame from "when should we abandon MTP?" to "when should we submit MTP at all, and can the first guard be made resident/cheap?"
 - maieutic: The hidden assumption was that a better off-ramp threshold could cross `>1.0x`. Evidence says the ceiling is close to plain exact unless the initial speculative attempt becomes cheaper or better routed.
 - adversary: Host timing variance is visible in same-run plain exact. Treat `0.986x` as near-plain/noisy, not as proof of a speed win.
+
+**decision_update_31:** MTP top2-margin promotion is implemented as a default-off probe and refuted as a direct controller, while preserving the margin signal as a router feature. `--mtp-spec-wall-promote-top2-margin=F` auto-enables top2 accounting and swaps top2 into the primary verifier candidate slot when `top1_logit - top2_logit <= F`; exact verifier parity remains mandatory, and summaries report `top2_promotions` plus `top2_promoted_accepted`. The first-step diagnostic supported the hypothesis narrowly: France top1 was correct with margin `0.780`, code top1 was correct with margin `4.106`, and reason's exact token was top2 with margin `0.216`. But route-level A/B refuted simple thresholds. On Qwen3.6-27B natural `gen32/gamma8/stage3/stage_once/lazy/top2-miss`, baseline measured `plain_speedup=0.913`; `F=0.5` regressed to `0.784` because it promoted too many wrong code candidates (`top2_promotions=8`, `top2_promoted_accepted=3`); `F=0.25` printed `1.000` only with anomalously slow same-run plain exact and still regressed code (`plain_speedup=0.857`). Conclusion: use MTP margin as an offline/router feature, not as direct top2 candidate promotion.
+**evidence_update_31:**
+- claim: "Top2-margin promotion is implemented as exact-verified, default-off MTP wall instrumentation."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_promote_build crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_top2_promote_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_promote_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`9 examples, 0 failures`)
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall candidate selection, hidden_top2 scoring, verifier parity, or summary counters change
+- claim: "Simple top2-margin promotion thresholds are not a speed route on the current natural gate."
+  source: `/tmp/qwen36_mtp_first_top5_margin_20260504_205256.log`; `/tmp/qwen36_mtp_top2_miss_gen32_promote_base_20260504_210345.log`; `/tmp/qwen36_mtp_top2_miss_gen32_promote_m05_20260504_210345.log`; `/tmp/qwen36_mtp_top2_miss_gen32_promote_m025_20260504_210533.log`
+  verified_at: 2026-05-04
+  decay_trigger: prompt suite, threshold, host load, MTP scoring calibration, or candidate routing changes
+**quadrumvirate_update_31:**
+- cassandra: The predicted failure mode occurred: local low margin can identify some top2 rescues, but direct promotion creates false promotions that cost verifier/replay work.
+- daedalus: Pivot from "swap candidate order" to "learn/use margin as one feature in a submit/skip router"; exact correction remains cheaper than wrong promoted branches.
+- maieutic: The assumption that low top1-top2 margin means top2 is likely correct is too weak. It can mean "uncertain", not specifically "second candidate is correct."
+- adversary: The `F=0.25` aggregate is contaminated by slow plain exact timing; the code-row regression and promotion counters are the stronger evidence.
