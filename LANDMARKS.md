@@ -7538,3 +7538,39 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from scalar MTP staging to two higher-level branches: high-accept same-weight/self-draft proposals, and exact long-prefill DeltaNet scan only if a rank-stable/fused formulation changes the cost model.
 - maieutic: The false assumption was that one exact first-token guard is enough to make the remaining tail profitable. Evidence says tail cleanliness is prompt-dependent and often too low.
 - adversary: This is a 3-prompt single-run gate, so do not overfit exact milliseconds. The robust signal is structural counters: accepted tokens are too few relative to verifier/fallback work.
+
+### [LM-codex-DN-ACCELERATOR-PORTFOLIO-20260505] Decode speed needs cleaner self-draft chunks or resident verifier state, while exact DN scan remains long-prefill research
+**status:** active research plan
+**trust:** {F:0.66, G:0.58, R:0.70}
+**context:** ml (Qwen35/Qwen36 DeltaNet, self-spec decode, long prefill)
+**evidence:**
+- claim: "Scalar MTP staged/off-ramp controllers are locally exhausted: exact-first, top2-miss, lazy top2, and stage-once variants preserve parity but stay below plain exact because accepted-token yield is too low relative to verifier/fallback work."
+  source: `LM-QWEN36-MTP-* decision_update_29..36`, reviewed 2026-05-05
+  verified_at: 2026-05-05
+  decay_trigger: new high-accept MTP candidate source, resident verifier implementation, or broad ABBA wall gate changes the controller economics
+- claim: "Exact DeltaNet affine/compact scan algebra remains valid, but current compact-summary, row-basis, and adjoint implementations are not production prefill wins against the rowwise chunk kernel."
+  source: `LM-codex-DELTANET-COMPACT-SUMMARY-FALSIFIER-1`, `LM-codex-DELTANET-ADJOINT-FULL-METAL-FALSIFIER-1`, and focused scan specs rerun on 2026-05-05
+  verified_at: 2026-05-05
+  decay_trigger: rank-stable compose, fused summary/replay, new Metal kernels, or pp1024+ integration A/B
+**decision:** Try physical/regime diagnostics next before more kernels: measure `g`, `beta`, effective decay horizon, K residual, and projected-K eligibility by layer/head. If fast-forgetting regimes correlate with safe approximate rates, route low-rank DN self-draft by regime; otherwise pivot to resident verifier/state handoff or prompt/session cache.
+**quadrumvirate:**
+- cassandra: The likely failure mode is another residual-only router. Include decay/gate features and verifier outcome gates before promoting any policy.
+- daedalus: Frame shift from "parallelize DN recurrence everywhere" to "exploit regimes where recurrence state matters less or can be represented cheaply."
+- maieutic: The key assumption to test is that `g/beta` carry usable information about approximation tolerance, not just dynamics.
+- adversary: This is approximate-inference routing unless exact verifier is in the loop. Do not claim quality-preserving speed from diagnostics alone.
+
+**decision_update_1:** DN regime diagnostics are implemented as a default-off probe and the first smoke supports a `g*residual` router experiment. `bin/qwen35_deltanet_fixed_basis_probe.cr` now accepts `--simulate-dn-regime-features` and optional `--dn-regime-g-cuts=LIST`, printing overall and per-v-head `g`, `beta`, effective decay horizon `tau=-1/log(g)`, K residual, `g*residual`, `beta*residual`, and joint eligibility rates. On Qwen3.5-9B layer `0/2/4`, `rank64`, `tokens80/calib32`, regimes are strongly separated: layer0 is bimodal, with aggregate `g_p50=0.997662` / `tau_p50=427.174` but several fast-forgetting heads at `tau_p50≈0.56..1.1` and `100%` `g<=0.75&r<=0.5`; layer2 and layer4 are more mixed (`g_p50=0.784201/0.859003`, `tau_p50=4.114/6.58`, aggregate `g<=0.75&r<=0.5` around `34.05%/33.46%`). Conclusion: raw K residual is missing a physical state-memory feature. The next falsifier should compare existing raw residual fallback with decayed-residual fallback (`max_h g_h * residual(k_head)`), still under exact greedy/self-spec verification.
+**evidence_update_1:**
+- claim: "DN regime diagnostics are implemented without changing default runtime behavior and the probe builds."
+  source: `crystal tool format bin/qwen35_deltanet_fixed_basis_probe.cr`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_dn_regime_build2 crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_dn_regime_probe2 --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-05-05
+  verified_at: 2026-05-05
+  decay_trigger: fixed-basis probe option parsing, recurrent sample collection, or DN gate formulas change
+- claim: "The first layer0/2/4 smoke shows usable decay-regime separation and motivates a decayed-residual router."
+  source: `/tmp/qwen35_dn_regime_layers_024_current_20260505_094356.log`
+  verified_at: 2026-05-05
+  decay_trigger: prompt/model/layer set, basis rank, calibration size, or projected-K sample collection changes
+**quadrumvirate_update_1:**
+- cassandra: Residual-only gating is too coarse; the observed head-level tau split gives a concrete reason it can reject safe fast-forgetting spans or accept risky long-memory spans.
+- daedalus: Pivot from "layer-level approximate on/off" to "state-memory-aware risk score"; the same low-rank math may become useful when gated by recurrent dynamics.
+- maieutic: The diagnostic does not prove speed or quality. It only proves a measurable physical feature exists and can feed the next verifier-backed falsifier.
+- adversary: Per-head statistics are from one prompt and 9B only. A promoted router needs multi-prompt, 27B, greedy/self-spec parity, and wall counters.

@@ -522,6 +522,96 @@ private def prompt_route_layer_feature_notes(name : String,
   end
 end
 
+private def sorted_percentile(values : Array(Float64), p : Float64) : Float64
+  return 0.0 if values.empty?
+  sorted = values.sort
+  idx = ((sorted.size - 1) * p).round.to_i.clamp(0, sorted.size - 1)
+  sorted[idx]
+end
+
+private def decay_tau(g : Float64) : Float64?
+  return nil unless g > 0.0 && g < 1.0
+  -1.0 / Math.log(g)
+end
+
+private def dn_regime_feature_notes(name : String,
+                                    layer_index : Int32,
+                                    rank : Int32,
+                                    token_count : Int32,
+                                    calib_count : Int32,
+                                    samples : Array(RecurrentSample),
+                                    bases : BasisSet,
+                                    residual_thresholds : Array(Float64),
+                                    g_cuts : Array(Float64)) : Array(String)
+  raise "DN regime features require recurrent samples" if samples.empty?
+  raise "DN regime features require held-out samples" unless calib_count < samples.size
+
+  h_k = bases.size
+  s = bases[0][0].size
+  h_v = samples[0].ghead.size
+  heldout = samples[calib_count, samples.size - calib_count]
+  values = [] of NamedTuple(head: Int32, g: Float64, tau: Float64?, beta: Float64, residual: Float64, decayed_residual: Float64, update_residual: Float64)
+
+  heldout.each do |sample|
+    h_v.times do |h|
+      k_head = h % h_k
+      g = sample.ghead[h].to_f64
+      beta = sample.beta[h].to_f64
+      residual = residual_norm_f32(sample.k, k_head * s, bases[k_head], rank)
+      values << {
+        head:             h,
+        g:                g,
+        tau:              decay_tau(g),
+        beta:             beta,
+        residual:         residual,
+        decayed_residual: g * residual,
+        update_residual:  beta * residual,
+      }
+    end
+  end
+
+  format_stats = ->(prefix : String, rows : Array(typeof(values[0]))) {
+    gs = rows.map { |r| r[:g] }
+    betas = rows.map { |r| r[:beta] }
+    residuals = rows.map { |r| r[:residual] }
+    decayed = rows.map { |r| r[:decayed_residual] }
+    update = rows.map { |r| r[:update_residual] }
+    taus = rows.compact_map { |r| r[:tau] }
+    unstable = rows.count { |r| r[:g] >= 1.0 }
+    g_rates = g_cuts.map do |cut|
+      passed = rows.count { |r| r[:g] <= cut }
+      "g<=#{cut.round(4)}:#{(100.0 * passed / rows.size).round(2)}%"
+    end
+    residual_rates = residual_thresholds.map do |threshold|
+      passed = rows.count { |r| r[:residual] <= threshold }
+      "r<=#{threshold.round(4)}:#{(100.0 * passed / rows.size).round(2)}%"
+    end
+    joint_rates = [] of String
+    g_cuts.each do |cut|
+      residual_thresholds.each do |threshold|
+        passed = rows.count { |r| r[:g] <= cut && r[:residual] <= threshold }
+        joint_rates << "g<=#{cut.round(4)}&r<=#{threshold.round(4)}:#{(100.0 * passed / rows.size).round(2)}%"
+      end
+    end
+    tau_note =
+      if taus.empty?
+        "tau_finite=0 tau_p50=inf tau_p90=inf"
+      else
+        "tau_finite=#{taus.size} tau_p50=#{sorted_percentile(taus, 0.50).round(3)} tau_p90=#{sorted_percentile(taus, 0.90).round(3)}"
+      end
+
+    "#{prefix} samples=#{rows.size} g_mean=#{(gs.sum / gs.size).round(6)} g_p10=#{sorted_percentile(gs, 0.10).round(6)} g_p50=#{sorted_percentile(gs, 0.50).round(6)} g_p90=#{sorted_percentile(gs, 0.90).round(6)} g_min=#{gs.min.round(6)} g_max=#{gs.max.round(6)} g_ge_1=#{unstable} #{tau_note} beta_mean=#{(betas.sum / betas.size).round(6)} beta_p50=#{sorted_percentile(betas, 0.50).round(6)} residual_mean=#{(residuals.sum / residuals.size).round(6)} residual_p50=#{sorted_percentile(residuals, 0.50).round(6)} residual_p90=#{sorted_percentile(residuals, 0.90).round(6)} decayed_residual_p50=#{sorted_percentile(decayed, 0.50).round(6)} decayed_residual_p90=#{sorted_percentile(decayed, 0.90).round(6)} update_residual_p50=#{sorted_percentile(update, 0.50).round(6)} update_residual_p90=#{sorted_percentile(update, 0.90).round(6)} g_rates=#{g_rates.join(',')} residual_rates=#{residual_rates.join(',')} joint_rates=#{joint_rates.join(',')}"
+  }
+
+  notes = [] of String
+  notes << format_stats.call("dn_regime_features name=#{name} layer=#{layer_index} rank=#{rank} token_vectors=#{token_count} calib_tokens=#{calib_count} heldout_tokens=#{token_count - calib_count} heads=#{h_v}", values)
+  h_v.times do |h|
+    head_rows = values.select { |r| r[:head] == h }
+    notes << format_stats.call("dn_regime_head_features name=#{name} layer=#{layer_index} head=#{h} k_head=#{h % h_k} rank=#{rank}", head_rows)
+  end
+  notes
+end
+
 private def ffn_updown_route_feature_note(name : String,
                                           weights : ML::GGUF::Qwen35Weights,
                                           token_ids : Array(Int32),
@@ -8815,6 +8905,8 @@ thresholds = [0.05, 0.10, 0.20, 0.35, 0.50]
 basis_mode = "greedy"
 pca_iters = 24
 simulate_delta = false
+simulate_dn_regime_features = false
+dn_regime_g_cuts = [0.50, 0.75, 0.90, 0.95, 0.98]
 simulate_lowrank = false
 simulate_lowrank_metal = false
 simulate_lowrank_metal_project = false
@@ -8972,6 +9064,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--basis=MODE", "Basis builder: greedy or pca (default: greedy)") { |v| basis_mode = v }
   p.on("--pca-iters=N", "Power iterations per PCA component (default: 24)") { |v| pca_iters = v.to_i }
   p.on("--simulate-delta", "Also simulate projected-K DeltaNet output/state drift") { simulate_delta = true }
+  p.on("--simulate-dn-regime-features", "Report g/beta/decay-horizon vs K residual features for projected-K routing") { simulate_dn_regime_features = true }
+  p.on("--dn-regime-g-cuts=LIST", "Comma-separated g cutoffs for --simulate-dn-regime-features") { |v| dn_regime_g_cuts = parse_float_list(v) }
   p.on("--simulate-lowrank", "Also prove low-rank M*B^T recurrence against full projected-K recurrence") { simulate_lowrank = true }
   p.on("--simulate-lowrank-metal", "Compare Metal low-rank DeltaNet step against the CPU low-rank proof kernel") { simulate_lowrank_metal = true }
   p.on("--simulate-lowrank-metal-project", "Compare Metal Q/K projection plus low-rank DeltaNet step against the CPU proof kernel") { simulate_lowrank_metal_project = true }
@@ -9181,7 +9275,7 @@ ffn_pca_calib_token_sets = ffn_pca_calib_prompts.map { |calib_prompt| token_ids_
 
 weights = ML::GGUF::Qwen35Weights.from_gguf(model)
 per_head = recurrent_k_vectors_for_prompt(weights, token_ids, layer_index)
-samples = (simulate_delta || simulate_lowrank || simulate_lowrank_metal || simulate_lowrank_metal_project || simulate_lowrank_metal_chunk || simulate_lowrank_metal_chunk_out || simulate_lowrank_metal_layer_chunk || simulate_lowrank_metal_layer_full || simulate_lowrank_metal_layer_updown_rank || simulate_lowrank_metal_layer_overlap || simulate_lowrank_metal_verifier_overlap || simulate_lowrank_metal_decode_verifier_overlap || simulate_lowrank_metal_chunk_thread_overlap || simulate_multilayer_overlap_n > 0) ? recurrent_samples_for_prompt(weights, token_ids, layer_index) : [] of RecurrentSample
+samples = (simulate_delta || simulate_dn_regime_features || simulate_lowrank || simulate_lowrank_metal || simulate_lowrank_metal_project || simulate_lowrank_metal_chunk || simulate_lowrank_metal_chunk_out || simulate_lowrank_metal_layer_chunk || simulate_lowrank_metal_layer_full || simulate_lowrank_metal_layer_updown_rank || simulate_lowrank_metal_layer_overlap || simulate_lowrank_metal_verifier_overlap || simulate_lowrank_metal_decode_verifier_overlap || simulate_lowrank_metal_chunk_thread_overlap || simulate_multilayer_overlap_n > 0) ? recurrent_samples_for_prompt(weights, token_ids, layer_index) : [] of RecurrentSample
 max_rank = ranks.max
 if rank = simulate_logit_rank
   max_rank = Math.max(max_rank, rank)
@@ -9198,6 +9292,12 @@ puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.joi
 puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first calib_tokens; reports held-out L2 residual for normalized K vectors"
 puts basis_rank_note(bases, max_rank)
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
+
+if simulate_dn_regime_features
+  ranks.each do |rank|
+    dn_regime_feature_notes("main", layer_index, rank, token_ids.size, calib_count, samples, bases, thresholds, dn_regime_g_cuts).each { |line| puts line }
+  end
+end
 
 unless simulate_ffn_block_sparsity_layers.empty?
   sparse_layers = simulate_ffn_block_sparsity_layers.uniq.sort
