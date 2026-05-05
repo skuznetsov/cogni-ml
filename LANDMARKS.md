@@ -7422,3 +7422,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from isolated top2 branch kernels to fail-closed routing: spend MTP only while candidate coverage remains plausible, otherwise exact decode the suffix.
 - maieutic: The key assumption checked was that abandoning MTP after a top2 miss would lose exactness or waste more than it saves. Exactness held; saved verifier/replay/draft work dominated suffix fallback cost on this gate.
 - adversary: This is a single same-binary 3-prompt gate and the route still scores `0.900x`, not `>1.0x`. Promotion requires `gen64` and ABBA/repeated gates; keep the flag default-off.
+
+**decision_update_30:** The `gen64` follow-up confirms fail-closed MTP routing is useful but still not sufficient to beat plain exact. On the same Qwen3.6-27B natural `france/code/reason` gate with `gamma8/stage3/stage_once/lazy`, no-offramp `gen64` preserved parity but remained very slow: `plain_speedup=0.562`, `wall_ms=21312.261`, `passes=70`, `verifier_tokens=281`, `replay_tokens=70`. `--mtp-spec-wall-top2-miss-offramp` preserved parity and reduced repeated bad MTP work: `plain_speedup=0.947`, `wall_ms=13647.991`, `passes=6`, `verifier_tokens=18`, `replay_tokens=4`, `fallback_tokens=179`. Testing `--mtp-spec-wall-reject-offramp=1` shows the boundary of this idea: reject-offramp alone measured `plain_speedup=0.892`, while top2-miss+reject-offramp=1 measured `0.986` only in a run with much slower same-run plain exact. Conclusion: this controller family is approaching "plain exact plus small initial overhead"; the next breakthrough cannot come from scalar off-ramp tuning. It needs either a pre-submit high-accept router that avoids the overhead on bad spans, or a resident/fused verifier/candidate path that makes the first guarded MTP attempt cheap enough.
+**evidence_update_30:**
+- claim: "Top2-miss off-ramp scales from gen32 to gen64 as a strong fail-closed improvement, while preserving parity."
+  source: `/tmp/qwen36_mtp_top2_accounting_gen64_samebin_20260504_204351.log` (`plain_speedup=0.562`, `parity_ok=3/3`); `/tmp/qwen36_mtp_top2_miss_offramp_gen64_20260504_204351.log` (`plain_speedup=0.947`, `parity_ok=3/3`)
+  verified_at: 2026-05-04
+  decay_trigger: prompt suite, generated length, host load, gamma/stage policy, fallback route, or MTP sidecar changes
+- claim: "Reject-offramp=1 is not a clean improvement over top2-miss off-ramp; it is near-plain/noisy and not a promotion target."
+  source: `/tmp/qwen36_mtp_reject_off1_gen64_20260504_204633.log` (`plain_speedup=0.892`); `/tmp/qwen36_mtp_top2_miss_plus_reject_off1_gen64_20260504_204633.log` (`plain_speedup=0.986`, same-run plain exact much slower)
+  verified_at: 2026-05-04
+  decay_trigger: host load, plain exact timing variance, reject-offramp semantics, or prompt suite changes
+**quadrumvirate_update_30:**
+- cassandra: Scalar off-ramp tuning has reached LOCAL_OPTIMIZATION: the best rows mostly trade repeated MTP waste for exact suffix fallback, leaving initial MTP/verifier overhead.
+- daedalus: Shift the frame from "when should we abandon MTP?" to "when should we submit MTP at all, and can the first guard be made resident/cheap?"
+- maieutic: The hidden assumption was that a better off-ramp threshold could cross `>1.0x`. Evidence says the ceiling is close to plain exact unless the initial speculative attempt becomes cheaper or better routed.
+- adversary: Host timing variance is visible in same-run plain exact. Treat `0.986x` as near-plain/noisy, not as proof of a speed win.
