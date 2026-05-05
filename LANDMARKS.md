@@ -7486,3 +7486,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from threshold routing to a classifier/surrogate problem: predict whether the first MTP candidate is exact-correct before generating or verifying a long tail.
 - maieutic: The hidden assumption was that high confidence or top2 coverage should map to high acceptance. The trace says the first exact mismatch is the real cliff; later-token confidence features only explain part of the tail.
 - adversary: The new rank feature uses exact target top1 and is not deployable as-is. Any runtime policy must either pay a cheaper exact-first proxy or learn a predictor from features available before full-span submission.
+
+**decision_update_34:** Deployable MTP-margin clean-chunk routing is refuted as a standalone speed path, and exact-first guard variants define the current MTP wall ceiling. On Qwen3.6-27B natural `france/code/reason`, `gen32`, `gamma8`, `stage=1 + lazy` improved over `stage=3 + stage_once + lazy` by eliminating replay (`plain_speedup=0.712` vs `0.541`, parity `3/3`), but still lost to plain exact because it verifies accepted MTP tokens one by one and adds MTP body cost. `stage=1 + top2-miss-offramp` moved close to exact (`plain_speedup=0.954`, parity `3/3`) by falling back after six guarded rejects, but the remaining overhead is still visible: `mtp_ms=139.614`, `verifier_ms=1009.413`, `backup_ms=25.106` on top of exact fallback work. Offline clean-chunk analysis of the multi-feature trace found only `5/70` passes with `accepted_delta>=3 && rejections_delta=0`, and none in the code row. MTP first/min margin thresholds could not select clean chunks with usable precision/recall. Conclusion: MTP margins and scalar off-ramps can prevent waste, but they do not create speed. To beat plain exact, the next route must either produce cleaner chunks from a better candidate source/self-draft body, or make the first-token/risk verifier cheap through a fused/resident verifier path.
+**evidence_update_34:**
+- claim: "Exact-first guarded MTP reduces replay but remains slower than plain exact on the 27B natural gen32 gate."
+  source: `/tmp/qwen36_mtp_stage3_lazy_gen32_20260504_232210.log` (`plain_speedup=0.541`, `replay_tokens=30`); `/tmp/qwen36_mtp_stage1_lazy_gen32_20260504_232210.log` (`plain_speedup=0.712`, `replay_tokens=0`); both parity `3/3`
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall verifier staging, prompt suite, generated length, host load, or exact verifier implementation changes
+- claim: "Stage1 plus top2-miss off-ramp is near-plain but still overhead-limited."
+  source: `/tmp/qwen36_mtp_stage1_top2_offramp_gen32_20260504_232353.log` (`plain_speedup=0.954`, `passes=6`, `draft_tokens=13`, `fallback_tokens=83`, parity `3/3`)
+  verified_at: 2026-05-04
+  decay_trigger: top2 off-ramp semantics, MTP top2 projection cost, fallback route, prompt suite, or host load changes
+- claim: "MTP margin features cannot reliably select profitable clean chunks on the current trace."
+  source: `/tmp/qwen36_mtp_router_features_gen64_nooff_20260504_231353.jsonl`; offline analysis: clean chunks `5/70`, code clean chunks `0`, best simple margin selectors had insufficient precision/recall
+  verified_at: 2026-05-04
+  decay_trigger: prompt suite, gamma/stage shape, MTP scoring calibration, or router feature schema changes
+**quadrumvirate_update_34:**
+- cassandra: The local-optimization risk is confirmed. Better off-ramps approach plain exact but cannot exceed it while accepted proposals still require serial exact verification plus MTP cost.
+- daedalus: Shift from "route MTP better" to "make chunks cleaner or make guards cheaper." That points back to same-weight self-draft/PCA candidate quality and fused verifier infrastructure.
+- maieutic: The false assumption was that first-token correctness or MTP margin would imply profitable chunk acceptance. The data says clean chunks are sparse and prompt-dependent.
+- adversary: The gen32 timing is still single-run and host-noisy, so exact deltas should not be overfit. The robust qualitative finding is structural: stage1 removes replay but increases verifier calls, and top2-offramp becomes exact fallback plus overhead.
