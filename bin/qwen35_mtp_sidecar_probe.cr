@@ -1,8 +1,10 @@
 #!/usr/bin/env crystal
 
+require "json"
 require "option_parser"
 require "../src/ml/gguf/qwen35_meta"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_metal"
 require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_tokenizer"
@@ -41,6 +43,8 @@ mtp_spec_wall_stage_bonus = false
 mtp_spec_wall_top2_accounting = false
 mtp_spec_wall_top2_miss_offramp = false
 mtp_spec_wall_promote_top2_margin = nil.as(Float64?)
+mtp_spec_wall_router_trace_path = nil.as(String?)
+mtp_spec_wall_router_thresholds = [] of Float64
 mtp_spec_wall_profile = false
 mtp_spec_wall_serial_early_verify = false
 mtp_spec_wall_snapshot_cost_probe = false
@@ -208,6 +212,29 @@ class MtpSpecWallAggregate
   end
 end
 
+class MtpSpecWallRouterPass
+  getter pass_index : Int32
+  getter start_i : Int32
+  getter end_i : Int32
+  getter wall_before_ms : Float64
+  getter wall_after_ms : Float64
+  getter accepted_delta : Int32
+  getter rejections_delta : Int32
+  getter fallback_delta : Int32
+  getter top2_rescue_delta : Int32
+  getter top2_offramp_delta : Int32
+  getter mtp_delta_ms : Float64
+  getter verifier_delta_ms : Float64
+  getter replay_delta_ms : Float64
+  getter fallback_delta_ms : Float64
+
+  def initialize(@pass_index, @start_i, @end_i, @wall_before_ms, @wall_after_ms,
+                 @accepted_delta, @rejections_delta, @fallback_delta,
+                 @top2_rescue_delta, @top2_offramp_delta,
+                 @mtp_delta_ms, @verifier_delta_ms, @replay_delta_ms, @fallback_delta_ms)
+  end
+end
+
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
 end
@@ -284,6 +311,50 @@ private def target_hidden_topk(weights, hidden : Array(Float32), k : Int32) : Ar
     logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
     ML::GGUF::Qwen35MTP.top_k(logits, k)
   end
+end
+
+private def target_hidden_top2(weights, hidden : Array(Float32)) : {Int32, Float32, Int32, Float32}
+  x = hidden.dup
+  ML::GGUF::Qwen35CPU.rms_norm!(x, weights.output_norm, weights.hparams.rms_eps)
+  if top2 = ML::GGUF::Qwen35Metal.project_top2_no_norm(weights.output, x)
+    return {top2[0].to_i32, top2[1], top2[2].to_i32, top2[3]}
+  end
+
+  logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
+  topk = ML::GGUF::Qwen35MTP.top_k(logits, 2)
+  {topk[0][0], topk[0][1], topk[1][0], topk[1][1]}
+end
+
+private def write_router_trace(io : IO, label : String, gamma : Int32, pass : MtpSpecWallRouterPass,
+                               target_top2 : {Int32, Float32, Int32, Float32},
+                               plain_suffix_ms : Float64)
+  top1_id, top1_logit, top2_id, top2_logit = target_top2
+  JSON.build(io) do |json|
+    json.object do
+      json.field "kind", "mtp_wall_router_pass"
+      json.field "label", label
+      json.field "gamma", gamma
+      json.field "pass", pass.pass_index
+      json.field "start_i", pass.start_i
+      json.field "end_i", pass.end_i
+      json.field "target_top1", top1_id
+      json.field "target_top2", top2_id
+      json.field "target_margin", (top1_logit - top2_logit).to_f64
+      json.field "wall_before_ms", pass.wall_before_ms
+      json.field "wall_after_ms", pass.wall_after_ms
+      json.field "plain_suffix_ms", plain_suffix_ms
+      json.field "accepted_delta", pass.accepted_delta
+      json.field "rejections_delta", pass.rejections_delta
+      json.field "fallback_delta", pass.fallback_delta
+      json.field "top2_rescue_delta", pass.top2_rescue_delta
+      json.field "top2_offramp_delta", pass.top2_offramp_delta
+      json.field "mtp_delta_ms", pass.mtp_delta_ms
+      json.field "verifier_delta_ms", pass.verifier_delta_ms
+      json.field "replay_delta_ms", pass.replay_delta_ms
+      json.field "fallback_delta_ms", pass.fallback_delta_ms
+    end
+  end
+  io << '\n'
 end
 
 private def prompt_hidden_rows(weights, token_ids : Array(Int32), max_seq : Int32) : Array(Array(Float32))
@@ -382,6 +453,10 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-wall-top2-accounting", "Track whether MTP top2 would cover exact reject corrections inside the wall loop") { mtp_spec_wall_top2_accounting = true }
   p.on("--mtp-spec-wall-top2-miss-offramp", "After a reject whose correction is not MTP top2, finish remaining tokens with exact greedy target decode") { mtp_spec_wall_top2_miss_offramp = true }
   p.on("--mtp-spec-wall-promote-top2-margin F", "Use MTP top2 as the verifier candidate when top1-top2 margin is <= F") { |v| mtp_spec_wall_promote_top2_margin = v.to_f64 }
+  p.on("--mtp-spec-wall-router-trace PATH", "Write JSONL pass records with target top2 margin and submit/skip oracle inputs") { |v| mtp_spec_wall_router_trace_path = v }
+  p.on("--mtp-spec-wall-router-thresholds LIST", "Comma-separated target-margin thresholds for an offline skip-MTP oracle") do |v|
+    mtp_spec_wall_router_thresholds = v.split(",").reject(&.empty?).map(&.to_f64)
+  end
   p.on("--mtp-spec-wall-lazy-draft", "Only draft the next staged MTP verifier chunk; avoids generating wrong tails after early rejection") { mtp_spec_wall_lazy_draft = true }
   p.on("--mtp-spec-wall-reject-offramp N", "After N consecutive MTP wall rejects, finish the remaining tokens with exact greedy target decode; 0 disables") { |v| mtp_spec_wall_reject_offramp = v.to_i32 }
   p.on("--mtp-spec-wall-profile", "Profile only target verifier calls inside the exact-resync MTP wall loop") { mtp_spec_wall_profile = true }
@@ -433,6 +508,8 @@ abort "--mtp-spec-wall-stage must be non-negative" if mtp_spec_wall_stage < 0
 abort "--mtp-spec-wall-lazy-draft requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_lazy_draft && mtp_spec_wall_stage <= 0
 abort "--mtp-spec-wall-stage-once requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_stage_once && mtp_spec_wall_stage <= 0
 abort "--mtp-spec-wall-reject-offramp must be non-negative" if mtp_spec_wall_reject_offramp < 0
+mtp_spec_wall_router_thresholds = mtp_spec_wall_router_thresholds.sort.uniq
+abort "--mtp-spec-wall-router-thresholds requires --mtp-spec-wall-gammas" if !mtp_spec_wall_router_thresholds.empty? && mtp_spec_wall_gammas.empty?
 chain_modes = case mtp_chain_mode
               when "teacher"
                 ["teacher"]
@@ -472,6 +549,8 @@ margin_router_aggregates = Hash(String, Array(MarginRouterAggregate)).new do |ha
 end
 mtp_spec_aggregates = Hash(Int32, MtpSpecAggregate).new { |hash, key| hash[key] = MtpSpecAggregate.new }
 mtp_spec_wall_aggregates = Hash(Int32, MtpSpecWallAggregate).new { |hash, key| hash[key] = MtpSpecWallAggregate.new }
+router_trace_io = mtp_spec_wall_router_trace_path.try { |path| File.open(path, "w") }
+target_margin_cache = {} of Int32 => {Int32, Float32, Int32, Float32}
 
 rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
@@ -576,14 +655,21 @@ rows.each do |label, prompt_text|
   plain_prev = y1
   plain_pos = token_ids.size
   plain_ids = [] of Int32
+  plain_token_ms = [] of Float64
   plain_start = Time.instant
   mtp_chain_tokens.times do
+    token_start = Time.instant
     id, _ = ML::GGUF::Qwen35CPU.forward_top1(weights, plain_prev, plain_pos, plain_state)
+    plain_token_ms << elapsed_ms(token_start)
     plain_ids << id
     plain_prev = id
     plain_pos += 1
   end
   plain_exact_ms = elapsed_ms(plain_start)
+  plain_suffix_ms = Array(Float64).new(mtp_chain_tokens + 1, 0.0_f64)
+  (mtp_chain_tokens - 1).downto(0) do |i|
+    plain_suffix_ms[i] = plain_suffix_ms[i + 1] + plain_token_ms[i]
+  end
   exact_ids = exact_nexts.map(&.[0])
   raise "plain exact ids mismatch" unless plain_ids == exact_ids
   puts "mtp_plain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} plain_exact_ms=#{plain_exact_ms.round(3)} ids=#{plain_ids.join(",")}"
@@ -694,8 +780,20 @@ rows.each do |label, prompt_text|
     backup_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq)
     ML::GGUF::Qwen35CPU.prepare_state_metal!(backup_state, weights.hparams)
     consecutive_rejections = 0
+    router_records = [] of MtpSpecWallRouterPass
 
     while wall_ids.size < mtp_chain_tokens
+      pass_wall_before_ms = elapsed_ms(wall_start)
+      pass_start_i = wall_ids.size
+      pass_accepted_before = wall_accepted
+      pass_rejections_before = wall_rejections
+      pass_fallback_before = wall_fallback_tokens
+      pass_top2_rescues_before = wall_top2_rescues
+      pass_top2_offramp_before = wall_top2_offramp_hits
+      pass_mtp_before = wall_mtp_ms
+      pass_verifier_before = wall_verifier_ms
+      pass_replay_before = wall_replay_ms
+      pass_fallback_ms_before = wall_fallback_ms
       wall_passes += 1
       remaining = mtp_chain_tokens - wall_ids.size
       draft_steps = Math.min(gamma, remaining)
@@ -926,6 +1024,22 @@ rows.each do |label, prompt_text|
           end
         end
       end
+
+      router_records << MtpSpecWallRouterPass.new(
+        wall_passes,
+        pass_start_i,
+        wall_ids.size,
+        pass_wall_before_ms,
+        elapsed_ms(wall_start),
+        wall_accepted - pass_accepted_before,
+        wall_rejections - pass_rejections_before,
+        wall_fallback_tokens - pass_fallback_before,
+        wall_top2_rescues - pass_top2_rescues_before,
+        wall_top2_offramp_hits - pass_top2_offramp_before,
+        wall_mtp_ms - pass_mtp_before,
+        wall_verifier_ms - pass_verifier_before,
+        wall_replay_ms - pass_replay_before,
+        wall_fallback_ms - pass_fallback_ms_before)
     end
 
     wall_ms = elapsed_ms(wall_start)
@@ -946,6 +1060,44 @@ rows.each do |label, prompt_text|
       puts "mtp_spec_wall_mismatch label=#{label.inspect} gamma=#{gamma} stage=#{mtp_spec_wall_stage} expected=#{exact_ids.join(",")} actual=#{wall_ids.join(",")}"
     end
     raise "mtp spec wall ids mismatch for #{label} gamma #{gamma}" unless parity
+
+    if router_trace_io || !mtp_spec_wall_router_thresholds.empty?
+      target_margin_cache.clear
+      get_target_top2 = ->(idx : Int32) do
+        cached = target_margin_cache[idx]?
+        unless cached
+          cached = target_hidden_top2(weights, exact_hiddens[idx])
+          target_margin_cache[idx] = cached
+        end
+        cached
+      end
+
+      router_records.each do |record|
+        next if record.start_i >= mtp_chain_tokens
+        top2 = get_target_top2.call(record.start_i)
+        if io = router_trace_io
+          write_router_trace(io, label, gamma, record, top2, plain_suffix_ms[record.start_i])
+        end
+      end
+
+      mtp_spec_wall_router_thresholds.each do |threshold|
+        skip_record = router_records.find do |record|
+          next false if record.start_i >= mtp_chain_tokens
+          top1_id, top1_logit, top2_id, top2_logit = get_target_top2.call(record.start_i)
+          (top1_logit - top2_logit).to_f64 < threshold
+        end
+        modeled_wall_ms = if skip_record
+                            skip_record.wall_before_ms + plain_suffix_ms[skip_record.start_i]
+                          else
+                            wall_ms
+                          end
+        skip_i = skip_record ? skip_record.start_i : -1
+        skip_pass = skip_record ? skip_record.pass_index : -1
+        skipped_tokens = skip_record ? (mtp_chain_tokens - skip_record.start_i) : 0
+        puts "mtp_spec_wall_router_oracle label=#{label.inspect} gamma=#{gamma} threshold=#{threshold} skipped=#{!!skip_record} skip_pass=#{skip_pass} skip_i=#{skip_i} skipped_tokens=#{skipped_tokens} actual_wall_ms=#{wall_ms.round(3)} modeled_wall_ms=#{modeled_wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} actual_plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} modeled_plain_speedup=#{(plain_exact_ms / modeled_wall_ms).round(3)}"
+      end
+    end
+
     agg = mtp_spec_wall_aggregates[gamma]
     agg.rows += 1
     agg.tokens += mtp_chain_tokens
@@ -1217,3 +1369,4 @@ mtp_spec_wall_aggregates.keys.sort.each do |gamma|
   verifier_mode = mtp_spec_wall_serial_early_verify ? "serial_early" : "chunk"
   puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
 end
+router_trace_io.try(&.close)
