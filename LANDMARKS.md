@@ -7590,3 +7590,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next frame is not "raise threshold harder"; it is "change score aggregation or combine with confidence/margin so risky local heads do not force exact fallback and risky token proposals are caught early."
 - maieutic: The assumption that `g` is the best physical weight was too weak. In the update equation, `beta` is the direct write strength, so `beta*residual` better matches the approximation error surface.
 - adversary: This is a small CPU/probe gate, not a wall-clock Metal win. Promotion requires either acceptance improvement or measured wall improvement on at least two prompt classes.
+
+**decision_update_3:** The schema reject is a chunk/free-run cadence problem before it is a fallback-score problem. Lowering raw/update thresholds did not remove the schema miss even when exact fallback dominated the approximated DN layers (`approx_rate=17.65%` still had one reject). Existing fixed `gamma=2` and progressive `2,2,4` did remove the miss: with `update` score threshold `0.35`, schema `gamma=4` was `88.24%` accept with one reject, while progressive `2,2,4` reached `100%` accept with the same `16` accepted tokens, `16` proposed tokens, and a slightly higher draft approx rate (`52.08%`). Code and reasoning prompts stayed at `100%` accept under the same progressive policy. Conclusion: the immediate speed/quality lever is verifier cadence / short-clean-chunk scheduling, not more aggressive max-score tuning.
+**evidence_update_3:**
+- claim: "Lower raw/update thresholds do not fix the schema miss."
+  source: `/tmp/qwen35_update_router_schema_low_threshold_20260505_100244.log`
+  verified_at: 2026-05-05
+  decay_trigger: prompt, layers/rank, fallback score semantics, or self-spec proposal loop changes
+- claim: "Progressive schedule 2,2,4 fixes the schema miss on the same 9B gate without hurting code/reason prompts."
+  source: `/tmp/qwen35_progressive_update_prompts_20260505_100829.log`
+  verified_at: 2026-05-05
+  decay_trigger: prompt suite, generated length, schedule semantics, fallback score, or verifier cadence changes
+**quadrumvirate_update_3:**
+- cassandra: The local fallback-score branch plateaued; the non-improving schema miss triggered a cadence pivot.
+- daedalus: Frame shift from "detect unsafe DN steps" to "keep proposal chunks inside the reliable horizon of the low-rank draft."
+- maieutic: The hidden assumption was that one bad token can be prevented by per-step exact fallback. Evidence says previous free-run drift inside the chunk can still poison the candidate.
+- adversary: More chunks can increase verifier overhead in real wall-clock paths. The next proof must be wall-clock, not just acceptance.
