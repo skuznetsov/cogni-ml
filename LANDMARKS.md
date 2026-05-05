@@ -7406,3 +7406,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "top2 branch kernel" to "high-accept routing plus branch-state verifier"; top2 is one feature, not the route.
 - maieutic: The question shifted from "can top2 rescue corrections?" to "does the rescued replay dominate wall?" The answer is no on this gate.
 - adversary: The accounting is a counterfactual, not a measured branch-state implementation. Any future speed claim must include real branch-state costs and ABBA/repeated timing.
+
+**decision_update_29:** MTP wall top2-miss off-ramp is implemented as an exact fail-closed controller and materially closes the current natural-gate wall gap, but it still does not beat plain exact decode. `--mtp-spec-wall-top2-miss-offramp` auto-enables top2 accounting; after a rejected staged verifier correction is not covered by MTP top2, the loop stops proposing MTP for the remaining requested suffix and finishes from the current exact boundary with target greedy decode. On Qwen3.6-27B natural `france/code/reason`, `gen32`, `gamma8`, `stage3`, `stage_once`, `lazy`, same-binary A/B preserved parity in both modes. No off-ramp measured `plain_speedup=0.592`, `wall_ms=9968.344`, `passes=35`, `verifier_tokens=135`, `replay_tokens=30`. Top2-miss off-ramp measured `plain_speedup=0.900`, `wall_ms=6583.273`, `passes=6`, `verifier_tokens=18`, `replay_tokens=4`, `fallback_tokens=83`, and `top2_offramp_hits=3`. Conclusion: top2-miss is a strong "stop wasting work" signal and should feed a router/fail-closed policy; it is not by itself a promotion to default because the exact suffix fallback still leaves the aggregate under plain greedy.
+**evidence_update_29:**
+- claim: "Top2-miss off-ramp is implemented as a default-off MTP wall probe and preserves exact parity on the 27B natural gen32 gate."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_offramp_build crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_top2_offramp_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_offramp_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`9 examples, 0 failures`); `/tmp/qwen36_mtp_top2_miss_offramp_gen32_gate_20260504_203045.log`
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall reject semantics, top2 accounting semantics, fallback decode boundary, prompt suite, model, or host load changes
+- claim: "Same-binary A/B shows top2-miss off-ramp closes most of the current wall gap but still remains below plain exact."
+  source: `/tmp/qwen36_mtp_top2_accounting_gen32_samebin_20260504_203125.log` (`plain_speedup=0.592`, `wall_ms=9968.344`); `/tmp/qwen36_mtp_top2_miss_offramp_gen32_gate_20260504_203045.log` (`plain_speedup=0.900`, `wall_ms=6583.273`)
+  verified_at: 2026-05-04
+  decay_trigger: host load, gamma/stage policy, exact fallback route, MTP sidecar, verifier route, or prompt suite changes
+**quadrumvirate_update_29:**
+- cassandra: The productive signal is not "top2 branch replay is enough"; it is "top2 miss predicts low-value continued MTP work." The observed `passes=35 -> 6` confirms this.
+- daedalus: Pivot from isolated top2 branch kernels to fail-closed routing: spend MTP only while candidate coverage remains plausible, otherwise exact decode the suffix.
+- maieutic: The key assumption checked was that abandoning MTP after a top2 miss would lose exactness or waste more than it saves. Exactness held; saved verifier/replay/draft work dominated suffix fallback cost on this gate.
+- adversary: This is a single same-binary 3-prompt gate and the route still scores `0.900x`, not `>1.0x`. Promotion requires `gen64` and ABBA/repeated gates; keep the flag default-off.
