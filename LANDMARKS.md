@@ -7574,3 +7574,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "layer-level approximate on/off" to "state-memory-aware risk score"; the same low-rank math may become useful when gated by recurrent dynamics.
 - maieutic: The diagnostic does not prove speed or quality. It only proves a measurable physical feature exists and can feed the next verifier-backed falsifier.
 - adversary: Per-head statistics are from one prompt and 9B only. A promoted router needs multi-prompt, 27B, greedy/self-spec parity, and wall counters.
+
+**decision_update_2:** The first state-memory-aware fallback score landed as a default-off probe knob: `--simulate-fallback-score=raw|decayed|update`. `raw` preserves the old `max K residual` behavior, `decayed` gates on `max_h(g_h * residual(k_head))`, and `update` gates on `max_h(beta_h * residual(k_head))`. The 9B `layers=0,2,4`, `rank64`, `gen16`, code/reason/schema gate says `update` is more useful than `decayed`: it reduces exact fallback work while preserving the same self-spec acceptance in this small gate. Code prompt: raw `0.5` had `70.83%` draft approx rate at `100%` accept; update `0.35/0.5` had `91.67%/100%` approx rate at `100%` accept. Reasoning prompt: raw `0.5` had `20.83%` approx rate at `100%` accept; update `0.35/0.5` had `37.5%/64.58%` approx rate at `100%` accept. Schema prompt: raw `0.5` and update `0.35/0.5` all kept one reject (`88.24%` accept), but update raised approx rate from `37.25%` to `49.02%/76.47%`. Conclusion: `beta*residual` is a plausible cost-router for making the draft body cheaper, but it does not by itself fix proposal quality.
+**evidence_update_2:**
+- claim: "Fallback score modes build and keep default raw behavior unless the new CLI flag is set."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_dn_decayed_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_dn_decayed_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-05-05
+  verified_at: 2026-05-05
+  decay_trigger: lowrank fallback routing, option parsing, or recurrent layer policy changes
+- claim: "`update=max_h(beta_h*residual)` raises approximate draft coverage versus raw residual on the first 3-prompt 9B gate without lowering self-spec acceptance."
+  source: `/tmp/qwen35_update_router_prompts_20260505_095634.log`; supporting default smoke `/tmp/qwen35_update_router_smoke_20260505_095338.log`
+  verified_at: 2026-05-05
+  decay_trigger: prompt suite, model size, rank/layers, fallback thresholds, lowrank route, or exact verifier semantics change
+**quadrumvirate_update_2:**
+- cassandra: This branch avoided the raw-residual local trap for cost, but not candidate quality; schema still rejected once.
+- daedalus: The next frame is not "raise threshold harder"; it is "change score aggregation or combine with confidence/margin so risky local heads do not force exact fallback and risky token proposals are caught early."
+- maieutic: The assumption that `g` is the best physical weight was too weak. In the update equation, `beta` is the direct write strength, so `beta*residual` better matches the approximation error surface.
+- adversary: This is a small CPU/probe gate, not a wall-clock Metal win. Promotion requires either acceptance improvement or measured wall improvement on at least two prompt classes.

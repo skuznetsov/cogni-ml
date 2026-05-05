@@ -15,6 +15,21 @@ DEFAULT_PROMPT    = "The quick brown fox jumps over the lazy dog. Describe this 
 DEFAULT_SELF_SPEC_GPU_PIPELINE_DRAFT_BLOCK_TOKENS = 1
 DEFAULT_FFN_SPARSE_BLOCK_SIZE                     = 256
 
+module ProbeRuntime
+  @@fallback_score_mode = "raw"
+
+  def self.fallback_score_mode : String
+    @@fallback_score_mode
+  end
+
+  def self.fallback_score_mode=(mode : String)
+    unless {"raw", "decayed", "update"}.includes?(mode)
+      raise "unknown fallback score mode #{mode.inspect}; expected raw, decayed, or update"
+    end
+    @@fallback_score_mode = mode
+  end
+end
+
 private alias BasisSet = Array(Array(Array(Float64)))
 private alias LayerVectorMap = Hash(Int32, BasisSet)
 private alias LayerBasisMap = Hash(Int32, BasisSet)
@@ -702,6 +717,35 @@ private def max_k_residual(k_conv : Array(Float32), bases : BasisSet, rank : Int
   h_k.times do |h|
     residual = residual_norm_f32(k_conv, h * s, bases[h], rank)
     max = residual if residual > max
+  end
+  max
+end
+
+private def max_k_residual_score(k_conv : Array(Float32),
+                                 ghead : Array(Float32),
+                                 beta : Array(Float32),
+                                 bases : BasisSet,
+                                 rank : Int32,
+                                 h_k : Int32,
+                                 s : Int32,
+                                 mode : String) : Float64
+  return max_k_residual(k_conv, bases, rank, h_k, s) if mode == "raw"
+
+  residuals = Array(Float64).new(h_k) do |h|
+    residual_norm_f32(k_conv, h * s, bases[h], rank)
+  end
+  max = 0.0
+  ghead.size.times do |h|
+    weight = case mode
+             when "decayed"
+               ghead[h].to_f64
+             when "update"
+               beta[h].to_f64
+             else
+               raise "unknown fallback score mode #{mode.inspect}"
+             end
+    score = weight * residuals[h % h_k]
+    max = score if score > max
   end
   max
 end
@@ -3380,7 +3424,7 @@ private def recurrent_layer_cpu_lowrank(inpSA : Array(Float32),
   scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
   fallback = force_fallback
   if threshold = fallback_threshold
-    fallback ||= max_k_residual(k_conv, bases, rank, h_k, s) > threshold
+    fallback ||= max_k_residual_score(k_conv, ghead, beta, bases, rank, h_k, s, ProbeRuntime.fallback_score_mode) > threshold
   end
   routed_out = nil.as(Array(Float32)?)
   if fallback
@@ -9117,6 +9161,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-logits-layers=LIST", "Comma-separated recurrent layers to approximate together during the logit drift gate") { |v| simulate_logit_layers = parse_int_list(v) }
   p.on("--simulate-fallback-threshold=F", "Fallback to exact DeltaNet step when max per-head K residual exceeds F") { |v| simulate_fallback_threshold = v.to_f64 }
   p.on("--simulate-fallback-thresholds=LIST", "Run multiple fallback thresholds in one process") { |v| simulate_fallback_thresholds = v.split(',').map(&.strip).reject(&.empty?).map(&.to_f64) }
+  p.on("--simulate-fallback-score=MODE", "Fallback score for threshold routing: raw, decayed (g*residual), or update (beta*residual)") { |v| ProbeRuntime.fallback_score_mode = v }
   p.on("--simulate-output-margin-threshold=F", "Fallback to exact output when approximate top1/top2 margin is below F") { |v| simulate_output_margin_threshold = v.to_f64 }
   p.on("--simulate-refresh-interval=N", "Force an exact low-rank-state refresh every N approximate-eligible positions") { |v| simulate_refresh_interval = v.to_i }
   p.on("--simulate-oracle-refresh-interval=N", "Copy the paired exact shadow state into the approximate state every N positions") { |v| simulate_oracle_refresh_interval = v.to_i }
@@ -9631,7 +9676,8 @@ if rank = simulate_logit_rank
       logit = simulate_logits_policy(weights, token_ids, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, simulate_oracle_refresh_interval, simulate_output_margin_threshold)
       total_steps = logit[:approx_steps] + logit[:fallback_steps]
       approx_rate = total_steps > 0 ? (100.0 * logit[:approx_steps] / total_steps) : 0.0
-      fallback_note = fallback_threshold ? " fallback_threshold=#{fallback_threshold} approx_rate=#{approx_rate.round(2)}%" : ""
+      fallback_score_note = ProbeRuntime.fallback_score_mode == "raw" ? "" : " fallback_score=#{ProbeRuntime.fallback_score_mode}"
+      fallback_note = fallback_threshold ? " fallback_threshold=#{fallback_threshold}#{fallback_score_note} approx_rate=#{approx_rate.round(2)}%" : fallback_score_note
       output_note = simulate_output_margin_threshold ? " output_margin_threshold=#{simulate_output_margin_threshold} output_fallbacks=#{logit[:output_fallbacks]}" : ""
       refresh_note = simulate_refresh_interval ? " refresh_interval=#{simulate_refresh_interval}" : ""
       oracle_refresh_note = simulate_oracle_refresh_interval ? " oracle_refresh_interval=#{simulate_oracle_refresh_interval}" : ""
@@ -9644,7 +9690,7 @@ if rank = simulate_logit_rank
         gen_output_note = simulate_output_margin_threshold ? " output_margin_threshold=#{simulate_output_margin_threshold} output_fallbacks=#{gen[:output_fallbacks]}" : ""
         gen_refresh_note = simulate_refresh_interval ? " refresh_interval=#{simulate_refresh_interval}" : ""
         gen_oracle_refresh_note = simulate_oracle_refresh_interval ? " oracle_refresh_interval=#{simulate_oracle_refresh_interval}" : ""
-        puts "greedy_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gen_tokens=#{simulate_generate_tokens} mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} max_delta=#{gen[:max_delta].round(6)} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_steps=#{gen[:approx_steps]} fallback_steps=#{gen[:fallback_steps]} approx_rate=#{gen_approx_rate.round(2)}%#{gen_refresh_note}#{gen_oracle_refresh_note}#{gen_output_note} exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
+        puts "greedy_drift_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gen_tokens=#{simulate_generate_tokens} mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} max_delta=#{gen[:max_delta].round(6)} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_steps=#{gen[:approx_steps]} fallback_steps=#{gen[:fallback_steps]} approx_rate=#{gen_approx_rate.round(2)}%#{fallback_score_note}#{gen_refresh_note}#{gen_oracle_refresh_note}#{gen_output_note} exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
       end
 
       if simulate_generate_tokens > 0 && !simulate_self_spec_gammas.empty?
@@ -9662,7 +9708,7 @@ if rank = simulate_logit_rank
             cost_note = " cost_model=#{self_spec_overlap_cost ? "overlap" : "sum"}:draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)}#{overlap_note} estimated_cost=#{estimated_cost.round(4)} estimated_speedup=#{estimated_speedup.round(4)}x"
           end
           rescue_note = simulate_self_spec_topk_rescue ? " topk_rescue=#{simulate_self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
-          puts "self_spec_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
+          puts "self_spec_policy layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{gamma} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}%#{fallback_score_note} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
         end
       end
       if simulate_generate_tokens > 0 && simulate_self_spec_adaptive
@@ -9680,7 +9726,7 @@ if rank = simulate_logit_rank
         end
         grow_margin_note = simulate_self_spec_adaptive_grow_margin ? " grow_margin=#{simulate_self_spec_adaptive_grow_margin}" : ""
         rescue_note = simulate_self_spec_topk_rescue ? " topk_rescue=#{simulate_self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
-        puts "self_spec_adaptive layers=#{simulate_logit_layers.join(',')} rank=#{rank} min_gamma=#{simulate_self_spec_adaptive_min} start_gamma=#{simulate_self_spec_adaptive_start} max_gamma=#{simulate_self_spec_adaptive_max}#{grow_margin_note} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
+        puts "self_spec_adaptive layers=#{simulate_logit_layers.join(',')} rank=#{rank} min_gamma=#{simulate_self_spec_adaptive_min} start_gamma=#{simulate_self_spec_adaptive_start} max_gamma=#{simulate_self_spec_adaptive_max}#{grow_margin_note} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}%#{fallback_score_note} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
       end
       if simulate_generate_tokens > 0 && !simulate_self_spec_progressive.empty?
         spec = simulate_self_spec_policy(weights, token_ids, simulate_generate_tokens, simulate_self_spec_progressive[0], layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval, nil, nil, nil, simulate_self_spec_draft_margin, simulate_self_spec_draft_stop_margin, simulate_self_spec_topk_rescue, simulate_self_spec_progressive)
@@ -9696,7 +9742,7 @@ if rank = simulate_logit_rank
           cost_note = " cost_model=#{self_spec_overlap_cost ? "overlap" : "sum"}:draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)}#{overlap_note} estimated_cost=#{estimated_cost.round(4)} estimated_speedup=#{estimated_speedup.round(4)}x"
         end
         rescue_note = simulate_self_spec_topk_rescue ? " topk_rescue=#{simulate_self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
-        puts "self_spec_progressive layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_progressive.join(',')} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}% draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
+        puts "self_spec_progressive layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_progressive.join(',')} gen_tokens=#{simulate_generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}%#{fallback_score_note} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')}#{cost_note} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
       end
       if simulate_generate_tokens > 0 && (tree_k = simulate_self_spec_tree_k)
         tree_schedule = simulate_self_spec_progressive.empty? ? [2, 2, 4] : simulate_self_spec_progressive
@@ -9710,7 +9756,7 @@ if rank = simulate_logit_rank
           full_cost = self_spec_tree_estimated_cost(tree, self_spec_draft_cost, self_spec_verifier_cost, self_spec_chunk_overhead, self_spec_correction_cost, tree[:branch_tokens_full])
           tree_cost_note = " cost_model=tree:draft:#{self_spec_draft_cost.round(4)},verifier:#{self_spec_verifier_cost.round(4)},chunk:#{self_spec_chunk_overhead.round(4)},correction:#{self_spec_correction_cost.round(4)} rank_cost=#{rank_cost.round(4)} rank_speedup=#{(simulate_generate_tokens / rank_cost).round(4)}x full_cost=#{full_cost.round(4)} full_speedup=#{(simulate_generate_tokens / full_cost).round(4)}x"
         end
-        puts "self_spec_tree_oracle layers=#{simulate_logit_layers.join(',')} rank=#{rank} top_k=#{tree_k} schedule=#{tree_schedule.join(',')} gen_tokens=#{simulate_generate_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} approx_steps=#{tree[:approx_steps]} fallback_steps=#{tree[:fallback_steps]} approx_rate=#{tree_approx_rate.round(2)}% schedule_history=#{tree[:schedule_history].join(',')}#{tree_cost_note} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
+        puts "self_spec_tree_oracle layers=#{simulate_logit_layers.join(',')} rank=#{rank} top_k=#{tree_k} schedule=#{tree_schedule.join(',')} gen_tokens=#{simulate_generate_tokens} chunks=#{tree[:chunks]} full_rescue_chunks=#{tree[:full_rescue_chunks]} misses=#{tree[:misses]} parity=#{parity} draft_steps=#{tree[:draft_steps]} top1_hits=#{tree[:top1_hits]} topk_hits=#{tree[:topk_hits]} top1_rate=#{tree[:top1_rate].round(2)}% topk_rate=#{tree[:topk_rate].round(2)}% branch_tokens_rank=#{tree[:branch_tokens_rank]} branch_tokens_full=#{tree[:branch_tokens_full]} avg_rank_branch_tokens=#{tree[:avg_rank_branch_tokens].round(3)} avg_full_branch_tokens=#{tree[:avg_full_branch_tokens].round(3)} correction_steps=#{tree[:correction_steps]} approx_steps=#{tree[:approx_steps]} fallback_steps=#{tree[:fallback_steps]} approx_rate=#{tree_approx_rate.round(2)}%#{fallback_score_note} schedule_history=#{tree[:schedule_history].join(',')}#{tree_cost_note} exact_ids=#{tree[:exact_ids].join(',')} emitted_ids=#{tree[:emitted_ids].join(',')}"
       end
       if simulate_generate_tokens > 0 && (oracle_k = simulate_topk_oracle_k)
         oracle = simulate_topk_oracle_calibration(weights, token_ids, simulate_generate_tokens, oracle_k, simulate_topk_oracle_train_tokens, layer_bases, rank, calib_count, fallback_threshold, simulate_refresh_interval)
