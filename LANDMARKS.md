@@ -7606,3 +7606,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Frame shift from "detect unsafe DN steps" to "keep proposal chunks inside the reliable horizon of the low-rank draft."
 - maieutic: The hidden assumption was that one bad token can be prevented by per-step exact fallback. Evidence says previous free-run drift inside the chunk can still poison the candidate.
 - adversary: More chunks can increase verifier overhead in real wall-clock paths. The next proof must be wall-clock, not just acceptance.
+
+**decision_update_4:** Mapping the cadence insight to the real GPU pipeline exposed the interface gap. On the schema falsifier, GPU schedule `2,2,4` improved wall-clock overlap versus fixed `gamma=4` (`845.83 ms -> 761.912 ms`, `plain_speedup=0.4382 -> 0.4844`) but did not remove the reject: both stayed at `88.24%` accept with parity true. This differs from the CPU policy gate because CPU used `update=max(beta*residual)` fallback routing, while the Metal draft route is pure low-rank for the selected layers and has no equivalent risk/fallback bridge. Conclusion: schedule helps wall, but candidate-quality recovery needs a GPU-resident or preplanned update-risk route, not another CPU-only probe knob.
+**evidence_update_4:**
+- claim: "Progressive schedule 2,2,4 improves schema GPU pipeline wall but does not improve acceptance."
+  source: `/tmp/qwen35_gpu_pipeline_schema_schedule_20260505_101139.log`
+  verified_at: 2026-05-05
+  decay_trigger: GPU self-spec scheduler, draft split policy, Metal low-rank route, fallback-risk bridge, or prompt/generation changes
+**quadrumvirate_update_4:**
+- cassandra: The predicted wall overhead risk was real, but shorter chunks still won on overlap for this falsifier.
+- daedalus: The blocker is now an execution-boundary problem: CPU risk routing and GPU draft execution are split.
+- maieutic: The assumption that CPU policy quality transfers to GPU was false because the GPU path lacks fallback semantics.
+- adversary: This is one schema run. Before promoting a default schedule, rerun ABBA-style across code/reason/schema and include host-load variance.
