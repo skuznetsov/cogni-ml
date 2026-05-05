@@ -7506,3 +7506,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Shift from "route MTP better" to "make chunks cleaner or make guards cheaper." That points back to same-weight self-draft/PCA candidate quality and fused verifier infrastructure.
 - maieutic: The false assumption was that first-token correctness or MTP margin would imply profitable chunk acceptance. The data says clean chunks are sparse and prompt-dependent.
 - adversary: The gen32 timing is still single-run and host-noisy, so exact deltas should not be overfit. The robust qualitative finding is structural: stage1 removes replay but increases verifier calls, and top2-offramp becomes exact fallback plus overhead.
+
+**decision_update_35:** Lazy MTP top2-on-reject is implemented as a default-off accounting/control probe and is not a speed path in the current guarded route. `--mtp-spec-wall-top2-on-reject` drafts MTP top1, stores the normalized MTP hidden, and computes MTP top2 only after the exact verifier rejects that candidate. This preserves the same top2-rescue/off-ramp semantics without paying eager K2 on accepted candidates. On Qwen3.6-27B natural `france/code/reason`, `gen32`, `gamma8`, `stage=1 + lazy + top2-miss-offramp`, it preserved parity (`3/3`) and kept the same rescue/off-ramp counters (`top2_rescues=3`, `top2_offramp_hits=3`), but did not improve wall (`plain_speedup=0.929`). The measured candidate-source cost was not lower (`mtp_ms=152.358`) because rejected candidates pay an extra no-norm top2 head projection after already doing top1. Conclusion: lazy top2 is a valid control surface but not a breakthrough; the overhead problem is the exact verifier/fallback execution model and candidate quality, not eager top2 head cost.
+**evidence_update_35:**
+- claim: "MTP top2-on-reject is implemented as default-off instrumentation and preserves exact parity/top2 off-ramp semantics."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_lazy_build crystal build --release -D qwen35_mtp_metal bin/qwen35_mtp_sidecar_probe.cr -o /tmp/qwen35_mtp_top2_lazy_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_lazy_spec crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`9 examples, 0 failures`)
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall candidate storage, top2 projection path, off-ramp semantics, or summary schema changes
+- claim: "Lazy top2-on-reject does not reduce the current stage1 top2-miss wall route enough to matter."
+  source: `/tmp/qwen36_mtp_stage1_top2_on_reject_gen32_20260504_233126.log` (`plain_speedup=0.929`, `mtp_ms=152.358`, `verifier_ms=953.738`, `fallback_ms=4843.955`, parity `3/3`)
+  verified_at: 2026-05-04
+  decay_trigger: host load, prompt suite, generated length, MTP top2 head implementation, or verifier route changes
+**quadrumvirate_update_35:**
+- cassandra: This was a plausible micro-overhead branch, but the predicted risk was LOCAL_OPTIMIZATION: shaving top2 work cannot overcome verifier/fallback dominance.
+- daedalus: Stop optimizing MTP top2 projection order. The next frame remains fused/resident verifier or cleaner self-draft chunks.
+- maieutic: The assumption tested was that eager K2 projection was a meaningful part of the near-plain overhead. Evidence says it is not the limiting term.
+- adversary: The wall number is single-run/noisy, but the unchanged counters and non-lower `mtp_ms` are enough to avoid promoting this route.
