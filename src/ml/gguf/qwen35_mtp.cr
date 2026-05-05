@@ -522,6 +522,19 @@ module ML::GGUF
       top_k(logits, 1)[0]
     end
 
+    def hidden_top2(weights : Qwen35Weights, hidden : Array(Float32)) : Array({Int32, Float32})
+      {% if flag?(:qwen35_mtp_metal) %}
+        if ENV["QWEN35_MTP_TOP2_METAL_OFF"]? != "1" && Qwen35Metal.available?
+          if top2 = Qwen35Metal.project_top2_no_norm(weights.output, hidden)
+            return [{top2[0].to_i32, top2[1]}, {top2[2].to_i32, top2[3]}]
+          end
+        end
+      {% end %}
+
+      logits = Qwen35CPU.qmatvec_nobias(weights.output, hidden)
+      top_k(logits, 2)
+    end
+
     def top_k(logits : Array(Float32), k : Int32) : Array({Int32, Float32})
       raise ArgumentError.new("top_k must be positive") unless k > 0
       best = [] of {Int32, Float32}

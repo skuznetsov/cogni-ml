@@ -200,8 +200,11 @@ private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k, next_hi
                    else
                      next_hidden
                    end
-  topk = if k == 1
+  topk = case k
+         when 1
            [ML::GGUF::Qwen35MTP.hidden_top1(weights, project_hidden)]
+         when 2
+           ML::GGUF::Qwen35MTP.hidden_top2(weights, project_hidden)
          else
            logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, project_hidden)
            ML::GGUF::Qwen35MTP.top_k(logits, k)

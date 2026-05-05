@@ -7358,3 +7358,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Shift fused/chunk-major target from "make current MTP stages larger" to "find high-accept spans first, then batch/fuse those spans."
 - maieutic: The hidden false assumption was that verifier chunk size is the primary limiter. Local evidence says candidate quality/routing determines whether larger chunks help or explode work.
 - adversary: This refutes scalar MTP chunk-major policies on a 3-prompt gate, not all future fused verifier designs. A high-accept self-draft/router route can still make chunk-major fusion valuable.
+
+**decision_update_26:** MTP hidden top2 now has a GPU-backed no-norm output-head path, removing a CPU/full-logits seam before deeper fused/chunk-major router work. `Qwen35Metal.project_top2_no_norm` reuses the existing Q6/Q8 top2 tile kernels and `qwen35_top2_reduce_tiles`, while `Qwen35MTP.hidden_top2` routes `K=2` MTP hidden projection through Metal unless `QWEN35_MTP_TOP2_METAL_OFF=1`. The new no-norm top2 spec compares Metal ids/values against full logits, and the old decode top2 spec still covers RMSNorm decode top2. A Qwen3.6-27B teacher-chain smoke with `--mtp-chain-topk 2` preserved the same rank histogram with and without the Metal path (`top1_hits=11/16`, `topk_hits=14/16`, `rank_hist=miss:2,1:11,2:3`). This is not yet a wall-speed win because the MTP body dominates roughly `~10ms/token`; its value is architectural: future K2 mismatch/router/tree verifier experiments can stay GPU-resident and avoid treating CPU full logits as an oracle.
+**evidence_update_26:**
+- claim: "No-norm Metal top2 projection is implemented and matches full logits on the 9B output head."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_top2_spec2 crystal spec spec/qwen35_mtp_spec.cr spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`9 examples, 0 failures`)
+  verified_at: 2026-05-04
+  decay_trigger: output-head quantization kernels, top2 reducer, no-norm projection path, or spec fixture model changes
+- claim: "MTP K2 chain candidate ids are preserved with the Metal hidden-top2 path versus the CPU/full-logits fallback."
+  source: `/tmp/qwen36_mtp_top2_metal_20260504_200420.log`; `/tmp/qwen36_mtp_top2_cpu_fallback_20260504_200434.log`
+  verified_at: 2026-05-04
+  decay_trigger: MTP sidecar body, top2 path, prompt/model, or chain accounting changes
+**quadrumvirate_update_26:**
+- cassandra: Removing CPU full-logits seams is a prerequisite, but it will not move wall time while the MTP body remains the dominant cost.
+- daedalus: The next frame is not "top2 is faster"; it is "top2/margin/router signals can now be made resident enough to justify branch-state or fused verifier experiments."
+- maieutic: The key assumption checked was that the existing decode top2 kernels could be reused without RMSNorm and still match full logits; the new spec covers that exact gap.
+- adversary: The smoke is a single prompt and mostly validates correctness/candidate identity. Promotion as a speed feature requires a real pipeline route that consumes K2 without adding serial verifier work.

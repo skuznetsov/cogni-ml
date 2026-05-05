@@ -24,6 +24,24 @@ private def spec_top2_from_logits(logits : Array(Float32)) : {Int32, Float32, In
 end
 
 describe ML::GGUF::Qwen35CPU do
+  it "matches full logits for Metal no-norm top2 projection" do
+    pending!("9B model not present") unless File.exists?(QWEN_9B_TOP2)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    weights = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_TOP2)
+    hidden = Array(Float32).new(weights.output.in_dim) do |i|
+      Math.sin(i.to_f32 * 0.017_f32) * 0.125_f32
+    end
+
+    expected = spec_top2_from_logits(ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, hidden))
+    actual = ML::GGUF::Qwen35Metal.project_top2_no_norm(weights.output, hidden).not_nil!
+
+    actual[0].to_i32.should eq(expected[0])
+    actual[2].to_i32.should eq(expected[2])
+    actual[1].should be_close(expected[1], 1.0e-3)
+    actual[3].should be_close(expected[3], 1.0e-3)
+  end
+
   it "matches full logits for Metal decode top2" do
     pending!("9B model not present") unless File.exists?(QWEN_9B_TOP2)
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
