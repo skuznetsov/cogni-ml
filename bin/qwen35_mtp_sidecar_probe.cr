@@ -227,11 +227,16 @@ class MtpSpecWallRouterPass
   getter verifier_delta_ms : Float64
   getter replay_delta_ms : Float64
   getter fallback_delta_ms : Float64
+  getter mtp_first_top1 : Int32
+  getter mtp_first_top2 : Int32
+  getter mtp_first_margin : Float64?
+  getter mtp_min_margin : Float64?
 
   def initialize(@pass_index, @start_i, @end_i, @wall_before_ms, @wall_after_ms,
                  @accepted_delta, @rejections_delta, @fallback_delta,
                  @top2_rescue_delta, @top2_offramp_delta,
-                 @mtp_delta_ms, @verifier_delta_ms, @replay_delta_ms, @fallback_delta_ms)
+                 @mtp_delta_ms, @verifier_delta_ms, @replay_delta_ms, @fallback_delta_ms,
+                 @mtp_first_top1, @mtp_first_top2, @mtp_first_margin, @mtp_min_margin)
   end
 end
 
@@ -329,6 +334,13 @@ private def write_router_trace(io : IO, label : String, gamma : Int32, pass : Mt
                                target_top2 : {Int32, Float32, Int32, Float32},
                                plain_suffix_ms : Float64)
   top1_id, top1_logit, top2_id, top2_logit = target_top2
+  mtp_target_rank = if pass.mtp_first_top1 == top1_id
+                      1
+                    elsif pass.mtp_first_top2 == top1_id
+                      2
+                    else
+                      0
+                    end
   JSON.build(io) do |json|
     json.object do
       json.field "kind", "mtp_wall_router_pass"
@@ -340,6 +352,11 @@ private def write_router_trace(io : IO, label : String, gamma : Int32, pass : Mt
       json.field "target_top1", top1_id
       json.field "target_top2", top2_id
       json.field "target_margin", (top1_logit - top2_logit).to_f64
+      json.field "mtp_first_top1", pass.mtp_first_top1
+      json.field "mtp_first_top2", pass.mtp_first_top2
+      json.field "mtp_first_target_rank", mtp_target_rank
+      json.field "mtp_first_margin", pass.mtp_first_margin
+      json.field "mtp_min_margin", pass.mtp_min_margin
       json.field "wall_before_ms", pass.wall_before_ms
       json.field "wall_after_ms", pass.wall_after_ms
       json.field "plain_suffix_ms", plain_suffix_ms
@@ -794,6 +811,10 @@ rows.each do |label, prompt_text|
       pass_verifier_before = wall_verifier_ms
       pass_replay_before = wall_replay_ms
       pass_fallback_ms_before = wall_fallback_ms
+      pass_mtp_first_top1 = -1
+      pass_mtp_first_top2 = -1
+      pass_mtp_first_margin = nil.as(Float64?)
+      pass_mtp_min_margin = nil.as(Float64?)
       wall_passes += 1
       remaining = mtp_chain_tokens - wall_ids.size
       draft_steps = Math.min(gamma, remaining)
@@ -810,6 +831,18 @@ rows.each do |label, prompt_text|
       unless mtp_spec_wall_lazy_draft
         draft_steps.times do
           mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, draft_hidden, draft_token, draft_pos, mtp_spec_wall_top2_accounting ? 2 : 1, false, draft_state)
+          if mtp_topk.size > 0 && pass_mtp_first_top1 < 0
+            pass_mtp_first_top1 = mtp_topk[0][0]
+          end
+          if mtp_topk.size > 1
+            margin = (mtp_topk[0][1] - mtp_topk[1][1]).to_f64
+            if pass_mtp_first_margin.nil?
+              pass_mtp_first_top1 = mtp_topk[0][0]
+              pass_mtp_first_top2 = mtp_topk[1][0]
+              pass_mtp_first_margin = margin
+            end
+            pass_mtp_min_margin = pass_mtp_min_margin ? Math.min(pass_mtp_min_margin.not_nil!, margin) : margin
+          end
           candidate, second_candidate, promoted = choose_mtp_wall_candidate(mtp_topk, mtp_spec_wall_promote_top2_margin)
           candidates << candidate
           candidate_seconds << second_candidate
@@ -845,6 +878,18 @@ rows.each do |label, prompt_text|
           stage_promoted_candidates = [] of Bool
           current_stage.times do
             mtp_hidden, mtp_topk, step_ms = mtp_hidden_topk(weights, mtp, draft_hidden, draft_token, draft_pos, mtp_spec_wall_top2_accounting ? 2 : 1, false, draft_state)
+            if mtp_topk.size > 0 && pass_mtp_first_top1 < 0
+              pass_mtp_first_top1 = mtp_topk[0][0]
+            end
+            if mtp_topk.size > 1
+              margin = (mtp_topk[0][1] - mtp_topk[1][1]).to_f64
+              if pass_mtp_first_margin.nil?
+                pass_mtp_first_top1 = mtp_topk[0][0]
+                pass_mtp_first_top2 = mtp_topk[1][0]
+                pass_mtp_first_margin = margin
+              end
+              pass_mtp_min_margin = pass_mtp_min_margin ? Math.min(pass_mtp_min_margin.not_nil!, margin) : margin
+            end
             candidate, second_candidate, promoted = choose_mtp_wall_candidate(mtp_topk, mtp_spec_wall_promote_top2_margin)
             stage_candidates << candidate
             stage_second_candidates << second_candidate
@@ -1039,7 +1084,11 @@ rows.each do |label, prompt_text|
         wall_mtp_ms - pass_mtp_before,
         wall_verifier_ms - pass_verifier_before,
         wall_replay_ms - pass_replay_before,
-        wall_fallback_ms - pass_fallback_ms_before)
+        wall_fallback_ms - pass_fallback_ms_before,
+        pass_mtp_first_top1,
+        pass_mtp_first_top2,
+        pass_mtp_first_margin,
+        pass_mtp_min_margin)
     end
 
     wall_ms = elapsed_ms(wall_start)
