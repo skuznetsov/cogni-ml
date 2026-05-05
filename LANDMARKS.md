@@ -7618,3 +7618,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The blocker is now an execution-boundary problem: CPU risk routing and GPU draft execution are split.
 - maieutic: The assumption that CPU policy quality transfers to GPU was false because the GPU path lacks fallback semantics.
 - adversary: This is one schema run. Before promoting a default schedule, rerun ABBA-style across code/reason/schema and include host-load variance.
+
+**decision_update_5:** Existing GPU top2-margin guard and fixed shorter gamma do not replace the missing `update` fallback bridge. On schema, `tree2_margin_guard=1.0` left acceptance at `88.24%` and increased verifier work; the actual reject had high draft margin (`tree2_reject_margin_min=4.6124`), so low margin is not the risk signal. Fixed GPU `gamma=2` also stayed at `88.24%` accept, unlike the CPU `update` policy where gamma2/progressive removed the schema miss. Conclusion: the gap is Metal draft body semantics (pure low-rank selected layers) versus CPU update-risk fallback semantics, not just schedule or top2 confidence.
+**evidence_update_5:**
+- claim: "GPU top2-margin guard does not catch the schema reject and adds verifier work."
+  source: `/tmp/qwen35_gpu_pipeline_schema_margin_guard_20260505_101319.log`
+  verified_at: 2026-05-05
+  decay_trigger: top2 margin buffers, guard semantics, prompt, or scheduler changes
+- claim: "Fixed GPU gamma2 does not reproduce CPU gamma2 acceptance recovery."
+  source: `/tmp/qwen35_gpu_pipeline_schema_gamma2_20260505_101407.log`
+  verified_at: 2026-05-05
+  decay_trigger: Metal draft route, CPU fallback policy, prompt, or layer/rank changes
+**quadrumvirate_update_5:**
+- cassandra: Confidence/margin routing was a plausible no-readback shortcut, but the reject margin falsified it for this case.
+- daedalus: Stop treating cadence as sufficient. The next pivot is a real update-risk bridge into the Metal draft layer policy.
+- maieutic: The question is not "how short should chunks be?" but "which draft layers/steps must stay exact to preserve candidate identity?"
+- adversary: This still needs a broader prompt gate after any bridge; one schema falsifier is enough to reject margin guard, not enough to set a default.
