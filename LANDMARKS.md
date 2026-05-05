@@ -7658,3 +7658,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "which static layers should be low-rank" to "when must a draft wave temporarily become exact and then return to low-rank."
 - maieutic: The bridge does not prove a speed win. It proves a necessary state transition exists; speed depends on predicting the rare refresh points cheaply.
 - adversary: Refresh-every-step is approximate-draft in name only and can be slower on clean prompts. Keep the flag default-off and treat selective update-risk routing as the next falsifier.
+
+**decision_update_7:** Manual exact-refresh selectors narrowed the schema reject from "one bad offset" to an early state-freshness horizon. The probe now accepts `--simulate-self-spec-gpu-pipeline-draft-exact-refresh-offsets=LIST` and `--simulate-self-spec-gpu-pipeline-draft-exact-refresh-prefix=N`. No single offset `0..15` removed the schema reject. Prefixes through `0..7` and `0..9` still rejected; prefixes through `0..10` and `0..11` reached `100%` acceptance/parity, while suffix `4..15` still rejected. Conclusion: the current schema miss is not a point-rescue problem. For this prompt, selected low-rank DN layers need exact/fresh recurrent state through roughly the first 11 generated draft waves, after which the tail can stay low-rank. This reframes the next deployable policy as "warm exact-refresh prefix / state horizon, then approximate tail" or a predictor for that horizon, not a sparse single-offset refresh.
+**evidence_update_7:**
+- claim: "Manual exact-refresh offset and prefix knobs build and preserve the existing top2 regression gate."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_exact_refresh_prefix_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_exact_refresh_prefix_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_exact_refresh_prefix_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-05
+  decay_trigger: exact-refresh option parsing, GPU self-spec pipeline output rows, or top2 decode path changes
+- claim: "Single exact-refresh offsets do not fix the schema reject."
+  source: `/tmp/qwen35_exact_refresh_offset_singles_20260505_111941.log`
+  verified_at: 2026-05-05
+  decay_trigger: schema prompt, generated length, layer/rank selection, or exact-refresh offset semantics changes
+- claim: "Schema needs an early exact-refresh prefix: `0..10` cleans, while `0..9` still rejects."
+  source: `/tmp/qwen35_exact_refresh_offset_sets_20260505_112821.log`; `/tmp/qwen35_exact_refresh_prefix_cut_20260505_113113.log`; `/tmp/qwen35_exact_refresh_prefix11_schema_20260505_113447.log`
+  verified_at: 2026-05-05
+  decay_trigger: schema prompt, generation boundary, layer/rank choice, low-rank state reconstruction, or verifier cadence changes
+**quadrumvirate_update_7:**
+- cassandra: The single-offset hypothesis was wrong; the evidence points to accumulated state freshness rather than isolated token identity.
+- daedalus: Pivot from sparse point refresh to state-horizon scheduling: exact-refresh early, then allow low-rank tail only after the state trajectory stabilizes.
+- maieutic: The apparent win still pays exact DN on most of a 16-token sample. It is a quality-boundary finding until tested on longer generations where the approximate tail can amortize the prefix.
+- adversary: This is one schema prompt under host-noisy wall timing. Next gate must use longer `gen=32/64` and code/reason/schema suite before treating prefix length as a policy.

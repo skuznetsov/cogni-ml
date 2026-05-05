@@ -18,6 +18,8 @@ DEFAULT_FFN_SPARSE_BLOCK_SIZE                     = 256
 module ProbeRuntime
   @@fallback_score_mode = "raw"
   @@gpu_draft_exact_refresh_interval = 0
+  @@gpu_draft_exact_refresh_offsets = [] of Int32
+  @@gpu_draft_exact_refresh_prefix = 0
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -37,6 +39,24 @@ module ProbeRuntime
   def self.gpu_draft_exact_refresh_interval=(interval : Int32)
     raise "GPU draft exact refresh interval must be non-negative" if interval < 0
     @@gpu_draft_exact_refresh_interval = interval
+  end
+
+  def self.gpu_draft_exact_refresh_offsets : Array(Int32)
+    @@gpu_draft_exact_refresh_offsets
+  end
+
+  def self.gpu_draft_exact_refresh_offsets=(offsets : Array(Int32))
+    raise "GPU draft exact refresh offsets must be non-negative" if offsets.any? { |v| v < 0 }
+    @@gpu_draft_exact_refresh_offsets = offsets.uniq.sort
+  end
+
+  def self.gpu_draft_exact_refresh_prefix : Int32
+    @@gpu_draft_exact_refresh_prefix
+  end
+
+  def self.gpu_draft_exact_refresh_prefix=(prefix : Int32)
+    raise "GPU draft exact refresh prefix must be non-negative" if prefix < 0
+    @@gpu_draft_exact_refresh_prefix = prefix
   end
 end
 
@@ -6799,6 +6819,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   schedule = gamma_schedule && !gamma_schedule.not_nil!.empty? ? gamma_schedule.not_nil! : [gamma]
   raise "GPU pipeline schedule values must be positive" if schedule.any? { |v| v <= 0 }
   exact_refresh_interval = ProbeRuntime.gpu_draft_exact_refresh_interval
+  exact_refresh_offsets = ProbeRuntime.gpu_draft_exact_refresh_offsets
+  exact_refresh_prefix = ProbeRuntime.gpu_draft_exact_refresh_prefix
   max_gamma = schedule.max
   tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || draft_updown_agreement_gate
 
@@ -6936,7 +6958,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         wba.try(&.mark("draft", "commit_#{label}_part_#{j // split_tokens}", t_commit, Time.instant))
         current_cmd = ML::GGUF::Qwen35Metal.decode_wave_command_buffer("self_spec_gpu_pipeline_draft")
       end
-      exact_refresh = exact_refresh_interval > 0 && ((pos_start + j - prompt_pos_last) % exact_refresh_interval) == 0
+      draft_offset = pos_start + j - prompt_pos_last
+      exact_refresh = (exact_refresh_interval > 0 && (draft_offset % exact_refresh_interval) == 0) || draft_offset < exact_refresh_prefix || exact_refresh_offsets.includes?(draft_offset)
       active_lowrank_set = exact_refresh ? empty_lowrank_set : lowrank_set
       if exact_refresh
         lowrank_set.each do |il|
@@ -9246,6 +9269,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-schedule=LIST", "Run real GPU self-spec pipeline with a repeating gamma schedule that resets on reject, e.g. 4,4,8") { |v| simulate_self_spec_gpu_pipeline_schedules << parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-draft-splits=LIST", "Run real GPU self-spec pipeline with comma-separated draft command-buffer split sizes; 0 keeps one command buffer per draft block") { |v| simulate_self_spec_gpu_pipeline_draft_splits = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-draft-exact-refresh=N", "Every Nth draft wave, reconstruct low-rank DN state to full, run exact recurrent DN for low-rank layers, then project back to low-rank; 0 disables") { |v| ProbeRuntime.gpu_draft_exact_refresh_interval = v.to_i }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-exact-refresh-prefix=N", "Exact-refresh the first N generated draft waves, then resume low-rank DN for later waves; 0 disables") { |v| ProbeRuntime.gpu_draft_exact_refresh_prefix = v.to_i }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-exact-refresh-offsets=LIST", "0-based generated-token offsets where draft waves should exact-refresh low-rank DN layers; default empty") { |v| ProbeRuntime.gpu_draft_exact_refresh_offsets = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-no-backup", "Skip verifier rollback backup on the hot full-accept path; rebuild exact state from emitted ids on reject") { simulate_self_spec_gpu_pipeline_no_backup = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn", "Use the research lowrank-no-ffn draft route for GPU self-spec proposals; exact verifier still enforces parity") { simulate_self_spec_gpu_pipeline_draft_no_ffn = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn-layers=LIST", "Skip FFN only for the listed low-rank recurrent draft layers; enables hybrid draft bodies") { |v| simulate_self_spec_gpu_pipeline_draft_no_ffn_layers = parse_int_list(v) }
@@ -9944,6 +9969,8 @@ if rank = simulate_logit_rank
       end
       state_backup_note = simulate_self_spec_gpu_pipeline_legacy_full_state_backup ? " state_backup=legacy_full" : " state_backup=live_blit"
       exact_refresh_note = ProbeRuntime.gpu_draft_exact_refresh_interval > 0 ? " draft_exact_refresh=#{ProbeRuntime.gpu_draft_exact_refresh_interval}" : ""
+      exact_refresh_note += " draft_exact_refresh_prefix=#{ProbeRuntime.gpu_draft_exact_refresh_prefix}" if ProbeRuntime.gpu_draft_exact_refresh_prefix > 0
+      exact_refresh_note += " draft_exact_refresh_offsets=#{ProbeRuntime.gpu_draft_exact_refresh_offsets.join(',')}" unless ProbeRuntime.gpu_draft_exact_refresh_offsets.empty?
       raise "risk-offramp repeats must be >= 1" if simulate_self_spec_gpu_pipeline_risk_offramp_repeats < 1
       risk_offramp_base_options = [] of Float64?
       add_risk_offramp_option = ->(value : Float64?) {
