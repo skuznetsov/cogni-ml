@@ -7374,3 +7374,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next frame is not "top2 is faster"; it is "top2/margin/router signals can now be made resident enough to justify branch-state or fused verifier experiments."
 - maieutic: The key assumption checked was that the existing decode top2 kernels could be reused without RMSNorm and still match full logits; the new spec covers that exact gap.
 - adversary: The smoke is a single prompt and mostly validates correctness/candidate identity. Promotion as a speed feature requires a real pipeline route that consumes K2 without adding serial verifier work.
+
+**decision_update_27:** Exact staged verifier bonus is implemented as a default-off falsifier and refuted as a fused/chunk-major speed route. `--mtp-spec-wall-stage-bonus` asks the chunk verifier for one exact bonus token after every accepted staged MTP chunk, emits that token, and restarts the next MTP pass from the exact boundary. This preserves parity and tests the hypothesis "more exact boundaries plus verifier chunks beat long drift-prone MTP tails." On the Qwen3.6-27B natural `france/code/reason`, `gen16`, `gamma8`, `stage=3`, `stage_once=true`, `lazy=true` gate, it regressed from baseline `plain_speedup=0.692` / `snapshot_modeled_speedup=0.804` to `0.503` / `0.666`. The mechanism is clear in counters: passes increased `17 -> 20`, verifier tokens `60 -> 76`, and replay tokens `9 -> 28`. Conclusion: bonus-after-every-stage is not the right chunk-major shape; it verifies too many extra rows and makes early mismatches more expensive. Future branch-state/tree paths should only add extra verification when a guard predicts high acceptance or when branch states avoid replay.
+**evidence_update_27:**
+- claim: "Stage-bonus MTP wall mode preserves exact parity but regresses wall and snapshot-modeled speed on the natural 27B gate."
+  source: `/tmp/qwen36_mtp_stage_bonus_baseline_20260504_201125.log`; `/tmp/qwen36_mtp_stage_bonus_on_20260504_201215.log`
+  verified_at: 2026-05-04
+  decay_trigger: MTP wall loop, staged verifier accounting, prompt suite, host load, or verifier/replay implementation changes
+- claim: "The regression comes from more verifier/replay work, not from a candidate identity failure."
+  source: baseline suite counters `passes=17 verifier_tokens=60 replay_tokens=9`; stage-bonus counters `passes=20 verifier_tokens=76 replay_tokens=28`; both parity `3/3`
+  verified_at: 2026-05-04
+  decay_trigger: stage-bonus semantics, replay accounting, or target verifier chunking changes
+**quadrumvirate_update_27:**
+- cassandra: The predicted risk materialized: adding a bonus row before knowing the stage is safe increases wrong-tail verification.
+- daedalus: Pivot from "always add exact bonus" to "only branch/bonus when confidence is high or replay is eliminated by resident branch-state slots."
+- maieutic: The false assumption was that exact boundary refresh is always valuable. It is only valuable when the refresh cost is lower than the extra verifier/replay tail.
+- adversary: This is a one-shot 3-prompt gate, but the regression is large and counter-supported by token counters, so the flag remains default-off and should not be retuned without a new guard.
