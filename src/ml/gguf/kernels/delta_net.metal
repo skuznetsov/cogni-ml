@@ -146,6 +146,31 @@ kernel void lowrank_project_state(
     out[(h * s + row) * rank + j] = acc;
 }
 
+kernel void lowrank_reconstruct_state(
+    device const float* lowrank_state [[buffer(0)]],
+    device const float* basis         [[buffer(1)]],
+    device       float* full_state    [[buffer(2)]],
+    constant     uint&  h_k           [[buffer(3)]],
+    constant     uint&  h_v           [[buffer(4)]],
+    constant     uint&  s             [[buffer(5)]],
+    constant     uint&  rank          [[buffer(6)]],
+    uint3 tid [[thread_position_in_grid]])
+{
+    const uint col = tid.x;
+    const uint row = tid.y;
+    const uint h = tid.z;
+    if (col >= s || row >= s || h >= h_v) return;
+
+    const uint basis_h = h % h_k;
+    device const float* m = lowrank_state + (h * s + row) * rank;
+    device const float* b = basis + basis_h * rank * s + col;
+    float acc = 0.0f;
+    for (uint j = 0; j < rank; ++j) {
+        acc += m[j] * b[j * s];
+    }
+    full_state[(h * s + row) * s + col] = acc;
+}
+
 // Predict FFN PCA coefficients directly from the post-attention FFN input.
 //
 // Layout:

@@ -177,6 +177,7 @@ module ML
         @@lowrank_project_coeffs_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_coeffs_chunk_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_state_pipeline : ML::Metal::ComputePipeline?
+        @@lowrank_reconstruct_state_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_delta_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_delta_chunk_pipeline : ML::Metal::ComputePipeline?
         @@ffn_pca_updown_coeffs_pipeline : ML::Metal::ComputePipeline?
@@ -997,6 +998,12 @@ module ML
         private def self.lowrank_project_state_pipeline : ML::Metal::ComputePipeline
           @@lowrank_project_state_pipeline ||= ML::Metal::PipelineCache.get("lowrank_project_state") {
             ML::Metal::ComputePipeline.new("lowrank_project_state", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.lowrank_reconstruct_state_pipeline : ML::Metal::ComputePipeline
+          @@lowrank_reconstruct_state_pipeline ||= ML::Metal::PipelineCache.get("lowrank_reconstruct_state") {
+            ML::Metal::ComputePipeline.new("lowrank_reconstruct_state", DELTA_NET_SOURCE)
           }
         end
 
@@ -2371,6 +2378,32 @@ module ML
           enc.dispatch_threadgroups({(rank + 7) // 8, s, h_v}, {8, 1, 1})
           enc.end_encoding
           out_buf
+        end
+
+        def self.lowrank_reconstruct_state_append(lowrank_state_buf : ML::MetalBuffer,
+                                                  basis_buf : ML::MetalBuffer,
+                                                  full_state_buf : ML::MetalBuffer,
+                                                  h_k : Int32, h_v : Int32, s : Int32,
+                                                  rank : Int32,
+                                                  cmd : ML::Metal::CommandBuffer) : Nil
+          ML::Metal::Device.init!
+          raise "lowrank_reconstruct_state rank must be positive" unless rank > 0
+          raise "lowrank_reconstruct_state lowrank state size mismatch" unless lowrank_state_buf.size >= (h_v * s * rank).to_i64 * sizeof(Float32)
+          raise "lowrank_reconstruct_state basis size mismatch" unless basis_buf.size >= (h_k * rank * s).to_i64 * sizeof(Float32)
+          raise "lowrank_reconstruct_state full state size mismatch" unless full_state_buf.size >= (h_v * s * s).to_i64 * sizeof(Float32)
+
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(lowrank_reconstruct_state_pipeline)
+          enc.set_buffer(lowrank_state_buf, 0)
+          enc.set_buffer(basis_buf, 1)
+          enc.set_buffer(full_state_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(h_k.to_u32, 3)
+          enc.set_value(h_v.to_u32, 4)
+          enc.set_value(s.to_u32, 5)
+          enc.set_value(rank.to_u32, 6)
+          enc.dispatch_threadgroups({(s + 7) // 8, s, h_v}, {8, 1, 1})
+          enc.end_encoding
+          nil
         end
 
         # Token-major chunk version of `lowrank_delta_step_projected_buf`.

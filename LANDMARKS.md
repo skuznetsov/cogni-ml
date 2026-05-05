@@ -7634,3 +7634,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Stop treating cadence as sufficient. The next pivot is a real update-risk bridge into the Metal draft layer policy.
 - maieutic: The question is not "how short should chunks be?" but "which draft layers/steps must stay exact to preserve candidate identity?"
 - adversary: This still needs a broader prompt gate after any bridge; one schema falsifier is enough to reject margin guard, not enough to set a default.
+
+**decision_update_6:** The first Metal state-handoff bridge is implemented and proves the missing schema recovery needs draft-layer state semantics, not a static layer mask. Static layer masks on the schema falsifier did not remove the reject. The default-off `--simulate-self-spec-gpu-pipeline-draft-exact-refresh=N` route adds `lowrank_reconstruct_state` so a draft wave can reconstruct projected-K low-rank DN state into the full SSM state, run exact recurrent DN for the selected low-rank layers, and project the updated full state back into low-rank buffers without CPU readback. The key implementation invariant is `full_current`: reconstruct only when the full state is stale, otherwise an exact full state can be overwritten by its low-rank approximation and the bridge silently fails. With that invariant, schema `exact_refresh=1` reached `100%` acceptance/parity; intervals `2/3/4/8` still rejected. Conclusion: refresh-every-step is an expensive upper bound and should not be promoted as a speed policy, but the state-handoff primitive is the right substrate for a future selective GPU/update-risk refresh router.
+**evidence_update_6:**
+- claim: "Static layer masks do not fix the schema GPU self-spec reject."
+  source: `/tmp/qwen35_gpu_pipeline_schema_layer_mask_20260505_105359.log`
+  verified_at: 2026-05-05
+  decay_trigger: GPU draft layer route, schema prompt, basis rank/layers, or verifier cadence changes
+- claim: "Metal lowrank-to-full exact refresh builds and fixes the schema reject only when full-state freshness is tracked."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_exact_refresh_verify_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_exact_refresh_verify_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_gpu_exact_refresh_statefix_schema_20260505_110440.log`; `/tmp/qwen35_exact_refresh_verify_schema_20260505_111559.log`
+  verified_at: 2026-05-05
+  decay_trigger: lowrank state layout, reconstruction kernel, full-current tracking, or draft submit scheduling changes
+- claim: "Refresh interval sweep says every-step refresh is required on the schema falsifier, so this is a bridge proof rather than a production speed knob."
+  source: `/tmp/qwen35_gpu_exact_refresh_schema_sweep_20260505_110516.log`
+  verified_at: 2026-05-05
+  decay_trigger: prompt suite, generation length, layer/rank choice, exact-refresh interval semantics, or update-risk selector changes
+- claim: "A 3-prompt code/reason/schema gate preserved parity and showed the bridge helps the schema reject while mostly adding/noising cost on already-clean prompts."
+  source: `/tmp/qwen35_gpu_exact_refresh_prompts_20260505_110757.log`
+  verified_at: 2026-05-05
+  decay_trigger: prompt suite, host load, GPU scheduler order, layer/rank choice, or exact-refresh selector changes
+**quadrumvirate_update_6:**
+- cassandra: The likely failure was a stale/full-state mismatch; the first negative exact-refresh run confirmed it before `full_current` fixed the invariant.
+- daedalus: Pivot from "which static layers should be low-rank" to "when must a draft wave temporarily become exact and then return to low-rank."
+- maieutic: The bridge does not prove a speed win. It proves a necessary state transition exists; speed depends on predicting the rare refresh points cheaply.
+- adversary: Refresh-every-step is approximate-draft in name only and can be slower on clean prompts. Keep the flag default-off and treat selective update-risk routing as the next falsifier.
