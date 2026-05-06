@@ -7766,3 +7766,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts again from "which DN update is expensive/risky?" to "which proposal token is likely wrong before we pay the chunk?"
 - maieutic: The hidden assumption was that DN update risk and next-token correctness are tightly coupled. The code prompt falsifies this: one layer refresh did not remove the reject.
 - adversary: Keep this default-off. It is a diagnostic and future substrate for richer routers, not a route to super-fuse or promote.
+
+**decision_update_13:** Proposal-quality signals are now the active branch: self top2 alone is insufficient on a real code boundary, while mismatch-only MTP K2 is promising as oracle candidate pressure. On 9B code `layers=0,2,4/rank64/gen8`, baseline had one reject (`77.78%` accept, `overlap_ms=476.153`). `tree2_first` preserved parity but was inert (`rescues=0`, `early_exits=0`) because the reject was not at the first token of a verified chunk. `tree2_anywhere` diagnosed one later self-top2 miss (`tree2_anywhere_misses=1`, `rescues=0`) and removed replay in that diagnostic path, but it is not a production route because it serializes accepted verification. On 27B code stress `layers=0,2,4,6,8,10/rank8/gen24/K2`, the MTP/self-draft fusion oracle produced a strong candidate-source signal: self top2 resolved only `15/24`, while `self_top2_first_mtp_k2_on_miss` resolved `23/24`, calling MTP on `9/24` positions and rescuing `8/9` of those misses (`avg_attempts=1.792`). Agreement guard stayed precise (`5/5`, no false selections), but it requires always-on MTP to know agreement and selected only `20.83%`, so use it as an offline/router feature, not a runtime policy. Conclusion: the next implementation target is a mismatch-only MTP K2 controller/suite that pays MTP only after self-top2 failure or a high-risk tree boundary, with exact verifier parity and real wall A/B. Do not promote from oracle accounting alone.
+**evidence_update_13:**
+- claim: "The 9B code reject is not rescued by first-token tree2 and is a self-top2 miss in the diagnostic anywhere path."
+  source: `/tmp/qwen35_tree2_quality_code_pair_20260506_141305_baseline.log`; `/tmp/qwen35_tree2_quality_code_pair_20260506_141305_tree2.log`; `/tmp/qwen35_tree2_quality_code_anywhere_20260506_141406.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, generated boundary, rank/layers, tree2 verifier semantics, or scheduler changes
+- claim: "MTP K2 on self-top2 misses recovers most stressed 27B code misses in oracle accounting."
+  source: `/tmp/qwen36_mtp_self_fusion_code_k2_gen24_20260506_141557.log`
+  verified_at: 2026-05-06
+  decay_trigger: MTP sidecar, model quant, prompt, rank/layers, generated length, or fusion oracle semantics changes
+**quadrumvirate_update_13:**
+- cassandra: First-token tree2 should miss later mismatches; MTP K2 should be useful mainly after self-top2 failure. Both predictions held.
+- daedalus: The branch pivots from "refresh exact state to improve the same candidate" to "augment candidate set only when self-draft candidate mass is missing."
+- maieutic: The hidden assumption was that self top2 captures most low-rank mistakes. The 27B stress gate falsifies it: MTP K2 contributes eight extra rescues.
+- adversary: This is oracle accounting, not real runtime. A real controller must include MTP call overhead, verifier/replay effects, and prompt-suite ABBA before any speed claim.
