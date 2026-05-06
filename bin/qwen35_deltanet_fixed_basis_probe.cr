@@ -25,6 +25,7 @@ module ProbeRuntime
   @@gpu_draft_update_risk_layer_threshold : Float64? = nil
   @@self_spec_router_trace_io : IO? = nil
   @@self_spec_router_trace_label = "main"
+  @@self_spec_branch_guard_snapshot = false
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -100,6 +101,14 @@ module ProbeRuntime
 
   def self.self_spec_router_trace_label=(label : String)
     @@self_spec_router_trace_label = label
+  end
+
+  def self.self_spec_branch_guard_snapshot : Bool
+    @@self_spec_branch_guard_snapshot
+  end
+
+  def self.self_spec_branch_guard_snapshot=(enabled : Bool)
+    @@self_spec_branch_guard_snapshot = enabled
   end
 end
 
@@ -6987,7 +6996,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                                                 tree2_margin_guard : Float64? = nil,
                                                 tree2_branch_guard : Float64? = nil,
                                                 risk_offramp_margin : Float64? = nil,
-                                                mtp_k2_on_reject : ML::GGUF::Qwen35MTPWeights? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, draft_updown_agreement_checks: Int32, draft_updown_agreement_passes: Int32, draft_updown_agreement_top1: Int32, draft_updown_agreement_top2: Int32, draft_updown_agreement_fails: Int32, draft_updown_agreement_probe_ms: Float64, draft_updown_agreement_margin_min_avg: Float64, draft_updown_agreement_margin_pass_avg: Float64, draft_updown_agreement_margin_fail_avg: Float64, draft_updown_agreement_margin_sweep: String, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, tree2_branch_guard_threshold: Float64, tree2_branch_guard_hits: Int32, tree2_branch_guard_tokens: Int32, tree2_branch_guard_rejects: Int32, tree2_branch_guard_rescues: Int32, tree2_branch_guard_misses: Int32, tree2_branch_guard_passes: Int32, tree2_branch_guard_prefix_rejects: Int32, tree2_branch_guard_replayless_resyncs: Int32, risk_offramp_threshold: Float64, risk_offramp_hits: Int32, risk_offramp_delayed_blocks: Int32, risk_offramp_delayed_tokens: Int32, mtp_k2_reject_checks: Int32, mtp_k2_reject_rescues: Int32, mtp_k2_reject_misses: Int32, mtp_k2_reject_ms: Float64, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, draft_resyncs: Int32, draft_wasted_tail_tokens: Int32, draft_wasted_next_tokens: Int32, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
+                                                mtp_k2_on_reject : ML::GGUF::Qwen35MTPWeights? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, draft_updown_agreement_checks: Int32, draft_updown_agreement_passes: Int32, draft_updown_agreement_top1: Int32, draft_updown_agreement_top2: Int32, draft_updown_agreement_fails: Int32, draft_updown_agreement_probe_ms: Float64, draft_updown_agreement_margin_min_avg: Float64, draft_updown_agreement_margin_pass_avg: Float64, draft_updown_agreement_margin_fail_avg: Float64, draft_updown_agreement_margin_sweep: String, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, tree2_branch_guard_threshold: Float64, tree2_branch_guard_hits: Int32, tree2_branch_guard_tokens: Int32, tree2_branch_guard_rejects: Int32, tree2_branch_guard_rescues: Int32, tree2_branch_guard_misses: Int32, tree2_branch_guard_passes: Int32, tree2_branch_guard_prefix_rejects: Int32, tree2_branch_guard_replayless_resyncs: Int32, tree2_branch_guard_snapshot_copies: Int32, tree2_branch_guard_snapshot_ms: Float64, tree2_branch_guard_suffix_replays: Int32, tree2_branch_guard_suffix_replay_tokens: Int32, tree2_branch_guard_suffix_replay_ms: Float64, risk_offramp_threshold: Float64, risk_offramp_hits: Int32, risk_offramp_delayed_blocks: Int32, risk_offramp_delayed_tokens: Int32, mtp_k2_reject_checks: Int32, mtp_k2_reject_rescues: Int32, mtp_k2_reject_misses: Int32, mtp_k2_reject_ms: Float64, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, draft_resyncs: Int32, draft_wasted_tail_tokens: Int32, draft_wasted_next_tokens: Int32, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
   raise "GPU pipeline requires Metal" unless ML::GGUF::Qwen35Metal.available?
   raise "GPU pipeline gamma must be positive" unless gamma > 0
   raise "GPU pipeline gen_tokens must be positive" unless gen_tokens > 0
@@ -7002,6 +7011,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   raise "GPU pipeline risk offramp currently cannot combine with tree2_anywhere/tree2_staged" if risk_offramp_margin && (tree2_anywhere || tree2_staged_tokens > 0)
   raise "GPU pipeline tree2 branch guard currently cannot combine with tree2_anywhere/tree2_staged/tree2_margin_guard" if tree2_branch_guard && (tree2_anywhere || tree2_staged_tokens > 0 || tree2_margin_guard)
   raise "GPU pipeline tree2 branch guard requires verifier backup" if tree2_branch_guard && !use_verifier_backup
+  branch_guard_snapshot_enabled = ProbeRuntime.self_spec_branch_guard_snapshot
+  raise "GPU pipeline tree2 branch guard snapshot requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_snapshot_enabled && tree2_branch_guard.nil?
   mtp_k2_on_reject_enabled = !mtp_k2_on_reject.nil?
   if mtp_k2_on_reject_enabled && (tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil?)
     raise "GPU pipeline MTP K2 reject diagnostic currently cannot combine with tree2/risk routes"
@@ -7515,6 +7526,11 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   tree2_branch_guard_passes = 0
   tree2_branch_guard_prefix_rejects = 0
   tree2_branch_guard_replayless_resyncs = 0
+  tree2_branch_guard_snapshot_copies = 0
+  tree2_branch_guard_snapshot_ms = 0.0
+  tree2_branch_guard_suffix_replays = 0
+  tree2_branch_guard_suffix_replay_tokens = 0
+  tree2_branch_guard_suffix_replay_ms = 0.0
   risk_offramp_hits = 0
   risk_offramp_delayed_blocks = 0
   risk_offramp_delayed_tokens = 0
@@ -7924,6 +7940,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     branch_guard_resync_index = -1
     target_nexts = [] of {Int32, Float32}
     target_hiddens = [] of Float32
+    branch_guard_snapshot_state = nil.as(ML::GGUF::Qwen35CPU::State?)
+    branch_guard_snapshot_pos = -1
     if bgi = branch_guard_index
       tree2_branch_guard_hits += 1
       tree2_branch_guard_tokens += bgi + 1
@@ -7963,20 +7981,61 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         guard_cand = proposal[bgi]
         if guard_cand == guard_expected
           tree2_branch_guard_passes += 1
-          suffix_size = verifier_tokens.size - bgi
-          if suffix_size > 0
-            t_verify_suffix = Time.instant
-            suffix_tokens = verifier_tokens[bgi, suffix_size]
-            suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi, verifier_state)
-            target_nexts.concat(suffix_nexts)
-            dt_verify_suffix = (Time.instant - t_verify_suffix).total_milliseconds
-            verifier_ms += dt_verify_suffix
+          if branch_guard_snapshot_enabled
+            t_verify_guard = Time.instant
+            guard_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, [guard_cand], cycle_start_pos + bgi, verifier_state)
+            target_nexts.concat(guard_nexts)
+            dt_verify_guard = (Time.instant - t_verify_guard).total_milliseconds
+            verifier_ms += dt_verify_guard
             if attr_collect
-              verifier_prefill_ms += dt_verify_suffix
+              verifier_prefill_ms += dt_verify_guard
               verifier_chunks += 1
-              verifier_tokens_count += suffix_tokens.size
+              verifier_tokens_count += 1
             end
-            wba.try(&.mark("verifier", "branch_guard_suffix_#{chunks}", t_verify_suffix, Time.instant))
+            wba.try(&.mark("verifier", "branch_guard_token_#{chunks}", t_verify_guard, Time.instant))
+
+            suffix_size = verifier_tokens.size - bgi - 1
+            if suffix_size > 0
+              t_snapshot = Time.instant
+              snapshot = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+              ML::GGUF::Qwen35CPU.prepare_state_metal!(snapshot, hp)
+              branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
+              copy_verifier_state.call(snapshot, verifier_state, branch_guard_snapshot_pos)
+              branch_guard_snapshot_state = snapshot
+              dt_snapshot = (Time.instant - t_snapshot).total_milliseconds
+              tree2_branch_guard_snapshot_copies += 1
+              tree2_branch_guard_snapshot_ms += dt_snapshot
+              wba.try(&.mark("verifier", "branch_guard_snapshot_#{chunks}", t_snapshot, Time.instant))
+
+              t_verify_suffix = Time.instant
+              suffix_tokens = verifier_tokens[bgi + 1, suffix_size]
+              suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi + 1, verifier_state)
+              target_nexts.concat(suffix_nexts)
+              dt_verify_suffix = (Time.instant - t_verify_suffix).total_milliseconds
+              verifier_ms += dt_verify_suffix
+              if attr_collect
+                verifier_prefill_ms += dt_verify_suffix
+                verifier_chunks += 1
+                verifier_tokens_count += suffix_tokens.size
+              end
+              wba.try(&.mark("verifier", "branch_guard_suffix_#{chunks}", t_verify_suffix, Time.instant))
+            end
+          else
+            suffix_size = verifier_tokens.size - bgi
+            if suffix_size > 0
+              t_verify_suffix = Time.instant
+              suffix_tokens = verifier_tokens[bgi, suffix_size]
+              suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi, verifier_state)
+              target_nexts.concat(suffix_nexts)
+              dt_verify_suffix = (Time.instant - t_verify_suffix).total_milliseconds
+              verifier_ms += dt_verify_suffix
+              if attr_collect
+                verifier_prefill_ms += dt_verify_suffix
+                verifier_chunks += 1
+                verifier_tokens_count += suffix_tokens.size
+              end
+              wba.try(&.mark("verifier", "branch_guard_suffix_#{chunks}", t_verify_suffix, Time.instant))
+            end
           end
         else
           if margin = read_top2_margin.call(current_block, bgi)
@@ -8160,6 +8219,26 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             tree2_branch_guard_replayless_resyncs += 1
           end
           wba.try(&.mark("verifier", "branch_guard_advance_#{chunks}_#{rejected_index}", t_branch_advance, Time.instant))
+        elsif branch_guard_snapshot_enabled && branch_guard_snapshot_state && branch_guard_index && branch_guard_snapshot_pos >= 0 && rejected_index > branch_guard_index.not_nil!
+          snapshot = branch_guard_snapshot_state.not_nil!
+          bgi = branch_guard_index.not_nil!
+          tail_start = bgi + 1
+          tail_size = correction_or_accepted.size - tail_start
+          tail_tokens = correction_or_accepted[tail_start, tail_size]
+          copy_verifier_state.call(verifier_state, snapshot, branch_guard_snapshot_pos)
+          t_suffix_replay = Time.instant
+          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, tail_tokens, branch_guard_snapshot_pos, verifier_state)
+          dt_suffix_replay = (Time.instant - t_suffix_replay).total_milliseconds
+          replay_ms += dt_suffix_replay
+          tree2_branch_guard_suffix_replays += 1
+          tree2_branch_guard_suffix_replay_tokens += tail_tokens.size
+          tree2_branch_guard_suffix_replay_ms += dt_suffix_replay
+          target_next_id = corrected[-1][0]
+          resync_base = copy_owned_resync_base.call(snapshot, branch_guard_snapshot_pos, "branch_guard_suffix_#{chunks}_#{rejected_index}")
+          if tail_tokens.size > 1
+            ML::GGUF::Qwen35CPU.prefill_tokens(weights, tail_tokens[0, tail_tokens.size - 1], branch_guard_snapshot_pos, resync_base)
+          end
+          wba.try(&.mark("verifier", "branch_guard_suffix_replay_#{chunks}_#{rejected_index}", t_suffix_replay, Time.instant))
         elsif use_verifier_backup
           backup = verifier_backup.not_nil!
           copy_verifier_state.call(verifier_state, backup, cycle_start_pos)
@@ -8528,6 +8607,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     serial_guard_rejected = false
     serial_branch_guard_resync_ready = false
     serial_branch_guard_resync_index = -1
+    serial_branch_guard_snapshot_state = nil.as(ML::GGUF::Qwen35CPU::State?)
+    serial_branch_guard_snapshot_pos = -1
     target_nexts = [] of {Int32, Float32}
     if bgi = serial_branch_guard_index
       prefix_size = bgi
@@ -8550,11 +8631,27 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         guard_expected = expected_branch
         guard_cand = proposal[bgi]
         if guard_cand == guard_expected
-          suffix_size = verifier_tokens.size - bgi
-          if suffix_size > 0
-            suffix_tokens = verifier_tokens[bgi, suffix_size]
-            suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi, serial_verifier_state)
-            target_nexts.concat(suffix_nexts)
+          if branch_guard_snapshot_enabled
+            guard_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, [guard_cand], cycle_start_pos + bgi, serial_verifier_state)
+            target_nexts.concat(guard_nexts)
+            suffix_size = verifier_tokens.size - bgi - 1
+            if suffix_size > 0
+              snapshot = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+              ML::GGUF::Qwen35CPU.prepare_state_metal!(snapshot, hp)
+              serial_branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
+              copy_verifier_state.call(snapshot, serial_verifier_state, serial_branch_guard_snapshot_pos)
+              serial_branch_guard_snapshot_state = snapshot
+              suffix_tokens = verifier_tokens[bgi + 1, suffix_size]
+              suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi + 1, serial_verifier_state)
+              target_nexts.concat(suffix_nexts)
+            end
+          else
+            suffix_size = verifier_tokens.size - bgi
+            if suffix_size > 0
+              suffix_tokens = verifier_tokens[bgi, suffix_size]
+              suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi, serial_verifier_state)
+              target_nexts.concat(suffix_nexts)
+            end
           end
         else
           serial_branch_guard_resync_ready = true
@@ -8617,6 +8714,19 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           branch_pos = cycle_start_pos + serial_rejected_index
           serial_resync_base = copy_owned_resync_base.call(serial_verifier_state, branch_pos, "serial_branch_guard_#{serial_chunks}_#{serial_rejected_index}")
           serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, serial_last_token, serial_pos_last, serial_verifier_state)[0]
+        elsif branch_guard_snapshot_enabled && serial_branch_guard_snapshot_state && serial_branch_guard_index && serial_branch_guard_snapshot_pos >= 0 && serial_rejected_index > serial_branch_guard_index.not_nil!
+          snapshot = serial_branch_guard_snapshot_state.not_nil!
+          bgi = serial_branch_guard_index.not_nil!
+          tail_start = bgi + 1
+          tail_size = correction_or_accepted.size - tail_start
+          tail_tokens = correction_or_accepted[tail_start, tail_size]
+          copy_verifier_state.call(serial_verifier_state, snapshot, serial_branch_guard_snapshot_pos)
+          corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, tail_tokens, serial_branch_guard_snapshot_pos, serial_verifier_state)
+          serial_target_next_id = corrected[-1][0]
+          serial_resync_base = copy_owned_resync_base.call(snapshot, serial_branch_guard_snapshot_pos, "serial_branch_guard_suffix_#{serial_chunks}_#{serial_rejected_index}")
+          if tail_tokens.size > 1
+            ML::GGUF::Qwen35CPU.prefill_tokens(weights, tail_tokens[0, tail_tokens.size - 1], serial_branch_guard_snapshot_pos, serial_resync_base)
+          end
         elsif use_verifier_backup
           backup = serial_backup.not_nil!
           copy_verifier_state.call(serial_verifier_state, backup, cycle_start_pos)
@@ -8726,6 +8836,11 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     tree2_branch_guard_passes:    tree2_branch_guard_passes,
     tree2_branch_guard_prefix_rejects: tree2_branch_guard_prefix_rejects,
     tree2_branch_guard_replayless_resyncs: tree2_branch_guard_replayless_resyncs,
+    tree2_branch_guard_snapshot_copies: tree2_branch_guard_snapshot_copies,
+    tree2_branch_guard_snapshot_ms: tree2_branch_guard_snapshot_ms,
+    tree2_branch_guard_suffix_replays: tree2_branch_guard_suffix_replays,
+    tree2_branch_guard_suffix_replay_tokens: tree2_branch_guard_suffix_replay_tokens,
+    tree2_branch_guard_suffix_replay_ms: tree2_branch_guard_suffix_replay_ms,
     risk_offramp_threshold:       risk_offramp_margin || 0.0,
     risk_offramp_hits:            risk_offramp_hits,
     risk_offramp_delayed_blocks:  risk_offramp_delayed_blocks,
@@ -8805,7 +8920,7 @@ private def self_spec_pipeline_updown_agreement_note(pipe) : String
 end
 
 private def self_spec_pipeline_tree2_note(pipe) : String
-  sprintf(" tree2_first_checks=%d tree2_first_rescues=%d tree2_first_misses=%d tree2_first_early_exits=%d tree2_anywhere_checks=%d tree2_anywhere_rescues=%d tree2_anywhere_misses=%d tree2_anywhere_early_exits=%d tree2_staged_checks=%d tree2_staged_rescues=%d tree2_staged_misses=%d tree2_staged_early_exits=%d tree2_staged_stages=%d tree2_margin_checks=%d tree2_margin_avg=%.4f tree2_margin_min=%.4f tree2_reject_margin_checks=%d tree2_reject_margin_avg=%.4f tree2_reject_margin_min=%.4f tree2_margin_guard_threshold=%.4f tree2_margin_guard_hits=%d tree2_margin_guard_tokens=%d tree2_margin_guard_rejects=%d tree2_margin_guard_passes=%d tree2_branch_guard_threshold=%.4f tree2_branch_guard_hits=%d tree2_branch_guard_tokens=%d tree2_branch_guard_rejects=%d tree2_branch_guard_rescues=%d tree2_branch_guard_misses=%d tree2_branch_guard_passes=%d tree2_branch_guard_prefix_rejects=%d tree2_branch_guard_replayless_resyncs=%d risk_offramp_threshold=%.4f risk_offramp_hits=%d risk_offramp_delayed_blocks=%d risk_offramp_delayed_tokens=%d mtp_k2_reject_checks=%d mtp_k2_reject_rescues=%d mtp_k2_reject_misses=%d mtp_k2_reject_ms=%.3f",
+  sprintf(" tree2_first_checks=%d tree2_first_rescues=%d tree2_first_misses=%d tree2_first_early_exits=%d tree2_anywhere_checks=%d tree2_anywhere_rescues=%d tree2_anywhere_misses=%d tree2_anywhere_early_exits=%d tree2_staged_checks=%d tree2_staged_rescues=%d tree2_staged_misses=%d tree2_staged_early_exits=%d tree2_staged_stages=%d tree2_margin_checks=%d tree2_margin_avg=%.4f tree2_margin_min=%.4f tree2_reject_margin_checks=%d tree2_reject_margin_avg=%.4f tree2_reject_margin_min=%.4f tree2_margin_guard_threshold=%.4f tree2_margin_guard_hits=%d tree2_margin_guard_tokens=%d tree2_margin_guard_rejects=%d tree2_margin_guard_passes=%d tree2_branch_guard_threshold=%.4f tree2_branch_guard_hits=%d tree2_branch_guard_tokens=%d tree2_branch_guard_rejects=%d tree2_branch_guard_rescues=%d tree2_branch_guard_misses=%d tree2_branch_guard_passes=%d tree2_branch_guard_prefix_rejects=%d tree2_branch_guard_replayless_resyncs=%d tree2_branch_guard_snapshot_copies=%d tree2_branch_guard_snapshot_ms=%.3f tree2_branch_guard_suffix_replays=%d tree2_branch_guard_suffix_replay_tokens=%d tree2_branch_guard_suffix_replay_ms=%.3f risk_offramp_threshold=%.4f risk_offramp_hits=%d risk_offramp_delayed_blocks=%d risk_offramp_delayed_tokens=%d mtp_k2_reject_checks=%d mtp_k2_reject_rescues=%d mtp_k2_reject_misses=%d mtp_k2_reject_ms=%.3f",
     pipe[:tree2_first_checks],
     pipe[:tree2_first_rescues],
     pipe[:tree2_first_misses],
@@ -8839,6 +8954,11 @@ private def self_spec_pipeline_tree2_note(pipe) : String
     pipe[:tree2_branch_guard_passes],
     pipe[:tree2_branch_guard_prefix_rejects],
     pipe[:tree2_branch_guard_replayless_resyncs],
+    pipe[:tree2_branch_guard_snapshot_copies],
+    pipe[:tree2_branch_guard_snapshot_ms],
+    pipe[:tree2_branch_guard_suffix_replays],
+    pipe[:tree2_branch_guard_suffix_replay_tokens],
+    pipe[:tree2_branch_guard_suffix_replay_ms],
     pipe[:risk_offramp_threshold],
     pipe[:risk_offramp_hits],
     pipe[:risk_offramp_delayed_blocks],
@@ -9810,6 +9930,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-staged=N", "Use real draft top2 with chunk-major verifier stages of N tokens, stopping at the first mismatch") { |v| simulate_self_spec_gpu_pipeline_tree2_staged_tokens = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-margin-guard=F", "Use draft top1/top2 margin <= F to split exact verifier at the first low-margin token") { |v| simulate_self_spec_gpu_pipeline_tree2_margin_guard = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard=F", "Use margin <= F to stop before the low-margin token and resync from exact branch state on reject") { |v| simulate_self_spec_gpu_pipeline_tree2_branch_guard = v.to_f64 }
+  p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot", "After a branch guard passes, snapshot the exact guard-boundary state so suffix rejects replay from the guard boundary") { ProbeRuntime.self_spec_branch_guard_snapshot = true }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margin=F", "When draft top1/top2 margin <= F, do not pre-submit the next draft block before exact verification") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST", "In-process A/B list for risk-offramp thresholds; automatically includes the no-offramp baseline") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margins = parse_float_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-repeats=N", "Repeat risk-offramp A/B in ABBA order and score against median no-offramp baselines") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_repeats = v.to_i }

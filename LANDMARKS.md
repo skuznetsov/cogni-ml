@@ -7886,3 +7886,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The pivot is from "predict exact reject token" to "checkpoint when a cheap warning appears, then cheaply recover if the suffix later rejects."
 - maieutic: The hidden assumption was that the guard must fire exactly at the rejecting token. The trace suggests a weaker condition may work: fire before a risky span and keep a branch state for the whole span.
 - adversary: This is instrumentation plus single-run evidence. Do not promote a threshold; implement any guarded-prefix snapshot as default-off and measure copy cost versus saved replay on ABBA prompt suites.
+
+**decision_update_20:** Guarded-prefix snapshot/resync is implemented as a default-off branch-state experiment, and the first gates refute the naive full-state-copy form as a speed path. `--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot` requires `--simulate-self-spec-gpu-pipeline-tree2-branch-guard=F`; when a guard token passes, the verifier advances that token, optionally copies the exact state at the guard boundary, then verifies the suffix. If a later suffix token rejects, the controller can restore that guard-boundary state and replay only the suffix tail. The path preserves exact greedy parity and reports `tree2_branch_guard_snapshot_copies/ms` plus `tree2_branch_guard_suffix_replays/tokens/ms`. A hostile 9B guard-token reject smoke remains replayless (`replay_ms=0`, `tree2_branch_guard_replayless_resyncs=7`). On 27B JSON-ish `guard=1.0`, the new path performed `3` full-state snapshot copies (`62.429ms`) and one suffix replay of one token (`78.813ms`), but regressed overlap (`3751.291ms` no-snapshot -> `5315.587ms` snapshot) because full recurrent-state copies and splitting guard/suffix verification cost more than the replay saved. A narrower `guard=0.5` reduced copies to `1` (`34.149ms`) but produced no suffix replay saving in that run. Conclusion: the control-flow idea is valid, but the full-copy/split-verifier implementation is not the breakthrough. The next viable version would need a cheap in-verifier checkpoint, copy-on-write recurrent state, or a much stronger guard that triggers only when suffix replay saving is likely.
+**evidence_update_20:**
+- claim: "Guarded-prefix snapshot builds, exposes its flag, and keeps top2 decode regression clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_snapshot_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_snapshot_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_branch_snapshot_probe --help | grep -F -- '--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot'`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_snapshot_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: branch-guard snapshot option parsing, verifier state copy, suffix replay, or top2 decode path changes
+- claim: "The snapshot path preserves replayless guard-token rejects."
+  source: `/tmp/qwen35_branch_snapshot_hostile_20260506153829.log`
+  verified_at: 2026-05-06
+  decay_trigger: hostile draft route, branch-guard threshold, live-state copy, or generated length changes
+- claim: "Naive full-state guarded-prefix snapshots are too expensive on the 27B JSON-ish gate."
+  source: `/tmp/qwen36_branch_snapshot_json_nosnapshot_20260506153858.log`; `/tmp/qwen36_branch_snapshot_json_snapshot_20260506153858.log`; `/tmp/qwen36_branch_snapshot_json_guard05_nosnapshot_20260506154153.log`; `/tmp/qwen36_branch_snapshot_json_guard05_snapshot_20260506154153.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, host load, threshold, snapshot implementation, verifier fusion granularity, rank/layers, or gamma changes
+**quadrumvirate_update_20:**
+- cassandra: Full-state snapshots should be structurally correct but likely too expensive unless they replace substantial replay. This held.
+- daedalus: The pivot is from "copy exact state at warning boundaries" to "make checkpoints cheap or avoid checkpoints unless the expected replay saving is large."
+- maieutic: The hidden assumption was that suffix replay is the dominant cost after a guard warning. The gate shows verifier split and state-copy overhead can dominate instead.
+- adversary: Keep this default-off as a falsifier/counter substrate. Do not super-fuse or tune thresholds around this implementation without repeated ABBA evidence and a cheaper checkpoint mechanism.
