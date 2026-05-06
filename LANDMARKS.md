@@ -7814,3 +7814,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "add another candidate source" to "classify when the candidate source is needed."
 - maieutic: The hidden assumption was that MTP rescue value is broadly distributed. The suite says it is clustered by prompt/span, which makes sparse routing the core problem.
 - adversary: These are exact-position oracle rows without runtime resync, replay, or queue overlap. The next promotion gate must be a real fail-closed controller measured against plain decode and existing tree2.
+
+**decision_update_16:** Real-boundary MTP K2 is now measurable inside the actual GPU self-spec loop, and it narrows the branch again. `--simulate-self-spec-gpu-pipeline-mtp-k2-on-reject` loads the Qwen3.6 MTP sidecar, forces draft top2 capture, preserves the normal exact verifier/emitted-token path, and calls MTP K2 only when a real reject is also a self-top2 miss. It reports `mtp_k2_reject_checks/rescues/misses/ms` in the existing tree2 note. On Qwen3.6-27B JSON `gen32/gamma4`, the real loop produced `5` rejects, but only `1` was a self-top2 miss; MTP K2 rescued that `1/1`. The synchronous lazy call cost `1677.240ms`, so this is a candidate-quality proof, not a speed path. Compared with decision_update_15, real resync collapses the apparent MTP demand from oracle `20/160` JSON-suite misses to rare actual boundary misses. Conclusion: immediate speed work should prioritize a branch-state/tree verifier that exploits self-top2 before wrong-tail replay, or a resident/asynchronous MTP path; do not place CPU/BF16 MTP in the controller hot path.
+**evidence_update_16:**
+- claim: "The real-pipeline MTP K2 reject diagnostic builds, exposes its flag, and keeps the top2 regression spec clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_reject_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_mtp_reject_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_mtp_reject_probe --help | rg 'mtp-k2-on-reject'`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_reject_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: pipeline option parsing, MTP sidecar loading, target hidden capture, or decode top2 spec changes
+- claim: "At the real JSON boundary, MTP K2 rescues the rare self-top2 miss but synchronous lazy MTP is too expensive for the hot path."
+  source: `/tmp/qwen36_mtp_k2_reject_json_gen32_20260506144048.log`; `/tmp/qwen36_mtp_k2_reject_json_gen32_baseline_20260506144222.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, rank/layers, gamma/schedule, MTP implementation path, host load, or branch verifier semantics changes
+**quadrumvirate_update_16:**
+- cassandra: The expected MTP rescue survived, but the expected hot-path cost problem also appeared; lazy sidecar invocation is too large for a per-reject controller.
+- daedalus: Pivot from "MTP fallback controller" to "avoid replay with existing self-top2 first, then make MTP resident/asynchronous only for the remaining misses."
+- maieutic: The hidden assumption was that oracle self-top2 misses map directly to real pipeline misses. Real resync falsifies that scale assumption.
+- adversary: Wall timings are single-run and noisy; the robust signal is structural: actual reject count, self-top2 miss count, MTP rescue count, and MTP call tax.
