@@ -7978,3 +7978,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "try another guard flag" to "measure expected value across trace distributions, then pick a router."
 - maieutic: The hidden assumption was that useful suffix rejects are common enough to justify branch snapshots. On the known trace, useful suffix rejects are sparse.
 - adversary: Cost parameters are assumptions, not facts. Use structural counters first, then calibrate snapshot/replay costs from same-binary runs before promoting a policy.
+
+**decision_update_25:** The first broader 27B trace shard moves branch-guard priority away from snapshots and back toward replayless guard-token rejects. A four-prompt trace shard (`fact_france`, `code_fib`, `structured_json`, `chat_fox`, `gen16/gamma4`, rank8 early6) had `17` chunks and only one reject. The scorer found exactly one low-margin candidate for thresholds `0.5`, `1.0`, and `2.0`; it was a guard-token reject, so snapshots had zero value. Runtime A/B on the structured JSON row confirmed the branch-state primitive: baseline had one reject with `replay_ms=375.770`, `overlap_ms=5523.084`, and `plain_speedup=0.3958x`; `tree2_branch_guard=1.0` preserved parity, hit `tree2_branch_guard_replayless_resyncs=1`, reduced `replay_ms` to `0.0`, and improved overlap to `5170.893` (`plain_speedup=0.4221x`). This is still slower than plain exact, so it is not a default speed path. Conclusion: immediate useful branch guard work is a sparse replay-removal route for guard-token rejects; guarded-prefix snapshots need more evidence of long-prefix suffix rejects before more engineering.
+**evidence_update_25:**
+- claim: "The four-prompt 27B trace shard has one low-margin candidate at thresholds up to 2.0, and it is a guard-token reject."
+  source: `/tmp/qwen35_branch_trace_suite_20260506164918`; `/tmp/qwen35_trace_score --input /tmp/qwen35_branch_trace_suite_20260506164918/*.jsonl --branch-thresholds 0.5,1.0,2.0,4.0 --min-prefixes 1,2,3,4 --snapshot-cost-ms 34 --replay-token-ms 80`
+  verified_at: 2026-05-06
+  decay_trigger: prompt shard, generated length, trace schema, rank/layers, gamma, or margin threshold list changes
+- claim: "On the structured JSON row, branch_guard=1.0 removes replay while preserving exact parity."
+  source: `/tmp/qwen36_branch_guard_structured_ab_20260506165636/baseline.log`; `/tmp/qwen36_branch_guard_structured_ab_20260506165636/guard1.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, host load, branch guard implementation, rank/layers, gamma, or verifier backup semantics changes
+**quadrumvirate_update_25:**
+- cassandra: The scorer predicted guard-token replay removal, not snapshot value. Runtime A/B matched the structural prediction.
+- daedalus: The frame shifts from "checkpoint suffix rejects" to "first make sparse guard-token rejects cheap and reliable; only then revisit snapshots."
+- maieutic: The hidden assumption was that snapshot-worthy suffix rejects are common. The small shard did not support that.
+- adversary: Four prompts are not enough for promotion. The branch guard should remain opt-in until a larger trace shard plus ABBA wall timing shows positive aggregate value.
