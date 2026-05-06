@@ -29,6 +29,7 @@ module ProbeRuntime
   @@self_spec_branch_guard_until_reject = false
   @@self_spec_branch_guard_snapshot_min_prefix = 1
   @@self_spec_branch_guard_snapshot_suffix_threshold : Float64? = nil
+  @@self_spec_branch_guard_snapshot_prefix_suffix_thresholds = [] of Tuple(Int32, Float64)
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -140,6 +141,18 @@ module ProbeRuntime
       raise "branch guard snapshot suffix threshold must be non-negative" if value < 0.0
     end
     @@self_spec_branch_guard_snapshot_suffix_threshold = threshold
+  end
+
+  def self.self_spec_branch_guard_snapshot_prefix_suffix_thresholds : Array(Tuple(Int32, Float64))
+    @@self_spec_branch_guard_snapshot_prefix_suffix_thresholds
+  end
+
+  def self.self_spec_branch_guard_snapshot_prefix_suffix_thresholds=(thresholds : Array(Tuple(Int32, Float64)))
+    thresholds.each do |min_prefix, threshold|
+      raise "branch guard snapshot prefix threshold min-prefix must be positive" if min_prefix <= 0
+      raise "branch guard snapshot prefix threshold must be non-negative" if threshold < 0.0
+    end
+    @@self_spec_branch_guard_snapshot_prefix_suffix_thresholds = thresholds.sort_by { |pair| pair[0] }
   end
 end
 
@@ -6130,6 +6143,18 @@ private def parse_float_list(value : String) : Array(Float64)
   value.split(',').map(&.strip).reject(&.empty?).map(&.to_f64)
 end
 
+private def parse_prefix_suffix_thresholds(value : String) : Array(Tuple(Int32, Float64))
+  value.split(',').map(&.strip).reject(&.empty?).map do |raw|
+    parts = raw.split(':').map(&.strip)
+    raise "prefix/suffix threshold entry expects MIN_PREFIX:THRESHOLD" unless parts.size == 2
+    min_prefix = parts[0].to_i
+    threshold = parts[1].to_f64
+    raise "prefix/suffix threshold min-prefix must be positive" if min_prefix <= 0
+    raise "prefix/suffix threshold must be non-negative" if threshold < 0.0
+    {min_prefix, threshold}
+  end
+end
+
 private def parse_layer_block(value : String)
   raw = value.strip
   if raw.includes?(":")
@@ -7046,6 +7071,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   raise "GPU pipeline tree2 branch guard snapshot requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_snapshot_enabled && tree2_branch_guard.nil?
   branch_guard_snapshot_min_prefix = ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix
   branch_guard_snapshot_suffix_threshold = ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold
+  branch_guard_snapshot_prefix_suffix_thresholds = ProbeRuntime.self_spec_branch_guard_snapshot_prefix_suffix_thresholds
   branch_guard_until_reject = ProbeRuntime.self_spec_branch_guard_until_reject
   raise "GPU pipeline tree2 branch guard until-reject requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_until_reject && tree2_branch_guard.nil?
   mtp_k2_on_reject_enabled = !mtp_k2_on_reject.nil?
@@ -7358,8 +7384,17 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     end
   }
   branch_guard_snapshot_suffix_allowed = ->(block : GpuDraftBlock, suffix_start : Int32, verifier_size : Int32) {
-    if threshold = branch_guard_snapshot_suffix_threshold
-      threshold_value = threshold.not_nil!
+    prefix_policy_enabled = !branch_guard_snapshot_prefix_suffix_thresholds.empty?
+    selected_threshold = nil.as(Float64?)
+    if prefix_policy_enabled
+      branch_guard_snapshot_prefix_suffix_thresholds.each do |min_prefix, threshold|
+        selected_threshold = threshold if suffix_start >= min_prefix
+      end
+    elsif threshold = branch_guard_snapshot_suffix_threshold
+      selected_threshold = threshold
+    end
+
+    if threshold_value = selected_threshold
       suffix_end = Math.min(verifier_size, block.submissions.size) - 1
       if suffix_start > suffix_end
         false
@@ -7376,7 +7411,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         allowed
       end
     else
-      true
+      !prefix_policy_enabled
     end
   }
 
@@ -10058,6 +10093,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot", "After a branch guard passes, snapshot the exact guard-boundary state so suffix rejects replay from the guard boundary") { ProbeRuntime.self_spec_branch_guard_snapshot = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-min-prefix=N", "Snapshot branch-guard pass state only after at least N accepted guard-prefix tokens") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-suffix-threshold=F", "Only snapshot a passed branch guard if the remaining suffix contains a draft margin <= F") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = v.to_f64 }
+  p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-prefix-suffix-thresholds=LIST", "Prefix-conditioned snapshot suffix thresholds, e.g. 2:1.0,3:2.0; largest matching min-prefix wins and overrides the single suffix threshold") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_prefix_suffix_thresholds = parse_prefix_suffix_thresholds(v) }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-until-reject", "Only enable branch guard before the first real reject in the run") { ProbeRuntime.self_spec_branch_guard_until_reject = true }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margin=F", "When draft top1/top2 margin <= F, do not pre-submit the next draft block before exact verification") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST", "In-process A/B list for risk-offramp thresholds; automatically includes the no-offramp baseline") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margins = parse_float_list(v) }

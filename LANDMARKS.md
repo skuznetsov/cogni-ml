@@ -8075,18 +8075,22 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - maieutic: The hidden assumption was that eliminating wasted snapshots is enough for promotion. It improves structural quality, but the wall objective also requires beating ungated snapshots on useful rows.
 - adversary: This remains a six-prompt, two-repeat shard with high host timing variance. Keep the suffix gate opt-in until `gen32/64` or a larger prompt suite shows positive min-delta against both baselines.
 
-**decision_update_31:** The first `gen32` expected-value trace changes the branch-snapshot router shape from a single threshold to a prefix-conditioned policy. I ran the same six-prompt 27B shard at `gen32/gamma4`, rank8 early6, with `branch_guard=1.0` and router JSONL enabled. All six wall rows preserved parity; the trace contained `52` chunks, `192` rows, and `6` reject chunks. `bin/qwen35_self_spec_router_trace_score.cr` now emits `branch_guard_prefix_suffix_value` rows so prefix length and suffix risk can be scored independently. Combined `gen12+gen32` scoring shows the current zero-waste policy (`threshold=1.0`, `min_prefix=3`, `suffix_threshold=2.0`) captures the two older `prefix_len=3` useful snapshots (`saved_prefix_tokens=6`) but misses a clean `prefix_len=2`, `suffix_threshold<=1.0` opportunity (`saved_prefix_tokens=2`, zero wasted snapshots). A naive global relaxation to `min_prefix=2`, `suffix_threshold=2.0` adds wasted snapshots. Conclusion: the next runtime policy should be prefix-conditioned, for example `prefix_len>=3 -> suffix<=2.0` plus `prefix_len==2 -> suffix<=1.0`, and must be ABBA-gated before default promotion.
-**evidence_update_31:**
-- claim: "The prefix/suffix scorer builds and identifies zero-waste prefix-conditioned bins on combined `gen12+gen32` traces."
-  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prefix_suffix_score_build crystal build --release bin/qwen35_self_spec_router_trace_score.cr -o /tmp/qwen35_trace_score_prefix_suffix`; `/tmp/qwen35_trace_score_prefix_suffix --input ... --branch-thresholds 1.0,2.0 --min-prefixes 1,2,3 --suffix-thresholds 0.5,1.0,2.0,inf --snapshot-cost-ms 3 --replay-token-ms 62`; `/tmp/qwen36_branch_trace_suite2_gen12_gen32_prefix_suffix_score.txt`
-  verified_at: 2026-05-06
-  decay_trigger: trace schema, scorer semantics, prompt suite, rank/layers, gamma, branch thresholds, or checkpoint/replay cost calibration changes
-- claim: "The `gen32` trace shard preserves parity on all six prompt rows and gives a longer-horizon expected-value sample."
-  source: `/tmp/qwen36_branch_trace_suite2_gen32_20260506192003`
+**decision_update_32:** Correction and update: the first `gen32` branch-snapshot trace I recorded in `decision_update_31` used the default 9B model because the command omitted `--model`; treat `/tmp/qwen36_branch_trace_suite2_gen32_20260506192003` as non-27B auxiliary data, not 27B evidence. I reran the same six-prompt shard on the intended Qwen3.6-27B Q4_K_M model at `gen32/gamma4`, rank8 early6, with `branch_guard=1.0` and router JSONL enabled. The corrected 27B trace preserved parity on all six rows and contained `48` chunks, `192` rows, and `2` reject chunks. Combined with the earlier 27B `gen12` trace, `threshold=1.0`, `min_prefix=3`, `suffix_threshold=2.0` captures `4` useful snapshots, `0` wasted snapshots, and `12` saved prefix tokens. There is no 27B `prefix_len=2` opportunity in this corrected shard; the useful rows remain `prefix_len=3`. The prefix/suffix scorer is still useful for preventing this class of overgeneralization, and the runtime now has a default-off prefix-conditioned snapshot policy flag, but the current 27B data does not require loosening the existing `min_prefix=3/suffix<=2.0` policy. Focused 27B runtime gate for the new flag (`2:1.0,3:2.0`, min-prefix `2`) preserved parity on `structured_yaml`, `structured_sql`, and `reason_bench` at `gen32`; it skipped the clean YAML snapshot and took one useful snapshot on each suffix-reject row.
+**evidence_update_32:**
+- claim: "The corrected `gen32` expected-value trace was run on Qwen3.6-27B and preserves parity on all six prompt rows."
+  source: `/tmp/qwen36_branch_trace_suite2_gen32_27b_20260506193419`; `/tmp/qwen36_branch_trace_suite2_gen32_27b_20260506193419/score.txt`
   verified_at: 2026-05-06
   decay_trigger: prompt suite, model file, host load, generated length, rank/layers, gamma, or self-spec pipeline controller changes
-**quadrumvirate_update_31:**
-- cassandra: Longer generation should expose different guard-prefix positions. It did: a clean `prefix_len=2` opportunity appears at `gen32`, while `prefix_len=1` remains noisy and waste-prone.
-- daedalus: The pivot is from scalar thresholds to a small decision table keyed by prefix length and suffix risk.
-- maieutic: The assumption that `min_prefix=3` is generally safe hides real shorter-prefix wins. The safer invariant is expected value per prefix bin, not a fixed prefix cutoff.
-- adversary: This is still trace economics, not wall-speed proof. Runtime promotion requires ABBA against current `min_prefix3/suffix2`, ungated snapshot, and nosnap.
+- claim: "Combined 27B `gen12+gen32` scoring supports the existing `min_prefix=3/suffix<=2.0` zero-waste policy and does not show a prefix_len=2 opportunity."
+  source: `/tmp/qwen36_branch_trace_suite2_gen12_gen32_27b_prefix_suffix_score.txt`; local parser over `branch_guard_value` and `branch_guard_prefix_suffix_value` rows
+  verified_at: 2026-05-06
+  decay_trigger: trace schema, scorer semantics, prompt suite, rank/layers, gamma, branch thresholds, or checkpoint/replay cost calibration changes
+- claim: "The prefix-conditioned runtime policy flag builds, keeps top2 spec clean, and preserves parity on focused 27B rows."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prefix_policy_probe_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_prefix_policy_probe --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prefix_policy_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`; `/tmp/qwen36_branch_snapshot_prefix_policy_gate_27b_20260506194829`
+  verified_at: 2026-05-06
+  decay_trigger: option parsing, prefix policy selection, branch snapshot verifier split, suffix margin semantics, rank/layers, gamma, or prompt/model changes
+**quadrumvirate_update_32:**
+- cassandra: Missing `--model` is a high-risk perf/research failure mode in this repo because the probe default is 9B while the active frontier is 27B. The corrected run changed the conclusion.
+- daedalus: The branch does not need a more permissive prefix policy yet; it needs stricter model/workload provenance in every trace/score note.
+- maieutic: The hidden assumption was that the current binary inherited the 27B model path. It did not. Future long-running gates should print or parse `model=` before scoring.
+- adversary: Runtime prefix-conditioned policy is verified as opt-in plumbing only. It is not a promoted speed policy until ABBA shows a wall win against current `min_prefix3/suffix2`, ungated snapshot, and nosnap on 27B.
