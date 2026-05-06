@@ -8014,3 +8014,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The correct frame is not "snapshot or no snapshot" but "checkpoint expected value = reject probability * saved replay tokens - copy/split cost."
 - maieutic: The weak assumption was that raw low margin alone identifies a profitable branch point. The trace says prefix length, clean-pass false positives, prior reject history, and prompt regime must be part of the router.
 - adversary: The trace shard is still small and focused A/B runs are single-shot. Keep the feature opt-in; require a larger suite or ABBA timing before changing defaults.
+
+**decision_update_27:** Guarded-prefix snapshots now use a cheaper recurrent-only checkpoint at the branch boundary. The key observation is that full-attention KV rows before the guard boundary are already correct in the live verifier state, and rows after the boundary are either replay-overwritten or ignored by the current position. Therefore a branch snapshot only needs to preserve recurrent DN state at the guard boundary. On suffix reject, the verifier restores recurrent state from the snapshot, replays the corrected suffix, and builds the next draft resync base by copying KV from the live exact verifier state while rewinding/replaying only recurrent state from the snapshot. This avoids paying full KV copies for pass-clean false-positive snapshots and defers full KV resync work until an actual suffix reject. Exactness is preserved by the top2 spec and by focused 27B runs: `structured_sql`, `reason_bench`, and the pass-clean `structured_yaml` all kept `parity=true`. The measured branch snapshot copy cost is now small in the focused runs (`2.512ms`, `4.473ms`, `2.399ms` respectively), and the two suffix-reject rows still replay only one suffix token (`61.979ms` and `61.868ms`). This does not make raw margin a default policy; it makes false-positive snapshots less expensive and changes the scorer cost calibration from the old full-copy assumption toward a roughly `3ms` checkpoint-copy term plus verifier split cost.
+**evidence_update_27:**
+- claim: "The recurrent-only branch snapshot implementation builds and keeps the top2 decode regression clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_rec_snapshot_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_rec_snapshot_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_rec_snapshot_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: state copy primitive, branch snapshot restore/resync code, top2 decode path, or Metal state layout changes
+- claim: "Focused 27B snapshot-positive and false-positive rows preserve parity with recurrent-only branch snapshots."
+  source: `/tmp/qwen36_branch_snapshot_rec_checkpoint_ab_20260506174053`; `/tmp/qwen36_branch_snapshot_rec_checkpoint_yaml_20260506174327.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompts, host load, rank/layers, gamma, branch threshold, snapshot min-prefix, or Qwen3.6 GGUF changes
+- claim: "With the new checkpoint cost scale, the suite2 offline scorer still favors value-gated snapshots but should no longer use the old 34ms full-copy assumption."
+  source: `/tmp/qwen35_trace_score --input /tmp/qwen35_branch_trace_suite2_20260506171103/*.jsonl --branch-thresholds 0.5,1.0,2.0,4.0 --min-prefixes 1,2,3,4 --snapshot-cost-ms 3 --replay-token-ms 62`
+  verified_at: 2026-05-06
+  decay_trigger: scorer cost model, snapshot implementation, prompt suite, or replay timing changes
+**quadrumvirate_update_27:**
+- cassandra: If KV is copied at every pass-clean guard, false positives dominate. Moving the snapshot to recurrent-only should mainly reduce false-positive cost, while useful suffix rejects still pay replay/resync work.
+- daedalus: This is an eliminate-over-optimize pivot: do not make KV copies faster at the guard point; avoid doing them until there is a real suffix reject.
+- maieutic: The hidden assumption was that a state checkpoint must be a full model state. For exact resume, recurrent state must rewind exactly; KV can be taken from the live verifier or overwritten by replay.
+- adversary: This relies on full-attention kernels overwriting the current row and respecting layer positions. Keep it guarded by parity tests; if attention cache semantics change, re-verify before trusting the optimization.

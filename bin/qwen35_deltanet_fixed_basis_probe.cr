@@ -7059,6 +7059,16 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       dst.copy_from!(src)
     end
   }
+  copy_verifier_recurrent_state = ->(dst : ML::GGUF::Qwen35CPU::State, src : ML::GGUF::Qwen35CPU::State, used_tokens : Int32) {
+    if live_state_backup
+      # For branch-snapshot restore, KV prefix rows before `used_tokens` are
+      # still valid in the verifier state and suffix rows are replay-overwritten.
+      # Only recurrent state has to rewind exactly to the guard boundary.
+      ML::GGUF::Qwen35CPU.copy_state_metal_used!(dst, src, hp, used_tokens: used_tokens, rec_only: true)
+    else
+      dst.copy_from!(src)
+    end
+  }
   h_k = hp.ssm_group_count
   h_v = hp.ssm_time_step_rank
   s = hp.ssm_state_size
@@ -7153,6 +7163,27 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     dst = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
     ML::GGUF::Qwen35CPU.prepare_state_metal!(dst, hp)
     copy_verifier_state.call(dst, src, used_tokens)
+    draft_fork_ms += (Time.instant - t_copy).total_milliseconds if attr_collect
+    wba.try(&.mark("draft", "copy_resync_base_#{label}", t_copy, Time.instant))
+    dst
+  }
+  copy_owned_resync_base_from_branch_snapshot = ->(current : ML::GGUF::Qwen35CPU::State,
+                                                   snapshot : ML::GGUF::Qwen35CPU::State,
+                                                   snapshot_pos : Int32,
+                                                   base_used_tokens : Int32,
+                                                   accepted_tail_prefix : Array(Int32),
+                                                   label : String) {
+    t_copy = Time.instant
+    dst = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(dst, hp)
+    # Avoid paying KV copies at the branch point. Current verifier KV rows
+    # before the next seed token remain exact (or are replay-overwritten),
+    # while recurrent state is rewound from the compact branch snapshot.
+    copy_verifier_state.call(dst, current, base_used_tokens)
+    copy_verifier_recurrent_state.call(dst, snapshot, snapshot_pos)
+    unless accepted_tail_prefix.empty?
+      ML::GGUF::Qwen35CPU.prefill_tokens(weights, accepted_tail_prefix, snapshot_pos, dst)
+    end
     draft_fork_ms += (Time.instant - t_copy).total_milliseconds if attr_collect
     wba.try(&.mark("draft", "copy_resync_base_#{label}", t_copy, Time.instant))
     dst
@@ -8030,7 +8061,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
               t_snapshot = Time.instant
               snapshot = branch_guard_snapshot_scratch.not_nil!
               branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
-              copy_verifier_state.call(snapshot, verifier_state, branch_guard_snapshot_pos)
+              copy_verifier_recurrent_state.call(snapshot, verifier_state, branch_guard_snapshot_pos)
               branch_guard_snapshot_state = snapshot
               dt_snapshot = (Time.instant - t_snapshot).total_milliseconds
               tree2_branch_guard_snapshot_copies += 1
@@ -8255,7 +8286,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           tail_start = bgi + 1
           tail_size = correction_or_accepted.size - tail_start
           tail_tokens = correction_or_accepted[tail_start, tail_size]
-          copy_verifier_state.call(verifier_state, snapshot, branch_guard_snapshot_pos)
+          copy_verifier_recurrent_state.call(verifier_state, snapshot, branch_guard_snapshot_pos)
           t_suffix_replay = Time.instant
           corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, tail_tokens, branch_guard_snapshot_pos, verifier_state)
           dt_suffix_replay = (Time.instant - t_suffix_replay).total_milliseconds
@@ -8264,10 +8295,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           tree2_branch_guard_suffix_replay_tokens += tail_tokens.size
           tree2_branch_guard_suffix_replay_ms += dt_suffix_replay
           target_next_id = corrected[-1][0]
-          resync_base = copy_owned_resync_base.call(snapshot, branch_guard_snapshot_pos, "branch_guard_suffix_#{chunks}_#{rejected_index}")
-          if tail_tokens.size > 1
-            ML::GGUF::Qwen35CPU.prefill_tokens(weights, tail_tokens[0, tail_tokens.size - 1], branch_guard_snapshot_pos, resync_base)
-          end
+          accepted_tail_prefix = tail_tokens.size > 1 ? tail_tokens[0, tail_tokens.size - 1] : [] of Int32
+          resync_base = copy_owned_resync_base_from_branch_snapshot.call(verifier_state, snapshot, branch_guard_snapshot_pos, pos_last, accepted_tail_prefix, "branch_guard_suffix_#{chunks}_#{rejected_index}")
           wba.try(&.mark("verifier", "branch_guard_suffix_replay_#{chunks}_#{rejected_index}", t_suffix_replay, Time.instant))
         elsif use_verifier_backup
           backup = verifier_backup.not_nil!
@@ -8674,7 +8703,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             if suffix_size > 0 && bgi + 1 >= branch_guard_snapshot_min_prefix
               snapshot = branch_guard_snapshot_scratch.not_nil!
               serial_branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
-              copy_verifier_state.call(snapshot, serial_verifier_state, serial_branch_guard_snapshot_pos)
+              copy_verifier_recurrent_state.call(snapshot, serial_verifier_state, serial_branch_guard_snapshot_pos)
               serial_branch_guard_snapshot_state = snapshot
               suffix_tokens = verifier_tokens[bgi + 1, suffix_size]
               suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi + 1, serial_verifier_state)
@@ -8756,13 +8785,11 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           tail_start = bgi + 1
           tail_size = correction_or_accepted.size - tail_start
           tail_tokens = correction_or_accepted[tail_start, tail_size]
-          copy_verifier_state.call(serial_verifier_state, snapshot, serial_branch_guard_snapshot_pos)
+          copy_verifier_recurrent_state.call(serial_verifier_state, snapshot, serial_branch_guard_snapshot_pos)
           corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, tail_tokens, serial_branch_guard_snapshot_pos, serial_verifier_state)
           serial_target_next_id = corrected[-1][0]
-          serial_resync_base = copy_owned_resync_base.call(snapshot, serial_branch_guard_snapshot_pos, "serial_branch_guard_suffix_#{serial_chunks}_#{serial_rejected_index}")
-          if tail_tokens.size > 1
-            ML::GGUF::Qwen35CPU.prefill_tokens(weights, tail_tokens[0, tail_tokens.size - 1], serial_branch_guard_snapshot_pos, serial_resync_base)
-          end
+          accepted_tail_prefix = tail_tokens.size > 1 ? tail_tokens[0, tail_tokens.size - 1] : [] of Int32
+          serial_resync_base = copy_owned_resync_base_from_branch_snapshot.call(serial_verifier_state, snapshot, serial_branch_guard_snapshot_pos, serial_pos_last, accepted_tail_prefix, "serial_branch_guard_suffix_#{serial_chunks}_#{serial_rejected_index}")
         elsif use_verifier_backup
           backup = serial_backup.not_nil!
           copy_verifier_state.call(serial_verifier_state, backup, cycle_start_pos)
