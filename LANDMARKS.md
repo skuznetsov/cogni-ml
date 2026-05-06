@@ -8034,3 +8034,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: This is an eliminate-over-optimize pivot: do not make KV copies faster at the guard point; avoid doing them until there is a real suffix reject.
 - maieutic: The hidden assumption was that a state checkpoint must be a full model state. For exact resume, recurrent state must rewind exactly; KV can be taken from the live verifier or overwritten by replay.
 - adversary: This relies on full-attention kernels overwriting the current row and respecting layer positions. Keep it guarded by parity tests; if attention cache semantics change, re-verify before trusting the optimization.
+
+**decision_update_28:** ABBA timing on the six-prompt 27B shard confirms the branch snapshot primitive has positive value only on suffix-reject rows, while pass-clean snapshots remain small but real overhead. The order was `nosnap/snap/snap/nosnap` per prompt with `guard=1.0`, `min_prefix=3`, `gen12/gamma4`, rank8 early6. All `24/24` rows preserved `parity=true`. On the two suffix-reject prompts, snapshots reduced replay and wall consistently: `structured_sql` averaged `replay_ms 177.697 -> 62.754` and `overlap_ms 1637.350 -> 1430.292`; `reason_bench` averaged `replay_ms 181.489 -> 61.721` and `overlap_ms 1751.572 -> 1494.834`. The measured useful-snapshot overhead is now decomposed as roughly `snapshot_copy 2.3-3.7ms`, `restore 1.1-1.4ms`, and `resync_base 15-20ms`. On the pass-clean false positive (`structured_yaml`), snapshots added only a recurrent checkpoint (`snapshot_ms ~2.7ms`) but still moved average overlap upward by about `40ms`, mostly from split/scheduling noise. Prompts with no branch hits stayed near neutral. Conclusion: recurrent-only snapshots are worth keeping, but the policy must predict suffix-reject value; raw `guard=1.0` still creates at least one false-positive snapshot in this shard.
+**evidence_update_28:**
+- claim: "Six-prompt ABBA keeps exact parity and shows positive average wall/replay deltas only on suffix-reject prompts."
+  source: `/tmp/qwen36_branch_snapshot_abba_20260506175155/summary.txt`; local parser over the summary rows
+  verified_at: 2026-05-06
+  decay_trigger: prompt suite, host load, branch threshold, snapshot min-prefix, rank/layers, gamma, or timing parser changes
+**quadrumvirate_update_28:**
+- cassandra: Useful suffix rejects should show replay reduction larger than checkpoint overhead; pass-clean snapshots should remain net-negative. ABBA matched both predictions.
+- daedalus: The next pivot is router quality, not checkpoint mechanics: classify profitable suffix-reject chunks before paying even the cheap recurrent snapshot.
+- maieutic: The cost model must include split/scheduling overhead, not only copy and replay bytes. The `structured_yaml` false positive shows a `~2.7ms` copy can still produce a larger wall penalty.
+- adversary: This is still a six-prompt, two-repeat shard. Treat it as directionally verified, not a default-policy proof.
