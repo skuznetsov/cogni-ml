@@ -7328,6 +7328,11 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     prefix_hidden_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq)
     ML::GGUF::Qwen35CPU.prepare_state_metal!(prefix_hidden_state, hp)
     mtp_prev_hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(weights, prefix_ids, 0, prefix_hidden_state)
+    # Keep the sparse reject diagnostic from charging one-time MTP Metal/BF16
+    # setup to the first rare fallback call. Model/kernels are normally hot
+    # before decode benchmarking; controller timing should reflect that.
+    mtp_hidden_topk_for_fusion(weights, mtp_k2_on_reject.not_nil!, mtp_prev_hidden.not_nil!,
+      last_token, pos_last, 2)
   end
   verifier_backup = if use_verifier_backup
                       backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
