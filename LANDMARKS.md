@@ -7958,3 +7958,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The pivot is from "copy checkpoints cheaper" to "copy only when expected saved replay exceeds copy plus verifier split cost."
 - maieutic: The hidden assumption was that a snapshot's value is binary. It is proportional to accepted prefix length and reject likelihood.
 - adversary: This is still a single-prompt structural gate. Do not promote `min_prefix=2` globally; use it as a control and gather prefix-length distributions before picking defaults.
+
+**decision_update_24:** Expected-value scoring for self-spec branch guards is now an offline tool, so the next router iteration can be data-shaped instead of threshold-shaped. `bin/qwen35_self_spec_router_trace_score.cr` reads router JSONL rows emitted by `--simulate-self-spec-gpu-pipeline-router-trace`, groups them by chunk, and scores hypothetical branch-guard thresholds plus snapshot min-prefix policies without changing runtime decode. It reports candidate chunks, guard-token rejects, pass-clean false positives, suffix rejects, snapshot/useful/wasted copy counts, saved prefix tokens, and optional `net_ms = saved_prefix_tokens * replay_token_ms - snapshots * snapshot_cost_ms`. Re-scoring the known 27B JSON-ish trace reproduced the current economics: margin threshold `1.0` selects `4/9` chunks, but only `1` has a suffix reject; `min_prefix=1` would take `3` snapshots, only `1` useful, and save only `1` prefix token. With a rough `snapshot_cost_ms=34` and `replay_token_ms=80`, that row is still negative (`net_ms=-22`). Conclusion: before building more runtime branch policies, collect router traces over a prompt suite and let this scorer identify whether any threshold/min-prefix regime has positive expected value.
+**evidence_update_24:**
+- claim: "The branch-guard expected-value scorer builds and exposes its help."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_trace_score_build crystal build --release bin/qwen35_self_spec_router_trace_score.cr -o /tmp/qwen35_trace_score`; `/tmp/qwen35_trace_score --help`
+  verified_at: 2026-05-06
+  decay_trigger: trace schema, scorer CLI, or Crystal JSON parsing changes
+- claim: "The scorer reproduces the 27B JSON-ish branch-guard economics from existing traces."
+  source: `/tmp/qwen35_trace_score --input /tmp/qwen36_router_trace_json_20260506152804.jsonl --branch-thresholds 0.5,1.0,2.0 --min-prefixes 1,2,3 --snapshot-cost-ms 34 --replay-token-ms 80`; `/tmp/qwen35_trace_score --input /tmp/qwen36_router_trace_json_branch1_20260506152955.jsonl --branch-thresholds 0.5,1.0,2.0 --min-prefixes 1,2,3 --snapshot-cost-ms 34 --replay-token-ms 80`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, trace files, cost assumptions, branch threshold list, or trace schema changes
+- claim: "The existing top2 decode regression remains clean after adding the offline scorer."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_trace_score_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: decode top2 path, build flags, or shared probe dependencies change
+**quadrumvirate_update_24:**
+- cassandra: A scorer should catch threshold overfitting before runtime changes. It immediately shows that the known JSON-ish snapshot opportunity is negative under plausible copy/replay costs.
+- daedalus: The frame shifts from "try another guard flag" to "measure expected value across trace distributions, then pick a router."
+- maieutic: The hidden assumption was that useful suffix rejects are common enough to justify branch snapshots. On the known trace, useful suffix rejects are sparse.
+- adversary: Cost parameters are assumptions, not facts. Use structural counters first, then calibrate snapshot/replay costs from same-binary runs before promoting a policy.
