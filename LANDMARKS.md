@@ -7830,3 +7830,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "MTP fallback controller" to "avoid replay with existing self-top2 first, then make MTP resident/asynchronous only for the remaining misses."
 - maieutic: The hidden assumption was that oracle self-top2 misses map directly to real pipeline misses. Real resync falsifies that scale assumption.
 - adversary: Wall timings are single-run and noisy; the robust signal is structural: actual reject count, self-top2 miss count, MTP rescue count, and MTP call tax.
+
+**decision_update_17:** The immediate speed branch should be self-top2 branch-state/chunk-major verification, not MTP-first. On the same Qwen3.6-27B JSON `gen32/gamma4` boundary from decision_update_16, existing `tree2_anywhere` produced the same `5` rejects, `4` self-top2 rescues, and `1` miss as the MTP diagnostic implied, with zero replay and overlap `4713.656ms` versus the noisy no-tree row `12884.879ms`. This is only an upper-bound/diagnostic path because it verifies accepted tokens serially. `tree2_staged=2` preserved the same rescue/miss counts but cost `6253.702ms` with `17` verifier stages and replay still present. Conclusion: build a branch-state verifier that tries the draft top2 candidate at the first mismatch while keeping accepted verifier work chunk-major; MTP should remain second-stage fallback only after self-top2 miss, and only after a resident/asynchronous path exists.
+**evidence_update_17:**
+- claim: "Real JSON rejects are mostly self-top2-rescuable, and existing tree2_anywhere proves the rescue upper bound."
+  source: `/tmp/qwen36_tree2_anywhere_json_gen32_20260506144643.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, rank/layers, gamma/schedule, tree2 verifier semantics, or branch-state implementation changes
+- claim: "Chunk staging with the current tree2_staged=2 path does not yet capture the upper-bound speed."
+  source: `/tmp/qwen36_tree2_staged2_json_gen32_20260506144812.log`
+  verified_at: 2026-05-06
+  decay_trigger: stage size, verifier scheduler, prompt, host load, or chunk-major verifier changes
+**quadrumvirate_update_17:**
+- cassandra: If most rejects are self-top2-rescuable, avoiding wrong-tail replay should dominate MTP fallback. The tree2_anywhere/staged comparison supports that.
+- daedalus: The frame shifts from "add candidate source" to "preserve verifier batching while branching at the first wrong candidate."
+- maieutic: The hidden assumption was that the existing tree2 routes were close to the desired implementation. They are not: one is serial, the other over-stages and still pays replay.
+- adversary: The no-tree baseline is noisy, so do not claim a stable speedup percentage. The robust facts are rescue/miss counts, replay elimination in anywhere, and staged verifier-stage explosion.
