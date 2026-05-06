@@ -7906,3 +7906,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The pivot is from "copy exact state at warning boundaries" to "make checkpoints cheap or avoid checkpoints unless the expected replay saving is large."
 - maieutic: The hidden assumption was that suffix replay is the dominant cost after a guard warning. The gate shows verifier split and state-copy overhead can dominate instead.
 - adversary: Keep this default-off as a falsifier/counter substrate. Do not super-fuse or tune thresholds around this implementation without repeated ABBA evidence and a cheaper checkpoint mechanism.
+
+**decision_update_21:** Preallocating the guarded-prefix snapshot state removes most allocation/prepare noise, but the branch still needs better verifier integration or routing. The snapshot path now allocates one reusable Metal-prepared `State` scratch per pipeline run and only copies into it on guard pass. This drops the narrow `guard=0.5` snapshot copy from `34.149ms` to `2.865ms` on the 27B JSON-ish gate, and keeps the hostile 9B replayless guard-token reject clean. For `guard=1.0`, the repeated full recurrent-state copies still cost `46.473ms` for `3` snapshots, but the route is no longer catastrophically worse in that run (`overlap_ms=3756.866` versus the previous no-snapshot same-binary `3751.291` reference). The remaining blocker is not allocation; it is false-positive guards plus extra guard/suffix verifier splits. Conclusion: preallocation is a useful measurement/engineering cleanup, but the next real speed branch should avoid splitting the verifier unless the guard is strong, or expose an in-verifier checkpoint without separate guard-token verification.
+**evidence_update_21:**
+- claim: "Preallocated snapshot scratch builds and keeps top2 decode regression clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_snapshot_reuse_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_snapshot_reuse_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_branch_snapshot_reuse_probe --help | grep -F -- '--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot'`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_snapshot_reuse_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: snapshot scratch allocation, state-copy semantics, build flags, or top2 decode path changes
+- claim: "Reusable snapshot scratch substantially reduces per-snapshot overhead, but does not by itself make branch guards a speed path."
+  source: `/tmp/qwen36_branch_snapshot_reuse_json_guard10_20260506154754.log`; `/tmp/qwen36_branch_snapshot_reuse_json_guard05_20260506154754.log`; `/tmp/qwen35_branch_snapshot_reuse_hostile_20260506155031.log`
+  verified_at: 2026-05-06
+  decay_trigger: host load, prompt, threshold, verifier split behavior, rank/layers, gamma, or state-copy implementation changes
+**quadrumvirate_update_21:**
+- cassandra: Removing allocation should reduce snapshot overhead but not solve false-positive guard economics. This held.
+- daedalus: The pivot is now from "make copies cheaper" to "avoid copies/splits except when a guard has high expected value."
+- maieutic: The hidden assumption was that allocation dominated snapshot cost. It dominated some cases, but repeated full recurrent-state copy and verifier splitting remain material.
+- adversary: Single-run wall remains noisy; trust structural counters and per-snapshot cost more than `plain_speedup`. Do not claim speedup from this without ABBA suite evidence.

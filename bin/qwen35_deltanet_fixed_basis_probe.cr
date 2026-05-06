@@ -7454,6 +7454,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                     else
                       nil
                     end
+  branch_guard_snapshot_scratch = if branch_guard_snapshot_enabled
+                                    snapshot = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+                                    ML::GGUF::Qwen35CPU.prepare_state_metal!(snapshot, hp)
+                                    snapshot
+                                  else
+                                    nil
+                                  end
   t_seed = Time.instant
   current_schedule_index = 0
   draft_updown_available = updown_actual_rank > 0
@@ -7997,8 +8004,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             suffix_size = verifier_tokens.size - bgi - 1
             if suffix_size > 0
               t_snapshot = Time.instant
-              snapshot = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-              ML::GGUF::Qwen35CPU.prepare_state_metal!(snapshot, hp)
+              snapshot = branch_guard_snapshot_scratch.not_nil!
               branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
               copy_verifier_state.call(snapshot, verifier_state, branch_guard_snapshot_pos)
               branch_guard_snapshot_state = snapshot
@@ -8636,8 +8642,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             target_nexts.concat(guard_nexts)
             suffix_size = verifier_tokens.size - bgi - 1
             if suffix_size > 0
-              snapshot = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-              ML::GGUF::Qwen35CPU.prepare_state_metal!(snapshot, hp)
+              snapshot = branch_guard_snapshot_scratch.not_nil!
               serial_branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
               copy_verifier_state.call(snapshot, serial_verifier_state, serial_branch_guard_snapshot_pos)
               serial_branch_guard_snapshot_state = snapshot
