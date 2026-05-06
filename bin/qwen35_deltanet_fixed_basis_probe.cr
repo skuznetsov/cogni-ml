@@ -1,5 +1,6 @@
 #!/usr/bin/env crystal
 
+require "json"
 require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
@@ -22,6 +23,8 @@ module ProbeRuntime
   @@gpu_draft_exact_refresh_prefix = 0
   @@gpu_draft_update_risk_threshold : Float64? = nil
   @@gpu_draft_update_risk_layer_threshold : Float64? = nil
+  @@self_spec_router_trace_io : IO? = nil
+  @@self_spec_router_trace_label = "main"
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -81,6 +84,22 @@ module ProbeRuntime
       raise "GPU draft update-risk layer threshold must be non-negative" if value < 0.0
     end
     @@gpu_draft_update_risk_layer_threshold = threshold
+  end
+
+  def self.self_spec_router_trace_io : IO?
+    @@self_spec_router_trace_io
+  end
+
+  def self.self_spec_router_trace_io=(io : IO?)
+    @@self_spec_router_trace_io = io
+  end
+
+  def self.self_spec_router_trace_label : String
+    @@self_spec_router_trace_label
+  end
+
+  def self.self_spec_router_trace_label=(label : String)
+    @@self_spec_router_trace_label = label
   end
 end
 
@@ -6860,6 +6879,84 @@ private def simulate_self_draft_gpu_chain_overlap_run(weights : ML::GGUF::Qwen35
   }
 end
 
+private def trace_self_spec_router_token(chunk : Int32,
+                                         index : Int32,
+                                         generated_offset : Int32,
+                                         chunk_size : Int32,
+                                         verifier_size : Int32,
+                                         draft_margin : Float64?,
+                                         proposal_margin_min : Float64,
+                                         top1_hit : Bool,
+                                         top2_hit : Bool,
+                                         second_id_available : Bool,
+                                         reject : Bool,
+                                         branch_guard_index : Int32?,
+                                         margin_guard_index : Int32?,
+                                         risk_offramp : Bool,
+                                         next_pre_submitted : Bool,
+                                         draft_updown : Bool,
+                                         rejections_before : Int32,
+                                         accepted_before : Int32)
+  return unless io = ProbeRuntime.self_spec_router_trace_io
+
+  guard_role = if bgi = branch_guard_index
+                 if index < bgi
+                   "branch_prefix"
+                 elsif index == bgi
+                   "branch_guard"
+                 else
+                   "branch_suffix"
+                 end
+               elsif gi = margin_guard_index
+                 if index < gi
+                   "margin_prefix"
+                 elsif index == gi
+                   "margin_guard"
+                 else
+                   "margin_suffix"
+                 end
+               else
+                 "none"
+               end
+
+  JSON.build(io) do |json|
+    json.object do
+      json.field "label", ProbeRuntime.self_spec_router_trace_label
+      json.field "chunk", chunk
+      json.field "index", index
+      json.field "generated_offset", generated_offset
+      json.field "chunk_size", chunk_size
+      json.field "verifier_size", verifier_size
+      json.field "final_tail_skip", index >= verifier_size
+      json.field "first_in_chunk", index == 0
+      json.field "last_in_chunk", index == chunk_size - 1
+      if margin = draft_margin
+        json.field "draft_margin", margin
+      else
+        json.field "draft_margin", nil
+      end
+      if proposal_margin_min == Float64::INFINITY
+        json.field "proposal_margin_min", nil
+      else
+        json.field "proposal_margin_min", proposal_margin_min
+      end
+      json.field "top1_hit", top1_hit
+      json.field "top2_hit", top2_hit
+      json.field "second_id_available", second_id_available
+      json.field "reject", reject
+      json.field "branch_guard_index", branch_guard_index || -1
+      json.field "margin_guard_index", margin_guard_index || -1
+      json.field "guard_role", guard_role
+      json.field "risk_offramp", risk_offramp
+      json.field "next_pre_submitted", next_pre_submitted
+      json.field "draft_updown", draft_updown
+      json.field "rejections_before", rejections_before
+      json.field "accepted_before", accepted_before
+    end
+  end
+  io << '\n'
+end
+
 private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weights,
                                                 prompt_ids : Array(Int32),
                                                 gen_tokens : Int32,
@@ -6918,7 +7015,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   exact_refresh_layer_offsets = {} of Int32 => Set(Int32)
   exact_refresh_prefix = ProbeRuntime.gpu_draft_exact_refresh_prefix
   max_gamma = schedule.max
-  tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || draft_updown_agreement_gate || mtp_k2_on_reject_enabled
+  router_trace_enabled = !ProbeRuntime.self_spec_router_trace_io.nil?
+  tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || draft_updown_agreement_gate || mtp_k2_on_reject_enabled || router_trace_enabled
 
   hp = weights.hparams
   copy_verifier_state = ->(dst : ML::GGUF::Qwen35CPU::State, src : ML::GGUF::Qwen35CPU::State, used_tokens : Int32) {
@@ -7985,16 +8083,20 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     cur_mtp_input_pos = mtp_input_pos
     rejected_index = -1
     proposal.each_with_index do |cand, i|
+      accepted_before = accepted_draft_tokens
+      rejections_before = rejections
+      second_id = tree2_enabled ? read_second_id.call(current_block, i) : -1_i32
+      margin = tree2_enabled ? read_top2_margin.call(current_block, i) : nil
+      top1_hit = cand == expected
+      top2_hit = second_id == expected
+      rejected_now = false
       exact_ids << expected
-      emitted = if cand == expected
+      emitted = if top1_hit
                   accepted_draft_tokens += 1
                   cand
                 else
-                  second_id = tree2_enabled ? read_second_id.call(current_block, i) : -1_i32
                   if tree2_enabled && !guard_rejected && !(branch_guard_resync_ready && i == branch_guard_resync_index)
-                    if margin = read_top2_margin.call(current_block, i)
-                      record_tree2_reject_margin.call(margin)
-                    end
+                    record_tree2_reject_margin.call(margin) if margin
                   end
                   if mtp_k2_on_reject_enabled && second_id != expected
                     mtp = mtp_k2_on_reject.not_nil!
@@ -8012,8 +8114,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                   rejections += 1
                   rejected = true
                   rejected_index = i
+                  rejected_now = true
                   expected
                 end
+      trace_self_spec_router_token(chunks, i, emitted_tokens, proposal.size, verifier_tokens.size,
+        margin, proposal_margin_min, top1_hit, top2_hit, second_id >= 0, rejected_now,
+        branch_guard_index, guard_index, risk_offramp, !next_block.nil?, current_block.use_updown,
+        rejections_before, accepted_before)
       correction_or_accepted << emitted
       emitted_ids << emitted
       emitted_tokens += 1
@@ -8021,13 +8128,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       pos = cycle_start_pos + i
       last_token = emitted
       pos_last = pos
-      if mtp_k2_on_reject_enabled && cand == expected && i < target_hiddens.size // hp.n_embd
+      if mtp_k2_on_reject_enabled && top1_hit && i < target_hiddens.size // hp.n_embd
         cur_mtp_prev_hidden = cur_mtp_input_hidden.not_nil!
         cur_mtp_input_hidden = target_hiddens[i * hp.n_embd, hp.n_embd]
         cur_mtp_input_token = emitted
         cur_mtp_input_pos = pos
       end
-      expected = target_nexts[i][0] if cand == expected && i < target_nexts.size
+      expected = target_nexts[i][0] if top1_hit && i < target_nexts.size
       break if rejected || emitted_tokens >= gen_tokens
     end
     controller_ms += (Time.instant - t_controller).total_milliseconds
@@ -9509,6 +9616,7 @@ simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = false
 simulate_self_spec_gpu_pipeline_route_features = false
 simulate_self_spec_gpu_pipeline_ffn_updown_route_features = false
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
+simulate_self_spec_gpu_pipeline_router_trace_path : String? = nil
 self_spec_cost_model = false
 self_spec_draft_cost = 0.0
 self_spec_verifier_cost = 0.0
@@ -9713,6 +9821,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-route-features", "Print held-out PCA residual features that can predict risky self-spec draft routes") { simulate_self_spec_gpu_pipeline_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-ffn-updown-route-features", "Print held-out FFN pca-updown reconstruction residual features for prompt-level pca-updown route risk") { simulate_self_spec_gpu_pipeline_ffn_updown_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
+  p.on("--simulate-self-spec-gpu-pipeline-router-trace=PATH", "Write JSONL self-spec router/reject-risk rows without raw token ids") { |v| simulate_self_spec_gpu_pipeline_router_trace_path = v }
   p.on("--simulate-self-spec-gpu-pipeline-suite-prompt=NAME::TEXT", "Additional eval prompt for GPU self-spec pipeline suite; main --prompt still runs first") do |v|
     add_self_spec_suite_prompt.call(v)
   end
@@ -9743,6 +9852,9 @@ raise "ranks must not be empty" if ranks.empty?
 raise "pca-iters must be positive" unless pca_iters > 0
 raise "FFN block size must be positive" unless simulate_ffn_block_size > 0
 raise "FFN block selector percentages must be in 1..100" if simulate_ffn_block_selector_percents.any? { |v| v < 1 || v > 100 }
+pipeline_router_trace_io = simulate_self_spec_gpu_pipeline_router_trace_path.try { |path| File.open(path, "w") }
+ProbeRuntime.self_spec_router_trace_io = pipeline_router_trace_io
+at_exit { pipeline_router_trace_io.try(&.close) }
 if simulate_mtp_self_draft_fusion > 0
   raise "MTP sidecar not found: #{mtp_path}" unless File.exists?(mtp_path)
   raise "--simulate-mtp-self-draft-fusion requires --simulate-logits-rank" if simulate_logit_rank.nil?
