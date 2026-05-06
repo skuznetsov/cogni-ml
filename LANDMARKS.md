@@ -7922,3 +7922,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The pivot is now from "make copies cheaper" to "avoid copies/splits except when a guard has high expected value."
 - maieutic: The hidden assumption was that allocation dominated snapshot cost. It dominated some cases, but repeated full recurrent-state copy and verifier splitting remain material.
 - adversary: Single-run wall remains noisy; trust structural counters and per-snapshot cost more than `plain_speedup`. Do not claim speedup from this without ABBA suite evidence.
+
+**decision_update_22:** History-aware branch-guard routing is now available as a default-off refinement, and it validates the "false positives after the first correction" pattern without promoting a wall-clock speed claim. `--simulate-self-spec-gpu-pipeline-tree2-branch-guard-until-reject` keeps the existing branch guard active only until the first real reject in the run; after that, the verifier falls back to the normal chunk route and avoids later low-margin pass-guard splits/snapshots. This is deliberately narrower than a learned router: it tests whether the first risky span is special in the observed 27B JSON-ish trace. The same-binary A/B on the 27B JSON-ish `gen32/gamma4/guard=1.0/snapshot` gate preserved exact parity and reduced structural waste from `4` guard hits / `3` snapshots (`90.468ms` copy time) to `1` guard hit / `1` snapshot (`34.325ms` copy time), while retaining the one useful suffix replay. The hostile 9B no-FFN smoke also preserved parity, but naturally only used one replayless guard before disabling further guards. Conclusion: run-history is a useful guard feature, but the next speed branch still needs either cheaper checkpoints or a richer expected-value router; this flag is a probe/control, not a default policy.
+**evidence_update_22:**
+- claim: "Branch-guard until-reject builds, exposes its flag, and keeps top2 decode regression clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_until_build2 crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_until_probe2 --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_branch_until_probe2 --help | grep -F -- '--simulate-self-spec-gpu-pipeline-tree2-branch-guard-until-reject'`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_until_spec2 crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: option parsing, branch-guard selection, serial paired baseline semantics, or top2 decode path changes
+- claim: "Until-reject preserves parity and removes post-reject false-positive guard work on the 27B JSON-ish gate."
+  source: `/tmp/qwen36_branch_until_json_guard10_20260506162656.log`; `/tmp/qwen36_branch_until_json_guard10_off_20260506162839.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, host load, branch threshold, snapshot implementation, rank/layers, gamma, or reject history changes
+- claim: "The hostile 9B no-FFN negative case remains exact under until-reject, but only exercises one replayless branch guard by design."
+  source: `/tmp/qwen35_branch_until_hostile_20260506162619.log`
+  verified_at: 2026-05-06
+  decay_trigger: hostile draft route, branch threshold, generated length, rank/layers, or verifier backup semantics changes
+**quadrumvirate_update_22:**
+- cassandra: After a real correction, low-margin tokens are likely to include false-positive guards. The 27B A/B supported this structural prediction.
+- daedalus: The pivot is from scalar threshold tuning to history-aware expected-value routing.
+- maieutic: The hidden assumption was that every low-margin warning has equal value. The trace says the first warning before any reject is different from later warnings after the state has already been corrected.
+- adversary: Do not claim speedup from this branch. The reliable evidence is parity plus reduced guard/snapshot counters; wall time remains dominated by verifier and host noise.

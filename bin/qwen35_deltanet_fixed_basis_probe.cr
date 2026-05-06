@@ -26,6 +26,7 @@ module ProbeRuntime
   @@self_spec_router_trace_io : IO? = nil
   @@self_spec_router_trace_label = "main"
   @@self_spec_branch_guard_snapshot = false
+  @@self_spec_branch_guard_until_reject = false
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -109,6 +110,14 @@ module ProbeRuntime
 
   def self.self_spec_branch_guard_snapshot=(enabled : Bool)
     @@self_spec_branch_guard_snapshot = enabled
+  end
+
+  def self.self_spec_branch_guard_until_reject : Bool
+    @@self_spec_branch_guard_until_reject
+  end
+
+  def self.self_spec_branch_guard_until_reject=(enabled : Bool)
+    @@self_spec_branch_guard_until_reject = enabled
   end
 end
 
@@ -7013,6 +7022,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   raise "GPU pipeline tree2 branch guard requires verifier backup" if tree2_branch_guard && !use_verifier_backup
   branch_guard_snapshot_enabled = ProbeRuntime.self_spec_branch_guard_snapshot
   raise "GPU pipeline tree2 branch guard snapshot requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_snapshot_enabled && tree2_branch_guard.nil?
+  branch_guard_until_reject = ProbeRuntime.self_spec_branch_guard_until_reject
+  raise "GPU pipeline tree2 branch guard until-reject requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_until_reject && tree2_branch_guard.nil?
   mtp_k2_on_reject_enabled = !mtp_k2_on_reject.nil?
   if mtp_k2_on_reject_enabled && (tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil?)
     raise "GPU pipeline MTP K2 reject diagnostic currently cannot combine with tree2/risk routes"
@@ -7897,11 +7908,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     end
     branch_guard_index = nil.as(Int32?)
     if branch_threshold = tree2_branch_guard
-      verifier_tokens.each_index do |i|
-        if margin = read_top2_margin.call(current_block, i)
-          if margin <= branch_threshold
-            branch_guard_index = i
-            break
+      if !branch_guard_until_reject || rejections == 0
+        verifier_tokens.each_index do |i|
+          if margin = read_top2_margin.call(current_block, i)
+            if margin <= branch_threshold
+              branch_guard_index = i
+              break
+            end
           end
         end
       end
@@ -8419,6 +8432,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   serial_exact_ids = [] of Int32
   serial_emitted_ids = [] of Int32
   serial_chunks = 0
+  serial_rejections = 0
 
   while serial_emitted_tokens < gen_tokens
     serial_chunks += 1
@@ -8467,6 +8481,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                     else
                       rejected = true
                       stage_rejected = true
+                      serial_rejections += 1
                       expected
                     end
           correction_or_accepted << emitted
@@ -8532,6 +8547,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                     cand
                   else
                     rejected = true
+                    serial_rejections += 1
                     expected
                   end
         serial_emitted_ids << emitted
@@ -8573,6 +8589,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       serial_emitted_tokens += 1
       serial_last_token = expected
       serial_pos_last = cycle_start_pos
+      serial_rejections += 1
       serial_disable_updown_after_reject.call
 
       if serial_emitted_tokens < gen_tokens
@@ -8587,11 +8604,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
     serial_branch_guard_index = nil.as(Int32?)
     if branch_threshold = tree2_branch_guard
-      verifier_tokens.each_index do |i|
-        if margin = read_top2_margin.call(serial_current_block, i)
-          if margin <= branch_threshold
-            serial_branch_guard_index = i
-            break
+      if !branch_guard_until_reject || serial_rejections == 0
+        verifier_tokens.each_index do |i|
+          if margin = read_top2_margin.call(serial_current_block, i)
+            if margin <= branch_threshold
+              serial_branch_guard_index = i
+              break
+            end
           end
         end
       end
@@ -8700,6 +8719,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                 else
                   rejected = true
                   serial_rejected_index = i
+                  serial_rejections += 1
                   expected
                 end
       correction_or_accepted << emitted
@@ -9936,6 +9956,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-margin-guard=F", "Use draft top1/top2 margin <= F to split exact verifier at the first low-margin token") { |v| simulate_self_spec_gpu_pipeline_tree2_margin_guard = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard=F", "Use margin <= F to stop before the low-margin token and resync from exact branch state on reject") { |v| simulate_self_spec_gpu_pipeline_tree2_branch_guard = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot", "After a branch guard passes, snapshot the exact guard-boundary state so suffix rejects replay from the guard boundary") { ProbeRuntime.self_spec_branch_guard_snapshot = true }
+  p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-until-reject", "Only enable branch guard before the first real reject in the run") { ProbeRuntime.self_spec_branch_guard_until_reject = true }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margin=F", "When draft top1/top2 margin <= F, do not pre-submit the next draft block before exact verification") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST", "In-process A/B list for risk-offramp thresholds; automatically includes the no-offramp baseline") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margins = parse_float_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-repeats=N", "Repeat risk-offramp A/B in ABBA order and score against median no-offramp baselines") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_repeats = v.to_i }
