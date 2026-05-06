@@ -7846,3 +7846,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "add candidate source" to "preserve verifier batching while branching at the first wrong candidate."
 - maieutic: The hidden assumption was that the existing tree2 routes were close to the desired implementation. They are not: one is serial, the other over-stages and still pays replay.
 - adversary: The no-tree baseline is noisy, so do not claim a stable speedup percentage. The robust facts are rescue/miss counts, replay elimination in anywhere, and staged verifier-stage explosion.
+
+**decision_update_18:** The first branch-state/chunk-major tree2 primitive is implemented as a default-off guard, but the selector remains the bottleneck. `--simulate-self-spec-gpu-pipeline-tree2-branch-guard=F` differs from the older margin guard by stopping before the first low-margin token: it verifies the accepted prefix only, leaves the verifier at the exact pre-token state, and on a guard reject copies that live branch state and advances the exact correction directly instead of restoring the chunk backup and replaying the accepted prefix. A hostile 9B `rank8/layers=0,2,4/draft_skip_recurrent_ffn/gen8/guard=10` smoke preserved parity with `8` rejects, `tree2_branch_guard_rejects=8`, and `tree2_branch_guard_replayless_resyncs=7` with `replay_ms=0.0`, proving the resync primitive. On a 27B JSON-ish `gen32/gamma4` gate, raw margins were not enough: `guard=2.0` hit `4` pass-only guards and missed the one real reject, while `guard=10.0` hit `9` pass-only guards and delayed draft work. Conclusion: branch-state resync is viable, but promotion requires a better reject-risk guard than scalar draft top1/top2 margin.
+**evidence_update_18:**
+- claim: "Branch guard builds, exposes its flag, and keeps top2 decode regression clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_guard_build3 crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_guard_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_branch_guard_probe --help | grep -F -- '--simulate-self-spec-gpu-pipeline-tree2-branch-guard'`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_guard_spec2 crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: branch-guard option parsing, verifier state-copy semantics, or decode top2 projection changes
+- claim: "The branch-state resync primitive eliminates replay on forced guard rejects while preserving exact greedy parity."
+  source: `/tmp/qwen35_branch_guard_hostile_minimal_20260506151725.log`
+  verified_at: 2026-05-06
+  decay_trigger: self-spec scheduler, live-state copy, hostile draft variant, rank/layers, or generated length changes
+- claim: "Raw margin threshold alone is not a sufficient selector for real 27B JSON-ish rejects."
+  source: `/tmp/qwen36_branch_guard_json_baseline_20260506150800.log`; `/tmp/qwen36_branch_guard_json_guard2_20260506150930.log`; `/tmp/qwen36_branch_guard_json_guard10_20260506151054.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, host load, rank/layers, gamma, margin distribution, or guard policy changes
+**quadrumvirate_update_18:**
+- cassandra: Branch-state resync should remove replay if the guard fires exactly at the wrong token; raw margin may mostly fire on clean low-margin tokens. Both predictions held.
+- daedalus: The frame shifts from "build branch state" to "select the branch point cheaply enough". The primitive exists; the router is now the hard part.
+- maieutic: The hidden assumption was that low top1/top2 margin identifies real rejects. The 27B gate falsifies this as a standalone rule.
+- adversary: Do not promote `tree2_branch_guard` by wall time from single noisy runs. Treat structural counters (`replayless_resyncs`, pass-only hits, missed rejects) as the reliable signal until ABBA/repeated prompt-suite timing exists.
