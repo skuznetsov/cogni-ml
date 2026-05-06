@@ -21,6 +21,7 @@ module ProbeRuntime
   @@gpu_draft_exact_refresh_offsets = [] of Int32
   @@gpu_draft_exact_refresh_prefix = 0
   @@gpu_draft_update_risk_threshold : Float64? = nil
+  @@gpu_draft_update_risk_layer_threshold : Float64? = nil
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -69,6 +70,17 @@ module ProbeRuntime
       raise "GPU draft update-risk threshold must be non-negative" if value < 0.0
     end
     @@gpu_draft_update_risk_threshold = threshold
+  end
+
+  def self.gpu_draft_update_risk_layer_threshold : Float64?
+    @@gpu_draft_update_risk_layer_threshold
+  end
+
+  def self.gpu_draft_update_risk_layer_threshold=(threshold : Float64?)
+    if value = threshold
+      raise "GPU draft update-risk layer threshold must be non-negative" if value < 0.0
+    end
+    @@gpu_draft_update_risk_layer_threshold = threshold
   end
 end
 
@@ -3699,8 +3711,8 @@ private def planned_gpu_update_risk_offsets(weights : ML::GGUF::Qwen35Weights,
                                             layer_bases : LayerBasisMap,
                                             rank : Int32,
                                             calib_count : Int32,
-                                            fallback_threshold : Float64) : NamedTuple(offsets: Array(Int32), approx_steps: Int32, fallback_steps: Int32, exact_ids: Array(Int32))
-  return {offsets: [] of Int32, approx_steps: 0, fallback_steps: 0, exact_ids: [] of Int32} if prompt_ids.empty? || gen_tokens <= 0 || layer_bases.empty?
+                                            fallback_threshold : Float64) : NamedTuple(offsets: Array(Int32), layer_offsets: Hash(Int32, Array(Int32)), approx_steps: Int32, fallback_steps: Int32, exact_ids: Array(Int32))
+  return {offsets: [] of Int32, layer_offsets: {} of Int32 => Array(Int32), approx_steps: 0, fallback_steps: 0, exact_ids: [] of Int32} if prompt_ids.empty? || gen_tokens <= 0 || layer_bases.empty?
 
   hp = weights.hparams
   max_seq = prompt_ids.size + gen_tokens + 8
@@ -3714,6 +3726,7 @@ private def planned_gpu_update_risk_offsets(weights : ML::GGUF::Qwen35Weights,
   sync_lowrank_shadow!(draft_state, exact_state, layer_bases, draft_lr_states, rank, hp)
 
   offsets = [] of Int32
+  layer_offsets = {} of Int32 => Array(Int32)
   exact_ids = [] of Int32
   token = prompt_last_token
 
@@ -3722,21 +3735,35 @@ private def planned_gpu_update_risk_offsets(weights : ML::GGUF::Qwen35Weights,
     exact_token = ML::GGUF::Qwen35CPU.forward_top1(weights, token, pos.to_i32, exact_state)[0]
     exact_ids << exact_token
 
-    fallback_before = draft_lr_states.values.sum(&.fallback_steps)
+    fallback_before = {} of Int32 => Int32
+    draft_lr_states.each { |il, lr| fallback_before[il] = lr.fallback_steps }
     logits_with_lowrank_policy(weights, token, pos.to_i32, draft_state,
       layer_bases, rank, calib_count, draft_lr_states, fallback_threshold, nil, true)
-    fallback_after = draft_lr_states.values.sum(&.fallback_steps)
-    offsets << offset if fallback_after > fallback_before
+    any_fallback = false
+    draft_lr_states.each do |il, lr|
+      if lr.fallback_steps > (fallback_before[il]? || 0)
+        any_fallback = true
+        (layer_offsets[il] ||= [] of Int32) << offset
+      end
+    end
+    offsets << offset if any_fallback
 
     token = exact_token
   end
 
+  layer_offsets.each { |_, values| values.uniq!.sort! }
+
   {
     offsets:        offsets.uniq.sort,
+    layer_offsets:  layer_offsets,
     approx_steps:   draft_lr_states.values.sum(&.approx_steps),
     fallback_steps: draft_lr_states.values.sum(&.fallback_steps),
     exact_ids:      exact_ids,
   }
+end
+
+private def format_layer_offsets(layer_offsets : Hash(Int32, Array(Int32))) : String
+  layer_offsets.keys.sort.map { |il| "#{il}:#{layer_offsets[il].join(',')}" }.join(";")
 end
 
 private def top_k_indices(v : Array(Float32), k : Int32) : Array(Int32)
@@ -6878,6 +6905,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   raise "GPU pipeline schedule values must be positive" if schedule.any? { |v| v <= 0 }
   exact_refresh_interval = ProbeRuntime.gpu_draft_exact_refresh_interval
   exact_refresh_offsets = ProbeRuntime.gpu_draft_exact_refresh_offsets.dup
+  exact_refresh_layer_offsets = {} of Int32 => Set(Int32)
   exact_refresh_prefix = ProbeRuntime.gpu_draft_exact_refresh_prefix
   max_gamma = schedule.max
   tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || draft_updown_agreement_gate
@@ -6904,14 +6932,25 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   state_size_bytes = (h_v * s * rank).to_i64 * sizeof(Float32)
   full_state_size = h_v * s * s
   lowrank_set = Set(Int32).new(layer_bases.keys)
-  empty_lowrank_set = Set(Int32).new
   if threshold = ProbeRuntime.gpu_draft_update_risk_threshold
     plan = planned_gpu_update_risk_offsets(weights, prompt_ids, gen_tokens,
       layer_bases, rank, prompt_ids.size - 1, threshold.not_nil!)
     exact_refresh_offsets = (exact_refresh_offsets + plan[:offsets]).uniq.sort
     total_steps = plan[:approx_steps] + plan[:fallback_steps]
     approx_rate = total_steps > 0 ? (100.0 * plan[:approx_steps] / total_steps) : 0.0
-    puts "self_spec_gpu_update_risk_plan layers=#{lowrank_set.to_a.sort.join(',')} rank=#{rank} threshold=#{threshold} fallback_score=#{ProbeRuntime.fallback_score_mode} gen_tokens=#{gen_tokens} offsets=#{plan[:offsets].join(',')} offset_count=#{plan[:offsets].size} approx_steps=#{plan[:approx_steps]} fallback_steps=#{plan[:fallback_steps]} approx_rate=#{approx_rate.round(2)}% exact_refresh_offsets=#{exact_refresh_offsets.join(',')} exact_ids=#{plan[:exact_ids].join(',')}"
+    puts "self_spec_gpu_update_risk_plan layers=#{lowrank_set.to_a.sort.join(',')} rank=#{rank} threshold=#{threshold} fallback_score=#{ProbeRuntime.fallback_score_mode} gen_tokens=#{gen_tokens} offsets=#{plan[:offsets].join(',')} offset_count=#{plan[:offsets].size} layer_offsets=#{format_layer_offsets(plan[:layer_offsets])} approx_steps=#{plan[:approx_steps]} fallback_steps=#{plan[:fallback_steps]} approx_rate=#{approx_rate.round(2)}% exact_refresh_offsets=#{exact_refresh_offsets.join(',')} exact_ids=#{plan[:exact_ids].join(',')}"
+  end
+  if threshold = ProbeRuntime.gpu_draft_update_risk_layer_threshold
+    plan = planned_gpu_update_risk_offsets(weights, prompt_ids, gen_tokens,
+      layer_bases, rank, prompt_ids.size - 1, threshold.not_nil!)
+    plan[:layer_offsets].each do |il, offsets|
+      offsets.each { |offset| (exact_refresh_layer_offsets[offset] ||= Set(Int32).new) << il }
+    end
+    total_steps = plan[:approx_steps] + plan[:fallback_steps]
+    approx_rate = total_steps > 0 ? (100.0 * plan[:approx_steps] / total_steps) : 0.0
+    layer_steps = plan[:layer_offsets].values.sum(&.size)
+    layer_plan = exact_refresh_layer_offsets.keys.sort.map { |offset| "#{offset}:#{exact_refresh_layer_offsets[offset].to_a.sort.join(',')}" }.join(";")
+    puts "self_spec_gpu_update_risk_layer_plan layers=#{lowrank_set.to_a.sort.join(',')} rank=#{rank} threshold=#{threshold} fallback_score=#{ProbeRuntime.fallback_score_mode} gen_tokens=#{gen_tokens} layer_offsets=#{format_layer_offsets(plan[:layer_offsets])} layer_refresh_steps=#{layer_steps} approx_steps=#{plan[:approx_steps]} fallback_steps=#{plan[:fallback_steps]} approx_rate=#{approx_rate.round(2)}% exact_refresh_layer_offsets=#{layer_plan} exact_ids=#{plan[:exact_ids].join(',')}"
   end
   shared_basis_bufs = {} of Int32 => ML::MetalBuffer
   layer_bases.each do |il, bs|
@@ -7025,10 +7064,17 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         current_cmd = ML::GGUF::Qwen35Metal.decode_wave_command_buffer("self_spec_gpu_pipeline_draft")
       end
       draft_offset = pos_start + j - prompt_pos_last
-      exact_refresh = (exact_refresh_interval > 0 && (draft_offset % exact_refresh_interval) == 0) || draft_offset < exact_refresh_prefix || exact_refresh_offsets.includes?(draft_offset)
-      active_lowrank_set = exact_refresh ? empty_lowrank_set : lowrank_set
-      if exact_refresh
-        lowrank_set.each do |il|
+      global_exact_refresh = (exact_refresh_interval > 0 && (draft_offset % exact_refresh_interval) == 0) || draft_offset < exact_refresh_prefix || exact_refresh_offsets.includes?(draft_offset)
+      exact_refresh_layers = Set(Int32).new
+      if global_exact_refresh
+        lowrank_set.each { |il| exact_refresh_layers << il }
+      elsif layer_set = exact_refresh_layer_offsets[draft_offset]?
+        layer_set.each { |il| exact_refresh_layers << il if lowrank_set.includes?(il) }
+      end
+      active_lowrank_set = Set(Int32).new
+      lowrank_set.each { |il| active_lowrank_set << il unless exact_refresh_layers.includes?(il) }
+      unless exact_refresh_layers.empty?
+        exact_refresh_layers.each do |il|
           unless full_current[il]? == true
             ssm_buf = state.layers[il].ssm_state_buf || raise "GPU draft exact refresh missing full SSM state buffer for layer #{il}"
             ML::GGUF::Qwen35Metal.lowrank_reconstruct_state_append(lr_bufs[il], shared_basis_bufs[il],
@@ -7069,16 +7115,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       draft_submit_ms += (Time.instant - t_submit).total_milliseconds if attr_collect
       wba.try(&.mark("draft", "submit_#{label}_#{j}", t_submit, Time.instant))
       submissions << sub
-      if exact_refresh
-        lowrank_set.each do |il|
-          ssm_buf = state.layers[il].ssm_state_buf || raise "GPU draft exact refresh missing updated SSM state buffer for layer #{il}"
-          lr_bufs[il] = ML::GGUF::Qwen35Metal.lowrank_project_state_append(ssm_buf, shared_basis_bufs[il],
-            h_k, h_v, s, rank, current_cmd)
-          full_current[il] = true
-        end
-      else
-        lowrank_set.each { |il| full_current[il] = false }
+      exact_refresh_layers.each do |il|
+        ssm_buf = state.layers[il].ssm_state_buf || raise "GPU draft exact refresh missing updated SSM state buffer for layer #{il}"
+        lr_bufs[il] = ML::GGUF::Qwen35Metal.lowrank_project_state_append(ssm_buf, shared_basis_bufs[il],
+          h_k, h_v, s, rank, current_cmd)
+        full_current[il] = true
       end
+      active_lowrank_set.each { |il| full_current[il] = false }
       cur_token_buf = sub.top1_id_buf.not_nil!
     end
     t_commit = Time.instant
@@ -9338,6 +9381,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-draft-exact-refresh-prefix=N", "Exact-refresh the first N generated draft waves, then resume low-rank DN for later waves; 0 disables") { |v| ProbeRuntime.gpu_draft_exact_refresh_prefix = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-exact-refresh-offsets=LIST", "0-based generated-token offsets where draft waves should exact-refresh low-rank DN layers; default empty") { |v| ProbeRuntime.gpu_draft_exact_refresh_offsets = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-draft-update-risk-threshold=F", "Plan exact-refresh offsets from the CPU teacher-forced fallback score (raw/decayed/update via --simulate-fallback-score) without per-token GPU readback") { |v| ProbeRuntime.gpu_draft_update_risk_threshold = v.to_f64 }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-update-risk-layer-threshold=F", "Plan per-layer exact-refresh offsets from the CPU teacher-forced fallback score without per-token GPU readback") { |v| ProbeRuntime.gpu_draft_update_risk_layer_threshold = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-no-backup", "Skip verifier rollback backup on the hot full-accept path; rebuild exact state from emitted ids on reject") { simulate_self_spec_gpu_pipeline_no_backup = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn", "Use the research lowrank-no-ffn draft route for GPU self-spec proposals; exact verifier still enforces parity") { simulate_self_spec_gpu_pipeline_draft_no_ffn = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn-layers=LIST", "Skip FFN only for the listed low-rank recurrent draft layers; enables hybrid draft bodies") { |v| simulate_self_spec_gpu_pipeline_draft_no_ffn_layers = parse_int_list(v) }

@@ -7746,3 +7746,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "find one threshold" to "change selector granularity" or "make the proposal body cheaper"; scalar threshold tuning is now a local optimum.
 - maieutic: The hidden assumption was that teacher-forced fallback offsets map cleanly to free-run chunk acceptance. Evidence says the interface is valid, but the policy is too coarse and prompt/timing dependent.
 - adversary: The wall timings are host-noisy single rows, so do not overfit milliseconds. The robust signal is structural: offset counts versus exact work, exact-id oracle divergence, and parity preservation.
+
+**decision_update_12:** Per-layer update-risk exact refresh is implemented and narrows exact work, but it is still not a speed/quality breakthrough. `--simulate-self-spec-gpu-pipeline-draft-update-risk-layer-threshold=F` leaves the global token-level planner unchanged and instead maps teacher-forced fallback events to `offset -> layer set`, so one risky low-rank layer can be exact-refreshed while other selected layers stay low-rank. The Metal draft scheduler now computes `active_lowrank_set = lowrank_set - exact_refresh_layers` per generated offset and maintains `full_current` per layer after partial refresh. On schema `gen16`, `t=0.7` planned only layer `0` at offsets `2,3,4,11,13` and kept `100%` acceptance/parity; `t=0.6` planned `11` layer refresh steps and `t=0.8` planned one layer refresh step, both clean. However, the same-binary schema baseline was already clean and faster within host-noisy wall timing (`607.785 ms` overlap baseline versus `614.328+ ms` with layer refresh), while a code prompt still rejected at `t=0.6` despite a layer-0 refresh at offset `7`. Conclusion: layer-specific update risk is useful instrumentation and cheaper than global token refresh, but `update=max(beta*residual)` remains an exact-work selector, not a candidate-correctness predictor.
+**evidence_update_12:**
+- claim: "The per-layer update-risk bridge builds and exposes the new option."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_update_risk_layer_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_update_risk_layer_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_update_risk_layer_probe --help | rg 'update-risk'`
+  verified_at: 2026-05-06
+  decay_trigger: option parsing, per-layer exact-refresh scheduling, or low-rank state freshness tracking changes
+- claim: "Layer-specific refresh is structurally cheaper than global token refresh on the schema threshold curve."
+  source: `/tmp/qwen35_update_risk_layer_schema_t07_20260506_140423.log`; `/tmp/qwen35_update_risk_layer_schema_curve_20260506_140504_t0.6.log`; `/tmp/qwen35_update_risk_layer_schema_curve_20260506_140504_t0.8.log`
+  verified_at: 2026-05-06
+  decay_trigger: schema prompt, selected layers/rank, fallback score, exact-refresh path, or generated length changes
+- claim: "Layer-specific update-risk does not fix the broader route economics or candidate-quality problem."
+  source: `/tmp/qwen35_update_risk_layer_schema_baseline_20260506_140614.log`; `/tmp/qwen35_update_risk_layer_suite_smoke_20260506_140723.log`; `/tmp/qwen35_update_risk_layer_code_t06_20260506_140834.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt suite, host load, selected layers/rank, fallback score threshold, or verifier scheduler changes
+**quadrumvirate_update_12:**
+- cassandra: The narrower selector should reduce exact-work overhead, but it may not touch the actual token mismatch. That prediction held.
+- daedalus: The frame shifts again from "which DN update is expensive/risky?" to "which proposal token is likely wrong before we pay the chunk?"
+- maieutic: The hidden assumption was that DN update risk and next-token correctness are tightly coupled. The code prompt falsifies this: one layer refresh did not remove the reject.
+- adversary: Keep this default-off. It is a diagnostic and future substrate for richer routers, not a route to super-fuse or promote.
