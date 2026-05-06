@@ -7798,3 +7798,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: This pivots from single-row oracle anecdotes to reusable suite evidence before any controller/kernel work.
 - maieutic: The hidden assumption is that MTP K2 rescue survives prompt-class changes. The tool now makes that assumption cheap to test.
 - adversary: Suite rows are still oracle accounting. The next runtime controller must separately measure MTP call scheduling, verifier/replay tax, and plain decode comparison.
+
+**decision_update_15:** The first one-process 27B MTP/self-draft fusion suite supports a sparse mismatch-only policy, but also says MTP should not be always-on. With Qwen3.6-27B Q4_K_M, `layers=0,2,4,6,8,10/rank8/K2`, and main/code/json/reason/structured prompts, `gen24` aggregate self-top2 resolved `108/120` positions while `self_top2_first_mtp_k2_on_miss` resolved `118/120`, calling MTP only on the `12/120` self-top2 misses and rescuing `10/12`. At `gen32`, self-top2 resolved `140/160`; mismatch-only MTP K2 resolved `157/160`, called MTP on `20/160`, and rescued `17/20`. The rescue mass concentrated in the JSON prompt (`12/32 -> 29/32` at `gen32`), while main/code/reason/structured were already `100%` self-top2 and would call MTP zero times. Conclusion: the next real controller should treat MTP K2 as a sparse fallback after self-top2/risk failure, not as a general token-by-token proposer. This remains oracle route-pressure evidence, not a wall-clock speed claim.
+**evidence_update_15:**
+- claim: "MTP K2 on self-top2 misses improves aggregate oracle coverage in a 27B prompt suite while keeping MTP call rate sparse."
+  source: `/tmp/qwen36_mtp_fusion_suite_gen24_k2_20260506142443.log`; `/tmp/qwen36_mtp_fusion_suite_gen32_k2_20260506142714.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt suite, generated length, selected layers/rank, MTP sidecar, self-top2 capture semantics, or fusion oracle output schema changes
+- claim: "The main nontrivial rescue class in this gate is JSON; easy spans should not pay MTP."
+  source: `/tmp/qwen36_mtp_fusion_suite_gen32_k2_20260506142714.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt distribution, tokenization, rank/layers, or controller feature changes
+**quadrumvirate_update_15:**
+- cassandra: The predicted failure of always-on MTP held: most prompt classes had no self-top2 misses, so MTP would add work without rescue value.
+- daedalus: The frame shifts from "add another candidate source" to "classify when the candidate source is needed."
+- maieutic: The hidden assumption was that MTP rescue value is broadly distributed. The suite says it is clustered by prompt/span, which makes sparse routing the core problem.
+- adversary: These are exact-position oracle rows without runtime resync, replay, or queue overlap. The next promotion gate must be a real fail-closed controller measured against plain decode and existing tree2.
