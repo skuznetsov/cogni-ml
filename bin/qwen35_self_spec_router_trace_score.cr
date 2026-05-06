@@ -10,14 +10,18 @@ require "option_parser"
 input_paths = [] of String
 thresholds = [0.5, 1.0, 2.0]
 min_prefixes = [1, 2, 3, 4]
+suffix_thresholds = [Float64::INFINITY]
 snapshot_cost_ms = 0.0
 replay_token_ms = 0.0
 
 OptionParser.parse(ARGV) do |p|
-  p.banner = "Usage: qwen35_self_spec_router_trace_score --input trace.jsonl [--input ...] [--branch-thresholds LIST] [--min-prefixes LIST]"
+  p.banner = "Usage: qwen35_self_spec_router_trace_score --input trace.jsonl [--input ...] [--branch-thresholds LIST] [--min-prefixes LIST] [--suffix-thresholds LIST]"
   p.on("--input PATH", "Router trace JSONL from --simulate-self-spec-gpu-pipeline-router-trace; can be repeated") { |v| input_paths << v }
   p.on("--branch-thresholds LIST", "Draft top1/top2 margin thresholds to score (default: 0.5,1.0,2.0)") { |v| thresholds = v.split(',').map(&.strip).reject(&.empty?).map(&.to_f64) }
   p.on("--min-prefixes LIST", "Snapshot min-prefix candidates to score (default: 1,2,3,4)") { |v| min_prefixes = v.split(',').map(&.strip).reject(&.empty?).map(&.to_i).uniq.sort }
+  p.on("--suffix-thresholds LIST", "Only snapshot if the post-guard suffix has a margin <= threshold; use inf for no gate (default: inf)") do |v|
+    suffix_thresholds = v.split(',').map(&.strip).reject(&.empty?).map { |raw| raw.downcase == "inf" ? Float64::INFINITY : raw.to_f64 }.uniq.sort
+  end
   p.on("--snapshot-cost-ms F", "Optional per-snapshot cost for net_ms scoring") { |v| snapshot_cost_ms = v.to_f64 }
   p.on("--replay-token-ms F", "Optional saved-prefix replay cost per token for net_ms scoring") { |v| replay_token_ms = v.to_f64 }
   p.on("-h", "--help", "Show help") do
@@ -29,6 +33,7 @@ end
 abort "at least one --input is required" if input_paths.empty?
 abort "--branch-thresholds must not be empty" if thresholds.empty?
 abort "--min-prefixes must contain positive integers" if min_prefixes.empty? || min_prefixes.any? { |v| v <= 0 }
+abort "--suffix-thresholds must not be empty" if suffix_thresholds.empty?
 abort "--snapshot-cost-ms must be non-negative" if snapshot_cost_ms < 0.0
 abort "--replay-token-ms must be non-negative" if replay_token_ms < 0.0
 
@@ -57,6 +62,7 @@ class Score
   property snapshots = 0
   property useful_snapshots = 0
   property wasted_snapshots = 0
+  property suffix_gate_skips = 0
   property saved_prefix_tokens = 0
   property max_saved_prefix = 0
   property post_reject_candidates = 0
@@ -122,10 +128,12 @@ input_paths.each_with_index do |path, path_index|
   end
 end
 
-scores = {} of {Float64, Int32} => Score
+scores = {} of {Float64, Int32, Float64} => Score
 thresholds.each do |threshold|
   min_prefixes.each do |min_prefix|
-    scores[{threshold, min_prefix}] = Score.new
+    suffix_thresholds.each do |suffix_threshold|
+      scores[{threshold, min_prefix, suffix_threshold}] = Score.new
+    end
   end
 end
 
@@ -146,47 +154,69 @@ groups.values.each do |rows|
   thresholds.each do |threshold|
     guard_index = rows.find { |row| row.index < verifier_size && (m = row.draft_margin) && m <= threshold }.try(&.index)
     min_prefixes.each do |min_prefix|
-      score = scores[{threshold, min_prefix}]
-      score.chunks += 1
-      next unless bgi = guard_index
+      suffix_thresholds.each do |suffix_threshold|
+        score = scores[{threshold, min_prefix, suffix_threshold}]
+        score.chunks += 1
+        next unless bgi = guard_index
 
-      score.candidates += 1
-      score.post_reject_candidates += 1 if rows.first.rejections_before > 0
+        score.candidates += 1
+        score.post_reject_candidates += 1 if rows.first.rejections_before > 0
 
-      if r = reject_index
-        if r < bgi
-          score.prefix_rejects += 1
-        elsif r == bgi
-          score.guard_rejects += 1
+        suffix_rows = rows.select { |row| row.index > bgi && row.index < verifier_size }
+        suffix_min_margin = suffix_rows.compact_map(&.draft_margin).min?
+        suffix_gate_ok = suffix_threshold.infinite? || (!!suffix_min_margin && suffix_min_margin.not_nil! <= suffix_threshold)
+
+        if r = reject_index
+          if r < bgi
+            score.prefix_rejects += 1
+          elsif r == bgi
+            score.guard_rejects += 1
+          else
+            score.guard_passes += 1
+            score.pass_suffix_reject += 1
+            prefix_len = bgi + 1
+            suffix_size = verifier_size - bgi - 1
+            if suffix_size > 0 && prefix_len >= min_prefix
+              if suffix_gate_ok
+                score.add_snapshot(prefix_len, true)
+              else
+                score.suffix_gate_skips += 1
+              end
+            end
+          end
         else
           score.guard_passes += 1
-          score.pass_suffix_reject += 1
+          score.pass_clean += 1
           prefix_len = bgi + 1
           suffix_size = verifier_size - bgi - 1
-          score.add_snapshot(prefix_len, true) if suffix_size > 0 && prefix_len >= min_prefix
+          if suffix_size > 0 && prefix_len >= min_prefix
+            if suffix_gate_ok
+              score.add_snapshot(prefix_len, false)
+            else
+              score.suffix_gate_skips += 1
+            end
+          end
         end
-      else
-        score.guard_passes += 1
-        score.pass_clean += 1
-        prefix_len = bgi + 1
-        suffix_size = verifier_size - bgi - 1
-        score.add_snapshot(prefix_len, false) if suffix_size > 0 && prefix_len >= min_prefix
       end
     end
   end
 end
 
-puts "self_spec_router_trace_score inputs=#{input_paths.size} chunks=#{total_chunks} rows=#{rows_total} chunks_with_reject=#{chunks_with_reject} thresholds=#{thresholds.join(',')} min_prefixes=#{min_prefixes.join(',')} snapshot_cost_ms=#{snapshot_cost_ms} replay_token_ms=#{replay_token_ms}"
+suffix_threshold_labels = suffix_thresholds.map { |v| v.infinite? ? "inf" : v.to_s }
+puts "self_spec_router_trace_score inputs=#{input_paths.size} chunks=#{total_chunks} rows=#{rows_total} chunks_with_reject=#{chunks_with_reject} thresholds=#{thresholds.join(',')} min_prefixes=#{min_prefixes.join(',')} suffix_thresholds=#{suffix_threshold_labels.join(',')} snapshot_cost_ms=#{snapshot_cost_ms} replay_token_ms=#{replay_token_ms}"
 
 thresholds.each do |threshold|
   min_prefixes.each do |min_prefix|
-    score = scores[{threshold, min_prefix}]
-    next if score.chunks == 0
+    suffix_thresholds.each do |suffix_threshold|
+      score = scores[{threshold, min_prefix, suffix_threshold}]
+      next if score.chunks == 0
 
-    candidate_rate = score.chunks > 0 ? 100.0 * score.candidates / score.chunks : 0.0
-    useful_rate = score.snapshots > 0 ? 100.0 * score.useful_snapshots / score.snapshots : 0.0
-    avg_saved = score.useful_snapshots > 0 ? score.saved_prefix_tokens.to_f64 / score.useful_snapshots : 0.0
-    net_ms = score.saved_prefix_tokens * replay_token_ms - score.snapshots * snapshot_cost_ms
-    puts "branch_guard_value threshold=#{threshold} min_prefix=#{min_prefix} chunks=#{score.chunks} candidates=#{score.candidates} candidate_rate=#{candidate_rate.round(2)}% prefix_rejects=#{score.prefix_rejects} guard_rejects=#{score.guard_rejects} guard_passes=#{score.guard_passes} pass_clean=#{score.pass_clean} pass_suffix_reject=#{score.pass_suffix_reject} post_reject_candidates=#{score.post_reject_candidates} snapshots=#{score.snapshots} useful_snapshots=#{score.useful_snapshots} wasted_snapshots=#{score.wasted_snapshots} useful_snapshot_rate=#{useful_rate.round(2)}% saved_prefix_tokens=#{score.saved_prefix_tokens} avg_saved_prefix=#{avg_saved.round(3)} max_saved_prefix=#{score.max_saved_prefix} net_ms=#{net_ms.round(3)}"
+      candidate_rate = score.chunks > 0 ? 100.0 * score.candidates / score.chunks : 0.0
+      useful_rate = score.snapshots > 0 ? 100.0 * score.useful_snapshots / score.snapshots : 0.0
+      avg_saved = score.useful_snapshots > 0 ? score.saved_prefix_tokens.to_f64 / score.useful_snapshots : 0.0
+      net_ms = score.saved_prefix_tokens * replay_token_ms - score.snapshots * snapshot_cost_ms
+      suffix_label = suffix_threshold.infinite? ? "inf" : suffix_threshold.to_s
+      puts "branch_guard_value threshold=#{threshold} min_prefix=#{min_prefix} suffix_threshold=#{suffix_label} chunks=#{score.chunks} candidates=#{score.candidates} candidate_rate=#{candidate_rate.round(2)}% prefix_rejects=#{score.prefix_rejects} guard_rejects=#{score.guard_rejects} guard_passes=#{score.guard_passes} pass_clean=#{score.pass_clean} pass_suffix_reject=#{score.pass_suffix_reject} post_reject_candidates=#{score.post_reject_candidates} snapshots=#{score.snapshots} useful_snapshots=#{score.useful_snapshots} wasted_snapshots=#{score.wasted_snapshots} suffix_gate_skips=#{score.suffix_gate_skips} useful_snapshot_rate=#{useful_rate.round(2)}% saved_prefix_tokens=#{score.saved_prefix_tokens} avg_saved_prefix=#{avg_saved.round(3)} max_saved_prefix=#{score.max_saved_prefix} net_ms=#{net_ms.round(3)}"
+    end
   end
 end

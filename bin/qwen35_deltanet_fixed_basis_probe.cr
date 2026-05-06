@@ -28,6 +28,7 @@ module ProbeRuntime
   @@self_spec_branch_guard_snapshot = false
   @@self_spec_branch_guard_until_reject = false
   @@self_spec_branch_guard_snapshot_min_prefix = 1
+  @@self_spec_branch_guard_snapshot_suffix_threshold : Float64? = nil
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -128,6 +129,17 @@ module ProbeRuntime
   def self.self_spec_branch_guard_snapshot_min_prefix=(value : Int32)
     raise "branch guard snapshot min prefix must be positive" if value <= 0
     @@self_spec_branch_guard_snapshot_min_prefix = value
+  end
+
+  def self.self_spec_branch_guard_snapshot_suffix_threshold : Float64?
+    @@self_spec_branch_guard_snapshot_suffix_threshold
+  end
+
+  def self.self_spec_branch_guard_snapshot_suffix_threshold=(threshold : Float64?)
+    if value = threshold
+      raise "branch guard snapshot suffix threshold must be non-negative" if value < 0.0
+    end
+    @@self_spec_branch_guard_snapshot_suffix_threshold = threshold
   end
 end
 
@@ -7033,6 +7045,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   branch_guard_snapshot_enabled = ProbeRuntime.self_spec_branch_guard_snapshot
   raise "GPU pipeline tree2 branch guard snapshot requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_snapshot_enabled && tree2_branch_guard.nil?
   branch_guard_snapshot_min_prefix = ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix
+  branch_guard_snapshot_suffix_threshold = ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold
   branch_guard_until_reject = ProbeRuntime.self_spec_branch_guard_until_reject
   raise "GPU pipeline tree2 branch guard until-reject requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_until_reject && tree2_branch_guard.nil?
   mtp_k2_on_reject_enabled = !mtp_k2_on_reject.nil?
@@ -7342,6 +7355,28 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       end
     else
       nil
+    end
+  }
+  branch_guard_snapshot_suffix_allowed = ->(block : GpuDraftBlock, suffix_start : Int32, verifier_size : Int32) {
+    if threshold = branch_guard_snapshot_suffix_threshold
+      threshold_value = threshold.not_nil!
+      suffix_end = Math.min(verifier_size, block.submissions.size) - 1
+      if suffix_start > suffix_end
+        false
+      else
+        allowed = false
+        suffix_start.upto(suffix_end) do |i|
+          if margin = read_top2_margin.call(block, i)
+            if margin <= threshold_value
+              allowed = true
+              break
+            end
+          end
+        end
+        allowed
+      end
+    else
+      true
     end
   }
 
@@ -8059,7 +8094,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             wba.try(&.mark("verifier", "branch_guard_token_#{chunks}", t_verify_guard, Time.instant))
 
             suffix_size = verifier_tokens.size - bgi - 1
-            if suffix_size > 0 && bgi + 1 >= branch_guard_snapshot_min_prefix
+            if suffix_size > 0 && bgi + 1 >= branch_guard_snapshot_min_prefix && branch_guard_snapshot_suffix_allowed.call(current_block, bgi + 1, verifier_tokens.size)
               t_snapshot = Time.instant
               snapshot = branch_guard_snapshot_scratch.not_nil!
               branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
@@ -8082,6 +8117,19 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                 verifier_tokens_count += suffix_tokens.size
               end
               wba.try(&.mark("verifier", "branch_guard_suffix_#{chunks}", t_verify_suffix, Time.instant))
+            elsif suffix_size > 0
+              t_verify_suffix = Time.instant
+              suffix_tokens = verifier_tokens[bgi + 1, suffix_size]
+              suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi + 1, verifier_state)
+              target_nexts.concat(suffix_nexts)
+              dt_verify_suffix = (Time.instant - t_verify_suffix).total_milliseconds
+              verifier_ms += dt_verify_suffix
+              if attr_collect
+                verifier_prefill_ms += dt_verify_suffix
+                verifier_chunks += 1
+                verifier_tokens_count += suffix_tokens.size
+              end
+              wba.try(&.mark("verifier", "branch_guard_suffix_no_snapshot_#{chunks}", t_verify_suffix, Time.instant))
             end
           else
             suffix_size = verifier_tokens.size - bgi
@@ -8706,11 +8754,15 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             guard_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, [guard_cand], cycle_start_pos + bgi, serial_verifier_state)
             target_nexts.concat(guard_nexts)
             suffix_size = verifier_tokens.size - bgi - 1
-            if suffix_size > 0 && bgi + 1 >= branch_guard_snapshot_min_prefix
+            if suffix_size > 0 && bgi + 1 >= branch_guard_snapshot_min_prefix && branch_guard_snapshot_suffix_allowed.call(serial_current_block, bgi + 1, verifier_tokens.size)
               snapshot = branch_guard_snapshot_scratch.not_nil!
               serial_branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
               copy_verifier_recurrent_state.call(snapshot, serial_verifier_state, serial_branch_guard_snapshot_pos)
               serial_branch_guard_snapshot_state = snapshot
+              suffix_tokens = verifier_tokens[bgi + 1, suffix_size]
+              suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi + 1, serial_verifier_state)
+              target_nexts.concat(suffix_nexts)
+            elsif suffix_size > 0
               suffix_tokens = verifier_tokens[bgi + 1, suffix_size]
               suffix_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, cycle_start_pos + bgi + 1, serial_verifier_state)
               target_nexts.concat(suffix_nexts)
@@ -10005,6 +10057,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard=F", "Use margin <= F to stop before the low-margin token and resync from exact branch state on reject") { |v| simulate_self_spec_gpu_pipeline_tree2_branch_guard = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot", "After a branch guard passes, snapshot the exact guard-boundary state so suffix rejects replay from the guard boundary") { ProbeRuntime.self_spec_branch_guard_snapshot = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-min-prefix=N", "Snapshot branch-guard pass state only after at least N accepted guard-prefix tokens") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix = v.to_i }
+  p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-suffix-threshold=F", "Only snapshot a passed branch guard if the remaining suffix contains a draft margin <= F") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-until-reject", "Only enable branch guard before the first real reject in the run") { ProbeRuntime.self_spec_branch_guard_until_reject = true }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margin=F", "When draft top1/top2 margin <= F, do not pre-submit the next draft block before exact verification") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST", "In-process A/B list for risk-offramp thresholds; automatically includes the no-offramp baseline") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margins = parse_float_list(v) }
