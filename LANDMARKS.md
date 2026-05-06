@@ -7942,3 +7942,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The pivot is from scalar threshold tuning to history-aware expected-value routing.
 - maieutic: The hidden assumption was that every low-margin warning has equal value. The trace says the first warning before any reject is different from later warnings after the state has already been corrected.
 - adversary: Do not claim speedup from this branch. The reliable evidence is parity plus reduced guard/snapshot counters; wall time remains dominated by verifier and host noise.
+
+**decision_update_23:** Guarded-prefix snapshots now have a default-preserving expected-value filter, and the first gate confirms that short-prefix snapshots are the wrong target for full recurrent-state copies. `--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-min-prefix=N` controls when a pass-guard boundary is actually copied; the default `N=1` preserves prior snapshot behavior, while larger values require at least `N` accepted guard-prefix tokens before paying the copy. On the 27B JSON-ish `gen32/gamma4/guard=1.0/snapshot/until-reject` gate, `min_prefix=2` preserved parity and skipped the observed `bgi=0` snapshot entirely (`tree2_branch_guard_snapshot_copies=0`, `snapshot_ms=0`, `suffix_replays=0`). The controller then used normal backup replay (`replay_ms=142.491`) instead of paying a full-state copy to save only one prefix token. Conclusion: the branch-state snapshot policy should be value-aware. Full recurrent snapshots may still be useful for long accepted prefixes, but `bgi=0` pass-guards should not snapshot unless the checkpoint mechanism becomes much cheaper.
+**evidence_update_23:**
+- claim: "Snapshot min-prefix builds, exposes its flag, and keeps top2 decode regression clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_snapshot_min_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_snapshot_min_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_snapshot_min_probe --help | grep -F -- '--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-min-prefix'`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_snapshot_min_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: option parsing, branch snapshot policy, verifier state copy, or top2 decode path changes
+- claim: "On the 27B JSON-ish gate, `min_prefix=2` preserves exact parity while avoiding the one-token-saving snapshot."
+  source: `/tmp/qwen36_snapshot_min2_json_guard10_20260506163757.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, host load, guard threshold, branch index distribution, snapshot implementation, rank/layers, or gamma changes
+**quadrumvirate_update_23:**
+- cassandra: A short-prefix snapshot should be a local optimization trap because full recurrent-state copy costs more than one-token replay. The gate supported this.
+- daedalus: The pivot is from "copy checkpoints cheaper" to "copy only when expected saved replay exceeds copy plus verifier split cost."
+- maieutic: The hidden assumption was that a snapshot's value is binary. It is proportional to accepted prefix length and reject likelihood.
+- adversary: This is still a single-prompt structural gate. Do not promote `min_prefix=2` globally; use it as a control and gather prefix-length distributions before picking defaults.
