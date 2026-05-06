@@ -7694,3 +7694,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot away from more exact-refresh scheduling. Either skip self-spec when the span is likely clean/low-upside, or make the approximate proposal materially cheaper.
 - maieutic: The hidden assumption was that keeping the early state exact would buy a long cheap low-rank tail. In gen64 schema, the tail was already accepted without prefix, so the prefix was unnecessary overhead.
 - adversary: The wall numbers are noisy single runs, but the structural counters are enough: accept/reject changes are prompt-dependent and `plain_speedup` stays below `1.0`.
+
+**decision_update_9:** The current nearest-neighbor FFN block-predicted sparse draft is not ready for Metal fusion. Rechecking 9B `layers=0,2`, rank64, `gen16`, schedule `4`, code/reason/schema with `lowrank-ffn-blocktop-10`, `lowrank-ffn-blockpred-10/20`, and `lowrank-ffn-pca-updown-16` shows no acceptance improvement over baseline. Code was already clean and stayed clean; `pca-updown16` was the only small draft-ms improvement (`744.058 -> 722.103 ms`). Reason baseline was clean, but all cheap variants introduced one reject (`78.95%` accept). Schema baseline already had one reject and all cheap variants kept the same reject while increasing dense-probe draft cost. Conclusion: do not build a sparse FFN Metal kernel for the current nearest-neighbor/blocktop selector. The next cheap-body attempt needs a genuinely cheap pre-FFN selector with better decision-boundary objective, or a broader pca-updown route that improves wall without introducing rejects.
+**evidence_update_9:**
+- claim: "Current blocktop/blockpred FFN cheap-body variants do not improve acceptance or dense-probe wall enough to justify Metal sparse FFN fusion."
+  source: `/tmp/qwen35_cheap_body_blockpred_suite_20260506_131913.log`
+  verified_at: 2026-05-06
+  decay_trigger: FFN block selector training, prompt suite, layer/rank selection, cheap draft wall policy, or sparse Metal implementation changes
+**quadrumvirate_update_9:**
+- cassandra: The predicted risk was objective mismatch: selecting activation-energy blocks does not guarantee next-token acceptance.
+- daedalus: Pivot from dense block masking to an actual pre-FFN selector or pca-updown body; otherwise the probe cannot become a speed path.
+- maieutic: The fact that blockpred preserves parity is not enough. It must either reduce draft cost or improve acceptance; this gate shows neither.
+- adversary: This is still a short prompt-local probe, but it is enough to avoid a broad sparse-kernel rewrite before the selector improves.
