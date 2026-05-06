@@ -7782,3 +7782,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The branch pivots from "refresh exact state to improve the same candidate" to "augment candidate set only when self-draft candidate mass is missing."
 - maieutic: The hidden assumption was that self top2 captures most low-rank mistakes. The 27B stress gate falsifies it: MTP K2 contributes eight extra rescues.
 - adversary: This is oracle accounting, not real runtime. A real controller must include MTP call overhead, verifier/replay effects, and prompt-suite ABBA before any speed claim.
+
+**decision_update_14:** MTP/self-draft fusion now has one-process suite tooling for prompt-class gates. `--simulate-mtp-self-draft-fusion-suite-prompt=NAME::TEXT` and `--simulate-mtp-self-draft-fusion-suite-prompts-file=PATH` reuse the already loaded target model and MTP sidecar, rebuild prompt-local projected-K bases for each suite prompt, and print compact suite rows for the main fusion summary plus `self_top2_only` and `self_top2_first_mtp_k2_on_miss` route-pressure policies. This is infrastructure for the mismatch-only MTP K2 branch from decision_update_13; it is not a runtime speed claim. The first 27B smoke with main France plus code suite, `gen4/K2`, emitted both main and suite rows and preserved the existing top2 regression spec.
+**evidence_update_14:**
+- claim: "MTP/self-draft fusion suite flags build, appear in help, and emit suite route-policy rows."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_fusion_suite_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_mtp_fusion_suite_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `/tmp/qwen35_mtp_fusion_suite_probe --help | rg 'mtp-self-draft-fusion-suite'`; `/tmp/qwen36_mtp_fusion_suite_smoke_20260506_142101.log`
+  verified_at: 2026-05-06
+  decay_trigger: option parsing, fusion oracle output schema, MTP sidecar loading, or prompt-local basis construction changes
+- claim: "The top2 decode regression spec still passes with the suite tooling."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_mtp_fusion_suite_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: Metal top2 projection, bridge link flags, or decode top2 spec changes
+**quadrumvirate_update_14:**
+- cassandra: Without suite tooling, MTP K2 rescue evidence can overfit one prompt/load; one-process suite support is the smallest falsifier for prompt-class stability.
+- daedalus: This pivots from single-row oracle anecdotes to reusable suite evidence before any controller/kernel work.
+- maieutic: The hidden assumption is that MTP K2 rescue survives prompt-class changes. The tool now makes that assumption cheap to test.
+- adversary: Suite rows are still oracle accounting. The next runtime controller must separately measure MTP call scheduling, verifier/replay tax, and plain decode comparison.

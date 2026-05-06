@@ -9198,6 +9198,7 @@ simulate_mtp_self_draft_fusion = 0
 simulate_mtp_self_draft_fusion_topk = 5
 simulate_mtp_self_draft_fusion_updown_rank : Int32? = nil
 simulate_mtp_self_draft_fusion_updown_layers = [] of Int32
+simulate_mtp_self_draft_fusion_suite_prompts = [] of NamedTuple(name: String, text: String)
 simulate_self_spec_gpu_pipeline = 0
 simulate_self_spec_gpu_pipeline_gammas = [] of Int32
 simulate_self_spec_gpu_pipeline_schedules = [] of Array(Int32)
@@ -9251,6 +9252,18 @@ add_self_spec_suite_prompt = ->(raw : String) {
   end
   safe_name = name.empty? ? "suite#{simulate_self_spec_gpu_pipeline_suite_prompts.size + 1}" : name.gsub(/[^A-Za-z0-9_.-]/, "_")
   simulate_self_spec_gpu_pipeline_suite_prompts << {name: safe_name, text: text}
+}
+
+add_mtp_self_draft_fusion_suite_prompt = ->(raw : String) {
+  if sep = raw.index("::")
+    name = raw[0, sep]
+    text = raw[(sep + 2)..]
+  else
+    name = "suite#{simulate_mtp_self_draft_fusion_suite_prompts.size + 1}"
+    text = raw
+  end
+  safe_name = name.empty? ? "suite#{simulate_mtp_self_draft_fusion_suite_prompts.size + 1}" : name.gsub(/[^A-Za-z0-9_.-]/, "_")
+  simulate_mtp_self_draft_fusion_suite_prompts << {name: safe_name, text: text}
 }
 
 add_block_surrogate_suite_prompt = ->(raw : String) {
@@ -9373,6 +9386,16 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-mtp-self-draft-fusion-topk=K", "MTP top-K width for --simulate-mtp-self-draft-fusion (default: 5)") { |v| simulate_mtp_self_draft_fusion_topk = v.to_i }
   p.on("--simulate-mtp-self-draft-fusion-updown=R", "Use resident FFN pca-updown rank R in the self-draft side of the MTP fusion probe") { |v| simulate_mtp_self_draft_fusion_updown_rank = v.to_i }
   p.on("--simulate-mtp-self-draft-fusion-updown-layers=LIST", "Apply MTP fusion pca-updown only to the listed low-rank recurrent draft layers") { |v| simulate_mtp_self_draft_fusion_updown_layers = parse_int_list(v) }
+  p.on("--simulate-mtp-self-draft-fusion-suite-prompt=NAME::TEXT", "Additional eval prompt for MTP/self-draft fusion suite; main --prompt still runs first") do |v|
+    add_mtp_self_draft_fusion_suite_prompt.call(v)
+  end
+  p.on("--simulate-mtp-self-draft-fusion-suite-prompts-file=PATH", "Read MTP/self-draft fusion suite prompts from UTF-8 lines: NAME::TEXT or TEXT") do |path|
+    File.each_line(path) do |line|
+      raw = line.strip
+      next if raw.empty? || raw.starts_with?("#")
+      add_mtp_self_draft_fusion_suite_prompt.call(raw)
+    end
+  end
   p.on("--simulate-self-spec-gpu-pipeline=N", "Run real fixed-gamma self-spec block pipeline: draft[k+1] on lane queue while verifier validates draft[k]") { |v| simulate_self_spec_gpu_pipeline = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-gammas=LIST", "Run real GPU self-spec pipeline for comma-separated fixed gammas in one model load") { |v| simulate_self_spec_gpu_pipeline_gammas = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-schedule=LIST", "Run real GPU self-spec pipeline with a repeating gamma schedule that resets on reject, e.g. 4,4,8") { |v| simulate_self_spec_gpu_pipeline_schedules << parse_int_list(v) }
@@ -10027,6 +10050,43 @@ if rank = simulate_logit_rank
       puts "mtp_self_draft_route_policy policy=self_top2_first_mtp_topk_on_miss layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{updown_note} steps=#{steps} mtp_width=#{fusion[:mtp_topk]} resolved_hits=#{fusion[:union_topk_with_self_top2_hits]} resolved_rate=#{pct_count(fusion[:union_topk_with_self_top2_hits], steps).round(2)} unresolved=#{steps - fusion[:union_topk_with_self_top2_hits]} mtp_calls=#{self_top2_unresolved} mtp_call_rate=#{pct_count(self_top2_unresolved, steps).round(2)} mtp_rescue_hits=#{self_top2_mtp_topk_rescues} mtp_rescue_rate=#{pct_count(self_top2_mtp_topk_rescues, self_top2_unresolved).round(2)} attempts=#{self_top2_mtp_topk_attempts_total} avg_attempts=#{(self_top2_mtp_topk_attempts_total.to_f64 / steps).round(3)} modeled_mtp_ms=#{self_top2_mismatch_mtp_ms.round(3)} saved_mtp_ms=#{self_top2_mismatch_saved_ms.round(3)} note=oracle_policy_pressure_exact_positions_not_resyncing_wall_runtime"
       fusion[:rows].each do |row|
         puts "mtp_self_draft_fusion_step i=#{row[:index]} exact=#{row[:exact]} self=#{row[:self_id]} self_second=#{row[:self_second_id]} mtp_rank=#{row[:mtp_rank]} self_hit=#{row[:self_hit]} self_top2_hit=#{row[:self_top2_hit]} mtp_hit=#{row[:mtp_hit]} mtp_k2_hit=#{row[:mtp_k2_hit]} union_hit=#{row[:union_hit]} union_k2_hit=#{row[:union_k2_hit]} agreement=#{row[:agreement]} union_size=#{row[:union_size]} union_k2_size=#{row[:union_k2_size]} self_first_attempts=#{row[:self_first_attempts]} mtp_first_attempts=#{row[:mtp_first_attempts]}"
+      end
+      simulate_mtp_self_draft_fusion_suite_prompts.each do |suite_prompt|
+        suite_token_ids = token_ids_for_prompt(tok, suite_prompt[:text], tokens_limit)
+        suite_calib_count = Math.min(calib_tokens, suite_token_ids.size - 1)
+        raise "MTP/self-draft fusion suite prompt #{suite_prompt[:name]} needs at least one held-out token" unless suite_calib_count > 0 && suite_calib_count < suite_token_ids.size
+        suite_layer_bases = {} of Int32 => BasisSet
+        sorted_simulate_logit_layers.each do |il|
+          vectors = recurrent_k_vectors_for_prompt(weights, suite_token_ids, il)
+          suite_layer_bases[il] = vectors.map do |head_vectors|
+            build_basis(head_vectors[0, suite_calib_count], max_rank, basis_mode, pca_iters)
+          end
+        end
+        suite_fusion = simulate_mtp_self_draft_fusion_run(weights, mtp, suite_token_ids, suite_calib_count, simulate_mtp_self_draft_fusion,
+          suite_layer_bases, rank, simulate_mtp_self_draft_fusion_topk, simulate_mtp_self_draft_fusion_updown_rank,
+          ffn_updown_adapters, fusion_updown_layer_set)
+        suite_steps = suite_fusion[:steps]
+        suite_rows = suite_fusion[:rows]
+        suite_mtp_extra_hits = suite_fusion[:union_hits] - suite_fusion[:self_hits]
+        suite_self_top2_unresolved = suite_steps - suite_fusion[:self_top2_hits]
+        suite_mtp_k2_width = Math.min(2, suite_fusion[:mtp_topk])
+        suite_self_top2_attempts_total = suite_rows.sum { |row| row[:self_hit] ? 1 : 2 }
+        suite_self_top2_mtp_k2_attempts_total = suite_rows.sum do |row|
+          if row[:self_hit]
+            1
+          elsif row[:self_top2_hit]
+            2
+          else
+            2 + (row[:mtp_k2_hit] ? row[:mtp_rank] : suite_mtp_k2_width)
+          end
+        end
+        suite_self_top2_mtp_k2_rescues = suite_rows.count { |row| !row[:self_top2_hit] && row[:mtp_k2_hit] }
+        suite_self_top2_mismatch_mtp_ms = suite_fusion[:mtp_ms] * suite_self_top2_unresolved.to_f64 / suite_steps
+        suite_self_top2_mismatch_saved_ms = suite_fusion[:mtp_ms] - suite_self_top2_mismatch_mtp_ms
+        suite_updown_note = suite_fusion[:draft_updown_rank] > 0 ? " draft_pca_updown_rank=#{suite_fusion[:draft_updown_rank]} draft_pca_updown_layers=#{simulate_mtp_self_draft_fusion_updown_layers.empty? ? "all" : simulate_mtp_self_draft_fusion_updown_layers.join(',')}" : ""
+        puts "mtp_self_draft_fusion_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{suite_updown_note} steps=#{suite_steps} mtp_topk=#{suite_fusion[:mtp_topk]} self_hits=#{suite_fusion[:self_hits]} self_rate=#{pct_count(suite_fusion[:self_hits], suite_steps).round(2)} mtp_hits=#{suite_fusion[:mtp_hits]} mtp_rate=#{pct_count(suite_fusion[:mtp_hits], suite_steps).round(2)} union_hits=#{suite_fusion[:union_hits]} union_rate=#{pct_count(suite_fusion[:union_hits], suite_steps).round(2)} mtp_extra_hits=#{suite_mtp_extra_hits} self_top2_hits=#{suite_fusion[:self_top2_hits]} self_top2_rate=#{pct_count(suite_fusion[:self_top2_hits], suite_steps).round(2)} union_k2_hits=#{suite_fusion[:union_k2_hits]} union_k2_rate=#{pct_count(suite_fusion[:union_k2_hits], suite_steps).round(2)} agreement=#{suite_fusion[:agreement]} agreement_hits=#{suite_fusion[:agreement_hits]} agreement_false=#{suite_fusion[:agreement_false]} self_chain_ms=#{suite_fusion[:self_chain_ms].round(3)} mtp_ms=#{suite_fusion[:mtp_ms].round(3)} exact_ms=#{suite_fusion[:self_exact_ms].round(3)}"
+        puts "mtp_self_draft_route_policy_suite name=#{suite_prompt[:name]} policy=self_top2_only layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{suite_updown_note} steps=#{suite_steps} resolved_hits=#{suite_fusion[:self_top2_hits]} resolved_rate=#{pct_count(suite_fusion[:self_top2_hits], suite_steps).round(2)} unresolved=#{suite_self_top2_unresolved} attempts=#{suite_self_top2_attempts_total} avg_attempts=#{(suite_self_top2_attempts_total.to_f64 / suite_steps).round(3)} mtp_calls=0 modeled_mtp_ms=0.0"
+        puts "mtp_self_draft_route_policy_suite name=#{suite_prompt[:name]} policy=self_top2_first_mtp_k2_on_miss layers=#{simulate_logit_layers.join(',')} rank=#{rank}#{suite_updown_note} steps=#{suite_steps} mtp_width=#{suite_mtp_k2_width} resolved_hits=#{suite_fusion[:union_k2_hits]} resolved_rate=#{pct_count(suite_fusion[:union_k2_hits], suite_steps).round(2)} unresolved=#{suite_steps - suite_fusion[:union_k2_hits]} mtp_calls=#{suite_self_top2_unresolved} mtp_call_rate=#{pct_count(suite_self_top2_unresolved, suite_steps).round(2)} mtp_rescue_hits=#{suite_self_top2_mtp_k2_rescues} mtp_rescue_rate=#{pct_count(suite_self_top2_mtp_k2_rescues, suite_self_top2_unresolved).round(2)} attempts=#{suite_self_top2_mtp_k2_attempts_total} avg_attempts=#{(suite_self_top2_mtp_k2_attempts_total.to_f64 / suite_steps).round(3)} modeled_mtp_ms=#{suite_self_top2_mismatch_mtp_ms.round(3)} saved_mtp_ms=#{suite_self_top2_mismatch_saved_ms.round(3)} note=oracle_policy_pressure_exact_positions_not_resyncing_wall_runtime"
       end
     end
     draft_no_ffn_layer_set = simulate_self_spec_gpu_pipeline_draft_no_ffn_layers.empty? ? nil : Set(Int32).new(simulate_self_spec_gpu_pipeline_draft_no_ffn_layers)
