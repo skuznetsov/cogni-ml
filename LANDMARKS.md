@@ -7678,3 +7678,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from sparse point refresh to state-horizon scheduling: exact-refresh early, then allow low-rank tail only after the state trajectory stabilizes.
 - maieutic: The apparent win still pays exact DN on most of a 16-token sample. It is a quality-boundary finding until tested on longer generations where the approximate tail can amortize the prefix.
 - adversary: This is one schema prompt under host-noisy wall timing. Next gate must use longer `gen=32/64` and code/reason/schema suite before treating prefix length as a policy.
+
+**decision_update_8:** Longer gates refute exact-refresh prefix as a default speed lever. On the 9B `gen32` code/reason/schema suite, `prefix=11` helped only the schema row: code stayed at `93.94%` accept and got slower (`1429.260 -> 1904.712 ms` overlap), reason stayed at `88.57%` accept and got slightly slower (`4374.526 -> 4432.282 ms`), while schema improved from one reject to clean (`88.57% -> 100%`, `3536.865 -> 2370.218 ms`). Even on schema, refresh-every-step was faster in that run (`2085.620 ms`), showing timing/order noise and that prefix is not a robust economics win. A focused schema `gen64` check then had a clean baseline already (`100%` accept); prefix11 gave only a small self-spec overlap improvement (`4430.908 -> 4213.992 ms`) and refresh1 regressed (`4544.200 ms`). All rows remained below plain exact (`plain_speedup < 1`). Conclusion: exact-refresh prefix is a useful quality/recovery diagnostic for early-drift regimes, not the breakthrough. The next deployable route should avoid entering self-spec on low-upside spans or make the proposal body cheaper; adding more exact DN refresh only erodes the draft advantage.
+**evidence_update_8:**
+- claim: "Gen32 code/reason/schema suite shows prefix11 is prompt-dependent and only rescues the schema row."
+  source: `/tmp/qwen35_exact_refresh_prefix_suite_gen32_20260506_130650.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt suite, generation length, host load, prefix semantics, layer/rank choice, or verifier scheduling changes
+- claim: "Schema gen64 does not show prefix amortization as a default speed route; baseline is already clean and all self-spec variants remain slower than plain exact."
+  source: `/tmp/qwen35_exact_refresh_schema_gen64_20260506_131334.log`
+  verified_at: 2026-05-06
+  decay_trigger: schema prompt, generation length, route cleanliness, timing boundary, or exact decode baseline changes
+**quadrumvirate_update_8:**
+- cassandra: The predicted amortization did not materialize robustly; prefix helps quality only when there is an early reject to remove.
+- daedalus: Pivot away from more exact-refresh scheduling. Either skip self-spec when the span is likely clean/low-upside, or make the approximate proposal materially cheaper.
+- maieutic: The hidden assumption was that keeping the early state exact would buy a long cheap low-rank tail. In gen64 schema, the tail was already accepted without prefix, so the prefix was unnecessary overhead.
+- adversary: The wall numbers are noisy single runs, but the structural counters are enough: accept/reject changes are prompt-dependent and `plain_speedup` stays below `1.0`.
