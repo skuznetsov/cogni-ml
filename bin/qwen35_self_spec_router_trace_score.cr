@@ -79,6 +79,35 @@ class Score
   end
 end
 
+class PrefixSuffixScore
+  property passes = 0
+  property pass_clean = 0
+  property pass_suffix_reject = 0
+  property snapshots = 0
+  property useful_snapshots = 0
+  property wasted_snapshots = 0
+  property saved_prefix_tokens = 0
+
+  def add_pass(prefix_len : Int32, suffix_reject : Bool, snapshot : Bool)
+    @passes += 1
+    if suffix_reject
+      @pass_suffix_reject += 1
+    else
+      @pass_clean += 1
+    end
+
+    return unless snapshot
+
+    @snapshots += 1
+    if suffix_reject
+      @useful_snapshots += 1
+      @saved_prefix_tokens += prefix_len
+    else
+      @wasted_snapshots += 1
+    end
+  end
+end
+
 def j_s(obj : JSON::Any, key : String, fallback : String = "") : String
   value = obj[key]?
   value ? value.as_s : fallback
@@ -136,6 +165,7 @@ thresholds.each do |threshold|
     end
   end
 end
+prefix_suffix_scores = Hash({Float64, Int32, Float64}, PrefixSuffixScore).new { |h, k| h[k] = PrefixSuffixScore.new }
 
 total_chunks = 0
 chunks_with_reject = 0
@@ -153,6 +183,31 @@ groups.values.each do |rows|
 
   thresholds.each do |threshold|
     guard_index = rows.find { |row| row.index < verifier_size && (m = row.draft_margin) && m <= threshold }.try(&.index)
+    if bgi = guard_index
+      suffix_size = verifier_size - bgi - 1
+      if suffix_size > 0
+        suffix_rows = rows.select { |row| row.index > bgi && row.index < verifier_size }
+        suffix_min_margin = suffix_rows.compact_map(&.draft_margin).min?
+        prefix_len = bgi + 1
+        suffix_reject = false
+        guard_pass = false
+        if r = reject_index
+          if r > bgi
+            suffix_reject = true
+            guard_pass = true
+          end
+        else
+          guard_pass = true
+        end
+
+        if guard_pass
+          suffix_thresholds.each do |suffix_threshold|
+            suffix_gate_ok = !suffix_threshold.infinite?.nil? || (!!suffix_min_margin && suffix_min_margin.not_nil! <= suffix_threshold)
+            prefix_suffix_scores[{threshold, prefix_len, suffix_threshold}].add_pass(prefix_len, suffix_reject, suffix_gate_ok)
+          end
+        end
+      end
+    end
     min_prefixes.each do |min_prefix|
       suffix_thresholds.each do |suffix_threshold|
         score = scores[{threshold, min_prefix, suffix_threshold}]
@@ -219,4 +274,15 @@ thresholds.each do |threshold|
       puts "branch_guard_value threshold=#{threshold} min_prefix=#{min_prefix} suffix_threshold=#{suffix_label} chunks=#{score.chunks} candidates=#{score.candidates} candidate_rate=#{candidate_rate.round(2)}% prefix_rejects=#{score.prefix_rejects} guard_rejects=#{score.guard_rejects} guard_passes=#{score.guard_passes} pass_clean=#{score.pass_clean} pass_suffix_reject=#{score.pass_suffix_reject} post_reject_candidates=#{score.post_reject_candidates} snapshots=#{score.snapshots} useful_snapshots=#{score.useful_snapshots} wasted_snapshots=#{score.wasted_snapshots} suffix_gate_skips=#{score.suffix_gate_skips} useful_snapshot_rate=#{useful_rate.round(2)}% saved_prefix_tokens=#{score.saved_prefix_tokens} avg_saved_prefix=#{avg_saved.round(3)} max_saved_prefix=#{score.max_saved_prefix} net_ms=#{net_ms.round(3)}"
     end
   end
+end
+
+prefix_suffix_scores.keys.sort_by { |key| {key[0], key[1], key[2].infinite? ? Float64::INFINITY : key[2]} }.each do |key|
+  threshold, prefix_len, suffix_threshold = key
+  score = prefix_suffix_scores[key]
+  next if score.passes == 0
+
+  useful_rate = score.snapshots > 0 ? 100.0 * score.useful_snapshots / score.snapshots : 0.0
+  net_ms = score.saved_prefix_tokens * replay_token_ms - score.snapshots * snapshot_cost_ms
+  suffix_label = suffix_threshold.infinite? ? "inf" : suffix_threshold.to_s
+  puts "branch_guard_prefix_suffix_value threshold=#{threshold} prefix_len=#{prefix_len} suffix_threshold=#{suffix_label} passes=#{score.passes} pass_clean=#{score.pass_clean} pass_suffix_reject=#{score.pass_suffix_reject} snapshots=#{score.snapshots} useful_snapshots=#{score.useful_snapshots} wasted_snapshots=#{score.wasted_snapshots} useful_snapshot_rate=#{useful_rate.round(2)}% saved_prefix_tokens=#{score.saved_prefix_tokens} net_ms=#{net_ms.round(3)}"
 end

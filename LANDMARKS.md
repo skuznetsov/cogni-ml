@@ -8074,3 +8074,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next frame is an expected-value router, not another raw threshold. Snapshot value depends on prefix length, suffix risk, reject history, and measured checkpoint/replay costs.
 - maieutic: The hidden assumption was that eliminating wasted snapshots is enough for promotion. It improves structural quality, but the wall objective also requires beating ungated snapshots on useful rows.
 - adversary: This remains a six-prompt, two-repeat shard with high host timing variance. Keep the suffix gate opt-in until `gen32/64` or a larger prompt suite shows positive min-delta against both baselines.
+
+**decision_update_31:** The first `gen32` expected-value trace changes the branch-snapshot router shape from a single threshold to a prefix-conditioned policy. I ran the same six-prompt 27B shard at `gen32/gamma4`, rank8 early6, with `branch_guard=1.0` and router JSONL enabled. All six wall rows preserved parity; the trace contained `52` chunks, `192` rows, and `6` reject chunks. `bin/qwen35_self_spec_router_trace_score.cr` now emits `branch_guard_prefix_suffix_value` rows so prefix length and suffix risk can be scored independently. Combined `gen12+gen32` scoring shows the current zero-waste policy (`threshold=1.0`, `min_prefix=3`, `suffix_threshold=2.0`) captures the two older `prefix_len=3` useful snapshots (`saved_prefix_tokens=6`) but misses a clean `prefix_len=2`, `suffix_threshold<=1.0` opportunity (`saved_prefix_tokens=2`, zero wasted snapshots). A naive global relaxation to `min_prefix=2`, `suffix_threshold=2.0` adds wasted snapshots. Conclusion: the next runtime policy should be prefix-conditioned, for example `prefix_len>=3 -> suffix<=2.0` plus `prefix_len==2 -> suffix<=1.0`, and must be ABBA-gated before default promotion.
+**evidence_update_31:**
+- claim: "The prefix/suffix scorer builds and identifies zero-waste prefix-conditioned bins on combined `gen12+gen32` traces."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prefix_suffix_score_build crystal build --release bin/qwen35_self_spec_router_trace_score.cr -o /tmp/qwen35_trace_score_prefix_suffix`; `/tmp/qwen35_trace_score_prefix_suffix --input ... --branch-thresholds 1.0,2.0 --min-prefixes 1,2,3 --suffix-thresholds 0.5,1.0,2.0,inf --snapshot-cost-ms 3 --replay-token-ms 62`; `/tmp/qwen36_branch_trace_suite2_gen12_gen32_prefix_suffix_score.txt`
+  verified_at: 2026-05-06
+  decay_trigger: trace schema, scorer semantics, prompt suite, rank/layers, gamma, branch thresholds, or checkpoint/replay cost calibration changes
+- claim: "The `gen32` trace shard preserves parity on all six prompt rows and gives a longer-horizon expected-value sample."
+  source: `/tmp/qwen36_branch_trace_suite2_gen32_20260506192003`
+  verified_at: 2026-05-06
+  decay_trigger: prompt suite, model file, host load, generated length, rank/layers, gamma, or self-spec pipeline controller changes
+**quadrumvirate_update_31:**
+- cassandra: Longer generation should expose different guard-prefix positions. It did: a clean `prefix_len=2` opportunity appears at `gen32`, while `prefix_len=1` remains noisy and waste-prone.
+- daedalus: The pivot is from scalar thresholds to a small decision table keyed by prefix length and suffix risk.
+- maieutic: The assumption that `min_prefix=3` is generally safe hides real shorter-prefix wins. The safer invariant is expected value per prefix bin, not a fixed prefix cutoff.
+- adversary: This is still trace economics, not wall-speed proof. Runtime promotion requires ABBA against current `min_prefix3/suffix2`, ungated snapshot, and nosnap.
