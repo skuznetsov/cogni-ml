@@ -7994,3 +7994,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifts from "checkpoint suffix rejects" to "first make sparse guard-token rejects cheap and reliable; only then revisit snapshots."
 - maieutic: The hidden assumption was that snapshot-worthy suffix rejects are common. The small shard did not support that.
 - adversary: Four prompts are not enough for promotion. The branch guard should remain opt-in until a larger trace shard plus ABBA wall timing shows positive aggregate value.
+
+**decision_update_26:** A second 27B trace shard found the first repeatable niche where guarded-prefix snapshots have positive structural value: long-prefix suffix rejects. The shard used six prompts (`structured_yaml`, `structured_sql`, `math_matrix`, `chat_story`, `reason_bench`, `repeat_json`) with `gen12/gamma4`, rank8, and early6 layers. The scorer saw `18` chunks, `72` rows, and `2` chunks with real rejects. Unlike the first shard, both reject chunks were suffix rejects after three accepted guard-prefix tokens. With the rough same-era cost model (`snapshot_cost_ms=34`, `replay_token_ms=80`), threshold `1.0` plus `min_prefix=3` scored `3` candidates, `2` useful snapshots, `1` wasted snapshot, `6` saved prefix tokens, and `net_ms=378`; threshold `4.0` plus `min_prefix=3` scored only `1` snapshot, `1` useful, `0` wasted, `3` saved prefix tokens, and `net_ms=206`. Focused runtime A/B on the two predicted prompts preserved parity and confirmed the mechanism: `structured_sql` snapshot-min-prefix replay dropped from `186.530ms` baseline to `64.988ms` with `1` snapshot (`2.779ms`) and `1` suffix replay; `reason_bench` dropped from `180.865ms` to `64.220ms` with `1` snapshot (`3.020ms`) and `1` suffix replay. Wall-clock improved on both focused runs (`overlap_ms 1878.401 -> 1483.952` and `1881.924 -> 1471.219`), but the paired `plain_exact_ms` varied enough that this remains a branch-local structural claim, not a promoted default speed policy. Conclusion: snapshots are not broadly refuted; they are valuable only when a router predicts a pass-guard followed by a long enough suffix reject. Next speed work should build a better pre-submit router and/or a cheaper checkpoint; do not tune raw margin alone.
+**evidence_update_26:**
+- claim: "The broader six-prompt 27B trace shard contains two snapshot-worthy long-prefix suffix rejects."
+  source: `/tmp/qwen35_branch_trace_suite2_20260506171103`; `/tmp/qwen35_trace_score --input /tmp/qwen35_branch_trace_suite2_20260506171103/*.jsonl --branch-thresholds 0.5,1.0,2.0,4.0 --min-prefixes 1,2,3,4 --snapshot-cost-ms 34 --replay-token-ms 80`
+  verified_at: 2026-05-06
+  decay_trigger: prompt shard, generated length, trace schema, rank/layers, gamma, branch thresholds, snapshot/replay cost calibration, or margin distribution changes
+- claim: "On `structured_sql`, `guard=1.0/snapshot/min_prefix=3` preserves parity and replays only the suffix token instead of the full chunk replay."
+  source: `/tmp/qwen36_branch_snapshot_sql_ab_20260506172515/baseline.log`; `/tmp/qwen36_branch_snapshot_sql_ab_20260506172515/snap3.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, host load, branch snapshot implementation, rank/layers, gamma, or verifier backup semantics changes
+- claim: "On `reason_bench`, `guard=1.0/snapshot/min_prefix=3` preserves parity and replays only the suffix token instead of the full chunk replay."
+  source: `/tmp/qwen36_branch_snapshot_reason_ab_20260506172959/baseline.log`; `/tmp/qwen36_branch_snapshot_reason_ab_20260506172959/snap3.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt, host load, branch snapshot implementation, rank/layers, gamma, or verifier backup semantics changes
+**quadrumvirate_update_26:**
+- cassandra: The first shard suggested snapshots were mostly waste; the second shard shows the conditional pattern: snapshot value appears when the accepted guard prefix is long enough before a suffix reject.
+- daedalus: The correct frame is not "snapshot or no snapshot" but "checkpoint expected value = reject probability * saved replay tokens - copy/split cost."
+- maieutic: The weak assumption was that raw low margin alone identifies a profitable branch point. The trace says prefix length, clean-pass false positives, prior reject history, and prompt regime must be part of the router.
+- adversary: The trace shard is still small and focused A/B runs are single-shot. Keep the feature opt-in; require a larger suite or ABBA timing before changing defaults.
