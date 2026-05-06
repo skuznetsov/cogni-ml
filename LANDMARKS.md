@@ -7706,3 +7706,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from dense block masking to an actual pre-FFN selector or pca-updown body; otherwise the probe cannot become a speed path.
 - maieutic: The fact that blockpred preserves parity is not enough. It must either reduce draft cost or improve acceptance; this gate shows neither.
 - adversary: This is still a short prompt-local probe, but it is enough to avoid a broad sparse-kernel rewrite before the selector improves.
+
+**decision_update_10:** Resident FFN `pca-updown` has a measurable but currently too-small GPU pipeline signal. With external calibration prompts, unconditional `pca-updown16` on layers `0,2` improved an easy main prompt (`overlap_ms 604.038 -> 571.331`, parity/accept clean), but reason and schema adversaries turned it into reject storms (`77.78%` and `54.17%` accept) and worse wall. The same-boundary lowrank/updown agreement gate is refuted as a cheap safety guard: it added `~264-465 ms` probe cost and still allowed the reason reject. A controller that starts lowrank, enables `pca-updown` only after an exact full-accept chunk with `min_margin=1.0`, and disables it after reject was safe in ABBA over main/reason/schema (`100%` accept/parity), but the effect was only `+1.26%` mean overlap delta with `+0.04%` minimum and `10` pca-updown chunks across `6` candidate rows. Conclusion: do not super-fuse this pca-updown route yet. Keep the margin/fallback controller as an opt-in building block, but the next speed branch needs a stronger cheap-body selector, richer risk features, or a route that changes wall by much more than current timing noise.
+**evidence_update_10:**
+- claim: "Unconditional resident pca-updown improves one easy prompt but fails reason/schema adversaries."
+  source: `/tmp/qwen35_pca_updown_gpu_route_suite_20260506_132656.log`
+  verified_at: 2026-05-06
+  decay_trigger: pca-updown adapter training, prompt suite, layer/rank choice, GPU pipeline scheduler, or verifier/replay semantics changes
+- claim: "Agreement-gated pca-updown is too expensive and does not reliably catch pca-updown drift."
+  source: `/tmp/qwen35_pca_updown_agreement_gate_suite_20260506_132840.log`
+  verified_at: 2026-05-06
+  decay_trigger: agreement probe implementation, top2/margin buffers, prompt suite, or scheduler changes
+- claim: "Margin-gated pca-updown with reject fallback is safe but too small/noisy to justify immediate Metal fusion."
+  source: `/tmp/qwen35_pca_updown_margin_fallback_suite_20260506_133035.log`; `/tmp/qwen35_pca_updown_margin1_fallback_suite_20260506_133215.log`; `/tmp/qwen35_pca_updown_margin1_abba_suite_20260506_133357.log`
+  verified_at: 2026-05-06
+  decay_trigger: margin source, fallback policy, prompt suite, host load, pca-updown layers/rank, or draft scheduler changes
+**quadrumvirate_update_10:**
+- cassandra: The expected failure was free-run drift under cheap FFN approximation; reason/schema confirmed it. The safe controller reduced quality risk but also reduced the available speedup.
+- daedalus: Pivot from "fuse the current pca-updown body" to "find a better selector/risk route first"; otherwise fusion optimizes a marginal controller.
+- maieutic: The hidden assumption was that a same-boundary agreement check predicts chunk-level acceptance. Evidence says it can agree at the boundary and still drift later inside the chunk.
+- adversary: The ABBA signal is below the intended promotion bar and close to host/order noise. This is a refutation for immediate superfusion, not a refutation of pca-updown as one component in a richer self-draft controller.
