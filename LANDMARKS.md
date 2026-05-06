@@ -7726,3 +7726,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Pivot from "fuse the current pca-updown body" to "find a better selector/risk route first"; otherwise fusion optimizes a marginal controller.
 - maieutic: The hidden assumption was that a same-boundary agreement check predicts chunk-level acceptance. Evidence says it can agree at the boundary and still drift later inside the chunk.
 - adversary: The ABBA signal is below the intended promotion bar and close to host/order noise. This is a refutation for immediate superfusion, not a refutation of pca-updown as one component in a richer self-draft controller.
+
+**decision_update_11:** The minimal Metal update-risk bridge is implemented, but token-level max update-risk is refuted as the next speed selector. `--simulate-self-spec-gpu-pipeline-draft-update-risk-threshold=F` preplans exact-refresh offsets from the CPU teacher-forced fallback score (`raw|decayed|update`) before GPU submission, then feeds those offsets into the existing Metal exact-refresh state-handoff path. The implementation is default-off and avoids per-token GPU readback. A critical adversary fix: the planner must use the same routed exact oracle as the verifier (`Qwen35CPU.forward_top1`) from an independent exact prefix state; using `logits_with_lowrank_policy(... approximate=false)` produced schema exact IDs that diverged from the GPU pipeline. On the schema `gen16` gate with `update` score, thresholds `0.35/0.5/0.6/0.7/0.8/0.9/1.0` produced refresh offset counts `14/12/9/5/1/0/0` out of `16`. All checked post-fix rows kept `100%` acceptance/parity, but nonzero offsets add exact-refresh work and zero-offset rows are baseline-equivalent. Conclusion: this is useful bridge/diagnostic substrate, not a default route. The next selector must be narrower than token-level max, likely per-layer/head or an early state-horizon/prefix predictor, or the branch should pivot back to cheap proposal-body work.
+**evidence_update_11:**
+- claim: "The update-risk bridge builds and the top2 regression spec still passes."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_update_risk_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_update_risk_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_update_risk_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: option parsing, exact oracle, low-rank fallback score semantics, or GPU exact-refresh path changes
+- claim: "The planner's exact IDs must come from `forward_top1`; the previous lowrank-policy exact oracle diverged on schema."
+  source: `/tmp/qwen35_update_risk_schema_plan_fix_20260506_135048.log`
+  verified_at: 2026-05-06
+  decay_trigger: CPU exact forward path, GPU verifier path, prompt, or state fork/copy semantics changes
+- claim: "Token-level `update` threshold curve is too blunt as a speed selector."
+  source: `/tmp/qwen35_update_risk_schema_plan_fix_20260506_135048.log`; `/tmp/qwen35_update_risk_schema_t05_20260506_135136.log`; `/tmp/qwen35_update_risk_schema_curve_20260506_135438_t0.6.log`; `/tmp/qwen35_update_risk_schema_curve_20260506_135438_t0.7.log`; `/tmp/qwen35_update_risk_schema_curve_20260506_135438_t0.8.log`; `/tmp/qwen35_update_risk_schema_curve_20260506_135438_t0.9.log`; `/tmp/qwen35_update_risk_schema_t10_20260506_135347.log`
+  verified_at: 2026-05-06
+  decay_trigger: prompt suite, rank/layers, fallback score aggregation, exact-refresh economics, or host-load variance changes
+**quadrumvirate_update_11:**
+- cassandra: The expected selector failure was overbreadth: a token-level max over heads/layers marks too much work exact at low thresholds, while high thresholds collapse to baseline.
+- daedalus: Pivot from "find one threshold" to "change selector granularity" or "make the proposal body cheaper"; scalar threshold tuning is now a local optimum.
+- maieutic: The hidden assumption was that teacher-forced fallback offsets map cleanly to free-run chunk acceptance. Evidence says the interface is valid, but the policy is too coarse and prompt/timing dependent.
+- adversary: The wall timings are host-noisy single rows, so do not overfit milliseconds. The robust signal is structural: offset counts versus exact work, exact-id oracle divergence, and parity preservation.
