@@ -2157,6 +2157,31 @@ private def print_cost_truth_row(kind : String, route : String, steps : Int32, m
   puts "cost_truth kind=#{kind} route=#{route} steps=#{steps} ms=#{ms.round(3)} ms_per_tok=#{per_token.round(3)} rel_to_plain_tok=#{rel.round(4)} tok_s=#{tok_s.round(2)} match=#{match}#{note}"
 end
 
+private def prefill_tokens_top1s_branch_split(weights : ML::GGUF::Qwen35Weights,
+                                              token_ids : Array(Int32),
+                                              start_pos : Int32,
+                                              state : ML::GGUF::Qwen35CPU::State,
+                                              guard_index : Int32) : Array({Int32, Float32})
+  raise "branch split requires at least one token" if token_ids.empty?
+  raise "branch split guard index out of range" unless guard_index >= 0 && guard_index < token_ids.size
+
+  results = [] of {Int32, Float32}
+  if guard_index > 0
+    prefix_tokens = token_ids[0, guard_index]
+    results.concat(ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, prefix_tokens, start_pos, state))
+  end
+
+  results.concat(ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, [token_ids[guard_index]], start_pos + guard_index, state))
+
+  suffix_len = token_ids.size - guard_index - 1
+  if suffix_len > 0
+    suffix_tokens = token_ids[(guard_index + 1), suffix_len]
+    results.concat(ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, start_pos + guard_index + 1, state))
+  end
+
+  results
+end
+
 private def simulate_self_spec_cost_truth_table(weights : ML::GGUF::Qwen35Weights,
                                                 token_ids : Array(Int32),
                                                 calib_count : Int32,
@@ -2165,7 +2190,8 @@ private def simulate_self_spec_cost_truth_table(weights : ML::GGUF::Qwen35Weight
                                                 rank : Int32,
                                                 ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
                                                 draft_updown_rank : Int32? = nil,
-                                                draft_updown_layer_indices : Set(Int32)? = nil) : Nil
+                                                draft_updown_layer_indices : Set(Int32)? = nil,
+                                                branch_split_guard_indices : Array(Int32) = [] of Int32) : Nil
   raise "cost truth table needs at least one chunk size" if chunk_sizes.empty?
   raise "cost truth table requires at least one held-out token" unless calib_count < token_ids.size
   raise "cost truth table requires Metal" unless ML::GGUF::Qwen35Metal.available?
@@ -2209,6 +2235,31 @@ private def simulate_self_spec_cost_truth_table(weights : ML::GGUF::Qwen35Weight
     chunk_ms = (Time.instant - t_chunk).total_milliseconds
     match = chunk_results.map(&.[0]) == plain_results[0, k].map(&.[0])
     print_cost_truth_row("verifier", "exact_chunk_major_k#{k}", k, chunk_ms, plain_per_token, match, " note=known_candidate_span")
+
+    unless branch_split_guard_indices.empty?
+      guard_indices = if branch_split_guard_indices.includes?(-1)
+                        (0...k).to_a
+                      else
+                        branch_split_guard_indices.select { |idx| idx >= 0 && idx < k }.uniq.sort
+                      end
+
+      guard_indices.each do |guard_index|
+        warm_split_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+        prefill_tokens_top1s_branch_split(weights, chunk_tokens, calib_count, warm_split_state, guard_index)
+
+        split_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+        t_split = Time.instant
+        split_results = prefill_tokens_top1s_branch_split(weights, chunk_tokens, calib_count, split_state, guard_index)
+        split_ms = (Time.instant - t_split).total_milliseconds
+        split_match = split_results.map(&.[0]) == plain_results[0, k].map(&.[0])
+        prefix_len = guard_index
+        suffix_len = k - guard_index - 1
+        split_chunks = (prefix_len > 0 ? 1 : 0) + 1 + (suffix_len > 0 ? 1 : 0)
+        ratio = chunk_ms > 0.0 ? split_ms / chunk_ms : 0.0
+        print_cost_truth_row("verifier_split", "branch_split_k#{k}_g#{guard_index}", k, split_ms, plain_per_token, split_match,
+          " prefix=#{prefix_len} guard=1 suffix=#{suffix_len} chunks=#{split_chunks} whole_ms=#{chunk_ms.round(3)} split_over_whole=#{ratio.round(4)} note=branch_guard_verifier_shape")
+      end
+    end
   end
 
   if layer_bases.empty?
@@ -9832,6 +9883,7 @@ simulate_lowrank_metal_verifier_overlap = false
 simulate_lowrank_metal_decode_verifier_overlap = false
 simulate_exact_verifier_ltp = false
 simulate_cost_truth_chunks = [] of Int32
+simulate_cost_truth_branch_split_guards = [] of Int32
 simulate_cost_truth_updown_rank : Int32? = nil
 simulate_cost_truth_updown_layers = [] of Int32
 simulate_block_surrogate_start : Int32? = nil
@@ -10007,6 +10059,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-lowrank-metal-decode-verifier-overlap", "Overlap one async low-rank layer chunk with queued exact decode-wave verifier on the held-out span") { simulate_lowrank_metal_decode_verifier_overlap = true }
   p.on("--simulate-exact-verifier-ltp", "Compare exact verifier routes: serial decode, queued decode, and chunk-major prefill") { simulate_exact_verifier_ltp = true }
   p.on("--simulate-cost-truth-table=LIST", "Print normalized cost table for exact decode, chunk verifier, low-rank draft, and optional pca-updown draft over chunk sizes") { |v| simulate_cost_truth_chunks = parse_int_list(v) }
+  p.on("--simulate-cost-truth-branch-splits=LIST", "With --simulate-cost-truth-table, also measure branch-guard verifier split shapes at 0-based guard indices; use -1 for all guards") { |v| simulate_cost_truth_branch_split_guards = parse_int_list(v) }
   p.on("--simulate-cost-truth-updown=R", "Include resident FFN pca-updown rank R in --simulate-cost-truth-table") { |v| simulate_cost_truth_updown_rank = v.to_i }
   p.on("--simulate-cost-truth-updown-layers=LIST", "Apply pca-updown cost-table rows only to the listed low-rank recurrent draft layers") { |v| simulate_cost_truth_updown_layers = parse_int_list(v) }
   p.on("--simulate-block-residual-surrogate=START:END", "Probe a static low-rank residual surrogate for a contiguous layer block on exact teacher-forced trajectory") do |v|
@@ -10581,7 +10634,7 @@ if rank = simulate_logit_rank
     unless simulate_cost_truth_chunks.empty?
       cost_updown_layers = simulate_cost_truth_updown_layers.empty? ? nil : Set(Int32).new(simulate_cost_truth_updown_layers)
       simulate_self_spec_cost_truth_table(weights, token_ids, calib_count, simulate_cost_truth_chunks, layer_bases, rank,
-        ffn_updown_adapters, simulate_cost_truth_updown_rank, cost_updown_layers)
+        ffn_updown_adapters, simulate_cost_truth_updown_rank, cost_updown_layers, simulate_cost_truth_branch_split_guards)
     end
     thresholds_to_run = if simulate_fallback_thresholds.empty?
                           [simulate_fallback_threshold]

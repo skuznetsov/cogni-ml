@@ -8150,3 +8150,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The relevant pivot is from "make MTP body cheaper" to "make the vLLM-style execution model true on Metal": exact hidden handoff, resident proposer, GPU-side candidate selection, and chunk-major verifier.
 - maieutic: The hidden assumption was that released MTP weights should speed up any runtime by themselves. Source says the weights are only one component of a speculative serving pipeline.
 - adversary: README recommends `qwen3_next_mtp`, while the downloaded config says `qwen3_5`; vLLM normalizes deprecated MTP method names to `mtp` and remaps by model config, so do not hard-code the README method string into our Crystal path without a version-specific check.
+
+**decision_update_36:** Added a verifier split attribution probe before touching Metal checkpoint kernels. The new `--simulate-cost-truth-branch-splits=LIST` option extends `--simulate-cost-truth-table` with exact branch-guard verifier shapes: whole known-span verifier chunk versus `prefix + guard + suffix` calls at selected guard indices (`-1` means all guards). This directly measures the branch-snapshot split tax without changing the hot path. On 9B with `k=4/8`, all split rows preserved exact top1 parity and measured `split_over_whole=1.11..1.28`; on 27B, the same smoke measured `1.08..1.24`. The cost is real and matches the branch-snapshot wall suspicion, but it is not large enough by itself to explain earlier multi-second 27B ABBA regressions. Conclusion: single-pass verifier boundary capture is still a plausible speed primitive with a rough upper bound of tens of milliseconds per affected 27B chunk, but the larger wall problem also includes queue contention/scheduling variance. Next speed step should either prototype a minimal recurrent checkpoint inside one verifier pass, or first add a row-level attribution around real branch-snapshot cycles to separate split tax from queue contention.
+**evidence_update_36:**
+- claim: "The branch-split attribution probe builds and keeps the top2 regression clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_split_attr_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_split_attr_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_split_attr_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `2 examples, 0 failures`
+  verified_at: 2026-05-07
+  decay_trigger: cost-truth harness, branch split verifier helper, top2 decode path, or Metal bridge changes
+- claim: "9B branch verifier splits are exact and cost roughly `+11..28%` over the whole chunk in the short smoke."
+  source: `/tmp/qwen35_branch_split_attr_probe --tokens=48 --calib-tokens=32 --ranks=8 --basis=pca --pca-iters=2 --simulate-logits-rank=8 --simulate-logits-layers=0 --simulate-cost-truth-table=4,8 --simulate-cost-truth-branch-splits=0,1,3`
+  verified_at: 2026-05-07
+  decay_trigger: prompt, model file, host load, chunk sizes, guard indices, or verifier implementation changes
+- claim: "27B branch verifier splits are exact and cost roughly `+8..24%` over the whole chunk in the short smoke."
+  source: `/tmp/qwen35_branch_split_attr_probe --model ~/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf --tokens=48 --calib-tokens=32 --ranks=8 --basis=pca --pca-iters=2 --simulate-logits-rank=8 --simulate-logits-layers=0 --simulate-cost-truth-table=4,8 --simulate-cost-truth-branch-splits=0,1,3`
+  verified_at: 2026-05-07
+  decay_trigger: prompt, model file, host load, chunk sizes, guard indices, or verifier implementation changes
+**quadrumvirate_update_36:**
+- cassandra: If split tax were the whole problem, the ratios should approach the earlier ABBA wall regressions. They do not; split overhead is material but not sufficient.
+- daedalus: The frame shifts from "eliminate split and expect the whole win" to "split elimination is one bounded lever; also attribute Metal queue contention around branch-snapshot cycles."
+- maieutic: The hidden assumption was that each verifier call cost composes linearly from token work. The measurements show fixed per-call overhead and queue effects.
+- adversary: These are short single-shot smokes, not a default-policy proof. They justify a kernel checkpoint experiment only as a bounded hypothesis, not as a guaranteed speedup.
