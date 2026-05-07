@@ -8330,3 +8330,31 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: This is harness hardening, not a new algorithm. It is still high leverage because it prevents false promotion/refutation from misconfigured A/B commands.
 - maieutic: The assumption is that calibrated mode names should be self-contained. That is now true for `*_min3_suffix2`; the older `*_suffix2` names remain compatibility shims.
 - adversary: The smoke was short and 9B-only. It verifies mode semantics and parity, not 27B performance; the next repeated 27B gate remains required for benchmark recommendation.
+
+**decision_update_47:** The calibrated 27B mode gate refutes recommending pure `*_min3_suffix2` only-split modes as the standard opt-in policy, while confirming the suffix-positive value remains real. The one-process `gen32/gamma4` gate used four prompts, five repeats per prompt/mode, and calibrated modes `nosnap`, `split_min3_suffix2`, `onepass_min3_suffix2`; all `60/60` rows preserved exact parity. Suffix-positive medians improved versus nosnap: `reason_bench` `4382.426 -> 3997.996ms` for one-pass, and `structured_sql` `4014.472 -> 3676.285ms`. But `structured_yaml` exposed the missing branch-router distinction: nosnap had `tree2_branch_guard_hits=2`, `replayless_resyncs=1`, and median `4356.646ms`; calibrated suffix-only-split modes had `hits=0`, lost replayless guard-token reject, and regressed to `split 4789.680ms` / `onepass 4843.898ms`. Conclusion: snapshot-value gating must not suppress the low-margin guard-token check. The next route should keep branch guard active for guard-token rejects while gating only the snapshot/one-pass suffix checkpoint.
+**evidence_update_47:**
+- claim: "Calibrated `*_min3_suffix2` modes preserve parity and keep suffix-positive wins, but regress a YAML replayless-guard row by disabling branch guard."
+  source: `/tmp/qwen36_branch_modes_cal_gate_20260507074238/gate.log`; `/tmp/qwen36_branch_modes_cal_gate_20260507074238/gate_summary.md`; `/tmp/qwen36_branch_modes_cal_gate_20260507074238/gate_rows.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: prompt set, model file, branch guard threshold, mode mapping, host load, rank/layers, gamma, checkpoint verifier path, or replayless branch-guard path changes
+**quadrumvirate_update_47:**
+- cassandra: The predicted pass-clean risk was false-positive split overhead. The actual worse case was sharper: the suffix-only split gate suppressed a useful guard-token reject check.
+- daedalus: The frame shifts from "skip no-value branch splits" to "separate guard-token reject value from suffix snapshot value." These are different expected-value decisions.
+- maieutic: The hidden assumption was that if a suffix snapshot has no value, the branch guard also has no value. `structured_yaml` falsified that.
+- adversary: The gate is broad enough to block recommendation, but not enough to prove the replacement. Test a keep-guard mode next.
+
+**decision_update_48:** Added and smoke-tested `*_min3_suffix2_keepguard` modes/policies as the direct fix for the replayless-regression pattern. These modes enable snapshots and calibrated suffix thresholding but keep `snapshot_only_split=false`, so low-margin branch-guard checks still run even when the suffix-value gate would skip snapshotting. Build and focused top2/checkpoint specs stayed clean. A 9B smoke confirmed the modes preserve parity and keep branch-guard hits. A focused 27B YAML ABBA on the replayless-regression prompt preserved parity on all six rows. It restored the missing mechanics (`hits=2`, `replayless_resyncs=1`, `snapshots=0`) and improved median versus onepass-only-split (`4450.808ms` vs `4850.110ms`); it was also slightly better than the noisy nosnap median (`4591.651ms`) in this small `n=2` row. Conclusion: keepguard is the new leading policy candidate because it combines suffix-positive one-pass checkpointing with replayless guard-token rejects. It still needs the same repeated four-prompt 27B gate before recommendation/default changes.
+**evidence_update_48:**
+- claim: "`onepass_min3_suffix2_keepguard` preserves parity and restores replayless branch guard on the focused 27B YAML regression row."
+  source: `/tmp/qwen36_branch_keepguard_yaml_abba_20260507.log`; local parser summary in session output
+  verified_at: 2026-05-07
+  decay_trigger: prompt text, model file, mode mapping, host load, branch threshold, rank/layers, gamma, or branch-guard verifier path changes
+- claim: "Keepguard mode additions build and keep focused regressions clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_keepguard_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_keepguard_probe --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_keepguard_top2_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_keepguard_checkpoint_spec crystal spec spec/qwen35_recurrent_checkpoint_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`
+  verified_at: 2026-05-07
+  decay_trigger: policy/mode parser, branch snapshot runtime flags, checkpoint/top2 paths, or self-spec pipeline loop changes
+**quadrumvirate_update_48:**
+- cassandra: If keepguard is the right separation, it should retain replayless resync on YAML while not changing suffix-positive one-pass mechanics. Focused YAML verified the first half; suffix-positive repeat gate remains.
+- daedalus: The useful optimization is not another checkpoint kernel; it is preserving two independent value paths: guard-token reject avoidance and suffix replay avoidance.
+- maieutic: The assumption that extra verifier chunks are always bad is too coarse. Extra guard chunks can be net-positive when they prevent wrong-tail replay/resync.
+- adversary: Evidence is focused and noisy. Keepguard is a candidate, not a promoted default.
