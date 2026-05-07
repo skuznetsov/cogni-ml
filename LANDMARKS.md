@@ -8460,3 +8460,26 @@ The follow-up `gen32` router trace on the same prompts found the specific blind 
 - daedalus: The frame shifts from "low suffix margin means snapshot value" to "middle suffix-margin band may indicate useful suffix replay, while very low suffix margin can be harmless repetition/format uncertainty."
 - maieutic: The hidden assumption was monotonicity: lower suffix margin should mean higher value. The new trace falsifies that; the useful SQL reject has a higher suffix margin than the pass-clean markdown false positive.
 - adversary: The A/B is only `n=2` per prompt/mode and visibly affected by timing drift. It is strong enough to block promotion and motivate the band-gate scorer, not enough to claim final runtime performance.
+
+**decision_update_55:** Added suffix-margin band scoring as the next branch-policy falsifier. `bin/qwen35_self_spec_router_trace_score.cr` now accepts `--suffix-min-thresholds` and emits `branch_guard_three_way_band_value` rows. This leaves the older upper-threshold scorer rows intact and adds a separate oracle for policies like `suffix_min_floor <= min(post_guard_margin) <= suffix_threshold`.
+
+The current 27B `gen32` runtime trace supports the band idea for snapshot value. At `threshold=0.5,no_snapshot_threshold=0.1,min_prefix=3,1.0<=suffix_min<=2.0`, the band scorer finds exactly two candidates: the main guard-token reject and the useful SQL suffix snapshot, with `0` pass-clean, `1` useful snapshot, and `1` useful guard reject. It removes the `repeat_markdown_tbl` wasted snapshot whose suffix min was too low (`0.1598`) and also avoids the no-snapshot false positive with `guard_margin=0.1063`. Cross-trace caveat: `no_snapshot_threshold=0.1` loses the older screen `structured_markdown` guard reject (`guard_margin=0.1604`), while `0.2` keeps that older guard reject but reintroduces one current pass-clean no-snapshot false positive. Conclusion: the suffix band is promising for snapshot gating, but no-snapshot guard value still needs a separate predicate or a conservative runtime mode.
+
+**evidence_update_55:**
+- claim: "The band scorer release-builds and emits band rows."
+  source: `crystal tool format bin/qwen35_self_spec_router_trace_score.cr`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_trace_score_band_build crystal build --release bin/qwen35_self_spec_router_trace_score.cr -o /tmp/qwen35_trace_score_band`
+  verified_at: 2026-05-07
+  decay_trigger: scorer CLI, trace schema, or branch policy scoring logic changes
+- claim: "On the current gen32 runtime trace, a 1.0..2.0 suffix band plus no_snapshot=0.1 removes pass-clean false positives while keeping the main guard reject and SQL suffix snapshot."
+  source: `/tmp/qwen36_threeway_runtime_ab_20260507185851/trace_gen32/trace_score_band.txt` -> `threshold=0.5,no_snapshot_threshold=0.1,suffix_min_threshold=1.0,suffix_threshold=2.0`: `candidates=2`, `guard_rejects=1`, `useful_snapshots=1`, `pass_clean=0`
+  verified_at: 2026-05-07
+  decay_trigger: prompt trace, scorer band logic, branch guard threshold, or suffix-margin source changes
+- claim: "Across older traces, the same band preserves useful snapshot value, but the no-snapshot threshold remains a tradeoff."
+  source: `/tmp/qwen36_guard_value_threeway_band_combined_20260507.txt`; `/tmp/qwen36_guard_value_screen_20260507184531/trace_score_band.txt`
+  verified_at: 2026-05-07
+  decay_trigger: trace mix, prompt labels, no-snapshot guard semantics, or scorer logic changes
+**quadrumvirate_update_55:**
+- cassandra: The band should remove too-low-margin pass-clean suffix false positives. It does on the current gen32 trace and keeps the SQL suffix snapshot.
+- daedalus: Separate the two axes: snapshot value appears band-shaped; no-snapshot guard value is not solved by the same suffix band and likely needs its own predicate.
+- maieutic: The assumption that one threshold can route both suffix snapshots and no-snapshot guard rejects remains false. They need independent features and probably independent default-off modes.
+- adversary: This is still offline oracle evidence. The next runtime test should be a narrow default-off band mode (`onepass_min3_suffix1to2_guard01`) against the exact pass-clean regressions.
