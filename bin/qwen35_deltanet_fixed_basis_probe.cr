@@ -32,6 +32,7 @@ module ProbeRuntime
   @@self_spec_branch_guard_single_pass_checkpoint = false
   @@self_spec_branch_guard_snapshot_min_prefix = 1
   @@self_spec_branch_guard_snapshot_suffix_threshold : Float64? = nil
+  @@self_spec_branch_guard_snapshot_suffix_min_threshold : Float64? = nil
   @@self_spec_branch_guard_snapshot_prefix_suffix_thresholds = [] of Tuple(Int32, Float64)
   @@self_spec_branch_guard_no_snapshot_threshold : Float64? = nil
 
@@ -169,6 +170,17 @@ module ProbeRuntime
       raise "branch guard snapshot suffix threshold must be non-negative" if value < 0.0
     end
     @@self_spec_branch_guard_snapshot_suffix_threshold = threshold
+  end
+
+  def self.self_spec_branch_guard_snapshot_suffix_min_threshold : Float64?
+    @@self_spec_branch_guard_snapshot_suffix_min_threshold
+  end
+
+  def self.self_spec_branch_guard_snapshot_suffix_min_threshold=(threshold : Float64?)
+    if value = threshold
+      raise "branch guard snapshot suffix min threshold must be non-negative" if value < 0.0
+    end
+    @@self_spec_branch_guard_snapshot_suffix_min_threshold = threshold
   end
 
   def self.self_spec_branch_guard_snapshot_prefix_suffix_thresholds : Array(Tuple(Int32, Float64))
@@ -6248,6 +6260,7 @@ end
 private def apply_branch_snapshot_policy(value : String) : String
   mode = value.strip.downcase
   ProbeRuntime.self_spec_branch_guard_no_snapshot_threshold = nil
+  ProbeRuntime.self_spec_branch_guard_snapshot_suffix_min_threshold = nil
   case mode
   when "off", "none", "nosnap"
     ProbeRuntime.self_spec_branch_guard_snapshot = false
@@ -6324,6 +6337,15 @@ private def apply_branch_snapshot_policy(value : String) : String
     ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = 2.0
     ProbeRuntime.self_spec_branch_guard_no_snapshot_threshold = 0.1
     "onepass_min3_suffix2_guard01"
+  when "onepass_min3_suffix1to2_guard01"
+    ProbeRuntime.self_spec_branch_guard_snapshot = true
+    ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = true
+    ProbeRuntime.self_spec_branch_guard_snapshot_only_split = true
+    ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix = 3
+    ProbeRuntime.self_spec_branch_guard_snapshot_suffix_min_threshold = 1.0
+    ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = 2.0
+    ProbeRuntime.self_spec_branch_guard_no_snapshot_threshold = 0.1
+    "onepass_min3_suffix1to2_guard01"
   when "onepass_min3_suffix2_guard05"
     ProbeRuntime.self_spec_branch_guard_snapshot = true
     ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = true
@@ -6341,7 +6363,7 @@ private def apply_branch_snapshot_policy(value : String) : String
     ProbeRuntime.self_spec_branch_guard_no_snapshot_threshold = Float64::INFINITY
     "onepass_min3_suffix2_guardinf"
   else
-    raise "unknown branch snapshot policy #{value.inspect}; expected off, split, onepass, split_min3_suffix2, onepass_min3_suffix2, *_keepguard, or onepass *_guard005/_guard01/_guard02/_guard05/_guardinf variants"
+    raise "unknown branch snapshot policy #{value.inspect}; expected off, split, onepass, split_min3_suffix2, onepass_min3_suffix2, *_keepguard, onepass_min3_suffix1to2_guard01, or onepass *_guard005/_guard01/_guard02/_guard05/_guardinf variants"
   end
 end
 
@@ -7261,6 +7283,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   raise "GPU pipeline tree2 branch guard snapshot requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_snapshot_enabled && tree2_branch_guard.nil?
   branch_guard_snapshot_min_prefix = ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix
   branch_guard_snapshot_suffix_threshold = ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold
+  branch_guard_snapshot_suffix_min_threshold = ProbeRuntime.self_spec_branch_guard_snapshot_suffix_min_threshold
   branch_guard_snapshot_prefix_suffix_thresholds = ProbeRuntime.self_spec_branch_guard_snapshot_prefix_suffix_thresholds
   branch_guard_until_reject = ProbeRuntime.self_spec_branch_guard_until_reject
   branch_guard_overlap_next = ProbeRuntime.self_spec_branch_guard_overlap_next
@@ -7592,6 +7615,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     end
 
     if threshold_value = selected_threshold
+      min_threshold = branch_guard_snapshot_suffix_min_threshold
       suffix_end = Math.min(verifier_size, block.submissions.size) - 1
       if suffix_start > suffix_end
         false
@@ -7599,7 +7623,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         allowed = false
         suffix_start.upto(suffix_end) do |i|
           if margin = read_top2_margin.call(block, i)
-            if margin <= threshold_value
+            min_ok = min_threshold.nil? || margin >= min_threshold.not_nil!
+            if min_ok && margin <= threshold_value
               allowed = true
               break
             end
@@ -10425,6 +10450,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard=F", "Use margin <= F to stop before the low-margin token and resync from exact branch state on reject") { |v| simulate_self_spec_gpu_pipeline_tree2_branch_guard = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot", "After a branch guard passes, snapshot the exact guard-boundary state so suffix rejects replay from the guard boundary") { ProbeRuntime.self_spec_branch_guard_snapshot = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-min-prefix=N", "Snapshot branch-guard pass state only after at least N accepted guard-prefix tokens") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix = v.to_i }
+  p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-suffix-min-threshold=F", "Only snapshot a passed branch guard if the remaining suffix contains a draft margin >= F and also passes the suffix threshold") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_suffix_min_threshold = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-suffix-threshold=F", "Only snapshot a passed branch guard if the remaining suffix contains a draft margin <= F") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-prefix-suffix-thresholds=LIST", "Prefix-conditioned snapshot suffix thresholds, e.g. 2:1.0,3:2.0; largest matching min-prefix wins and overrides the single suffix threshold") { |v| ProbeRuntime.self_spec_branch_guard_snapshot_prefix_suffix_thresholds = parse_prefix_suffix_thresholds(v) }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-until-reject", "Only enable branch guard before the first real reject in the run") { ProbeRuntime.self_spec_branch_guard_until_reject = true }
@@ -11206,13 +11232,14 @@ if rank = simulate_logit_rank
       branch_snapshot_single_pass_base_enabled = ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint
       branch_snapshot_only_split_base_enabled = ProbeRuntime.self_spec_branch_guard_snapshot_only_split
       branch_snapshot_min_prefix_base = ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix
+      branch_snapshot_suffix_min_threshold_base = ProbeRuntime.self_spec_branch_guard_snapshot_suffix_min_threshold
       branch_snapshot_suffix_threshold_base = ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold
       branch_snapshot_prefix_suffix_thresholds_base = ProbeRuntime.self_spec_branch_guard_snapshot_prefix_suffix_thresholds
       branch_snapshot_no_snapshot_threshold_base = ProbeRuntime.self_spec_branch_guard_no_snapshot_threshold
-      branch_snapshot_mode_options = [] of NamedTuple(name: String, snapshot: Bool, onepass: Bool, only_split: Bool, min_prefix: Int32?, suffix_threshold: Float64?, no_snapshot_threshold: Float64?)
+      branch_snapshot_mode_options = [] of NamedTuple(name: String, snapshot: Bool, onepass: Bool, only_split: Bool, min_prefix: Int32?, suffix_min_threshold: Float64?, suffix_threshold: Float64?, no_snapshot_threshold: Float64?)
       if simulate_self_spec_gpu_pipeline_branch_snapshot_modes.empty?
         branch_snapshot_policy_name = simulate_self_spec_gpu_pipeline_branch_snapshot_policy || ""
-        branch_snapshot_mode_options << {name: branch_snapshot_policy_name.to_s, snapshot: branch_snapshot_base_enabled, onepass: branch_snapshot_single_pass_base_enabled, only_split: branch_snapshot_only_split_base_enabled, min_prefix: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
+        branch_snapshot_mode_options << {name: branch_snapshot_policy_name.to_s, snapshot: branch_snapshot_base_enabled, onepass: branch_snapshot_single_pass_base_enabled, only_split: branch_snapshot_only_split_base_enabled, min_prefix: nil, suffix_min_threshold: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
       else
         if simulate_self_spec_gpu_pipeline_hybrid_sweep
           raise "branch snapshot mode sweep is not wired into hybrid route scoreboards yet; disable hybrid sweep"
@@ -11223,50 +11250,54 @@ if rank = simulate_logit_rank
         simulate_self_spec_gpu_pipeline_branch_snapshot_modes.each do |mode|
           case mode
           when "nosnap"
-            branch_snapshot_mode_options << {name: "nosnap", snapshot: false, onepass: false, only_split: false, min_prefix: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "nosnap", snapshot: false, onepass: false, only_split: false, min_prefix: nil, suffix_min_threshold: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
           when "split"
-            branch_snapshot_mode_options << {name: "split", snapshot: true, onepass: false, only_split: false, min_prefix: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "split", snapshot: true, onepass: false, only_split: false, min_prefix: nil, suffix_min_threshold: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
           when "split_suffix2"
-            branch_snapshot_mode_options << {name: "split_suffix2", snapshot: true, onepass: false, only_split: true, min_prefix: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "split_suffix2", snapshot: true, onepass: false, only_split: true, min_prefix: nil, suffix_min_threshold: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
           when "split_min3_suffix2"
-            branch_snapshot_mode_options << {name: "split_min3_suffix2", snapshot: true, onepass: false, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "split_min3_suffix2", snapshot: true, onepass: false, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: nil}
           when "split_min3_suffix2_keepguard"
-            branch_snapshot_mode_options << {name: "split_min3_suffix2_keepguard", snapshot: true, onepass: false, only_split: false, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "split_min3_suffix2_keepguard", snapshot: true, onepass: false, only_split: false, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: nil}
           when "split_min3_suffix2_guard02"
-            branch_snapshot_mode_options << {name: "split_min3_suffix2_guard02", snapshot: true, onepass: false, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: 0.2}
+            branch_snapshot_mode_options << {name: "split_min3_suffix2_guard02", snapshot: true, onepass: false, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: 0.2}
           when "onepass"
-            branch_snapshot_mode_options << {name: "onepass", snapshot: true, onepass: true, only_split: false, min_prefix: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "onepass", snapshot: true, onepass: true, only_split: false, min_prefix: nil, suffix_min_threshold: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
           when "onepass_suffix2"
-            branch_snapshot_mode_options << {name: "onepass_suffix2", snapshot: true, onepass: true, only_split: true, min_prefix: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "onepass_suffix2", snapshot: true, onepass: true, only_split: true, min_prefix: nil, suffix_min_threshold: nil, suffix_threshold: nil, no_snapshot_threshold: nil}
           when "onepass_min3_suffix2"
-            branch_snapshot_mode_options << {name: "onepass_min3_suffix2", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix2", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: nil}
           when "onepass_min3_suffix2_keepguard"
-            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_keepguard", snapshot: true, onepass: true, only_split: false, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: nil}
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_keepguard", snapshot: true, onepass: true, only_split: false, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: nil}
           when "onepass_min3_suffix2_guard02"
-            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard02", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: 0.2}
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard02", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: 0.2}
           when "onepass_min3_suffix2_guard005"
-            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard005", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: 0.05}
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard005", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: 0.05}
           when "onepass_min3_suffix2_guard01"
-            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard01", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: 0.1}
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard01", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: 0.1}
+          when "onepass_min3_suffix1to2_guard01"
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix1to2_guard01", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_min_threshold: 1.0, suffix_threshold: 2.0, no_snapshot_threshold: 0.1}
           when "onepass_min3_suffix2_guard05"
-            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard05", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: 0.5}
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guard05", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: 0.5}
           when "onepass_min3_suffix2_guardinf"
-            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guardinf", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_threshold: 2.0, no_snapshot_threshold: Float64::INFINITY}
+            branch_snapshot_mode_options << {name: "onepass_min3_suffix2_guardinf", snapshot: true, onepass: true, only_split: true, min_prefix: 3, suffix_min_threshold: nil, suffix_threshold: 2.0, no_snapshot_threshold: Float64::INFINITY}
           else
-            raise "unknown branch snapshot mode #{mode.inspect}; expected nosnap, split, split_suffix2, split_min3_suffix2, split_min3_suffix2_keepguard, split_min3_suffix2_guard02, onepass, onepass_suffix2, onepass_min3_suffix2, onepass_min3_suffix2_keepguard, or onepass_min3_suffix2_guard005/_guard01/_guard02/_guard05/_guardinf"
+            raise "unknown branch snapshot mode #{mode.inspect}; expected nosnap, split, split_suffix2, split_min3_suffix2, split_min3_suffix2_keepguard, split_min3_suffix2_guard02, onepass, onepass_suffix2, onepass_min3_suffix2, onepass_min3_suffix2_keepguard, onepass_min3_suffix1to2_guard01, or onepass_min3_suffix2_guard005/_guard01/_guard02/_guard05/_guardinf"
           end
         end
       end
-      apply_branch_snapshot_mode = ->(branch_snapshot_mode : NamedTuple(name: String, snapshot: Bool, onepass: Bool, only_split: Bool, min_prefix: Int32?, suffix_threshold: Float64?, no_snapshot_threshold: Float64?)) {
+      apply_branch_snapshot_mode = ->(branch_snapshot_mode : NamedTuple(name: String, snapshot: Bool, onepass: Bool, only_split: Bool, min_prefix: Int32?, suffix_min_threshold: Float64?, suffix_threshold: Float64?, no_snapshot_threshold: Float64?)) {
         ProbeRuntime.self_spec_branch_guard_snapshot = branch_snapshot_mode[:snapshot]
         ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = branch_snapshot_mode[:onepass]
         ProbeRuntime.self_spec_branch_guard_snapshot_only_split = branch_snapshot_mode[:only_split]
         ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix = branch_snapshot_mode[:min_prefix] || branch_snapshot_min_prefix_base
         ProbeRuntime.self_spec_branch_guard_no_snapshot_threshold = branch_snapshot_mode[:no_snapshot_threshold] || branch_snapshot_no_snapshot_threshold_base
         if suffix_threshold = branch_snapshot_mode[:suffix_threshold]
+          ProbeRuntime.self_spec_branch_guard_snapshot_suffix_min_threshold = branch_snapshot_mode[:suffix_min_threshold]
           ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = suffix_threshold
           ProbeRuntime.self_spec_branch_guard_snapshot_prefix_suffix_thresholds = [] of Tuple(Int32, Float64)
         else
+          ProbeRuntime.self_spec_branch_guard_snapshot_suffix_min_threshold = branch_snapshot_suffix_min_threshold_base
           ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = branch_snapshot_suffix_threshold_base
           ProbeRuntime.self_spec_branch_guard_snapshot_prefix_suffix_thresholds = branch_snapshot_prefix_suffix_thresholds_base
         end

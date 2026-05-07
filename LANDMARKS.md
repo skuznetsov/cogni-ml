@@ -8483,3 +8483,26 @@ The current 27B `gen32` runtime trace supports the band idea for snapshot value.
 - daedalus: Separate the two axes: snapshot value appears band-shaped; no-snapshot guard value is not solved by the same suffix band and likely needs its own predicate.
 - maieutic: The assumption that one threshold can route both suffix snapshots and no-snapshot guard rejects remains false. They need independent features and probably independent default-off modes.
 - adversary: This is still offline oracle evidence. The next runtime test should be a narrow default-off band mode (`onepass_min3_suffix1to2_guard01`) against the exact pass-clean regressions.
+
+**decision_update_56:** Implemented and tested the default-off runtime suffix-band mode, but did not promote it. New mode/policy `onepass_min3_suffix1to2_guard01` enables one-pass branch snapshots only when `min_prefix=3` and the post-guard suffix has a margin in `[1.0, 2.0]`, while allowing no-snapshot guard checks only for guard margin `<=0.1`. Build and focused top2/checkpoint specs passed, and a 9B smoke showed the mode preserves parity.
+
+The 27B tests confirmed mechanics but not speed. The small four-prompt gate preserved parity on `16/16` rows. It kept the intended SQL suffix snapshot and removed the `repeat_markdown_tbl` wasted snapshot, but wall timing was worse/noisy on the SQL and markdown rows. A focused `repeat_markdown_tbl` ABBA isolated the key contradiction: band mode removed no-value branch work (`hits 4->0`, snapshots `0`, verifier chunks `10->8`) but median overlap still worsened (`6822.646 -> 7341.235ms`). Therefore the next bottleneck is not another scalar route feature. The branch route can be structurally cheaper and still lose due verifier wall, draft wait, command ordering, or host-load drift. Next step should attribute that verifier/scheduler wall before adding more gates.
+
+**evidence_update_56:**
+- claim: "The suffix-band runtime mode builds, passes focused specs, and preserves parity in 9B smoke."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_band_runtime_build2 crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_band_runtime_probe2 --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_band_runtime_specs2 crystal spec -D qwen35_mtp_metal spec/qwen35_decode_top2_spec.cr spec/qwen35_recurrent_checkpoint_spec.cr --link-flags=...` -> `4 examples, 0 failures`; `/tmp/qwen35_band_mode_smoke2_20260507194718.log`
+  verified_at: 2026-05-07
+  decay_trigger: branch snapshot mode parser, suffix-band predicate, checkpoint verifier path, or top2 decode path changes
+- claim: "The 27B band-mode gate preserved parity and showed correct mechanics, but did not provide a speed promotion."
+  source: `/tmp/qwen36_band_runtime_gate_20260507192909/gate.log`; `/tmp/qwen36_band_runtime_gate_20260507192909/summary.md`
+  verified_at: 2026-05-07
+  decay_trigger: prompt set, host load, model file, branch guard threshold, suffix-band predicate, or Metal scheduling changes
+- claim: "Focused repeat_markdown ABBA shows structural branch-work reduction can still lose wall time."
+  source: `/tmp/qwen36_band_markdown_abba_20260507193858/gate.log`; local summary `nosnap median_overlap=6822.646ms hits=4 chunks=10`, `band median_overlap=7341.235ms hits=0 chunks=8`
+  verified_at: 2026-05-07
+  decay_trigger: prompt text, host load, verifier scheduling, branch guard path, or Metal queue behavior changes
+**quadrumvirate_update_56:**
+- cassandra: If scalar routing were the remaining issue, removing no-value branch work should improve repeat-markdown wall. It did not.
+- daedalus: Pivot from "better value gate" to "why cheaper verifier structure does not lower wall." The next observation level is verifier/scheduler attribution, not route-classification.
+- maieutic: The assumption that fewer verifier chunks monotonically reduces wall is false in current runs. It may be masked by draft wait/queue ordering/host drift.
+- adversary: The runtime gate is small and noisy, so it blocks promotion rather than refuting the band mode permanently. Use it as a diagnostic mode while investigating verifier wall.
