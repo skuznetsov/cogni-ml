@@ -8398,3 +8398,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: Move from threshold tuning to trace-feature attribution. The missing predicate is expected value of a guard split, not uncertainty alone.
 - maieutic: The hidden assumption was that replayless counter restoration implies wall win. It does not when verifier split/scheduling cost dominates.
 - adversary: The threshold sweep was focused and visibly noisy. It blocks promotion but should not be used as a final broad performance estimate.
+
+**decision_update_52:** Added the first offline no-snapshot guard-value scorer and fixed suite-prompt trace attribution. `ProbeRuntime.self_spec_router_trace_label` is now reset to `main` for the primary prompt and set to the suite prompt name inside the suite loop, so router traces can separate prompt classes. `bin/qwen35_self_spec_router_trace_score.cr` now accepts `--no-snapshot-thresholds=LIST` and emits `branch_guard_no_snapshot_value` rows for aggregate and per-label candidates. The score distinguishes useful guard-token rejects from low-margin false positives: on the focused 27B YAML+math trace, `threshold=0.1/0.2` finds one useful `main` guard reject and no `math_matrix` candidates, while `threshold=0.5` adds a `math_matrix` false positive with no useful guard rejects. This confirms the next policy feature should be expected guard value, not margin alone. It does not promote a runtime threshold; the trace is small and was produced for feature attribution.
+**evidence_update_52:**
+- claim: "Router trace labels now distinguish the main prompt from suite prompts on the focused 27B trace."
+  source: `/tmp/qwen36_router_trace_label_20260507182245/router_trace.jsonl`; local parser output `labels {'main': 16, 'math_matrix': 16}`, `chunks {'main': 5, 'math_matrix': 4}`
+  verified_at: 2026-05-07
+  decay_trigger: suite-prompt loop, router trace writer, or self-spec pipeline scheduling changes
+- claim: "The offline scorer builds and reports no-snapshot guard-value rows that separate useful YAML-style guard rejects from math false positives."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_trace_score_build crystal build --release bin/qwen35_self_spec_router_trace_score.cr -o /tmp/qwen35_trace_score`; `/tmp/qwen35_trace_score --input /tmp/qwen36_router_trace_label_20260507182245/router_trace.jsonl --branch-thresholds 0.05,0.1,0.2,0.5,1.0 --min-prefixes 1,2,3 --suffix-thresholds 2.0,inf --no-snapshot-thresholds 0.05,0.1,0.2,0.5,inf` -> `main threshold=0.1/0.2 guard_rejects=1`, `math_matrix threshold=0.1/0.2 candidates=0`, `math_matrix threshold=0.5 guard_passes=1`
+  verified_at: 2026-05-07
+  decay_trigger: trace schema, scorer grouping, branch guard semantics, or prompt trace set changes
+- claim: "The probe/scorer changes keep focused regressions clean."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_router_trace_label_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_router_trace_label_probe --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_router_trace_specs crystal spec -D qwen35_mtp_metal spec/qwen35_decode_top2_spec.cr spec/qwen35_recurrent_checkpoint_spec.cr --link-flags=...` -> `4 examples, 0 failures`
+  verified_at: 2026-05-07
+  decay_trigger: probe CLI, top2 decode path, recurrent checkpoint path, or Metal bridge changes
+**quadrumvirate_update_52:**
+- cassandra: Raw margin thresholding was expected to be incomplete. The scorer confirms why: low margin can be a useful guard reject on one prompt class and a pure false positive on another.
+- daedalus: Shift from threshold tuning to expected-value classification. The route decision is three-way: skip guard on pass-clean spans, use suffix checkpointing on suffix-replay spans, and keep no-snapshot guard only when guard-token reject value is likely.
+- maieutic: The assumption that prompt-class labels are cosmetic was false; without labels the feature signal collapses and hides that `math_matrix` and `main` have opposite guard-value structure.
+- adversary: Evidence is feature-level and trace-sized (`9` chunks). It is adequate to justify the next data collection/scorer branch, not adequate to change runtime defaults.

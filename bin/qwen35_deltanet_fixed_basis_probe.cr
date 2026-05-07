@@ -11274,6 +11274,7 @@ if rank = simulate_logit_rank
       if simulate_self_spec_gpu_pipeline_hybrid_sweep && simulate_self_spec_gpu_pipeline_draft_updown_repeats > 1
         raise "draft pca-updown repeats are not wired into hybrid route scoreboards yet; disable hybrid sweep or set repeats=1"
       end
+      ProbeRuntime.self_spec_router_trace_label = "main"
       if simulate_self_spec_gpu_pipeline_hybrid_sweep
         pipeline_gammas.each do |pipeline_gamma|
           pipeline_splits.each do |draft_split|
@@ -11392,6 +11393,7 @@ if rank = simulate_logit_rank
       end
       unless simulate_self_spec_gpu_pipeline_suite_prompts.empty?
         simulate_self_spec_gpu_pipeline_suite_prompts.each do |suite_prompt|
+          ProbeRuntime.self_spec_router_trace_label = suite_prompt[:name]
           suite_token_ids = token_ids_for_prompt(tok, suite_prompt[:text], tokens_limit)
           suite_calib_count = Math.min(calib_tokens, suite_token_ids.size - 1)
           raise "suite prompt #{suite_prompt[:name]} needs at least one held-out token" unless suite_calib_count > 0 && suite_calib_count < suite_token_ids.size
