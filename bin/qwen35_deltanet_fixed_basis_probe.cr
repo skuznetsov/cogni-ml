@@ -7121,7 +7121,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                                                 tree2_margin_guard : Float64? = nil,
                                                 tree2_branch_guard : Float64? = nil,
                                                 risk_offramp_margin : Float64? = nil,
-                                                mtp_k2_on_reject : ML::GGUF::Qwen35MTPWeights? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, draft_updown_agreement_checks: Int32, draft_updown_agreement_passes: Int32, draft_updown_agreement_top1: Int32, draft_updown_agreement_top2: Int32, draft_updown_agreement_fails: Int32, draft_updown_agreement_probe_ms: Float64, draft_updown_agreement_margin_min_avg: Float64, draft_updown_agreement_margin_pass_avg: Float64, draft_updown_agreement_margin_fail_avg: Float64, draft_updown_agreement_margin_sweep: String, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, tree2_branch_guard_threshold: Float64, tree2_branch_guard_hits: Int32, tree2_branch_guard_tokens: Int32, tree2_branch_guard_rejects: Int32, tree2_branch_guard_rescues: Int32, tree2_branch_guard_misses: Int32, tree2_branch_guard_passes: Int32, tree2_branch_guard_prefix_rejects: Int32, tree2_branch_guard_replayless_resyncs: Int32, tree2_branch_guard_snapshot_copies: Int32, tree2_branch_guard_snapshot_ms: Float64, tree2_branch_guard_snapshot_restore_ms: Float64, tree2_branch_guard_snapshot_resync_base_ms: Float64, tree2_branch_guard_suffix_replays: Int32, tree2_branch_guard_suffix_replay_tokens: Int32, tree2_branch_guard_suffix_replay_ms: Float64, risk_offramp_threshold: Float64, risk_offramp_hits: Int32, risk_offramp_delayed_blocks: Int32, risk_offramp_delayed_tokens: Int32, mtp_k2_reject_checks: Int32, mtp_k2_reject_rescues: Int32, mtp_k2_reject_misses: Int32, mtp_k2_reject_ms: Float64, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, draft_resyncs: Int32, draft_wasted_tail_tokens: Int32, draft_wasted_next_tokens: Int32, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
+                                                mtp_k2_on_reject : ML::GGUF::Qwen35MTPWeights? = nil) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, draft_updown_agreement_checks: Int32, draft_updown_agreement_passes: Int32, draft_updown_agreement_top1: Int32, draft_updown_agreement_top2: Int32, draft_updown_agreement_fails: Int32, draft_updown_agreement_probe_ms: Float64, draft_updown_agreement_margin_min_avg: Float64, draft_updown_agreement_margin_pass_avg: Float64, draft_updown_agreement_margin_fail_avg: Float64, draft_updown_agreement_margin_sweep: String, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, tree2_branch_guard_threshold: Float64, tree2_branch_guard_hits: Int32, tree2_branch_guard_tokens: Int32, tree2_branch_guard_rejects: Int32, tree2_branch_guard_rescues: Int32, tree2_branch_guard_misses: Int32, tree2_branch_guard_passes: Int32, tree2_branch_guard_prefix_rejects: Int32, tree2_branch_guard_replayless_resyncs: Int32, tree2_branch_guard_snapshot_copies: Int32, tree2_branch_guard_snapshot_ms: Float64, tree2_branch_guard_snapshot_restore_ms: Float64, tree2_branch_guard_snapshot_resync_base_ms: Float64, tree2_branch_guard_suffix_replays: Int32, tree2_branch_guard_suffix_replay_tokens: Int32, tree2_branch_guard_suffix_replay_ms: Float64, tree2_branch_guard_prefix_verify_ms: Float64, tree2_branch_guard_prefix_verify_tokens: Int32, tree2_branch_guard_token_verify_ms: Float64, tree2_branch_guard_token_verify_tokens: Int32, tree2_branch_guard_suffix_verify_ms: Float64, tree2_branch_guard_suffix_verify_tokens: Int32, tree2_branch_guard_snapshot_suffix_verify_ms: Float64, tree2_branch_guard_snapshot_suffix_verify_tokens: Int32, tree2_branch_guard_no_snapshot_suffix_verify_ms: Float64, tree2_branch_guard_no_snapshot_suffix_verify_tokens: Int32, risk_offramp_threshold: Float64, risk_offramp_hits: Int32, risk_offramp_delayed_blocks: Int32, risk_offramp_delayed_tokens: Int32, mtp_k2_reject_checks: Int32, mtp_k2_reject_rescues: Int32, mtp_k2_reject_misses: Int32, mtp_k2_reject_ms: Float64, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, draft_resyncs: Int32, draft_wasted_tail_tokens: Int32, draft_wasted_next_tokens: Int32, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
   raise "GPU pipeline requires Metal" unless ML::GGUF::Qwen35Metal.available?
   raise "GPU pipeline gamma must be positive" unless gamma > 0
   raise "GPU pipeline gen_tokens must be positive" unless gen_tokens > 0
@@ -7746,6 +7746,16 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   tree2_branch_guard_suffix_replays = 0
   tree2_branch_guard_suffix_replay_tokens = 0
   tree2_branch_guard_suffix_replay_ms = 0.0
+  tree2_branch_guard_prefix_verify_ms = 0.0
+  tree2_branch_guard_prefix_verify_tokens = 0
+  tree2_branch_guard_token_verify_ms = 0.0
+  tree2_branch_guard_token_verify_tokens = 0
+  tree2_branch_guard_suffix_verify_ms = 0.0
+  tree2_branch_guard_suffix_verify_tokens = 0
+  tree2_branch_guard_snapshot_suffix_verify_ms = 0.0
+  tree2_branch_guard_snapshot_suffix_verify_tokens = 0
+  tree2_branch_guard_no_snapshot_suffix_verify_ms = 0.0
+  tree2_branch_guard_no_snapshot_suffix_verify_tokens = 0
   risk_offramp_hits = 0
   risk_offramp_delayed_blocks = 0
   risk_offramp_delayed_tokens = 0
@@ -8174,6 +8184,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, prefix_tokens, cycle_start_pos, verifier_state)
         dt_verify_prefix = (Time.instant - t_verify_prefix).total_milliseconds
         verifier_ms += dt_verify_prefix
+        tree2_branch_guard_prefix_verify_ms += dt_verify_prefix
+        tree2_branch_guard_prefix_verify_tokens += prefix_tokens.size
         if attr_collect
           verifier_prefill_ms += dt_verify_prefix
           verifier_chunks += 1
@@ -8207,6 +8219,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             target_nexts.concat(guard_nexts)
             dt_verify_guard = (Time.instant - t_verify_guard).total_milliseconds
             verifier_ms += dt_verify_guard
+            tree2_branch_guard_token_verify_ms += dt_verify_guard
+            tree2_branch_guard_token_verify_tokens += 1
             if attr_collect
               verifier_prefill_ms += dt_verify_guard
               verifier_chunks += 1
@@ -8232,6 +8246,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
               target_nexts.concat(suffix_nexts)
               dt_verify_suffix = (Time.instant - t_verify_suffix).total_milliseconds
               verifier_ms += dt_verify_suffix
+              tree2_branch_guard_suffix_verify_ms += dt_verify_suffix
+              tree2_branch_guard_suffix_verify_tokens += suffix_tokens.size
+              tree2_branch_guard_snapshot_suffix_verify_ms += dt_verify_suffix
+              tree2_branch_guard_snapshot_suffix_verify_tokens += suffix_tokens.size
               if attr_collect
                 verifier_prefill_ms += dt_verify_suffix
                 verifier_chunks += 1
@@ -8245,6 +8263,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
               target_nexts.concat(suffix_nexts)
               dt_verify_suffix = (Time.instant - t_verify_suffix).total_milliseconds
               verifier_ms += dt_verify_suffix
+              tree2_branch_guard_suffix_verify_ms += dt_verify_suffix
+              tree2_branch_guard_suffix_verify_tokens += suffix_tokens.size
+              tree2_branch_guard_no_snapshot_suffix_verify_ms += dt_verify_suffix
+              tree2_branch_guard_no_snapshot_suffix_verify_tokens += suffix_tokens.size
               if attr_collect
                 verifier_prefill_ms += dt_verify_suffix
                 verifier_chunks += 1
@@ -8261,6 +8283,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
               target_nexts.concat(suffix_nexts)
               dt_verify_suffix = (Time.instant - t_verify_suffix).total_milliseconds
               verifier_ms += dt_verify_suffix
+              tree2_branch_guard_suffix_verify_ms += dt_verify_suffix
+              tree2_branch_guard_suffix_verify_tokens += suffix_tokens.size
+              tree2_branch_guard_no_snapshot_suffix_verify_ms += dt_verify_suffix
+              tree2_branch_guard_no_snapshot_suffix_verify_tokens += suffix_tokens.size
               if attr_collect
                 verifier_prefill_ms += dt_verify_suffix
                 verifier_chunks += 1
@@ -9087,6 +9113,16 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     tree2_branch_guard_suffix_replays: tree2_branch_guard_suffix_replays,
     tree2_branch_guard_suffix_replay_tokens: tree2_branch_guard_suffix_replay_tokens,
     tree2_branch_guard_suffix_replay_ms: tree2_branch_guard_suffix_replay_ms,
+    tree2_branch_guard_prefix_verify_ms: tree2_branch_guard_prefix_verify_ms,
+    tree2_branch_guard_prefix_verify_tokens: tree2_branch_guard_prefix_verify_tokens,
+    tree2_branch_guard_token_verify_ms: tree2_branch_guard_token_verify_ms,
+    tree2_branch_guard_token_verify_tokens: tree2_branch_guard_token_verify_tokens,
+    tree2_branch_guard_suffix_verify_ms: tree2_branch_guard_suffix_verify_ms,
+    tree2_branch_guard_suffix_verify_tokens: tree2_branch_guard_suffix_verify_tokens,
+    tree2_branch_guard_snapshot_suffix_verify_ms: tree2_branch_guard_snapshot_suffix_verify_ms,
+    tree2_branch_guard_snapshot_suffix_verify_tokens: tree2_branch_guard_snapshot_suffix_verify_tokens,
+    tree2_branch_guard_no_snapshot_suffix_verify_ms: tree2_branch_guard_no_snapshot_suffix_verify_ms,
+    tree2_branch_guard_no_snapshot_suffix_verify_tokens: tree2_branch_guard_no_snapshot_suffix_verify_tokens,
     risk_offramp_threshold:       risk_offramp_margin || 0.0,
     risk_offramp_hits:            risk_offramp_hits,
     risk_offramp_delayed_blocks:  risk_offramp_delayed_blocks,
@@ -9166,7 +9202,7 @@ private def self_spec_pipeline_updown_agreement_note(pipe) : String
 end
 
 private def self_spec_pipeline_tree2_note(pipe) : String
-  sprintf(" tree2_first_checks=%d tree2_first_rescues=%d tree2_first_misses=%d tree2_first_early_exits=%d tree2_anywhere_checks=%d tree2_anywhere_rescues=%d tree2_anywhere_misses=%d tree2_anywhere_early_exits=%d tree2_staged_checks=%d tree2_staged_rescues=%d tree2_staged_misses=%d tree2_staged_early_exits=%d tree2_staged_stages=%d tree2_margin_checks=%d tree2_margin_avg=%.4f tree2_margin_min=%.4f tree2_reject_margin_checks=%d tree2_reject_margin_avg=%.4f tree2_reject_margin_min=%.4f tree2_margin_guard_threshold=%.4f tree2_margin_guard_hits=%d tree2_margin_guard_tokens=%d tree2_margin_guard_rejects=%d tree2_margin_guard_passes=%d tree2_branch_guard_threshold=%.4f tree2_branch_guard_hits=%d tree2_branch_guard_tokens=%d tree2_branch_guard_rejects=%d tree2_branch_guard_rescues=%d tree2_branch_guard_misses=%d tree2_branch_guard_passes=%d tree2_branch_guard_prefix_rejects=%d tree2_branch_guard_replayless_resyncs=%d tree2_branch_guard_snapshot_copies=%d tree2_branch_guard_snapshot_ms=%.3f tree2_branch_guard_snapshot_restore_ms=%.3f tree2_branch_guard_snapshot_resync_base_ms=%.3f tree2_branch_guard_suffix_replays=%d tree2_branch_guard_suffix_replay_tokens=%d tree2_branch_guard_suffix_replay_ms=%.3f risk_offramp_threshold=%.4f risk_offramp_hits=%d risk_offramp_delayed_blocks=%d risk_offramp_delayed_tokens=%d mtp_k2_reject_checks=%d mtp_k2_reject_rescues=%d mtp_k2_reject_misses=%d mtp_k2_reject_ms=%.3f",
+  sprintf(" tree2_first_checks=%d tree2_first_rescues=%d tree2_first_misses=%d tree2_first_early_exits=%d tree2_anywhere_checks=%d tree2_anywhere_rescues=%d tree2_anywhere_misses=%d tree2_anywhere_early_exits=%d tree2_staged_checks=%d tree2_staged_rescues=%d tree2_staged_misses=%d tree2_staged_early_exits=%d tree2_staged_stages=%d tree2_margin_checks=%d tree2_margin_avg=%.4f tree2_margin_min=%.4f tree2_reject_margin_checks=%d tree2_reject_margin_avg=%.4f tree2_reject_margin_min=%.4f tree2_margin_guard_threshold=%.4f tree2_margin_guard_hits=%d tree2_margin_guard_tokens=%d tree2_margin_guard_rejects=%d tree2_margin_guard_passes=%d tree2_branch_guard_threshold=%.4f tree2_branch_guard_hits=%d tree2_branch_guard_tokens=%d tree2_branch_guard_rejects=%d tree2_branch_guard_rescues=%d tree2_branch_guard_misses=%d tree2_branch_guard_passes=%d tree2_branch_guard_prefix_rejects=%d tree2_branch_guard_replayless_resyncs=%d tree2_branch_guard_snapshot_copies=%d tree2_branch_guard_snapshot_ms=%.3f tree2_branch_guard_snapshot_restore_ms=%.3f tree2_branch_guard_snapshot_resync_base_ms=%.3f tree2_branch_guard_suffix_replays=%d tree2_branch_guard_suffix_replay_tokens=%d tree2_branch_guard_suffix_replay_ms=%.3f tree2_branch_guard_prefix_verify_ms=%.3f tree2_branch_guard_prefix_verify_tokens=%d tree2_branch_guard_token_verify_ms=%.3f tree2_branch_guard_token_verify_tokens=%d tree2_branch_guard_suffix_verify_ms=%.3f tree2_branch_guard_suffix_verify_tokens=%d tree2_branch_guard_snapshot_suffix_verify_ms=%.3f tree2_branch_guard_snapshot_suffix_verify_tokens=%d tree2_branch_guard_no_snapshot_suffix_verify_ms=%.3f tree2_branch_guard_no_snapshot_suffix_verify_tokens=%d risk_offramp_threshold=%.4f risk_offramp_hits=%d risk_offramp_delayed_blocks=%d risk_offramp_delayed_tokens=%d mtp_k2_reject_checks=%d mtp_k2_reject_rescues=%d mtp_k2_reject_misses=%d mtp_k2_reject_ms=%.3f",
     pipe[:tree2_first_checks],
     pipe[:tree2_first_rescues],
     pipe[:tree2_first_misses],
@@ -9207,6 +9243,16 @@ private def self_spec_pipeline_tree2_note(pipe) : String
     pipe[:tree2_branch_guard_suffix_replays],
     pipe[:tree2_branch_guard_suffix_replay_tokens],
     pipe[:tree2_branch_guard_suffix_replay_ms],
+    pipe[:tree2_branch_guard_prefix_verify_ms],
+    pipe[:tree2_branch_guard_prefix_verify_tokens],
+    pipe[:tree2_branch_guard_token_verify_ms],
+    pipe[:tree2_branch_guard_token_verify_tokens],
+    pipe[:tree2_branch_guard_suffix_verify_ms],
+    pipe[:tree2_branch_guard_suffix_verify_tokens],
+    pipe[:tree2_branch_guard_snapshot_suffix_verify_ms],
+    pipe[:tree2_branch_guard_snapshot_suffix_verify_tokens],
+    pipe[:tree2_branch_guard_no_snapshot_suffix_verify_ms],
+    pipe[:tree2_branch_guard_no_snapshot_suffix_verify_tokens],
     pipe[:risk_offramp_threshold],
     pipe[:risk_offramp_hits],
     pipe[:risk_offramp_delayed_blocks],
