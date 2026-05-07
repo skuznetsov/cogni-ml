@@ -172,6 +172,7 @@ module ML
         @@dn128_fused_post_pipeline : ML::Metal::ComputePipeline?
         @@dn128_chunk_fused_pipeline : ML::Metal::ComputePipeline?
         @@dn128_chunk_rowwise_pipeline : ML::Metal::ComputePipeline?
+        @@dn128_chunk_rowwise_checkpoint_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_coeffs_pipeline : ML::Metal::ComputePipeline?
@@ -199,6 +200,7 @@ module ML
         @@recurrent_shift_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@recurrent_conv_shift_chunk_checkpoint_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_chunk_h16_pipeline : ML::Metal::ComputePipeline?
         @@l2_heads_pipeline : ML::Metal::ComputePipeline?
         @@l2_heads_chunk_pipeline : ML::Metal::ComputePipeline?
@@ -934,6 +936,12 @@ module ML
           }
         end
 
+        private def self.dn128_chunk_rowwise_checkpoint_pipeline : ML::Metal::ComputePipeline
+          @@dn128_chunk_rowwise_checkpoint_pipeline ||= ML::Metal::PipelineCache.get("delta_net_chunk_128_rowwise_checkpoint") {
+            ML::Metal::ComputePipeline.new("delta_net_chunk_128_rowwise_checkpoint", DELTA_NET_SOURCE)
+          }
+        end
+
         private def self.dn_128_enabled? : Bool
           ENV["QWEN35_DN_128"]? != "0"
         end
@@ -1124,6 +1132,12 @@ module ML
         private def self.recurrent_conv_shift_chunk_pipeline : ML::Metal::ComputePipeline
           @@recurrent_conv_shift_chunk_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv_shift_chunk") {
             ML::Metal::ComputePipeline.new("qwen35_recurrent_conv_shift_chunk", RECURRENT_SOURCE)
+          }
+        end
+
+        private def self.recurrent_conv_shift_chunk_checkpoint_pipeline : ML::Metal::ComputePipeline
+          @@recurrent_conv_shift_chunk_checkpoint_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv_shift_chunk_checkpoint") {
+            ML::Metal::ComputePipeline.new("qwen35_recurrent_conv_shift_chunk_checkpoint", RECURRENT_SOURCE)
           }
         end
 
@@ -3089,6 +3103,69 @@ module ML
           result
         end
 
+        def self.delta_net_chunk_checkpoint(state_buf : ML::MetalBuffer,
+                                            q_conv : Array(Float32),
+                                            k_conv : Array(Float32),
+                                            v_conv : Array(Float32),
+                                            ghead : Array(Float32),
+                                            beta : Array(Float32),
+                                            h_k : Int32, h_v : Int32, s : Int32,
+                                            n_tokens : Int32,
+                                            scale : Float32,
+                                            checkpoint_index : Int32) : NamedTuple(out: Array(Float32), checkpoint_state: Array(Float32))
+          ML::Metal::Device.init!
+          raise "delta_net_chunk_checkpoint currently requires rowwise s=128" unless s == 128
+          raise "delta_net_chunk_checkpoint n_tokens must be positive" unless n_tokens > 0
+          raise "delta_net_chunk_checkpoint checkpoint index out of range" unless checkpoint_index >= 0 && checkpoint_index < n_tokens
+          raise "delta_net_chunk_checkpoint q size mismatch" unless q_conv.size == n_tokens * h_k * s
+          raise "delta_net_chunk_checkpoint k size mismatch" unless k_conv.size == n_tokens * h_k * s
+          raise "delta_net_chunk_checkpoint v size mismatch" unless v_conv.size == n_tokens * h_v * s
+          raise "delta_net_chunk_checkpoint g size mismatch" unless ghead.size == n_tokens * h_v
+          raise "delta_net_chunk_checkpoint beta size mismatch" unless beta.size == n_tokens * h_v
+
+          q_buf   = Scratch.get(:dn_chunk_checkpoint_q, q_conv.size.to_i64 * sizeof(Float32))
+          k_buf   = Scratch.get(:dn_chunk_checkpoint_k, k_conv.size.to_i64 * sizeof(Float32))
+          v_buf   = Scratch.get(:dn_chunk_checkpoint_v, v_conv.size.to_i64 * sizeof(Float32))
+          g_buf   = Scratch.get(:dn_chunk_checkpoint_g, ghead.size.to_i64 * sizeof(Float32))
+          b_buf   = Scratch.get(:dn_chunk_checkpoint_b, beta.size.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:dn_chunk_checkpoint_out, (n_tokens * h_v * s).to_i64 * sizeof(Float32))
+          checkpoint_buf = Scratch.get(:dn_chunk_checkpoint_state, (h_v * s * s).to_i64 * sizeof(Float32))
+
+          q_buf.write(q_conv)
+          k_buf.write(k_conv)
+          v_buf.write(v_conv)
+          g_buf.write(ghead)
+          b_buf.write(beta)
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(dn128_chunk_rowwise_checkpoint_pipeline)
+          enc.set_buffer(state_buf,      0, ML::Metal::BufferAccess::ReadWrite)
+          enc.set_buffer(q_buf,          1)
+          enc.set_buffer(k_buf,          2)
+          enc.set_buffer(v_buf,          3)
+          enc.set_buffer(g_buf,          4)
+          enc.set_buffer(b_buf,          5)
+          enc.set_buffer(out_buf,        6, ML::Metal::BufferAccess::Write)
+          enc.set_value(h_k.to_u32,      7)
+          enc.set_value(h_v.to_u32,      8)
+          enc.set_value(s.to_u32,        9)
+          enc.set_value(scale,          10)
+          enc.set_value(n_tokens.to_u32, 11)
+          enc.set_buffer(checkpoint_buf, 12, ML::Metal::BufferAccess::Write)
+          enc.set_value(checkpoint_index.to_u32, 13)
+          enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
+          enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+
+          {
+            out:              read_shared_f32(out_buf, n_tokens * h_v * s),
+            checkpoint_state: read_shared_f32(checkpoint_buf, h_v * s * s),
+          }
+        end
+
         # Multi-token recurrent prep for Qwen35 prefill chunks.
         #
         # `qkv_mixed`, `alpha`, and `beta` are token-major outputs from the
@@ -3193,6 +3270,112 @@ module ML
             read_shared_f32(v_buf, n_tokens * v_dim),
             read_shared_f32(g_buf, n_tokens * h_v),
             read_shared_f32(beta_buf, n_tokens * h_v),
+          }
+        end
+
+        def self.recurrent_prep_chunk_checkpoint(conv_state_buf : ML::MetalBuffer,
+                                                 qkv_mixed : Array(Float32),
+                                                 alpha : Array(Float32),
+                                                 beta : Array(Float32),
+                                                 ssm_conv1d : Array(Float32),
+                                                 ssm_dt_bias : Array(Float32),
+                                                 ssm_a : Array(Float32),
+                                                 h_k : Int32, h_v : Int32, s : Int32,
+                                                 conv_k : Int32,
+                                                 n_tokens : Int32,
+                                                 eps : Float32,
+                                                 checkpoint_index : Int32) : NamedTuple(q: Array(Float32), k: Array(Float32), v: Array(Float32), g: Array(Float32), beta: Array(Float32), checkpoint_conv: Array(Float32))
+          ML::Metal::Device.init!
+          qkv_dim = 2 * h_k * s + h_v * s
+          q_dim = h_k * s
+          v_dim = h_v * s
+          raise "recurrent_prep_chunk_checkpoint n_tokens must be positive" unless n_tokens > 0
+          raise "recurrent_prep_chunk_checkpoint checkpoint index out of range" unless checkpoint_index >= 0 && checkpoint_index < n_tokens
+          raise "recurrent_prep_chunk_checkpoint needs a non-empty conv state" unless conv_k > 1
+          raise "recurrent_prep_chunk_checkpoint qkv size mismatch" unless qkv_mixed.size == n_tokens * qkv_dim
+          raise "recurrent_prep_chunk_checkpoint alpha size mismatch" unless alpha.size == n_tokens * h_v
+          raise "recurrent_prep_chunk_checkpoint beta size mismatch" unless beta.size == n_tokens * h_v
+          raise "recurrent_prep_chunk_checkpoint conv1d size mismatch" unless ssm_conv1d.size == qkv_dim * conv_k
+
+          qkv_buf = Scratch.get(:rec_chunk_checkpoint_qkv, qkv_mixed.size.to_i64 * sizeof(Float32))
+          conv_w_buf = Scratch.get(:rec_chunk_checkpoint_conv_w, ssm_conv1d.size.to_i64 * sizeof(Float32))
+          q_buf = Scratch.get(:rec_chunk_checkpoint_q, (n_tokens * q_dim).to_i64 * sizeof(Float32))
+          k_buf = Scratch.get(:rec_chunk_checkpoint_k, (n_tokens * q_dim).to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:rec_chunk_checkpoint_v, (n_tokens * v_dim).to_i64 * sizeof(Float32))
+          alpha_buf = Scratch.get(:rec_chunk_checkpoint_alpha, alpha.size.to_i64 * sizeof(Float32))
+          beta_buf = Scratch.get(:rec_chunk_checkpoint_beta, beta.size.to_i64 * sizeof(Float32))
+          dt_bias_buf = Scratch.get(:rec_chunk_checkpoint_dt_bias, ssm_dt_bias.size.to_i64 * sizeof(Float32))
+          ssm_a_buf = Scratch.get(:rec_chunk_checkpoint_ssm_a, ssm_a.size.to_i64 * sizeof(Float32))
+          g_buf = Scratch.get(:rec_chunk_checkpoint_g, (n_tokens * h_v).to_i64 * sizeof(Float32))
+          checkpoint_buf = Scratch.get(:rec_chunk_checkpoint_conv, ((conv_k - 1) * qkv_dim).to_i64 * sizeof(Float32))
+
+          qkv_buf.write(qkv_mixed)
+          conv_w_buf.write(ssm_conv1d)
+          alpha_buf.write(alpha)
+          beta_buf.write(beta)
+          dt_bias_buf.write(ssm_dt_bias)
+          ssm_a_buf.write(ssm_a)
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          conv_enc = ML::Metal::ComputeEncoder.new(cmd)
+          conv_enc.set_pipeline(recurrent_conv_shift_chunk_checkpoint_pipeline)
+          conv_enc.set_buffer(conv_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          conv_enc.set_buffer(qkv_buf, 1)
+          conv_enc.set_buffer(conv_w_buf, 2)
+          conv_enc.set_buffer(q_buf, 3, ML::Metal::BufferAccess::Write)
+          conv_enc.set_buffer(k_buf, 4, ML::Metal::BufferAccess::Write)
+          conv_enc.set_buffer(v_buf, 5, ML::Metal::BufferAccess::Write)
+          conv_enc.set_value(h_k.to_u32, 6)
+          conv_enc.set_value(h_v.to_u32, 7)
+          conv_enc.set_value(s.to_u32, 8)
+          conv_enc.set_value(conv_k.to_u32, 9)
+          conv_enc.set_value(n_tokens.to_u32, 10)
+          conv_enc.set_buffer(checkpoint_buf, 11, ML::Metal::BufferAccess::Write)
+          conv_enc.set_value(checkpoint_index.to_u32, 12)
+          conv_enc.dispatch_1d(qkv_dim, 256)
+          conv_enc.end_encoding
+
+          qnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          qnorm_enc.set_pipeline(l2_heads_chunk_pipeline)
+          qnorm_enc.set_buffer(q_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          qnorm_enc.set_value(h_k.to_u32, 1)
+          qnorm_enc.set_value(s.to_u32, 2)
+          qnorm_enc.set_value(eps, 3)
+          qnorm_enc.dispatch_threadgroups({h_k, n_tokens, 1}, {32, 1, 1})
+          qnorm_enc.end_encoding
+
+          knorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          knorm_enc.set_pipeline(l2_heads_chunk_pipeline)
+          knorm_enc.set_buffer(k_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          knorm_enc.set_value(h_k.to_u32, 1)
+          knorm_enc.set_value(s.to_u32, 2)
+          knorm_enc.set_value(eps, 3)
+          knorm_enc.dispatch_threadgroups({h_k, n_tokens, 1}, {32, 1, 1})
+          knorm_enc.end_encoding
+
+          ab_enc = ML::Metal::ComputeEncoder.new(cmd)
+          ab_enc.set_pipeline(recurrent_ab_chunk_pipeline)
+          ab_enc.set_buffer(alpha_buf, 0)
+          ab_enc.set_buffer(beta_buf, 1, ML::Metal::BufferAccess::ReadWrite)
+          ab_enc.set_buffer(dt_bias_buf, 2)
+          ab_enc.set_buffer(ssm_a_buf, 3)
+          ab_enc.set_buffer(g_buf, 4, ML::Metal::BufferAccess::Write)
+          ab_enc.set_value(h_v.to_u32, 5)
+          ab_enc.set_value(n_tokens.to_u32, 6)
+          ab_enc.dispatch_1d(n_tokens * h_v, 64)
+          ab_enc.end_encoding
+
+          cmd.commit
+          cmd.wait
+
+          {
+            q:               read_shared_f32(q_buf, n_tokens * q_dim),
+            k:               read_shared_f32(k_buf, n_tokens * q_dim),
+            v:               read_shared_f32(v_buf, n_tokens * v_dim),
+            g:               read_shared_f32(g_buf, n_tokens * h_v),
+            beta:            read_shared_f32(beta_buf, n_tokens * h_v),
+            checkpoint_conv: read_shared_f32(checkpoint_buf, (conv_k - 1) * qkv_dim),
           }
         end
 
