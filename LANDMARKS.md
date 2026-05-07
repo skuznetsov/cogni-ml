@@ -8094,3 +8094,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The branch does not need a more permissive prefix policy yet; it needs stricter model/workload provenance in every trace/score note.
 - maieutic: The hidden assumption was that the current binary inherited the 27B model path. It did not. Future long-running gates should print or parse `model=` before scoring.
 - adversary: Runtime prefix-conditioned policy is verified as opt-in plumbing only. It is not a promoted speed policy until ABBA shows a wall win against current `min_prefix3/suffix2`, ungated snapshot, and nosnap on 27B.
+
+**decision_update_33:** Focused 27B `gen32` ABBA refutes promoting prefix-conditioned snapshots as a speed policy under the current verifier/scheduler shape. The clean Python runner checked `model=Qwen3.6-27B-Q4_K_M.gguf`, used three prompt classes (`structured_yaml`, `structured_sql`, `reason_bench`), and ran order `nosnap/snap/suffix2/prefixmap/prefixmap/suffix2/snap/nosnap`. All `24/24` rows preserved `parity=true`. Structurally, the prefix map behaved correctly: it skipped the clean YAML snapshot (`snapshot_copies=0`) and kept one useful suffix snapshot on each SQL/reason reject row. However wall timing did not support promotion. Aggregate `overlap_ms` was `nosnap 4766.531`, `prefixmap 4966.869`, `snap 5131.162`, and `suffix2 5656.397`; average replay fell from `125.742ms` for nosnap to roughly `42-45ms` for snapshot modes, but verifier/scheduling variance dominated the saved replay. `structured_sql` is the clearest adversary row: replay dropped by about `116-122ms`, yet prefixmap/suffix2 wall regressed by about `2.1s` versus nosnap. Conclusion: prefix-conditioned snapshots are correct opt-in plumbing and useful as a router primitive, but the next speed work must attribute and reduce verifier split/scheduler overhead before adding more snapshot-router features.
+**evidence_update_33:**
+- claim: "The 27B `gen32` prefix-policy ABBA preserves exact parity and shows replay savings without robust wall-speed promotion."
+  source: `/tmp/qwen36_branch_snapshot_prefix_policy_abba_27b_gen32_py2_20260506205048/compact.tsv`; `/tmp/qwen36_branch_snapshot_prefix_policy_abba_27b_gen32_py2_20260506205048/summary.txt`
+  verified_at: 2026-05-06
+  decay_trigger: prompt suite, model file, host load, generated length, rank/layers, gamma, branch snapshot implementation, or verifier scheduling changes
+**quadrumvirate_update_33:**
+- cassandra: Snapshot routes should save replay but can still lose wall if verifier splitting and queue scheduling dominate. The ABBA data matched this failure mode.
+- daedalus: The next pivot is from "better snapshot selection" to "why does a structurally cheaper verifier path have worse wall?" Attribute verifier/scheduler overhead before more router tuning.
+- maieutic: The hidden assumption was that replay reduction is a sufficient proxy for speed. It is not under current command-buffer/split scheduling.
+- adversary: The gate is focused, not broad; nevertheless it is enough to block promotion because the policy fails against its most relevant baselines on the targeted rows.
