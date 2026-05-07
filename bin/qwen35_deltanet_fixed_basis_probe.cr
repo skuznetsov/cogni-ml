@@ -29,6 +29,7 @@ module ProbeRuntime
   @@self_spec_branch_guard_until_reject = false
   @@self_spec_branch_guard_overlap_next = false
   @@self_spec_branch_guard_snapshot_only_split = false
+  @@self_spec_branch_guard_single_pass_checkpoint = false
   @@self_spec_branch_guard_snapshot_min_prefix = 1
   @@self_spec_branch_guard_snapshot_suffix_threshold : Float64? = nil
   @@self_spec_branch_guard_snapshot_prefix_suffix_thresholds = [] of Tuple(Int32, Float64)
@@ -139,6 +140,14 @@ module ProbeRuntime
 
   def self.self_spec_branch_guard_snapshot_only_split=(enabled : Bool)
     @@self_spec_branch_guard_snapshot_only_split = enabled
+  end
+
+  def self.self_spec_branch_guard_single_pass_checkpoint : Bool
+    @@self_spec_branch_guard_single_pass_checkpoint
+  end
+
+  def self.self_spec_branch_guard_single_pass_checkpoint=(enabled : Bool)
+    @@self_spec_branch_guard_single_pass_checkpoint = enabled
   end
 
   def self.self_spec_branch_guard_snapshot_min_prefix : Int32
@@ -7144,9 +7153,11 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   branch_guard_until_reject = ProbeRuntime.self_spec_branch_guard_until_reject
   branch_guard_overlap_next = ProbeRuntime.self_spec_branch_guard_overlap_next
   branch_guard_snapshot_only_split = ProbeRuntime.self_spec_branch_guard_snapshot_only_split
+  branch_guard_single_pass_checkpoint = ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint
   raise "GPU pipeline tree2 branch guard until-reject requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_until_reject && tree2_branch_guard.nil?
   raise "GPU pipeline tree2 branch guard overlap-next requires --simulate-self-spec-gpu-pipeline-tree2-branch-guard" if branch_guard_overlap_next && tree2_branch_guard.nil?
   raise "GPU pipeline tree2 branch guard snapshot-only split requires snapshot mode" if branch_guard_snapshot_only_split && !branch_guard_snapshot_enabled
+  raise "GPU pipeline tree2 branch guard single-pass checkpoint requires snapshot mode" if branch_guard_single_pass_checkpoint && !branch_guard_snapshot_enabled
   mtp_k2_on_reject_enabled = !mtp_k2_on_reject.nil?
   if mtp_k2_on_reject_enabled && (tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil?)
     raise "GPU pipeline MTP K2 reject diagnostic currently cannot combine with tree2/risk routes"
@@ -8175,6 +8186,65 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     if bgi = branch_guard_index
       tree2_branch_guard_hits += 1
       tree2_branch_guard_tokens += bgi + 1
+      handled_branch_guard = false
+      single_pass_checkpoint = branch_guard_single_pass_checkpoint &&
+                               branch_guard_snapshot_enabled &&
+                               verifier_tokens.size > bgi + 1 &&
+                               bgi + 1 >= branch_guard_snapshot_min_prefix &&
+                               branch_guard_snapshot_suffix_allowed.call(current_block, bgi + 1, verifier_tokens.size)
+      if single_pass_checkpoint
+        snapshot = branch_guard_snapshot_scratch.not_nil!
+        branch_guard_snapshot_pos = cycle_start_pos + bgi + 1
+        t_verify_onepass = Time.instant
+        target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s_recurrent_checkpoint(weights, verifier_tokens, cycle_start_pos,
+          verifier_state, bgi, snapshot)
+        dt_verify_onepass = (Time.instant - t_verify_onepass).total_milliseconds
+        verifier_ms += dt_verify_onepass
+        tree2_branch_guard_suffix_verify_ms += dt_verify_onepass
+        tree2_branch_guard_suffix_verify_tokens += verifier_tokens.size
+        tree2_branch_guard_snapshot_suffix_verify_ms += dt_verify_onepass
+        tree2_branch_guard_snapshot_suffix_verify_tokens += verifier_tokens.size
+        if attr_collect
+          verifier_prefill_ms += dt_verify_onepass
+          verifier_chunks += 1
+          verifier_tokens_count += verifier_tokens.size
+        end
+        wba.try(&.mark("verifier", "branch_guard_onepass_checkpoint_#{chunks}", t_verify_onepass, Time.instant))
+
+        expected_branch = target_next_id
+        prefix_ok = true
+        bgi.times do |i|
+          cand = proposal[i]
+          if cand == expected_branch
+            expected_branch = target_nexts[i][0]
+          else
+            tree2_branch_guard_prefix_rejects += 1
+            prefix_ok = false
+            break
+          end
+        end
+
+        if prefix_ok
+          guard_expected = expected_branch
+          guard_cand = proposal[bgi]
+          if guard_cand == guard_expected
+            tree2_branch_guard_passes += 1
+            branch_guard_snapshot_state = snapshot
+            tree2_branch_guard_snapshot_copies += 1
+          else
+            second_id = read_second_id.call(current_block, bgi)
+            tree2_branch_guard_rejects += 1
+            if second_id == guard_expected
+              tree2_branch_guard_rescues += 1
+            else
+              tree2_branch_guard_misses += 1
+            end
+          end
+        end
+        handled_branch_guard = true
+      end
+
+      unless handled_branch_guard
       prefix_size = bgi
       prefix_ok = true
       expected_branch = target_next_id
@@ -8309,6 +8379,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           branch_guard_resync_ready = true
           branch_guard_resync_index = bgi
         end
+      end
       end
     elsif gi = guard_index
       guard_verify_size = gi + 1
@@ -10233,6 +10304,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-until-reject", "Only enable branch guard before the first real reject in the run") { ProbeRuntime.self_spec_branch_guard_until_reject = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-overlap-next", "Allow speculative next-block pre-submit even when branch guard is active; rejects discard the wasted block") { ProbeRuntime.self_spec_branch_guard_overlap_next = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-only-split", "When branch snapshots are enabled, split verifier only for guard candidates that pass the snapshot value gate") { ProbeRuntime.self_spec_branch_guard_snapshot_only_split = true }
+  p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-single-pass-checkpoint", "When branch snapshots are enabled, verify prefix+guard+suffix in one known-span pass while checkpointing recurrent state after the guard") { ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = true }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margin=F", "When draft top1/top2 margin <= F, do not pre-submit the next draft block before exact verification") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST", "In-process A/B list for risk-offramp thresholds; automatically includes the no-offramp baseline") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margins = parse_float_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-repeats=N", "Repeat risk-offramp A/B in ABBA order and score against median no-offramp baselines") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_repeats = v.to_i }

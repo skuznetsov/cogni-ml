@@ -2184,6 +2184,37 @@ module ML::GGUF
       {hidden: hidden, top1s: top1s}
     end
 
+    # Exact known-span verifier with a recurrent-state checkpoint captured
+    # after `checkpoint_index`. This is used by branch-guard experiments that
+    # want one verifier pass for prefix+guard+suffix while still keeping an
+    # exact recurrent resume point after a passed guard token.
+    def prefill_tokens_top1s_recurrent_checkpoint(weights : Qwen35Weights,
+                                                  token_ids : Array(Int32),
+                                                  start_pos : Int32,
+                                                  state : State,
+                                                  checkpoint_index : Int32,
+                                                  checkpoint_state : State) : Array({Int32, Float32})
+      raise ArgumentError.new("prefill_tokens_top1s_recurrent_checkpoint token_ids must not be empty") if token_ids.empty?
+      raise ArgumentError.new("prefill_tokens_top1s_recurrent_checkpoint checkpoint index out of range") unless checkpoint_index >= 0 && checkpoint_index < token_ids.size
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard { prefill_tokens_top1s_recurrent_checkpoint(weights, token_ids, start_pos, state, checkpoint_index, checkpoint_state) }
+      end
+
+      hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state,
+        checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state)
+      hp = weights.hparams
+      if top1s = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
+        return top1s
+      end
+
+      results = [] of {Int32, Float32}
+      token_ids.size.times do |i|
+        row = hidden[i * hp.n_embd, hp.n_embd]
+        results << hidden_top1(weights, row)
+      end
+      results
+    end
+
     # Process a known prompt span and return the final pre-output-norm hidden.
     # This is useful for MTP/self-draft probes that need the exact target
     # hidden at the prompt boundary without paying an extra lm-head pass.
@@ -2209,13 +2240,23 @@ module ML::GGUF
                                       token_ids : Array(Int32),
                                       start_pos : Int32,
                                       state : State,
-                                      stop_layer : Int32? = nil) : Array(Float32)
+                                      stop_layer : Int32? = nil,
+                                      checkpoint_index : Int32? = nil,
+                                      checkpoint_state : State? = nil) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
+      checkpoint_requested = !checkpoint_index.nil? || !checkpoint_state.nil?
+      if checkpoint_requested
+        raise ArgumentError.new("prefill_tokens_hidden checkpoint requires both index and state") if checkpoint_index.nil? || checkpoint_state.nil?
+        raise ArgumentError.new("prefill_tokens_hidden checkpoint index out of range") unless checkpoint_index.not_nil! >= 0 && checkpoint_index.not_nil! < token_ids.size
+      end
 
       if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
         hp = weights.hparams
         max_seq = state.max_seq
         layer_limit = stop_layer || weights.layers.size
+        if checkpoint_requested
+          prepare_state_metal!(checkpoint_state.not_nil!, hp, clear: false)
+        end
         hidden = Array(Float32).new(token_ids.size * hp.n_embd, 0.0_f32)
         token_ids.each_with_index do |token_id, i|
           pos = start_pos + i
@@ -2230,11 +2271,17 @@ module ML::GGUF
             end
           end
           hp.n_embd.times { |j| hidden[i * hp.n_embd + j] = x[j] }
+          if checkpoint_requested && i == checkpoint_index.not_nil!
+            copy_state_metal_used!(checkpoint_state.not_nil!, state, hp, used_tokens: pos + 1, rec_only: true)
+          end
         end
         return hidden
       end
 
       hp = weights.hparams
+      if checkpoint_requested
+        prepare_state_metal!(checkpoint_state.not_nil!, hp, clear: false)
+      end
       max_seq = state.max_seq
       n_tokens = token_ids.size
       raise ArgumentError.new("prefill span exceeds max_seq") if start_pos < 0 || start_pos + n_tokens > max_seq
@@ -2246,7 +2293,16 @@ module ML::GGUF
         x = nil.as(Array(Float32)?)
         while offset < n_tokens
           len = Math.min(chunk_size, n_tokens - offset)
-          x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state, stop_layer: stop_layer)
+          local_checkpoint_index = nil.as(Int32?)
+          local_checkpoint_state = nil.as(State?)
+          if cp = checkpoint_index
+            if cp >= offset && cp < offset + len
+              local_checkpoint_index = cp - offset
+              local_checkpoint_state = checkpoint_state
+            end
+          end
+          x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state,
+            stop_layer: stop_layer, checkpoint_index: local_checkpoint_index, checkpoint_state: local_checkpoint_state)
           offset += len
         end
         return x.not_nil!
@@ -2264,11 +2320,15 @@ module ML::GGUF
         lw = weights.layers[il]
         case lw
         in Qwen35FullAttnWeights
-          if fused = full_attn_then_recurrent_chunk_project_many_routed(x, n_tokens, start_pos, state, weights, il, hp, max_seq)
-            x = fused[0]
-            il = fused[1]
-            next
-          elsif gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
+          unless checkpoint_requested
+            if fused = full_attn_then_recurrent_chunk_project_many_routed(x, n_tokens, start_pos, state, weights, il, hp, max_seq)
+              x = fused[0]
+              il = fused[1]
+              next
+            end
+          end
+
+          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
             x = gpu_out
           else
             out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
@@ -2288,10 +2348,12 @@ module ML::GGUF
               run_end += 1
             end
 
-            if run_end - il > 1
+            if run_end - il > 1 || checkpoint_requested
               rec_layers = [] of Qwen35RecurrentWeights
               conv_bufs = [] of ML::MetalBuffer
               ssm_bufs = [] of ML::MetalBuffer
+              checkpoint_conv_bufs = [] of ML::MetalBuffer
+              checkpoint_ssm_bufs = [] of ML::MetalBuffer
               h_k = hp.ssm_group_count
               h_v = hp.ssm_time_step_rank
               s = hp.ssm_state_size
@@ -2325,6 +2387,9 @@ module ML::GGUF
                   lstate.conv_state_buf = conv_buf
                 end
                 conv_bufs << conv_buf
+                if checkpoint_requested
+                  checkpoint_conv_bufs << checkpoint_state.not_nil!.layers[j].conv_state_buf.not_nil!
+                end
 
                 ssm_bytes = (h_v * s * s).to_i64 * sizeof(Float32)
                 ssm_buf = lstate.ssm_state_buf
@@ -2338,6 +2403,9 @@ module ML::GGUF
                   lstate.ssm_state_buf = ssm_buf
                 end
                 ssm_bufs << ssm_buf
+                if checkpoint_requested
+                  checkpoint_ssm_bufs << checkpoint_state.not_nil!.layers[j].ssm_state_buf.not_nil!
+                end
                 j += 1
               end
 
@@ -2345,13 +2413,22 @@ module ML::GGUF
                 if gpu_out = Qwen35Metal.recurrent_layer_chunk_project_many(
                      x, conv_bufs, ssm_bufs, rec_layers,
                      h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
-                     "rec#{il}-#{run_end - 1}")
+                     "rec#{il}-#{run_end - 1}",
+                     checkpoint_index: checkpoint_index,
+                     checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
+                     checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil)
                   x = gpu_out
                   il = run_end
                   next
+                elsif checkpoint_requested
+                  raise "prefill recurrent checkpoint unsupported for recurrent run #{il}..#{run_end - 1}"
                 end
+              elsif checkpoint_requested
+                raise "prefill recurrent checkpoint requires Metal-supported recurrent run #{il}..#{run_end - 1}"
               end
             end
+          elsif checkpoint_requested
+            raise "prefill recurrent checkpoint requires QWEN35_PREFILL_REC_RUN_OFF != 1"
           end
 
           x = forward_recurrent_layer_chunk(x, n_tokens, lw, state.layers[il], hp, max_seq)

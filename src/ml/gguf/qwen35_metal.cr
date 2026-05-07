@@ -4358,9 +4358,22 @@ module ML
                                                     conv_k : Int32,
                                                     n_tokens : Int32,
                                                     eps : Float32,
-                                                    profile_label : String = "rec_chunk_many") : Array(Float32)?
+                                                    profile_label : String = "rec_chunk_many",
+                                                    checkpoint_index : Int32? = nil,
+                                                    checkpoint_conv_state_bufs : Array(ML::MetalBuffer)? = nil,
+                                                    checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil) : Array(Float32)?
           return nil unless n_tokens > 0
           return nil if layers.empty?
+          checkpoint_requested = !checkpoint_index.nil?
+          if checkpoint_requested
+            cp = checkpoint_index.not_nil!
+            return nil unless cp >= 0 && cp < n_tokens
+            return nil unless conv_k > 1 && s == 128 && dn_chunk_rowwise_enabled?(s)
+            conv_chk = checkpoint_conv_state_bufs
+            ssm_chk = checkpoint_ssm_state_bufs
+            return nil if conv_chk.nil? || conv_chk.size != layers.size
+            return nil if ssm_chk.nil? || ssm_chk.size != layers.size
+          end
 
           layers.each do |lw|
             qkv_pipe = gemv_pipeline_for(lw.attn_qkv_qw)
@@ -4441,7 +4454,11 @@ module ML
 
             Profile.trace("prefill.rec.proj") do
               proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-              qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+              # The checkpoint conv kernel currently consumes f32 qkv rows.
+              # Keep checkpointed verifier experiments exact by using the f32
+              # projection route even when the normal prefill path would use
+              # the h16 qkv fast path.
+              qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
               shared_h16 = rec_proj_shared_h16_enabled? && qkv_h16 && q4_h16_gemm_enabled? &&
                            lw.attn_gate_qw.type.q4_k? && n_tokens > GEMM_BATCH_THRESHOLD
               if shared_h16
@@ -4471,8 +4488,8 @@ module ML
             end
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
-            qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
-            conv_enc.set_pipeline(qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline)
+            qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+            conv_enc.set_pipeline(checkpoint_requested ? recurrent_conv_shift_chunk_checkpoint_pipeline : (qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline))
             conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
             conv_enc.set_buffer(qkv_h16 ? qkv_h16_buf : qkv_buf, 1)
             conv_enc.set_buffer(conv_w_buf, 2)
@@ -4484,6 +4501,10 @@ module ML
             conv_enc.set_value(s.to_u32, 8)
             conv_enc.set_value(conv_k.to_u32, 9)
             conv_enc.set_value(n_tokens.to_u32, 10)
+            if checkpoint_requested
+              conv_enc.set_buffer(checkpoint_conv_state_bufs.not_nil![local_i], 11, ML::Metal::BufferAccess::Write)
+              conv_enc.set_value(checkpoint_index.not_nil!.to_u32, 12)
+            end
             conv_enc.dispatch_1d(qkv_dim, 256)
             conv_enc.end_encoding
 
@@ -4519,7 +4540,7 @@ module ML
 
             dn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_dn_rowwise = dn_chunk_rowwise_enabled?(s)
-            dn_enc.set_pipeline(use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline)
+            dn_enc.set_pipeline(checkpoint_requested ? dn128_chunk_rowwise_checkpoint_pipeline : (use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline))
             dn_enc.set_buffer(ssm_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
             dn_enc.set_buffer(q_buf, 1)
             dn_enc.set_buffer(k_buf, 2)
@@ -4532,6 +4553,10 @@ module ML
             dn_enc.set_value(s.to_u32, 9)
             dn_enc.set_value(scale, 10)
             dn_enc.set_value(n_tokens.to_u32, 11)
+            if checkpoint_requested
+              dn_enc.set_buffer(checkpoint_ssm_state_bufs.not_nil![local_i], 12, ML::Metal::BufferAccess::Write)
+              dn_enc.set_value(checkpoint_index.not_nil!.to_u32, 13)
+            end
             if use_dn_rowwise
               dn_enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
             else
