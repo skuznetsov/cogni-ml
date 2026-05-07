@@ -11077,9 +11077,10 @@ if rank = simulate_logit_rank
       end
       branch_snapshot_base_enabled = ProbeRuntime.self_spec_branch_guard_snapshot
       branch_snapshot_single_pass_base_enabled = ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint
-      branch_snapshot_mode_options = [] of NamedTuple(name: String, snapshot: Bool, onepass: Bool)
+      branch_snapshot_only_split_base_enabled = ProbeRuntime.self_spec_branch_guard_snapshot_only_split
+      branch_snapshot_mode_options = [] of NamedTuple(name: String, snapshot: Bool, onepass: Bool, only_split: Bool)
       if simulate_self_spec_gpu_pipeline_branch_snapshot_modes.empty?
-        branch_snapshot_mode_options << {name: "", snapshot: branch_snapshot_base_enabled, onepass: branch_snapshot_single_pass_base_enabled}
+        branch_snapshot_mode_options << {name: "", snapshot: branch_snapshot_base_enabled, onepass: branch_snapshot_single_pass_base_enabled, only_split: branch_snapshot_only_split_base_enabled}
       else
         if simulate_self_spec_gpu_pipeline_hybrid_sweep
           raise "branch snapshot mode sweep is not wired into hybrid route scoreboards yet; disable hybrid sweep"
@@ -11087,17 +11088,18 @@ if rank = simulate_logit_rank
         unless simulate_self_spec_gpu_pipeline_schedules.empty?
           raise "branch snapshot mode sweep is not wired into schedule routes yet; use fixed gammas"
         end
-        if ProbeRuntime.self_spec_branch_guard_snapshot_only_split
-          raise "branch snapshot mode sweep is not compatible with snapshot-only-split; use explicit snapshot flags instead"
-        end
         simulate_self_spec_gpu_pipeline_branch_snapshot_modes.each do |mode|
           case mode
           when "nosnap"
-            branch_snapshot_mode_options << {name: "nosnap", snapshot: false, onepass: false}
-          when "split", "split_suffix2"
-            branch_snapshot_mode_options << {name: mode, snapshot: true, onepass: false}
-          when "onepass", "onepass_suffix2"
-            branch_snapshot_mode_options << {name: mode, snapshot: true, onepass: true}
+            branch_snapshot_mode_options << {name: "nosnap", snapshot: false, onepass: false, only_split: false}
+          when "split"
+            branch_snapshot_mode_options << {name: "split", snapshot: true, onepass: false, only_split: false}
+          when "split_suffix2"
+            branch_snapshot_mode_options << {name: "split_suffix2", snapshot: true, onepass: false, only_split: true}
+          when "onepass"
+            branch_snapshot_mode_options << {name: "onepass", snapshot: true, onepass: true, only_split: false}
+          when "onepass_suffix2"
+            branch_snapshot_mode_options << {name: "onepass_suffix2", snapshot: true, onepass: true, only_split: true}
           else
             raise "unknown branch snapshot mode #{mode.inspect}; expected nosnap, split, split_suffix2, onepass, onepass_suffix2"
           end
@@ -11168,6 +11170,7 @@ if rank = simulate_logit_rank
                 branch_snapshot_mode_options.each do |branch_snapshot_mode|
                   ProbeRuntime.self_spec_branch_guard_snapshot = branch_snapshot_mode[:snapshot]
                   ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = branch_snapshot_mode[:onepass]
+                  ProbeRuntime.self_spec_branch_guard_snapshot_only_split = branch_snapshot_mode[:only_split]
                   pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_gamma, layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject)
                   accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                   backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
@@ -11316,6 +11319,7 @@ if rank = simulate_logit_rank
                   branch_snapshot_mode_options.each do |branch_snapshot_mode|
                   ProbeRuntime.self_spec_branch_guard_snapshot = branch_snapshot_mode[:snapshot]
                   ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = branch_snapshot_mode[:onepass]
+                  ProbeRuntime.self_spec_branch_guard_snapshot_only_split = branch_snapshot_mode[:only_split]
                   pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_gamma, suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject)
                   accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                   backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
