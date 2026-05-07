@@ -8222,3 +8222,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame is now route selection rather than primitive correctness: use one-pass checkpoint for pass-biased suffix-risk candidates, keep split branch guard for guard-reject candidates.
 - maieutic: The hidden assumption was that fewer verifier calls is always better. The hostile reject smoke shows fewer calls can still be worse if it removes early-stop/replayless semantics.
 - adversary: Evidence is focused and 9B-only. The one-shot wall delta is encouraging but noisy; do not promote until a 27B paired/ABBA gate confirms suffix-positive rows improve against split snapshot and nosnap baselines.
+
+**decision_update_40:** Focused 27B suffix-positive rows support keeping the one-pass checkpoint path as the next branch-state speed lever, but not yet as a default policy. After an aborted broad ABBA script exposed a harness mistake (`--simulate-self-spec-gpu-pipeline=1` also emitted gamma1 rows and confused the parser), I reran the intended 27B `gamma=4` rows directly on the two known suffix-positive prompts. All rows preserved exact parity. On `structured_sql`, current no-snapshot branch guard paid full replay (`overlap_ms=1657.461`, `replay_ms=185.998`, verifier chunks `4`), split suffix snapshot reduced replay but still used separate prefix/guard/suffix verifier calls (`overlap_ms=1435.510`, `replay_ms=62.643`, verifier chunks `5`), and one-pass checkpoint reduced verifier chunks to `3` while preserving the suffix replay behavior (`overlap_ms=1357.878`, `replay_ms=61.575`, `attr_verifier_prefill_ms=606.500`). On `reason_bench`, the same pattern held but smaller: `nosnap 1669.910ms`, split `1445.054ms`, one-pass `1415.906ms`; verifier chunks again moved `5 -> 3` versus split and verifier prefill moved `660.432 -> 610.255ms`. Conclusion: the primitive is doing the intended work on 27B suffix-positive rows. The next engineering step should not be another hand-written shell ABBA; add an in-process mode sweep so `nosnap/split/onepass` rows run in one model load with stable parsing, then repeat at `gen12/gen32`.
+**evidence_update_40:**
+- claim: "27B structured_sql one-pass checkpoint preserved parity and improved focused wall versus split suffix snapshot and nosnap."
+  source: `/tmp/qwen36_onepass_checkpoint_abba_20260506230934/structured_sql_1_nosnap.log`; `/tmp/qwen36_onepass_checkpoint_abba_20260506230934/structured_sql_2_split.log`; `/tmp/qwen36_onepass_structured_sql_20260506231332.log`
+  verified_at: 2026-05-07
+  decay_trigger: prompt, model file, branch snapshot controller, one-pass checkpoint path, rank/layers, gamma, host load, or Metal queue behavior changes
+- claim: "27B reason_bench one-pass checkpoint preserved parity and improved focused wall versus split suffix snapshot and nosnap."
+  source: `/tmp/qwen36_onepass_reason_bench_nosnap_20260506231733.log`; `/tmp/qwen36_onepass_reason_bench_split_20260506231509.log`; `/tmp/qwen36_onepass_reason_bench_onepass_20260506231617.log`
+  verified_at: 2026-05-07
+  decay_trigger: prompt, model file, branch snapshot controller, one-pass checkpoint path, rank/layers, gamma, host load, or Metal queue behavior changes
+**quadrumvirate_update_40:**
+- cassandra: The expected win was verifier split reduction on pass-guard suffix-reject rows. Both 27B rows showed `5 -> 3` verifier chunks versus split snapshot and lower focused overlap.
+- daedalus: The next bottleneck is measurement harness quality, not another local kernel guess. A mode sweep inside one model load is the right pivot before optimizing h16 checkpoint variants.
+- maieutic: The evidence is still focused single-run timing. It is enough to continue the branch, not enough to promote a default.
+- adversary: The aborted parser run is a real harness failure. Future claims must filter `gamma=4` rows explicitly or avoid emitting gamma1 rows in the same command.
