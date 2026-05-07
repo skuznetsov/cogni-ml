@@ -8318,3 +8318,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: This is not the final router; it is the smallest safe bridge from experimental mode sweep to reproducible opt-in benchmark mode.
 - maieutic: The assumption is that named policy composition is less error-prone than manual flags. That is true operationally, but policy speed still inherits the four-prompt gate limits.
 - adversary: No default changed. The policy must still beat explicit split and nosnap in a repeated policy gate before it becomes a recommendation rather than an experiment.
+
+**decision_update_46:** Tightened the branch snapshot measurement harness so calibrated suffix policies can be swept in-process without relying on external threshold flags. `--simulate-self-spec-gpu-pipeline-branch-snapshot-modes=LIST` now accepts `split_min3_suffix2` and `onepass_min3_suffix2`; each calibrated mode applies `min_prefix=3` and `suffix_threshold=2.0` per row and clears prefix-conditioned suffix thresholds for that row. Legacy labels `split_suffix2` and `onepass_suffix2` still preserve the previous behavior where suffix thresholds come from separate runtime flags. The focused 9B smoke emitted `nosnap`, `split_min3_suffix2`, and `onepass_min3_suffix2` rows in one process with exact parity, and top2/checkpoint specs stayed clean. This removes a repeatable measurement footgun: future promotion gates can use calibrated mode names directly.
+**evidence_update_46:**
+- claim: "Calibrated branch snapshot modes build, keep focused specs clean, and emit exact in-process rows."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_modes_cal_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_modes_cal_probe --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_modes_cal_top2_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_modes_cal_checkpoint_spec crystal spec spec/qwen35_recurrent_checkpoint_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`; `/tmp/qwen35_branch_modes_cal_smoke_20260507.log`
+  verified_at: 2026-05-07
+  decay_trigger: branch snapshot mode parser, calibrated mode mapping, per-row ProbeRuntime threshold reset, checkpoint/top2 paths, or self-spec pipeline loop changes
+**quadrumvirate_update_46:**
+- cassandra: The measurement risk was repeating the earlier "suffix2 label without suffix semantics" error. Per-row calibrated modes eliminate that by binding the threshold and min-prefix into the mode itself.
+- daedalus: This is harness hardening, not a new algorithm. It is still high leverage because it prevents false promotion/refutation from misconfigured A/B commands.
+- maieutic: The assumption is that calibrated mode names should be self-contained. That is now true for `*_min3_suffix2`; the older `*_suffix2` names remain compatibility shims.
+- adversary: The smoke was short and 9B-only. It verifies mode semantics and parity, not 27B performance; the next repeated 27B gate remains required for benchmark recommendation.
