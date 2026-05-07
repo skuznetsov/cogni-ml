@@ -8278,3 +8278,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The frame shifted from "one-pass regressed pass-clean prompts" to "mode semantics and measurement order are part of the experiment." Suffix modes must imply value-gated splitting.
 - maieutic: The assumption that a named mode fully describes its route was false; `split_suffix2` must toggle both snapshot and split gating, not only the printed label.
 - adversary: Current 27B timing is still single-order per run. Use duplicated mode lists for ABBA-style order control before changing defaults or claiming stable speedup.
+
+**decision_update_43:** Duplicated-mode ABBA on the 27B suffix-positive prompts strengthens the case for one-pass suffix checkpoints, while keeping default promotion gated. The one-process order was `nosnap,split_suffix2,onepass_suffix2,onepass_suffix2,split_suffix2,nosnap` with `gen32/gamma4`, `guard=1.0`, `min_prefix=3`, `suffix_threshold=2.0`, rank8 early6 layers, `structured_sql` as main prompt, and `reason_bench` as suite prompt. All `12/12` rows preserved parity. Median wall on `structured_sql`: `nosnap 3784.812ms`, `split_suffix2 3504.915ms`, `onepass_suffix2 3482.126ms`; on `reason_bench`: `3952.458ms`, `3617.072ms`, `3480.521ms`. Median replay dropped from `~187-191ms` in nosnap to `~61-64ms` in suffix modes. One-pass had the best median on both prompts and reduced verifier chunks versus split (`10 -> 8`) while preserving the same suffix replay behavior. Conclusion: one-pass suffix checkpoint is now the leading branch-state speed path for suffix-positive rows, but evidence is still only `n=2` per prompt. Next promotion gate should run at least five repeats and include pass-clean prompts before changing defaults.
+**evidence_update_43:**
+- claim: "27B duplicated-mode ABBA on suffix-positive prompts preserved parity and gave one-pass the best median overlap on both prompts."
+  source: `/tmp/qwen36_branch_mode_sweep_20260506233125/gen32_suffix_positive_abba.log`; `/tmp/qwen36_branch_mode_sweep_20260506233125/gen32_suffix_positive_abba_summary.md`; `/tmp/qwen36_branch_mode_sweep_20260506233125/gen32_suffix_positive_abba.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: prompt set, model file, mode order, host load, branch threshold, suffix threshold, rank/layers, gamma, or verifier scheduling changes
+**quadrumvirate_update_43:**
+- cassandra: If one-pass benefit were only order noise, ABBA medians should not consistently beat split and nosnap across both suffix-positive prompts. It did beat both, but with only two samples per prompt.
+- daedalus: The next useful frame is not another primitive; it is a promotion gate with repeats and pass-clean adversary prompts.
+- maieutic: The hidden assumption that one focused row is enough for default promotion remains false. The right claim level is "leading candidate," not "default."
+- adversary: Need pass-clean rows in the same repeated gate; suffix-positive-only ABBA can overfit to the exact niche where snapshots are expected to help.
