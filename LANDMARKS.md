@@ -8358,3 +8358,15 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful optimization is not another checkpoint kernel; it is preserving two independent value paths: guard-token reject avoidance and suffix replay avoidance.
 - maieutic: The assumption that extra verifier chunks are always bad is too coarse. Extra guard chunks can be net-positive when they prevent wrong-tail replay/resync.
 - adversary: Evidence is focused and noisy. Keepguard is a candidate, not a promoted default.
+
+**decision_update_49:** The repeated 27B keepguard gate promotes keepguard from focused candidate to leading router candidate, but still refutes blind default promotion. The gate compared `nosnap`, `onepass_min3_suffix2`, and `onepass_min3_suffix2_keepguard` over the same four prompt classes with five repeats per prompt/mode; all `60/60` rows preserved exact parity. Keepguard fixed the YAML replayless-regression pattern: `structured_yaml` medians were `nosnap 5128.250ms`, onlysplit `6115.844ms`, and keepguard `5037.895ms`; keepguard restored `hits=2` and `replayless_resyncs=1` while onlysplit had `hits=0`. Keepguard also kept suffix-positive wins versus nosnap (`reason_bench -338.758ms`, `structured_sql -253.880ms`). Aggregate median delta versus nosnap improved from onlysplit `-112.559ms` to keepguard `-172.117ms`. However `math_matrix` refutes keepguard as a blind policy: keepguard regressed by `+207.041ms` because it paid two branch-guard hits and two extra verifier chunks with no replay/snapshot value. Conclusion: the correct policy is three-way expected-value routing, not one global mode: suffix-positive rows need one-pass checkpointing; replayless-risk rows need keepguard; no-value pass-clean rows should avoid extra guard chunks.
+**evidence_update_49:**
+- claim: "Repeated 27B keepguard gate preserved parity, fixed YAML replayless regression, and improved aggregate median versus nosnap and onlysplit, but regressed math_matrix."
+  source: `/tmp/qwen36_branch_keepguard_gate_20260507080326/gate.log`; `/tmp/qwen36_branch_keepguard_gate_20260507080326/gate_summary.md`; `/tmp/qwen36_branch_keepguard_gate_20260507080326/gate_rows.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: prompt set, model file, branch guard threshold, mode mapping, host load, rank/layers, gamma, replayless branch guard path, or checkpoint verifier path changes
+**quadrumvirate_update_49:**
+- cassandra: Keepguard should repair rows where suffix-only-split suppresses a useful guard-token reject, but should regress rows with low-margin false positives and no replayless value. The gate observed both.
+- daedalus: The optimization target is now a route classifier: choose among nosnap, onepass-onlysplit, and onepass-keepguard by expected replay/snapshot value.
+- maieutic: The hidden assumption was that "keep guard" is always safer. `math_matrix` falsified it; extra verifier chunks are a cost unless they prevent replay or enable snapshot.
+- adversary: Four prompts are enough to block a blind default, not enough to train a robust classifier. Next step should add/score features before another policy gate.
