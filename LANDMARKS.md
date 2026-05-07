@@ -8370,3 +8370,19 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The optimization target is now a route classifier: choose among nosnap, onepass-onlysplit, and onepass-keepguard by expected replay/snapshot value.
 - maieutic: The hidden assumption was that "keep guard" is always safer. `math_matrix` falsified it; extra verifier chunks are a cost unless they prevent replay or enable snapshot.
 - adversary: Four prompts are enough to block a blind default, not enough to train a robust classifier. Next step should add/score features before another policy gate.
+
+**decision_update_50:** Added the first no-snapshot guard-risk threshold probe, but raw margin `0.2` is not a promoted router. New default-off `--simulate-self-spec-gpu-pipeline-tree2-branch-guard-no-snapshot-threshold=F` lets suffix-only-split modes still run a no-snapshot branch guard when the guard-token margin is below `F`; calibrated `split_min3_suffix2_guard02` and `onepass_min3_suffix2_guard02` bind this to `F=0.2`. Build and focused specs stayed clean, and a 9B smoke showed the expected behavior: high-margin rows skip guard hits under `guard02` while `keepguard` still pays guard chunks. A focused 27B YAML+math gate preserved parity on all `16/16` rows. The feature matched the intended mechanics on `math_matrix`: guard02 skipped no-value guard chunks (`hits=0`, chunks `8`) and median overlap was slightly better than nosnap/keepguard in the small gate (`4805.028ms` vs `4903.701ms` / `4824.248ms`). It did not cleanly fix YAML wall: guard02 restored replayless mechanics (`hits=1`, `replayless=1`) but median remained worse than nosnap (`5488.218ms` vs `4637.350ms`). Conclusion: raw guard-token margin alone is an incomplete predictor. Keep guard02 as an opt-in probe; next work should sweep thresholds or use richer route features before adding more fixed modes.
+**evidence_update_50:**
+- claim: "No-snapshot guard threshold plumbing builds, preserves focused specs, and emits exact guard02 rows."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_guard02_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_guard02_probe --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_guard02_top2_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_guard02_checkpoint_spec crystal spec spec/qwen35_recurrent_checkpoint_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`; `/tmp/qwen35_branch_guard02_smoke_20260507.log`
+  verified_at: 2026-05-07
+  decay_trigger: branch guard split gating, no-snapshot threshold parser, calibrated mode mapping, checkpoint/top2 paths, or self-spec loop changes
+- claim: "Focused 27B YAML+math guard02 gate preserves parity but refutes raw margin 0.2 as a clean promoted router."
+  source: `/tmp/qwen36_branch_guard02_yaml_math_20260507082647/gate.log`; local parser summary in session output
+  verified_at: 2026-05-07
+  decay_trigger: prompt text, model file, host load, branch threshold, no-snapshot threshold, rank/layers, gamma, or verifier scheduling changes
+**quadrumvirate_update_50:**
+- cassandra: Margin `0.2` should avoid math false positives and keep YAML replayless. It avoided math guard chunks, but YAML wall still regressed versus nosnap.
+- daedalus: The next frame is feature scoring, not hard-coding another threshold. Need distinguish "low margin with cheap replayless value" from "low margin with high scheduling cost."
+- maieutic: The assumption that guard-token margin alone predicts replayless value is false. It predicts uncertainty, not whether split overhead will be recovered.
+- adversary: The 27B guard02 gate was focused and `n=2`; it is enough to avoid promotion, not enough to discard the probe entirely.
