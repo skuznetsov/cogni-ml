@@ -8106,3 +8106,23 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The next pivot is from "better snapshot selection" to "why does a structurally cheaper verifier path have worse wall?" Attribute verifier/scheduler overhead before more router tuning.
 - maieutic: The hidden assumption was that replay reduction is a sufficient proxy for speed. It is not under current command-buffer/split scheduling.
 - adversary: The gate is focused, not broad; nevertheless it is enough to block promotion because the policy fails against its most relevant baselines on the targeted rows.
+
+**decision_update_34:** Branch-guard scheduler falsifiers were added and checked as default-off probes. The first probe, `--simulate-self-spec-gpu-pipeline-tree2-branch-guard-overlap-next`, tests the obvious scheduling inversion: keep drafting the next speculative block even when a branch guard is active, and discard that work if the verifier later rejects. On the 27B `structured_sql` `gen32/gamma4` suffix-snapshot row, this preserved parity but regressed wall timing: `nosnap 3604.049 -> 3829.137ms`, `suffix2 3632.377 -> 4201.246ms`, with `attr_draft_wasted_next_tokens=4` in both overlap-next rows. The second probe, `--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-only-split`, only splits verifier at branch-guard candidates that also pass the snapshot value gate. It correctly removed the clean YAML branch split (`tree2_branch_guard_hits 1 -> 0`, verifier chunks `10 -> 8`) but did not improve the focused row (`3552.073 -> 3605.979ms`), and useful SQL/reason rows were dominated by timing variance because the flag leaves their actual snapshot path unchanged. Conclusion: the missing speed is not recovered by simply overlapping branch-guard next-block drafting or by skipping no-snapshot branch splits. The durable next direction is a better verifier execution primitive: either capture recurrent boundary state inside a single known-span verifier pass, or make first-token/branch verifier checks cheap enough that split scheduling cost does not dominate replay savings.
+**evidence_update_34:**
+- claim: "Branch-guard overlap-next is exact but slower on the focused 27B SQL suffix-snapshot row."
+  source: `/tmp/qwen36_branch_overlap_sql_27b_gen32_20260506213353/summary.tsv`
+  verified_at: 2026-05-06
+  decay_trigger: branch-guard scheduler implementation, prompt suite, model file, host load, generated length, rank/layers, gamma, or Metal queue behavior changes
+- claim: "Snapshot-only split is exact and removes the clean YAML split, but it is not a demonstrated wall-speed win."
+  source: `/tmp/qwen36_snapshot_only_split_27b_gen32_20260506214320/summary.tsv`
+  verified_at: 2026-05-06
+  decay_trigger: branch snapshot router implementation, prompt suite, model file, host load, generated length, rank/layers, gamma, or verifier timing changes
+- claim: "The scheduler probe build and top2 regression passed."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_snapshot_only_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_branch_snapshot_only_probe --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_branch_snapshot_only_spec crystal spec spec/qwen35_decode_top2_spec.cr -D qwen35_mtp_metal --link-flags=...` -> `2 examples, 0 failures`
+  verified_at: 2026-05-06
+  decay_trigger: option parsing, probe flags, top2 decode path, or Metal bridge changes
+**quadrumvirate_update_34:**
+- cassandra: If branch-guard work was only host-side scheduling loss, overlap-next should hide it. Instead it increased wasted next-block work and draft wait, so GPU contention is part of the cost.
+- daedalus: The useful frame shifts from "schedule around the split" to "eliminate the split or make the branch verifier primitive cheaper."
+- maieutic: The hidden assumption was that verifier chunks are independent costs that can be overlapped away. The measurements show the draft and verifier lanes contend for the same Metal resources on M2 Max.
+- adversary: These are focused single-shot gates with noisy wall timing, so they refute promotion but do not prove exact magnitudes. Keep both flags default-off and use ABBA only if a later verifier primitive changes the cost surface.
