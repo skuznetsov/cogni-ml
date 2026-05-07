@@ -114,6 +114,64 @@ class NoSnapshotScore
   end
 end
 
+class ThreeWayScore
+  property chunks = 0
+  property branch_candidates = 0
+  property candidates = 0
+  property no_snapshot_candidates = 0
+  property snapshot_candidates = 0
+  property both_candidates = 0
+  property no_split_skips = 0
+  property prefix_rejects = 0
+  property guard_rejects = 0
+  property guard_passes = 0
+  property pass_clean = 0
+  property pass_suffix_reject = 0
+  property snapshots = 0
+  property useful_snapshots = 0
+  property wasted_snapshots = 0
+  property useful_suffix_tokens = 0
+  property pass_suffix_tokens = 0
+  property saved_prefix_tokens = 0
+  property max_saved_prefix = 0
+  property max_useful_suffix = 0
+  property post_reject_candidates = 0
+
+  def add_candidate(no_snapshot_gate : Bool, snapshot_gate : Bool)
+    @candidates += 1
+    @no_snapshot_candidates += 1 if no_snapshot_gate
+    @snapshot_candidates += 1 if snapshot_gate
+    @both_candidates += 1 if no_snapshot_gate && snapshot_gate
+  end
+
+  def add_guard_reject(suffix_tokens : Int32)
+    @guard_rejects += 1
+    @useful_suffix_tokens += suffix_tokens
+    @max_useful_suffix = suffix_tokens if suffix_tokens > @max_useful_suffix
+  end
+
+  def add_guard_pass(suffix_tokens : Int32, suffix_reject : Bool, snapshot_gate : Bool, prefix_len : Int32)
+    @guard_passes += 1
+    @pass_suffix_tokens += suffix_tokens
+    if suffix_reject
+      @pass_suffix_reject += 1
+    else
+      @pass_clean += 1
+    end
+
+    return unless snapshot_gate
+
+    @snapshots += 1
+    if suffix_reject
+      @useful_snapshots += 1
+      @saved_prefix_tokens += prefix_len
+      @max_saved_prefix = prefix_len if prefix_len > @max_saved_prefix
+    else
+      @wasted_snapshots += 1
+    end
+  end
+end
+
 class PrefixSuffixScore
   property passes = 0
   property pass_clean = 0
@@ -202,6 +260,7 @@ thresholds.each do |threshold|
 end
 prefix_suffix_scores = Hash({Float64, Int32, Float64}, PrefixSuffixScore).new { |h, k| h[k] = PrefixSuffixScore.new }
 no_snapshot_scores = Hash({String, Float64}, NoSnapshotScore).new { |h, k| h[k] = NoSnapshotScore.new }
+three_way_scores = Hash({String, Float64, Float64, Int32, Float64}, ThreeWayScore).new { |h, k| h[k] = ThreeWayScore.new }
 
 total_chunks = 0
 chunks_with_reject = 0
@@ -220,6 +279,7 @@ groups.values.each do |rows|
 
   thresholds.each do |threshold|
     guard_index = rows.find { |row| row.index < verifier_size && (m = row.draft_margin) && m <= threshold }.try(&.index)
+    guard_margin = guard_index ? rows.find { |row| row.index == guard_index }.try(&.draft_margin) : nil
     if bgi = guard_index
       suffix_size = verifier_size - bgi - 1
       if suffix_size > 0
@@ -291,6 +351,48 @@ groups.values.each do |rows|
         end
       end
     end
+
+    no_snapshot_thresholds.each do |no_snapshot_threshold|
+      min_prefixes.each do |min_prefix|
+        suffix_thresholds.each do |suffix_threshold|
+          ["all", label].each do |score_label|
+            three_way_score = three_way_scores[{score_label, threshold, no_snapshot_threshold, min_prefix, suffix_threshold}]
+            three_way_score.chunks += 1
+            next unless bgi = guard_index
+
+            three_way_score.branch_candidates += 1
+            prefix_len = bgi + 1
+            suffix_tokens = verifier_size - bgi - 1
+            suffix_rows = rows.select { |row| row.index > bgi && row.index < verifier_size }
+            suffix_min_margin = suffix_rows.compact_map(&.draft_margin).min?
+            suffix_gate_ok = suffix_tokens > 0 && prefix_len >= min_prefix && (
+              !!suffix_threshold.infinite? || (!!suffix_min_margin && suffix_min_margin.not_nil! <= suffix_threshold)
+            )
+            no_snapshot_gate_ok = !!guard_margin && guard_margin.not_nil! <= no_snapshot_threshold
+
+            unless suffix_gate_ok || no_snapshot_gate_ok
+              three_way_score.no_split_skips += 1
+              next
+            end
+
+            three_way_score.add_candidate(no_snapshot_gate_ok, suffix_gate_ok)
+            three_way_score.post_reject_candidates += 1 if rows.first.rejections_before > 0
+
+            if r = reject_index
+              if r < bgi
+                three_way_score.prefix_rejects += 1
+              elsif r == bgi
+                three_way_score.add_guard_reject(suffix_tokens)
+              else
+                three_way_score.add_guard_pass(suffix_tokens, true, suffix_gate_ok, prefix_len)
+              end
+            else
+              three_way_score.add_guard_pass(suffix_tokens, false, suffix_gate_ok, prefix_len)
+            end
+          end
+        end
+      end
+    end
   end
 
   no_snapshot_thresholds.each do |threshold|
@@ -348,6 +450,23 @@ prefix_suffix_scores.keys.sort_by { |key| {key[0], key[1], key[2].infinite? ? Fl
   net_ms = score.saved_prefix_tokens * replay_token_ms - score.snapshots * snapshot_cost_ms
   suffix_label = suffix_threshold.infinite? ? "inf" : suffix_threshold.to_s
   puts "branch_guard_prefix_suffix_value threshold=#{threshold} prefix_len=#{prefix_len} suffix_threshold=#{suffix_label} passes=#{score.passes} pass_clean=#{score.pass_clean} pass_suffix_reject=#{score.pass_suffix_reject} snapshots=#{score.snapshots} useful_snapshots=#{score.useful_snapshots} wasted_snapshots=#{score.wasted_snapshots} useful_snapshot_rate=#{useful_rate.round(2)}% saved_prefix_tokens=#{score.saved_prefix_tokens} net_ms=#{net_ms.round(3)}"
+end
+
+three_way_scores.keys.sort_by { |key| {key[0] == "all" ? "" : key[0], key[1], key[2].infinite? ? Float64::INFINITY : key[2], key[3], key[4].infinite? ? Float64::INFINITY : key[4]} }.each do |key|
+  label, threshold, no_snapshot_threshold, min_prefix, suffix_threshold = key
+  score = three_way_scores[key]
+  next if score.chunks == 0
+
+  candidate_rate = score.chunks > 0 ? 100.0 * score.candidates / score.chunks : 0.0
+  branch_candidate_rate = score.chunks > 0 ? 100.0 * score.branch_candidates / score.chunks : 0.0
+  useful_snapshot_rate = score.snapshots > 0 ? 100.0 * score.useful_snapshots / score.snapshots : 0.0
+  useful_guard_rate = score.no_snapshot_candidates > 0 ? 100.0 * score.guard_rejects / score.no_snapshot_candidates : 0.0
+  avg_saved_prefix = score.useful_snapshots > 0 ? score.saved_prefix_tokens.to_f64 / score.useful_snapshots : 0.0
+  avg_useful_suffix = score.guard_rejects > 0 ? score.useful_suffix_tokens.to_f64 / score.guard_rejects : 0.0
+  net_ms = (score.saved_prefix_tokens + score.useful_suffix_tokens) * replay_token_ms - score.snapshots * snapshot_cost_ms
+  suffix_label = suffix_threshold.infinite? ? "inf" : suffix_threshold.to_s
+  no_snapshot_label = no_snapshot_threshold.infinite? ? "inf" : no_snapshot_threshold.to_s
+  puts "branch_guard_three_way_value label=#{label} threshold=#{threshold} no_snapshot_threshold=#{no_snapshot_label} min_prefix=#{min_prefix} suffix_threshold=#{suffix_label} chunks=#{score.chunks} branch_candidates=#{score.branch_candidates} branch_candidate_rate=#{branch_candidate_rate.round(2)}% candidates=#{score.candidates} candidate_rate=#{candidate_rate.round(2)}% no_snapshot_candidates=#{score.no_snapshot_candidates} snapshot_candidates=#{score.snapshot_candidates} both_candidates=#{score.both_candidates} no_split_skips=#{score.no_split_skips} prefix_rejects=#{score.prefix_rejects} guard_rejects=#{score.guard_rejects} guard_passes=#{score.guard_passes} pass_clean=#{score.pass_clean} pass_suffix_reject=#{score.pass_suffix_reject} post_reject_candidates=#{score.post_reject_candidates} snapshots=#{score.snapshots} useful_snapshots=#{score.useful_snapshots} wasted_snapshots=#{score.wasted_snapshots} useful_snapshot_rate=#{useful_snapshot_rate.round(2)}% useful_guard_rate=#{useful_guard_rate.round(2)}% saved_prefix_tokens=#{score.saved_prefix_tokens} avg_saved_prefix=#{avg_saved_prefix.round(3)} max_saved_prefix=#{score.max_saved_prefix} useful_suffix_tokens=#{score.useful_suffix_tokens} avg_useful_suffix=#{avg_useful_suffix.round(3)} max_useful_suffix=#{score.max_useful_suffix} pass_suffix_tokens=#{score.pass_suffix_tokens} net_ms=#{net_ms.round(3)}"
 end
 
 no_snapshot_scores.keys.sort_by { |key| {key[0] == "all" ? "" : key[0], key[1].infinite? ? Float64::INFINITY : key[1]} }.each do |key|
