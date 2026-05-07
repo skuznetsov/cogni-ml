@@ -6233,6 +6233,43 @@ private def parse_prefix_suffix_thresholds(value : String) : Array(Tuple(Int32, 
   end
 end
 
+private def apply_branch_snapshot_policy(value : String) : String
+  mode = value.strip.downcase
+  case mode
+  when "off", "none", "nosnap"
+    ProbeRuntime.self_spec_branch_guard_snapshot = false
+    ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = false
+    ProbeRuntime.self_spec_branch_guard_snapshot_only_split = false
+    "nosnap"
+  when "split"
+    ProbeRuntime.self_spec_branch_guard_snapshot = true
+    ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = false
+    ProbeRuntime.self_spec_branch_guard_snapshot_only_split = false
+    "split"
+  when "onepass"
+    ProbeRuntime.self_spec_branch_guard_snapshot = true
+    ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = true
+    ProbeRuntime.self_spec_branch_guard_snapshot_only_split = false
+    "onepass"
+  when "split_suffix2", "split_min3_suffix2"
+    ProbeRuntime.self_spec_branch_guard_snapshot = true
+    ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = false
+    ProbeRuntime.self_spec_branch_guard_snapshot_only_split = true
+    ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix = 3
+    ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = 2.0
+    "split_min3_suffix2"
+  when "onepass_suffix2", "onepass_min3_suffix2"
+    ProbeRuntime.self_spec_branch_guard_snapshot = true
+    ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = true
+    ProbeRuntime.self_spec_branch_guard_snapshot_only_split = true
+    ProbeRuntime.self_spec_branch_guard_snapshot_min_prefix = 3
+    ProbeRuntime.self_spec_branch_guard_snapshot_suffix_threshold = 2.0
+    "onepass_min3_suffix2"
+  else
+    raise "unknown branch snapshot policy #{value.inspect}; expected off, split, onepass, split_min3_suffix2, or onepass_min3_suffix2"
+  end
+end
+
 private def parse_layer_block(value : String)
   raw = value.strip
   if raw.includes?(":")
@@ -10091,6 +10128,7 @@ simulate_self_spec_gpu_pipeline_tree2_anywhere = false
 simulate_self_spec_gpu_pipeline_tree2_staged_tokens = 0
 simulate_self_spec_gpu_pipeline_tree2_margin_guard : Float64? = nil
 simulate_self_spec_gpu_pipeline_tree2_branch_guard : Float64? = nil
+simulate_self_spec_gpu_pipeline_branch_snapshot_policy : String? = nil
 simulate_self_spec_gpu_pipeline_branch_snapshot_modes = [] of String
 simulate_self_spec_gpu_pipeline_risk_offramp_margin : Float64? = nil
 simulate_self_spec_gpu_pipeline_risk_offramp_margins = [] of Float64
@@ -10306,6 +10344,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-overlap-next", "Allow speculative next-block pre-submit even when branch guard is active; rejects discard the wasted block") { ProbeRuntime.self_spec_branch_guard_overlap_next = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-snapshot-only-split", "When branch snapshots are enabled, split verifier only for guard candidates that pass the snapshot value gate") { ProbeRuntime.self_spec_branch_guard_snapshot_only_split = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-branch-guard-single-pass-checkpoint", "When branch snapshots are enabled, verify prefix+guard+suffix in one known-span pass while checkpointing recurrent state after the guard") { ProbeRuntime.self_spec_branch_guard_single_pass_checkpoint = true }
+  p.on("--simulate-self-spec-gpu-pipeline-branch-snapshot-policy=MODE", "Apply a calibrated branch snapshot policy: off, split, onepass, split_min3_suffix2, onepass_min3_suffix2") { |v| simulate_self_spec_gpu_pipeline_branch_snapshot_policy = apply_branch_snapshot_policy(v) }
   p.on("--simulate-self-spec-gpu-pipeline-branch-snapshot-modes=LIST", "In-process A/B for branch snapshot verifier modes: nosnap, split_suffix2, onepass_suffix2; suffix policy comes from branch-guard snapshot flags") { |v| simulate_self_spec_gpu_pipeline_branch_snapshot_modes = v.split(',').map(&.strip).reject(&.empty?) }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margin=F", "When draft top1/top2 margin <= F, do not pre-submit the next draft block before exact verification") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-risk-offramp-margins=LIST", "In-process A/B list for risk-offramp thresholds; automatically includes the no-offramp baseline") { |v| simulate_self_spec_gpu_pipeline_risk_offramp_margins = parse_float_list(v) }
@@ -11080,7 +11119,8 @@ if rank = simulate_logit_rank
       branch_snapshot_only_split_base_enabled = ProbeRuntime.self_spec_branch_guard_snapshot_only_split
       branch_snapshot_mode_options = [] of NamedTuple(name: String, snapshot: Bool, onepass: Bool, only_split: Bool)
       if simulate_self_spec_gpu_pipeline_branch_snapshot_modes.empty?
-        branch_snapshot_mode_options << {name: "", snapshot: branch_snapshot_base_enabled, onepass: branch_snapshot_single_pass_base_enabled, only_split: branch_snapshot_only_split_base_enabled}
+        branch_snapshot_policy_name = simulate_self_spec_gpu_pipeline_branch_snapshot_policy || ""
+        branch_snapshot_mode_options << {name: branch_snapshot_policy_name.to_s, snapshot: branch_snapshot_base_enabled, onepass: branch_snapshot_single_pass_base_enabled, only_split: branch_snapshot_only_split_base_enabled}
       else
         if simulate_self_spec_gpu_pipeline_hybrid_sweep
           raise "branch snapshot mode sweep is not wired into hybrid route scoreboards yet; disable hybrid sweep"
