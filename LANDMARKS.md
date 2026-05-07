@@ -8126,3 +8126,27 @@ Per-cycle work between draft and verify: `target_backup_state.copy_from!(state)`
 - daedalus: The useful frame shifts from "schedule around the split" to "eliminate the split or make the branch verifier primitive cheaper."
 - maieutic: The hidden assumption was that verifier chunks are independent costs that can be overlapped away. The measurements show the draft and verifier lanes contend for the same Metal resources on M2 Max.
 - adversary: These are focused single-shot gates with noisy wall timing, so they refute promotion but do not prove exact magnitudes. Keep both flags default-off and use ABBA only if a later verifier primitive changes the cost surface.
+
+**decision_update_35:** Source audit of Qwen3.6/vLLM MTP explains why the upstream MTP weights are real but have not become a wall-clock win in our current Metal probe. The local Qwen3.6 HF snapshot now includes `config.json`/`README.md`: Qwen3.6 declares `model_type=qwen3_5`, `text_config.mtp_num_hidden_layers=1`, and `mtp_use_dedicated_embeddings=false`; the Qwen README recommends server-side MTP with SGLang NEXTN and vLLM speculative config. vLLM treats MTP as a same-model draft path, not a separate small model: `SpeculativeConfig` remaps `qwen3_5` to `qwen3_5_mtp`, uses the target model as the draft model when `method=mtp`, and builds a chain token tree. The vLLM Qwen3.5 MTP body is `RMSNorm(embed), RMSNorm(target_hidden), concat, fc(2H->H), one full-attention decoder layer, norm, shared lm_head`; the proposer passes target hidden states from the exact model, shares target embeddings/lm_head with MTP, uses persistent GPU buffers/cudagraph dispatch, and recommends starting with `num_speculative_tokens=1`. This confirms we are not "wrong" on the formula: our `Qwen35MTP.forward_one_hidden` matches that shape and already has the exact one-token attention shortcut. We are still "cooking it wrong" at the execution-model level if we expect the sidecar alone to beat decode: our current wall loss is verifier/scheduler/replay dominated, while vLLM's intended win depends on resident hidden-state handoff, graph-captured proposal, GPU-side rejection/sampling, and a target verifier whose cost scales closer to chunks/passes than emitted tokens.
+**evidence_update_35:**
+- claim: "Qwen3.6 exposes one MTP layer and no dedicated MTP embeddings in the official local HF config."
+  source: `/Users/sergey/.cache/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9/config.json` (`model_type=qwen3_5`, `mtp_num_hidden_layers=1`, `mtp_use_dedicated_embeddings=false`)
+  verified_at: 2026-05-07
+  decay_trigger: model repo revision or config download changes
+- claim: "The Qwen3.6 README recommends MTP/NEXTN server-side speculative decoding, including vLLM speculative config."
+  source: `/Users/sergey/.cache/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9/README.md`
+  verified_at: 2026-05-07
+  decay_trigger: model repo README revision or serving-runtime version changes
+- claim: "vLLM's Qwen MTP implementation uses target hidden states plus MTP fc/full-attention layer and shares target embeddings/lm_head."
+  source: `/Users/sergey/SrcArchives/AI/vllm/vllm/model_executor/models/qwen3_5_mtp.py`; `/Users/sergey/SrcArchives/AI/vllm/vllm/config/speculative.py`; `/Users/sergey/SrcArchives/AI/vllm/vllm/v1/spec_decode/eagle.py`; `/Users/sergey/SrcArchives/AI/vllm/vllm/v1/spec_decode/llm_base_proposer.py`
+  verified_at: 2026-05-07
+  decay_trigger: vLLM checkout revision or MTP proposer implementation changes
+- claim: "Our current MTP implementation is formula-compatible but still probe-shaped around one-token/wall experiments."
+  source: `/Users/sergey/Projects/Crystal/cogni-ml/src/ml/gguf/qwen35_mtp.cr`; `/Users/sergey/Projects/Crystal/cogni-ml/src/ml/gguf/kernels/mtp_qwen35.metal`; `/Users/sergey/Projects/Crystal/cogni-ml/bin/qwen35_mtp_sidecar_probe.cr`
+  verified_at: 2026-05-07
+  decay_trigger: MTP sidecar kernel fusion, verifier controller, or wall-loop rewrite
+**quadrumvirate_update_35:**
+- cassandra: Always-on MTP remains a local-optimization trap because the sidecar can improve candidate quality while still adding wall if verifier/replay is expensive.
+- daedalus: The relevant pivot is from "make MTP body cheaper" to "make the vLLM-style execution model true on Metal": exact hidden handoff, resident proposer, GPU-side candidate selection, and chunk-major verifier.
+- maieutic: The hidden assumption was that released MTP weights should speed up any runtime by themselves. Source says the weights are only one component of a speculative serving pipeline.
+- adversary: README recommends `qwen3_next_mtp`, while the downloaded config says `qwen3_5`; vLLM normalizes deprecated MTP method names to `mtp` and remaps by model config, so do not hard-code the README method string into our Crystal path without a version-specific check.
