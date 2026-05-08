@@ -9231,3 +9231,23 @@ Conclusion: the remaining CUDA gap before a real recurrent-layer facade is now c
 - daedalus: The frame should now pivot from more one-off math kernels to a facade with explicit GPU buffer ownership; otherwise repeated probes will duplicate launch/plumbing code.
 - maieutic: The hidden assumption that projections and prep could be reasoned about independently is only partially true; the next proof must compose real projections with prep/output and persistent states.
 - adversary: The probe still omits attention norm, residual add, post-attention norm, FFN, tokenizer/decode scheduling, and whole-model state management.
+
+**decision_update_89:** Extended the CUDA recurrent slice to a full one-token recurrent layer probe. `bin/cuda_recurrent_prep_output_probe.cr` now runs input RMSNorm, real Q5_K/Q4_K recurrent projections, recurrent conv prep, Q/K normalization, alpha/beta transform, DeltaNet state update, post RMSNorm/SiLU gating, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual without CPU roundtrips between kernels.
+
+Conclusion: CUDA now has a verified one-token recurrent-layer proof for Qwen3.5 9B layer 0. The next gap is no longer layer math coverage; it is engineering the reusable backend object that keeps constants, weights, conv state, SSM state, and intermediates resident across repeated tokens instead of rebuilding/uploading around a probe.
+
+**evidence_update_89:**
+- claim: "The CUDA full recurrent-layer probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_rec_layer_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: recurrent layer probe source, DeltaNet PTX source, Q4/Q5/Q6 PTX source, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The CUDA full recurrent-layer probe matches CPU references on remote Qwen3.5 9B layer 0."
+  source: remote `crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr`; remote `--layer 0 --reps 10 --warmup 2` -> `cuda_ms=1.591`, `cpu_ms=5100.603`, `conv_state/ssm_state/attn_out/final cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_89:**
+- cassandra: The likely blocker after recurrent-attention slice proof was FFN/residual composition. This probe covers that boundary and exposes the next bottleneck as residency/object design.
+- daedalus: The next frame should stop extending standalone probes and build a persistent CUDA backend object; otherwise timing includes repeated setup/upload work that real inference should not pay.
+- maieutic: The assumption that a layer proof equals a decoder backend remains false. This is a one-token layer proof; repeated-token state ownership and scheduler integration are separate requirements.
+- adversary: The probe still omits full-attention layers, KV cache, tokenizer/decode loop, multi-layer sequencing, sampling/top1, and cross-token model-level state management.

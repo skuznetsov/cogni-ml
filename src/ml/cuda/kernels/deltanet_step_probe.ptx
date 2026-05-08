@@ -435,3 +435,220 @@ L2_DONE:
 AB_DONE:
     ret;
 }
+
+// Serial correctness-first RMSNorm over one vector:
+//   out[i] = x[i] * rsqrt(mean(x^2) + eps) * norm[i]
+.visible .entry rmsnorm_vec_probe(
+    .param .u64 x,
+    .param .u64 norm,
+    .param .u64 out,
+    .param .u32 dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<5>;
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<18>;
+    .reg .f32 %f<16>;
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [norm];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [dim];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r2, %tid.x;
+    setp.ne.u32 %p1, %r2, 0;
+    @%p1 bra RMS_DONE;
+
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r3, 0;
+RMS_SUM:
+    setp.ge.u32 %p2, %r3, %r1;
+    @%p2 bra RMS_INV;
+    mul.wide.u32 %rd4, %r3, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f3, [%rd5];
+    fma.rn.f32 %f2, %f3, %f3, %f2;
+    add.u32 %r3, %r3, 1;
+    bra RMS_SUM;
+
+RMS_INV:
+    cvt.rn.f32.u32 %f4, %r1;
+    div.rn.f32 %f5, %f2, %f4;
+    add.rn.f32 %f5, %f5, %f1;
+    sqrt.rn.f32 %f6, %f5;
+    rcp.rn.f32 %f7, %f6;
+    mov.u32 %r4, 0;
+
+RMS_WRITE:
+    setp.ge.u32 %p3, %r4, %r1;
+    @%p3 bra RMS_DONE;
+    mul.wide.u32 %rd6, %r4, 4;
+    add.s64 %rd7, %rd1, %rd6;
+    add.s64 %rd8, %rd2, %rd6;
+    add.s64 %rd9, %rd3, %rd6;
+    ld.global.f32 %f8, [%rd7];
+    ld.global.f32 %f9, [%rd8];
+    mul.rn.f32 %f10, %f8, %f7;
+    mul.rn.f32 %f11, %f10, %f9;
+    st.global.f32 [%rd9], %f11;
+    add.u32 %r4, %r4, 1;
+    bra RMS_WRITE;
+
+RMS_DONE:
+    ret;
+}
+
+// residual_out = x + add; normed_out = RMSNorm(residual_out, norm).
+.visible .entry add_rmsnorm_vec_probe(
+    .param .u64 x,
+    .param .u64 add,
+    .param .u64 norm,
+    .param .u64 residual_out,
+    .param .u64 normed_out,
+    .param .u32 dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<5>;
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<24>;
+    .reg .f32 %f<18>;
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [add];
+    ld.param.u64 %rd3, [norm];
+    ld.param.u64 %rd4, [residual_out];
+    ld.param.u64 %rd5, [normed_out];
+    ld.param.u32 %r1, [dim];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r2, %tid.x;
+    setp.ne.u32 %p1, %r2, 0;
+    @%p1 bra ADDRMS_DONE;
+
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r3, 0;
+ADDRMS_SUM:
+    setp.ge.u32 %p2, %r3, %r1;
+    @%p2 bra ADDRMS_INV;
+    mul.wide.u32 %rd6, %r3, 4;
+    add.s64 %rd7, %rd1, %rd6;
+    add.s64 %rd8, %rd2, %rd6;
+    add.s64 %rd9, %rd4, %rd6;
+    ld.global.f32 %f3, [%rd7];
+    ld.global.f32 %f4, [%rd8];
+    add.rn.f32 %f5, %f3, %f4;
+    st.global.f32 [%rd9], %f5;
+    fma.rn.f32 %f2, %f5, %f5, %f2;
+    add.u32 %r3, %r3, 1;
+    bra ADDRMS_SUM;
+
+ADDRMS_INV:
+    cvt.rn.f32.u32 %f6, %r1;
+    div.rn.f32 %f7, %f2, %f6;
+    add.rn.f32 %f7, %f7, %f1;
+    sqrt.rn.f32 %f8, %f7;
+    rcp.rn.f32 %f9, %f8;
+    mov.u32 %r4, 0;
+
+ADDRMS_WRITE:
+    setp.ge.u32 %p3, %r4, %r1;
+    @%p3 bra ADDRMS_DONE;
+    mul.wide.u32 %rd10, %r4, 4;
+    add.s64 %rd11, %rd4, %rd10;
+    add.s64 %rd12, %rd3, %rd10;
+    add.s64 %rd13, %rd5, %rd10;
+    ld.global.f32 %f10, [%rd11];
+    ld.global.f32 %f11, [%rd12];
+    mul.rn.f32 %f12, %f10, %f9;
+    mul.rn.f32 %f13, %f12, %f11;
+    st.global.f32 [%rd13], %f13;
+    add.u32 %r4, %r4, 1;
+    bra ADDRMS_WRITE;
+
+ADDRMS_DONE:
+    ret;
+}
+
+.visible .entry swiglu_probe(
+    .param .u64 gate,
+    .param .u64 up,
+    .param .u64 out,
+    .param .u32 dim
+)
+{
+    .reg .pred %p<3>;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<14>;
+
+    ld.param.u64 %rd1, [gate];
+    ld.param.u64 %rd2, [up];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [dim];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra SWI_DONE;
+
+    mul.wide.u32 %rd4, %r5, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd6, %rd2, %rd4;
+    add.s64 %rd7, %rd3, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    ld.global.f32 %f2, [%rd6];
+    mov.f32 %f3, 0fBFB8AA3B;
+    mul.rn.f32 %f4, %f1, %f3;
+    ex2.approx.ftz.f32 %f5, %f4;
+    mov.f32 %f6, 0f3F800000;
+    add.rn.f32 %f7, %f6, %f5;
+    rcp.approx.ftz.f32 %f8, %f7;
+    mul.rn.f32 %f9, %f1, %f8;
+    mul.rn.f32 %f10, %f9, %f2;
+    st.global.f32 [%rd7], %f10;
+
+SWI_DONE:
+    ret;
+}
+
+.visible .entry add_vec_probe(
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 out,
+    .param .u32 dim
+)
+{
+    .reg .pred %p<3>;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<4>;
+
+    ld.param.u64 %rd1, [a];
+    ld.param.u64 %rd2, [b];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [dim];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra ADD_DONE;
+
+    mul.wide.u32 %rd4, %r5, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd6, %rd2, %rd4;
+    add.s64 %rd7, %rd3, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    ld.global.f32 %f2, [%rd6];
+    add.rn.f32 %f3, %f1, %f2;
+    st.global.f32 [%rd7], %f3;
+
+ADD_DONE:
+    ret;
+}

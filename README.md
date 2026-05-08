@@ -200,7 +200,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_r
   --warmup 2
 ```
 
-`cuda_recurrent_prep_output_probe` now composes the real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`) with recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, and Q4_K `ssm_out`. It is a one-token recurrent-attention slice facade; residual add, post-attention norm, and FFN are still outside this probe.
+`cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
 
 Build the Metal bridge once:
 
