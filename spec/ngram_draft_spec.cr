@@ -103,4 +103,13 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.lag_ratio(ids, 4).should eq(0.0)
     ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16).should be_true
   end
+
+  it "risk-gates structured YAML-like tails with weak lag-four reuse" do
+    ids = [198, 220, 471, 850, 25, 220, 17, 198, 262, 803, 25, 8029, 198, 262, 869, 25]
+
+    ML::GGUF::NgramDraft.pair_unique_ratio(ids).should be > 0.90
+    ML::GGUF::NgramDraft.lag_ratio(ids, 4).should be < 0.10
+    ML::GGUF::NgramDraft.lag_ratio(ids, 8).should be < 0.20
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 8).should be_true
+  end
 end

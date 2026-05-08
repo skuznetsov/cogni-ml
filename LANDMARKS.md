@@ -8883,3 +8883,25 @@ Conclusion: the accepted n-gram verifier is now too balanced for these local WBA
 - daedalus: This closes the "maybe old WBA refutations revive on b31" branch for the current accepted verifier.
 - maieutic: The assumption that visible conversion/FFN-down profile entries imply wall leverage was too local; grouped command-buffer wall is distributed across many phases.
 - adversary: Do not promote env-only WBA knobs from sub-millisecond ABBA differences under host noise.
+
+**decision_update_73:** Saved and tested the proposal-aware verifier frame. The correct composition is not "run n-gram, neural draft, and one-pass verifier all the time"; it is an expected-value router where each proposal span selects the cheapest exact verifier/fallback mode. Clean cheap-copy spans should use the exact accepted-span verifier, uncertain spans should fail closed to exact target/plain decode, and branch/one-pass checkpoint verifier modes should be reserved for neural/self-spec spans where suffix-reject replay can be avoided.
+
+The first local smoke found a concrete risk-gate miss. A structured YAML-like prompt produced a 16-token n-gram candidate with high pair diversity (`pair_unique=0.933`) and low long-lag reuse (`lag8=0`), but `lag4=0.083` missed the old `<0.05` high-diversity tail threshold. The candidate rejected at the first or second token and made `ngram_target_only_risk` pay a full failed verifier chunk. Tightened that final high-diversity clause to `lag4 < 0.10` and added a regression spec with the observed candidate token ids.
+
+Conclusion: this is evidence for proposal-aware routing, not for blindly adding neural fallback. On the fixed 27B smoke, `ngram_target_only_risk` kept the clean repeat fast, made the YAML row fail closed to near-plain, and beat neural default on paired average. The next combined-policy experiment should compare the best individual policy against an explicit route contract; one-pass/checkpoint modes should be tested only on branch/suffix self-spec spans where their replay-saving primitive is relevant.
+
+**evidence_update_73:**
+- claim: "The structured YAML-like n-gram overrun is now risk-gated by a focused helper regression."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_structured_tail_spec crystal spec spec/ngram_draft_spec.cr ...` -> `15 examples, 0 failures`
+  verified_at: 2026-05-08
+  decay_trigger: n-gram risk features, tokenizer IDs, min-candidate policy, or candidate-generation semantics change
+- claim: "The risk-gate fix improves the proposal-aware target-only route on the smoke suite without removing clean-repeat speed."
+  source: `/tmp/qwen35_proposal_router_fix_smoke_20260508105327/sweep.log` -> 9B `ngram_target_only_risk` wins `3/3`, paired ratio `0.702x`, YAML fail-closed; `/tmp/qwen36_proposal_router_fix_smoke_20260508105405/sweep.log` -> 27B clean repeat `2.545x`, YAML `1.003x`, paired ratio `0.815x` vs neural default
+  verified_at: 2026-05-08
+  decay_trigger: prompt suite, target/draft model files, host load, risk gate, or verifier route changes
+
+**quadrumvirate_update_73:**
+- cassandra: The main failure mode of the proposed marriage is paying verifier or neural-draft cost for spans whose proposal source cannot earn it back.
+- daedalus: Shifted from "combine every speed path" to "route each span by expected value"; cheap copy proposals and one-pass branch checkpoints solve different failure modes.
+- maieutic: The hidden assumption was that neural fallback is the natural partner for cheap copy proposals. Evidence says exact target-only fallback is usually the safer partner unless a separate branch/suffix signal justifies self-spec.
+- adversary: This is a smoke, not a promotion. The 27B suite is tiny and timing-noisy; promotion still requires an interleaved larger suite against the best individual policy, with parity and per-prompt win/loss reporting.
