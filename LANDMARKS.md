@@ -8905,3 +8905,29 @@ Conclusion: this is evidence for proposal-aware routing, not for blindly adding 
 - daedalus: Shifted from "combine every speed path" to "route each span by expected value"; cheap copy proposals and one-pass branch checkpoints solve different failure modes.
 - maieutic: The hidden assumption was that neural fallback is the natural partner for cheap copy proposals. Evidence says exact target-only fallback is usually the safer partner unless a separate branch/suffix signal justifies self-spec.
 - adversary: This is a smoke, not a promotion. The 27B suite is tiny and timing-noisy; promotion still requires an interleaved larger suite against the best individual policy, with parity and per-prompt win/loss reporting.
+
+**decision_update_74:** Productized only the safe slice of proposal-aware decoding as an opt-in `qwen35_generate` auto profile. `QWEN35_DECODE_POLICY=auto` now defaults `QWEN35_NGRAM_MIN_CANDIDATES` to `8`, while explicit `QWEN35_DECODE_POLICY=ngram` preserves the historical `0` default unless the user sets the env var. The auto profile remains exact and fail-closed: risk-gated n-gram/cache proposals first, exact target-only fallback when no economical safe proposal exists, no neural draft fallback, and no research guarded/full-row verifier.
+
+This is a productization boundary, not a broad default promotion. The evidence supports opt-in CLI use for repeated/template spans and safe near-plain fallback elsewhere. It does not yet justify making auto the default decode mode for all prompts, because the verifier body remains expensive and the broader prompt suite still needs ABBA/interleaved validation against the best individual policy.
+
+The remote CUDA host was also verified without installing packages or copying models. A Python `ctypes` CUDA Driver API smoke loaded PTX, launched a vector-add kernel, synchronized, copied results back, and returned `ok=True` on an `NVIDIA GeForce RTX 5060 Ti` with compute capability `12.0`. The host has CUDA driver access but no Crystal, C compiler, Torch, Triton, CuPy, NumPy, or nvcc in the default PATH, so useful CUDA benchmarking will need a user-space toolchain/container or a self-contained binary upload.
+
+**evidence_update_74:**
+- claim: "`qwen35_generate` auto profile now uses the economical n-gram minimum while preserving explicit n-gram compatibility."
+  source: `/tmp/qwen35_generate_auto_product_smoke.log` -> `QWEN35_DECODE_POLICY=auto` prints `min_candidates=8`; source keeps explicit `ngram` default at `0`
+  verified_at: 2026-05-08
+  decay_trigger: decode-policy parsing, n-gram env defaults, or generate CLI routing changes
+- claim: "The productized auto profile builds and still uses the exact accepted n-gram route on clean repeats."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_auto_product_spec crystal spec spec/ngram_draft_spec.cr ...` -> `15 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_auto_product_build crystal build --release --no-debug bin/qwen35_generate.cr ...`; `/tmp/qwen35_generate_auto_product_repeat16.log` -> `accepted=16/16`, `cycles=1`, `8.09 ms/tok`
+  verified_at: 2026-05-08
+  decay_trigger: n-gram risk gate, generate CLI, model path, or verifier route changes
+- claim: "The remote CUDA host can execute a CUDA kernel through the driver API."
+  source: remote Python/ctypes CUDA Driver API PTX vector-add smoke -> device `NVIDIA GeForce RTX 5060 Ti`, compute capability `12.0`, `ok=True`
+  verified_at: 2026-05-08
+  decay_trigger: remote host rebuild, driver change, account change, PATH/toolchain change, or GPU allocation change
+
+**quadrumvirate_update_74:**
+- cassandra: The product risk is over-promoting a workload-specialized route. Keeping it opt-in avoids default regressions while making the reliable slice usable.
+- daedalus: Shifted productization from "ship speculative decoding" to "ship the fail-closed proposal-aware policy profile".
+- maieutic: The assumption that productization means default-on was rejected; productization here means documented stable CLI behavior with conservative defaults.
+- adversary: CUDA availability is verified only at the driver/kernel-smoke level. It is not evidence that the Crystal/Metal Qwen path, GGUF models, or CUDA LLM kernels are runnable on that host yet.

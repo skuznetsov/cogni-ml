@@ -96,6 +96,11 @@ Use the conservative automatic decode policy:
 QWEN35_DECODE_POLICY=auto ./build/qwen35_generate "The capital of France is" 64
 ```
 
+`auto` is the product-safe proposal-aware profile: it uses exact n-gram/cache
+proposals only when they are large enough to amortize verification, enables the
+candidate-shape risk gate, and otherwise falls back to exact target decoding
+without invoking the neural draft model.
+
 Enable exact neural speculative decode with the Qwen 3.5 0.8B draft:
 
 ```sh
@@ -126,6 +131,7 @@ Useful Qwen environment switches:
 | `QWEN35_NGRAM_GAMMA=32` | Maximum n-gram verifier chunk size. |
 | `QWEN35_NGRAM_MIN=6` | Minimum repeated suffix length before n-gram drafting. |
 | `QWEN35_NGRAM_MAX=8` | Maximum suffix length to search for n-gram drafting. |
+| `QWEN35_NGRAM_MIN_CANDIDATES=N` | Skip n-gram proposals shorter than `N` candidates. In `auto`, the default is `8`; explicit `ngram` keeps the old default `0` unless set. |
 | `QWEN35_NGRAM_STAGE_MIN=N` | Split only n-gram verifier chunks with at least `N` candidates into staged subchunks. In `auto`, the default is `QWEN35_NGRAM_GAMMA + 1`, so the common full chunk is kept intact unless overridden. Explicit `ngram` keeps the old default `0` unless set. |
 | `QWEN35_NGRAM_RISK_GATE=0\|1` | In `auto`, the exact candidate-shape risk gate is enabled by default; set `0` to disable. Explicit `ngram` keeps the old default off unless set to `1`. |
 | `QWEN35_NGRAM_RISK_MIN_SIZE=16` | Candidate size threshold used by the n-gram risk gate. This is independent from `QWEN35_NGRAM_STAGE_MIN`, so staging can be disabled without weakening fail-closed risk checks. |
@@ -320,9 +326,10 @@ Speculative decode caveats:
 - The speculative paths are exact greedy verification paths, not approximate sampling shortcuts.
 - Neural speculative speed depends on draft acceptance. High-accept prompts are faster; rejection-heavy prompts quickly fall back to plain target decode.
 - In `qwen35_generate`, neural speculative decode is useful for longer high-accept generations. In a local 64-token smoke, `The capital of France is` measured `20.40 ms/tok` greedy, `16.61 ms/tok` neural speculative, and `15.10 ms/tok` neural speculative with guarded full-row verification. A 32-token smoke was slower due fixed draft/verifier overhead.
-- N-gram speculation is a workload-specialized path for repeated/generated-template text. It is intentionally fail-closed after a rejected n-gram chunk by default.
+- N-gram speculation is a workload-specialized path for repeated/generated-template text. `QWEN35_DECODE_POLICY=auto` is the recommended product profile: risk-gated, `min_candidates=8`, no neural fallback, and exact target-only fallback outside clean cheap-copy spans.
 - In the research acceptance harness, `--ngram-target-only` / `QWEN35_SPEC_NGRAM_TARGET_ONLY=1` skips neural draft fallback after the cheap n-gram proposal source and uses exact target-only steps instead. On a 27B mixed JSONL gate it beat neural default on `5/7` prompts with paired ratio `0.909x` when combined with `--ngram-risk-gate`, but its average speed was near plain target decode; the real win is on clean repeated spans.
 - The n-gram risk gate now also catches small-period prefix overruns such as IP/YAML tails. A focused 27B probe kept clean `alpha beta gamma` repeats at `~2.58x` while turning a YAML overrun from `0.80x` into fail-closed target-only `1.006x`.
+- The productization smoke after the structured-tail fix kept clean 27B repeats fast (`~2.55x` over plain), made a YAML-like overrun fail closed (`1.003x`), and had `ngram_target_only_risk` beat neural default on the tiny paired suite (`0.815x` ratio). Treat this as opt-in CLI evidence, not a broad default claim.
 - `QWEN35_NGRAM_REPLAY_ON_REJECT=1` is exact but deliberately opt-in. It removes rollback-copy overhead on high-confidence accepted n-gram chunks; on the local 27B+0.8B repeat8 harness it improved `ngram_router16_risk` from `30.85` to `30.21 ms/tok`. A forced no-risk YAML reject regressed from `71.53` to `95.86 ms/tok`, so this is not a broad default.
 - N-gram verifier chunks temporarily disable guarded full-row verification even if `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, because partial n-gram rejection exposed a close-row guard failure during adversarial CLI testing.
 - `QWEN35_HEAD_FULL_ROWS_GUARDED=1` is still an experimental research switch. The harness checks final output against plain greedy target output, but the route is not broad-defaulted because it relies on a full-row F16 top1 margin guard.

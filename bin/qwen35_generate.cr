@@ -61,7 +61,7 @@ ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
 ngram_stage_min = (ENV["QWEN35_NGRAM_STAGE_MIN"]? || (decode_policy == "auto" ? (ngram_gamma + 1).to_s : "0")).to_i
 ngram_stage_gate = (ENV["QWEN35_NGRAM_STAGE_GATE"]? || "4").to_i
 ngram_risk_min_size = (ENV["QWEN35_NGRAM_RISK_MIN_SIZE"]? || "16").to_i
-ngram_min_candidates = (ENV["QWEN35_NGRAM_MIN_CANDIDATES"]? || "0").to_i
+ngram_min_candidates = (ENV["QWEN35_NGRAM_MIN_CANDIDATES"]? || (decode_policy == "auto" ? "8" : "0")).to_i
 ngram_risk_gate = if value = ENV["QWEN35_NGRAM_RISK_GATE"]?
                     value == "1"
                   else
