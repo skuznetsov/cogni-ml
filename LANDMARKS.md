@@ -8967,3 +8967,27 @@ Conclusion: the host is ready for Linux/CUDA experiments at the GGUF metadata an
 - daedalus: The next frame shift is backend separation: keep GGUF parsing/model metadata shared, but introduce a Linux/CUDA execution path instead of trying to run Metal entrypoints on the CUDA box.
 - maieutic: The hidden assumption was that "Crystal builds on remote" implies "Qwen native CLI builds." Evidence refutes that because the CLI currently requires Metal bridge symbols.
 - adversary: Do not benchmark or compare remote CUDA inference until a CUDA backend or CPU-only build route can compile and run end-to-end; metadata reads only prove model availability and parser compatibility.
+
+**decision_update_76:** Added the first real Linux/CUDA backend boundary without pretending the Metal-first generator is portable. New `bin/qwen35_gguf_info.cr` builds with `-Dcpu_only`, reads Qwen 3.5/3.6 GGUF metadata, reports tensor inventory, and optionally instantiates `Qwen35Weights` via `--load-weights`. `src/ml/gguf/qwen35_weights.cr` now requires `qwen35_metal` only outside `-Dcpu_only`, so the structured weight loader can compile on Linux without pulling Metal bridge symbols.
+
+Conclusion: this is not inference, but it is the correct first boundary: GGUF parsing, hparams, tensor inventory, and structured weight mapping are now shared and verifiable on the CUDA host. The next CUDA step should be one measured backend primitive, such as a minimal Q4_K/Q8_0 matmul probe, not trying to run `qwen35_generate` before the state/execution backend split exists.
+
+**evidence_update_76:**
+- claim: "The CPU-only Qwen GGUF info CLI builds and can instantiate structured weights without Metal."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_qwen_info_build crystal build -Dcpu_only bin/qwen35_gguf_info.cr -o /tmp/qwen35_gguf_info_cpu_only`; local `/tmp/qwen35_gguf_info_cpu_only --model ...Qwen3.5-0.8B-Q8_0.gguf --load-weights` -> `weights=loaded`, `weight_layers=24`, `token_embd=248320x1024:Q8_0`
+  verified_at: 2026-05-08
+  decay_trigger: qwen35 weight loader, GGUF reader, CLI args, model files, or cpu_only build boundary changes
+- claim: "`Qwen35Weights` now has a focused CPU-only compile/load regression check."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cpu_only_weights_spec crystal spec -Dcpu_only spec/qwen35_weights_spec.cr` -> `1 examples, 0 failures`
+  verified_at: 2026-05-08
+  decay_trigger: qwen35_weights requires, compute buffer stubs, spec model path, or cpu_only semantics change
+- claim: "The same CPU-only boundary works on the remote CUDA host with downloaded models."
+  source: remote `crystal build -Dcpu_only bin/qwen35_gguf_info.cr`, remote `crystal spec -Dcpu_only spec/qwen35_weights_spec.cr` -> `1 examples, 0 failures`, remote 27B info smoke -> `layers=64`, `tensor_types=F32:353,Q4_K:433,Q6_K:65`
+  verified_at: 2026-05-08
+  decay_trigger: remote source sync, remote Crystal wrapper, model paths, downloaded GGUF files, or Linux linker/toolchain changes
+
+**quadrumvirate_update_76:**
+- cassandra: The obvious trap was over-scoping into full Linux generation. The safer measurable step was to detach the non-Metal model-load layer first.
+- daedalus: Backend separation should proceed bottom-up: model metadata and weight mapping first, then a standalone CUDA matmul primitive, then stateful Qwen layers.
+- maieutic: The phrase "backend boundary" was assumed to mean a full generator switch; evidence shows the first useful boundary is a compile/link boundary around `Qwen35Weights`.
+- adversary: The CLI does not prove CUDA inference speed or correctness. It only proves portable loading and inventory; the next benchmark claim requires a CUDA kernel with a matched CPU/Metal reference.

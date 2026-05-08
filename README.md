@@ -63,6 +63,16 @@ Most benchmark/probe CLIs also accept `--model`, `--target`, `--draft`, `--token
 
 ### Build Qwen CLIs
 
+Build the CPU-only GGUF/Qwen metadata smoke on Linux, CUDA hosts, or any environment where Metal is unavailable:
+
+```sh
+crystal build -Dcpu_only bin/qwen35_gguf_info.cr -o build/qwen35_gguf_info
+./build/qwen35_gguf_info --model /path/to/Qwen3.5-9B-Q4_K_M.gguf
+./build/qwen35_gguf_info --model /path/to/Qwen3.5-0.8B-Q8_0.gguf --load-weights
+```
+
+This entrypoint intentionally does not run inference. It verifies GGUF parsing, Qwen 3.5/3.6 hparams, tensor inventory, and the structured `Qwen35Weights` loader without pulling the Metal bridge into a Linux build.
+
 Build the Metal bridge once:
 
 ```sh

@@ -1,7 +1,9 @@
 require "./reader"
 require "./compute" # for QuantWeight
 require "./qwen35_meta"
-require "./qwen35_metal"
+{% unless flag?(:cpu_only) %}
+  require "./qwen35_metal"
+{% end %}
 
 # Qwen 3.5 / 3.6 weight loader.
 #
