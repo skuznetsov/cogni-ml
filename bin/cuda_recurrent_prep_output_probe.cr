@@ -91,14 +91,16 @@ layer = 0
 seed = 31_u64
 reps = 1
 warmup = 0
+tokens = 1
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_recurrent_prep_output_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N]"
+  p.banner = "Usage: cuda_recurrent_prep_output_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N]"
   p.on("--model PATH", "Qwen Q4_K_M GGUF model path") { |v| model = v }
   p.on("--layer N", "Recurrent layer index") { |v| layer = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed recurrent-prep output launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
+  p.on("--tokens N", "GPU-resident sequence length for recurrent state progression") { |v| tokens = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -106,6 +108,7 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "layer must be non-negative" unless layer >= 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
+raise "tokens must be positive" unless tokens > 0
 
 h_k = 16
 h_v = 32
@@ -169,74 +172,81 @@ raise "ssm_norm size mismatch" unless ssm_norm.size == s
 raise "norm size mismatch" unless attn_norm.size == hidden && post_norm.size == hidden
 
 rng = Random.new(seed)
-x = Array(Float32).new(hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
+xs = Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
 conv_state_init = Array(Float32).new((conv_k - 1) * qkv_dim) { ((rng.next_float - 0.5) * 0.05).to_f32 }
 ssm_state_init = Array(Float32).new(h_v * s * s) { ((rng.next_float - 0.5) * 0.05).to_f32 }
 
 cpu_t0 = Time.instant
-cur = ML::GGUF::Qwen35CPU.rms_norm(x, attn_norm, eps)
-qkv_mixed = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, qkv_raw, ML::GGUF::TensorType::Q5_K, qkv_dim, Array(Float32).new(qkv_dim, 0.0_f32))
-z = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, inner_dim, Array(Float32).new(inner_dim, 0.0_f32))
-alpha = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, alpha_raw, ML::GGUF::TensorType::Q4_K, h_v, Array(Float32).new(h_v, 0.0_f32))
-beta_raw = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, beta_raw_w, ML::GGUF::TensorType::Q4_K, h_v, Array(Float32).new(h_v, 0.0_f32))
 conv_state_cpu = conv_state_init.dup
-conv_out = Array(Float32).new(qkv_dim) do |ch|
-  acc = 0.0_f32
-  w_base = ch * conv_k
-  (conv_k - 1).times { |t| acc += conv_state_cpu[t * qkv_dim + ch] * conv1d[w_base + t] }
-  acc += qkv_mixed[ch] * conv1d[w_base + conv_k - 1]
-  sig = 1.0_f32 / (1.0_f32 + Math.exp(-acc).to_f32)
-  acc * sig
-end
-(conv_k - 2).times do |t|
-  src = (t + 1) * qkv_dim
-  dst = t * qkv_dim
-  qkv_dim.times { |ch| conv_state_cpu[dst + ch] = conv_state_cpu[src + ch] }
-end
-last = (conv_k - 2) * qkv_dim
-qkv_dim.times { |ch| conv_state_cpu[last + ch] = qkv_mixed[ch] }
-q_cpu = conv_out[0, q_dim]
-k_cpu = conv_out[q_dim, q_dim]
-v_cpu = conv_out[2 * q_dim, v_dim]
-h_k.times do |h|
-  ML::GGUF::Qwen35CPU.l2_norm_slice!(q_cpu, h * s, s, eps)
-  ML::GGUF::Qwen35CPU.l2_norm_slice!(k_cpu, h * s, s, eps)
-end
-g_cpu = Array(Float32).new(h_v, 0.0_f32)
-b_cpu = Array(Float32).new(h_v, 0.0_f32)
-h_v.times do |h|
-  b_cpu[h] = 1.0_f32 / (1.0_f32 + Math.exp(-beta_raw[h]).to_f32)
-  xi = alpha[h] + dt_bias[h]
-  sp = xi > 20.0_f32 ? xi : Math.log(1.0_f32 + Math.exp(xi).to_f32).to_f32
-  g_cpu[h] = Math.exp((sp * ssm_a[h]).to_f64).to_f32
-end
 ssm_state_cpu = ssm_state_init.dup
-y_cpu = Array(Float32).new(inner_dim, 0.0_f32)
-ML::GGUF::Qwen35CPU.delta_net_step!(ssm_state_cpu, q_cpu, k_cpu, v_cpu, g_cpu, b_cpu, y_cpu, h_k, h_v, s, scale)
-h_v.times do |h|
-  base = h * s
-  sumsq = 0.0_f32
-  s.times { |d| yv = y_cpu[base + d]; sumsq += yv * yv }
-  inv_rms = 1.0_f32 / Math.sqrt(sumsq / s + eps).to_f32
-  s.times do |d|
-    idx = base + d
-    zv = z[idx]
-    sig = 1.0_f32 / (1.0_f32 + Math.exp(-zv).to_f32)
-    y_cpu[idx] = y_cpu[idx] * inv_rms * ssm_norm[d] * (zv * sig)
+attn_out_cpu = Array(Float32).new(hidden, 0.0_f32)
+final_cpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
+
+tokens.times do |tok|
+  x_offset = tok * hidden
+  x = xs[x_offset, hidden]
+  cur = ML::GGUF::Qwen35CPU.rms_norm(x, attn_norm, eps)
+  qkv_mixed = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, qkv_raw, ML::GGUF::TensorType::Q5_K, qkv_dim, Array(Float32).new(qkv_dim, 0.0_f32))
+  z = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, inner_dim, Array(Float32).new(inner_dim, 0.0_f32))
+  alpha = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, alpha_raw, ML::GGUF::TensorType::Q4_K, h_v, Array(Float32).new(h_v, 0.0_f32))
+  beta_raw = ML::GGUF::QuantMatmul.matmul_add(cur, 1, hidden, beta_raw_w, ML::GGUF::TensorType::Q4_K, h_v, Array(Float32).new(h_v, 0.0_f32))
+  conv_out = Array(Float32).new(qkv_dim) do |ch|
+    acc = 0.0_f32
+    w_base = ch * conv_k
+    (conv_k - 1).times { |t| acc += conv_state_cpu[t * qkv_dim + ch] * conv1d[w_base + t] }
+    acc += qkv_mixed[ch] * conv1d[w_base + conv_k - 1]
+    sig = 1.0_f32 / (1.0_f32 + Math.exp(-acc).to_f32)
+    acc * sig
   end
+  (conv_k - 2).times do |t|
+    src = (t + 1) * qkv_dim
+    dst = t * qkv_dim
+    qkv_dim.times { |ch| conv_state_cpu[dst + ch] = conv_state_cpu[src + ch] }
+  end
+  last = (conv_k - 2) * qkv_dim
+  qkv_dim.times { |ch| conv_state_cpu[last + ch] = qkv_mixed[ch] }
+  q_cpu = conv_out[0, q_dim]
+  k_cpu = conv_out[q_dim, q_dim]
+  v_cpu = conv_out[2 * q_dim, v_dim]
+  h_k.times do |h|
+    ML::GGUF::Qwen35CPU.l2_norm_slice!(q_cpu, h * s, s, eps)
+    ML::GGUF::Qwen35CPU.l2_norm_slice!(k_cpu, h * s, s, eps)
+  end
+  g_cpu = Array(Float32).new(h_v, 0.0_f32)
+  b_cpu = Array(Float32).new(h_v, 0.0_f32)
+  h_v.times do |h|
+    b_cpu[h] = 1.0_f32 / (1.0_f32 + Math.exp(-beta_raw[h]).to_f32)
+    xi = alpha[h] + dt_bias[h]
+    sp = xi > 20.0_f32 ? xi : Math.log(1.0_f32 + Math.exp(xi).to_f32).to_f32
+    g_cpu[h] = Math.exp((sp * ssm_a[h]).to_f64).to_f32
+  end
+  y_cpu = Array(Float32).new(inner_dim, 0.0_f32)
+  ML::GGUF::Qwen35CPU.delta_net_step!(ssm_state_cpu, q_cpu, k_cpu, v_cpu, g_cpu, b_cpu, y_cpu, h_k, h_v, s, scale)
+  h_v.times do |h|
+    base = h * s
+    sumsq = 0.0_f32
+    s.times { |d| yv = y_cpu[base + d]; sumsq += yv * yv }
+    inv_rms = 1.0_f32 / Math.sqrt(sumsq / s + eps).to_f32
+    s.times do |d|
+      idx = base + d
+      zv = z[idx]
+      sig = 1.0_f32 / (1.0_f32 + Math.exp(-zv).to_f32)
+      y_cpu[idx] = y_cpu[idx] * inv_rms * ssm_norm[d] * (zv * sig)
+    end
+  end
+  attn_out_cpu = ML::GGUF::QuantMatmul.matmul_add(y_cpu, 1, inner_dim, out_raw, ML::GGUF::TensorType::Q4_K, out_dim, Array(Float32).new(out_dim, 0.0_f32))
+  residual_cpu = Array(Float32).new(hidden) { |i| x[i] + attn_out_cpu[i] }
+  cur2 = ML::GGUF::Qwen35CPU.rms_norm(residual_cpu, post_norm, eps)
+  ffn_gate_cpu = ML::GGUF::QuantMatmul.matmul_add(cur2, 1, hidden, ffn_gate_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, Array(Float32).new(ffn_dim, 0.0_f32))
+  ffn_up_cpu = ML::GGUF::QuantMatmul.matmul_add(cur2, 1, hidden, ffn_up_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, Array(Float32).new(ffn_dim, 0.0_f32))
+  ffn_comb_cpu = Array(Float32).new(ffn_dim) do |i|
+    gv = ffn_gate_cpu[i]
+    (gv / (1.0_f32 + Math.exp(-gv).to_f32)) * ffn_up_cpu[i]
+  end
+  ffn_out_cpu = ML::GGUF::QuantMatmul.matmul_add(ffn_comb_cpu, 1, ffn_dim, ffn_down_raw, ML::GGUF::TensorType::Q6_K, hidden, Array(Float32).new(hidden, 0.0_f32))
+  hidden.times { |i| final_cpu_all[x_offset + i] = residual_cpu[i] + ffn_out_cpu[i] }
 end
-attn_out_cpu = ML::GGUF::QuantMatmul.matmul_add(y_cpu, 1, inner_dim, out_raw, ML::GGUF::TensorType::Q4_K, out_dim, Array(Float32).new(out_dim, 0.0_f32))
-residual_cpu = Array(Float32).new(hidden) { |i| x[i] + attn_out_cpu[i] }
-cur2 = ML::GGUF::Qwen35CPU.rms_norm(residual_cpu, post_norm, eps)
-ffn_gate_cpu = ML::GGUF::QuantMatmul.matmul_add(cur2, 1, hidden, ffn_gate_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, Array(Float32).new(ffn_dim, 0.0_f32))
-ffn_up_cpu = ML::GGUF::QuantMatmul.matmul_add(cur2, 1, hidden, ffn_up_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, Array(Float32).new(ffn_dim, 0.0_f32))
-ffn_comb_cpu = Array(Float32).new(ffn_dim) do |i|
-  gv = ffn_gate_cpu[i]
-  (gv / (1.0_f32 + Math.exp(-gv).to_f32)) * ffn_up_cpu[i]
-end
-ffn_out_cpu = ML::GGUF::QuantMatmul.matmul_add(ffn_comb_cpu, 1, ffn_dim, ffn_down_raw, ML::GGUF::TensorType::Q6_K, hidden, Array(Float32).new(hidden, 0.0_f32))
-final_cpu = Array(Float32).new(hidden) { |i| residual_cpu[i] + ffn_out_cpu[i] }
-cpu_ms = (Time.instant - cpu_t0).total_milliseconds
+cpu_ms = (Time.instant - cpu_t0).total_milliseconds / tokens
 
 cuda! LibCUDARecPrepOut.cuInit(0_u32), "cuInit"
 dev = uninitialized LibCUDARecPrepOut::CUdevice
@@ -286,30 +296,30 @@ begin
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(q5_fn), q5_mod, "q5_k_gemv_warp4_f32"), "cuModuleGetFunction(q5)"
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(q6_fn), q6_mod, "q6_k_gemv_warp4_f32"), "cuModuleGetFunction(q6)"
 
-  sizes = [bytesize_f32(hidden), bytesize_f32(hidden), bytesize_f32(hidden),
+  sizes = [bytesize_f32(tokens * hidden), bytesize_f32(hidden), bytesize_f32(hidden),
            qkv_raw.size.to_u64, gate_raw.size.to_u64, alpha_raw.size.to_u64, beta_raw_w.size.to_u64,
            bytesize_f32(conv_state_init.size), bytesize_f32(ssm_state_init.size), bytesize_f32(qkv_dim), bytesize_f32(conv1d.size),
            bytesize_f32(qkv_dim), bytesize_f32(h_v), bytesize_f32(h_v), bytesize_f32(dt_bias.size), bytesize_f32(ssm_a.size),
            bytesize_f32(h_v), bytesize_f32(h_v), bytesize_f32(inner_dim), bytesize_f32(ssm_norm.size), out_raw.size.to_u64,
            bytesize_f32(hidden), bytesize_f32(hidden), bytesize_f32(hidden), bytesize_f32(hidden),
            ffn_gate_raw.size.to_u64, ffn_up_raw.size.to_u64, ffn_down_raw.size.to_u64,
-           bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(hidden), bytesize_f32(hidden)]
+           bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(hidden), bytesize_f32(tokens * hidden)]
   sizes.each_with_index do |size_bytes, i|
     pdev = 0_u64
     cuda! LibCUDARecPrepOut.cuMemAlloc_v2(pointerof(pdev), size_bytes), "cuMemAlloc(#{i})"
     ptrs << pdev
   end
-  d_x, d_attn_norm_w, d_cur,
+  d_xs, d_attn_norm_w, d_cur,
     d_qkv_w, d_gate_w, d_alpha_w, d_beta_w,
     d_conv_state, d_ssm_state, d_qkv, d_conv_w,
     d_conv_out, d_alpha, d_beta_raw, d_dt, d_a,
     d_g, d_b, d_z, d_norm, d_out_w,
     d_attn_out, d_post_norm_w, d_residual, d_cur2,
     d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w,
-    d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final = ptrs
+    d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all = ptrs
 
   copy_inputs = -> {
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(x)"
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_xs, xs.to_unsafe.as(Void*), bytesize_f32(tokens * hidden)), "cuMemcpyHtoD(xs)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_attn_norm_w, attn_norm.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(attn_norm)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_qkv_w, qkv_raw.to_unsafe.as(Void*), qkv_raw.size.to_u64), "cuMemcpyHtoD(qkv_w)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_gate_w, gate_raw.to_unsafe.as(Void*), gate_raw.size.to_u64), "cuMemcpyHtoD(gate_w)"
@@ -346,9 +356,11 @@ begin
   d_q = d_conv_out
   d_k = d_conv_out + bytesize_f32(q_dim)
   d_v = d_conv_out + bytesize_f32(2 * q_dim)
+  d_x_cur = d_xs
+  d_final_cur = d_final_all
 
   attn_norm_params = Pointer(Void*).malloc(5)
-  attn_norm_params[0] = pointerof(d_x).as(Void*)
+  attn_norm_params[0] = pointerof(d_x_cur).as(Void*)
   attn_norm_params[1] = pointerof(d_attn_norm_w).as(Void*)
   attn_norm_params[2] = pointerof(d_cur).as(Void*)
   attn_norm_params[3] = pointerof(hidden_u32).as(Void*)
@@ -434,7 +446,7 @@ begin
   out_proj_params[4] = pointerof(hidden_u32).as(Void*)
 
   add_rms_params = Pointer(Void*).malloc(7)
-  add_rms_params[0] = pointerof(d_x).as(Void*)
+  add_rms_params[0] = pointerof(d_x_cur).as(Void*)
   add_rms_params[1] = pointerof(d_attn_out).as(Void*)
   add_rms_params[2] = pointerof(d_post_norm_w).as(Void*)
   add_rms_params[3] = pointerof(d_residual).as(Void*)
@@ -472,10 +484,13 @@ begin
   final_add_params = Pointer(Void*).malloc(4)
   final_add_params[0] = pointerof(d_residual).as(Void*)
   final_add_params[1] = pointerof(d_ffn_out).as(Void*)
-  final_add_params[2] = pointerof(d_final).as(Void*)
+  final_add_params[2] = pointerof(d_final_cur).as(Void*)
   final_add_params[3] = pointerof(hidden_u32).as(Void*)
 
-  run_bundle = -> {
+  run_token = ->(tok : Int32) {
+    offset = bytesize_f32(tok * hidden)
+    d_x_cur = d_xs + offset
+    d_final_cur = d_final_all + offset
     cuda! LibCUDARecPrepOut.cuLaunchKernel(attn_norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, attn_norm_params, Pointer(Void*).null), "attn norm"
     cuda! LibCUDARecPrepOut.cuLaunchKernel(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, qkv_proj_params, Pointer(Void*).null), "qkv proj"
     cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, gate_proj_params, Pointer(Void*).null), "gate proj"
@@ -496,33 +511,38 @@ begin
     cuda! LibCUDARecPrepOut.cuLaunchKernel(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, final_add_params, Pointer(Void*).null), "final add"
   }
 
-  warmup.times { run_bundle.call }
+  warmup.times do
+    tokens.times { |tok| run_token.call(tok) }
+  end
   cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(warmup)" if warmup > 0
   copy_inputs.call
   gpu_t0 = Time.instant
-  reps.times { run_bundle.call }
+  reps.times do
+    tokens.times { |tok| run_token.call(tok) }
+  end
   cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize"
-  gpu_ms = (Time.instant - gpu_t0).total_milliseconds / reps
+  timed_steps = reps * tokens
+  gpu_ms = (Time.instant - gpu_t0).total_milliseconds / timed_steps
 
   copy_inputs.call
-  run_bundle.call
+  tokens.times { |tok| run_token.call(tok) }
   cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(correctness)"
 
   conv_state_gpu = Array(Float32).new(conv_state_init.size, 0.0_f32)
   ssm_state_gpu = Array(Float32).new(ssm_state_init.size, 0.0_f32)
   attn_out_gpu = Array(Float32).new(hidden, 0.0_f32)
-  final_gpu = Array(Float32).new(hidden, 0.0_f32)
+  final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
   cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(conv_state_gpu.to_unsafe.as(Void*), d_conv_state, bytesize_f32(conv_state_gpu.size)), "cuMemcpyDtoH(conv_state)"
   cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(ssm_state_gpu.to_unsafe.as(Void*), d_ssm_state, bytesize_f32(ssm_state_gpu.size)), "cuMemcpyDtoH(ssm_state)"
   cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(attn_out_gpu.to_unsafe.as(Void*), d_attn_out, bytesize_f32(attn_out_gpu.size)), "cuMemcpyDtoH(attn_out)"
-  cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(final_gpu.to_unsafe.as(Void*), d_final, bytesize_f32(final_gpu.size)), "cuMemcpyDtoH(final)"
+  cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(final_gpu_all.to_unsafe.as(Void*), d_final_all, bytesize_f32(final_gpu_all.size)), "cuMemcpyDtoH(finals)"
 
   lines = [] of String
   ok = true
   ok &&= report_pair("conv_state", conv_state_gpu, conv_state_cpu, lines, 1.0e-5_f32)
   ok &&= report_pair("ssm_state", ssm_state_gpu, ssm_state_cpu, lines, 5.0e-4_f32)
   ok &&= report_pair("attn_out", attn_out_gpu, attn_out_cpu, lines, 5.0e-3_f32)
-  ok &&= report_pair("final", final_gpu, final_cpu, lines, 5.0e-3_f32)
+  ok &&= report_pair("final_all", final_gpu_all, final_cpu_all, lines, 5.0e-3_f32)
 
   puts "device=#{device_name}"
   puts "compute_capability=#{cc_major}.#{cc_minor}"
@@ -533,10 +553,14 @@ begin
   puts "qkv_dim=#{qkv_dim}"
   puts "inner_dim=#{inner_dim}"
   puts "out_dim=#{out_dim}"
+  puts "tokens=#{tokens}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
+  puts "timed_steps=#{timed_steps}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
+  puts "cuda_ms_per_token=#{gpu_ms.round(3)}"
   puts "cpu_ms=#{cpu_ms.round(3)}"
+  puts "cpu_ms_per_token=#{cpu_ms.round(3)}"
   lines.each { |line| puts line }
   puts "ok=#{ok}"
 ensure

@@ -9251,3 +9251,27 @@ Conclusion: CUDA now has a verified one-token recurrent-layer proof for Qwen3.5 
 - daedalus: The next frame should stop extending standalone probes and build a persistent CUDA backend object; otherwise timing includes repeated setup/upload work that real inference should not pay.
 - maieutic: The assumption that a layer proof equals a decoder backend remains false. This is a one-token layer proof; repeated-token state ownership and scheduler integration are separate requirements.
 - adversary: The probe still omits full-attention layers, KV cache, tokenizer/decode loop, multi-layer sequencing, sampling/top1, and cross-token model-level state management.
+
+**decision_update_90:** Added repeated-token CUDA recurrent-layer sequence mode to `bin/cuda_recurrent_prep_output_probe.cr`. The probe now accepts `--tokens N`, uploads a sequence of hidden vectors once, advances the persistent recurrent conv/SSM state across token steps, and writes each final hidden vector into a GPU-resident output slot before a single correctness readback.
+
+Conclusion: the CUDA recurrent-layer proof now covers cross-token state progression inside one layer, not just repeated launches over a single token. This is still a standalone probe and not a reusable decoder backend, but it verifies the next residency boundary needed before extracting a CUDA backend object: dynamic input/output pointer rebinding, persistent recurrent state mutation, and all-token CPU parity.
+
+**evidence_update_90:**
+- claim: "The CUDA recurrent-layer sequence probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_seq_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: recurrent layer probe source, Crystal compiler, CUDA FFI signatures, or embedded PTX files change
+- claim: "The sequence mode matches CPU references on remote Qwen3.5 9B layer 0."
+  source: remote `crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr`; remote `--tokens 4 --reps 1 --warmup 1` -> `cuda_ms_per_token=1.585`, `cpu_ms_per_token=4481.908`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`; remote `--tokens 8 --reps 1 --warmup 1` -> `cuda_ms_per_token=1.602`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+- claim: "The new sequence mode preserves the one-token boundary."
+  source: remote `--tokens 1 --reps 3 --warmup 1` -> `cuda_ms_per_token=1.583`, `cpu_ms_per_token=4506.588`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: same as sequence-mode probe
+
+**quadrumvirate_update_90:**
+- cassandra: The most likely failure was stale kernel parameter pointers after changing input/output device pointers per token. The remote `tokens=4/8` parity checks directly tested that risk.
+- daedalus: This is a residency-step proof, not the backend facade itself. The next frame should extract ownership and lifecycle into reusable CUDA objects instead of expanding probe-local plumbing.
+- maieutic: The hidden assumption that repeated launches prove token sequencing was false; sequence mode now uses distinct per-token inputs and verifies all per-token final outputs.
+- adversary: Timing is a layer-slice microbench and excludes full model scheduling, full-attention layers, KV cache, tokenizer, sampling, and multi-layer decode. Do not compare it as end-to-end CUDA inference.

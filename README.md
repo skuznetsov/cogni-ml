@@ -196,11 +196,12 @@ crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_r
 ./build/cuda_recurrent_prep_output_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --layer 0 \
+  --tokens 4 \
   --reps 10 \
   --warmup 2
 ```
 
-`cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
+`cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. `--tokens N` runs a GPU-resident sequence through persistent conv/SSM state and compares all token outputs plus final recurrent states against the CPU reference. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
 
 Build the Metal bridge once:
 
@@ -626,10 +627,10 @@ vecs = model.embed_batch(["Hello", "World", "Crystal"])
 |---|---|---|---|
 | macOS Apple Silicon | Metal | Yes | Primary target. |
 | macOS Intel | Metal | Yes | Supported for general Metal paths; Qwen performance focus is Apple Silicon. |
-| Linux | No native Metal | Yes | Use `-Dcpu_only` or llama.cpp bindings. |
+| Linux | Experimental CUDA probes | Yes | Use `-Dcpu_only` for GGUF/metadata and CUDA probe CLIs; full Qwen generation is still Metal-first. |
 | FreeBSD | No native Metal | Untested CPU-only | Not a primary CI target. |
 
-NVIDIA/CUDA support is not implemented. The Qwen native path is Metal-first.
+NVIDIA/CUDA support is currently an experimental backend-probe track, not a full decoder. The Qwen native generation path remains Metal-first.
 
 ## Build Flags
 
