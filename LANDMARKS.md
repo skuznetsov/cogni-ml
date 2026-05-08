@@ -9211,3 +9211,23 @@ Conclusion: CUDA now has a verified stateful recurrent boundary: state update, p
 - daedalus: The frame has shifted from independent GEMV bundles to minimal stateful recurrent slices. The next useful pivot is either full recurrent conv/post-gate composition or a backend facade that owns the whole slice.
 - maieutic: The assumption that `ssm_out` would be Q6_K was false on Qwen3.5 9B Q4_K_M; live tensor inspection showed Q4_K `[4096, 4096]`, and the probe was corrected before promotion.
 - adversary: This uses synthetic q/k/v/g/beta/z and intentionally omits conv prep, alpha/beta transforms from model projections, full layer residuals, and decode scheduling.
+
+**decision_update_88:** Added the CUDA recurrent prep/output slice. New `bin/cuda_recurrent_prep_output_probe.cr` uses synthetic qkv/alpha/beta/gate inputs plus real recurrent tensors (`ssm_conv1d`, `ssm_dt.bias`, `ssm_a`, `ssm_norm`, Q4_K `ssm_out.weight`) and runs conv prep, Q/K L2 normalization, alpha/beta transforms, DeltaNet state update, post RMSNorm/SiLU gating, and `ssm_out` projection without CPU roundtrips between kernels.
+
+Conclusion: the remaining CUDA gap before a real recurrent-layer facade is now composition/ownership, not missing recurrent math. The next useful step is to join the real projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`) with this prep/output slice under one small backend object that owns GPU buffers and persistent recurrent state.
+
+**evidence_update_88:**
+- claim: "The CUDA recurrent prep/output slice has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_rec_prep_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: recurrent prep probe source, DeltaNet PTX source, Q4 PTX source, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The CUDA recurrent prep/output slice matches CPU references on remote Qwen3.5 9B layer 0."
+  source: remote `crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr`; remote `--layer 0 --reps 10 --warmup 2` -> `cuda_ms=0.119`, `cpu_ms=347.527`, `conv_state/ssm_state/post_y/proj cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: recurrent prep math, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_88:**
+- cassandra: The likely blocker after synthetic DeltaNet/post-gate was recurrent conv prep and alpha/beta transforms. This probe covers both with real layer constants.
+- daedalus: The frame should now pivot from more one-off math kernels to a facade with explicit GPU buffer ownership; otherwise repeated probes will duplicate launch/plumbing code.
+- maieutic: The hidden assumption that projections and prep could be reasoned about independently is only partially true; the next proof must compose real projections with prep/output and persistent states.
+- adversary: Inputs are still synthetic and the probe omits attention norm, residual add, post-attention norm, FFN, tokenizer/decode scheduling, and whole-model state management.

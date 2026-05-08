@@ -224,3 +224,214 @@ POST_WRITE_LOOP:
 POST_DONE:
     ret;
 }
+
+// Single-token recurrent convolution + SiLU prep.
+//
+// Launch: enough threads to cover qkv_dim (8192 for Qwen3.5 9B).
+.visible .entry recurrent_conv1d_silu_step_probe(
+    .param .u64 conv_state,
+    .param .u64 qkv,
+    .param .u64 conv_w,
+    .param .u64 out,
+    .param .u32 qkv_dim
+)
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<20>;
+    .reg .b64 %rd<30>;
+    .reg .f32 %f<20>;
+
+    ld.param.u64 %rd1, [conv_state];
+    ld.param.u64 %rd2, [qkv];
+    ld.param.u64 %rd3, [conv_w];
+    ld.param.u64 %rd4, [out];
+    ld.param.u32 %r1, [qkv_dim];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;  // ch
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra CONV_DONE;
+
+    mul.wide.u32 %rd5, %r5, 4;
+    add.s64 %rd6, %rd1, %rd5;       // state[0,ch]
+    add.s64 %rd7, %rd2, %rd5;       // qkv[ch]
+    add.s64 %rd8, %rd4, %rd5;       // out[ch]
+
+    add.u32 %r6, %r5, %r1;
+    mul.wide.u32 %rd9, %r6, 4;
+    add.s64 %rd10, %rd1, %rd9;      // state[1,ch]
+
+    add.u32 %r7, %r6, %r1;
+    mul.wide.u32 %rd11, %r7, 4;
+    add.s64 %rd12, %rd1, %rd11;     // state[2,ch]
+
+    shl.b32 %r8, %r5, 2;            // ch * conv_k
+    mul.wide.u32 %rd13, %r8, 4;
+    add.s64 %rd14, %rd3, %rd13;     // conv_w[ch,0]
+
+    ld.global.f32 %f1, [%rd6];
+    ld.global.f32 %f2, [%rd10];
+    ld.global.f32 %f3, [%rd12];
+    ld.global.f32 %f4, [%rd7];
+    ld.global.f32 %f5, [%rd14];
+    add.s64 %rd15, %rd14, 4;
+    ld.global.f32 %f6, [%rd15];
+    add.s64 %rd16, %rd14, 8;
+    ld.global.f32 %f7, [%rd16];
+    add.s64 %rd17, %rd14, 12;
+    ld.global.f32 %f8, [%rd17];
+
+    mul.rn.f32 %f9, %f1, %f5;
+    fma.rn.f32 %f9, %f2, %f6, %f9;
+    fma.rn.f32 %f9, %f3, %f7, %f9;
+    fma.rn.f32 %f9, %f4, %f8, %f9;
+
+    mov.f32 %f10, 0fBFB8AA3B;       // -log2(e)
+    mul.rn.f32 %f11, %f9, %f10;
+    ex2.approx.ftz.f32 %f12, %f11;
+    mov.f32 %f13, 0f3F800000;
+    add.rn.f32 %f14, %f13, %f12;
+    rcp.approx.ftz.f32 %f15, %f14;
+    mul.rn.f32 %f16, %f9, %f15;     // silu(acc)
+    st.global.f32 [%rd8], %f16;
+
+    st.global.f32 [%rd6], %f2;
+    st.global.f32 [%rd10], %f3;
+    st.global.f32 [%rd12], %f4;
+
+CONV_DONE:
+    ret;
+}
+
+// Serial per-head L2 normalization for a [heads,128] buffer.
+.visible .entry l2_norm_128_probe(
+    .param .u64 x,
+    .param .u32 heads,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<5>;
+    .reg .b32 %r<14>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<12>;
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u32 %r1, [heads];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %tid.x;
+    setp.ge.u32 %p1, %r2, %r1;
+    @%p1 bra L2_DONE;
+    setp.ne.u32 %p2, %r3, 0;
+    @%p2 bra L2_DONE;
+
+    shl.b32 %r4, %r2, 7;
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r5, 0;
+
+L2_SUM:
+    setp.ge.u32 %p3, %r5, 128;
+    @%p3 bra L2_SCALE_PREP;
+    add.u32 %r6, %r4, %r5;
+    mul.wide.u32 %rd2, %r6, 4;
+    add.s64 %rd3, %rd1, %rd2;
+    ld.global.f32 %f3, [%rd3];
+    fma.rn.f32 %f2, %f3, %f3, %f2;
+    add.u32 %r5, %r5, 1;
+    bra L2_SUM;
+
+L2_SCALE_PREP:
+    add.rn.f32 %f4, %f2, %f1;
+    sqrt.rn.f32 %f5, %f4;
+    rcp.rn.f32 %f6, %f5;
+    mov.u32 %r7, 0;
+
+L2_WRITE:
+    setp.ge.u32 %p4, %r7, 128;
+    @%p4 bra L2_DONE;
+    add.u32 %r8, %r4, %r7;
+    mul.wide.u32 %rd4, %r8, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f7, [%rd5];
+    mul.rn.f32 %f8, %f7, %f6;
+    st.global.f32 [%rd5], %f8;
+    add.u32 %r7, %r7, 1;
+    bra L2_WRITE;
+
+L2_DONE:
+    ret;
+}
+
+// Transform projected alpha/beta into DeltaNet ghead/beta:
+//   beta = sigmoid(beta_raw)
+//   g    = exp(softplus(alpha + dt_bias) * ssm_a)
+.visible .entry alpha_beta_transform_probe(
+    .param .u64 alpha,
+    .param .u64 beta_raw,
+    .param .u64 dt_bias,
+    .param .u64 ssm_a,
+    .param .u64 g_out,
+    .param .u64 beta_out,
+    .param .u32 h_v
+)
+{
+    .reg .pred %p<3>;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<24>;
+    .reg .f32 %f<30>;
+
+    ld.param.u64 %rd1, [alpha];
+    ld.param.u64 %rd2, [beta_raw];
+    ld.param.u64 %rd3, [dt_bias];
+    ld.param.u64 %rd4, [ssm_a];
+    ld.param.u64 %rd5, [g_out];
+    ld.param.u64 %rd6, [beta_out];
+    ld.param.u32 %r1, [h_v];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra AB_DONE;
+
+    mul.wide.u32 %rd7, %r5, 4;
+    add.s64 %rd8, %rd1, %rd7;
+    add.s64 %rd9, %rd2, %rd7;
+    add.s64 %rd10, %rd3, %rd7;
+    add.s64 %rd11, %rd4, %rd7;
+    add.s64 %rd12, %rd5, %rd7;
+    add.s64 %rd13, %rd6, %rd7;
+
+    ld.global.f32 %f1, [%rd8];     // alpha
+    ld.global.f32 %f2, [%rd9];     // beta raw
+    ld.global.f32 %f3, [%rd10];    // dt bias
+    ld.global.f32 %f4, [%rd11];    // ssm_a
+
+    mov.f32 %f5, 0fBFB8AA3B;       // -log2(e)
+    mul.rn.f32 %f6, %f2, %f5;
+    ex2.approx.ftz.f32 %f7, %f6;
+    mov.f32 %f8, 0f3F800000;
+    add.rn.f32 %f9, %f8, %f7;
+    rcp.approx.ftz.f32 %f10, %f9;
+    st.global.f32 [%rd13], %f10;
+
+    add.rn.f32 %f11, %f1, %f3;     // xi
+    mov.f32 %f12, 0f3FB8AA3B;      // log2(e)
+    mul.rn.f32 %f13, %f11, %f12;
+    ex2.approx.ftz.f32 %f14, %f13; // exp(xi)
+    add.rn.f32 %f15, %f8, %f14;
+    lg2.approx.ftz.f32 %f16, %f15;
+    mov.f32 %f17, 0f3F317218;      // ln(2)
+    mul.rn.f32 %f18, %f16, %f17;   // softplus approx
+    mul.rn.f32 %f19, %f18, %f4;
+    mul.rn.f32 %f20, %f19, %f12;
+    ex2.approx.ftz.f32 %f21, %f20;
+    st.global.f32 [%rd12], %f21;
+
+AB_DONE:
+    ret;
+}

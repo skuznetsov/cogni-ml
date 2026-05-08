@@ -189,6 +189,19 @@ crystal build -Dcpu_only bin/cuda_deltanet_output_probe.cr -o build/cuda_deltane
 
 `cuda_deltanet_output_probe` runs a synthetic CUDA DeltaNet state update, applies post RMSNorm/SiLU gating on GPU, and feeds the result directly into the real Q4_K `ssm_out.weight` projection. It is a stateful boundary probe, not a full recurrent layer: recurrent conv prep, alpha/beta transforms, residuals, and FFN remain separate work.
 
+Build the recurrent prep/output slice probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_recurrent_prep_output_probe
+./build/cuda_recurrent_prep_output_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layer 0 \
+  --reps 10 \
+  --warmup 2
+```
+
+`cuda_recurrent_prep_output_probe` adds the recurrent conv prep and alpha/beta transforms before the DeltaNet/post-gate/`ssm_out` slice. It still uses synthetic qkv/alpha/beta/gate inputs; the next CUDA gate is composing the real projection bundle with this prep/output slice under one explicit buffer-owner facade.
+
 Build the Metal bridge once:
 
 ```sh
