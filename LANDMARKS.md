@@ -9111,3 +9111,23 @@ Conclusion: the CUDA backend now has verified standalone GEMV primitives for the
 - daedalus: With Q8_0, Q4_K, and Q6_K proven, the next bottleneck is backend composition and residency, not individual format discovery.
 - maieutic: The hidden assumption that Q4_K_M means only Q4_K was false; tensor inventory showed Q6_K is required for a representative target path.
 - adversary: These are still standalone GEMV microbenchmarks. They do not include CPU/GPU transfer costs, state buffers, command scheduling, activations, or full layer correctness.
+
+**decision_update_83:** Added the first GPU-resident CUDA composition boundary. New `bin/cuda_ffn_sequence_probe.cr` runs a realistic Qwen FFN projection sequence on CUDA: Q4_K `ffn_gate` GEMV plus Q4_K `ffn_up` GEMV, GPU SwiGLU activation, then Q6_K `ffn_down` GEMV. The probe embeds the already-verified Q4_K/Q6_K PTX kernel files from `src/ml/cuda/kernels/*.ptx` at compile time and only copies the final hidden vector back for CPU-reference comparison.
+
+Conclusion: the CUDA work has moved from isolated quantized GEMV layout proofs to a real multi-kernel, GPU-resident projection sequence. This is still not full inference or a complete Qwen layer, but it verifies the next critical boundary: composing target-model quantized kernels and activation without CPU roundtrips between stages.
+
+**evidence_update_83:**
+- claim: "The CUDA FFN sequence probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_ffn_seq_syntax crystal build -Dcpu_only --no-codegen bin/cuda_ffn_sequence_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: FFN sequence probe source, embedded PTX files, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The GPU-resident CUDA FFN sequence matches the CPU FFN reference on remote Qwen3.5 9B layer 0."
+  source: remote `crystal build -Dcpu_only bin/cuda_ffn_sequence_probe.cr`; remote `--layer 0 --reps 3 --warmup 1` -> `cuda_ms=0.408`, `cpu_ms=3544.113`, `cos=1.0`, `max_diff=1.8626451e-7`, `ok=true`; remote `--reps 10 --warmup 2` -> `cuda_ms=0.403`, `cpu_ms=3011.666`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: Q4/Q6 PTX source, SwiGLU PTX approximation, CUDA driver/PTX JIT, model file, FFN tensor layout, CPU reference, or sequence launch order changes
+
+**quadrumvirate_update_83:**
+- cassandra: The main risk after isolated GEMVs was hidden CPU/GPU boundary cost. This probe keeps FFN intermediates GPU-resident and therefore tests the right composition boundary.
+- daedalus: The frame shifted from "prove another quant format" to "compose verified primitives into a layer slice." That is the necessary step before any Linux CUDA inference path.
+- maieutic: The hidden assumption was that individual GEMV parity implies sequence parity. The FFN sequence explicitly tests activation and buffer handoff between Q4_K and Q6_K kernels.
+- adversary: This still omits RMSNorm, residuals, DeltaNet/attention state, tokenizer/decode scheduling, and full model residency. Treat it as a layer-slice proof, not an end-to-end throughput claim.

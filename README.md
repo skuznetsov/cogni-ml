@@ -124,6 +124,19 @@ crystal build -Dcpu_only bin/cuda_q6k_gemv_probe.cr -o build/cuda_q6k_gemv_probe
 
 `cuda_q6k_gemv_probe` covers the GGUF Q6_K block layout (`ql`, `qh`, signed scales, `d`) used by output/value/down projections in mixed-quant target models. Like the Q4_K/Q8_0 probes, it is a standalone backend primitive check; full CUDA Qwen execution is still a separate backend split.
 
+Build the first GPU-resident FFN sequence probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_ffn_sequence_probe.cr -o build/cuda_ffn_sequence_probe
+./build/cuda_ffn_sequence_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layer 0 \
+  --reps 10 \
+  --warmup 2
+```
+
+`cuda_ffn_sequence_probe` composes the checked CUDA primitives as `Q4_K ffn_gate + Q4_K ffn_up -> SwiGLU -> Q6_K ffn_down` while keeping the input, intermediate activations, and output projection input GPU-resident. Only the final hidden vector is copied back for comparison against the CPU `QuantMatmul` FFN reference.
+
 Build the Metal bridge once:
 
 ```sh
