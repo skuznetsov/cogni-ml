@@ -1,9 +1,9 @@
 # CUDA recurrent prep + DeltaNet output slice probe for Qwen GGUF weights.
 #
-# Runs synthetic qkv/alpha/beta/gate inputs through CUDA recurrent conv prep,
-# alpha/beta transforms, DeltaNet state update, post RMSNorm/SiLU gating, and
-# the real Q4_K ssm_out projection. This tests the remaining recurrent-attn
-# state/output boundary before wiring a full layer facade.
+# Runs the real recurrent input projection bundle through CUDA recurrent conv
+# prep, alpha/beta transforms, DeltaNet state update, post RMSNorm/SiLU
+# gating, and the real Q4_K ssm_out projection. This is the first one-token recurrent-attention slice facade; residuals and
+# FFN are still outside the probe.
 
 require "option_parser"
 require "../src/ml/gguf/reader"
@@ -40,6 +40,7 @@ end
 
 DN_PTX        = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
 Q4K_PTX       = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+Q5K_PTX       = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
 def cuda!(code : Int32, what : String) : Nil
@@ -118,14 +119,29 @@ eps = 1.0e-6_f32
 
 gguf = ML::GGUF::GGUFFile.new(model)
 prefix = "blk.#{layer}"
+qkv_info = gguf.tensor("#{prefix}.attn_qkv.weight") || raise "missing #{prefix}.attn_qkv.weight"
+gate_info = gguf.tensor("#{prefix}.attn_gate.weight") || raise "missing #{prefix}.attn_gate.weight"
+alpha_info = gguf.tensor("#{prefix}.ssm_alpha.weight") || raise "missing #{prefix}.ssm_alpha.weight"
+beta_info = gguf.tensor("#{prefix}.ssm_beta.weight") || raise "missing #{prefix}.ssm_beta.weight"
 out_info = gguf.tensor("#{prefix}.ssm_out.weight") || raise "missing #{prefix}.ssm_out.weight"
 conv_info = gguf.tensor("#{prefix}.ssm_conv1d.weight") || raise "missing #{prefix}.ssm_conv1d.weight"
 dt_info = gguf.tensor("#{prefix}.ssm_dt.bias") || raise "missing #{prefix}.ssm_dt.bias"
 a_info = gguf.tensor("#{prefix}.ssm_a") || raise "missing #{prefix}.ssm_a"
 norm_info = gguf.tensor("#{prefix}.ssm_norm.weight") || raise "missing #{prefix}.ssm_norm.weight"
+raise "expected Q5_K attn_qkv" unless qkv_info.type.q5_k?
+raise "expected Q4_K gate/alpha/beta" unless gate_info.type.q4_k? && alpha_info.type.q4_k? && beta_info.type.q4_k?
 raise "expected Q4_K ssm_out" unless out_info.type.q4_k?
+hidden = qkv_info.dims[0].to_i32
+raise "attn_qkv shape mismatch" unless qkv_info.dims[1].to_i32 == qkv_dim
+raise "attn_gate shape mismatch" unless gate_info.dims[0].to_i32 == hidden && gate_info.dims[1].to_i32 == inner_dim
+raise "ssm_alpha/beta shape mismatch" unless alpha_info.dims[0].to_i32 == hidden && alpha_info.dims[1].to_i32 == h_v &&
+                                      beta_info.dims[0].to_i32 == hidden && beta_info.dims[1].to_i32 == h_v
 raise "ssm_out input mismatch" unless out_info.dims[0].to_i32 == inner_dim
 out_dim = out_info.dims[1].to_i32
+qkv_raw = gguf.read_tensor_raw(qkv_info)
+gate_raw = gguf.read_tensor_raw(gate_info)
+alpha_raw = gguf.read_tensor_raw(alpha_info)
+beta_raw_w = gguf.read_tensor_raw(beta_info)
 out_raw = gguf.read_tensor_raw(out_info)
 conv1d = gguf.read_tensor_f32(conv_info)
 dt_bias = gguf.read_tensor_f32(dt_info)
@@ -136,12 +152,13 @@ raise "dt/ssm_a size mismatch" unless dt_bias.size == h_v && ssm_a.size == h_v
 raise "ssm_norm size mismatch" unless ssm_norm.size == s
 
 rng = Random.new(seed)
+x = Array(Float32).new(hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
 conv_state_init = Array(Float32).new((conv_k - 1) * qkv_dim) { ((rng.next_float - 0.5) * 0.05).to_f32 }
 ssm_state_init = Array(Float32).new(h_v * s * s) { ((rng.next_float - 0.5) * 0.05).to_f32 }
-qkv_mixed = Array(Float32).new(qkv_dim) { ((rng.next_float - 0.5) * 0.2).to_f32 }
-alpha = Array(Float32).new(h_v) { ((rng.next_float - 0.5) * 0.2).to_f32 }
-beta_raw = Array(Float32).new(h_v) { ((rng.next_float - 0.5) * 0.2).to_f32 }
-z = Array(Float32).new(inner_dim) { ((rng.next_float - 0.5) * 0.2).to_f32 }
+qkv_mixed = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, qkv_raw, ML::GGUF::TensorType::Q5_K, qkv_dim, Array(Float32).new(qkv_dim, 0.0_f32))
+z = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, inner_dim, Array(Float32).new(inner_dim, 0.0_f32))
+alpha = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, alpha_raw, ML::GGUF::TensorType::Q4_K, h_v, Array(Float32).new(h_v, 0.0_f32))
+beta_raw = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, beta_raw_w, ML::GGUF::TensorType::Q4_K, h_v, Array(Float32).new(h_v, 0.0_f32))
 
 cpu_t0 = Time.instant
 conv_state_cpu = conv_state_init.dup
@@ -207,25 +224,30 @@ cuda! LibCUDARecPrepOut.cuCtxCreate_v2(pointerof(ctx), 0_u32, dev), "cuCtxCreate
 
 dn_mod = Pointer(Void).null
 q4_mod = Pointer(Void).null
+q5_mod = Pointer(Void).null
 conv_fn = Pointer(Void).null
 norm_fn = Pointer(Void).null
 ab_fn = Pointer(Void).null
 dn_fn = Pointer(Void).null
 post_fn = Pointer(Void).null
 q4_fn = Pointer(Void).null
+q5_fn = Pointer(Void).null
 ptrs = [] of UInt64
 
 begin
   cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(dn_mod), DN_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(delta)"
   cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(q4_mod), Q4K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q4)"
+  cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(q5_mod), Q5K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q5)"
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(conv_fn), dn_mod, "recurrent_conv1d_silu_step_probe"), "cuModuleGetFunction(conv)"
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(norm_fn), dn_mod, "l2_norm_128_probe"), "cuModuleGetFunction(norm)"
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(ab_fn), dn_mod, "alpha_beta_transform_probe"), "cuModuleGetFunction(alpha_beta)"
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(dn_fn), dn_mod, "deltanet_step_128_probe"), "cuModuleGetFunction(delta)"
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(post_fn), dn_mod, "deltanet_post_norm_gate_128_probe"), "cuModuleGetFunction(post)"
   cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(q4_fn), q4_mod, "q4_k_gemv_warp4_f32"), "cuModuleGetFunction(q4)"
+  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(q5_fn), q5_mod, "q5_k_gemv_warp4_f32"), "cuModuleGetFunction(q5)"
 
-  sizes = [bytesize_f32(conv_state_init.size), bytesize_f32(ssm_state_init.size), bytesize_f32(qkv_mixed.size), bytesize_f32(conv1d.size),
+  sizes = [bytesize_f32(hidden), qkv_raw.size.to_u64, gate_raw.size.to_u64, alpha_raw.size.to_u64, beta_raw_w.size.to_u64,
+           bytesize_f32(conv_state_init.size), bytesize_f32(ssm_state_init.size), bytesize_f32(qkv_mixed.size), bytesize_f32(conv1d.size),
            bytesize_f32(qkv_dim), bytesize_f32(alpha.size), bytesize_f32(beta_raw.size), bytesize_f32(dt_bias.size), bytesize_f32(ssm_a.size),
            bytesize_f32(g_cpu.size), bytesize_f32(b_cpu.size), bytesize_f32(z.size), bytesize_f32(ssm_norm.size), out_raw.size.to_u64,
            bytesize_f32(out_dim)]
@@ -234,18 +256,19 @@ begin
     cuda! LibCUDARecPrepOut.cuMemAlloc_v2(pointerof(pdev), size_bytes), "cuMemAlloc(#{i})"
     ptrs << pdev
   end
-  d_conv_state, d_ssm_state, d_qkv, d_conv_w, d_conv_out, d_alpha, d_beta_raw, d_dt, d_a, d_g, d_b, d_z, d_norm, d_out_w, d_proj = ptrs
+  d_x, d_qkv_w, d_gate_w, d_alpha_w, d_beta_w, d_conv_state, d_ssm_state, d_qkv, d_conv_w, d_conv_out, d_alpha, d_beta_raw, d_dt, d_a, d_g, d_b, d_z, d_norm, d_out_w, d_proj = ptrs
 
   copy_inputs = -> {
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(x)"
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_qkv_w, qkv_raw.to_unsafe.as(Void*), qkv_raw.size.to_u64), "cuMemcpyHtoD(qkv_w)"
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_gate_w, gate_raw.to_unsafe.as(Void*), gate_raw.size.to_u64), "cuMemcpyHtoD(gate_w)"
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_alpha_w, alpha_raw.to_unsafe.as(Void*), alpha_raw.size.to_u64), "cuMemcpyHtoD(alpha_w)"
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_beta_w, beta_raw_w.to_unsafe.as(Void*), beta_raw_w.size.to_u64), "cuMemcpyHtoD(beta_w)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_conv_state, conv_state_init.to_unsafe.as(Void*), bytesize_f32(conv_state_init.size)), "cuMemcpyHtoD(conv_state)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ssm_state, ssm_state_init.to_unsafe.as(Void*), bytesize_f32(ssm_state_init.size)), "cuMemcpyHtoD(ssm_state)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_qkv, qkv_mixed.to_unsafe.as(Void*), bytesize_f32(qkv_mixed.size)), "cuMemcpyHtoD(qkv)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_conv_w, conv1d.to_unsafe.as(Void*), bytesize_f32(conv1d.size)), "cuMemcpyHtoD(conv_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_alpha, alpha.to_unsafe.as(Void*), bytesize_f32(alpha.size)), "cuMemcpyHtoD(alpha)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_beta_raw, beta_raw.to_unsafe.as(Void*), bytesize_f32(beta_raw.size)), "cuMemcpyHtoD(beta_raw)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_dt, dt_bias.to_unsafe.as(Void*), bytesize_f32(dt_bias.size)), "cuMemcpyHtoD(dt)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_a, ssm_a.to_unsafe.as(Void*), bytesize_f32(ssm_a.size)), "cuMemcpyHtoD(a)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_z, z.to_unsafe.as(Void*), bytesize_f32(z.size)), "cuMemcpyHtoD(z)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_norm, ssm_norm.to_unsafe.as(Void*), bytesize_f32(ssm_norm.size)), "cuMemcpyHtoD(norm)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_out_w, out_raw.to_unsafe.as(Void*), out_raw.size.to_u64), "cuMemcpyHtoD(out_w)"
   }
@@ -254,13 +277,46 @@ begin
   qkv_dim_u32 = qkv_dim.to_u32
   h_k_u32 = h_k.to_u32
   h_v_u32 = h_v.to_u32
+  hidden_u32 = hidden.to_u32
   inner_u32 = inner_dim.to_u32
   out_dim_u32 = out_dim.to_u32
+  qkv_dim_u32_for_proj = qkv_dim.to_u32
   q4_grid = ((out_dim + 3) // 4).to_u32
+  qkv_grid = ((qkv_dim + 3) // 4).to_u32
+  inner_grid = ((inner_dim + 3) // 4).to_u32
+  h_v_grid = ((h_v + 3) // 4).to_u32
   conv_grid = ((qkv_dim + 127) // 128).to_u32
   d_q = d_conv_out
   d_k = d_conv_out + bytesize_f32(q_dim)
   d_v = d_conv_out + bytesize_f32(2 * q_dim)
+
+  qkv_proj_params = Pointer(Void*).malloc(5)
+  qkv_proj_params[0] = pointerof(d_qkv_w).as(Void*)
+  qkv_proj_params[1] = pointerof(d_x).as(Void*)
+  qkv_proj_params[2] = pointerof(d_qkv).as(Void*)
+  qkv_proj_params[3] = pointerof(hidden_u32).as(Void*)
+  qkv_proj_params[4] = pointerof(qkv_dim_u32_for_proj).as(Void*)
+
+  gate_proj_params = Pointer(Void*).malloc(5)
+  gate_proj_params[0] = pointerof(d_gate_w).as(Void*)
+  gate_proj_params[1] = pointerof(d_x).as(Void*)
+  gate_proj_params[2] = pointerof(d_z).as(Void*)
+  gate_proj_params[3] = pointerof(hidden_u32).as(Void*)
+  gate_proj_params[4] = pointerof(inner_u32).as(Void*)
+
+  alpha_proj_params = Pointer(Void*).malloc(5)
+  alpha_proj_params[0] = pointerof(d_alpha_w).as(Void*)
+  alpha_proj_params[1] = pointerof(d_x).as(Void*)
+  alpha_proj_params[2] = pointerof(d_alpha).as(Void*)
+  alpha_proj_params[3] = pointerof(hidden_u32).as(Void*)
+  alpha_proj_params[4] = pointerof(h_v_u32).as(Void*)
+
+  beta_proj_params = Pointer(Void*).malloc(5)
+  beta_proj_params[0] = pointerof(d_beta_w).as(Void*)
+  beta_proj_params[1] = pointerof(d_x).as(Void*)
+  beta_proj_params[2] = pointerof(d_beta_raw).as(Void*)
+  beta_proj_params[3] = pointerof(hidden_u32).as(Void*)
+  beta_proj_params[4] = pointerof(h_v_u32).as(Void*)
 
   conv_params = Pointer(Void*).malloc(5)
   conv_params[0] = pointerof(d_conv_state).as(Void*)
@@ -314,6 +370,10 @@ begin
   q4_params[4] = pointerof(out_dim_u32).as(Void*)
 
   run_bundle = -> {
+    cuda! LibCUDARecPrepOut.cuLaunchKernel(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, qkv_proj_params, Pointer(Void*).null), "qkv proj"
+    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, gate_proj_params, Pointer(Void*).null), "gate proj"
+    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, alpha_proj_params, Pointer(Void*).null), "alpha proj"
+    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, beta_proj_params, Pointer(Void*).null), "beta proj"
     cuda! LibCUDARecPrepOut.cuLaunchKernel(conv_fn, conv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, conv_params, Pointer(Void*).null), "conv prep"
     cuda! LibCUDARecPrepOut.cuLaunchKernel(norm_fn, h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, q_norm_params, Pointer(Void*).null), "q norm"
     cuda! LibCUDARecPrepOut.cuLaunchKernel(norm_fn, h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, k_norm_params, Pointer(Void*).null), "k norm"
@@ -368,6 +428,7 @@ ensure
   ptrs.each { |ptr| LibCUDARecPrepOut.cuMemFree_v2(ptr) unless ptr == 0_u64 }
   LibCUDARecPrepOut.cuModuleUnload(dn_mod) unless dn_mod.null?
   LibCUDARecPrepOut.cuModuleUnload(q4_mod) unless q4_mod.null?
+  LibCUDARecPrepOut.cuModuleUnload(q5_mod) unless q5_mod.null?
   LibCUDARecPrepOut.cuCtxDestroy_v2(ctx) unless ctx.null?
   gguf.close
 end

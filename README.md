@@ -200,7 +200,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_r
   --warmup 2
 ```
 
-`cuda_recurrent_prep_output_probe` adds the recurrent conv prep and alpha/beta transforms before the DeltaNet/post-gate/`ssm_out` slice. It still uses synthetic qkv/alpha/beta/gate inputs; the next CUDA gate is composing the real projection bundle with this prep/output slice under one explicit buffer-owner facade.
+`cuda_recurrent_prep_output_probe` now composes the real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`) with recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, and Q4_K `ssm_out`. It is a one-token recurrent-attention slice facade; residual add, post-attention norm, and FFN are still outside this probe.
 
 Build the Metal bridge once:
 
