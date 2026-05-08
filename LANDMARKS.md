@@ -8581,3 +8581,26 @@ Conclusion: off-ramping after a full bad proposal is too late. The next causal s
 - daedalus: The useful pivot is earlier in the timeline: stop before tail generation or precompute a viable alternate branch. Post-reject fallback is only a damage limiter.
 - maieutic: The assumption that eliminating resync is enough was false; the replacement work matters, and exact suffix decode is too expensive after a long reject.
 - adversary: Evidence is one focused 27B row, so keep the mode as a diagnostic. It is refuted only as a standalone speed path, not as part of a larger router.
+
+**decision_update_60:** Refuted the two simplest "make high-gamma safer" knobs and narrowed the next breakthrough candidate to pre-submit residual routing. Existing progressive schedule `4,4,8,16` avoids full first-tail generation, but it pays too many verifier chunks. On the same Qwen3.6-27B rank2 3-prompt suite it preserved parity but stayed below plain everywhere: main `plain_speedup=0.5168x`, repeat-markdown `0.5765x`, repeat-SQL-values `0.4897x`. Rank8/gamma32 is not the robustness knob either: it made repeat-SQL clean, but main still rejected (`0.4286x`) and clean repeat rows were too draft-body-bound (`0.7765x`, `0.8478x`).
+
+The useful new signal is prompt/span residual separability before submit. At rank2 over layers `0,2,4,6,8,10`, clean repeat-markdown has residual mean `0.514299` and pass@0.5 `50.94%`; main has `0.597178` / `29.12%`; repeat-SQL-values has `0.573695` / `36.04%`. This is not a broad classifier yet, but it is deployable as a conservative default-off probe: only run high-gamma self-spec for very low-residual spans, otherwise emit exact greedy. The approximate oracle from current rows says this could turn catastrophic rows into neutral `1.0x` and keep the one clean win, but it needs in-process implementation to avoid hand-picked accounting.
+
+**evidence_update_60:**
+- claim: "Progressive schedule 4,4,8,16 is slower than plain on the tested 27B rank2 suite."
+  source: `/tmp/qwen36_rank2_progressive_schedule_3prompt_20260507204641/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: schedule controller, prompt suite, rank/layer set, or verifier implementation changes
+- claim: "Rank8/gamma32 is not a sufficient robustness/speed knob."
+  source: `/tmp/qwen36_rank8_gamma32_3prompt_20260507204939/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: rank/layer set, prompt suite, model file, or draft body kernels change
+- claim: "Residual route features distinguish the clean repeat-markdown span from the two bad/fragile rows in this small suite."
+  source: `/tmp/qwen36_route_features_rank2_rank8_20260507205310/features.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: feature definition, calibration window, prompt suite, rank/layer set, or basis builder changes
+**quadrumvirate_update_60:**
+- cassandra: Static progressive scheduling and higher rank were expected to trade one bottleneck for another. The measurements confirm verifier chunks and draft body cost dominate respectively.
+- daedalus: The frame shifts from "choose one safer self-spec route" to "classify whether to speculate at all before submitting GPU work."
+- maieutic: The assumption that clean-span quality can be inferred from the route itself after work is paid is too late; the router must use pre-submit features.
+- adversary: Residual features are only a small-suite signal and can overfit repeat patterns. First implementation must be conservative and report exact skipped rows as neutral, not as hidden wins.
