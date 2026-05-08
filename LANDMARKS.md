@@ -8851,3 +8851,19 @@ Conclusion: the existing `12`-row Q6 top1 tile is already near the local optimum
 - daedalus: This is another local-retune dead end. Move up a level to fusing/removing output-head work or batching only needed exact rows.
 - maieutic: The hidden assumption was that the head path is under-optimized by a constant. Evidence says the constant is not the bottleneck.
 - adversary: Do not leave a startup env knob without a demonstrated win; it would expand the tuning surface and risk Q8/Q6 mismatches.
+
+**decision_update_71:** Refuted a first exact multi-row Q6 top1 tile kernel for accepted n-gram verification. The temporary default-off `QWEN35_HEAD_TOP1_ROWS_BATCH2=1` path added `simd_mv_q6k_top1_tiles_batch2_f32`, which handled two verifier rows per output-weight tile so the same Q6 weight tile could be decoded across two hidden rows. Focused exactness held (`QWEN35_HEAD_TOP1_ROWS_BATCH2=1 crystal spec spec/qwen35_forward_spec.cr ...` -> `15 examples, 0 failures`). The same-binary 27B clean n-gram ABBA showed no real speed win: base `377.5/375.0ms`, batch2 `376.5/376.9ms`, all with `32/32` accepted. The probe was removed.
+
+Conclusion: naive cross-row weight-tile reuse does not move wall time enough in this kernel shape. The likely reason is that the added per-thread arithmetic/register pressure offsets reduced weight traffic, or that the overall accepted verifier remains dominated by recurrent/full prefill body rather than head alone. Future exact head work needs a more structural design, such as integrating head reduction with an existing resident hidden buffer or changing verifier economics, not a standalone batch2 top1 kernel.
+
+**evidence_update_71:**
+- claim: "The batch2 exact Q6 top1 tile probe preserved focused top1 correctness but did not beat the default accepted n-gram verifier path."
+  source: `QWEN35_HEAD_TOP1_ROWS_BATCH2=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_head_batch2_spec crystal spec spec/qwen35_forward_spec.cr ...` -> `15 examples, 0 failures`; `/tmp/qwen36_head_batch2_abba_20260508085502/summary.log` -> base `377.5/375.0ms`, batch2 `376.5/376.9ms`, all `accepted=32/32`
+  verified_at: 2026-05-08
+  decay_trigger: Q6 top1 batch kernel design, output-head route, verifier chunk size, or target model changes
+
+**quadrumvirate_update_71:**
+- cassandra: The expected win was weight-tile reuse across verifier rows; the failure mode was extra arithmetic/register pressure or head not being dominant enough.
+- daedalus: Stop trying isolated head microkernels for now. The accepted verifier needs body-level fusion/elimination or a verifier route that avoids repeated layer work.
+- maieutic: The hidden assumption was that output-head weight traffic was the easiest exact bottleneck. It is measurable but not enough for this simple kernel.
+- adversary: Leaving batch2 default-off would create maintenance risk without a measured benefit; removal is the safer engineering choice.
