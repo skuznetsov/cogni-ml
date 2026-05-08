@@ -84,6 +84,7 @@ The CUDA smoke is a backend boundary probe only: it links `libcuda`, loads embed
 
 CUDA probe code uses `src/ml/cuda/driver.cr` for reusable CUDA context, module/function, launch, copy, synchronize, and device-buffer ownership. This is intentionally small: it owns the raw CUDA Driver API lifecycle and calls, while higher-level layer execution is still probe-local until the CUDA backend split is promoted.
 It also provides `ML::CUDA::ResidentSequenceRunner`, a thin lifecycle facade for resident sequence probes with explicit `upload_weights`, `reset_sequence`, `run_sequence`, and `read_outputs` phases.
+`src/ml/cuda/qwen_recurrent_layer_runner.cr` is the first Qwen-specific runner extraction: it owns one recurrent layer's CUDA modules, device buffers, kernel parameters, weight upload, sequence reset, token launch graph, and output readback. GGUF tensor loading and CPU-reference comparison intentionally remain in the probe.
 
 Build the first quantized CUDA correctness probe on NVIDIA/Linux hosts:
 

@@ -9355,3 +9355,29 @@ Conclusion: the CUDA path now has an explicit resident-sequence lifecycle contra
 - daedalus: The facade is intentionally generic and proc-backed; the next frame must move Qwen-specific state and launch graph into a typed recurrent-layer object.
 - maieutic: The assumption that "object methods" require a full backend object in one step was too large. A lifecycle facade is a smaller verified boundary.
 - adversary: This is not yet strong encapsulation. It documents and routes lifecycle phases, but the closures still capture many probe-local variables.
+
+**decision_update_95:** Extracted the Qwen-specific recurrent-layer CUDA runner. New `src/ml/cuda/qwen_recurrent_layer_runner.cr` owns the recurrent layer's CUDA modules, device buffers, kernel parameter blocks, weight upload, sequence reset, token launch graph, and output readback. `bin/cuda_recurrent_prep_output_probe.cr` now keeps GGUF tensor loading, CPU reference, timing/reporting, and parity checks.
+
+Conclusion: the CUDA recurrent-layer path now has a real Qwen-specific object boundary instead of only generic lifecycle wrappers. This is still one recurrent layer, not full Qwen generation, but it is the first reusable unit that can be extended toward multi-layer CUDA execution.
+
+**evidence_update_95:**
+- claim: "The Qwen recurrent-layer runner extraction has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_qwen_runner_syntax2 crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: `src/ml/cuda/qwen_recurrent_layer_runner.cr`, driver wrapper, recurrent probe source, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The extracted Qwen recurrent-layer runner matches the CPU reference on remote Qwen3.5 9B layer0."
+  source: remote Qwen3.5 9B layer0 `--tokens 4 --reps 1 --warmup 1` -> `weight_upload_ms=21.771`, `cuda_ms_per_token=1.648`, `cpu_ms_per_token=4602.758`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: Qwen runner object, CUDA wrapper layer, recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**refutation_update_95:**
+- claim: "Probe-local kernel param pointers can be moved into a long-lived runner object unchanged."
+  source: first remote Qwen runner attempt exited with signal 11, invalid memory access at address `0x0`
+  verdict: false; kernel parameter arrays were pointing at locals inside `build_runner` after that method returned
+  fix: heap-backed parameter boxes (`box_ptr`, `box_u32`, `box_f32`) with explicit keepalive, plus mutable device-pointer boxes for per-token input/output slots
+
+**quadrumvirate_update_95:**
+- cassandra: The predicted lifetime hazard occurred immediately as a remote segfault. The fix makes kernel parameter storage explicitly heap-backed and kept alive by the runner.
+- daedalus: The abstraction boundary is now Qwen recurrent-layer execution, not raw CUDA lifecycle. The next frame is a GGUF-to-runner adapter and then multiple layer instances.
+- maieutic: The hidden assumption was that closure-captured locals and kernel param pointers have equivalent lifetime after object extraction. They do not when the setup method returns.
+- adversary: The runner still takes many raw tensors as constructor parameters and only covers recurrent layers. It does not cover full-attention layers, KV cache, logits, tokenizer, or sampling.
