@@ -110,6 +110,20 @@ crystal build -Dcpu_only bin/cuda_q4k_gemv_probe.cr -o build/cuda_q4k_gemv_probe
 
 `cuda_q4k_gemv_probe` uses the raw GGUF Q4_K block layout (`d`, `dmin`, 12-byte packed scales/mins, 128-byte packed nibbles) and checks the CUDA output against the CPU `QuantMatmul` Q4_K reference. `--kernel scalar` keeps the first correctness kernel; the default `--kernel warp4` maps four output rows to four warps per block and is the current faster probe shape.
 
+Build the Q6_K CUDA correctness/speed probe for Q4_K_M tensors that remain in Q6_K:
+
+```sh
+crystal build -Dcpu_only bin/cuda_q6k_gemv_probe.cr -o build/cuda_q6k_gemv_probe
+./build/cuda_q6k_gemv_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --tensor blk.0.ffn_down.weight \
+  --kernel warp4 \
+  --reps 10 \
+  --warmup 2
+```
+
+`cuda_q6k_gemv_probe` covers the GGUF Q6_K block layout (`ql`, `qh`, signed scales, `d`) used by output/value/down projections in mixed-quant target models. Like the Q4_K/Q8_0 probes, it is a standalone backend primitive check; full CUDA Qwen execution is still a separate backend split.
+
 Build the Metal bridge once:
 
 ```sh

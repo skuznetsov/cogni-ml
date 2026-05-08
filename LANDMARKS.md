@@ -9091,3 +9091,23 @@ Conclusion: the CUDA backend now has both Q8_0 and Q4_K warp-per-row GEMV primit
 - daedalus: The same frame shift that worked for Q8_0 applies to Q4_K: align one warp with the quant block lane structure instead of serializing a whole row inside one thread.
 - maieutic: The assumption that Q4_K optimization must immediately mimic llama.cpp's final CUDA kernels was rejected; a narrow same-layout warp primitive is enough to establish the next measured boundary.
 - adversary: The probe still excludes end-to-end layer scheduling, Q6_K tensors, activations, state buffers, and CPU/GPU transfers. The next claim must be a stateful layer microbench or a Q6_K boundary, not an inference-speed claim.
+
+**decision_update_82:** Added the Q6_K CUDA correctness/speed boundary. New `bin/cuda_q6k_gemv_probe.cr` builds with `-Dcpu_only`, reads real Q6_K tensors from mixed-quant Qwen GGUF files, and exposes both `--kernel scalar` and default `--kernel warp4`. The CUDA kernels implement the raw GGUF Q6_K block layout (`ql:128B`, `qh:64B`, signed `scales:16B`, `d:f16`) and compare against the CPU `ML::GGUF::QuantMatmul` Q6_K reference.
+
+Conclusion: the CUDA backend now has verified standalone GEMV primitives for the quant families needed by current Qwen paths: Q8_0 draft, Q4_K target weights, and Q6_K mixed-quant output/value/down projections. The next meaningful boundary is no longer another isolated block-layout proof; it should be a minimal stateful layer/projection-sequence microbench that keeps tensors GPU-resident and compares against CPU reference outputs.
+
+**evidence_update_82:**
+- claim: "The Q6_K CUDA probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q6k_syntax crystal build -Dcpu_only --no-codegen bin/cuda_q6k_gemv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: Q6_K probe source, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The Q6_K CUDA scalar and warp4 kernels match the CPU reference on remote Qwen3.5 9B target tensors."
+  source: remote `crystal build -Dcpu_only bin/cuda_q6k_gemv_probe.cr`; remote `blk.3.attn_v.weight` -> scalar `0.159ms`, warp4 `0.014ms`, `cos=1.0`, `ok=true`; remote `blk.0.ffn_down.weight` -> scalar `0.567ms`, warp4 `0.135ms`, `cos=1.0`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: PTX source, CUDA driver/PTX JIT, Q6_K block layout, CPU reference, model file, or launch-shape changes
+
+**quadrumvirate_update_82:**
+- cassandra: Q4_K_M target execution would silently stay incomplete without Q6_K, because output, value, and FFN-down tensors use Q6_K.
+- daedalus: With Q8_0, Q4_K, and Q6_K proven, the next bottleneck is backend composition and residency, not individual format discovery.
+- maieutic: The hidden assumption that Q4_K_M means only Q4_K was false; tensor inventory showed Q6_K is required for a representative target path.
+- adversary: These are still standalone GEMV microbenchmarks. They do not include CPU/GPU transfer costs, state buffers, command scheduling, activations, or full layer correctness.
