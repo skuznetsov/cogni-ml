@@ -9275,3 +9275,23 @@ Conclusion: the CUDA recurrent-layer proof now covers cross-token state progress
 - daedalus: This is a residency-step proof, not the backend facade itself. The next frame should extract ownership and lifecycle into reusable CUDA objects instead of expanding probe-local plumbing.
 - maieutic: The hidden assumption that repeated launches prove token sequencing was false; sequence mode now uses distinct per-token inputs and verifies all per-token final outputs.
 - adversary: Timing is a layer-slice microbench and excludes full model scheduling, full-attention layers, KV cache, tokenizer, sampling, and multi-layer decode. Do not compare it as end-to-end CUDA inference.
+
+**decision_update_91:** Split persistent weight upload from per-sequence reset in `bin/cuda_recurrent_prep_output_probe.cr`. The probe now has separate `upload_weights` and `reset_sequence` phases: model weights/constants are copied once into CUDA buffers, while warmup/timed/correctness runs only reset sequence inputs and recurrent conv/SSM state.
+
+Conclusion: the recurrent-layer CUDA probe now exposes the intended backend ownership boundary more honestly. The measured `cuda_ms_per_token` is a resident execution measurement that excludes one-time weight upload, and `weight_upload_ms` is printed separately. This is still probe-local plumbing; the next step remains extracting this lifecycle into a reusable CUDA object.
+
+**evidence_update_91:**
+- claim: "The persistent-upload split has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_resident_upload_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: recurrent layer probe source, Crystal compiler, CUDA FFI signatures, or embedded PTX files change
+- claim: "Separating one-time weight upload from sequence reset preserves CUDA/CPU parity."
+  source: remote Qwen3.5 9B layer0 `--tokens 4 --reps 2 --warmup 1` -> `weight_upload_ms=21.781`, `cuda_ms_per_token=1.617`, `cpu_ms_per_token=4477.378`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_91:**
+- cassandra: The likely regression was accidentally relying on weight re-upload during warmup or correctness reset. The remote run exercised warmup, timed execution, and correctness after a single weight upload.
+- daedalus: The useful frame is now lifecycle ownership: one-time model upload, per-sequence state/input reset, resident token execution, and readback. The next code move should make these object methods instead of closures.
+- maieutic: The assumption that "not in the timed loop" is enough was weak; explicit split makes the contract inspectable and measurable.
+- adversary: The split still lives inside a standalone probe. It is not yet a production CUDA backend, and no full decoder path uses it.

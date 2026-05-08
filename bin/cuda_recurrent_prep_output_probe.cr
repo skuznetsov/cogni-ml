@@ -318,15 +318,12 @@ begin
     d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w,
     d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all = ptrs
 
-  copy_inputs = -> {
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_xs, xs.to_unsafe.as(Void*), bytesize_f32(tokens * hidden)), "cuMemcpyHtoD(xs)"
+  upload_weights = -> {
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_attn_norm_w, attn_norm.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(attn_norm)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_qkv_w, qkv_raw.to_unsafe.as(Void*), qkv_raw.size.to_u64), "cuMemcpyHtoD(qkv_w)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_gate_w, gate_raw.to_unsafe.as(Void*), gate_raw.size.to_u64), "cuMemcpyHtoD(gate_w)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_alpha_w, alpha_raw.to_unsafe.as(Void*), alpha_raw.size.to_u64), "cuMemcpyHtoD(alpha_w)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_beta_w, beta_raw_w.to_unsafe.as(Void*), beta_raw_w.size.to_u64), "cuMemcpyHtoD(beta_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_conv_state, conv_state_init.to_unsafe.as(Void*), bytesize_f32(conv_state_init.size)), "cuMemcpyHtoD(conv_state)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ssm_state, ssm_state_init.to_unsafe.as(Void*), bytesize_f32(ssm_state_init.size)), "cuMemcpyHtoD(ssm_state)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_conv_w, conv1d.to_unsafe.as(Void*), bytesize_f32(conv1d.size)), "cuMemcpyHtoD(conv_w)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_dt, dt_bias.to_unsafe.as(Void*), bytesize_f32(dt_bias.size)), "cuMemcpyHtoD(dt)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_a, ssm_a.to_unsafe.as(Void*), bytesize_f32(ssm_a.size)), "cuMemcpyHtoD(a)"
@@ -337,7 +334,18 @@ begin
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ffn_up_w, ffn_up_raw.to_unsafe.as(Void*), ffn_up_raw.size.to_u64), "cuMemcpyHtoD(ffn_up_w)"
     cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ffn_down_w, ffn_down_raw.to_unsafe.as(Void*), ffn_down_raw.size.to_u64), "cuMemcpyHtoD(ffn_down_w)"
   }
-  copy_inputs.call
+
+  reset_sequence = -> {
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_xs, xs.to_unsafe.as(Void*), bytesize_f32(tokens * hidden)), "cuMemcpyHtoD(xs)"
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_conv_state, conv_state_init.to_unsafe.as(Void*), bytesize_f32(conv_state_init.size)), "cuMemcpyHtoD(conv_state)"
+    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ssm_state, ssm_state_init.to_unsafe.as(Void*), bytesize_f32(ssm_state_init.size)), "cuMemcpyHtoD(ssm_state)"
+  }
+
+  upload_t0 = Time.instant
+  upload_weights.call
+  cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(upload_weights)"
+  weight_upload_ms = (Time.instant - upload_t0).total_milliseconds
+  reset_sequence.call
 
   hidden_u32 = hidden.to_u32
   ffn_dim_u32 = ffn_dim.to_u32
@@ -515,7 +523,7 @@ begin
     tokens.times { |tok| run_token.call(tok) }
   end
   cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(warmup)" if warmup > 0
-  copy_inputs.call
+  reset_sequence.call
   gpu_t0 = Time.instant
   reps.times do
     tokens.times { |tok| run_token.call(tok) }
@@ -524,7 +532,7 @@ begin
   timed_steps = reps * tokens
   gpu_ms = (Time.instant - gpu_t0).total_milliseconds / timed_steps
 
-  copy_inputs.call
+  reset_sequence.call
   tokens.times { |tok| run_token.call(tok) }
   cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(correctness)"
 
@@ -557,6 +565,7 @@ begin
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "timed_steps=#{timed_steps}"
+  puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
   puts "cuda_ms_per_token=#{gpu_ms.round(3)}"
   puts "cpu_ms=#{cpu_ms.round(3)}"

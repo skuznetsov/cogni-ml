@@ -201,7 +201,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_r
   --warmup 2
 ```
 
-`cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. `--tokens N` runs a GPU-resident sequence through persistent conv/SSM state and compares all token outputs plus final recurrent states against the CPU reference. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
+`cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. `--tokens N` runs a GPU-resident sequence through persistent conv/SSM state and compares all token outputs plus final recurrent states against the CPU reference. The probe now separates one-time weight upload from per-sequence input/state reset and prints `weight_upload_ms`; timed `cuda_ms_per_token` excludes the persistent weight upload. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
 
 Build the Metal bridge once:
 
