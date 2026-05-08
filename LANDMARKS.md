@@ -8562,3 +8562,22 @@ The next implementation should therefore test a causal mechanism, not just obser
 - daedalus: Shift frame from "make every chunk speculative" to "speculate only when expected value is positive, or make rejects branch-resumable." This is an eliminate-work problem, not a route-threshold problem.
 - maieutic: The hidden assumption was that high acceptance on one repeat span transfers to other prompt classes. The 3-prompt gate falsifies it.
 - adversary: These are 27B-local measurements with noisy wall time; they justify the next experiment, not a default. Any promotion needs parity plus aggregate `plain_speedup>1` and no catastrophic row.
+
+**decision_update_59:** Added a default-off causal fail-closed probe, `--simulate-self-spec-gpu-pipeline-reject-offramp-after=N`, and immediately refuted it as a standalone speed path. The mode is intentionally plain-route only: it currently rejects combinations with tree2/risk/MTP routes, stops after the Nth self-spec reject, and finishes the requested tokens with exact greedy decode from the current verifier state. It preserved parity on the first 27B main/rank2/gamma32 A/B, but wall moved in the wrong direction: baseline overlap `5649.027ms`, reject-offramp overlap `7013.817ms`. The mechanism did what it was supposed to do structurally (`attr_draft_resync_ms=0`, `reject_offramp_hits=1`, `reject_offramp_tokens=28`), but exact suffix fallback cost `3498.038ms`, more than the low-rank resync it replaced in that run.
+
+Conclusion: off-ramping after a full bad proposal is too late. The next causal speed branch must either avoid generating risky tails in the first place (streaming/progressive proposal gate) or have an alternate branch already available when the verifier rejects. Keep the flag as a fail-closed diagnostic/control, not as a promoted route.
+
+**evidence_update_59:**
+- claim: "The reject off-ramp builds, focused specs pass, and the first 27B A/B preserves parity."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_reject_offramp_build_min crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_reject_offramp_probe_min --link-flags=...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_reject_offramp_specs_min crystal spec -D qwen35_mtp_metal spec/qwen35_decode_top2_spec.cr spec/qwen35_recurrent_checkpoint_spec.cr --link-flags=...` -> `4 examples, 0 failures`; `/tmp/qwen35_reject_offramp_smoke_20260507.log`; `/tmp/qwen36_main_rank2_gamma32_reject_offramp_ab_20260507203754/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: self-spec controller, exact fallback loop, verifier state semantics, or Metal bridge changes
+- claim: "Reject off-ramping after the first bad long proposal is slower than low-rank resync on the tested row."
+  source: `/tmp/qwen36_main_rank2_gamma32_reject_offramp_ab_20260507203754/summary.tsv` -> baseline overlap `5649.027ms`, off-ramp overlap `7013.817ms`, off-ramp suffix `3498.038ms`
+  verified_at: 2026-05-07
+  decay_trigger: prompt text, model file, host load, gamma/rank route, or exact fallback implementation changes
+**quadrumvirate_update_59:**
+- cassandra: The expected risk was that exact suffix fallback would cost more than low-rank resync. The first A/B confirms it for this bad row.
+- daedalus: The useful pivot is earlier in the timeline: stop before tail generation or precompute a viable alternate branch. Post-reject fallback is only a damage limiter.
+- maieutic: The assumption that eliminating resync is enough was false; the replacement work matters, and exact suffix decode is too expensive after a long reject.
+- adversary: Evidence is one focused 27B row, so keep the mode as a diagnostic. It is refuted only as a standalone speed path, not as part of a larger router.
