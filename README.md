@@ -137,6 +137,19 @@ crystal build -Dcpu_only bin/cuda_ffn_sequence_probe.cr -o build/cuda_ffn_sequen
 
 `cuda_ffn_sequence_probe` composes the checked CUDA primitives as `Q4_K ffn_gate + Q4_K ffn_up -> SwiGLU -> Q6_K ffn_down` while keeping the input, intermediate activations, and output projection input GPU-resident. Only the final hidden vector is copied back for comparison against the CPU `QuantMatmul` FFN reference.
 
+Build the full-attention input projection bundle probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_attn_projection_probe.cr -o build/cuda_attn_projection_probe
+./build/cuda_attn_projection_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layer 3 \
+  --reps 10 \
+  --warmup 2
+```
+
+`cuda_attn_projection_probe` runs `Q4_K attn_q + Q4_K attn_k + Q6_K attn_v` from one GPU-resident hidden vector and copies Q/K/V back only after all projections complete. It targets full-attention layers such as `blk.3` in Qwen3.5 9B.
+
 Build the Metal bridge once:
 
 ```sh

@@ -9131,3 +9131,23 @@ Conclusion: the CUDA work has moved from isolated quantized GEMV layout proofs t
 - daedalus: The frame shifted from "prove another quant format" to "compose verified primitives into a layer slice." That is the necessary step before any Linux CUDA inference path.
 - maieutic: The hidden assumption was that individual GEMV parity implies sequence parity. The FFN sequence explicitly tests activation and buffer handoff between Q4_K and Q6_K kernels.
 - adversary: This still omits RMSNorm, residuals, DeltaNet/attention state, tokenizer/decode scheduling, and full model residency. Treat it as a layer-slice proof, not an end-to-end throughput claim.
+
+**decision_update_84:** Added a GPU-resident CUDA full-attention input projection bundle. New `bin/cuda_attn_projection_probe.cr` runs Qwen full-attention layer input projections from a single hidden vector: Q4_K `attn_q`, Q4_K `attn_k`, and Q6_K `attn_v`. It reuses the verified Q4_K/Q6_K PTX kernel files and copies Q/K/V back only after all projection kernels finish.
+
+Conclusion: CUDA composition now covers both FFN and full-attention projection bundles. The next missing target path is recurrent-layer projection composition, especially Q5_K `attn_qkv`, because recurrent layers use a combined QKV tensor that is not covered by Q4_K/Q6_K/Q8_0 yet.
+
+**evidence_update_84:**
+- claim: "The CUDA full-attention projection probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_attn_proj_syntax crystal build -Dcpu_only --no-codegen bin/cuda_attn_projection_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: attention projection probe source, embedded PTX files, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The GPU-resident CUDA full-attention projection bundle matches CPU references on remote Qwen3.5 9B layer 3."
+  source: remote `crystal build -Dcpu_only bin/cuda_attn_projection_probe.cr`; remote `--layer 3 --reps 10 --warmup 2` -> `cuda_ms=0.107`, `cpu_ms=1232.757`, `q_cos=1.0`, `k_cos=1.0`, `v_cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: Q4/Q6 PTX source, CUDA driver/PTX JIT, model file, full-attention tensor layout, CPU reference, or sequence launch order changes
+
+**quadrumvirate_update_84:**
+- cassandra: After FFN composition, the likely blind spot was full-attention mixed Q/K/V projection composition from one hidden vector. This probe covers that without stateful attention yet.
+- daedalus: The remaining composition gap is now recurrent-specific Q5_K combined QKV and DeltaNet state, not generic projection bundles.
+- maieutic: The assumption that FFN sequence proof generalizes to attention projections was tested directly because attention uses different output dimensions and a mixed Q4/Q6 set.
+- adversary: This omits Q/K normalization, RoPE, KV cache, attention score/value application, output projection, RMSNorm, and residuals. It is a projection-bundle proof only.
