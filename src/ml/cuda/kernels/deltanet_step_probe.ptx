@@ -133,3 +133,94 @@ STORE_Y:
 DONE:
     ret;
 }
+
+// Serial correctness-first post-processing:
+//   y[h, d] = RMSNorm(y[h, :], norm) * silu(z[h, d])
+//
+// Launch: grid=(h_v), block=(1). The serial per-head shape is intentional for
+// this boundary probe; the next optimized version should parallelize the 128-d
+// reduction and vector update.
+.visible .entry deltanet_post_norm_gate_128_probe(
+    .param .u64 y,
+    .param .u64 z,
+    .param .u64 norm,
+    .param .u32 h_v,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<5>;
+    .reg .b32 %r<18>;
+    .reg .b64 %rd<22>;
+    .reg .f32 %f<26>;
+
+    ld.param.u64 %rd1, [y];
+    ld.param.u64 %rd2, [z];
+    ld.param.u64 %rd3, [norm];
+    ld.param.u32 %r1, [h_v];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r2, %ctaid.x;       // h
+    mov.u32 %r3, %tid.x;
+    setp.ge.u32 %p1, %r2, %r1;
+    @%p1 bra POST_DONE;
+    setp.ne.u32 %p2, %r3, 0;
+    @%p2 bra POST_DONE;
+
+    shl.b32 %r4, %r2, 7;         // base = h * 128
+    mov.f32 %f2, 0f00000000;     // sumsq
+    mov.u32 %r5, 0;
+
+POST_SUM_LOOP:
+    setp.ge.u32 %p3, %r5, 128;
+    @%p3 bra POST_INV;
+
+    add.u32 %r6, %r4, %r5;
+    mul.wide.u32 %rd4, %r6, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f3, [%rd5];
+    fma.rn.f32 %f2, %f3, %f3, %f2;
+
+    add.u32 %r5, %r5, 1;
+    bra POST_SUM_LOOP;
+
+POST_INV:
+    mov.f32 %f4, 0f3C000000;     // 1 / 128
+    mul.rn.f32 %f5, %f2, %f4;
+    add.rn.f32 %f5, %f5, %f1;
+    sqrt.rn.f32 %f6, %f5;
+    rcp.rn.f32 %f7, %f6;         // inv_rms
+    mov.u32 %r7, 0;
+
+POST_WRITE_LOOP:
+    setp.ge.u32 %p4, %r7, 128;
+    @%p4 bra POST_DONE;
+
+    add.u32 %r8, %r4, %r7;
+    mul.wide.u32 %rd6, %r8, 4;
+    add.s64 %rd7, %rd1, %rd6;
+    add.s64 %rd8, %rd2, %rd6;
+    ld.global.f32 %f8, [%rd7];   // y
+    ld.global.f32 %f9, [%rd8];   // z
+
+    mul.wide.u32 %rd9, %r7, 4;
+    add.s64 %rd10, %rd3, %rd9;
+    ld.global.f32 %f10, [%rd10]; // norm[d]
+
+    mov.f32 %f11, 0fBFB8AA3B;    // -log2(e)
+    mul.rn.f32 %f12, %f9, %f11;
+    ex2.approx.ftz.f32 %f13, %f12;
+    mov.f32 %f14, 0f3F800000;    // 1.0
+    add.rn.f32 %f15, %f14, %f13;
+    rcp.approx.ftz.f32 %f16, %f15;
+    mul.rn.f32 %f17, %f9, %f16;  // silu(z)
+    mul.rn.f32 %f18, %f8, %f7;
+    mul.rn.f32 %f19, %f18, %f10;
+    mul.rn.f32 %f20, %f19, %f17;
+    st.global.f32 [%rd7], %f20;
+
+    add.u32 %r7, %r7, 1;
+    bra POST_WRITE_LOOP;
+
+POST_DONE:
+    ret;
+}

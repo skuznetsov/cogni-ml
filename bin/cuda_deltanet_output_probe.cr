@@ -1,9 +1,9 @@
 # CUDA DeltaNet state/output slice probe for Qwen GGUF weights.
 #
-# Runs a synthetic DeltaNet step on CUDA, keeps the y vector GPU-resident, then
-# feeds it directly into the real Q4_K ssm_out projection. This intentionally
-# omits recurrent post RMSNorm/SiLU gating; it tests the stateful-kernel to
-# quantized-output-projection boundary before the full recurrent layer facade.
+# Runs a synthetic DeltaNet step on CUDA, applies recurrent post RMSNorm/SiLU
+# gating on GPU, then feeds the result directly into the real Q4_K ssm_out
+# projection. It tests the stateful-kernel to post-gate to quantized-output
+# projection boundary before the full recurrent layer facade.
 
 require "option_parser"
 require "../src/ml/gguf/reader"
@@ -114,10 +114,13 @@ scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
 gguf = ML::GGUF::GGUFFile.new(model)
 prefix = "blk.#{layer}"
 out_info = gguf.tensor("#{prefix}.ssm_out.weight") || raise "missing #{prefix}.ssm_out.weight"
+norm_info = gguf.tensor("#{prefix}.ssm_norm.weight") || raise "missing #{prefix}.ssm_norm.weight"
 raise "expected Q4_K ssm_out" unless out_info.type.q4_k?
 raise "ssm_out input mismatch: expected #{inner_dim}, got #{out_info.dims[0]}" unless out_info.dims[0].to_i32 == inner_dim
 out_dim = out_info.dims[1].to_i32
 out_raw = gguf.read_tensor_raw(out_info)
+ssm_norm = gguf.read_tensor_f32(norm_info)
+raise "ssm_norm size mismatch: expected #{s}, got #{ssm_norm.size}" unless ssm_norm.size == s
 
 rng = Random.new(seed)
 state_init = Array(Float32).new(h_v * s * s) { ((rng.next_float - 0.5) * 0.05).to_f32 }
@@ -126,11 +129,28 @@ k = Array(Float32).new(h_k * s) { ((rng.next_float - 0.5) * 0.2).to_f32 }
 v = Array(Float32).new(h_v * s) { ((rng.next_float - 0.5) * 0.2).to_f32 }
 g = Array(Float32).new(h_v) { (0.90 + 0.09 * rng.next_float).to_f32 }
 beta = Array(Float32).new(h_v) { rng.next_float.to_f32 }
+z = Array(Float32).new(inner_dim) { ((rng.next_float - 0.5) * 0.2).to_f32 }
 
 cpu_t0 = Time.instant
 state_cpu = state_init.dup
 y_cpu = Array(Float32).new(inner_dim, 0.0_f32)
 ML::GGUF::Qwen35CPU.delta_net_step!(state_cpu, q, k, v, g, beta, y_cpu, h_k, h_v, s, scale)
+eps = 1.0e-6_f32
+h_v.times do |h|
+  base = h * s
+  sumsq = 0.0_f32
+  s.times do |d|
+    yv = y_cpu[base + d]
+    sumsq += yv * yv
+  end
+  inv_rms = 1.0_f32 / Math.sqrt(sumsq / s + eps).to_f32
+  s.times do |d|
+    idx = base + d
+    zv = z[idx]
+    sig = 1.0_f32 / (1.0_f32 + Math.exp(-zv).to_f32)
+    y_cpu[idx] = y_cpu[idx] * inv_rms * ssm_norm[d] * (zv * sig)
+  end
+end
 proj_cpu = ML::GGUF::QuantMatmul.matmul_add(y_cpu, 1, inner_dim, out_raw, ML::GGUF::TensorType::Q4_K, out_dim, Array(Float32).new(out_dim, 0.0_f32))
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds
 
@@ -149,6 +169,7 @@ cuda! LibCUDADeltaOut.cuCtxCreate_v2(pointerof(ctx), 0_u32, dev), "cuCtxCreate"
 dn_mod = Pointer(Void).null
 q4_mod = Pointer(Void).null
 dn_fn = Pointer(Void).null
+post_fn = Pointer(Void).null
 q4_fn = Pointer(Void).null
 ptrs = [] of UInt64
 
@@ -156,17 +177,19 @@ begin
   cuda! LibCUDADeltaOut.cuModuleLoadData(pointerof(dn_mod), DN_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(delta)"
   cuda! LibCUDADeltaOut.cuModuleLoadData(pointerof(q4_mod), Q4K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q4)"
   cuda! LibCUDADeltaOut.cuModuleGetFunction(pointerof(dn_fn), dn_mod, "deltanet_step_128_probe"), "cuModuleGetFunction(delta)"
+  cuda! LibCUDADeltaOut.cuModuleGetFunction(pointerof(post_fn), dn_mod, "deltanet_post_norm_gate_128_probe"), "cuModuleGetFunction(post)"
   cuda! LibCUDADeltaOut.cuModuleGetFunction(pointerof(q4_fn), q4_mod, "q4_k_gemv_warp4_f32"), "cuModuleGetFunction(q4)"
 
   sizes = [bytesize_f32(state_init.size), bytesize_f32(q.size), bytesize_f32(k.size), bytesize_f32(v.size),
-           bytesize_f32(g.size), bytesize_f32(beta.size), bytesize_f32(y_cpu.size), out_raw.size.to_u64,
+           bytesize_f32(g.size), bytesize_f32(beta.size), bytesize_f32(z.size), bytesize_f32(ssm_norm.size),
+           bytesize_f32(y_cpu.size), out_raw.size.to_u64,
            bytesize_f32(out_dim)]
   sizes.each_with_index do |size_bytes, i|
     pdev = 0_u64
     cuda! LibCUDADeltaOut.cuMemAlloc_v2(pointerof(pdev), size_bytes), "cuMemAlloc(#{i})"
     ptrs << pdev
   end
-  d_state, d_q, d_k, d_v, d_g, d_beta, d_y, d_out_w, d_proj = ptrs
+  d_state, d_q, d_k, d_v, d_g, d_beta, d_z, d_norm, d_y, d_out_w, d_proj = ptrs
 
   copy_inputs = -> {
     cuda! LibCUDADeltaOut.cuMemcpyHtoD_v2(d_state, state_init.to_unsafe.as(Void*), bytesize_f32(state_init.size)), "cuMemcpyHtoD(state)"
@@ -175,6 +198,8 @@ begin
     cuda! LibCUDADeltaOut.cuMemcpyHtoD_v2(d_v, v.to_unsafe.as(Void*), bytesize_f32(v.size)), "cuMemcpyHtoD(v)"
     cuda! LibCUDADeltaOut.cuMemcpyHtoD_v2(d_g, g.to_unsafe.as(Void*), bytesize_f32(g.size)), "cuMemcpyHtoD(g)"
     cuda! LibCUDADeltaOut.cuMemcpyHtoD_v2(d_beta, beta.to_unsafe.as(Void*), bytesize_f32(beta.size)), "cuMemcpyHtoD(beta)"
+    cuda! LibCUDADeltaOut.cuMemcpyHtoD_v2(d_z, z.to_unsafe.as(Void*), bytesize_f32(z.size)), "cuMemcpyHtoD(z)"
+    cuda! LibCUDADeltaOut.cuMemcpyHtoD_v2(d_norm, ssm_norm.to_unsafe.as(Void*), bytesize_f32(ssm_norm.size)), "cuMemcpyHtoD(norm)"
     cuda! LibCUDADeltaOut.cuMemcpyHtoD_v2(d_out_w, out_raw.to_unsafe.as(Void*), out_raw.size.to_u64), "cuMemcpyHtoD(out_w)"
   }
   copy_inputs.call
@@ -197,6 +222,13 @@ begin
   dn_params[8] = pointerof(h_v_u32).as(Void*)
   dn_params[9] = pointerof(scale).as(Void*)
 
+  post_params = Pointer(Void*).malloc(5)
+  post_params[0] = pointerof(d_y).as(Void*)
+  post_params[1] = pointerof(d_z).as(Void*)
+  post_params[2] = pointerof(d_norm).as(Void*)
+  post_params[3] = pointerof(h_v_u32).as(Void*)
+  post_params[4] = pointerof(eps).as(Void*)
+
   q4_params = Pointer(Void*).malloc(5)
   q4_params[0] = pointerof(d_out_w).as(Void*)
   q4_params[1] = pointerof(d_y).as(Void*)
@@ -207,6 +239,8 @@ begin
   run_bundle = -> {
     cuda! LibCUDADeltaOut.cuLaunchKernel(dn_fn, h_v.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
       0_u32, Pointer(Void).null, dn_params, Pointer(Void*).null), "delta step"
+    cuda! LibCUDADeltaOut.cuLaunchKernel(post_fn, h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32,
+      0_u32, Pointer(Void).null, post_params, Pointer(Void*).null), "post gate"
     cuda! LibCUDADeltaOut.cuLaunchKernel(q4_fn, q4_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
       0_u32, Pointer(Void).null, q4_params, Pointer(Void*).null), "ssm_out"
   }
@@ -233,7 +267,7 @@ begin
   lines = [] of String
   ok = true
   ok &&= report_pair("state", state_gpu, state_cpu, lines, 1.0e-5_f32)
-  ok &&= report_pair("y", y_gpu, y_cpu, lines, 1.0e-5_f32)
+  ok &&= report_pair("post_y", y_gpu, y_cpu, lines, 1.0e-3_f32)
   ok &&= report_pair("proj", proj_gpu, proj_cpu, lines, 1.0e-3_f32)
 
   puts "device=#{device_name}"
