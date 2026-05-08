@@ -8629,3 +8629,26 @@ Next step is a two-stage value router: first fail closed on residual risk, then 
 - daedalus: Pivot from binary "safe to speculate" routing to expected-value routing. We need to eliminate low-value self-spec submits, not just reject-prone ones.
 - maieutic: The hidden assumption was that `100%` acceptance implies positive speed. The repeat-markdown row falsified that under this run.
 - adversary: The 27B evidence is timing-noisy and one run. Treat this as a verified harness feature and a refuted promotion, not as a stable performance law.
+
+**decision_update_62:** Added a second default-off pre-submit value router for high-gamma self-spec. New flags:
+`--simulate-self-spec-gpu-pipeline-value-repeat-rate-min=F`,
+`--simulate-self-spec-gpu-pipeline-value-bigram-repeat-rate-min=F`, and
+`--simulate-self-spec-gpu-pipeline-value-unique-rate-max=F`.
+The value router computes held-out prompt token repetition/entropy features before any GPU self-spec submit and combines fail-closed with the residual router. If either residual risk or value risk fails, the harness emits the explicit exact fallback row (`chunks=0`, `parity=true`, `plain_speedup=1.0x`) instead of silently hiding the skipped work.
+
+The feature signal is real but not sufficient for promotion. On the 27B rank2/gamma32 three-prompt gate, repetition separated main from the repetitive rows: main `repeat_rate=31.25`, repeat-markdown `85.94`, repeat-SQL-values `79.69`. With residual gate plus `value_repeat_rate_min=0`, repeat-markdown ran clean with `plain_speedup=1.1132x` while main/SQL exact-fell-back. With stricter `value_repeat_rate_min=80`, only repeat-markdown ran structurally, but the selected row measured `plain_speedup=0.8052x` under heavy host timing variance. Conclusion: prompt repetition is a useful expected-value feature candidate, especially combined with residual risk, but it does not yet predict wall benefit robustly. Next promotion attempt needs ABBA/repeats under stable host load or a more direct pre-submit lower-bound feature for draft/verifier cost.
+
+**evidence_update_62:**
+- claim: "The value router builds, focused specs pass, and both skip/run smoke paths preserve parity."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_value_router_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_value_router_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_value_router_spec crystal spec spec/qwen35_decode_top2_spec.cr spec/qwen35_recurrent_checkpoint_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `4 examples, 0 failures`; `/tmp/qwen35_value_router_skip_smoke.log`; `/tmp/qwen35_value_router_run_smoke.log`
+  verified_at: 2026-05-07
+  decay_trigger: prompt value feature computation, tokenizer prompt expansion, pre-submit router wiring, or exact fallback loop changes
+- claim: "The first 27B residual+value gate produced useful feature separation but no stable speed promotion."
+  source: `/tmp/qwen36_value_router_gate_20260507212107/summary.tsv`; `/tmp/qwen36_value_router_repeat80_gate_20260507212503/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: host load, prompt suite, model file, residual/value thresholds, Metal scheduler, or self-spec controller changes
+**quadrumvirate_update_62:**
+- cassandra: The expected failure mode was that repetition would predict acceptance class but not wall stability. The repeat80 run confirmed this: correct structural selection, negative `plain_speedup` in a noisy host window.
+- daedalus: The next pivot is from cheap prompt-class proxies to direct expected-value measurement: draft lower bound, verifier chunk estimate, or ABBA repeat medians before promotion.
+- maieutic: The hidden assumption that a repetitive clean span automatically beats plain decode is false; clean acceptance and high repetition are necessary but not sufficient.
+- adversary: Evidence is one small 27B suite and timing is noisy. Keep value router default-off; do not claim speed win without repeated aggregate gate.
