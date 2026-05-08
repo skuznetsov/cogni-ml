@@ -8533,3 +8533,32 @@ A fresh focused ABBA also showed the previous repeat-markdown band regression wa
 - daedalus: Pivot from branch-route classification to eliminating self-spec overhead on predicted no-value chunks or directly reducing verifier prefill.
 - maieutic: The core assumption that self-spec should always run when parity is high is false on these 27B rows; many have `plain_speedup<1`.
 - adversary: Evidence is still local to 27B/rank8/early6/gamma4. Do not generalize to 9B or other gammas without remeasurement.
+
+**decision_update_58:** The first post-branch-routing speed gate says the next breakthrough is not another scalar branch policy; it is a causal high-accept router/rescue path that avoids paying self-spec on bad spans. The phase evidence separates three cases:
+
+1. Clean repetitive spans can benefit from long low-rank self-draft. On repeat-markdown, `rank2/gamma32` preserved parity and reached `plain_speedup=1.333x` in the 3-prompt gate; earlier focused runs had `rank4/gamma32=1.0543x` and `rank8/gamma32=0.9543x`.
+2. The same aggressive route is prompt-fragile. In the 3-prompt rank2 gate, main SQL-style prompt had one reject and fell to `0.5144x`, repeat-SQL-values had one reject and fell to `0.406x`. Rank4 removed some rejects but remained slower than plain even on clean repeat rows (`0.8368x` / `0.8398x`) because draft body cost dominated.
+3. Gamma tuning trades verifier chunks for wasted draft/resync; it does not solve the bad-prompt row. On the main rank2 prompt, `gamma4/8/16/32` measured `plain_speedup=0.5342x/0.4738x/0.5026x/0.4050x`. Small gamma avoided long wasted tails but paid many verifier chunks; large gamma lowered verifier chunks but paid long proposal/resync work.
+
+`draft_no_ffn` remains refuted for this route: repeat-markdown `rank8/gamma32` with no FFN preserved parity only through verifier correction, dropped accept rate to `63.27%`, and measured `plain_speedup=0.6129x`. A sparse MTP-K2-on-reject diagnostic is promising as a component but not yet a speed claim: on the main `rank2/gamma32` row, MTP K2 rescued the only self-draft reject (`checks=1,rescues=1`) in `22.591ms`, but the current diagnostic does not avoid low-rank resync or wasted-tail work.
+
+The next implementation should therefore test a causal mechanism, not just observation: either streaming/progressive self-draft that stops long proposal generation before risky tails, MTP/self-top2 alternate branches that avoid resync after a reject, or a route classifier that only runs high-gamma self-spec on predicted clean spans and falls back to plain exact elsewhere.
+
+**evidence_update_58:**
+- claim: "Low-rank long-gamma self-draft can beat plain on a clean repeat span but is not prompt-stable."
+  source: `/tmp/qwen36_gamma32_rank2_3prompt_20260507201756/summary.tsv`; `/tmp/qwen36_gamma32_rank4_3prompt_20260507202122/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: model file, prompt suite, low-rank layer set, gamma scheduling, Metal scheduling, or timing harness changes
+- claim: "Gamma tuning alone does not fix the reject-prone main prompt."
+  source: `/tmp/qwen36_main_rank2_gamma_sweep_20260507202455/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: prompt text, route, verifier implementation, or self-spec controller changes
+- claim: "MTP-K2 can rescue the observed rank2/gamma32 self-draft reject, but the current diagnostic is not a causal speed path."
+  source: `/tmp/qwen36_main_rank2_gamma32_mtp_reject_diag_20260507202952/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: MTP sidecar, MTP topK path, self-draft reject distribution, or verifier controller changes
+**quadrumvirate_update_58:**
+- cassandra: More branch-threshold tuning should keep finding small/noisy wins and prompt-specific regressions. The rank/gamma gate confirms a stronger split: high-gamma helps only when the proposal body stays clean.
+- daedalus: Shift frame from "make every chunk speculative" to "speculate only when expected value is positive, or make rejects branch-resumable." This is an eliminate-work problem, not a route-threshold problem.
+- maieutic: The hidden assumption was that high acceptance on one repeat span transfers to other prompt classes. The 3-prompt gate falsifies it.
+- adversary: These are 27B-local measurements with noisy wall time; they justify the next experiment, not a default. Any promotion needs parity plus aggregate `plain_speedup>1` and no catastrophic row.
