@@ -9171,3 +9171,23 @@ Conclusion: the CUDA primitive set now covers Q8_0, Q4_K, Q5_K, and Q6_K. The re
 - daedalus: With Q5_K proven, the next frame is recurrent bundle composition, not another standalone quant format.
 - maieutic: The hidden assumption that Q4/Q6 coverage was sufficient for recurrent layers was false; tensor inventory showed Q5_K is on the critical path.
 - adversary: This is still a GEMV primitive, not DeltaNet recurrence, convolution, or full recurrent-layer execution.
+
+**decision_update_86:** Added the GPU-resident CUDA recurrent projection bundle. New `bin/cuda_recurrent_projection_probe.cr` runs Q5_K `attn_qkv` plus Q4_K `attn_gate`, `ssm_alpha`, and `ssm_beta` from one hidden vector, keeping input/weights/intermediates GPU-resident until final output readback.
+
+Conclusion: CUDA composition now covers FFN, full-attention input projections, and recurrent input projections. The next missing recurrent boundary is stateful DeltaNet/conv/ssm_out composition or a tiny backend facade that makes buffer ownership explicit instead of one-off probes.
+
+**evidence_update_86:**
+- claim: "The CUDA recurrent projection bundle has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_rec_proj_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_projection_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: recurrent projection probe source, embedded PTX files, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The GPU-resident recurrent projection bundle matches CPU references on remote Qwen3.5 9B layer 0."
+  source: remote `crystal build -Dcpu_only bin/cuda_recurrent_projection_probe.cr`; remote `--layer 0 --reps 10 --warmup 2` -> `cuda_ms=0.147`, `cpu_ms=1113.153`, `qkv/gate/alpha/beta cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: Q4/Q5 PTX source, CUDA driver/PTX JIT, model file, recurrent tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_86:**
+- cassandra: The likely recurrent gap after Q5_K proof was composition with Q4_K side projections. This probe covers the projection bundle but not state recurrence.
+- daedalus: The next frame should shift from more one-off projection probes to stateful slice ownership: conv/DeltaNet/ssm_out or backend facade.
+- maieutic: The assumption that Q5_K attn_qkv proof alone covers recurrent projection work was incomplete; recurrent layers also need gate/alpha/beta projections from the same hidden state.
+- adversary: This omits convolution, beta sigmoid application, DeltaNet state update, gated RMSNorm, ssm_out, FFN, residuals, and full decode scheduling.

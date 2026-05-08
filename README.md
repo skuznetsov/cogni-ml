@@ -163,6 +163,19 @@ crystal build -Dcpu_only bin/cuda_q5k_gemv_probe.cr -o build/cuda_q5k_gemv_probe
 
 `cuda_q5k_gemv_probe` covers the GGUF Q5_K block layout used by recurrent-layer combined `attn_qkv.weight` tensors in the current Qwen3.5 9B Q4_K_M file.
 
+Build the recurrent-layer projection bundle probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_recurrent_projection_probe.cr -o build/cuda_recurrent_projection_probe
+./build/cuda_recurrent_projection_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layer 0 \
+  --reps 10 \
+  --warmup 2
+```
+
+`cuda_recurrent_projection_probe` runs `Q5_K attn_qkv + Q4_K attn_gate + Q4_K ssm_alpha + Q4_K ssm_beta` from one GPU-resident hidden vector and copies the four outputs back only after all kernels complete. It is the first CUDA recurrent projection-bundle proof; DeltaNet recurrence, convolution, state updates, and `ssm_out` remain separate work.
+
 Build the Metal bridge once:
 
 ```sh
