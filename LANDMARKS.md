@@ -9051,3 +9051,23 @@ Conclusion: Q8_0 CUDA math is now both correctness-checked and has a first usefu
 - daedalus: The useful frame shift was from one CUDA thread per row to one warp per row, matching the Q8_0 block width and eliminating the serial inner loop across 32 values.
 - maieutic: The assumption that a faster microkernel means model speed is explicitly rejected. This only proves the primitive direction.
 - adversary: Timing uses repeated launches and excludes transfers/module load. It is suitable for scalar-vs-warp4 probe comparison, not for llama.cpp or Metal end-to-end claims.
+
+**decision_update_80:** Added the first Q4_K CUDA correctness boundary. New `bin/cuda_q4k_gemv_probe.cr` builds with `-Dcpu_only`, reads real Qwen target-model Q4_K tensors from GGUF, launches a CUDA Driver API PTX scalar GEMV over the raw Q4_K block layout, and compares against the CPU `ML::GGUF::QuantMatmul` Q4_K reference.
+
+This covers the target-model quantization family that matters for the downloaded Qwen3.5 9B and Qwen3.6 27B Q4_K_M files. The kernel is intentionally scalar and correctness-first; it verifies the CUDA implementation of `d`, `dmin`, packed 6-bit scales/mins, and packed 4-bit values before any optimized Q4_K tiling or stateful layer integration.
+
+**evidence_update_80:**
+- claim: "The Q4_K CUDA probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4k_syntax crystal build -Dcpu_only --no-codegen bin/cuda_q4k_gemv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: Q4_K probe source, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The Q4_K CUDA probe matches the CPU reference on remote Qwen3.5 9B target tensors."
+  source: remote `crystal build -Dcpu_only bin/cuda_q4k_gemv_probe.cr`; remote `blk.0.ssm_alpha.weight` -> `4096x32`, `cuda_ms=0.096`, `cos=1.0`, `max_diff=1.66893e-6`, `ok=true`; remote `blk.0.attn_gate.weight` -> `4096x4096`, `cuda_ms=0.152`, `max_diff=4.2915344e-6`, `ok=true`; remote `blk.0.ffn_up.weight` -> `4096x12288`, `cuda_ms=0.366`, `max_diff=4.053116e-6`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: remote source sync, CUDA driver/PTX JIT behavior, Q4_K block layout, CPU reference, model file replacement, or kernel implementation changes
+
+**quadrumvirate_update_80:**
+- cassandra: Q4_K has a much higher layout-bug risk than Q8_0 because scales and mins are packed across bytes; CPU-reference comparison on several real tensor shapes is mandatory before optimization.
+- daedalus: The backend split now has both draft-friendly Q8_0 and target-critical Q4_K quantized math boundaries, so the next frame can move from layout proof to optimized kernels or stateful layer microbenching.
+- maieutic: The assumption that Q8_0 success generalizes to Q4_K is false; Q4_K needed its own block-layout proof.
+- adversary: The measured CUDA times are scalar-kernel microbench timings that exclude full model scheduling/transfers and should not be compared to Metal/llama end-to-end inference.

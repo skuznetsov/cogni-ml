@@ -96,6 +96,19 @@ crystal build -Dcpu_only bin/cuda_q8_gemv_probe.cr -o build/cuda_q8_gemv_probe
 
 `cuda_q8_gemv_probe` loads a real GGUF Q8_0 tensor, launches a Crystal-driven CUDA Driver API GEMV kernel over the raw GGUF block layout, and compares against the existing CPU `QuantMatmul` reference. `--kernel scalar` keeps the first one-thread-per-output-row correctness kernel; the default `--kernel warp4` maps four output rows to four warps per thread block and is the current faster probe shape. This is still a standalone backend-boundary probe, not an optimized Qwen CUDA inference path yet. The current full `qwen35_generate` CLI remains Metal-first.
 
+Build the first Q4_K CUDA correctness probe for Qwen 9B/27B-style target tensors:
+
+```sh
+crystal build -Dcpu_only bin/cuda_q4k_gemv_probe.cr -o build/cuda_q4k_gemv_probe
+./build/cuda_q4k_gemv_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --tensor blk.0.attn_gate.weight \
+  --reps 20 \
+  --warmup 3
+```
+
+`cuda_q4k_gemv_probe` uses the raw GGUF Q4_K block layout (`d`, `dmin`, 12-byte packed scales/mins, 128-byte packed nibbles) and checks the CUDA output against the CPU `QuantMatmul` Q4_K reference. It is currently a scalar correctness kernel; it exists to harden layout/math before optimized CUDA Q4_K tiling.
+
 Build the Metal bridge once:
 
 ```sh
