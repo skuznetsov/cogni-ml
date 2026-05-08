@@ -8793,3 +8793,25 @@ Conclusion: do not super-fuse staged n-gram verifier yet. The reliable path is `
 - daedalus: Shifted from "verify bad chunks cheaper" to "do not propose bad chunks". This preserved the clean-repeat fast path and removed the YAML overrun.
 - maieutic: The hidden assumption was that a safe n-gram route should always fall through to neural draft. Evidence says neural fallback is often net overhead; exact target-only is the safer default fallback for cheap-proposal mode.
 - adversary: This is not a broad speedup over plain decode. It is workload-specialized: strong on repeated spans, near plain elsewhere, and only reliable with risk gating.
+
+**decision_update_68:** Profiled the accepted full-chunk n-gram verifier before attempting more fusion. On Qwen3.6-27B with a clean `alpha beta gamma` repeat, `tokens=32`, `--ngram-target-only --ngram-risk-gate`, and `QWEN35_SPEC_NGRAM_MIN_CANDIDATES=8`, the exact path measured `399.3ms` wall (`12.48ms/tok`), with `target_verify=388.1ms` and `target_backup=11.0ms`. The Metal profile decomposed the verifier into `16` grouped known-span prefill command buffers (`~287.5ms` wait total), one exact lm-head top1-rows call (`~85.8ms` wait), and `14.1GiB` logical matmul traffic for the `31` rows that need future-token logits.
+
+A default-off upper-bound run with `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, `--allow-guarded-verifier`, `--ngram-replay-on-reject`, and the same risk/min-candidate policy improved clean repeats to `~9.5-9.6ms/tok` with zero guard fallback rows in focused runs. This is useful as an optimization target but not a promoted exact path: guarded full-row verification still relies on an F16 margin guard rather than a formal exact argmax proof, and a focused YAML target-only run under the guarded setting showed a severe wall outlier despite no n-gram proposals. Keep guarded full-row n-gram as research/upper-bound only.
+
+Conclusion: do not super-fuse staged n-gram verification. The next exact fusion target is the accepted known-span verifier body: recurrent/full prefill groups and exact output-head top1 rows. Rollback/replay savings are secondary (`~11ms` on the profiled clean 32-token run).
+
+**evidence_update_68:**
+- claim: "Accepted n-gram verifier cost is dominated by known-span prefill groups and exact lm-head rows, not state backup."
+  source: `/tmp/qwen36_ngram_clean_profile_20260508082934.log` -> `spec_wall=399.3ms`, `target_verify=388.1ms`, `target_backup=11.0ms`, grouped prefill wait `~287.5ms`, lm-head top1 wait `~85.8ms`, `14.1GiB` logical matmul traffic
+  verified_at: 2026-05-08
+  decay_trigger: target model, verifier head route, recurrent prefill kernels, n-gram chunk size, or host-load conditions change
+- claim: "Guarded full-row head plus replay is a fast upper-bound on clean n-gram repeats but remains research-only."
+  source: `/tmp/qwen36_ngram_guard_replay_clean_20260508083224.log` -> `9.61ms/tok`, `target_backup=0.0ms`, `head_full_rows_guard rows=31 fallback=0`; `/tmp/qwen36_ngram_guard_replay_focus_20260508083317/gate.log` -> clean repeat rows `9.59` and `9.48ms/tok`, YAML target-only outlier `143.64ms/tok`
+  verified_at: 2026-05-08
+  decay_trigger: guarded full-row exactness policy, margin threshold, risk gate, prompt suite, or host-load conditions change
+
+**quadrumvirate_update_68:**
+- cassandra: The expected trap was optimizing rollback or verifier splits after the risk gate; profiling shows that would miss the main cost.
+- daedalus: Shifted from route-level staging to operator-level accepted-span body fusion. The accepted case is a dense prefill problem, not a rejection-control problem.
+- maieutic: The hidden assumption was that `~12ms/tok` n-gram is already mostly overhead-free. It is not: output head and recurrent prefill still read substantial weights for every verified row.
+- adversary: Guarded full-row speed cannot be reported as verified exact beyond harness equality on focused prompts; do not make it default without a formal exact fallback/proof or a much broader adversarial parity gate.
