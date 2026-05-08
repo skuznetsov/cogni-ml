@@ -8652,3 +8652,28 @@ The feature signal is real but not sufficient for promotion. On the 27B rank2/ga
 - daedalus: The next pivot is from cheap prompt-class proxies to direct expected-value measurement: draft lower bound, verifier chunk estimate, or ABBA repeat medians before promotion.
 - maieutic: The hidden assumption that a repetitive clean span automatically beats plain decode is false; clean acceptance and high repetition are necessary but not sufficient.
 - adversary: Evidence is one small 27B suite and timing is noisy. Keep value router default-off; do not claim speed win without repeated aggregate gate.
+
+**decision_update_63:** Repeated the 27B residual+value high-gamma router and refuted it as a promotion path. The repeated gate used Qwen3.6-27B, rank2 layers `0,2,4,6,8,10`, `gamma32`, `draft_split=1`, `onepass_min3_suffix1to2_guard01`, residual gate `mean<=0.53/pass@0.5>=45%`, and value gate `repeat_rate>=80%`. It preserved parity on all `9/9` rows and structurally selected only repeat-markdown for self-spec; main and repeat-SQL exact-fell-back. The selected clean row had `100%` accept every time, but `plain_speedup=0.7728/0.8167/0.8085` with median `0.8085x`, so the router is correctly conservative but still not a speed win.
+
+The causal reason is proposal cost, not acceptance. Median phase counters for selected repeat-markdown were `draft_seed_ms=5990.120`, `verifier_ms=1087.475`, `plain_exact_ms=5793.568`: the low-rank draft body alone was at/above exact plain, and the verifier became overhead. Cost-truth on the same 27B shape confirms the lower bound: main `draft+verifier_rel=1.7495`, repeat-markdown `1.0948`, repeat-SQL `1.5853`. Even repeat-markdown's state-only no-LM-head lower bound plus verifier was `1.0079`, so a clean same-weight low-rank proposal still needs a body/head/verifier reduction before it can beat plain reliably. Focused WBA on markdown showed `attr_draft_profiled_ms=2121.851`, `attr_verifier_total_ms=597.397`, `plain_exact_ms=2349.898`, `plain_speedup=0.8626x`. Resident `pca-updown16` on this selected span did not rescue it (`accept=65.96%`, `plain_speedup=0.5327x`).
+
+Conclusion: stop spending iterations on scalar residual/repetition routing for this high-gamma low-rank path. The next breakthrough target is proposal-cost elimination: either a much cheaper exact-verified proposal source for repetitive spans, a latent/shortlist head that removes enough LM-head/top1 work, or a fused/approximated body that pushes `draft+verifier_rel` clearly below `1.0` before promotion gates.
+
+**evidence_update_63:**
+- claim: "Residual+value repeat80 routing is parity-safe but slower than plain on repeated 27B clean markdown."
+  source: `/tmp/qwen36_value_router_repeat80_abba_20260507213431/summary.md` -> markdown `plain_speedup` values `0.7728,0.8167,0.8085`, median `0.8085`, parity all true
+  verified_at: 2026-05-07
+  decay_trigger: host load, model file, prompt suite, residual/value thresholds, or self-spec controller changes
+- claim: "Cost-truth predicts no current high-gamma low-rank row has positive expected value."
+  source: `/tmp/qwen36_value_router_cost_truth_more_20260507215058/summary.md`; `/tmp/qwen36_value_router_cost_truth_20260507214902/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: cost-truth helper, draft chain kernels, verifier route, model file, or prompt suite changes
+- claim: "Resident pca-updown16 does not rescue the selected clean markdown row."
+  source: `/tmp/qwen36_value_router_markdown_updown_ab_20260507215800/summary.tsv` -> lowrank `plain_speedup=0.8346x`, pca-updown16 `plain_speedup=0.5327x`, parity true
+  verified_at: 2026-05-07
+  decay_trigger: pca-updown adapter training, layer mask, prompt, rank, or draft body kernels change
+**quadrumvirate_update_63:**
+- cassandra: The likely failure was that routing could avoid bad rows but still select a clean row with negative expected value. Repeated evidence confirms it.
+- daedalus: Pivot from classifier tuning to proposal-cost elimination. If draft plus verifier is above plain, a better classifier can only skip more often; it cannot create speed.
+- maieutic: The hidden assumption was that exact self-spec needs only high acceptance. The actual necessary condition is `proposal_cost + verifier_cost < plain_cost` after overlap.
+- adversary: Cost-truth is still local to rank2/gamma32/three-prompt 27B. It refutes this route, not all possible self-spec or cheap proposal sources.
