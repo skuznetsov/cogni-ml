@@ -9011,3 +9011,23 @@ Conclusion: Crystal can call CUDA Driver API directly on the remote host. The ne
 - daedalus: The backend split is now three layers: portable GGUF/weights, CUDA driver launch, then quantized kernels.
 - maieutic: The hidden assumption was that Python CUDA availability implies Crystal CUDA availability. The new smoke verifies Crystal directly.
 - adversary: This still does not prove Qwen speed. It only proves a correct launch/copy pipeline; the next probe must include CPU reference math and realistic quantized block layout.
+
+**decision_update_78:** Added the first CUDA quantized-kernel correctness boundary. New `bin/cuda_q8_gemv_probe.cr` builds with `-Dcpu_only`, reads a real Q8_0 tensor from GGUF, launches a CUDA Driver API PTX GEMV kernel directly over GGUF's raw Q8_0 block layout (`f16 scale` plus `32` signed int8 values per block), and compares the output against the existing CPU `ML::GGUF::QuantMatmul` reference.
+
+Conclusion: the portable stack now reaches real quantized model math on CUDA without Metal or Python. This is still a correctness/backend-boundary probe, not an optimized inference path: the kernel is scalar one-thread-per-output-row and times only launch/synchronize math, not full Qwen state, scheduling, or optimized tiling. The next CUDA gate should optimize this primitive or add Q4_K with the same CPU-reference discipline before touching stateful Qwen execution.
+
+**evidence_update_78:**
+- claim: "The Q8_0 CUDA GEMV probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q8_syntax crystal build -Dcpu_only --no-codegen bin/cuda_q8_gemv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: CUDA probe source, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The Q8_0 CUDA GEMV probe matches the CPU reference on the remote CUDA host for both tiny and FFN-up Q8_0 tensors."
+  source: remote `crystal build -Dcpu_only bin/cuda_q8_gemv_probe.cr`; remote `blk.0.ssm_alpha.weight` -> `cos=1.0`, `max_diff=2.6226044e-6`, `ok=true`; remote `blk.0.ffn_up.weight` -> `cos=1.0`, `max_diff=5.066395e-7`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: remote source sync, CUDA driver/PTX JIT behavior, model file replacement, Q8_0 block layout, QuantMatmul reference, or kernel implementation changes
+
+**quadrumvirate_update_78:**
+- cassandra: The risk was confusing a CUDA launch smoke with real model math. This probe adds quantized GGUF math plus CPU-reference agreement before any performance claim.
+- daedalus: Backend separation is progressing bottom-up: portable GGUF/weights, Crystal CUDA launch, then real quantized GEMV. Stateful Qwen execution remains a later backend split.
+- maieutic: The hidden assumption was that the first CUDA matmul should target the final fastest kernel. The better first step is a narrow correctness kernel whose failures are easy to localize.
+- adversary: Do not compare this scalar CUDA probe to Metal or llama.cpp as an inference benchmark. It validates layout/math/linkage only; optimized tiling, transfers, state management, and verifier/decode integration are still unproven.

@@ -80,7 +80,18 @@ crystal build bin/cuda_driver_smoke.cr -o build/cuda_driver_smoke
 ./build/cuda_driver_smoke 4096
 ```
 
-The CUDA smoke is a backend boundary probe only: it links `libcuda`, loads embedded PTX, launches a vector-add kernel, and checks the result. Qwen CUDA kernels are not implemented yet.
+The CUDA smoke is a backend boundary probe only: it links `libcuda`, loads embedded PTX, launches a vector-add kernel, and checks the result.
+
+Build the first quantized CUDA correctness probe on NVIDIA/Linux hosts:
+
+```sh
+crystal build -Dcpu_only bin/cuda_q8_gemv_probe.cr -o build/cuda_q8_gemv_probe
+./build/cuda_q8_gemv_probe \
+  --model /path/to/Qwen3.5-0.8B-Q8_0.gguf \
+  --tensor blk.0.ffn_up.weight
+```
+
+`cuda_q8_gemv_probe` loads a real GGUF Q8_0 tensor, launches a Crystal-driven CUDA Driver API GEMV kernel over the raw GGUF block layout, and compares against the existing CPU `QuantMatmul` reference. It is a correctness/backend-boundary probe, not an optimized Qwen CUDA inference path yet. The current full `qwen35_generate` CLI remains Metal-first.
 
 Build the Metal bridge once:
 
