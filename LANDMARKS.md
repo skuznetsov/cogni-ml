@@ -8831,3 +8831,23 @@ Conclusion: the tail-skip/batch-size boundary is not the missing exact speed lev
 - daedalus: Shifted away from padding/alignment knobs toward eliminating or fusing accepted-span work.
 - maieutic: The hidden assumption was that `b32` alignment could beat the cost of computing one extra exact row. The measured path did not support that.
 - adversary: One severe final-row outlier reinforces that this should not be exposed as a default-off tuning knob unless a future kernel rewrite changes the batching economics.
+
+**decision_update_70:** Refuted simple Q6 lm-head top1 tile-size retuning as an accepted n-gram verifier speed lever. A temporary startup-only `QWEN35_HEAD_TOP1_ROWS_PER_TG` probe rewired the host tile count and the Metal `MV6_TOP_ROWS_PER_TG` constant together, then passed focused Qwen forward specs in both default and `rows_per_tg=16` modes (`15 examples, 0 failures` each). The 27B clean accepted n-gram verifier sweep showed no material gain: `rows=8` `389.3ms`, `12` `377.2ms`, `16` `377.1ms`, `24` `393.3ms`, `32` `384.5ms` for the same `tokens=32` `alpha beta gamma` repeat. The probe was removed after measurement.
+
+Conclusion: the existing `12`-row Q6 top1 tile is already near the local optimum for this workload. The next exact head work should be algorithmic/fusion-level, not scalar tile retuning.
+
+**evidence_update_70:**
+- claim: "Q6 top1 tile-size retuning does not improve the clean accepted n-gram verifier path."
+  source: `/tmp/qwen36_head_rows_sweep_20260508084908/summary.log` -> `rows=8` `389.3ms`, `12` `377.2ms`, `16` `377.1ms`, `24` `393.3ms`, `32` `384.5ms`; all rows accepted `32/32`
+  verified_at: 2026-05-08
+  decay_trigger: Q6 top1 tile kernel, output-head route, verifier chunk size, or target model changes
+- claim: "The temporary tile-size probe preserved focused top1 correctness before benchmark use."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_head_rows_spec_default crystal spec spec/qwen35_forward_spec.cr ...` -> `15 examples, 0 failures`; `QWEN35_HEAD_TOP1_ROWS_PER_TG=16 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_head_rows_spec_16 crystal spec spec/qwen35_forward_spec.cr ...` -> `15 examples, 0 failures`
+  verified_at: 2026-05-08
+  decay_trigger: top1 tile-count host/kernel plumbing or qwen35 forward spec coverage changes
+
+**quadrumvirate_update_70:**
+- cassandra: The plausible scalar knob was tile granularity; the failure mode was trading fewer threadgroups for less parallelism.
+- daedalus: This is another local-retune dead end. Move up a level to fusing/removing output-head work or batching only needed exact rows.
+- maieutic: The hidden assumption was that the head path is under-optimized by a constant. Evidence says the constant is not the bottleneck.
+- adversary: Do not leave a startup env knob without a demonstrated win; it would expand the tuning surface and risk Q8/Q6 mismatches.
