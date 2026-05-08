@@ -8705,3 +8705,53 @@ Conclusion: this is the first current route that directly removes proposal-body 
 - daedalus: The frame shift is from "make self-draft cheaper" to "avoid self-draft when history already contains an exact proposal source."
 - maieutic: The hidden assumption was that proposals must come from neural compute. Repetition shows a data-structure proposal can be good enough because the exact verifier owns correctness.
 - adversary: This does not solve general reasoning prompts and should not be promoted as a blanket default. It is a router primitive whose next proof must be a mixed-prompt A/B against plain and neural self-spec.
+
+**decision_update_65:** Promoted the proposal-portfolio idea from analysis to first mixed-harness evidence. The durable plan is: cheap data-structure proposals first (`n-gram`, future LZ/session-copy), exact verifier/checkpoint plumbing second, and neural low-rank/PCA/block surrogates only as expected-value fallback/rescue. This was also saved outside the repo at `/Users/sergey/.codex/memories/extensions/ad_hoc/notes/20260507-230807-cogni-ml-proposal-portfolio.md` to survive context compaction.
+
+The first runtime attempt exposed a harness hazard, not a model result: `qwen35_speculative_sweep --only-prompts` is pipe-delimited, so a markdown-table prompt containing literal `|` split into invalid prompt fragments and produced parity failures on garbage prompts. Do not use `--only-prompts` for prompts with pipes until the sweep has a prompt-file/JSONL input. The safe rerun used delimiter-free prompt text.
+
+The safe 27B gate used Qwen3.6-27B target, Qwen3.5-0.8B Q8 draft, `tokens=16`, policies `default,router16,ngram,ngram_router16_risk`, and global `QWEN35_SPEC_NGRAM_MIN_CANDIDATES=8`, `QWEN35_SPEC_NGRAM_RISK_GATE=1`. It produced `24/24` cycle dumps and no parity failures. `ngram` beat default neural on `4/6` prompts, avg delta `-6.93ms/tok`, paired ratio `0.900x`. `ngram_router16_risk` also beat default on `4/6`, avg delta `-6.54ms/tok`, paired ratio `0.893x`.
+
+A repeated leading-policy gate (`5` prompts x `2` reps, policies `default,ngram,ngram_router16_risk`) strengthened the narrow conclusion. `ngram` was the current best mixed policy: wins `7/10`, avg delta `-6.18ms/tok`, paired ratio `0.896x` vs default neural. `ngram_router16_risk` remained positive but weaker: wins `6/10`, avg delta `-2.98ms/tok`, paired ratio `0.941x`. Cycle attribution explains the result: n-gram cycles accepted `84/84` with zero draft time, while neural cycles accepted `114/160`, had `18` rejects, and spent `1110.4ms` in draft work. This is the first current mixed-harness evidence that cheap exact-verified proposals should front-run neural self-spec rather than be treated as a side experiment.
+
+Conclusion: do not promote aggressive `ngram + router16` as the default yet; the extra neural bootstrap can hurt cases like `repeat_sql_values`. The next implementation gate should make prompt input safe, then test a more surgical route: pure `ngram_min_candidates+risk` first, exact checkpoint/one-pass verifier for known spans second, and neural draft only after the cheap proposal path produces no useful chunk.
+
+**evidence_update_65:**
+- claim: "The initial pipe-delimited sweep was invalid when prompt text contained literal pipes."
+  source: `/tmp/qwen36_proposal_portfolio_gate_20260507230954/gate.log` -> markdown table split into `prompt6`/`prompt7` fragments and runner parity failures
+  verified_at: 2026-05-07
+  decay_trigger: sweep prompt parsing, prompt-file support, or suite manifest generation changes
+- claim: "A safe delimiter-free 27B mixed gate shows n-gram front-running beats default neural on the tested suite."
+  source: `/tmp/qwen36_proposal_portfolio_gate_safe_20260507231553/gate.log` -> `ngram` wins `4/6`, avg ratio `0.900x`; `ngram_router16_risk` wins `4/6`, avg ratio `0.893x`; `24/24` cycle dumps
+  verified_at: 2026-05-07
+  decay_trigger: host load, target/draft model files, sweep policies, n-gram min/risk policy, or verifier implementation changes
+- claim: "The repeated leading-policy gate favors plain n-gram front-running over aggressive n-gram plus router16 bootstrap."
+  source: `/tmp/qwen36_proposal_portfolio_repeat_gate_20260507231916/gate.log` -> `ngram` wins `7/10`, ratio `0.896x`; `ngram_router16_risk` wins `6/10`, ratio `0.941x`; n-gram cycles `84/84` accepted, neural cycles `114/160` accepted with `18` rejects
+  verified_at: 2026-05-07
+  decay_trigger: host load, prompt suite, policy list, target/draft model files, or n-gram verifier economics changes
+
+**quadrumvirate_update_65:**
+- cassandra: The expected win condition was narrow repeated spans with near-zero proposal cost. The mixed gates confirm a positive aggregate on this small repeat/adversary suite.
+- daedalus: The useful frame is no longer "make neural self-spec always better"; it is "route around neural self-spec whenever a cheaper exact-verified proposal source exists."
+- maieutic: The hidden assumption that cheap n-gram must be combined with aggressive neural bootstrap is false. Plain n-gram front-running was stronger than the risk+router16 combo in the repeated gate.
+- adversary: This is still small-suite 27B evidence under host noise and does not prove a broad default. The next proof needs prompt-safe input, a larger interleaved suite, and a verifier/checkpoint variant that reduces target known-span cost.
+
+**decision_update_66:** Closed the prompt-delimiter harness hazard found during the proposal-portfolio gate. `bin/qwen35_speculative_sweep.cr` now accepts `--prompts-jsonl PATH`, replacing the prompt set with JSONL rows containing string fields `name` and `text`. This matches the existing `bin/qwen35_spec_router_prompt_suite.cr --format jsonl` output and avoids the old `--only-prompts` pipe delimiter when prompt text itself contains pipes or newlines.
+
+Verification used two levels. A fake-runner smoke with `/tmp/qwen35_prompts_pipe.jsonl` proved the sweep keeps prompt names `repeat_markdown_tbl` and `json_pairs` instead of splitting on literal pipes. A real 27B smoke with a markdown table prompt and JSON repeat prompt produced `4/4` cycle dumps and no parity failures. The markdown row kept the expected proposal-cost win: `ngram` measured `46.98ms/tok` versus default neural `54.80ms/tok`, with `8/8` accepted. The JSON repeat stayed fail-closed/neutral, as expected for the current risk/min-candidate settings.
+
+**evidence_update_66:**
+- claim: "JSONL prompt input preserves prompt names and supports literal pipes/newlines in sweep prompts."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_sweep_jsonl_build crystal build bin/qwen35_speculative_sweep.cr -o /tmp/qwen35_spec_sweep_jsonl`; `/tmp/qwen35_spec_sweep_jsonl --runner /tmp/qwen35_fake_accept.sh --tokens 2 --reps 1 --policies default --prompts-jsonl /tmp/qwen35_prompts_pipe.jsonl`
+  verified_at: 2026-05-07
+  decay_trigger: sweep prompt parsing, JSONL schema, or prompt manifest generation changes
+- claim: "The JSONL path works in a real 27B pipe-prompt smoke and preserves the markdown n-gram win."
+  source: `/tmp/qwen36_sweep_jsonl_pipe_smoke_20260507232545/smoke.log` -> `4/4` dumps, no parity failures, markdown default `54.80ms/tok`, markdown ngram `46.98ms/tok`
+  verified_at: 2026-05-07
+  decay_trigger: target/draft model files, n-gram verifier policy, sweep JSONL parser, or prompt text changes
+
+**quadrumvirate_update_66:**
+- cassandra: Prompt transport bugs can masquerade as model parity failures. The pipe-delimiter failure matched this pattern exactly.
+- daedalus: The harness should carry prompts as data records, not as delimiter-encoded shell strings.
+- maieutic: The hidden assumption was that synthetic sweep prompts would not contain the sweep delimiter. Markdown tables falsified it.
+- adversary: JSONL solves literal `|` and newlines, but callers still need to avoid writing private prompt text unless `--dump-prompt-texts` or external manifests are intentionally used.

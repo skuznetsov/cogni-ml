@@ -94,6 +94,21 @@ def prompt_case_from_spec(spec : String, index : Int32) : PromptCase
   end
 end
 
+def prompt_cases_from_jsonl(path : String) : Array(PromptCase)
+  raise "prompt JSONL not found: #{path}" unless File.file?(path)
+
+  prompts = [] of PromptCase
+  File.each_line(path) do |line|
+    next if line.strip.empty?
+
+    rec = JSON.parse(line)
+    text = rec["text"]?.try(&.as_s?) || raise "prompt JSONL row missing string field 'text'"
+    name = rec["name"]?.try(&.as_s?) || "prompt#{prompts.size}"
+    prompts << PromptCase.new(name, text)
+  end
+  prompts
+end
+
 def safe_name(name : String) : String
   safe = name.gsub(/[^A-Za-z0-9_.-]/, "_")
   safe.empty? ? "prompt" : safe
@@ -138,7 +153,7 @@ dump_prompt_texts = ENV["QWEN35_SPEC_DUMP_PROMPT_TEXTS"]? == "1"
 router_model_path = ENV["QWEN35_SPEC_ROUTER_MODEL"]?
 
 OptionParser.parse(ARGV) do |p|
-  p.banner = "Usage: qwen35_speculative_sweep [--runner PATH] [--tokens N] [--reps N] [--policies LIST] [--prompt TEXT] [--extra-arg ARG]"
+  p.banner = "Usage: qwen35_speculative_sweep [--runner PATH] [--tokens N] [--reps N] [--policies LIST] [--prompt TEXT|--prompts-jsonl PATH] [--extra-arg ARG]"
   p.on("--runner PATH", "Compiled qwen35_speculative_accept binary (default: /tmp/qwen35_speculative_accept)") { |v| runner = v }
   p.on("--tokens N", "Generated tokens per run (default: 32)") { |v| tokens = v.to_i }
   p.on("--gamma N", "Initial speculative gamma (default: 4)") { |v| gamma = v.to_i }
@@ -152,6 +167,9 @@ OptionParser.parse(ARGV) do |p|
   end
   p.on("--only-prompts LIST", "Replace prompt set with pipe-separated prompts. Entries may be NAME::TEXT.") do |v|
     prompts = v.split('|').map(&.strip).reject(&.empty?).map_with_index { |spec, i| prompt_case_from_spec(spec, i) }
+  end
+  p.on("--prompts-jsonl PATH", "Replace prompt set with JSONL rows containing string fields name/text; safe for pipes and newlines") do |v|
+    prompts = prompt_cases_from_jsonl(v)
   end
   p.on("--extra-arg ARG", "Extra arg forwarded to every runner invocation; can be repeated") { |v| extra_args << v }
   p.on("--dump-cycles-dir DIR", "Write per-run cycle JSONL files under DIR by forwarding --dump-cycles to the runner") { |v| dump_cycles_dir = v }
