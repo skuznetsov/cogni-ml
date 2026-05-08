@@ -122,6 +122,108 @@ STORE:
 DONE:
     ret;
 }
+
+.visible .entry q8_0_gemv_warp4_f32(
+    .param .u64 w_raw,
+    .param .u64 x,
+    .param .u64 out,
+    .param .u32 in_dim,
+    .param .u32 out_dim
+)
+{
+    .reg .pred %p;
+    .reg .b16 %h<2>;
+    .reg .b32 %r<36>;
+    .reg .b64 %rd<28>;
+    .reg .f32 %f<10>;
+    .shared .align 4 .b8 smem[512];
+
+    ld.param.u64 %rd1, [w_raw];
+    ld.param.u64 %rd2, [x];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [in_dim];
+    ld.param.u32 %r2, [out_dim];
+
+    mov.u32 %r3, %tid.x;
+    mov.u32 %r4, %ctaid.x;
+    and.b32 %r5, %r3, 31;       // lane inside row warp
+    shr.u32 %r6, %r3, 5;        // warp id inside 128-thread block
+    shl.b32 %r7, %r4, 2;
+    add.u32 %r8, %r7, %r6;      // output row
+    setp.ge.u32 %p, %r8, %r2;
+    @%p bra WARP4_DONE;
+
+    shr.u32 %r9, %r1, 5;        // blocks_per_row = in_dim / 32
+    mul.lo.u32 %r10, %r9, 34;   // row_bytes
+    mul.wide.u32 %rd4, %r8, %r10;
+    add.s64 %rd5, %rd1, %rd4;   // row base
+
+    mov.f32 %f1, 0f00000000;
+    mov.u32 %r11, 0;
+
+WARP4_BLOCK_LOOP:
+    setp.ge.u32 %p, %r11, %r9;
+    @%p bra WARP4_REDUCE_PREP;
+
+    mul.lo.u32 %r12, %r11, 34;
+    cvt.u64.u32 %rd6, %r12;
+    add.s64 %rd7, %rd5, %rd6;   // block base
+    ld.global.u16 %h1, [%rd7];
+    cvt.f32.f16 %f2, %h1;       // block scale
+    add.s64 %rd8, %rd7, 2;      // qs base
+
+    shl.b32 %r13, %r11, 5;
+    add.u32 %r14, %r13, %r5;    // ib*32 + lane
+    mul.wide.u32 %rd9, %r14, 4;
+    add.s64 %rd10, %rd2, %rd9;
+    ld.global.f32 %f3, [%rd10];
+
+    cvt.u64.u32 %rd11, %r5;
+    add.s64 %rd12, %rd8, %rd11;
+    ld.global.s8 %r15, [%rd12];
+    cvt.rn.f32.s32 %f4, %r15;
+
+    mul.f32 %f5, %f2, %f3;
+    fma.rn.f32 %f1, %f5, %f4, %f1;
+
+    add.u32 %r11, %r11, 1;
+    bra WARP4_BLOCK_LOOP;
+
+WARP4_REDUCE_PREP:
+    shl.b32 %r16, %r3, 2;
+    mov.u64 %rd15, smem;
+    cvt.u64.u32 %rd16, %r16;
+    add.s64 %rd17, %rd15, %rd16;
+    st.shared.f32 [%rd17], %f1;
+    bar.sync 0;
+
+    setp.ne.u32 %p, %r5, 0;
+    @%p bra WARP4_DONE;
+
+    shl.b32 %r17, %r6, 7;       // warp shared base = warp * 32 * 4
+    mov.f32 %f6, 0f00000000;
+    mov.u32 %r18, 0;
+
+WARP4_SUM_LOOP:
+    setp.ge.u32 %p, %r18, 32;
+    @%p bra WARP4_STORE;
+    shl.b32 %r19, %r18, 2;
+    add.u32 %r20, %r17, %r19;
+    cvt.u64.u32 %rd18, %r20;
+    add.s64 %rd19, %rd15, %rd18;
+    ld.shared.f32 %f7, [%rd19];
+    add.rn.f32 %f6, %f6, %f7;
+    add.u32 %r18, %r18, 1;
+    bra WARP4_SUM_LOOP;
+
+WARP4_STORE:
+    mul.wide.u32 %rd13, %r8, 4;
+    add.s64 %rd14, %rd3, %rd13;
+    st.global.f32 [%rd14], %f6;
+
+WARP4_DONE:
+    ret;
+}
 PTX
 
 DEFAULT_MODEL  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
@@ -163,18 +265,27 @@ model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 tensor_name = DEFAULT_TENSOR
 seed = 23_u64
 block = 128_u32
+kernel = "warp4"
+reps = 1
+warmup = 0
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_q8_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--block N]"
+  p.banner = "Usage: cuda_q8_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--kernel scalar|warp4] [--reps N] [--warmup N] [--block N]"
   p.on("--model PATH", "Q8_0 GGUF model path") { |v| model = v }
   p.on("--tensor NAME", "Q8_0 tensor name") { |v| tensor_name = v }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
+  p.on("--kernel NAME", "CUDA kernel: scalar or warp4") { |v| kernel = v }
+  p.on("--reps N", "Timed kernel launches") { |v| reps = v.to_i }
+  p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
   p.on("--block N", "CUDA block size") { |v| block = v.to_u32 }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
 raise "model not found: #{model}" unless File.exists?(model)
 raise "block must be positive" unless block > 0
+raise "reps must be positive" unless reps > 0
+raise "warmup must be non-negative" unless warmup >= 0
+raise "kernel must be scalar or warp4, got #{kernel.inspect}" unless {"scalar", "warp4"}.includes?(kernel)
 
 gguf = ML::GGUF::GGUFFile.new(model)
 info = gguf.tensor(tensor_name) || raise "missing tensor #{tensor_name.inspect}"
@@ -216,7 +327,8 @@ d_out = 0_u64
 
 begin
   cuda! LibCUDAQ8.cuModuleLoadData(pointerof(mod), PTX.to_unsafe.as(Void*)), "cuModuleLoadData"
-  cuda! LibCUDAQ8.cuModuleGetFunction(pointerof(fn), mod, "q8_0_gemv_f32"), "cuModuleGetFunction"
+  kernel_fn = kernel == "warp4" ? "q8_0_gemv_warp4_f32" : "q8_0_gemv_f32"
+  cuda! LibCUDAQ8.cuModuleGetFunction(pointerof(fn), mod, kernel_fn), "cuModuleGetFunction"
 
   gpu_out = Array(Float32).new(out_dim, 0.0_f32)
   raw_size = w_raw.size.to_u64
@@ -237,12 +349,26 @@ begin
   params[3] = pointerof(in_dim_u32).as(Void*)
   params[4] = pointerof(out_dim_u32).as(Void*)
 
-  grid = ((out_dim + block.to_i - 1) // block.to_i).to_u32
+  launch_block = kernel == "warp4" ? 128_u32 : block
+  grid = if kernel == "warp4"
+           ((out_dim + 3) // 4).to_u32
+         else
+           ((out_dim + block.to_i - 1) // block.to_i).to_u32
+         end
+
+  warmup.times do
+    cuda! LibCUDAQ8.cuLaunchKernel(fn, grid, 1_u32, 1_u32, launch_block, 1_u32, 1_u32,
+      0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel(warmup)"
+  end
+  cuda! LibCUDAQ8.cuCtxSynchronize, "cuCtxSynchronize(warmup)" if warmup > 0
+
   gpu_t0 = Time.instant
-  cuda! LibCUDAQ8.cuLaunchKernel(fn, grid, 1_u32, 1_u32, block, 1_u32, 1_u32,
-    0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel"
+  reps.times do
+    cuda! LibCUDAQ8.cuLaunchKernel(fn, grid, 1_u32, 1_u32, launch_block, 1_u32, 1_u32,
+      0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel"
+  end
   cuda! LibCUDAQ8.cuCtxSynchronize, "cuCtxSynchronize"
-  gpu_ms = (Time.instant - gpu_t0).total_milliseconds
+  gpu_ms = (Time.instant - gpu_t0).total_milliseconds / reps
   cuda! LibCUDAQ8.cuMemcpyDtoH_v2(gpu_out.to_unsafe.as(Void*), d_out, out_size), "cuMemcpyDtoH(out)"
 
   max_diff = max_abs_diff(gpu_out, cpu)
@@ -253,6 +379,9 @@ begin
   puts "model=#{model}"
   puts "tensor=#{tensor_name}"
   puts "shape=#{in_dim}x#{out_dim}"
+  puts "kernel=#{kernel}"
+  puts "reps=#{reps}"
+  puts "warmup=#{warmup}"
   puts "raw_bytes=#{w_raw.size}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
   puts "cpu_ms=#{cpu_ms.round(3)}"

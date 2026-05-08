@@ -88,10 +88,13 @@ Build the first quantized CUDA correctness probe on NVIDIA/Linux hosts:
 crystal build -Dcpu_only bin/cuda_q8_gemv_probe.cr -o build/cuda_q8_gemv_probe
 ./build/cuda_q8_gemv_probe \
   --model /path/to/Qwen3.5-0.8B-Q8_0.gguf \
-  --tensor blk.0.ffn_up.weight
+  --tensor blk.0.ffn_up.weight \
+  --kernel warp4 \
+  --reps 100 \
+  --warmup 10
 ```
 
-`cuda_q8_gemv_probe` loads a real GGUF Q8_0 tensor, launches a Crystal-driven CUDA Driver API GEMV kernel over the raw GGUF block layout, and compares against the existing CPU `QuantMatmul` reference. It is a correctness/backend-boundary probe, not an optimized Qwen CUDA inference path yet. The current full `qwen35_generate` CLI remains Metal-first.
+`cuda_q8_gemv_probe` loads a real GGUF Q8_0 tensor, launches a Crystal-driven CUDA Driver API GEMV kernel over the raw GGUF block layout, and compares against the existing CPU `QuantMatmul` reference. `--kernel scalar` keeps the first one-thread-per-output-row correctness kernel; the default `--kernel warp4` maps four output rows to four warps per thread block and is the current faster probe shape. This is still a standalone backend-boundary probe, not an optimized Qwen CUDA inference path yet. The current full `qwen35_generate` CLI remains Metal-first.
 
 Build the Metal bridge once:
 

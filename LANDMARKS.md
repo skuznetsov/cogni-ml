@@ -9031,3 +9031,23 @@ Conclusion: the portable stack now reaches real quantized model math on CUDA wit
 - daedalus: Backend separation is progressing bottom-up: portable GGUF/weights, Crystal CUDA launch, then real quantized GEMV. Stateful Qwen execution remains a later backend split.
 - maieutic: The hidden assumption was that the first CUDA matmul should target the final fastest kernel. The better first step is a narrow correctness kernel whose failures are easy to localize.
 - adversary: Do not compare this scalar CUDA probe to Metal or llama.cpp as an inference benchmark. It validates layout/math/linkage only; optimized tiling, transfers, state management, and verifier/decode integration are still unproven.
+
+**decision_update_79:** Added and promoted a faster Q8_0 CUDA probe kernel inside `bin/cuda_q8_gemv_probe.cr`. The original scalar kernel remains available as `--kernel scalar`; the default `--kernel warp4` maps four output rows to four warps per 128-thread block, with each lane consuming one quantized value per Q8_0 block and a shared-memory warp reduction. The probe also gained `--reps` and `--warmup` so timing can separate one-shot correctness from repeated-kernel microbench behavior.
+
+Conclusion: Q8_0 CUDA math is now both correctness-checked and has a first useful intra-kernel optimization signal. The improvement is local to the standalone probe; it does not yet imply Qwen inference speed because there is no CUDA state/execution backend, no fused layer scheduling, and no Q4_K path.
+
+**evidence_update_79:**
+- claim: "The warp4 Q8_0 CUDA kernel JITs and matches the CPU reference on remote Q8_0 tensors."
+  source: remote `crystal build -Dcpu_only bin/cuda_q8_gemv_probe.cr`; remote `--kernel warp4 --reps 50 --warmup 5` on `blk.0.ssm_alpha.weight` -> `cos=1.0`, `max_diff=4.7683716e-7`, `ok=true`; same on `blk.0.ffn_up.weight` -> `cos=1.0`, `max_diff=1.1920929e-7`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: PTX source, CUDA driver/PTX JIT, Q8_0 layout, CPU reference, model file, or launch-shape changes
+- claim: "The warp4 kernel is materially faster than the scalar probe on the remote FFN-up Q8_0 shape."
+  source: remote `--reps 50 --warmup 5` -> `1024x16` scalar `0.018ms`, warp4 `0.003ms`; `1024x3584` scalar `0.033ms`, warp4 `0.011ms`; remote `--reps 100 --warmup 10` three-run FFN check repeated scalar `0.032ms` and warp4 `0.011ms`, all `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: remote host load, driver clocks, launch timing method, kernel implementation, or tensor shape changes
+
+**quadrumvirate_update_79:**
+- cassandra: The likely failure was PTX/shared-memory fragility; a JIT-log pass caught the initial invalid shared-memory address syntax before correctness runs.
+- daedalus: The useful frame shift was from one CUDA thread per row to one warp per row, matching the Q8_0 block width and eliminating the serial inner loop across 32 values.
+- maieutic: The assumption that a faster microkernel means model speed is explicitly rejected. This only proves the primitive direction.
+- adversary: Timing uses repeated launches and excludes transfers/module load. It is suitable for scalar-vs-warp4 probe comparison, not for llama.cpp or Metal end-to-end claims.
