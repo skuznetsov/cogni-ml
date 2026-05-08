@@ -254,6 +254,226 @@ STORE:
 DONE:
     ret;
 }
+
+.visible .entry q4_k_gemv_warp4_f32(
+    .param .u64 w_raw,
+    .param .u64 x,
+    .param .u64 out,
+    .param .u32 in_dim,
+    .param .u32 out_dim
+)
+{
+    .reg .pred %p<6>;
+    .reg .b16 %h<3>;
+    .reg .b32 %r<90>;
+    .reg .b64 %rd<70>;
+    .reg .f32 %f<24>;
+    .shared .align 4 .b8 smem[512];
+
+    ld.param.u64 %rd1, [w_raw];
+    ld.param.u64 %rd2, [x];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [in_dim];
+    ld.param.u32 %r2, [out_dim];
+
+    mov.u32 %r3, %tid.x;
+    mov.u32 %r4, %ctaid.x;
+    and.b32 %r5, %r3, 31;       // lane inside row warp
+    shr.u32 %r6, %r3, 5;        // warp id inside 128-thread block
+    shl.b32 %r7, %r4, 2;
+    add.u32 %r8, %r7, %r6;      // output row
+    setp.ge.u32 %p1, %r8, %r2;
+    @%p1 bra WARP_DONE;
+
+    shr.u32 %r9, %r1, 8;        // blocks_per_row = in_dim / 256
+    mul.lo.u32 %r10, %r9, 144;  // row_bytes
+    mul.wide.u32 %rd4, %r8, %r10;
+    add.s64 %rd5, %rd1, %rd4;   // row base
+
+    mov.f32 %f1, 0f00000000;
+    mov.u32 %r11, 0;
+
+WARP_BLOCK_LOOP:
+    setp.ge.u32 %p1, %r11, %r9;
+    @%p1 bra WARP_REDUCE_PREP;
+
+    mul.lo.u32 %r12, %r11, 144;
+    cvt.u64.u32 %rd6, %r12;
+    add.s64 %rd7, %rd5, %rd6;   // block base
+    ld.global.u16 %h1, [%rd7];
+    add.s64 %rd8, %rd7, 2;
+    ld.global.u16 %h2, [%rd8];
+    cvt.f32.f16 %f2, %h1;       // d
+    cvt.f32.f16 %f3, %h2;       // dmin
+    add.s64 %rd9, %rd7, 4;      // scales base
+    add.s64 %rd10, %rd7, 16;    // qs base
+
+    mov.u32 %r13, 0;            // group 0..3
+
+WARP_GROUP_LOOP:
+    setp.ge.u32 %p1, %r13, 4;
+    @%p1 bra WARP_NEXT_BLOCK;
+
+    shl.b32 %r14, %r13, 1;      // scale index 0,2,4,6
+
+    setp.lt.u32 %p2, %r14, 4;
+    @%p2 bra WARP_SCALE1_LOW;
+
+WARP_SCALE1_HIGH:
+    add.u32 %r15, %r14, 4;
+    cvt.u64.u32 %rd11, %r15;
+    add.s64 %rd12, %rd9, %rd11;
+    ld.global.u8 %r16, [%rd12];
+    and.b32 %r20, %r16, 15;
+    add.u32 %r17, %r14, -4;
+    cvt.u64.u32 %rd13, %r17;
+    add.s64 %rd14, %rd9, %rd13;
+    ld.global.u8 %r18, [%rd14];
+    shr.u32 %r19, %r18, 6;
+    shl.b32 %r19, %r19, 4;
+    or.b32 %r20, %r20, %r19;
+    shr.u32 %r21, %r16, 4;
+    cvt.u64.u32 %rd15, %r14;
+    add.s64 %rd16, %rd9, %rd15;
+    ld.global.u8 %r22, [%rd16];
+    shr.u32 %r23, %r22, 6;
+    shl.b32 %r23, %r23, 4;
+    or.b32 %r21, %r21, %r23;
+    bra WARP_SCALE1_DONE;
+
+WARP_SCALE1_LOW:
+    cvt.u64.u32 %rd17, %r14;
+    add.s64 %rd18, %rd9, %rd17;
+    ld.global.u8 %r20, [%rd18];
+    and.b32 %r20, %r20, 63;
+    add.u32 %r24, %r14, 4;
+    cvt.u64.u32 %rd19, %r24;
+    add.s64 %rd20, %rd9, %rd19;
+    ld.global.u8 %r21, [%rd20];
+    and.b32 %r21, %r21, 63;
+
+WARP_SCALE1_DONE:
+    add.u32 %r25, %r14, 1;
+    setp.lt.u32 %p3, %r25, 4;
+    @%p3 bra WARP_SCALE2_LOW;
+
+WARP_SCALE2_HIGH:
+    add.u32 %r26, %r25, 4;
+    cvt.u64.u32 %rd21, %r26;
+    add.s64 %rd22, %rd9, %rd21;
+    ld.global.u8 %r27, [%rd22];
+    and.b32 %r30, %r27, 15;
+    add.u32 %r28, %r25, -4;
+    cvt.u64.u32 %rd23, %r28;
+    add.s64 %rd24, %rd9, %rd23;
+    ld.global.u8 %r29, [%rd24];
+    shr.u32 %r31, %r29, 6;
+    shl.b32 %r31, %r31, 4;
+    or.b32 %r30, %r30, %r31;
+    shr.u32 %r32, %r27, 4;
+    cvt.u64.u32 %rd25, %r25;
+    add.s64 %rd26, %rd9, %rd25;
+    ld.global.u8 %r33, [%rd26];
+    shr.u32 %r34, %r33, 6;
+    shl.b32 %r34, %r34, 4;
+    or.b32 %r31, %r32, %r34;
+    bra WARP_SCALE2_DONE;
+
+WARP_SCALE2_LOW:
+    cvt.u64.u32 %rd27, %r25;
+    add.s64 %rd28, %rd9, %rd27;
+    ld.global.u8 %r30, [%rd28];
+    and.b32 %r30, %r30, 63;
+    add.u32 %r35, %r25, 4;
+    cvt.u64.u32 %rd29, %r35;
+    add.s64 %rd30, %rd9, %rd29;
+    ld.global.u8 %r31, [%rd30];
+    and.b32 %r31, %r31, 63;
+
+WARP_SCALE2_DONE:
+    cvt.rn.f32.u32 %f4, %r20;
+    mul.rn.f32 %f4, %f4, %f2;
+    cvt.rn.f32.u32 %f5, %r21;
+    mul.rn.f32 %f5, %f5, %f3;
+    cvt.rn.f32.u32 %f6, %r30;
+    mul.rn.f32 %f6, %f6, %f2;
+    cvt.rn.f32.u32 %f7, %r31;
+    mul.rn.f32 %f7, %f7, %f3;
+
+    mul.lo.u32 %r36, %r13, 32;
+    add.u32 %r37, %r36, %r5;
+    cvt.u64.u32 %rd31, %r37;
+    add.s64 %rd32, %rd10, %rd31;
+    ld.global.u8 %r38, [%rd32];
+
+    and.b32 %r39, %r38, 15;
+    cvt.rn.f32.u32 %f8, %r39;
+    mul.rn.f32 %f9, %f4, %f8;
+    sub.rn.f32 %f9, %f9, %f5;
+
+    shr.u32 %r40, %r38, 4;
+    cvt.rn.f32.u32 %f10, %r40;
+    mul.rn.f32 %f11, %f6, %f10;
+    sub.rn.f32 %f11, %f11, %f7;
+
+    shl.b32 %r41, %r11, 8;
+    mul.lo.u32 %r42, %r13, 64;
+    add.u32 %r43, %r41, %r42;
+    add.u32 %r44, %r43, %r5;
+    mul.wide.u32 %rd33, %r44, 4;
+    add.s64 %rd34, %rd2, %rd33;
+    ld.global.f32 %f12, [%rd34];
+    fma.rn.f32 %f1, %f12, %f9, %f1;
+
+    add.u32 %r45, %r44, 32;
+    mul.wide.u32 %rd35, %r45, 4;
+    add.s64 %rd36, %rd2, %rd35;
+    ld.global.f32 %f13, [%rd36];
+    fma.rn.f32 %f1, %f13, %f11, %f1;
+
+    add.u32 %r13, %r13, 1;
+    bra WARP_GROUP_LOOP;
+
+WARP_NEXT_BLOCK:
+    add.u32 %r11, %r11, 1;
+    bra WARP_BLOCK_LOOP;
+
+WARP_REDUCE_PREP:
+    shl.b32 %r46, %r3, 2;
+    mov.u64 %rd37, smem;
+    cvt.u64.u32 %rd38, %r46;
+    add.s64 %rd39, %rd37, %rd38;
+    st.shared.f32 [%rd39], %f1;
+    bar.sync 0;
+
+    setp.ne.u32 %p4, %r5, 0;
+    @%p4 bra WARP_DONE;
+
+    shl.b32 %r47, %r6, 7;
+    mov.f32 %f14, 0f00000000;
+    mov.u32 %r48, 0;
+
+WARP_SUM_LOOP:
+    setp.ge.u32 %p5, %r48, 32;
+    @%p5 bra WARP_STORE;
+    shl.b32 %r49, %r48, 2;
+    add.u32 %r50, %r47, %r49;
+    cvt.u64.u32 %rd40, %r50;
+    add.s64 %rd41, %rd37, %rd40;
+    ld.shared.f32 %f15, [%rd41];
+    add.rn.f32 %f14, %f14, %f15;
+    add.u32 %r48, %r48, 1;
+    bra WARP_SUM_LOOP;
+
+WARP_STORE:
+    mul.wide.u32 %rd42, %r8, 4;
+    add.s64 %rd43, %rd3, %rd42;
+    st.global.f32 [%rd43], %f14;
+
+WARP_DONE:
+    ret;
+}
+
 PTX
 
 DEFAULT_MODEL  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
@@ -297,12 +517,14 @@ seed = 23_u64
 block = 128_u32
 reps = 1
 warmup = 0
+kernel = "warp4"
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_q4k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--reps N] [--warmup N] [--block N]"
+  p.banner = "Usage: cuda_q4k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--kernel scalar|warp4] [--reps N] [--warmup N] [--block N]"
   p.on("--model PATH", "Q4_K GGUF model path") { |v| model = v }
   p.on("--tensor NAME", "Q4_K tensor name") { |v| tensor_name = v }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
+  p.on("--kernel NAME", "CUDA kernel: scalar or warp4") { |v| kernel = v }
   p.on("--reps N", "Timed kernel launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
   p.on("--block N", "CUDA block size") { |v| block = v.to_u32 }
@@ -313,6 +535,7 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "block must be positive" unless block > 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
+raise "kernel must be scalar or warp4, got #{kernel.inspect}" unless {"scalar", "warp4"}.includes?(kernel)
 
 gguf = ML::GGUF::GGUFFile.new(model)
 info = gguf.tensor(tensor_name) || raise "missing tensor #{tensor_name.inspect}"
@@ -354,7 +577,8 @@ d_out = 0_u64
 
 begin
   cuda! LibCUDAQ4K.cuModuleLoadData(pointerof(mod), PTX.to_unsafe.as(Void*)), "cuModuleLoadData"
-  cuda! LibCUDAQ4K.cuModuleGetFunction(pointerof(fn), mod, "q4_k_gemv_scalar_f32"), "cuModuleGetFunction"
+  kernel_fn = kernel == "warp4" ? "q4_k_gemv_warp4_f32" : "q4_k_gemv_scalar_f32"
+  cuda! LibCUDAQ4K.cuModuleGetFunction(pointerof(fn), mod, kernel_fn), "cuModuleGetFunction"
 
   gpu_out = Array(Float32).new(out_dim, 0.0_f32)
   raw_size = w_raw.size.to_u64
@@ -375,16 +599,21 @@ begin
   params[3] = pointerof(in_dim_u32).as(Void*)
   params[4] = pointerof(out_dim_u32).as(Void*)
 
-  grid = ((out_dim + block.to_i - 1) // block.to_i).to_u32
+  launch_block = kernel == "warp4" ? 128_u32 : block
+  grid = if kernel == "warp4"
+           ((out_dim + 3) // 4).to_u32
+         else
+           ((out_dim + block.to_i - 1) // block.to_i).to_u32
+         end
   warmup.times do
-    cuda! LibCUDAQ4K.cuLaunchKernel(fn, grid, 1_u32, 1_u32, block, 1_u32, 1_u32,
+    cuda! LibCUDAQ4K.cuLaunchKernel(fn, grid, 1_u32, 1_u32, launch_block, 1_u32, 1_u32,
       0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel(warmup)"
   end
   cuda! LibCUDAQ4K.cuCtxSynchronize, "cuCtxSynchronize(warmup)" if warmup > 0
 
   gpu_t0 = Time.instant
   reps.times do
-    cuda! LibCUDAQ4K.cuLaunchKernel(fn, grid, 1_u32, 1_u32, block, 1_u32, 1_u32,
+    cuda! LibCUDAQ4K.cuLaunchKernel(fn, grid, 1_u32, 1_u32, launch_block, 1_u32, 1_u32,
       0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel"
   end
   cuda! LibCUDAQ4K.cuCtxSynchronize, "cuCtxSynchronize"
@@ -399,6 +628,7 @@ begin
   puts "model=#{model}"
   puts "tensor=#{tensor_name}"
   puts "shape=#{in_dim}x#{out_dim}"
+  puts "kernel=#{kernel}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "raw_bytes=#{w_raw.size}"

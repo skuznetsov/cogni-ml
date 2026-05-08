@@ -103,11 +103,12 @@ crystal build -Dcpu_only bin/cuda_q4k_gemv_probe.cr -o build/cuda_q4k_gemv_probe
 ./build/cuda_q4k_gemv_probe \
   --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
   --tensor blk.0.attn_gate.weight \
+  --kernel warp4 \
   --reps 20 \
   --warmup 3
 ```
 
-`cuda_q4k_gemv_probe` uses the raw GGUF Q4_K block layout (`d`, `dmin`, 12-byte packed scales/mins, 128-byte packed nibbles) and checks the CUDA output against the CPU `QuantMatmul` Q4_K reference. It is currently a scalar correctness kernel; it exists to harden layout/math before optimized CUDA Q4_K tiling.
+`cuda_q4k_gemv_probe` uses the raw GGUF Q4_K block layout (`d`, `dmin`, 12-byte packed scales/mins, 128-byte packed nibbles) and checks the CUDA output against the CPU `QuantMatmul` Q4_K reference. `--kernel scalar` keeps the first correctness kernel; the default `--kernel warp4` maps four output rows to four warps per block and is the current faster probe shape.
 
 Build the Metal bridge once:
 

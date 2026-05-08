@@ -9071,3 +9071,23 @@ This covers the target-model quantization family that matters for the downloaded
 - daedalus: The backend split now has both draft-friendly Q8_0 and target-critical Q4_K quantized math boundaries, so the next frame can move from layout proof to optimized kernels or stateful layer microbenching.
 - maieutic: The assumption that Q8_0 success generalizes to Q4_K is false; Q4_K needed its own block-layout proof.
 - adversary: The measured CUDA times are scalar-kernel microbench timings that exclude full model scheduling/transfers and should not be compared to Metal/llama end-to-end inference.
+
+**decision_update_81:** Added and promoted a faster Q4_K CUDA probe kernel inside `bin/cuda_q4k_gemv_probe.cr`. The original scalar kernel remains available as `--kernel scalar`; the default `--kernel warp4` maps four output rows to four warps per 128-thread block. Each lane consumes the matching packed Q4_K nibble pair for all four 64-value groups in a block, accumulates a partial row dot product, and reduces through shared memory.
+
+Conclusion: the CUDA backend now has both Q8_0 and Q4_K warp-per-row GEMV primitives with CPU-reference parity on real GGUF tensors. This is still microkernel evidence, but it is a stronger basis for the next backend split than vector-add or scalar-only layout checks.
+
+**evidence_update_81:**
+- claim: "The warp4 Q4_K CUDA kernel matches the CPU reference on remote Qwen3.5 9B target tensors."
+  source: remote `crystal build -Dcpu_only bin/cuda_q4k_gemv_probe.cr`; remote `--kernel warp4` on `blk.0.ssm_alpha.weight` -> `cos=1.0`, `max_diff=4.7683716e-7`, `ok=true`; `blk.0.attn_gate.weight` -> `cos=1.0`, `max_diff=7.1525574e-7`, `ok=true`; `blk.0.ffn_up.weight` -> `cos=1.0`, `max_diff=4.172325e-7`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: PTX source, CUDA driver/PTX JIT, Q4_K layout, CPU reference, model file, or launch-shape changes
+- claim: "The warp4 Q4_K kernel is materially faster than the scalar probe on the remote target projection shapes."
+  source: remote scalar-vs-warp4 A/B -> `blk.0.ssm_alpha.weight` `0.097ms -> 0.009ms`; `blk.0.attn_gate.weight` `0.152ms -> 0.042ms`; `blk.0.ffn_up.weight` `0.366ms -> 0.118ms`; all rows `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: remote host load, driver clocks, launch timing method, kernel implementation, or tensor shape changes
+
+**quadrumvirate_update_81:**
+- cassandra: The main failure risk was scale/min packing or reduction-order drift. Remote parity across small, square, and FFN-up shapes reduces that risk for Q4_K GEMV.
+- daedalus: The same frame shift that worked for Q8_0 applies to Q4_K: align one warp with the quant block lane structure instead of serializing a whole row inside one thread.
+- maieutic: The assumption that Q4_K optimization must immediately mimic llama.cpp's final CUDA kernels was rejected; a narrow same-layout warp primitive is enough to establish the next measured boundary.
+- adversary: The probe still excludes end-to-end layer scheduling, Q6_K tensors, activations, state buffers, and CPU/GPU transfers. The next claim must be a stateful layer microbench or a Q6_K boundary, not an inference-speed claim.
