@@ -8931,3 +8931,39 @@ The remote CUDA host was also verified without installing packages or copying mo
 - daedalus: Shifted productization from "ship speculative decoding" to "ship the fail-closed proposal-aware policy profile".
 - maieutic: The assumption that productization means default-on was rejected; productization here means documented stable CLI behavior with conservative defaults.
 - adversary: CUDA availability is verified only at the driver/kernel-smoke level. It is not evidence that the Crystal/Metal Qwen path, GGUF models, or CUDA LLM kernels are runnable on that host yet.
+
+**decision_update_75:** Prepared the remote CUDA host as a user-space cogni-ml workstation without storing the full SSH target in repo notes. Heavy directories were moved from the small overlay into the writable 3.6T application data mount and symlinked back (`~/venvs`, `~/opt`, `~/.cache`, `~/models`, `~/work`). The host now has a Python CUDA stack (`numpy`, `cupy-cuda13x`, `torch 2.11.0+cu130`, `triton`), Crystal `1.20.1`, Shards `0.20.0`, Zig `0.16.0`, a Crystal wrapper that uses Zig as `cc`, and a minimal `pkg-config` shim for Crystal's common package probes.
+
+The Qwen GGUF files were downloaded directly from Hugging Face Hub into `~/models` on the large mount and symlinked into the README-compatible LM Studio paths:
+- `lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf`
+- `lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q4_K_M.gguf`
+- `lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf`
+- `lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf`
+
+The local source tree was mirrored to `~/work/cogni-ml` with generated binaries and build artifacts excluded. A first rsync exclude used an unanchored `ml` pattern and accidentally omitted `src/ml/`; it was corrected to anchored root excludes (`/ml`, `/test_graph`, etc.) plus `/bin/*.cr` inclusion and verified by `src_count=65`.
+
+Conclusion: the host is ready for Linux/CUDA experiments at the GGUF metadata and Python CUDA levels, but the existing `qwen35_generate` native path is still Metal-first. Building the full CLI on Linux reaches link-time Metal FFI symbols (`gs_*`) and is not a valid CUDA smoke until a CUDA backend or CPU-only build boundary is added.
+
+**evidence_update_75:**
+- claim: "The remote Crystal/user-space environment survived the move to the large mount and can run CUDA Python and Crystal smoke checks."
+  source: remote `cogni-cuda-check` -> Crystal `1.20.1`, Shards `0.20.0`, Zig `0.16.0`, RTX 5060 Ti visible, CuPy and Torch vector results correct; remote `crystal build/run/eval` hello smoke -> `42`
+  verified_at: 2026-05-08
+  decay_trigger: remote host rebuild, mount remap, wrapper edit, Python environment change, Crystal/Zig update, or driver change
+- claim: "Downloaded Qwen GGUF model files match Hugging Face Hub file sizes."
+  source: remote `huggingface_hub.HfApi(... files_metadata=True)` size check -> all four local file sizes equal Hub metadata for 0.8B Q8_0, 0.8B Q4_K_M, 9B Q4_K_M, and 27B Q4_K_M
+  verified_at: 2026-05-08
+  decay_trigger: model redownload, Hub revision change, local file replacement, or path layout change
+- claim: "The mirrored source tree on the remote host is complete enough for non-Metal Crystal checks and GGUF metadata reads."
+  source: remote `crystal spec spec/ngram_draft_spec.cr` -> `15 examples, 0 failures`; remote Crystal GGUF metadata smoke -> 0.8B `layers=24 embd=1024`, 9B `layers=32 embd=4096`, 27B `layers=64 embd=5120`
+  verified_at: 2026-05-08
+  decay_trigger: source resync, qwen35 metadata parser change, model path change, or remote Crystal wrapper change
+- claim: "The full native `qwen35_generate` CLI is not currently a Linux/CUDA smoke because it links the Metal FFI path."
+  source: remote `crystal build bin/qwen35_generate.cr` after source sync reached link errors for `gs_create_*`, `gs_encoder_*`, and related Metal bridge symbols
+  verified_at: 2026-05-08
+  decay_trigger: adding a CUDA backend, adding a CPU-only compile boundary, changing `qwen35_generate` requires, or changing Metal FFI stubs
+
+**quadrumvirate_update_75:**
+- cassandra: The main setup risk was mistaking a source-sync or metadata smoke for CUDA inference readiness. The exact boundary is now recorded.
+- daedalus: The next frame shift is backend separation: keep GGUF parsing/model metadata shared, but introduce a Linux/CUDA execution path instead of trying to run Metal entrypoints on the CUDA box.
+- maieutic: The hidden assumption was that "Crystal builds on remote" implies "Qwen native CLI builds." Evidence refutes that because the CLI currently requires Metal bridge symbols.
+- adversary: Do not benchmark or compare remote CUDA inference until a CUDA backend or CPU-only build route can compile and run end-to-end; metadata reads only prove model availability and parser compatibility.
