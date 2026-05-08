@@ -274,6 +274,20 @@ crystal build --release --no-debug \
   "The capital of France is"
 ```
 
+Cheap-proposal-only policy for repeated/template spans:
+
+```sh
+QWEN35_SPEC_NGRAM_MIN_CANDIDATES=8 \
+./build/qwen35_speculative_accept \
+  --target ~/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf \
+  --draft ~/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf \
+  --tokens 32 \
+  --ngram \
+  --ngram-risk-gate \
+  --ngram-target-only \
+  "alpha beta gamma alpha beta gamma alpha beta gamma alpha"
+```
+
 Target-only n-gram speculative harness:
 
 ```sh
@@ -307,6 +321,8 @@ Speculative decode caveats:
 - Neural speculative speed depends on draft acceptance. High-accept prompts are faster; rejection-heavy prompts quickly fall back to plain target decode.
 - In `qwen35_generate`, neural speculative decode is useful for longer high-accept generations. In a local 64-token smoke, `The capital of France is` measured `20.40 ms/tok` greedy, `16.61 ms/tok` neural speculative, and `15.10 ms/tok` neural speculative with guarded full-row verification. A 32-token smoke was slower due fixed draft/verifier overhead.
 - N-gram speculation is a workload-specialized path for repeated/generated-template text. It is intentionally fail-closed after a rejected n-gram chunk by default.
+- In the research acceptance harness, `--ngram-target-only` / `QWEN35_SPEC_NGRAM_TARGET_ONLY=1` skips neural draft fallback after the cheap n-gram proposal source and uses exact target-only steps instead. On a 27B mixed JSONL gate it beat neural default on `5/7` prompts with paired ratio `0.909x` when combined with `--ngram-risk-gate`, but its average speed was near plain target decode; the real win is on clean repeated spans.
+- The n-gram risk gate now also catches small-period prefix overruns such as IP/YAML tails. A focused 27B probe kept clean `alpha beta gamma` repeats at `~2.58x` while turning a YAML overrun from `0.80x` into fail-closed target-only `1.006x`.
 - `QWEN35_NGRAM_REPLAY_ON_REJECT=1` is exact but deliberately opt-in. It removes rollback-copy overhead on high-confidence accepted n-gram chunks; on the local 27B+0.8B repeat8 harness it improved `ngram_router16_risk` from `30.85` to `30.21 ms/tok`. A forced no-risk YAML reject regressed from `71.53` to `95.86 ms/tok`, so this is not a broad default.
 - N-gram verifier chunks temporarily disable guarded full-row verification even if `QWEN35_HEAD_FULL_ROWS_GUARDED=1`, because partial n-gram rejection exposed a close-row guard failure during adversarial CLI testing.
 - `QWEN35_HEAD_FULL_ROWS_GUARDED=1` is still an experimental research switch. The harness checks final output against plain greedy target output, but the route is not broad-defaulted because it relies on a full-row F16 top1 margin guard.

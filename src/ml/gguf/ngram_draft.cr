@@ -55,6 +55,9 @@ module ML::GGUF
         return true if match_len >= 5 && pair_unique_ratio(ids) > 0.90 && unique_ratio(ids) < 0.95
       end
 
+      prefix_run = prefix_period_run(ids, 4)
+      return true if prefix_run >= 6 && prefix_run < ids.size && exact_period(ids, 4) == 0
+
       return false if ids.size < min_size
 
       pair_unique_ratio(ids) > 0.90 && lag_ratio(ids, 4) < 0.05 && lag_ratio(ids, 8) < 0.20
@@ -102,6 +105,22 @@ module ML::GGUF
         return period if exact
       end
       0
+    end
+
+    def prefix_period_run(ids : Array(Int32), max_period : Int32) : Int32
+      return 0 if ids.empty?
+
+      best = 0
+      1.upto(Math.min(max_period, ids.size)) do |period|
+        run = period
+        period.upto(ids.size - 1) do |i|
+          break unless ids[i] == ids[i - period]
+
+          run += 1
+        end
+        best = Math.max(best, run) if run >= period * 2
+      end
+      best
     end
 
     def lag_ratio(ids : Array(Int32), lag : Int32) : Float64

@@ -80,6 +80,22 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 5).should be_true
   end
 
+  it "risk-gates small-period prefixes that overrun into a different tail" do
+    ids = [15, 13, 15, 13, 15, 13, 16, 198, 220, 471, 803, 25, 13053, 198]
+
+    ML::GGUF::NgramDraft.prefix_period_run(ids, 4).should eq(6)
+    ML::GGUF::NgramDraft.exact_period(ids, 4).should eq(0)
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 6).should be_true
+  end
+
+  it "does not risk-gate fully periodic compact candidate chunks" do
+    ids = [8029, 13053, 20956] * 4
+
+    ML::GGUF::NgramDraft.prefix_period_run(ids, 4).should eq(ids.size)
+    ML::GGUF::NgramDraft.exact_period(ids, 4).should eq(3)
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 6).should be_false
+  end
+
   it "detects non-repeating high-diversity candidate tails" do
     ids = (1..16).to_a
 

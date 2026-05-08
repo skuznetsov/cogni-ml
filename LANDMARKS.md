@@ -8755,3 +8755,41 @@ Verification used two levels. A fake-runner smoke with `/tmp/qwen35_prompts_pipe
 - daedalus: The harness should carry prompts as data records, not as delimiter-encoded shell strings.
 - maieutic: The hidden assumption was that synthetic sweep prompts would not contain the sweep delimiter. Markdown tables falsified it.
 - adversary: JSONL solves literal `|` and newlines, but callers still need to avoid writing private prompt text unless `--dump-prompt-texts` or external manifests are intentionally used.
+
+**decision_update_67:** Tested the cheap-proposal-only route after the proposal-portfolio pivot. The new default-off acceptance-harness flag `--ngram-target-only` / `QWEN35_SPEC_NGRAM_TARGET_ONLY=1` keeps exact n-gram proposals but avoids neural draft fallback: if no safe n-gram chunk exists, it advances the exact target one token at a time. This is a route-level elimination, not a kernel fusion; it removes neural draft/resync work on spans where the cheap proposal source has no expected value.
+
+The first gate exposed a failure pattern: plain `ngram_target_only` beats neural default on no-repeat/adversarial prompts by avoiding neural overhead, but a YAML/IP continuation produced a bad n-gram overrun (`accepted=6/14`) and regressed. Staged n-gram verification reduced that bad overrun cost (`68.40 -> 60.56ms/tok`) but refuted broad promotion because clean repeated spans slowed from `~11.9ms/tok` to `~42.5ms/tok` when split into small verifier stages.
+
+The retained fix is a stronger risk gate for small-period prefix overruns. `ML::GGUF::NgramDraft.prefix_period_run` detects candidates whose prefix is compactly periodic, then breaks into a different structural tail. This catches the observed YAML/IP candidate (`0.0.0.1\n  - name: beta\n`) while preserving fully periodic compact repeats such as `alpha beta gamma ...`.
+
+After the risk update, the 27B JSONL mixed gate (`tokens=16`, Qwen3.6-27B Q4_K_M target, Qwen3.5-0.8B Q8_0 draft, `QWEN35_SPEC_NGRAM_MIN_CANDIDATES=8`) produced no parity failures. `ngram_target_only_risk` beat neural default on `5/7` prompts, avg delta `-7.52ms/tok`, paired ratio `0.909x`; its average speed was near plain exact target decode because most prompts had no safe repeat proposal. Focused repeat prompts are the real win: `ngram_target_only_risk` measured `~11.93ms/tok` vs plain `~56.31ms/tok` (`4.718x`) and neural default `~37.98ms/tok`, with `32/32` accepted on both clean repeats.
+
+Conclusion: do not super-fuse staged n-gram verifier yet. The reliable path is `ngram_target_only + risk_gate`: cheap exact proposals when the pattern is clean, exact target-only when no cheap candidate is safe, and neural/self-draft only as a separate policy when evidence says it beats target-only. The next kernel-level fusion should target the accepted full-chunk verifier, not bad-tail staging.
+
+**evidence_update_67:**
+- claim: "The strengthened n-gram risk gate preserves focused unit semantics."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_risk_spec crystal spec spec/ngram_draft_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `14 examples, 0 failures`
+  verified_at: 2026-05-07
+  decay_trigger: n-gram candidate risk features, tokenizer IDs, or candidate-generation semantics change
+- claim: "The target-only n-gram route compiles through the acceptance harness and sweep policy aliases."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_risk_accept_build crystal build --release bin/qwen35_speculative_accept.cr -o /tmp/qwen35_spec_accept_ngram_risk --link-flags="..."`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_risk_sweep_build crystal build bin/qwen35_speculative_sweep.cr -o /tmp/qwen35_spec_sweep_ngram_risk`
+  verified_at: 2026-05-07
+  decay_trigger: acceptance-harness option parsing, sweep policy aliases, or bridge link flags change
+- claim: "Prefix-overrun risk gating fixes the observed YAML/IP bad n-gram proposal while preserving clean repeats."
+  source: `/tmp/qwen36_ngram_risk_prefix_probe_20260507235218/gate.log` -> YAML `ngram_target_only` `67.16ms/tok`, `6/14` accepted; `ngram_target_only_risk` `53.94ms/tok`, `0/0` proposals; clean alpha repeat remains `100%` accepted and `~2.58x`
+  verified_at: 2026-05-07
+  decay_trigger: prompt text, target model, risk gate, tokenizer, or verifier path changes
+- claim: "On the mixed 27B JSONL suite, `ngram_target_only_risk` avoids the bad overrun and beats neural default on paired wall time, but mostly by falling back to exact target-only."
+  source: `/tmp/qwen36_ngram_prefix_risk_gate_20260507235252/gate.log` -> wins `5/7`, avg delta `-7.52ms/tok`, paired ratio `0.909x`, no parity failures, `100%` accept with `0/0` n-gram proposals on the formerly bad YAML row
+  verified_at: 2026-05-07
+  decay_trigger: prompt suite, model files, host load, neural policy defaults, risk gate, or verifier implementation changes
+- claim: "Staged n-gram verification is not a broad promotion despite helping the bad YAML case."
+  source: `/tmp/qwen36_ngram_target_staged_gate_20260507234012/gate.log` -> staged YAML `60.56ms/tok` vs unstaged `68.40ms/tok`, but `/tmp/qwen36_ngram_target_repeat_focus_20260507234704/gate.log` -> clean repeats slow to `~42.5ms/tok` vs plain n-gram `~11.9ms/tok`
+  verified_at: 2026-05-07
+  decay_trigger: staged verifier implementation, stage gate, prompt mix, or target verifier performance changes
+
+**quadrumvirate_update_67:**
+- cassandra: The tempting fusion was staged verifier/kernel work, but the failure mode was selector quality; bad proposals make any verifier expensive.
+- daedalus: Shifted from "verify bad chunks cheaper" to "do not propose bad chunks". This preserved the clean-repeat fast path and removed the YAML overrun.
+- maieutic: The hidden assumption was that a safe n-gram route should always fall through to neural draft. Evidence says neural fallback is often net overhead; exact target-only is the safer default fallback for cheap-proposal mode.
+- adversary: This is not a broad speedup over plain decode. It is workload-specialized: strong on repeated spans, near plain elsewhere, and only reliable with risk gating.

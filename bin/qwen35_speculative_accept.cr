@@ -53,6 +53,7 @@ ngram_risk_gate = ENV["QWEN35_SPEC_NGRAM_RISK_GATE"]? == "1"
 ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 ngram_replay_on_reject = ENV["QWEN35_SPEC_NGRAM_REPLAY_ON_REJECT"]? == "1"
+ngram_target_only = ENV["QWEN35_SPEC_NGRAM_TARGET_ONLY"]? == "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
@@ -89,6 +90,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
   parser.on("--ngram-replay-on-reject", "Research: skip n-gram state backups and rebuild exact target state only after a non-final reject") { ngram_replay_on_reject = true }
+  parser.on("--ngram-target-only", "Research: after n-gram has no chunk, continue with exact target-only steps instead of neural draft") { ngram_target_only = true }
   parser.on("--no-warm-verifier", "Do not warm the target chunk-verifier route before decode timing") { warm_verifier = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
@@ -461,7 +463,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -524,6 +526,7 @@ gamma_max_seen = 0
 early_rejects = 0
 single_accept_fast = 0
 plain_fallback_tokens = 0
+ngram_target_only_tokens = 0
 draft_skips_before_fallback = 0
 draft_backup_skips = 0
 
@@ -641,7 +644,7 @@ while generated_ids.size < n_gen
         end
       end
 
-      unless correction_or_accepted.empty?
+      unless correction_or_accepted.empty? || ngram_target_only
         pending_draft_start_pos = cycle_start_pos if pending_draft_tokens.empty?
         pending_draft_tokens.concat(correction_or_accepted)
       end
@@ -667,6 +670,43 @@ while generated_ids.size < n_gen
       end
       next
     end
+  end
+
+  if ngram_enabled && ngram_target_only
+    cycle_wall0 = Time.instant
+    cycle_draft0 = draft_ms
+    cycle_target_verify0 = target_verify_ms
+    cycle_target_backup0 = target_backup_ms
+    cycle_draft_backup0 = draft_backup_ms
+    cycle_draft_resync0 = draft_resync_ms
+    cycle_start_pos = pos
+    cycle_ngram_match_len = ngram_match_len(history, ngram_max, ngram_min)
+    generated_ids << target_next
+    if generated_ids.size < n_gen
+      tv0 = Time.instant
+      target_next = advance_next(target, target_next, pos, target_state)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+    end
+    pos += 1
+    ngram_target_only_tokens += 1
+    history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+    if dump_cycles_path
+      cycle_dumps << CycleDump.new(
+        prompt_hash, target_model_id, draft_model_id,
+        "target_only", "ngram_target_only", verify_mode,
+        cycle_start_pos, history_size_before, 1,
+        1, 0, 0, -1,
+        cycle_ngram_match_len, ngram_min, ngram_max, ngram_recursive,
+        ngram_disabled, ngram_disabled,
+        token_ids_hash([] of Int32), nil,
+        draft_ms - cycle_draft0,
+        target_verify_ms - cycle_target_verify0,
+        target_backup_ms - cycle_target_backup0,
+        draft_backup_ms - cycle_draft_backup0,
+        draft_resync_ms - cycle_draft_resync0,
+        (Time.instant - cycle_wall0).total_milliseconds)
+    end
+    next
   end
 
   if plain_fallback_enabled && adaptive_gamma && !adaptive_growth_allowed && current_gamma <= plain_fallback_gamma
@@ -1104,7 +1144,7 @@ if path = dump_cycles_path
   end
 end
 
-accept_rate = accepted.to_f64 / proposed.to_f64
+accept_rate = proposed > 0 ? accepted.to_f64 / proposed.to_f64 : 1.0
 tokens_s = n_gen.to_f64 / (wall_ms / 1000.0)
 plain_tokens_s = n_gen.to_f64 / (plain_ms / 1000.0)
 
@@ -1119,7 +1159,7 @@ if ngram_enabled
   end
 end
 avg_gamma = cycles > 0 ? (gamma_sum.to_f64 / cycles.to_f64).round(2) : 0.0
-puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects} single_fast=#{single_accept_fast} plain_fallback=#{plain_fallback_tokens} draft_skip=#{draft_skips_before_fallback} draft_backup_skip=#{draft_backup_skips}"
+puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_gamma} early_rejects=#{early_rejects} single_fast=#{single_accept_fast} plain_fallback=#{plain_fallback_tokens} ngram_target_only=#{ngram_target_only_tokens} draft_skip=#{draft_skips_before_fallback} draft_backup_skip=#{draft_backup_skips}"
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s, decode_only=true)"
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
