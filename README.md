@@ -73,6 +73,15 @@ crystal build -Dcpu_only bin/qwen35_gguf_info.cr -o build/qwen35_gguf_info
 
 This entrypoint intentionally does not run inference. It verifies GGUF parsing, Qwen 3.5/3.6 hparams, tensor inventory, and the structured `Qwen35Weights` loader without pulling the Metal bridge into a Linux build.
 
+Build the minimal Crystal CUDA Driver API smoke on NVIDIA/Linux hosts:
+
+```sh
+crystal build bin/cuda_driver_smoke.cr -o build/cuda_driver_smoke
+./build/cuda_driver_smoke 4096
+```
+
+The CUDA smoke is a backend boundary probe only: it links `libcuda`, loads embedded PTX, launches a vector-add kernel, and checks the result. Qwen CUDA kernels are not implemented yet.
+
 Build the Metal bridge once:
 
 ```sh

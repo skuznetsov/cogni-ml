@@ -8991,3 +8991,23 @@ Conclusion: this is not inference, but it is the correct first boundary: GGUF pa
 - daedalus: Backend separation should proceed bottom-up: model metadata and weight mapping first, then a standalone CUDA matmul primitive, then stateful Qwen layers.
 - maieutic: The phrase "backend boundary" was assumed to mean a full generator switch; evidence shows the first useful boundary is a compile/link boundary around `Qwen35Weights`.
 - adversary: The CLI does not prove CUDA inference speed or correctness. It only proves portable loading and inventory; the next benchmark claim requires a CUDA kernel with a matched CPU/Metal reference.
+
+**decision_update_77:** Added the first Crystal-native CUDA execution boundary. New `bin/cuda_driver_smoke.cr` links `libcuda`, creates a CUDA context, loads embedded PTX, launches a `vadd_f32` kernel, copies results back, and checks exact agreement with the CPU reference. This is intentionally independent from Qwen and Metal so it isolates the driver/link/launch surface before any quantized matmul work.
+
+Conclusion: Crystal can call CUDA Driver API directly on the remote host. The next useful CUDA step is now a real quantized GEMV/GEMM probe, preferably Q8_0 first because the block format is simpler and we have a 0.8B Q8_0 model plus Metal Q8_0 evidence for comparison.
+
+**evidence_update_77:**
+- claim: "The Crystal CUDA driver smoke compiles on the remote host without manual link flags and launches embedded PTX."
+  source: remote `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_driver_smoke_build2 crystal build bin/cuda_driver_smoke.cr -o /tmp/cuda_driver_smoke_auto`; remote `/tmp/cuda_driver_smoke_auto 4096` -> `device=NVIDIA GeForce RTX 5060 Ti`, `compute_capability=12.0`, `max_err=0.0`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: CUDA driver version, libcuda path, PTX target support, Crystal wrapper/link flags, or remote GPU allocation changes
+- claim: "The CUDA driver smoke has local syntax coverage even though local macOS cannot link or run it."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_driver_smoke_syntax crystal build --no-codegen bin/cuda_driver_smoke.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: CUDA smoke source, Crystal compiler version, or FFI signature changes
+
+**quadrumvirate_update_77:**
+- cassandra: Writing Q8/Q4 CUDA before proving Crystal driver launch would risk confusing linker/driver failures with kernel math failures.
+- daedalus: The backend split is now three layers: portable GGUF/weights, CUDA driver launch, then quantized kernels.
+- maieutic: The hidden assumption was that Python CUDA availability implies Crystal CUDA availability. The new smoke verifies Crystal directly.
+- adversary: This still does not prove Qwen speed. It only proves a correct launch/copy pipeline; the next probe must include CPU reference math and realistic quantized block layout.
