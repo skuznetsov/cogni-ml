@@ -9151,3 +9151,23 @@ Conclusion: CUDA composition now covers both FFN and full-attention projection b
 - daedalus: The remaining composition gap is now recurrent-specific Q5_K combined QKV and DeltaNet state, not generic projection bundles.
 - maieutic: The assumption that FFN sequence proof generalizes to attention projections was tested directly because attention uses different output dimensions and a mixed Q4/Q6 set.
 - adversary: This omits Q/K normalization, RoPE, KV cache, attention score/value application, output projection, RMSNorm, and residuals. It is a projection-bundle proof only.
+
+**decision_update_85:** Added the Q5_K CUDA recurrent-QKV boundary. New `bin/cuda_q5k_gemv_probe.cr` builds with `-Dcpu_only`, embeds `src/ml/cuda/kernels/q5k_gemv_probe.ptx`, and runs a warp-per-row CUDA GEMV over raw GGUF Q5_K blocks. This format is required by recurrent-layer combined `attn_qkv.weight` tensors in the current Qwen3.5 9B Q4_K_M model.
+
+Conclusion: the CUDA primitive set now covers Q8_0, Q4_K, Q5_K, and Q6_K. The recurrent-layer projection bundle is now unblocked at the quantized GEMV level; the next step should compose Q5_K `attn_qkv` with Q4_K `attn_gate/ssm_alpha/ssm_beta/ssm_out` in one GPU-resident probe, then move toward a small backend facade.
+
+**evidence_update_85:**
+- claim: "The Q5_K CUDA recurrent-QKV probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q5k_syntax crystal build -Dcpu_only --no-codegen bin/cuda_q5k_gemv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: Q5_K probe source, PTX source, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The Q5_K CUDA kernel matches the CPU reference on remote Qwen3.5 9B recurrent attn_qkv."
+  source: remote `crystal build -Dcpu_only bin/cuda_q5k_gemv_probe.cr`; remote `blk.0.attn_qkv.weight` -> `4096x8192`, `cuda_ms=0.084`, `cpu_ms=1561.54`, `cos=1.0`, `max_diff=1.1473894e-6`, `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: PTX source, CUDA driver/PTX JIT, Q5_K block layout, CPU reference, model file, or launch-shape changes
+
+**quadrumvirate_update_85:**
+- cassandra: Recurrent projection composition would fail or fall back without Q5_K because recurrent layers use Q5_K combined QKV in this GGUF.
+- daedalus: With Q5_K proven, the next frame is recurrent bundle composition, not another standalone quant format.
+- maieutic: The hidden assumption that Q4/Q6 coverage was sufficient for recurrent layers was false; tensor inventory showed Q5_K is on the critical path.
+- adversary: This is still a GEMV primitive, not DeltaNet recurrence, convolution, or full recurrent-layer execution.

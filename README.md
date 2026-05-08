@@ -150,6 +150,19 @@ crystal build -Dcpu_only bin/cuda_attn_projection_probe.cr -o build/cuda_attn_pr
 
 `cuda_attn_projection_probe` runs `Q4_K attn_q + Q4_K attn_k + Q6_K attn_v` from one GPU-resident hidden vector and copies Q/K/V back only after all projections complete. It targets full-attention layers such as `blk.3` in Qwen3.5 9B.
 
+Build the Q5_K CUDA recurrent-QKV probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_q5k_gemv_probe.cr -o build/cuda_q5k_gemv_probe
+./build/cuda_q5k_gemv_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --tensor blk.0.attn_qkv.weight \
+  --reps 10 \
+  --warmup 2
+```
+
+`cuda_q5k_gemv_probe` covers the GGUF Q5_K block layout used by recurrent-layer combined `attn_qkv.weight` tensors in the current Qwen3.5 9B Q4_K_M file.
+
 Build the Metal bridge once:
 
 ```sh
