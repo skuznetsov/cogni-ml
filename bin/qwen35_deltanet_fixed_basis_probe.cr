@@ -2215,6 +2215,29 @@ private def prefill_tokens_top1s_branch_split(weights : ML::GGUF::Qwen35Weights,
   results
 end
 
+private def prefill_tokens_top1s_branch_split_nosnap(weights : ML::GGUF::Qwen35Weights,
+                                                     token_ids : Array(Int32),
+                                                     start_pos : Int32,
+                                                     state : ML::GGUF::Qwen35CPU::State,
+                                                     guard_index : Int32) : Array({Int32, Float32})
+  raise "branch split requires at least one token" if token_ids.empty?
+  raise "branch split guard index out of range" unless guard_index >= 0 && guard_index < token_ids.size
+
+  results = [] of {Int32, Float32}
+  if guard_index > 0
+    prefix_tokens = token_ids[0, guard_index]
+    results.concat(ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, prefix_tokens, start_pos, state))
+  end
+
+  suffix_len = token_ids.size - guard_index
+  if suffix_len > 0
+    suffix_tokens = token_ids[guard_index, suffix_len]
+    results.concat(ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, suffix_tokens, start_pos + guard_index, state))
+  end
+
+  results
+end
+
 private def simulate_self_spec_cost_truth_table(weights : ML::GGUF::Qwen35Weights,
                                                 token_ids : Array(Int32),
                                                 calib_count : Int32,
@@ -2291,6 +2314,20 @@ private def simulate_self_spec_cost_truth_table(weights : ML::GGUF::Qwen35Weight
         ratio = chunk_ms > 0.0 ? split_ms / chunk_ms : 0.0
         print_cost_truth_row("verifier_split", "branch_split_k#{k}_g#{guard_index}", k, split_ms, plain_per_token, split_match,
           " prefix=#{prefix_len} guard=1 suffix=#{suffix_len} chunks=#{split_chunks} whole_ms=#{chunk_ms.round(3)} split_over_whole=#{ratio.round(4)} note=branch_guard_verifier_shape")
+
+        warm_nosnap_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+        prefill_tokens_top1s_branch_split_nosnap(weights, chunk_tokens, calib_count, warm_nosnap_state, guard_index)
+
+        nosnap_state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+        t_nosnap = Time.instant
+        nosnap_results = prefill_tokens_top1s_branch_split_nosnap(weights, chunk_tokens, calib_count, nosnap_state, guard_index)
+        nosnap_ms = (Time.instant - t_nosnap).total_milliseconds
+        nosnap_match = nosnap_results.map(&.[0]) == plain_results[0, k].map(&.[0])
+        nosnap_suffix_len = k - guard_index
+        nosnap_chunks = (prefix_len > 0 ? 1 : 0) + (nosnap_suffix_len > 0 ? 1 : 0)
+        nosnap_ratio = chunk_ms > 0.0 ? nosnap_ms / chunk_ms : 0.0
+        print_cost_truth_row("verifier_split", "branch_split_nosnap_k#{k}_g#{guard_index}", k, nosnap_ms, plain_per_token, nosnap_match,
+          " prefix=#{prefix_len} guard_suffix=#{nosnap_suffix_len} chunks=#{nosnap_chunks} whole_ms=#{chunk_ms.round(3)} split_over_whole=#{nosnap_ratio.round(4)} note=branch_guard_no_snapshot_runtime_shape")
       end
     end
   end

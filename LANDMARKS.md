@@ -8506,3 +8506,30 @@ The 27B tests confirmed mechanics but not speed. The small four-prompt gate pres
 - daedalus: Pivot from "better value gate" to "why cheaper verifier structure does not lower wall." The next observation level is verifier/scheduler attribution, not route-classification.
 - maieutic: The assumption that fewer verifier chunks monotonically reduces wall is false in current runs. It may be masked by draft wait/queue ordering/host drift.
 - adversary: The runtime gate is small and noisy, so it blocks promotion rather than refuting the band mode permanently. Use it as a diagnostic mode while investigating verifier wall.
+
+**decision_update_57:** Added verifier cost-truth coverage for the real no-snapshot branch split shape and used it to refute the current split-count explanation. The previous cost-truth branch split row measured `prefix + guard + suffix`, but the runtime no-snapshot branch path actually verifies `prefix + guard_suffix`. The new `branch_split_nosnap_k*_g*` row measures that exact shape.
+
+On Qwen3.6-27B repeat-markdown with `k=4, guard=2`, whole chunk verifier was still best: `exact_chunk_major_k4=175.851ms`, old 3-way split `216.139ms` (`1.229x`), and runtime-shaped no-snapshot split `195.253ms` (`1.110x`), all with `match=true`. Therefore the older runtime case where `nosnap` looked faster despite more verifier chunks cannot be explained by split shape alone. It is scheduler/load/controller interaction or measurement variance.
+
+A fresh focused ABBA also showed the previous repeat-markdown band regression was unstable: `onepass_min3_suffix1to2_guard01` median overlap `5072.746ms` versus `nosnap 5883.140ms`, parity true. A broader 3-prompt re-gate stayed mixed: band won the SQL-like main prompt by `-1419.355ms`, regressed repeat-markdown by `+186.043ms`, and regressed repeat SQL-values by `+477.562ms`, parity true throughout. This blocks branch-policy promotion and moves the next target to persistent `plain_speedup<1` cases.
+
+`QWEN35_HEAD_TOP1_ROWS_MIN=4` was tested as a simple verifier-head row-batching lever and refuted on the same cost-truth shape: k4 verifier worsened `175.851 -> 208.110ms`, and split rows worsened more. Keep the default row threshold for now.
+
+**evidence_update_57:**
+- claim: "Cost-truth now measures the actual no-snapshot branch verifier shape."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cost_nosnap_build crystal build --release -D qwen35_mtp_metal bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_cost_nosnap_probe --link-flags=...`; `/tmp/qwen36_cost_truth_nosnap_split_20260507195226.log`
+  verified_at: 2026-05-07
+  decay_trigger: cost-truth helper, branch guard verifier control flow, or prefill verifier route changes
+- claim: "The suffix-band policy remains mixed and should not be promoted."
+  source: `/tmp/qwen36_band_markdown_abba_verify_20260507195330/summary.tsv`; `/tmp/qwen36_band_broader_regate_20260507195651/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: prompt suite, host load, branch policy, low-rank route, or verifier scheduler changes
+- claim: "Lowering QWEN35_HEAD_TOP1_ROWS_MIN to 4 is slower for the tested 27B k4 verifier."
+  source: `/tmp/qwen36_cost_truth_head_rows_min4_20260507200623.log`
+  verified_at: 2026-05-07
+  decay_trigger: head top1 kernels, output quantization type, model size, or gamma/chunk size changes
+**quadrumvirate_update_57:**
+- cassandra: The likely failure mode for more branch gates is overfitting noisy wall rows. The latest re-gate confirms mixed results.
+- daedalus: Pivot from branch-route classification to eliminating self-spec overhead on predicted no-value chunks or directly reducing verifier prefill.
+- maieutic: The core assumption that self-spec should always run when parity is high is false on these 27B rows; many have `plain_speedup<1`.
+- adversary: Evidence is still local to 27B/rank8/early6/gamma4. Do not generalize to 9B or other gammas without remeasurement.
