@@ -9191,3 +9191,23 @@ Conclusion: CUDA composition now covers FFN, full-attention input projections, a
 - daedalus: The next frame should shift from more one-off projection probes to stateful slice ownership: conv/DeltaNet/ssm_out or backend facade.
 - maieutic: The assumption that Q5_K attn_qkv proof alone covers recurrent projection work was incomplete; recurrent layers also need gate/alpha/beta projections from the same hidden state.
 - adversary: This omits convolution, beta sigmoid application, DeltaNet state update, gated RMSNorm, ssm_out, FFN, residuals, and full decode scheduling.
+
+**decision_update_87:** Added a stateful synthetic CUDA DeltaNet-output slice. New `src/ml/cuda/kernels/deltanet_step_probe.ptx` implements a correctness-first Qwen-shape DeltaNet step (`s=128`) and `bin/cuda_deltanet_output_probe.cr` feeds the resulting GPU-resident `y` vector into the real Q4_K `ssm_out.weight` projection.
+
+Conclusion: CUDA now has a verified stateful recurrent boundary: state update, output vector handoff, and quantized `ssm_out` projection can run without a CPU roundtrip between the state kernel and output GEMV. This is still not a full recurrent layer because recurrent conv prep, alpha/beta transforms, post RMSNorm/SiLU gating, residuals, and FFN are not included.
+
+**evidence_update_87:**
+- claim: "The CUDA DeltaNet-output slice has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_dn_out_syntax crystal build -Dcpu_only --no-codegen bin/cuda_deltanet_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: DeltaNet PTX source, output probe source, Q4 PTX source, Crystal compiler, CPU-only GGUF/QuantMatmul requires, or FFI signatures change
+- claim: "The CUDA DeltaNet-output slice matches CPU references on remote Qwen3.5 9B layer 0."
+  source: remote `crystal build -Dcpu_only bin/cuda_deltanet_output_probe.cr`; remote `--layer 0 --reps 10 --warmup 2` -> `cuda_ms=0.102`, `cpu_ms=553.654`, `state/y/proj cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: DeltaNet formula, PTX source, CUDA driver/PTX JIT, model file, recurrent tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_87:**
+- cassandra: After projection-only recurrent proof, the likely hidden blocker was stateful buffer handoff into `ssm_out`. This probe covers that boundary directly.
+- daedalus: The frame has shifted from independent GEMV bundles to minimal stateful recurrent slices. The next useful pivot is either full recurrent conv/post-gate composition or a backend facade that owns the whole slice.
+- maieutic: The assumption that `ssm_out` would be Q6_K was false on Qwen3.5 9B Q4_K_M; live tensor inspection showed Q4_K `[4096, 4096]`, and the probe was corrected before promotion.
+- adversary: This uses synthetic q/k/v/g/beta and feeds raw DeltaNet `y` into `ssm_out`; it intentionally omits conv prep, alpha/beta transforms, post RMSNorm/SiLU gating, full layer residuals, and decode scheduling.

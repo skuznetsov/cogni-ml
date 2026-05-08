@@ -1,0 +1,135 @@
+.version 8.0
+.target sm_80
+.address_size 64
+
+// Correctness-first CUDA DeltaNet step probe for Qwen recurrent shape s=128.
+//
+// One thread computes one value-head state row. The kernel keeps the algorithm
+// intentionally direct:
+//   state[h, row, :] *= g[h]
+//   sk = dot(state[h, row, :], k[h % h_k, :])
+//   delta = beta[h] * (v[h, row] - sk)
+//   state[h, row, :] += k[h % h_k, :] * delta
+//   y[h, row] = dot(state[h, row, :], q[h % h_k, :]) * scale
+//
+// Launch: grid=(h_v), block=(128).
+.visible .entry deltanet_step_128_probe(
+    .param .u64 state,
+    .param .u64 q,
+    .param .u64 k,
+    .param .u64 v,
+    .param .u64 g,
+    .param .u64 beta,
+    .param .u64 y,
+    .param .u32 h_k,
+    .param .u32 h_v,
+    .param .f32 scale
+)
+{
+    .reg .pred %p<6>;
+    .reg .b32 %r<42>;
+    .reg .b64 %rd<50>;
+    .reg .f32 %f<20>;
+
+    ld.param.u64 %rd1, [state];
+    ld.param.u64 %rd2, [q];
+    ld.param.u64 %rd3, [k];
+    ld.param.u64 %rd4, [v];
+    ld.param.u64 %rd5, [g];
+    ld.param.u64 %rd6, [beta];
+    ld.param.u64 %rd7, [y];
+    ld.param.u32 %r1, [h_k];
+    ld.param.u32 %r2, [h_v];
+    ld.param.f32 %f1, [scale];
+
+    mov.u32 %r3, %ctaid.x;       // h
+    mov.u32 %r4, %tid.x;         // row/d2
+    setp.ge.u32 %p1, %r3, %r2;
+    @%p1 bra DONE;
+    setp.ge.u32 %p2, %r4, 128;
+    @%p2 bra DONE;
+
+    rem.u32 %r5, %r3, %r1;       // k head = h % h_k
+
+    // state row element offset = h * 16384 + row * 128.
+    mul.lo.u32 %r6, %r3, 16384;
+    shl.b32 %r7, %r4, 7;
+    add.u32 %r8, %r6, %r7;
+
+    // q/k base = (h % h_k) * 128; v/y base = h * 128.
+    shl.b32 %r9, %r5, 7;
+    shl.b32 %r10, %r3, 7;
+    add.u32 %r11, %r10, %r4;
+
+    // Load scalar head parameters and v[h,row].
+    mul.wide.u32 %rd8, %r3, 4;
+    add.s64 %rd9, %rd5, %rd8;
+    ld.global.f32 %f2, [%rd9];   // gh
+    add.s64 %rd10, %rd6, %rd8;
+    ld.global.f32 %f3, [%rd10];  // beta
+
+    mul.wide.u32 %rd11, %r11, 4;
+    add.s64 %rd12, %rd4, %rd11;
+    ld.global.f32 %f4, [%rd12];  // v[h,row]
+
+    mov.f32 %f5, 0f00000000;     // sk
+    mov.u32 %r12, 0;             // d1
+
+DECAY_DOT_LOOP:
+    setp.ge.u32 %p3, %r12, 128;
+    @%p3 bra UPDATE_PREP;
+
+    add.u32 %r13, %r8, %r12;
+    mul.wide.u32 %rd13, %r13, 4;
+    add.s64 %rd14, %rd1, %rd13;
+    ld.global.f32 %f6, [%rd14];  // old state
+    mul.rn.f32 %f7, %f6, %f2;    // decayed state
+    st.global.f32 [%rd14], %f7;
+
+    add.u32 %r14, %r9, %r12;
+    mul.wide.u32 %rd15, %r14, 4;
+    add.s64 %rd16, %rd3, %rd15;
+    ld.global.f32 %f8, [%rd16];  // k
+    fma.rn.f32 %f5, %f7, %f8, %f5;
+
+    add.u32 %r12, %r12, 1;
+    bra DECAY_DOT_LOOP;
+
+UPDATE_PREP:
+    sub.rn.f32 %f9, %f4, %f5;
+    mul.rn.f32 %f10, %f9, %f3;   // delta
+    mov.f32 %f11, 0f00000000;    // acc
+    mov.u32 %r15, 0;
+
+UPDATE_LOOP:
+    setp.ge.u32 %p4, %r15, 128;
+    @%p4 bra STORE_Y;
+
+    add.u32 %r16, %r8, %r15;
+    mul.wide.u32 %rd17, %r16, 4;
+    add.s64 %rd18, %rd1, %rd17;
+    ld.global.f32 %f12, [%rd18]; // decayed state
+
+    add.u32 %r17, %r9, %r15;
+    mul.wide.u32 %rd19, %r17, 4;
+    add.s64 %rd20, %rd3, %rd19;
+    ld.global.f32 %f13, [%rd20]; // k
+    fma.rn.f32 %f14, %f13, %f10, %f12;
+    st.global.f32 [%rd18], %f14;
+
+    add.s64 %rd21, %rd2, %rd19;
+    ld.global.f32 %f15, [%rd21]; // q
+    fma.rn.f32 %f11, %f14, %f15, %f11;
+
+    add.u32 %r15, %r15, 1;
+    bra UPDATE_LOOP;
+
+STORE_Y:
+    mul.rn.f32 %f16, %f11, %f1;
+    mul.wide.u32 %rd22, %r11, 4;
+    add.s64 %rd23, %rd7, %rd22;
+    st.global.f32 [%rd23], %f16;
+
+DONE:
+    ret;
+}

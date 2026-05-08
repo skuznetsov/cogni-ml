@@ -176,6 +176,19 @@ crystal build -Dcpu_only bin/cuda_recurrent_projection_probe.cr -o build/cuda_re
 
 `cuda_recurrent_projection_probe` runs `Q5_K attn_qkv + Q4_K attn_gate + Q4_K ssm_alpha + Q4_K ssm_beta` from one GPU-resident hidden vector and copies the four outputs back only after all kernels complete. It is the first CUDA recurrent projection-bundle proof; DeltaNet recurrence, convolution, state updates, and `ssm_out` remain separate work.
 
+Build the synthetic DeltaNet output slice probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_deltanet_output_probe.cr -o build/cuda_deltanet_output_probe
+./build/cuda_deltanet_output_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layer 0 \
+  --reps 10 \
+  --warmup 2
+```
+
+`cuda_deltanet_output_probe` runs a synthetic CUDA DeltaNet state update, keeps the generated `y` vector on GPU, and feeds it directly into the real Q4_K `ssm_out.weight` projection. It is a stateful boundary probe, not a full recurrent layer: recurrent conv prep, beta/alpha transforms, post RMSNorm/SiLU gating, residuals, and FFN remain separate work.
+
 Build the Metal bridge once:
 
 ```sh
