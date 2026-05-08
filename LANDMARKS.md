@@ -8815,3 +8815,19 @@ Conclusion: do not super-fuse staged n-gram verification. The next exact fusion 
 - daedalus: Shifted from route-level staging to operator-level accepted-span body fusion. The accepted case is a dense prefill problem, not a rejection-control problem.
 - maieutic: The hidden assumption was that `~12ms/tok` n-gram is already mostly overhead-free. It is not: output head and recurrent prefill still read substantial weights for every verified row.
 - adversary: Guarded full-row speed cannot be reported as verified exact beyond harness equality on focused prompts; do not make it default without a formal exact fallback/proof or a much broader adversarial parity gate.
+
+**decision_update_69:** Refuted the simple batch-alignment hypothesis that keeping the otherwise-unneeded final verifier row would make accepted n-gram chunks faster. A default-off `--verify-final-row` probe was wired into `bin/qwen35_speculative_accept.cr`, built successfully, and tested on the clean Qwen3.6-27B `alpha beta gamma` repeat with `--ngram-target-only --ngram-risk-gate --ngram-replay-on-reject` and `QWEN35_SPEC_NGRAM_MIN_CANDIDATES=8`. It did not improve wall time: `tokens=32` measured `374.6ms` skip-final vs `377.3ms` final-row, and `tokens=16` measured `321.0ms` vs `324.3ms`. A small ABBA repeat confirmed skip-final around `374.1/374.3ms`; the final-row path had one normal slower sample (`376.6ms`) and one severe host outlier (`3278.0ms`). The probe was removed rather than leaving dead CLI/API surface.
+
+Conclusion: the tail-skip/batch-size boundary is not the missing exact speed lever. Keep skipping the final future-logit row. The next exact fusion target remains the accepted known-span verifier body and exact output-head rows, not padding or final-row alignment.
+
+**evidence_update_69:**
+- claim: "Keeping the final verifier row does not improve the accepted n-gram clean-repeat verifier path."
+  source: `/tmp/qwen36_verify_final_ab_20260508083932/summary.log` -> `tokens=32` skip-final `374.6ms` vs final-row `377.3ms`; `tokens=16` skip-final `321.0ms` vs final-row `324.3ms`; `/tmp/qwen36_verify_final_abba_20260508084016/summary.log` -> skip-final `374.1/374.3ms`, final-row normal sample `376.6ms`, final-row host outlier `3278.0ms`
+  verified_at: 2026-05-08
+  decay_trigger: known-span verifier batching, output-head route, n-gram verifier path, or target model changes
+
+**quadrumvirate_update_69:**
+- cassandra: The plausible win was kernel shape alignment; the likely failure was that the extra row only adds more exact work.
+- daedalus: Shifted away from padding/alignment knobs toward eliminating or fusing accepted-span work.
+- maieutic: The hidden assumption was that `b32` alignment could beat the cost of computing one extra exact row. The measured path did not support that.
+- adversary: One severe final-row outlier reinforces that this should not be exposed as a default-off tuning knob unless a future kernel rewrite changes the batching economics.
