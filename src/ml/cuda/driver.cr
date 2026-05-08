@@ -2,6 +2,8 @@
 lib LibCUDADriver
   alias CUdevice = Int32
   alias CUcontext = Void*
+  alias CUmodule = Void*
+  alias CUfunction = Void*
   alias CUdeviceptr = UInt64
 
   fun cuInit(flags : UInt32) : Int32
@@ -10,8 +12,18 @@ lib LibCUDADriver
   fun cuDeviceComputeCapability(major : Int32*, minor : Int32*, dev : CUdevice) : Int32
   fun cuCtxCreate_v2(ctx : CUcontext*, flags : UInt32, dev : CUdevice) : Int32
   fun cuCtxDestroy_v2(ctx : CUcontext) : Int32
+  fun cuModuleLoadData(mod : CUmodule*, image : Void*) : Int32
+  fun cuModuleUnload(mod : CUmodule) : Int32
+  fun cuModuleGetFunction(fn : CUfunction*, mod : CUmodule, name : UInt8*) : Int32
   fun cuMemAlloc_v2(dptr : CUdeviceptr*, bytesize : LibC::SizeT) : Int32
   fun cuMemFree_v2(dptr : CUdeviceptr) : Int32
+  fun cuMemcpyHtoD_v2(dst : CUdeviceptr, src : Void*, bytesize : LibC::SizeT) : Int32
+  fun cuMemcpyDtoH_v2(dst : Void*, src : CUdeviceptr, bytesize : LibC::SizeT) : Int32
+  fun cuLaunchKernel(fn : CUfunction, grid_x : UInt32, grid_y : UInt32, grid_z : UInt32,
+                     block_x : UInt32, block_y : UInt32, block_z : UInt32,
+                     shared_mem_bytes : UInt32, stream : Void*,
+                     kernel_params : Void**, extra : Void**) : Int32
+  fun cuCtxSynchronize : Int32
 end
 
 module ML::CUDA
@@ -72,5 +84,60 @@ module ML::CUDA
       LibCUDADriver.cuMemFree_v2(@ptr) unless @ptr == 0_u64
       @closed = true
     end
+  end
+
+  class CUDAModule
+    def self.load(ptx : String, label : String) : self
+      handle = Pointer(Void).null
+      ML::CUDA.check! LibCUDADriver.cuModuleLoadData(pointerof(handle), ptx.to_unsafe.as(Void*)), "cuModuleLoadData(#{label})"
+      new(handle)
+    end
+
+    def initialize(@handle : Void*)
+      @closed = false
+    end
+
+    def function(name : String) : KernelFunction
+      fn = Pointer(Void).null
+      ML::CUDA.check! LibCUDADriver.cuModuleGetFunction(pointerof(fn), @handle, name), "cuModuleGetFunction(#{name})"
+      KernelFunction.new(fn, name)
+    end
+
+    def close : Nil
+      return if @closed
+
+      LibCUDADriver.cuModuleUnload(@handle) unless @handle.null?
+      @closed = true
+    end
+  end
+
+  class KernelFunction
+    getter handle : LibCUDADriver::CUfunction
+    getter name : String
+
+    def initialize(@handle : LibCUDADriver::CUfunction, @name : String)
+    end
+  end
+
+  def self.copy_htod!(dst : DevicePtr, src : Void*, bytesize : LibC::SizeT, what : String) : Nil
+    check! LibCUDADriver.cuMemcpyHtoD_v2(dst, src, bytesize), "cuMemcpyHtoD(#{what})"
+  end
+
+  def self.copy_dtoh!(dst : Void*, src : DevicePtr, bytesize : LibC::SizeT, what : String) : Nil
+    check! LibCUDADriver.cuMemcpyDtoH_v2(dst, src, bytesize), "cuMemcpyDtoH(#{what})"
+  end
+
+  def self.synchronize!(what : String = "cuCtxSynchronize") : Nil
+    check! LibCUDADriver.cuCtxSynchronize, what
+  end
+
+  def self.launch!(fn : KernelFunction,
+                   grid_x : UInt32, grid_y : UInt32, grid_z : UInt32,
+                   block_x : UInt32, block_y : UInt32, block_z : UInt32,
+                   params : Void**, label : String,
+                   shared_mem_bytes : UInt32 = 0_u32) : Nil
+    check! LibCUDADriver.cuLaunchKernel(fn.handle, grid_x, grid_y, grid_z,
+      block_x, block_y, block_z, shared_mem_bytes, Pointer(Void).null,
+      params, Pointer(Void*).null), "cuLaunchKernel(#{label})"
   end
 end

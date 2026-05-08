@@ -9315,3 +9315,23 @@ Conclusion: CUDA backend work now has a small shared ownership substrate instead
 - daedalus: This is the first reusable substrate, not the final abstraction. The next pivot is a recurrent-layer runner object with method boundaries for upload/reset/run/readback.
 - maieutic: The hidden assumption that a backend object must be built in one jump was rejected. Generic ownership is a smaller falsifiable boundary and already removes duplicated lifecycle code.
 - adversary: Existing CUDA probes still duplicate many lib bindings and launch-parameter details. This layer only owns context and memory; it does not yet model streams, modules, kernels, layer weights, or decode scheduling.
+
+**decision_update_93:** Extended the reusable CUDA Driver API layer to own modules, functions, copies, launches, and synchronization. `src/ml/cuda/driver.cr` now provides `ML::CUDA::CUDAModule`, `ML::CUDA::KernelFunction`, `copy_htod!`, `copy_dtoh!`, `launch!`, and `synchronize!`. `bin/cuda_recurrent_prep_output_probe.cr` no longer declares a probe-local CUDA lib.
+
+Conclusion: the CUDA substrate now owns the raw Driver API boundary rather than only context/buffer lifecycle. This reduces the recurrent-layer facade risk because module loading, function lookup, buffer ownership, host/device copies, kernel launches, and synchronization are all behind one shared API.
+
+**evidence_update_93:**
+- claim: "The shared CUDA module/function/launch layer has local syntax coverage through the recurrent-layer probe."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_module_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: `src/ml/cuda/driver.cr`, recurrent probe source, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "Replacing probe-local CUDA Driver calls with shared `ML::CUDA` wrappers preserves recurrent-layer parity."
+  source: remote Qwen3.5 9B layer0 `--tokens 4 --reps 1 --warmup 1` -> `weight_upload_ms=21.78`, `cuda_ms_per_token=1.646`, `cpu_ms_per_token=4642.091`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: CUDA wrapper layer, recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_93:**
+- cassandra: The likely failure was ABI mismatch in the generic `launch!` wrapper. The remote parity run exercised all recurrent-layer kernels through the wrapper.
+- daedalus: The next abstraction can now focus on Qwen recurrent-layer state/weights, not raw CUDA FFI mechanics.
+- maieutic: The assumption that probe-local lib bindings were harmless was locally true but architecturally weak; they prevented a reusable backend boundary.
+- adversary: This still does not provide streams, events, async copies, or typed kernel parameter builders. It is enough for the current synchronous correctness probes only.

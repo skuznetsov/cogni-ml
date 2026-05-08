@@ -11,43 +11,11 @@ require "../src/ml/gguf/quant_matmul"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/cuda/driver"
 
-@[Link(ldflags: "-lcuda")]
-lib LibCUDARecPrepOut
-  alias CUdevice = Int32
-  alias CUcontext = Void*
-  alias CUmodule = Void*
-  alias CUfunction = Void*
-  alias CUdeviceptr = UInt64
-
-  fun cuInit(flags : UInt32) : Int32
-  fun cuDeviceGet(device : CUdevice*, ordinal : Int32) : Int32
-  fun cuDeviceGetName(name : UInt8*, len : Int32, dev : CUdevice) : Int32
-  fun cuDeviceComputeCapability(major : Int32*, minor : Int32*, dev : CUdevice) : Int32
-  fun cuCtxCreate_v2(ctx : CUcontext*, flags : UInt32, dev : CUdevice) : Int32
-  fun cuCtxDestroy_v2(ctx : CUcontext) : Int32
-  fun cuModuleLoadData(mod : CUmodule*, image : Void*) : Int32
-  fun cuModuleUnload(mod : CUmodule) : Int32
-  fun cuModuleGetFunction(fn : CUfunction*, mod : CUmodule, name : UInt8*) : Int32
-  fun cuMemAlloc_v2(dptr : CUdeviceptr*, bytesize : LibC::SizeT) : Int32
-  fun cuMemFree_v2(dptr : CUdeviceptr) : Int32
-  fun cuMemcpyHtoD_v2(dst : CUdeviceptr, src : Void*, bytesize : LibC::SizeT) : Int32
-  fun cuMemcpyDtoH_v2(dst : Void*, src : CUdeviceptr, bytesize : LibC::SizeT) : Int32
-  fun cuLaunchKernel(fn : CUfunction, grid_x : UInt32, grid_y : UInt32, grid_z : UInt32,
-                     block_x : UInt32, block_y : UInt32, block_z : UInt32,
-                     shared_mem_bytes : UInt32, stream : Void*,
-                     kernel_params : Void**, extra : Void**) : Int32
-  fun cuCtxSynchronize : Int32
-end
-
 DN_PTX        = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
 Q4K_PTX       = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
 Q5K_PTX       = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
 Q6K_PTX       = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
-
-def cuda!(code : Int32, what : String) : Nil
-  raise "#{what} failed with CUDA error #{code}" unless code == 0
-end
 
 def bytesize_f32(elements : Int32) : LibC::SizeT
   (elements * sizeof(Float32)).to_u64
@@ -249,23 +217,8 @@ tokens.times do |tok|
 end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds / tokens
 
-dn_mod = Pointer(Void).null
-q4_mod = Pointer(Void).null
-q5_mod = Pointer(Void).null
-q6_mod = Pointer(Void).null
-attn_norm_fn = Pointer(Void).null
-add_rmsnorm_fn = Pointer(Void).null
-swiglu_fn = Pointer(Void).null
-add_fn = Pointer(Void).null
-conv_fn = Pointer(Void).null
-norm_fn = Pointer(Void).null
-ab_fn = Pointer(Void).null
-dn_fn = Pointer(Void).null
-post_fn = Pointer(Void).null
-q4_fn = Pointer(Void).null
-q5_fn = Pointer(Void).null
-q6_fn = Pointer(Void).null
 cuda_ctx = nil.as(ML::CUDA::Context?)
+modules = [] of ML::CUDA::CUDAModule
 buffers = [] of ML::CUDA::DeviceBuffer
 ptrs = [] of UInt64
 
@@ -275,22 +228,24 @@ begin
   cc_major = cuda_ctx.compute_capability_major
   cc_minor = cuda_ctx.compute_capability_minor
 
-  cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(dn_mod), DN_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(delta)"
-  cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(q4_mod), Q4K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q4)"
-  cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(q5_mod), Q5K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q5)"
-  cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(q6_mod), Q6K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q6)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(attn_norm_fn), dn_mod, "rmsnorm_vec_probe"), "cuModuleGetFunction(rmsnorm)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(add_rmsnorm_fn), dn_mod, "add_rmsnorm_vec_probe"), "cuModuleGetFunction(add_rmsnorm)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(swiglu_fn), dn_mod, "swiglu_probe"), "cuModuleGetFunction(swiglu)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(add_fn), dn_mod, "add_vec_probe"), "cuModuleGetFunction(add)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(conv_fn), dn_mod, "recurrent_conv1d_silu_step_probe"), "cuModuleGetFunction(conv)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(norm_fn), dn_mod, "l2_norm_128_probe"), "cuModuleGetFunction(norm)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(ab_fn), dn_mod, "alpha_beta_transform_probe"), "cuModuleGetFunction(alpha_beta)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(dn_fn), dn_mod, "deltanet_step_128_probe"), "cuModuleGetFunction(delta)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(post_fn), dn_mod, "deltanet_post_norm_gate_128_probe"), "cuModuleGetFunction(post)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(q4_fn), q4_mod, "q4_k_gemv_warp4_f32"), "cuModuleGetFunction(q4)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(q5_fn), q5_mod, "q5_k_gemv_warp4_f32"), "cuModuleGetFunction(q5)"
-  cuda! LibCUDARecPrepOut.cuModuleGetFunction(pointerof(q6_fn), q6_mod, "q6_k_gemv_warp4_f32"), "cuModuleGetFunction(q6)"
+  dn_mod = ML::CUDA::CUDAModule.load(DN_PTX, "delta")
+  q4_mod = ML::CUDA::CUDAModule.load(Q4K_PTX, "q4")
+  q5_mod = ML::CUDA::CUDAModule.load(Q5K_PTX, "q5")
+  q6_mod = ML::CUDA::CUDAModule.load(Q6K_PTX, "q6")
+  modules.concat([dn_mod, q4_mod, q5_mod, q6_mod])
+
+  attn_norm_fn = dn_mod.function("rmsnorm_vec_probe")
+  add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_probe")
+  swiglu_fn = dn_mod.function("swiglu_probe")
+  add_fn = dn_mod.function("add_vec_probe")
+  conv_fn = dn_mod.function("recurrent_conv1d_silu_step_probe")
+  norm_fn = dn_mod.function("l2_norm_128_probe")
+  ab_fn = dn_mod.function("alpha_beta_transform_probe")
+  dn_fn = dn_mod.function("deltanet_step_128_probe")
+  post_fn = dn_mod.function("deltanet_post_norm_gate_128_probe")
+  q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
+  q5_fn = q5_mod.function("q5_k_gemv_warp4_f32")
+  q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
 
   sizes = [bytesize_f32(tokens * hidden), bytesize_f32(hidden), bytesize_f32(hidden),
            qkv_raw.size.to_u64, gate_raw.size.to_u64, alpha_raw.size.to_u64, beta_raw_w.size.to_u64,
@@ -315,31 +270,31 @@ begin
     d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all = ptrs
 
   upload_weights = -> {
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_attn_norm_w, attn_norm.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(attn_norm)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_qkv_w, qkv_raw.to_unsafe.as(Void*), qkv_raw.size.to_u64), "cuMemcpyHtoD(qkv_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_gate_w, gate_raw.to_unsafe.as(Void*), gate_raw.size.to_u64), "cuMemcpyHtoD(gate_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_alpha_w, alpha_raw.to_unsafe.as(Void*), alpha_raw.size.to_u64), "cuMemcpyHtoD(alpha_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_beta_w, beta_raw_w.to_unsafe.as(Void*), beta_raw_w.size.to_u64), "cuMemcpyHtoD(beta_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_conv_w, conv1d.to_unsafe.as(Void*), bytesize_f32(conv1d.size)), "cuMemcpyHtoD(conv_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_dt, dt_bias.to_unsafe.as(Void*), bytesize_f32(dt_bias.size)), "cuMemcpyHtoD(dt)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_a, ssm_a.to_unsafe.as(Void*), bytesize_f32(ssm_a.size)), "cuMemcpyHtoD(a)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_norm, ssm_norm.to_unsafe.as(Void*), bytesize_f32(ssm_norm.size)), "cuMemcpyHtoD(norm)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_out_w, out_raw.to_unsafe.as(Void*), out_raw.size.to_u64), "cuMemcpyHtoD(out_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_post_norm_w, post_norm.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(post_norm)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ffn_gate_w, ffn_gate_raw.to_unsafe.as(Void*), ffn_gate_raw.size.to_u64), "cuMemcpyHtoD(ffn_gate_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ffn_up_w, ffn_up_raw.to_unsafe.as(Void*), ffn_up_raw.size.to_u64), "cuMemcpyHtoD(ffn_up_w)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ffn_down_w, ffn_down_raw.to_unsafe.as(Void*), ffn_down_raw.size.to_u64), "cuMemcpyHtoD(ffn_down_w)"
+    ML::CUDA.copy_htod!(d_attn_norm_w, attn_norm.to_unsafe.as(Void*), bytesize_f32(hidden), "attn_norm")
+    ML::CUDA.copy_htod!(d_qkv_w, qkv_raw.to_unsafe.as(Void*), qkv_raw.size.to_u64, "qkv_w")
+    ML::CUDA.copy_htod!(d_gate_w, gate_raw.to_unsafe.as(Void*), gate_raw.size.to_u64, "gate_w")
+    ML::CUDA.copy_htod!(d_alpha_w, alpha_raw.to_unsafe.as(Void*), alpha_raw.size.to_u64, "alpha_w")
+    ML::CUDA.copy_htod!(d_beta_w, beta_raw_w.to_unsafe.as(Void*), beta_raw_w.size.to_u64, "beta_w")
+    ML::CUDA.copy_htod!(d_conv_w, conv1d.to_unsafe.as(Void*), bytesize_f32(conv1d.size), "conv_w")
+    ML::CUDA.copy_htod!(d_dt, dt_bias.to_unsafe.as(Void*), bytesize_f32(dt_bias.size), "dt")
+    ML::CUDA.copy_htod!(d_a, ssm_a.to_unsafe.as(Void*), bytesize_f32(ssm_a.size), "a")
+    ML::CUDA.copy_htod!(d_norm, ssm_norm.to_unsafe.as(Void*), bytesize_f32(ssm_norm.size), "norm")
+    ML::CUDA.copy_htod!(d_out_w, out_raw.to_unsafe.as(Void*), out_raw.size.to_u64, "out_w")
+    ML::CUDA.copy_htod!(d_post_norm_w, post_norm.to_unsafe.as(Void*), bytesize_f32(hidden), "post_norm")
+    ML::CUDA.copy_htod!(d_ffn_gate_w, ffn_gate_raw.to_unsafe.as(Void*), ffn_gate_raw.size.to_u64, "ffn_gate_w")
+    ML::CUDA.copy_htod!(d_ffn_up_w, ffn_up_raw.to_unsafe.as(Void*), ffn_up_raw.size.to_u64, "ffn_up_w")
+    ML::CUDA.copy_htod!(d_ffn_down_w, ffn_down_raw.to_unsafe.as(Void*), ffn_down_raw.size.to_u64, "ffn_down_w")
   }
 
   reset_sequence = -> {
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_xs, xs.to_unsafe.as(Void*), bytesize_f32(tokens * hidden)), "cuMemcpyHtoD(xs)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_conv_state, conv_state_init.to_unsafe.as(Void*), bytesize_f32(conv_state_init.size)), "cuMemcpyHtoD(conv_state)"
-    cuda! LibCUDARecPrepOut.cuMemcpyHtoD_v2(d_ssm_state, ssm_state_init.to_unsafe.as(Void*), bytesize_f32(ssm_state_init.size)), "cuMemcpyHtoD(ssm_state)"
+    ML::CUDA.copy_htod!(d_xs, xs.to_unsafe.as(Void*), bytesize_f32(tokens * hidden), "xs")
+    ML::CUDA.copy_htod!(d_conv_state, conv_state_init.to_unsafe.as(Void*), bytesize_f32(conv_state_init.size), "conv_state")
+    ML::CUDA.copy_htod!(d_ssm_state, ssm_state_init.to_unsafe.as(Void*), bytesize_f32(ssm_state_init.size), "ssm_state")
   }
 
   upload_t0 = Time.instant
   upload_weights.call
-  cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(upload_weights)"
+  ML::CUDA.synchronize!("cuCtxSynchronize(upload_weights)")
   weight_upload_ms = (Time.instant - upload_t0).total_milliseconds
   reset_sequence.call
 
@@ -495,51 +450,51 @@ begin
     offset = bytesize_f32(tok * hidden)
     d_x_cur = d_xs + offset
     d_final_cur = d_final_all + offset
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(attn_norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, attn_norm_params, Pointer(Void*).null), "attn norm"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, qkv_proj_params, Pointer(Void*).null), "qkv proj"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, gate_proj_params, Pointer(Void*).null), "gate proj"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, alpha_proj_params, Pointer(Void*).null), "alpha proj"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, beta_proj_params, Pointer(Void*).null), "beta proj"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(conv_fn, conv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, conv_params, Pointer(Void*).null), "conv prep"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(norm_fn, h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, q_norm_params, Pointer(Void*).null), "q norm"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(norm_fn, h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, k_norm_params, Pointer(Void*).null), "k norm"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(ab_fn, 1_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, ab_params, Pointer(Void*).null), "alpha beta"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(dn_fn, h_v.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, dn_params, Pointer(Void*).null), "delta step"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(post_fn, h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, post_params, Pointer(Void*).null), "post gate"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, out_proj_params, Pointer(Void*).null), "ssm_out"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, add_rms_params, Pointer(Void*).null), "add rmsnorm"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, ffn_gate_params, Pointer(Void*).null), "ffn gate"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, ffn_up_params, Pointer(Void*).null), "ffn up"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, swiglu_params, Pointer(Void*).null), "swiglu"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(q6_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, ffn_down_params, Pointer(Void*).null), "ffn down"
-    cuda! LibCUDARecPrepOut.cuLaunchKernel(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, 0_u32, Pointer(Void).null, final_add_params, Pointer(Void*).null), "final add"
+    ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+    ML::CUDA.launch!(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj")
+    ML::CUDA.launch!(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj")
+    ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
+    ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj")
+    ML::CUDA.launch!(conv_fn, conv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, conv_params, "conv prep")
+    ML::CUDA.launch!(norm_fn, h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_norm_params, "q norm")
+    ML::CUDA.launch!(norm_fn, h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_norm_params, "k norm")
+    ML::CUDA.launch!(ab_fn, 1_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ab_params, "alpha beta")
+    ML::CUDA.launch!(dn_fn, h_v.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, dn_params, "delta step")
+    ML::CUDA.launch!(post_fn, h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, post_params, "post gate")
+    ML::CUDA.launch!(q4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out")
+    ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
+    ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
+    ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
+    ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
+    ML::CUDA.launch!(q6_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
+    ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
   }
 
   warmup.times do
     tokens.times { |tok| run_token.call(tok) }
   end
-  cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(warmup)" if warmup > 0
+  ML::CUDA.synchronize!("cuCtxSynchronize(warmup)")
   reset_sequence.call
   gpu_t0 = Time.instant
   reps.times do
     tokens.times { |tok| run_token.call(tok) }
   end
-  cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize"
+  ML::CUDA.synchronize!("cuCtxSynchronize")
   timed_steps = reps * tokens
   gpu_ms = (Time.instant - gpu_t0).total_milliseconds / timed_steps
 
   reset_sequence.call
   tokens.times { |tok| run_token.call(tok) }
-  cuda! LibCUDARecPrepOut.cuCtxSynchronize, "cuCtxSynchronize(correctness)"
+  ML::CUDA.synchronize!("cuCtxSynchronize(correctness)")
 
   conv_state_gpu = Array(Float32).new(conv_state_init.size, 0.0_f32)
   ssm_state_gpu = Array(Float32).new(ssm_state_init.size, 0.0_f32)
   attn_out_gpu = Array(Float32).new(hidden, 0.0_f32)
   final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
-  cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(conv_state_gpu.to_unsafe.as(Void*), d_conv_state, bytesize_f32(conv_state_gpu.size)), "cuMemcpyDtoH(conv_state)"
-  cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(ssm_state_gpu.to_unsafe.as(Void*), d_ssm_state, bytesize_f32(ssm_state_gpu.size)), "cuMemcpyDtoH(ssm_state)"
-  cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(attn_out_gpu.to_unsafe.as(Void*), d_attn_out, bytesize_f32(attn_out_gpu.size)), "cuMemcpyDtoH(attn_out)"
-  cuda! LibCUDARecPrepOut.cuMemcpyDtoH_v2(final_gpu_all.to_unsafe.as(Void*), d_final_all, bytesize_f32(final_gpu_all.size)), "cuMemcpyDtoH(finals)"
+  ML::CUDA.copy_dtoh!(conv_state_gpu.to_unsafe.as(Void*), d_conv_state, bytesize_f32(conv_state_gpu.size), "conv_state")
+  ML::CUDA.copy_dtoh!(ssm_state_gpu.to_unsafe.as(Void*), d_ssm_state, bytesize_f32(ssm_state_gpu.size), "ssm_state")
+  ML::CUDA.copy_dtoh!(attn_out_gpu.to_unsafe.as(Void*), d_attn_out, bytesize_f32(attn_out_gpu.size), "attn_out")
+  ML::CUDA.copy_dtoh!(final_gpu_all.to_unsafe.as(Void*), d_final_all, bytesize_f32(final_gpu_all.size), "finals")
 
   lines = [] of String
   ok = true
@@ -570,10 +525,7 @@ begin
   puts "ok=#{ok}"
 ensure
   buffers.each(&.close)
-  LibCUDARecPrepOut.cuModuleUnload(dn_mod) unless dn_mod.null?
-  LibCUDARecPrepOut.cuModuleUnload(q4_mod) unless q4_mod.null?
-  LibCUDARecPrepOut.cuModuleUnload(q5_mod) unless q5_mod.null?
-  LibCUDARecPrepOut.cuModuleUnload(q6_mod) unless q6_mod.null?
+  modules.each(&.close)
   cuda_ctx.try(&.close)
   gguf.close
 end
