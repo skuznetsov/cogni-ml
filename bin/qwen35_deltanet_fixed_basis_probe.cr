@@ -715,6 +715,63 @@ private def prompt_route_layer_feature_notes(name : String,
   end
 end
 
+private def self_spec_residual_router_thresholds(thresholds : Array(Float64),
+                                                 pass_threshold : Float64?) : Array(Float64)
+  values = thresholds.dup
+  if threshold = pass_threshold
+    values << threshold unless values.any? { |value| (value - threshold).abs < 1e-9 }
+  end
+  values
+end
+
+private def self_spec_residual_router_decision(stats,
+                                               mean_max : Float64?,
+                                               pass_threshold : Float64?,
+                                               pass_rate_min : Float64?)
+  enabled = !mean_max.nil? || !pass_threshold.nil? || !pass_rate_min.nil?
+  pass_rate = 0.0
+  if threshold = pass_threshold
+    if entry = stats[:pass_rates].find { |row| (row[:threshold] - threshold).abs < 1e-9 }
+      pass_rate = entry[:rate]
+    end
+  end
+
+  run = true
+  reasons = [] of String
+  if limit = mean_max
+    if stats[:mean] > limit
+      run = false
+      reasons << "mean"
+    end
+  end
+  if min_rate = pass_rate_min
+    if pass_rate < min_rate
+      run = false
+      reasons << "pass_rate"
+    end
+  end
+
+  {
+    enabled:   enabled,
+    run:       run,
+    reason:    run ? "run" : reasons.join("+"),
+    pass_rate: pass_rate,
+  }
+end
+
+private def self_spec_residual_router_note(decision,
+                                           stats,
+                                           mean_max : Float64?,
+                                           pass_threshold : Float64?,
+                                           pass_rate_min : Float64?) : String
+  return "" unless decision[:enabled]
+
+  mean_limit = mean_max.nil? ? "none" : mean_max.not_nil!.round(6).to_s
+  pass_threshold_label = pass_threshold.nil? ? "none" : pass_threshold.not_nil!.round(4).to_s
+  pass_rate_min_label = pass_rate_min.nil? ? "none" : pass_rate_min.not_nil!.round(2).to_s
+  " residual_router=#{decision[:run] ? "run" : "skip"} residual_router_reason=#{decision[:reason]} residual_mean=#{stats[:mean].round(6)} residual_p50=#{stats[:p50].round(6)} residual_p90=#{stats[:p90].round(6)} residual_p99=#{stats[:p99].round(6)} residual_mean_max=#{mean_limit} residual_pass_threshold=#{pass_threshold_label} residual_pass_rate=#{decision[:pass_rate].round(2)} residual_pass_rate_min=#{pass_rate_min_label}"
+end
+
 private def sorted_percentile(values : Array(Float64), p : Float64) : Float64
   return 0.0 if values.empty?
   sorted = values.sort
@@ -7193,6 +7250,42 @@ private def simulate_self_draft_gpu_chain_overlap_run(weights : ML::GGUF::Qwen35
   }
 end
 
+private def simulate_self_spec_gpu_pipeline_exact_fallback_run(weights : ML::GGUF::Qwen35Weights,
+                                                               prompt_ids : Array(Int32),
+                                                               gen_tokens : Int32)
+  raise "exact fallback requires non-empty prompt" if prompt_ids.empty?
+  raise "exact fallback gen_tokens must be positive" unless gen_tokens > 0
+
+  max_seq = prompt_ids.size + gen_tokens + 8
+  prefix_ids = prompt_ids[0, prompt_ids.size - 1]
+  state = verifier_state_after_prefix(weights, prefix_ids, max_seq)
+  last_token = prompt_ids[-1]
+  pos_last = prompt_ids.size - 1
+  ids = [] of Int32
+  t0 = Time.instant
+  gen_tokens.times do
+    id = ML::GGUF::Qwen35CPU.forward_top1(weights, last_token, pos_last, state)[0]
+    ids << id
+    last_token = id
+    pos_last += 1
+  end
+  ms = (Time.instant - t0).total_milliseconds
+  {
+    plain_exact_ms: ms,
+    serial_ms:      ms,
+    overlap_ms:     ms,
+    speedup:        1.0,
+    plain_speedup:  1.0,
+    parity:         true,
+    exact_ids:      ids,
+    emitted_ids:    ids,
+  }
+end
+
+private def self_spec_pipeline_exact_fallback_fields(exact, gen_tokens : Int32) : String
+  " gen_tokens=#{gen_tokens} chunks=0 draft_updown_chunks=0 rejections=0 accepted_draft_tokens=0 proposed_tokens=0 accept_rate=0.0% parity=#{exact[:parity]} gamma_history=exact draft_seed_ms=0.0 draft_next_ms=0.0 verifier_ms=0.0 draft_wait_ms=0.0 backup_ms=0.0 rebuild_ms=0.0 controller_ms=0.0 replay_ms=0.0 plain_exact_ms=#{exact[:plain_exact_ms].round(3)} serial_ms=#{exact[:serial_ms].round(3)} overlap_ms=#{exact[:overlap_ms].round(3)} hidden_ms=0.0 speedup=#{exact[:speedup].round(4)}x plain_speedup=#{exact[:plain_speedup].round(4)}x exact_ids=#{exact[:exact_ids].join(',')} emitted_ids=#{exact[:emitted_ids].join(',')}"
+end
+
 private def trace_self_spec_router_token(chunk : Int32,
                                          index : Int32,
                                          generated_offset : Int32,
@@ -10341,6 +10434,9 @@ simulate_self_spec_gpu_pipeline_route_features = false
 simulate_self_spec_gpu_pipeline_ffn_updown_route_features = false
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 simulate_self_spec_gpu_pipeline_router_trace_path : String? = nil
+simulate_self_spec_gpu_pipeline_residual_router_mean_max : Float64? = nil
+simulate_self_spec_gpu_pipeline_residual_router_pass_threshold : Float64? = nil
+simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min : Float64? = nil
 self_spec_cost_model = false
 self_spec_draft_cost = 0.0
 self_spec_verifier_cost = 0.0
@@ -10529,6 +10625,9 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-agreement-gate", "Probe lowrank vs pca-updown at the same boundary and use pca-updown only when its next top1 matches lowrank top1/top2") { simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-agreement-steps=N", "Compare N lowrank/pca-updown draft steps before allowing pca-updown; steps after the first must match lowrank top1 exactly") { |v| simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-agreement-margin-thresholds=LIST", "When agreement gate is enabled, score lowrank same-boundary margin thresholds as candidate cheap pca-updown predictors; reports selected/pass/fail/false-negative counts") { |v| simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds = parse_float_list(v) }
+  p.on("--simulate-self-spec-gpu-pipeline-residual-router-mean-max=F", "Default-off gate: run GPU self-spec only when held-out low-rank residual mean is <= F; otherwise emit exact fallback row") { |v| simulate_self_spec_gpu_pipeline_residual_router_mean_max = v.to_f64 }
+  p.on("--simulate-self-spec-gpu-pipeline-residual-router-pass-threshold=F", "Residual router pass-rate threshold paired with --simulate-self-spec-gpu-pipeline-residual-router-pass-rate-min") { |v| simulate_self_spec_gpu_pipeline_residual_router_pass_threshold = v.to_f64 }
+  p.on("--simulate-self-spec-gpu-pipeline-residual-router-pass-rate-min=F", "Default-off gate: require at least F percent of held-out residuals under the configured pass threshold") { |v| simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-legacy-full-state-backup", "Use the old full-capacity State#copy_from! verifier backup/restore path for A/B") { simulate_self_spec_gpu_pipeline_legacy_full_state_backup = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-first", "Use real draft top2 for a first-token k=2 early branch before verifying the wrong tail") { simulate_self_spec_gpu_pipeline_tree2_first = true }
   p.on("--simulate-self-spec-gpu-pipeline-tree2-anywhere", "Use real draft top2 with serial exact verifier inside each draft chunk, stopping at the first mismatch") { simulate_self_spec_gpu_pipeline_tree2_anywhere = true }
@@ -11229,6 +11328,16 @@ if rank = simulate_logit_rank
     end
     pipeline_route_active = simulate_generate_tokens > 0 && (!pipeline_gammas.empty? || !simulate_self_spec_gpu_pipeline_schedules.empty?)
     if pipeline_route_active
+      residual_router_enabled = !simulate_self_spec_gpu_pipeline_residual_router_mean_max.nil? ||
+                                !simulate_self_spec_gpu_pipeline_residual_router_pass_threshold.nil? ||
+                                !simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min.nil?
+      if residual_router_enabled
+        pass_threshold_set = !simulate_self_spec_gpu_pipeline_residual_router_pass_threshold.nil?
+        pass_rate_set = !simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min.nil?
+        raise "residual router pass threshold and pass-rate min must be set together" if pass_threshold_set != pass_rate_set
+        raise "residual router currently supports fixed-gamma pipeline rows; disable --simulate-self-spec-gpu-pipeline-schedule" unless simulate_self_spec_gpu_pipeline_schedules.empty?
+        raise "residual router is not wired into hybrid route scoreboards; disable hybrid sweep" if simulate_self_spec_gpu_pipeline_hybrid_sweep || simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
+      end
       pipeline_mtp_k2_on_reject = if simulate_self_spec_gpu_pipeline_mtp_k2_on_reject
                                     mtp = ML::GGUF::Qwen35MTPWeights.from_safetensors(mtp_path)
                                     mtp.validate_for_qwen35!(weights.hparams)
@@ -11280,6 +11389,21 @@ if rank = simulate_logit_rank
       exact_refresh_note = ProbeRuntime.gpu_draft_exact_refresh_interval > 0 ? " draft_exact_refresh=#{ProbeRuntime.gpu_draft_exact_refresh_interval}" : ""
       exact_refresh_note += " draft_exact_refresh_prefix=#{ProbeRuntime.gpu_draft_exact_refresh_prefix}" if ProbeRuntime.gpu_draft_exact_refresh_prefix > 0
       exact_refresh_note += " draft_exact_refresh_offsets=#{ProbeRuntime.gpu_draft_exact_refresh_offsets.join(',')}" unless ProbeRuntime.gpu_draft_exact_refresh_offsets.empty?
+      residual_router_thresholds = self_spec_residual_router_thresholds(thresholds, simulate_self_spec_gpu_pipeline_residual_router_pass_threshold)
+      main_residual_router_note = ""
+      main_residual_router_skip = false
+      if residual_router_enabled
+        main_residual_router_stats = route_residual_stats(layer_vectors, layer_bases, rank, calib_count, residual_router_thresholds)
+        main_residual_router_decision = self_spec_residual_router_decision(main_residual_router_stats,
+          simulate_self_spec_gpu_pipeline_residual_router_mean_max,
+          simulate_self_spec_gpu_pipeline_residual_router_pass_threshold,
+          simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min)
+        main_residual_router_note = self_spec_residual_router_note(main_residual_router_decision, main_residual_router_stats,
+          simulate_self_spec_gpu_pipeline_residual_router_mean_max,
+          simulate_self_spec_gpu_pipeline_residual_router_pass_threshold,
+          simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min)
+        main_residual_router_skip = !main_residual_router_decision[:run]
+      end
       raise "risk-offramp repeats must be >= 1" if simulate_self_spec_gpu_pipeline_risk_offramp_repeats < 1
       risk_offramp_base_options = [] of Float64?
       add_risk_offramp_option = ->(value : Float64?) {
@@ -11455,6 +11579,23 @@ if rank = simulate_logit_rank
               risk_offramp_options.each do |risk_offramp_margin|
                 branch_snapshot_mode_options.each do |branch_snapshot_mode|
                   apply_branch_snapshot_mode.call(branch_snapshot_mode)
+                  if main_residual_router_skip
+                    backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
+                    draft_variant_note = simulate_self_spec_gpu_pipeline_draft_no_ffn ? " draft_no_ffn=1" : ""
+                    draft_no_ffn_layers_note = draft_no_ffn_layer_set ? " draft_no_ffn_layers=#{draft_no_ffn_layer_set.not_nil!.to_a.sort.join(',')}" : ""
+                    draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
+                    draft_updown_note = pipeline_updown_rank ? " draft_pca_updown=#{pipeline_updown_rank}" : ""
+                    draft_updown_layers_note = (pipeline_updown_rank && draft_updown_layer_set) ? " draft_pca_updown_layers=#{draft_updown_layer_set.not_nil!.to_a.sort.join(',')}" : ""
+                    draft_updown_fallback_note = (pipeline_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject) ? " draft_pca_updown_fallback=reject" : ""
+                    draft_updown_warmup_note = (pipeline_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts > 0) ? " draft_pca_updown_after_full_accepts=#{simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts}" : ""
+                    draft_updown_margin_note = (pipeline_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_min_margin) ? " draft_pca_updown_min_margin=#{simulate_self_spec_gpu_pipeline_draft_updown_min_margin}" : ""
+                    split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
+                    risk_offramp_note = risk_offramp_margin ? " risk_offramp_margin=#{risk_offramp_margin}" : ""
+                    branch_snapshot_mode_note = branch_snapshot_mode[:name].empty? ? "" : " branch_snapshot_mode=#{branch_snapshot_mode[:name]}"
+                    exact = simulate_self_spec_gpu_pipeline_exact_fallback_run(weights, token_ids, simulate_generate_tokens)
+                    puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{main_residual_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note}#{self_spec_pipeline_exact_fallback_fields(exact, simulate_generate_tokens)}"
+                    next
+                  end
                   pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_gamma, layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                   accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                   backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
@@ -11473,7 +11614,7 @@ if rank = simulate_logit_rank
                   tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !simulate_self_spec_gpu_pipeline_tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !simulate_self_spec_gpu_pipeline_draft_updown_min_margin.nil? || simulate_self_spec_gpu_pipeline_mtp_k2_on_reject || simulate_self_spec_gpu_pipeline_reject_offramp_after > 0) ? self_spec_pipeline_tree2_note(pipe) : ""
                   attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                   agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
-                  puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                  puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{main_residual_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                   append_draft_body_score(draft_body_score_rows, "main", "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                   append_risk_offramp_score(risk_offramp_score_rows, "main", "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, risk_offramp_margin, pipe, accept_rate)
                 end
@@ -11541,6 +11682,20 @@ if rank = simulate_logit_rank
               end
             end
           end
+          suite_residual_router_note = ""
+          suite_residual_router_skip = false
+          if residual_router_enabled
+            suite_residual_router_stats = route_residual_stats(suite_layer_vectors, suite_layer_bases, rank, suite_calib_count, residual_router_thresholds)
+            suite_residual_router_decision = self_spec_residual_router_decision(suite_residual_router_stats,
+              simulate_self_spec_gpu_pipeline_residual_router_mean_max,
+              simulate_self_spec_gpu_pipeline_residual_router_pass_threshold,
+              simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min)
+            suite_residual_router_note = self_spec_residual_router_note(suite_residual_router_decision, suite_residual_router_stats,
+              simulate_self_spec_gpu_pipeline_residual_router_mean_max,
+              simulate_self_spec_gpu_pipeline_residual_router_pass_threshold,
+              simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min)
+            suite_residual_router_skip = !suite_residual_router_decision[:run]
+          end
           if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
             pipeline_gammas.each do |pipeline_gamma|
               pipeline_splits.each do |draft_split|
@@ -11603,6 +11758,23 @@ if rank = simulate_logit_rank
                 risk_offramp_options.each do |risk_offramp_margin|
                   branch_snapshot_mode_options.each do |branch_snapshot_mode|
                   apply_branch_snapshot_mode.call(branch_snapshot_mode)
+                  if suite_residual_router_skip
+                    backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
+                    draft_variant_note = simulate_self_spec_gpu_pipeline_draft_no_ffn ? " draft_no_ffn=1" : ""
+                    draft_no_ffn_layers_note = draft_no_ffn_layer_set ? " draft_no_ffn_layers=#{draft_no_ffn_layer_set.not_nil!.to_a.sort.join(',')}" : ""
+                    draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
+                    draft_updown_note = pipeline_updown_rank ? " draft_pca_updown=#{pipeline_updown_rank}" : ""
+                    draft_updown_layers_note = (pipeline_updown_rank && draft_updown_layer_set) ? " draft_pca_updown_layers=#{draft_updown_layer_set.not_nil!.to_a.sort.join(',')}" : ""
+                    draft_updown_fallback_note = (pipeline_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject) ? " draft_pca_updown_fallback=reject" : ""
+                    draft_updown_warmup_note = (pipeline_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts > 0) ? " draft_pca_updown_after_full_accepts=#{simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts}" : ""
+                    draft_updown_margin_note = (pipeline_updown_rank && simulate_self_spec_gpu_pipeline_draft_updown_min_margin) ? " draft_pca_updown_min_margin=#{simulate_self_spec_gpu_pipeline_draft_updown_min_margin}" : ""
+                    split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
+                    risk_offramp_note = risk_offramp_margin ? " risk_offramp_margin=#{risk_offramp_margin}" : ""
+                    branch_snapshot_mode_note = branch_snapshot_mode[:name].empty? ? "" : " branch_snapshot_mode=#{branch_snapshot_mode[:name]}"
+                    exact = simulate_self_spec_gpu_pipeline_exact_fallback_run(weights, suite_token_ids, simulate_generate_tokens)
+                    puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{suite_residual_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note}#{self_spec_pipeline_exact_fallback_fields(exact, simulate_generate_tokens)}"
+                    next
+                  end
                   pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_gamma, suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                   accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                   backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
@@ -11621,7 +11793,7 @@ if rank = simulate_logit_rank
                   tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !simulate_self_spec_gpu_pipeline_tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !simulate_self_spec_gpu_pipeline_draft_updown_min_margin.nil? || simulate_self_spec_gpu_pipeline_mtp_k2_on_reject || simulate_self_spec_gpu_pipeline_reject_offramp_after > 0) ? self_spec_pipeline_tree2_note(pipe) : ""
                   attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                   agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
-                  puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                  puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{suite_residual_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                   append_draft_body_score(draft_body_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                   append_risk_offramp_score(risk_offramp_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, risk_offramp_margin, pipe, accept_rate)
                 end

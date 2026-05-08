@@ -8604,3 +8604,28 @@ The useful new signal is prompt/span residual separability before submit. At ran
 - daedalus: The frame shifts from "choose one safer self-spec route" to "classify whether to speculate at all before submitting GPU work."
 - maieutic: The assumption that clean-span quality can be inferred from the route itself after work is paid is too late; the router must use pre-submit features.
 - adversary: Residual features are only a small-suite signal and can overfit repeat patterns. First implementation must be conservative and report exact skipped rows as neutral, not as hidden wins.
+
+**decision_update_61:** Implemented the conservative pre-submit residual router as a default-off fixed-gamma probe. New flags:
+`--simulate-self-spec-gpu-pipeline-residual-router-mean-max=F`,
+`--simulate-self-spec-gpu-pipeline-residual-router-pass-threshold=F`, and
+`--simulate-self-spec-gpu-pipeline-residual-router-pass-rate-min=F`.
+When enabled, the harness computes held-out low-rank residual stats before submitting GPU self-spec work. If the span fails the configured predicates, it emits an explicit exact greedy fallback row with `residual_router=skip`, `chunks=0`, `parity=true`, and `plain_speedup=1.0x`; otherwise it runs the normal fixed-gamma route and annotates the row with `residual_router=run`.
+
+Mechanics are verified, promotion is blocked. On the Qwen3.6-27B rank2/gamma32 3-prompt gate with `mean_max=0.53` and `pass@0.5>=45%`, the router did the intended classification: main skipped (`residual_mean=0.681482`, pass@0.5 `13.05%`), repeat-markdown ran (`0.514299`, `50.94%`), repeat-SQL skipped (`0.573695`, `36.04%`), all parity true. However, the selected repeat-markdown row measured `plain_speedup=0.7341x` in this run despite `100%` acceptance. This refines the hypothesis: residual features are useful as an acceptance/reject-risk filter, but acceptance alone is not a sufficient expected-value signal because draft wall/scheduler variance can still dominate.
+
+Next step is a two-stage value router: first fail closed on residual risk, then run high-gamma only when a cheap pre-submit value signal predicts that draft wall plus verifier wall can beat exact. Candidate value features are repetition/entropy, estimated verifier chunk count, prior prompt-class timing, stricter residual bands, or repeated ABBA confirmation before any default.
+
+**evidence_update_61:**
+- claim: "The residual router builds, focused specs pass, and both skip/run smoke paths preserve parity."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_residual_router_build crystal build bin/qwen35_deltanet_fixed_basis_probe.cr -o /tmp/qwen35_residual_router_probe --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_residual_router_spec crystal spec spec/qwen35_decode_top2_spec.cr spec/qwen35_recurrent_checkpoint_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `4 examples, 0 failures`; `/tmp/qwen35_residual_router_skip_smoke.log`; `/tmp/qwen35_residual_router_run_smoke.log`
+  verified_at: 2026-05-07
+  decay_trigger: residual feature computation, fixed-gamma pipeline call sites, exact fallback loop, or decode verifier state semantics changes
+- claim: "The first 27B residual-router gate classified the intended clean/fragile prompts, but did not prove a speed promotion."
+  source: `/tmp/qwen36_residual_router_gate_20260507210804/summary.tsv`
+  verified_at: 2026-05-07
+  decay_trigger: prompt suite, host load, model file, residual thresholds, rank/layer set, or Metal scheduler changes
+**quadrumvirate_update_61:**
+- cassandra: The expected success was avoiding catastrophic reject rows; that part happened. The observed failure is that a clean accepted row can still be slower than exact under current wall timing.
+- daedalus: Pivot from binary "safe to speculate" routing to expected-value routing. We need to eliminate low-value self-spec submits, not just reject-prone ones.
+- maieutic: The hidden assumption was that `100%` acceptance implies positive speed. The repeat-markdown row falsified that under this run.
+- adversary: The 27B evidence is timing-noisy and one run. Treat this as a verified harness feature and a refuted promotion, not as a stable performance law.
