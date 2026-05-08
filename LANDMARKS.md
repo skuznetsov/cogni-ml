@@ -9335,3 +9335,23 @@ Conclusion: the CUDA substrate now owns the raw Driver API boundary rather than 
 - daedalus: The next abstraction can now focus on Qwen recurrent-layer state/weights, not raw CUDA FFI mechanics.
 - maieutic: The assumption that probe-local lib bindings were harmless was locally true but architecturally weak; they prevented a reusable backend boundary.
 - adversary: This still does not provide streams, events, async copies, or typed kernel parameter builders. It is enough for the current synchronous correctness probes only.
+
+**decision_update_94:** Added a resident sequence runner facade. `ML::CUDA::ResidentSequenceRunner` wraps the current CUDA recurrent probe lifecycle into explicit object methods: `upload_weights`, `reset_sequence`, `run_sequence`, `run_repeated`, and `read_outputs`. The Qwen recurrent-layer launch graph still lives in `bin/cuda_recurrent_prep_output_probe.cr`, but the top-level execution no longer calls raw closures directly.
+
+Conclusion: the CUDA path now has an explicit resident-sequence lifecycle contract. This is a scaffold for the real Qwen recurrent-layer runner object: the next extraction should move Qwen-specific buffers, kernel parameters, and launch graph behind typed methods rather than generic proc callbacks.
+
+**evidence_update_94:**
+- claim: "The resident sequence runner facade has local syntax coverage through the recurrent-layer probe."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_runner_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: `src/ml/cuda/driver.cr`, recurrent probe source, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "Routing recurrent probe execution through `ResidentSequenceRunner` preserves CUDA/CPU parity."
+  source: remote Qwen3.5 9B layer0 `--tokens 4 --reps 1 --warmup 1` -> `weight_upload_ms=21.809`, `cuda_ms_per_token=1.638`, `cpu_ms_per_token=4400.314`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: resident runner, CUDA wrapper layer, recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_94:**
+- cassandra: The likely regression was lifecycle ordering: upload/reset/warmup/timed/correctness/readback. The remote gate exercised the full sequence through the facade.
+- daedalus: The facade is intentionally generic and proc-backed; the next frame must move Qwen-specific state and launch graph into a typed recurrent-layer object.
+- maieutic: The assumption that "object methods" require a full backend object in one step was too large. A lifecycle facade is a smaller verified boundary.
+- adversary: This is not yet strong encapsulation. It documents and routes lifecycle phases, but the closures still capture many probe-local variables.

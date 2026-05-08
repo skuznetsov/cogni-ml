@@ -140,4 +140,39 @@ module ML::CUDA
       block_x, block_y, block_z, shared_mem_bytes, Pointer(Void).null,
       params, Pointer(Void*).null), "cuLaunchKernel(#{label})"
   end
+
+  class ResidentSequenceRunner
+    getter tokens : Int32
+
+    def initialize(@tokens : Int32,
+                   @upload_weights : Proc(Nil),
+                   @reset_sequence : Proc(Nil),
+                   @run_token : Proc(Int32, Nil),
+                   @read_outputs : Proc(Nil)? = nil)
+      raise ArgumentError.new("tokens must be positive") unless @tokens > 0
+    end
+
+    def upload_weights : Nil
+      @upload_weights.call
+    end
+
+    def reset_sequence : Nil
+      @reset_sequence.call
+    end
+
+    def run_sequence : Nil
+      @tokens.times { |tok| @run_token.call(tok) }
+    end
+
+    def run_repeated(reps : Int32) : Int32
+      raise ArgumentError.new("reps must be positive") unless reps > 0
+
+      reps.times { run_sequence }
+      reps * @tokens
+    end
+
+    def read_outputs : Nil
+      @read_outputs.try(&.call)
+    end
+  end
 end

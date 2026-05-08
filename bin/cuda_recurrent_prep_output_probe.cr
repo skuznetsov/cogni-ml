@@ -292,12 +292,6 @@ begin
     ML::CUDA.copy_htod!(d_ssm_state, ssm_state_init.to_unsafe.as(Void*), bytesize_f32(ssm_state_init.size), "ssm_state")
   }
 
-  upload_t0 = Time.instant
-  upload_weights.call
-  ML::CUDA.synchronize!("cuCtxSynchronize(upload_weights)")
-  weight_upload_ms = (Time.instant - upload_t0).total_milliseconds
-  reset_sequence.call
-
   hidden_u32 = hidden.to_u32
   ffn_dim_u32 = ffn_dim.to_u32
   qkv_dim_u32 = qkv_dim.to_u32
@@ -470,31 +464,38 @@ begin
     ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
   }
 
-  warmup.times do
-    tokens.times { |tok| run_token.call(tok) }
-  end
-  ML::CUDA.synchronize!("cuCtxSynchronize(warmup)")
-  reset_sequence.call
-  gpu_t0 = Time.instant
-  reps.times do
-    tokens.times { |tok| run_token.call(tok) }
-  end
-  ML::CUDA.synchronize!("cuCtxSynchronize")
-  timed_steps = reps * tokens
-  gpu_ms = (Time.instant - gpu_t0).total_milliseconds / timed_steps
-
-  reset_sequence.call
-  tokens.times { |tok| run_token.call(tok) }
-  ML::CUDA.synchronize!("cuCtxSynchronize(correctness)")
-
   conv_state_gpu = Array(Float32).new(conv_state_init.size, 0.0_f32)
   ssm_state_gpu = Array(Float32).new(ssm_state_init.size, 0.0_f32)
   attn_out_gpu = Array(Float32).new(hidden, 0.0_f32)
   final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
-  ML::CUDA.copy_dtoh!(conv_state_gpu.to_unsafe.as(Void*), d_conv_state, bytesize_f32(conv_state_gpu.size), "conv_state")
-  ML::CUDA.copy_dtoh!(ssm_state_gpu.to_unsafe.as(Void*), d_ssm_state, bytesize_f32(ssm_state_gpu.size), "ssm_state")
-  ML::CUDA.copy_dtoh!(attn_out_gpu.to_unsafe.as(Void*), d_attn_out, bytesize_f32(attn_out_gpu.size), "attn_out")
-  ML::CUDA.copy_dtoh!(final_gpu_all.to_unsafe.as(Void*), d_final_all, bytesize_f32(final_gpu_all.size), "finals")
+  read_outputs = -> {
+    ML::CUDA.copy_dtoh!(conv_state_gpu.to_unsafe.as(Void*), d_conv_state, bytesize_f32(conv_state_gpu.size), "conv_state")
+    ML::CUDA.copy_dtoh!(ssm_state_gpu.to_unsafe.as(Void*), d_ssm_state, bytesize_f32(ssm_state_gpu.size), "ssm_state")
+    ML::CUDA.copy_dtoh!(attn_out_gpu.to_unsafe.as(Void*), d_attn_out, bytesize_f32(attn_out_gpu.size), "attn_out")
+    ML::CUDA.copy_dtoh!(final_gpu_all.to_unsafe.as(Void*), d_final_all, bytesize_f32(final_gpu_all.size), "finals")
+  }
+  runner = ML::CUDA::ResidentSequenceRunner.new(tokens, upload_weights, reset_sequence, run_token, read_outputs)
+
+  upload_t0 = Time.instant
+  runner.upload_weights
+  ML::CUDA.synchronize!("cuCtxSynchronize(upload_weights)")
+  weight_upload_ms = (Time.instant - upload_t0).total_milliseconds
+  runner.reset_sequence
+
+  warmup.times do
+    runner.run_sequence
+  end
+  ML::CUDA.synchronize!("cuCtxSynchronize(warmup)")
+  runner.reset_sequence
+  gpu_t0 = Time.instant
+  timed_steps = runner.run_repeated(reps)
+  ML::CUDA.synchronize!("cuCtxSynchronize")
+  gpu_ms = (Time.instant - gpu_t0).total_milliseconds / timed_steps
+
+  runner.reset_sequence
+  runner.run_sequence
+  ML::CUDA.synchronize!("cuCtxSynchronize(correctness)")
+  runner.read_outputs
 
   lines = [] of String
   ok = true
