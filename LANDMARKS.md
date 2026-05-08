@@ -8867,3 +8867,19 @@ Conclusion: naive cross-row weight-tile reuse does not move wall time enough in 
 - daedalus: Stop trying isolated head microkernels for now. The accepted verifier needs body-level fusion/elimination or a verifier route that avoids repeated layer work.
 - maieutic: The hidden assumption was that output-head weight traffic was the easiest exact bottleneck. It is measurable but not enough for this simple kernel.
 - adversary: Leaving batch2 default-off would create maintenance risk without a measured benefit; removal is the safer engineering choice.
+
+**decision_update_72:** Rechecked two existing prefill WBA knobs under the exact accepted n-gram verifier workload and did not find a promotion candidate. `QWEN35_PREFILL_FFN_DOWN_ADD_FUSED=1` remained noise-level on the clean 27B b31 verifier path: base `377.0/374.8ms`, fused `377.2/374.5ms`. Lowering `QWEN35_Q4K_PAIR_H16_MIN_BATCH` from the default `64` to `16` so b31 can use paired Q4 gate/up H16 conversion was also noise-level: base `375.4/375.0ms`, pair16 `374.8/375.8ms`. Both kept `32/32` accepted. No source changes were retained.
+
+Conclusion: the accepted n-gram verifier is now too balanced for these local WBA knobs to move wall time. The remaining exact lever is not another scalar prefill knob; it is either a body-level execution-model change or a route/economics change that avoids running the full target verifier body.
+
+**evidence_update_72:**
+- claim: "Existing prefill FFN-down-add fusion and b31 Q4 pair-H16 activation do not materially improve the clean accepted n-gram verifier path."
+  source: `/tmp/qwen36_ngram_prefill_down_add_abba_20260508085920/summary.log` -> base `377.0/374.8ms`, fused `377.2/374.5ms`; `/tmp/qwen36_ngram_q4pair_b31_abba_20260508090025/summary.log` -> base `375.4/375.0ms`, pair16 `374.8/375.8ms`; all rows `accepted=32/32`
+  verified_at: 2026-05-08
+  decay_trigger: prefill FFN down-add route, Q4 pair-H16 route, verifier chunk size, or target model changes
+
+**quadrumvirate_update_72:**
+- cassandra: The likely outcome was small/noisy because prior pp64/pp256 evidence already showed these WBA paths are not large wins.
+- daedalus: This closes the "maybe old WBA refutations revive on b31" branch for the current accepted verifier.
+- maieutic: The assumption that visible conversion/FFN-down profile entries imply wall leverage was too local; grouped command-buffer wall is distributed across many phases.
+- adversary: Do not promote env-only WBA knobs from sub-millisecond ABBA differences under host noise.
