@@ -9295,3 +9295,23 @@ Conclusion: the recurrent-layer CUDA probe now exposes the intended backend owne
 - daedalus: The useful frame is now lifecycle ownership: one-time model upload, per-sequence state/input reset, resident token execution, and readback. The next code move should make these object methods instead of closures.
 - maieutic: The assumption that "not in the timed loop" is enough was weak; explicit split makes the contract inspectable and measurable.
 - adversary: The split still lives inside a standalone probe. It is not yet a production CUDA backend, and no full decoder path uses it.
+
+**decision_update_92:** Added the first reusable CUDA ownership layer. New `src/ml/cuda/driver.cr` defines `ML::CUDA::Context` for CUDA Driver API context lifecycle and `ML::CUDA::DeviceBuffer` for device memory ownership. `bin/cuda_recurrent_prep_output_probe.cr` now uses these objects for context and buffer allocation/freeing while keeping recurrent-layer launch parameters probe-local.
+
+Conclusion: CUDA backend work now has a small shared ownership substrate instead of fully duplicated probe-local context/buffer management. This is not yet a recurrent-layer runner facade, but it removes a concrete blocker to one: object-owned context and buffers can now outlive individual sequence calls and be reused by future CUDA probes/backends.
+
+**evidence_update_92:**
+- claim: "The reusable CUDA driver ownership layer has local syntax coverage through the recurrent-layer probe."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_driver_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: `src/ml/cuda/driver.cr`, recurrent probe source, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The recurrent-layer probe still matches CPU references when using `ML::CUDA::Context` and `ML::CUDA::DeviceBuffer` for ownership."
+  source: remote Qwen3.5 9B layer0 `--tokens 4 --reps 1 --warmup 1` -> `weight_upload_ms=21.768`, `cuda_ms_per_token=1.646`, `cpu_ms_per_token=4642.045`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: CUDA ownership layer, recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_92:**
+- cassandra: Refactoring context/buffer ownership could break the implicit current CUDA context used by module loads and launches. The remote run verified mixed `ML::CUDA` ownership plus existing module-launch bindings in one process.
+- daedalus: This is the first reusable substrate, not the final abstraction. The next pivot is a recurrent-layer runner object with method boundaries for upload/reset/run/readback.
+- maieutic: The hidden assumption that a backend object must be built in one jump was rejected. Generic ownership is a smaller falsifiable boundary and already removes duplicated lifecycle code.
+- adversary: Existing CUDA probes still duplicate many lib bindings and launch-parameter details. This layer only owns context and memory; it does not yet model streams, modules, kernels, layer weights, or decode scheduling.

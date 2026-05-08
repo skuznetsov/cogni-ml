@@ -82,6 +82,8 @@ crystal build bin/cuda_driver_smoke.cr -o build/cuda_driver_smoke
 
 The CUDA smoke is a backend boundary probe only: it links `libcuda`, loads embedded PTX, launches a vector-add kernel, and checks the result.
 
+CUDA probe code uses `src/ml/cuda/driver.cr` for reusable CUDA context and device-buffer ownership. This is intentionally small: it owns `cuCtxCreate`/`cuCtxDestroy` and `cuMemAlloc`/`cuMemFree`, while higher-level layer execution is still probe-local until the CUDA backend split is promoted.
+
 Build the first quantized CUDA correctness probe on NVIDIA/Linux hosts:
 
 ```sh

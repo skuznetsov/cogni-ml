@@ -9,6 +9,7 @@ require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/quant_matmul"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/cuda/driver"
 
 @[Link(ldflags: "-lcuda")]
 lib LibCUDARecPrepOut
@@ -248,18 +249,6 @@ tokens.times do |tok|
 end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds / tokens
 
-cuda! LibCUDARecPrepOut.cuInit(0_u32), "cuInit"
-dev = uninitialized LibCUDARecPrepOut::CUdevice
-cuda! LibCUDARecPrepOut.cuDeviceGet(pointerof(dev), 0), "cuDeviceGet"
-name_buf = Bytes.new(256)
-cuda! LibCUDARecPrepOut.cuDeviceGetName(name_buf.to_unsafe, name_buf.size, dev), "cuDeviceGetName"
-device_name = String.new(name_buf.to_unsafe).strip
-cc_major = uninitialized Int32
-cc_minor = uninitialized Int32
-cuda! LibCUDARecPrepOut.cuDeviceComputeCapability(pointerof(cc_major), pointerof(cc_minor), dev), "cuDeviceComputeCapability"
-ctx = Pointer(Void).null
-cuda! LibCUDARecPrepOut.cuCtxCreate_v2(pointerof(ctx), 0_u32, dev), "cuCtxCreate"
-
 dn_mod = Pointer(Void).null
 q4_mod = Pointer(Void).null
 q5_mod = Pointer(Void).null
@@ -276,9 +265,16 @@ post_fn = Pointer(Void).null
 q4_fn = Pointer(Void).null
 q5_fn = Pointer(Void).null
 q6_fn = Pointer(Void).null
+cuda_ctx = nil.as(ML::CUDA::Context?)
+buffers = [] of ML::CUDA::DeviceBuffer
 ptrs = [] of UInt64
 
 begin
+  cuda_ctx = ML::CUDA::Context.create
+  device_name = cuda_ctx.device_name
+  cc_major = cuda_ctx.compute_capability_major
+  cc_minor = cuda_ctx.compute_capability_minor
+
   cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(dn_mod), DN_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(delta)"
   cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(q4_mod), Q4K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q4)"
   cuda! LibCUDARecPrepOut.cuModuleLoadData(pointerof(q5_mod), Q5K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q5)"
@@ -305,9 +301,9 @@ begin
            ffn_gate_raw.size.to_u64, ffn_up_raw.size.to_u64, ffn_down_raw.size.to_u64,
            bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(hidden), bytesize_f32(tokens * hidden)]
   sizes.each_with_index do |size_bytes, i|
-    pdev = 0_u64
-    cuda! LibCUDARecPrepOut.cuMemAlloc_v2(pointerof(pdev), size_bytes), "cuMemAlloc(#{i})"
-    ptrs << pdev
+    buffer = ML::CUDA::DeviceBuffer.new(size_bytes)
+    buffers << buffer
+    ptrs << buffer.ptr
   end
   d_xs, d_attn_norm_w, d_cur,
     d_qkv_w, d_gate_w, d_alpha_w, d_beta_w,
@@ -573,11 +569,11 @@ begin
   lines.each { |line| puts line }
   puts "ok=#{ok}"
 ensure
-  ptrs.each { |ptr| LibCUDARecPrepOut.cuMemFree_v2(ptr) unless ptr == 0_u64 }
+  buffers.each(&.close)
   LibCUDARecPrepOut.cuModuleUnload(dn_mod) unless dn_mod.null?
   LibCUDARecPrepOut.cuModuleUnload(q4_mod) unless q4_mod.null?
   LibCUDARecPrepOut.cuModuleUnload(q5_mod) unless q5_mod.null?
   LibCUDARecPrepOut.cuModuleUnload(q6_mod) unless q6_mod.null?
-  LibCUDARecPrepOut.cuCtxDestroy_v2(ctx) unless ctx.null?
+  cuda_ctx.try(&.close)
   gguf.close
 end
