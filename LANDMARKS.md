@@ -8677,3 +8677,31 @@ Conclusion: stop spending iterations on scalar residual/repetition routing for t
 - daedalus: Pivot from classifier tuning to proposal-cost elimination. If draft plus verifier is above plain, a better classifier can only skip more often; it cannot create speed.
 - maieutic: The hidden assumption was that exact self-spec needs only high acceptance. The actual necessary condition is `proposal_cost + verifier_cost < plain_cost` after overlap.
 - adversary: Cost-truth is still local to rank2/gamma32/three-prompt 27B. It refutes this route, not all possible self-spec or cheap proposal sources.
+
+**decision_update_64:** Tested the first proposal-cost elimination route: exact n-gram prompt-copy proposals with an economic chunk-size gate. This is not another low-rank/self-draft body; it is a near-free proposal source that only pays the exact target verifier when history contains a repeated continuation. `ML::GGUF::NgramDraft.candidates` now accepts `min_candidates`, returning no proposal when the final candidate chunk is smaller than the configured amortization floor. The default remains `0`, preserving historical behavior.
+
+The gate is wired through three entrypoints: `bin/qwen35_ngram_speculative.cr` (`--min-candidates` / `QWEN35_NGRAM_MIN_CANDIDATES`), `bin/qwen35_generate.cr` (`QWEN35_NGRAM_MIN_CANDIDATES`), and `bin/qwen35_speculative_accept.cr` (`--ngram-min-candidates` / `QWEN35_SPEC_NGRAM_MIN_CANDIDATES`). This lets the standalone probe, practical CLI, and neural speculative harness share the same fail-closed economics instead of each growing a separate n-gram policy.
+
+Focused 27B evidence with `--min-candidates 8`, `tokens=32`, `gamma=32`, `min_ngram=4`, `max_ngram=8` supports the pivot. A fact prompt with no repeated continuation stayed target-only (`accepted=0/0`, `cycles=0`, `plain_steps=32`). `repeat_markdown_tbl` kept a one-cycle exact proposal (`accepted=14/32`) and measured `56.43ms/tok` versus plain `60.35ms/tok` (`1.069x`). `repeat_sql_values` accepted `27/27` and measured `21.62ms/tok` versus plain `61.64ms/tok` (`2.850x`). The standalone harness had its plain equality check enabled; no mismatch exception occurred.
+
+Conclusion: this is the first current route that directly removes proposal-body cost rather than trying to make the low-rank body cheaper. It is narrow: it helps repeated/prompt-copy spans and is neutral/noisy elsewhere. The next gate should compose `ngram_min_candidates + risk_gate` ahead of neural self-spec in the same workload, so repeat spans never pay neural draft cost while non-repeat/adversarial spans fall through to exact or the existing neural policy.
+
+**evidence_update_64:**
+- claim: "The n-gram economic gate preserves default behavior and rejects invalid parameters."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_min_spec crystal spec spec/ngram_draft_spec.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `12 examples, 0 failures`
+  verified_at: 2026-05-07
+  decay_trigger: n-gram candidate semantics, recursive candidate extension, or invalid-parameter handling changes
+- claim: "The economic gate compiles through standalone, practical CLI, and speculative-accept entrypoints."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_min_build crystal build --release bin/qwen35_ngram_speculative.cr -o /tmp/qwen35_ngram_speculative_min --link-flags="..."`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_min_generate_build crystal build bin/qwen35_generate.cr -o /tmp/qwen35_generate_min --link-flags="..."`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_min_spec_accept_build crystal build bin/qwen35_speculative_accept.cr -o /tmp/qwen35_speculative_accept_min --link-flags="..."`
+  verified_at: 2026-05-07
+  decay_trigger: CLI option parsing, n-gram decode policy, speculative harness argument surface, or bridge link flags change
+- claim: "Near-free exact n-gram proposals beat plain on selected repeated 27B spans while no-repeat prompts fail closed."
+  source: `/tmp/qwen36_ngram_min_candidates_20260507221641` -> fact `accepted=0/0`, markdown `1.069x`, SQL-values `2.850x`, plain-check enabled and no mismatch exception
+  verified_at: 2026-05-07
+  decay_trigger: model file, tokenizer, prompt suite, host load, n-gram risk/min-candidate policy, or target verifier path changes
+
+**quadrumvirate_update_64:**
+- cassandra: The likely success mode was narrow and pattern-dependent: repeated spans can win because proposal cost is almost zero; non-repeat spans must remain target-only.
+- daedalus: The frame shift is from "make self-draft cheaper" to "avoid self-draft when history already contains an exact proposal source."
+- maieutic: The hidden assumption was that proposals must come from neural compute. Repetition shows a data-structure proposal can be good enough because the exact verifier owns correctness.
+- adversary: This does not solve general reasoning prompts and should not be promoted as a blanket default. It is a router primitive whose next proof must be a mixed-prompt A/B against plain and neural self-spec.

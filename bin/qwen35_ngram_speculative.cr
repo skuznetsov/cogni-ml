@@ -15,6 +15,7 @@ n_gen = 64
 gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 max_ngram = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
 min_ngram = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
+min_candidates = (ENV["QWEN35_NGRAM_MIN_CANDIDATES"]? || "0").to_i
 recursive_ngram = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 check_plain = ENV["QWEN35_NGRAM_CHECK_PLAIN"]? != "0"
@@ -27,6 +28,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--gamma N", "Maximum n-gram draft candidates per verifier chunk (default: env QWEN35_NGRAM_GAMMA or 32)") { |value| gamma = value.to_i }
   parser.on("--min-ngram N", "Minimum suffix match length before drafting (default: env QWEN35_NGRAM_MIN or 6)") { |value| min_ngram = value.to_i }
   parser.on("--max-ngram N", "Maximum suffix match length to search (default: env QWEN35_NGRAM_MAX or 8)") { |value| max_ngram = value.to_i }
+  parser.on("--min-candidates N", "Skip n-gram chunks shorter than N candidates; 0 preserves historical behavior") { |value| min_candidates = value.to_i }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through the draft scratch history") { recursive_ngram = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram drafts after a rejected candidate chunk") { disable_after_reject = false }
   parser.on("--no-check", "Skip plain greedy replay/equality check") { check_plain = false }
@@ -43,6 +45,7 @@ raise ArgumentError.new("--tokens must be positive") unless n_gen > 0
 raise ArgumentError.new("--gamma must be positive") unless gamma > 0
 raise ArgumentError.new("--min-ngram must be positive") unless min_ngram > 0
 raise ArgumentError.new("--max-ngram must be >= --min-ngram") unless max_ngram >= min_ngram
+raise ArgumentError.new("--min-candidates must be non-negative") unless min_candidates >= 0
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -92,7 +95,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{weights.hparams.n_layer} dim=#{weights.hparams.n_embd} vocab=#{weights.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} n_gen=#{n_gen}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} n_gen=#{n_gen}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -112,7 +115,7 @@ target_backup_ms = 0.0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
-  candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(history, Math.min(gamma, n_gen - generated_ids.size), max_ngram, min_ngram, recursive: recursive_ngram)
+  candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(history, Math.min(gamma, n_gen - generated_ids.size), max_ngram, min_ngram, recursive: recursive_ngram, min_candidates: min_candidates)
 
   if candidates.empty?
     generated_ids << target_next

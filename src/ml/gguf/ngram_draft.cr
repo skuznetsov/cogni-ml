@@ -8,27 +8,39 @@ module ML::GGUF
                    gamma : Int32,
                    max_ngram : Int32,
                    min_ngram : Int32,
-                   recursive : Bool = false) : Array(Int32)
+                   recursive : Bool = false,
+                   min_candidates : Int32 = 0) : Array(Int32)
       raise ArgumentError.new("gamma must be positive") unless gamma > 0
       raise ArgumentError.new("min_ngram must be positive") unless min_ngram > 0
       raise ArgumentError.new("max_ngram must be >= min_ngram") unless max_ngram >= min_ngram
+      raise ArgumentError.new("min_candidates must be non-negative") unless min_candidates >= 0
       return [] of Int32 if history.empty?
 
-      return candidates_once(history, gamma, max_ngram, min_ngram) unless recursive
+      result = if recursive
+                 first = candidates_once(history, gamma, max_ngram, min_ngram)
+                 if first.empty? || first.size >= gamma
+                   first
+                 else
+                   scratch = history.dup
+                   scratch.concat(first)
+                   expanded = first
+                   while expanded.size < gamma
+                     chunk = candidates_once(scratch, gamma - expanded.size, max_ngram, min_ngram)
+                     break if chunk.empty?
+                     expanded.concat(chunk)
+                     scratch.concat(chunk)
+                   end
+                   expanded
+                 end
+               else
+                 candidates_once(history, gamma, max_ngram, min_ngram)
+               end
 
-      first = candidates_once(history, gamma, max_ngram, min_ngram)
-      return first if first.empty? || first.size >= gamma
-
-      scratch = history.dup
-      scratch.concat(first)
-      result = first
-      while result.size < gamma
-        chunk = candidates_once(scratch, gamma - result.size, max_ngram, min_ngram)
-        break if chunk.empty?
-        result.concat(chunk)
-        scratch.concat(chunk)
+      if min_candidates > 0 && result.size < min_candidates
+        [] of Int32
+      else
+        result
       end
-      result
     end
 
     def risky_candidate_shape?(ids : Array(Int32), min_size : Int32 = 16, match_len : Int32 = 0) : Bool

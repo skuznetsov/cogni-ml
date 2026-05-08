@@ -28,6 +28,13 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 3, min_ngram: 3).should eq([] of Int32)
   end
 
+  it "can suppress tiny candidate chunks below an economic minimum" do
+    history = [1, 2, 1]
+
+    ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 1, min_ngram: 1, min_candidates: 3).should eq([] of Int32)
+    ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 1, min_ngram: 1, min_candidates: 2).should eq([2, 1])
+  end
+
   it "rejects invalid parameters" do
     expect_raises(ArgumentError, "gamma must be positive") do
       ML::GGUF::NgramDraft.candidates([1, 2, 1], gamma: 0, max_ngram: 2, min_ngram: 1)
@@ -35,6 +42,10 @@ describe ML::GGUF::NgramDraft do
 
     expect_raises(ArgumentError, "max_ngram must be >= min_ngram") do
       ML::GGUF::NgramDraft.candidates([1, 2, 1], gamma: 1, max_ngram: 1, min_ngram: 2)
+    end
+
+    expect_raises(ArgumentError, "min_candidates must be non-negative") do
+      ML::GGUF::NgramDraft.candidates([1, 2, 1], gamma: 1, max_ngram: 1, min_ngram: 1, min_candidates: -1)
     end
   end
 
