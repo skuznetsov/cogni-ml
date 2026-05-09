@@ -10438,3 +10438,27 @@ Conclusion: cache hints are neutral on RTX 5060 Ti for current Q4_K decode GEMV.
 - daedalus: Do not keep trying to force `x` residency locally. Next exact Q4 work needs a different dot/dequant schedule, fewer instructions per quant block, or a larger fusion boundary.
 - maieutic: The assumption "duplicated x loads are still a major uncached traffic source" is not supported for these shapes.
 - adversary: This refutes only `.ca` cache hints for activation loads. It does not refute source-level compiler scheduling, vectorized dequant, or fused dual-output kernels that eliminate duplicated work rather than hinting cache policy.
+
+**decision_update_142:** Added and tested a metadata-only Q4_K repack microbench. Unlike the earlier naive repack, this keeps raw packed 4-bit q bytes and only pre-expands the per-subblock Q4_K scale/min metadata to f32. This tests the narrow hypothesis that packed scale/min extraction is expensive enough to justify a smaller memory increase than the full u8-qval repack.
+
+Conclusion: metadata-only repack is exact but not a hot decode path. It raises hot FFN weight-side bytes by `1.444x` and regresses hot `4096x12288` Q4_K GEMV from `~0.1098ms` to `~0.1270ms`. The tiny `4096x32` projection improves from `0.0064ms` to `0.0058ms`, but the absolute gain is too small to matter and the hot FFN regression dominates. Keep this only as a standalone probe; do not integrate metadata-only Q4 scale/min arrays into the model runner.
+
+**evidence_update_142:**
+- claim: "Metadata-only Q4_K repack preserves tensor-level correctness."
+  source: remote `/tmp/cuda_q4k_repack_probe_meta` sweep -> `meta_cos=1.0`, max diff <= `4.6938658e-7`, `ok=true` on tested Q4_K tensors
+  verified_at: 2026-05-09
+  decay_trigger: metadata unpack helper, Q4_K layout, CUDA metadata kernel, or CPU reference changes
+- claim: "Metadata-only Q4_K repack regresses hot FFN Q4_K GEMV."
+  source: remote `--reps 120 --warmup 12` -> `blk.0.ffn_up.weight` `raw_cuda_ms=0.1098`, `meta_cuda_ms=0.1270`, `meta_speedup=0.8645`; `blk.0.ffn_gate.weight` `0.1098 -> 0.1269`, speedup `0.8655`; `blk.1.ffn_up.weight` `0.1098 -> 0.1270`, speedup `0.8649`; all `meta_ratio=1.444`
+  verified_at: 2026-05-09
+  decay_trigger: hot Q4 tensor shapes, metadata layout, GPU memory/cache behavior, or CUDA driver changes
+- claim: "Metadata-only Q4_K repack helps tiny Q4_K projections but not enough to matter."
+  source: remote `blk.0.ssm_alpha.weight` -> shape `4096x32`, `raw_cuda_ms=0.0064`, `meta_cuda_ms=0.0058`, `meta_speedup=1.1162`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: launch overhead, small projection route, or tensor mix changes
+
+**quadrumvirate_update_142:**
+- cassandra: The expected failure mode was extra metadata bandwidth outweighing removed scale/min bit extraction on hot shapes; the sweep confirms it.
+- daedalus: The remaining exact Q4 path is not "predecode metadata"; it must reduce total work without materially increasing bytes, or fuse consumers so the extra representation is reused many times.
+- maieutic: The assumption "scale/min extraction is a dominant hot-shape cost" is false at this memory trade-off.
+- adversary: This refutes f32 metadata-only repack for decode GEMV. It does not refute a more compact f16/int metadata format, but such a format must prove exactness or be treated as approximate.
