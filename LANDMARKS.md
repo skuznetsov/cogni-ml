@@ -10722,3 +10722,27 @@ Conclusion: the signal was not robust. Initial five-layer top1 correctness held 
 - daedalus: Continue pivoting away from head CTA/reduce retuning; pursue elimination/shortlist or body row-compute changes.
 - maieutic: The assumption that final reduce was material was false at current scale; the body-floor and profile still point to Q6 row dot/dequant.
 - adversary: This refutes only the 512-thread reduce shape, not all head algorithms.
+
+**decision_update_155:** Refuted promoting Q6 FFN-down add `warp8` row packing. A temporary branch duplicated `q6_k_gemv_add_warp4_f32` as `q6_k_gemv_add_warp8_f32`, used 8 row-warps per CTA with 256-thread launches, and routed only Q6 FFN-down residual-add GEMV through `QWEN_CUDA_Q6_ADD_WARP8=1`. This was the smallest follow-up to the body-floor/profile evidence because it avoided touching the output head and tested the Q6 body path directly.
+
+Conclusion: correctness held, but the full-model signal was a stable regression. Five-layer `start_pos=63 --read-logits` preserved logits/top1 (`logits_cos=1.0`, `top1_gpu=top1_cpu=100253`) and showed only a tiny local change: base `7.677/7.678 ms`, warp8 `7.665/7.675 ms`. Full 9B steady ABBA regressed consistently: base `22.897/22.934/22.957 ms/tok`, warp8 `22.950/22.983/23.005 ms/tok`. The temporary PTX and runner route were removed. Do not retry naive Q6 row-warps-per-CTA packing; future Q6 work needs a different dot/dequant representation or a larger producer-consumer fusion boundary.
+
+**evidence_update_155:**
+- claim: "Q6 FFN-down add warp8 preserves the five-layer full-logit oracle."
+  source: remote temporary `/tmp/cuda_mixed_stack_probe_q6addw8 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> base `7.677/7.678 ms`, warp8 `7.665/7.675 ms`, all `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: Q6 add PTX, recurrent/full-attn FFN-down routing, CUDA driver scheduling, or five-layer oracle changes
+- claim: "Q6 FFN-down add warp8 regresses full 9B steady decode."
+  source: remote temporary full 9B ABBA `--all-layers --tokens=1 --max-seq=64 --warmup=1 --steady-reps=16 --skip-debug-readback --perf-only` -> base `22.897/22.934/22.957 ms/tok`, warp8 `22.950/22.983/23.005 ms/tok`, same `top1_gpu=8894`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA scheduling/load, Q6 FFN-down tensor shapes, mixed-stack timing harness, or GPU architecture changes
+- claim: "The temporary Q6 FFN-down add warp8 code was removed after refutation."
+  source: local `git diff -- src/ml/cuda/kernels/q6k_gemv_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr src/ml/cuda/qwen_full_attn_kv_runner.cr` -> empty after removal
+  verified_at: 2026-05-09
+  decay_trigger: future runner/PTX edits
+
+**quadrumvirate_update_155:**
+- cassandra: The result matches the existing Q4/Q6 warp8 pattern: local CTA packing can look neutral or slightly positive in a narrow gate, but full 9B timing rejects it.
+- daedalus: Stop spending attempts on row-warps-per-CTA retunes. The next plausible CUDA lever is boundary elimination: fused FFN diamond pieces, shortlist/draft-head cuts, or a genuinely different Q6 dot/dequant schedule.
+- maieutic: The key false assumption was that fewer CTAs improves the Q6 FFN-down wall. The full-model regression suggests occupancy/scheduling/cache effects dominate that simple packing argument.
+- adversary: This refutes only naive Q6 FFN-down add warp8 packing on this host/model. It does not refute Q6 activation quantization, candidate shortlist, or super-fused FFN producer-consumer designs.
