@@ -10152,3 +10152,27 @@ Conclusion: this is the first CUDA speedup unlocked by the semantic-loop measure
 - daedalus: The useful pivot was context-length-aware profiling. Synthetic `cache_len=1` steady timing hid the bottleneck; semantic timing exposed it.
 - maieutic: Shared-memory barriers are acceptable here because they replace thousands of serial per-head operations, unlike the refuted Q4 x-cache branch where barriers only saved cached `x` reads.
 - adversary: The kernel is exact for tested top1/logits gates but still uses approximate exp/rcp like the serial PTX path. Evidence is on RTX 5060 Ti and Qwen3.5 9B; longer contexts still need A/B because score buffer and V reduction traffic grow with `cache_len`.
+
+**decision_update_130:** Refuted reopening Q4_K warp8 row packing after the CUDA shuffle-reduction and parallel full-attention changes. A temporary opt-in `QWEN_CUDA_Q4_WARP8=1` duplicated Q4/Q4-add GEMV kernels with eight row-warps per CTA and routed Q4 recurrent/full-attention projections through 256-thread launches.
+
+Conclusion: the new premise was not enough. Correctness held, but full semantic decode regressed. The code branch was removed; keep focusing on a genuinely different GEMV/dequant algorithm or larger exact fusions rather than CTA row packing.
+
+**evidence_update_130:**
+- claim: "Q4 warp8 preserved the five-layer full-logit oracle but did not improve wall time."
+  source: remote `QWEN_CUDA_Q4_WARP8=1 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `cuda_ms=7.749`
+  verified_at: 2026-05-09
+  decay_trigger: Q4 GEMV PTX, runner launch geometry, GPU architecture, or full-attn routing changes
+- claim: "Q4 warp8 regressed the semantic full 9B loop."
+  source: same binary full 9B semantic A/B: default `cuda_ms_per_token=24.079`, `greedy_body_ms_per_token=23.913`; `QWEN_CUDA_Q4_WARP8=1` `cuda_ms_per_token=24.248`, `greedy_body_ms_per_token=24.083`, both `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: GPU/load conditions, Q4 GEMV implementation, semantic-loop timing, or model quantization changes
+- claim: "The temporary Q4 warp8 code was removed after refutation."
+  source: local files restored to `HEAD` for Q4 PTX and touched CUDA runners; follow-up syntax gate required before commit
+  verified_at: 2026-05-09
+  decay_trigger: future Q4 row-packing experiments
+
+**quadrumvirate_update_130:**
+- cassandra: Fewer CTAs could have helped after shuffle reduction, but larger 256-thread blocks reduced scheduling/occupancy enough to lose.
+- daedalus: The row-packing frame is now weak. Next CUDA body work should change the inner dequant/dot algorithm or fuse larger producer-consumer regions.
+- maieutic: The assumption that CTA count is material was false for this workload; per-warp row compute and dequant throughput dominate.
+- adversary: This refutes only naive Q4 warp8 row packing on RTX 5060 Ti. It does not refute warp-specialized vectorized dequant, tensor-core batch paths, or offline repacking.
