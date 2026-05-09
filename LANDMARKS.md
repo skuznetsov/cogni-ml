@@ -10770,3 +10770,27 @@ Conclusion: the route is exact but too slow for hot FFN. Five-layer `start_pos=6
 - daedalus: The useful FFN frame is not "one launch for two matrices" but "one row program computes gate/up for the same output index while reusing activation loads" or a larger FFN diamond cut.
 - maieutic: The cheap test answered the assumption cheaply: launch removal alone is insufficient for hot FFN gate/up.
 - adversary: This does not refute a future same-row dual Q4 kernel with real x reuse. It refutes only reusing the existing across-matrix row-selection dual kernel for hot FFN.
+
+**decision_update_157:** Refuted the first same-row Q4 FFN `gate + up` pair kernel. A temporary `q4_k_pair_same_row_gemv_warp4_f32` computed `gate[i]` and `up[i]` in the same row warp, reading the activation values once and accumulating two independent sums, then routed recurrent and full-attention FFN gate/up through `QWEN_CUDA_Q4_FFN_PAIR=1`. This tested the stronger version of the FFN sibling-fusion idea after the existing dual-GEMV route failed.
+
+Conclusion: correctness held, but performance regressed substantially. Five-layer `start_pos=63 --read-logits` preserved logits/top1 (`logits_cos=1.0`, `top1_gpu=top1_cpu=100253`) but slowed from base `7.662 ms` to pair `7.799/7.806 ms`. Full 9B steady ABBA regressed from base `22.897/22.926/22.944 ms/tok` to pair `23.735/23.738/23.758 ms/tok`. The likely mechanism is register pressure/instruction scheduling: the kernel saves activation loads and one launch, but doubles quant metadata/weight dequant work inside one warp and carries two accumulation/reduction chains. The temporary PTX and runner route were removed. Do not build the full FFN diamond by simply merging more GEMV work into one row program unless a resource/SASS probe shows headroom.
+
+**evidence_update_157:**
+- claim: "Same-row Q4 FFN gate/up pair kernel preserves five-layer full-logit correctness."
+  source: remote temporary `/tmp/cuda_mixed_stack_probe_q4ffnpair --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> base `7.662/7.662 ms`, pair `7.799/7.806 ms`, all `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: Q4 pair PTX, FFN gate/up routing, CUDA driver scheduling, or five-layer oracle changes
+- claim: "Same-row Q4 FFN gate/up pair kernel regresses full 9B steady decode."
+  source: remote temporary full 9B ABBA `QWEN_CUDA_Q4_FFN_PAIR=1 --all-layers --tokens=1 --max-seq=64 --warmup=1 --steady-reps=16 --skip-debug-readback --perf-only` -> base `22.897/22.926/22.944 ms/tok`, pair `23.735/23.738/23.758 ms/tok`, same `top1_gpu=8894`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA scheduling/load, Q4 pair kernel, FFN tensor shapes, or mixed-stack timing harness changes
+- claim: "The temporary same-row Q4 FFN pair kernel and runner route were removed after refutation."
+  source: local no-codegen build after removal passed; local `git diff -- src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr src/ml/cuda/qwen_full_attn_kv_runner.cr` -> empty
+  verified_at: 2026-05-09
+  decay_trigger: future kernel/runner edits
+
+**quadrumvirate_update_157:**
+- cassandra: This closes the naive FFN gate/up fusion family: launch packing regressed, and same-row activation reuse regressed more.
+- daedalus: The next FFN acceleration attempt must reduce mathematical work or use a different representation, not just co-schedule two full GEMVs in one row program.
+- maieutic: The hidden assumption "activation loads dominate gate/up" was false on this GPU/path; dequant and scheduling pressure dominate.
+- adversary: This refutes this no-barrier same-row row-warp design. It does not refute approximate/draft FFN surrogates, activation-quant DP4A in draft mode, or shortlist/head-elimination paths.
