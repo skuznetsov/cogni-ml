@@ -5,6 +5,7 @@ module ML::CUDA
   # Reusable CUDA runner for a Qwen full-attention layer's input projection
   # bundle: attn_q, attn_k, attn_v from the same hidden vector sequence.
   class QwenFullAttnProjectionRunner
+    DN_PTX  = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
     Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
     Q6K_PTX = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
 
@@ -59,7 +60,18 @@ module ML::CUDA
 
     def self.from_weights(weights : Weights, tokens : Int32, xs : Array(Float32)) : self
       new(tokens, weights.hidden, weights.q_dim, weights.k_dim, weights.v_dim,
-        xs, weights.q_raw, weights.k_raw, weights.v_raw, weights.v_type)
+        xs, weights.q_raw, weights.k_raw, weights.v_raw, weights.v_type,
+        nil, 0.0_f32)
+    end
+
+    def self.from_weights_with_input_norm(weights : Weights,
+                                          tokens : Int32,
+                                          xs : Array(Float32),
+                                          input_norm : Array(Float32),
+                                          eps : Float32) : self
+      new(tokens, weights.hidden, weights.q_dim, weights.k_dim, weights.v_dim,
+        xs, weights.q_raw, weights.k_raw, weights.v_raw, weights.v_type,
+        input_norm, eps)
     end
 
     private def initialize(@tokens : Int32,
@@ -71,9 +83,14 @@ module ML::CUDA
                            @q_raw : Bytes,
                            @k_raw : Bytes,
                            @v_raw : Bytes,
-                           @v_type : ML::GGUF::TensorType)
+                           @v_type : ML::GGUF::TensorType,
+                           @input_norm : Array(Float32)?,
+                           @input_norm_eps : Float32)
       raise ArgumentError.new("tokens must be positive") unless @tokens > 0
       raise ArgumentError.new("xs size mismatch") unless @xs.size == @tokens * @hidden
+      if norm = @input_norm
+        raise ArgumentError.new("input norm size mismatch") unless norm.size == @hidden
+      end
 
       @modules = [] of CUDAModule
       @buffers = [] of DeviceBuffer
@@ -129,22 +146,25 @@ module ML::CUDA
     end
 
     private def build_runner : Nil
+      dn_mod = CUDAModule.load(DN_PTX, "delta_proj")
       q4_mod = CUDAModule.load(Q4K_PTX, "q4")
       q6_mod = CUDAModule.load(Q6K_PTX, "q6")
-      @modules.concat([q4_mod, q6_mod])
+      @modules.concat([dn_mod, q4_mod, q6_mod])
 
+      input_norm_fn = dn_mod.function("rmsnorm_vec_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       v_fn = @v_type.q4_k? ? q4_fn : q6_fn
 
-      sizes = [bytesize_f32(@tokens * @hidden), @q_raw.size.to_u64, @k_raw.size.to_u64, @v_raw.size.to_u64,
+      sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
+               @q_raw.size.to_u64, @k_raw.size.to_u64, @v_raw.size.to_u64,
                bytesize_f32(@tokens * @q_dim), bytesize_f32(@tokens * @k_dim), bytesize_f32(@tokens * @v_dim)]
       ptrs = sizes.map do |size_bytes|
         buffer = DeviceBuffer.new(size_bytes)
         @buffers << buffer
         buffer.ptr
       end
-      d_xs, d_q_w, d_k_w, d_v_w, d_q_all, d_k_all, d_v_all = ptrs
+      d_xs, d_input_norm_w, d_norm_all, d_q_w, d_k_w, d_v_w, d_q_all, d_k_all, d_v_all = ptrs
       @owned_input_device_ptr = d_xs
       @input_device_base = d_xs
       @q_device_ptr = d_q_all
@@ -152,6 +172,9 @@ module ML::CUDA
       @v_device_ptr = d_v_all
 
       upload_weights = -> {
+        if norm = @input_norm
+          ML::CUDA.copy_htod!(d_input_norm_w, norm.to_unsafe.as(Void*), bytesize_f32(norm.size), "input_norm")
+        end
         ML::CUDA.copy_htod!(d_q_w, @q_raw.to_unsafe.as(Void*), @q_raw.size.to_u64, "attn_q_w")
         ML::CUDA.copy_htod!(d_k_w, @k_raw.to_unsafe.as(Void*), @k_raw.size.to_u64, "attn_k_w")
         ML::CUDA.copy_htod!(d_v_w, @v_raw.to_unsafe.as(Void*), @v_raw.size.to_u64, "attn_v_w")
@@ -172,27 +195,36 @@ module ML::CUDA
       v_grid = ((@v_dim + 3) // 4).to_u32
 
       d_x_cur_ptr = box_ptr(d_xs)
+      d_norm_cur_ptr = box_ptr(d_norm_all)
+      d_proj_input_cur_ptr = box_ptr(d_xs)
       d_q_cur_ptr = box_ptr(d_q_all)
       d_k_cur_ptr = box_ptr(d_k_all)
       d_v_cur_ptr = box_ptr(d_v_all)
 
+      input_norm_params = Pointer(Void*).malloc(5)
+      input_norm_params[0] = d_x_cur_ptr.as(Void*)
+      input_norm_params[1] = box_ptr(d_input_norm_w).as(Void*)
+      input_norm_params[2] = d_norm_cur_ptr.as(Void*)
+      input_norm_params[3] = box_u32(hidden_u32).as(Void*)
+      input_norm_params[4] = box_f32(@input_norm_eps).as(Void*)
+
       q_params = Pointer(Void*).malloc(5)
       q_params[0] = box_ptr(d_q_w).as(Void*)
-      q_params[1] = d_x_cur_ptr.as(Void*)
+      q_params[1] = d_proj_input_cur_ptr.as(Void*)
       q_params[2] = d_q_cur_ptr.as(Void*)
       q_params[3] = box_u32(hidden_u32).as(Void*)
       q_params[4] = box_u32(q_dim_u32).as(Void*)
 
       k_params = Pointer(Void*).malloc(5)
       k_params[0] = box_ptr(d_k_w).as(Void*)
-      k_params[1] = d_x_cur_ptr.as(Void*)
+      k_params[1] = d_proj_input_cur_ptr.as(Void*)
       k_params[2] = d_k_cur_ptr.as(Void*)
       k_params[3] = box_u32(hidden_u32).as(Void*)
       k_params[4] = box_u32(k_dim_u32).as(Void*)
 
       v_params = Pointer(Void*).malloc(5)
       v_params[0] = box_ptr(d_v_w).as(Void*)
-      v_params[1] = d_x_cur_ptr.as(Void*)
+      v_params[1] = d_proj_input_cur_ptr.as(Void*)
       v_params[2] = d_v_cur_ptr.as(Void*)
       v_params[3] = box_u32(hidden_u32).as(Void*)
       v_params[4] = box_u32(v_dim_u32).as(Void*)
@@ -200,6 +232,13 @@ module ML::CUDA
       run_token = ->(tok : Int32) {
         x_offset = bytesize_f32(tok * @hidden)
         d_x_cur_ptr.value = @input_device_base.not_nil! + x_offset
+        if @input_norm
+          d_norm_cur_ptr.value = d_norm_all + x_offset
+          d_proj_input_cur_ptr.value = d_norm_all + x_offset
+          ML::CUDA.launch!(input_norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, input_norm_params, "attn input norm")
+        else
+          d_proj_input_cur_ptr.value = d_x_cur_ptr.value
+        end
         d_q_cur_ptr.value = d_q_all + bytesize_f32(tok * @q_dim)
         d_k_cur_ptr.value = d_k_all + bytesize_f32(tok * @k_dim)
         d_v_cur_ptr.value = d_v_all + bytesize_f32(tok * @v_dim)
@@ -229,6 +268,13 @@ module ML::CUDA
 
     private def box_u32(value : UInt32) : Pointer(UInt32)
       ptr = Pointer(UInt32).malloc(1)
+      ptr.value = value
+      @param_keepalive << ptr.as(Void*)
+      ptr
+    end
+
+    private def box_f32(value : Float32) : Pointer(Float32)
+      ptr = Pointer(Float32).malloc(1)
       ptr.value = value
       @param_keepalive << ptr.as(Void*)
       ptr

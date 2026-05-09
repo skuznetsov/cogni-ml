@@ -106,11 +106,11 @@ raise "attn output projection mismatch" unless kv_weights.output_in_dim == q_dim
 
 rng = Random.new(seed)
 residual_xs = Array(Float32).new(tokens * hidden) { rng.rand(-1.0_f32..1.0_f32) }
-projection_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
+projection_xs_cpu = Array(Float32).new(tokens * hidden, 0.0_f32)
 tokens.times do |tok|
   x = residual_xs[tok * hidden, hidden]
   cur = ML::GGUF::Qwen35CPU.rms_norm(x, kv_weights.attn_norm, hparams.rms_eps)
-  hidden.times { |i| projection_xs[tok * hidden + i] = cur[i] }
+  hidden.times { |i| projection_xs_cpu[tok * hidden + i] = cur[i] }
 end
 cos_table, sin_table = rope_tables(tokens, start_pos, rope_dim, hparams.rope_freq_base)
 
@@ -126,7 +126,7 @@ heads_per_group = n_head // n_head_kv
 scale = (1.0_f64 / Math.sqrt(head_dim.to_f64)).to_f32
 
 tokens.times do |tok|
-  x = projection_xs[tok * hidden, hidden]
+  x = projection_xs_cpu[tok * hidden, hidden]
   q_full = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, proj_weights.q_raw, ML::GGUF::TensorType::Q4_K, proj_weights.q_dim, Array(Float32).new(proj_weights.q_dim, 0.0_f32))
   k = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, proj_weights.k_raw, ML::GGUF::TensorType::Q4_K, kv_dim, Array(Float32).new(kv_dim, 0.0_f32))
   v = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, proj_weights.v_raw, proj_weights.v_type, kv_dim, Array(Float32).new(kv_dim, 0.0_f32))
@@ -211,7 +211,8 @@ kv = nil.as(ML::CUDA::QwenFullAttnKVRunner?)
 
 begin
   cuda_ctx = ML::CUDA::Context.create
-  proj = ML::CUDA::QwenFullAttnProjectionRunner.from_weights(proj_weights, tokens, projection_xs)
+  proj = ML::CUDA::QwenFullAttnProjectionRunner.from_weights_with_input_norm(proj_weights, tokens, residual_xs,
+    kv_weights.attn_norm, hparams.rms_eps)
   proj.upload_weights
   proj.reset_sequence
   proj.run_sequence

@@ -9581,3 +9581,28 @@ Conclusion: CUDA now verifies Qwen3.5 9B full-attention layer semantics from nor
 - daedalus: The runner name `QwenFullAttnKVRunner` is now too narrow; after initial `attn_norm` is moved into CUDA, rename or wrap it as a full-attention layer runner instead of continuing to grow a KV-named class.
 - maieutic: The hidden assumption that this is a complete device-side full-attention layer is false; the probe still computes `attn_norm` on CPU before the projection runner. The verified claim is narrower: normalized-input full-attention tail through final hidden.
 - adversary: Evidence covers one 9B layer, synthetic hidden inputs, zero-initialized prefix cache rows before `start_pos`, and the current Q4/Q6 tensor pattern. It does not yet cover restored nonzero prefix KV, initial CUDA `attn_norm`, mixed full/recurrent stack handoff, logits/top1, or model-level scheduling.
+
+
+**decision_update_105:** Moved the initial CUDA full-attention `attn_norm` onto the device. `QwenFullAttnProjectionRunner` now has an opt-in `from_weights_with_input_norm` constructor that uploads the full-attention norm weights, runs the existing CUDA `rmsnorm_vec_probe` over residual hidden inputs, and feeds the normalized device buffer directly into Q/K/V projection. `bin/cuda_full_attn_kv_probe.cr` now uses residual hidden states as the projection-runner input while keeping the CPU-normalized copy only as the oracle source.
+
+Conclusion: CUDA now verifies Qwen3.5 9B full-attention layer semantics from residual hidden input through final hidden output for layer `3`. The next useful abstraction is not another semantic slice inside the same KV-named class, but a clean full-attention layer runner/wrapper with residual-hidden device input and final-hidden device output so it can compose with recurrent stack runners.
+
+**evidence_update_105:**
+- claim: "The full-attention projection runner with device-side input RMSNorm has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_full_input_norm_syntax2 crystal build -Dcpu_only --no-codegen bin/cuda_full_attn_kv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: projection runner input-norm path, `rmsnorm_vec_probe`, CUDA driver wrapper, Crystal compiler, or embedded PTX files change
+- claim: "The CUDA full-attention path matches CPU references from residual hidden input through final hidden output on Qwen3.5 9B layer3 with a nonzero cache offset."
+  source: remote `cuda_full_attn_kv_probe --layer 3 --tokens 4 --start-pos 2 --max-seq 12` -> `ok=true`, `final_cos=1.0`, `final_max_diff=4.005432e-5`; Q/gate/K/attn/proj/K-cache/V-cache also remained `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: initial attn RMSNorm formula, residual input layout, projection runner pointer routing, Q/K/V tensor layout, KV runner launch order, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+- claim: "The existing projection-only runner path remains compatible when no input norm is requested."
+  source: remote `cuda_attn_projection_probe --layer 3 --tokens 2 --reps 1 --warmup 0` -> `ok=true`, Q/K/V all `cos=1.0`
+  verified_at: 2026-05-08
+  decay_trigger: projection runner optional-norm branch, CUDA module loading, Q/K/V GEMV kernels, model file, or CPU reference changes
+
+**quadrumvirate_update_105:**
+- cassandra: The likely failure was pointer aliasing between the residual input, normalized projection buffer, and Q/K/V GEMV input pointer. The remote gate covered all downstream comparisons, so a wrong projection input would have broken Q/gate/K and final hidden immediately.
+- daedalus: The frame shifted from "finish another tail piece" to "define a composable layer boundary". Full-attention semantics are now present, but still split across a projection runner and a KV/tail runner.
+- maieutic: The remaining hidden assumption is that semantic completeness equals backend readiness. It does not: model-level scheduling, restored prefix KV, logits/top1, and an optimized attention decode kernel remain outside this proof.
+- adversary: Evidence covers one 9B full-attention layer, synthetic residual inputs, zero-initialized prefix cache rows before `start_pos`, and the current Q4/Q6 tensor pattern. It does not cover nonzero restored prefix KV, 27B shape variants, mixed full/recurrent stack handoff, logits/top1, tokenizer/sampling, or performance-optimized attention decode.
