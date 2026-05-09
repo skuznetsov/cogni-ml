@@ -10052,3 +10052,27 @@ Conclusion: avoiding materialized vocab logits is a correct but small full-model
 - daedalus: The useful abstraction is "do not materialize intermediates if the consumer only needs a reduction." This may generalize, but only where the consumer is immediate and exact.
 - maieutic: The win is bounded because the output head is no longer the dominant wall. It should not distract from body GEMV work.
 - adversary: This path is Q6/top1-only. Sampling modes needing logits, Q4 output heads, or full-logit diagnostics still use the old materialized-logits path.
+
+**decision_update_126:** Refuted CTA-level shared `x` caching for Q4_K warp4 GEMV. A temporary `q4_k_gemv_xcache_warp4_f32` loaded each 256-float input block into shared memory once per CTA so the four row-warps could reuse it, then routed Q4 GEMVs through that variant. The code was reverted after measurement.
+
+Conclusion: this is a useful WBA negative case. Reducing apparent `x` traffic by adding CTA barriers is worse than relying on cache for this workload/GPU. Future body GEMV work should avoid shared-memory staging unless it removes more work than it synchronizes; prefer warp-local/register transformations or no-barrier multi-row approaches.
+
+**evidence_update_126:**
+- claim: "Q4 shared `x` tile caching preserved top1 correctness but regressed performance."
+  source: remote temporary x-cache build: five-layer `--tokens=1 --warmup=1 --skip-debug-readback` -> `ok=true`, `top1_gpu=96939`, `top1_cpu=96939`, `cuda_ms=7.395`; baseline fused-head gate was `7.264ms`
+  verified_at: 2026-05-09
+  decay_trigger: Q4 kernel implementation, GPU cache behavior, CTA tiling, or mixed-stack route changes
+- claim: "Full 9B steady A/B refutes Q4 CTA x-cache as a speed path."
+  source: remote full 9B ABBA `--steady-reps=16`: baseline `23.673/23.704ms/token`; x-cache `24.877/24.899ms/token`, all `ok=true`, `top1_gpu=8894`
+  verified_at: 2026-05-09
+  decay_trigger: GPU architecture, Q4 GEMV kernel, shared-memory staging strategy, or full-stack timing harness changes
+- claim: "The temporary x-cache code was reverted."
+  source: local restore from `HEAD` for touched Q4/kernel runner files; `rg xcache src/ml/cuda` -> no matches
+  verified_at: 2026-05-09
+  decay_trigger: Q4 GEMV route or runner function lookup changes
+
+**quadrumvirate_update_126:**
+- cassandra: The predicted risk was that `bar.sync` would cost more than saved `x` loads. The full-stack A/B confirmed it.
+- daedalus: The frame shifts from "reuse via shared memory" to "reuse without barriers" or "reduce dequant work per row."
+- maieutic: Apparent memory-traffic savings are not sufficient evidence; the synchronization topology matters more here.
+- adversary: Refutation is scoped to CTA-level shared x-cache with four row-warps on RTX 5060 Ti. It does not refute all x reuse strategies.
