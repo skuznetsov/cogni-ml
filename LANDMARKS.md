@@ -10630,3 +10630,27 @@ Conclusion: explicit upload is correctness-neutral and keeps the semantic graph 
 - daedalus: Graph replay is now infrastructure, not a standalone speed lever. The next graph work should use the uploaded graph as a branch/scheduler substrate, not keep tuning launch overhead.
 - maieutic: The key assumption to keep checking is whether graph timing includes one-time setup. Explicit upload moves setup outside the measured region.
 - adversary: This does not prove production device graph launch works; it only verifies host-side upload/replay plumbing through the driver API.
+
+**decision_update_150:** Added a device-launch-ready CUDA Graph instantiation probe for the semantic greedy-loop body. `bin/cuda_mixed_stack_probe.cr --greedy-loop-graph-device-ready` calls `cuGraphInstantiateWithParams` with `CUDA_GRAPH_INSTANTIATE_FLAG_DEVICE_LAUNCH=4` and an upload stream, then still host-launches the graph through the existing `cuGraphLaunch` path. This intentionally tests whether our captured decode body satisfies device-launch instantiation constraints before building an actual GPU-side controller kernel.
+
+Conclusion: device-launch-ready instantiation is compatible with the current semantic greedy-loop graph and correctness-neutral, but not itself a speed lever. Five-layer and full 9B token sequences match normal graph replay. Full 9B gen16 ABBA shows neutral timing: normal `23.859/23.866 ms/tok`, host graph `23.788/23.817`, device-ready graph `23.787/23.818`. Keep this as scheduler groundwork; the next useful step is a GPU-resident controller or branch graph that can make decisions without host round trips.
+
+**evidence_update_150:**
+- claim: "CUDA device-launch-ready graph instantiation flag is the expected value."
+  source: NVIDIA CUDA Driver API search result for current/archive docs -> `CUDA_GRAPH_INSTANTIATE_FLAG_DEVICE_LAUNCH = 4`; docs also describe `cuGraphInstantiateWithParams` as the API carrying this flag
+  verified_at: 2026-05-09
+  decay_trigger: CUDA driver API version change or local header availability changes
+- claim: "Device-launch-ready semantic graph preserves five-layer token parity."
+  source: remote `/tmp/cuda_mixed_stack_probe_devicegraph --layers=0,1,2,3,4 --greedy-loop-tokens=8 --seed-token=0 --perf-only --skip-debug-readback --greedy-loop-graph[-device-ready]` -> graph and device-ready both `top1_gpu=220,695,12,50,1458,1449,17961,17961`; timing `5.832` vs `5.846 ms/tok`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph wrapper, semantic-loop body, graph capture contents, or full-attn start_pos handling changes
+- claim: "Device-launch-ready semantic graph preserves full 9B gen16 token parity and is timing-neutral versus host graph."
+  source: remote full 9B ABBA -> normal `23.859/23.866 ms/tok`, graph `23.788/23.817`, device-ready `23.787/23.818`; all modes generated `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph driver API, semantic-loop harness, GPU load/order, generated-token length, or graph launch policy changes
+
+**quadrumvirate_update_150:**
+- cassandra: Expected speedup is approximately zero because this only changes graph instantiation constraints, not the measured host launch path; observed timing matches.
+- daedalus: The value is not launch overhead reduction. The frame shift is preparing captured decode subgraphs to be callable by a future GPU controller.
+- maieutic: The key assumption was that the current graph body is legal under device-launch constraints. Remote instantiation and replay tested that assumption directly.
+- adversary: This does not prove actual device-side launch or speculative branching works. It only proves the current graph can be instantiated with the device-launch flag and host-replayed without parity loss.

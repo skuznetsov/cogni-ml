@@ -93,6 +93,7 @@ perf_only = false
 all_layers = false
 greedy_loop_tokens = 0
 greedy_loop_graph = false
+greedy_loop_graph_device_ready = false
 seed_token = 0
 
 OptionParser.parse do |p|
@@ -113,6 +114,7 @@ OptionParser.parse do |p|
   p.on("--all-layers", "Run all model layers instead of the explicit/default layer slice") { all_layers = true }
   p.on("--greedy-loop-tokens N", "Run an embedding-driven greedy decode loop for N generated tokens; forces --tokens=1") { |v| greedy_loop_tokens = v.to_i }
   p.on("--greedy-loop-graph", "Capture the reset-free greedy-loop body as a CUDA graph and replay it after the first token") { greedy_loop_graph = true }
+  p.on("--greedy-loop-graph-device-ready", "Instantiate the greedy-loop CUDA graph with DEVICE_LAUNCH constraints; still host-launched by this probe") { greedy_loop_graph_device_ready = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -134,6 +136,7 @@ raise "--steady-graph-reps does not support --profile-phases" if steady_graph_re
 raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps > 0 && steady_graph_reps > 0
 raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
 raise "--greedy-loop-graph requires --greedy-loop-tokens" if greedy_loop_graph && greedy_loop_tokens == 0
+raise "--greedy-loop-graph-device-ready requires --greedy-loop-graph" if greedy_loop_graph_device_ready && !greedy_loop_graph
 if greedy_loop_tokens > 0
   raise "--greedy-loop-tokens currently requires --perf-only; it is a semantic timing harness, not a CPU oracle" unless perf_only
   raise "--greedy-loop-tokens is incompatible with --steady-reps/--steady-graph-reps" if steady_reps > 0 || steady_graph_reps > 0
@@ -293,7 +296,11 @@ begin
           sync_end: false, read_head_outputs: false)
         graph = graph_stream.not_nil!.end_capture
       end
-      graph_exec = graph.not_nil!.instantiate
+      graph_exec = if greedy_loop_graph_device_ready
+                     graph.not_nil!.instantiate_device_launch(graph_stream.not_nil!)
+                   else
+                     graph.not_nil!.instantiate
+                   end
       graph.not_nil!.close
       graph = nil
       graph_exec.not_nil!.upload(graph_stream.not_nil!)

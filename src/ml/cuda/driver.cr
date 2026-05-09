@@ -7,7 +7,15 @@ lib LibCUDADriver
   alias CUstream = Void*
   alias CUgraph = Void*
   alias CUgraphExec = Void*
+  alias CUgraphNode = Void*
   alias CUdeviceptr = UInt64
+
+  struct CUGraphInstantiateParams
+    flags : UInt64
+    h_upload_stream : CUstream
+    h_err_node_out : CUgraphNode
+    result_out : UInt32
+  end
 
   fun cuInit(flags : UInt32) : Int32
   fun cuDeviceGet(device : CUdevice*, ordinal : Int32) : Int32
@@ -25,6 +33,7 @@ lib LibCUDADriver
   fun cuStreamBeginCapture(stream : CUstream, mode : Int32) : Int32
   fun cuStreamEndCapture(stream : CUstream, graph : CUgraph*) : Int32
   fun cuGraphInstantiate(exec : CUgraphExec*, graph : CUgraph, flags : UInt64) : Int32
+  fun cuGraphInstantiateWithParams(exec : CUgraphExec*, graph : CUgraph, params : CUGraphInstantiateParams*) : Int32
   fun cuGraphUpload(exec : CUgraphExec, stream : CUstream) : Int32
   fun cuGraphLaunch(exec : CUgraphExec, stream : CUstream) : Int32
   fun cuGraphDestroy(graph : CUgraph) : Int32
@@ -186,6 +195,8 @@ module ML::CUDA
   end
 
   class CUDAGraph
+    DEVICE_LAUNCH_FLAG = 4_u64
+
     def initialize(@handle : LibCUDADriver::CUgraph)
       @closed = false
     end
@@ -193,6 +204,18 @@ module ML::CUDA
     def instantiate : CUDAGraphExec
       exec = Pointer(Void).null
       ML::CUDA.check! LibCUDADriver.cuGraphInstantiate(pointerof(exec), @handle, 0_u64), "cuGraphInstantiate"
+      CUDAGraphExec.new(exec)
+    end
+
+    def instantiate_device_launch(upload_stream : CUDAStream? = nil) : CUDAGraphExec
+      exec = Pointer(Void).null
+      params = LibCUDADriver::CUGraphInstantiateParams.new
+      params.flags = DEVICE_LAUNCH_FLAG
+      params.h_upload_stream = upload_stream ? upload_stream.not_nil!.handle : Pointer(Void).null
+      params.h_err_node_out = Pointer(Void).null
+      params.result_out = 0_u32
+      ML::CUDA.check! LibCUDADriver.cuGraphInstantiateWithParams(pointerof(exec), @handle, pointerof(params)),
+        "cuGraphInstantiateWithParams(device_launch)"
       CUDAGraphExec.new(exec)
     end
 
