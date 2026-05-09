@@ -10128,3 +10128,27 @@ Conclusion: the previous reset-free full-model CUDA steady probe was useful but 
 - daedalus: The next frame shift is from GEMV-only decode to context-length-aware attention: replace the serial correctness attention kernel with a warp/block parallel exact decode kernel before judging CUDA competitiveness.
 - maieutic: Token embedding, RoPE table upload, and top1 DtoH were plausible suspects, but attribution shows they are too small to explain the gap.
 - adversary: The semantic loop is perf-only and uses top1 ids without CPU semantic oracle; correctness remains anchored by the five-layer top1/logit gates. The attention profile uses mostly zero historical KV rows in the synthetic start-pos test, so it measures kernel scaling cost rather than full user prompt quality.
+
+**decision_update_129:** Added a default-on parallel exact CUDA full-attention decode kernel. `full_attn_decode_cache_parallel_probe` replaces the serial one-thread-per `(token, head)` attention decode with one 256-thread CTA per `(token, head)`: QK dot is reduced across `head_dim`, softmax denominator is reduced across positions, and the V/gate output is parallelized across output dimensions. `QWEN_CUDA_FULL_ATTN_PARALLEL_OFF=1` keeps the old serial path as an escape hatch.
+
+Conclusion: this is the first CUDA speedup unlocked by the semantic-loop measurement rather than synthetic steady timing. It removes the context-length cliff from the correctness-first full-attention decode kernel and brings the semantic full 9B loop close to the synthetic lower bound.
+
+**evidence_update_129:**
+- claim: "The parallel attention kernel preserves five-layer top1 and full-logit oracle correctness at nontrivial cache length."
+  source: remote RTX 5060 Ti default-on `--layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`
+  verified_at: 2026-05-09
+  decay_trigger: parallel full-attn PTX, full-attn runner routing, RoPE/cache semantics, or output-head oracle changes
+- claim: "The parallel attention kernel removes the profiled full-attention decode cliff at cache_len=64."
+  source: remote full 9B `--all-layers --tokens=1 --start-pos=63 --max-seq=64 --skip-debug-readback --perf-only --profile-phases`: serial before change had `phase_layer*_kv_attn_decode_ms≈1.145-1.159ms` and `cuda_ms=47.142`; parallel opt-in had `phase_layer3_kv_attn_decode_ms=0.076`, `phase_layer7_kv_attn_decode_ms=0.078`, `phase_layer31_kv_attn_decode_ms=0.071`, `cuda_ms=38.53`
+  verified_at: 2026-05-09
+  decay_trigger: profile synchronization policy, context length, full-attn layer count, or attention PTX changes
+- claim: "Default-on parallel attention improves the semantic full 9B greedy loop."
+  source: remote full 9B default-on `--all-layers --tokens=1 --max-seq=64 --warmup=1 --greedy-loop-tokens=16 --seed-token=0 --skip-debug-readback --perf-only` -> `cuda_ms_per_token=24.109`, `greedy_body_ms_per_token=23.946`, `ok=true`; escape hatch `QWEN_CUDA_FULL_ATTN_PARALLEL_OFF=1` -> `cuda_ms_per_token=25.544`, `greedy_body_ms_per_token=25.381`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: semantic loop scheduler, attention kernel routing, full-attn context length, or GPU/load conditions changes
+
+**quadrumvirate_update_129:**
+- cassandra: The predicted win was high because the serial attention kernel scaled linearly in both `cache_len` and `head_dim` inside one thread. Measurement confirmed the cliff and the fix.
+- daedalus: The useful pivot was context-length-aware profiling. Synthetic `cache_len=1` steady timing hid the bottleneck; semantic timing exposed it.
+- maieutic: Shared-memory barriers are acceptable here because they replace thousands of serial per-head operations, unlike the refuted Q4 x-cache branch where barriers only saved cached `x` reads.
+- adversary: The kernel is exact for tested top1/logits gates but still uses approximate exp/rcp like the serial PTX path. Evidence is on RTX 5060 Ti and Qwen3.5 9B; longer contexts still need A/B because score buffer and V reduction traffic grow with `cache_len`.

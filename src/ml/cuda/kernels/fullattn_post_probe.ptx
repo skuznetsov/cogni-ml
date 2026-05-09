@@ -495,3 +495,229 @@ A_GATE_WRITE:
 A_DONE:
     ret;
 }
+
+// Parallel exact GQA attention decode over a resident KV cache.
+// Launch: grid=(tokens, n_head), block=(256).
+// One CTA owns one (token, q_head). It parallelizes each Q.K dot over head_dim,
+// parallelizes softmax denominator over positions, and parallelizes the V
+// reduction over output dimensions.
+.visible .entry full_attn_decode_cache_parallel_probe(
+    .param .u64 q_in,
+    .param .u64 gate_in,
+    .param .u64 k_cache,
+    .param .u64 v_cache,
+    .param .u64 scores,
+    .param .u64 attn_out,
+    .param .u32 n_head,
+    .param .u32 n_kv_head,
+    .param .u32 head_dim,
+    .param .u32 heads_per_group,
+    .param .u32 start_pos,
+    .param .u32 max_seq,
+    .param .f32 scale
+)
+{
+    .reg .pred %p<24>;
+    .reg .b32 %r<96>;
+    .reg .b64 %rd<96>;
+    .reg .f32 %f<48>;
+    .shared .align 4 .b8 P_SH[1024];
+
+    ld.param.u64 %rd1, [q_in];
+    ld.param.u64 %rd2, [gate_in];
+    ld.param.u64 %rd3, [k_cache];
+    ld.param.u64 %rd4, [v_cache];
+    ld.param.u64 %rd5, [scores];
+    ld.param.u64 %rd6, [attn_out];
+    ld.param.u32 %r1, [n_head];
+    ld.param.u32 %r2, [n_kv_head];
+    ld.param.u32 %r3, [head_dim];
+    ld.param.u32 %r4, [heads_per_group];
+    ld.param.u32 %r5, [start_pos];
+    ld.param.u32 %r6, [max_seq];
+    ld.param.f32 %f1, [scale];
+
+    mov.u32 %r7, %ctaid.x;      // tok
+    mov.u32 %r8, %ctaid.y;      // q head
+    mov.u32 %r9, %tid.x;
+    mov.u32 %r10, %ntid.x;
+    setp.ge.u32 %p1, %r8, %r1;
+    @%p1 bra AP_DONE;
+
+    add.u32 %r11, %r5, %r7;     // absolute position
+    setp.ge.u32 %p2, %r11, %r6;
+    @%p2 bra AP_DONE;
+    add.u32 %r12, %r11, 1;      // cache_len
+    mul.lo.u32 %r13, %r2, %r3;  // kv_dim
+    div.u32 %r14, %r8, %r4;     // kv_h
+    mul.lo.u32 %r15, %r7, %r1;
+    add.u32 %r16, %r15, %r8;
+    mul.lo.u32 %r17, %r16, %r3; // q/gate/out base
+    mul.lo.u32 %r18, %r16, %r6; // scores base
+    cvta.shared.u64 %rd7, P_SH;
+
+    mov.f32 %f2, 0fFF7FFFFF;    // max score ~= -FLT_MAX, thread 0 only
+    mov.u32 %r19, 0;            // p
+AP_SCORE_P_LOOP:
+    setp.ge.u32 %p3, %r19, %r12;
+    @%p3 bra AP_SCORE_DONE;
+
+    mov.f32 %f3, 0f00000000;    // local dot partial
+    mov.u32 %r20, %r9;          // d = tid
+AP_DOT_D_LOOP:
+    setp.ge.u32 %p4, %r20, %r3;
+    @%p4 bra AP_DOT_STORE;
+    add.u32 %r21, %r17, %r20;
+    mul.lo.u32 %r22, %r19, %r13;
+    mad.lo.u32 %r23, %r14, %r3, %r22;
+    add.u32 %r24, %r23, %r20;
+    mul.wide.u32 %rd8, %r21, 4;
+    mul.wide.u32 %rd9, %r24, 4;
+    add.s64 %rd10, %rd1, %rd8;
+    add.s64 %rd11, %rd3, %rd9;
+    ld.global.f32 %f4, [%rd10];
+    ld.global.f32 %f5, [%rd11];
+    fma.rn.f32 %f3, %f4, %f5, %f3;
+    add.u32 %r20, %r20, %r10;
+    bra AP_DOT_D_LOOP;
+
+AP_DOT_STORE:
+    mul.wide.u32 %rd12, %r9, 4;
+    add.s64 %rd13, %rd7, %rd12;
+    st.shared.f32 [%rd13], %f3;
+    bar.sync 0;
+
+    mov.u32 %r25, 128;
+AP_DOT_REDUCE_LOOP:
+    setp.lt.u32 %p5, %r9, %r25;
+    @!%p5 bra AP_DOT_REDUCE_SKIP;
+    add.u32 %r26, %r9, %r25;
+    mul.wide.u32 %rd14, %r9, 4;
+    mul.wide.u32 %rd15, %r26, 4;
+    add.s64 %rd16, %rd7, %rd14;
+    add.s64 %rd17, %rd7, %rd15;
+    ld.shared.f32 %f6, [%rd16];
+    ld.shared.f32 %f7, [%rd17];
+    add.rn.f32 %f6, %f6, %f7;
+    st.shared.f32 [%rd16], %f6;
+AP_DOT_REDUCE_SKIP:
+    bar.sync 0;
+    shr.u32 %r25, %r25, 1;
+    setp.gt.u32 %p6, %r25, 0;
+    @%p6 bra AP_DOT_REDUCE_LOOP;
+
+    setp.ne.u32 %p7, %r9, 0;
+    @%p7 bra AP_SCORE_NEXT;
+    ld.shared.f32 %f8, [%rd7];
+    mul.rn.f32 %f9, %f8, %f1;
+    max.ftz.f32 %f2, %f2, %f9;
+    add.u32 %r27, %r18, %r19;
+    mul.wide.u32 %rd18, %r27, 4;
+    add.s64 %rd19, %rd5, %rd18;
+    st.global.f32 [%rd19], %f9;
+
+AP_SCORE_NEXT:
+    bar.sync 0;
+    add.u32 %r19, %r19, 1;
+    bra AP_SCORE_P_LOOP;
+
+AP_SCORE_DONE:
+    setp.ne.u32 %p8, %r9, 0;
+    @%p8 bra AP_MAX_WAIT;
+    st.shared.f32 [%rd7], %f2;
+AP_MAX_WAIT:
+    bar.sync 0;
+    ld.shared.f32 %f10, [%rd7]; // max score
+
+    mov.f32 %f11, 0f00000000;   // local denom
+    mov.u32 %r28, %r9;          // p = tid
+AP_DENOM_LOOP:
+    setp.ge.u32 %p9, %r28, %r12;
+    @%p9 bra AP_DENOM_STORE;
+    add.u32 %r29, %r18, %r28;
+    mul.wide.u32 %rd20, %r29, 4;
+    add.s64 %rd21, %rd5, %rd20;
+    ld.global.f32 %f12, [%rd21];
+    sub.rn.f32 %f13, %f12, %f10;
+    mov.f32 %f14, 0f3FB8AA3B;   // log2(e)
+    mul.rn.f32 %f15, %f13, %f14;
+    ex2.approx.ftz.f32 %f16, %f15;
+    add.rn.f32 %f11, %f11, %f16;
+    st.global.f32 [%rd21], %f16; // unnormalized weight
+    add.u32 %r28, %r28, %r10;
+    bra AP_DENOM_LOOP;
+
+AP_DENOM_STORE:
+    mul.wide.u32 %rd22, %r9, 4;
+    add.s64 %rd23, %rd7, %rd22;
+    st.shared.f32 [%rd23], %f11;
+    bar.sync 0;
+
+    mov.u32 %r30, 128;
+AP_DENOM_REDUCE_LOOP:
+    setp.lt.u32 %p10, %r9, %r30;
+    @!%p10 bra AP_DENOM_REDUCE_SKIP;
+    add.u32 %r31, %r9, %r30;
+    mul.wide.u32 %rd24, %r9, 4;
+    mul.wide.u32 %rd25, %r31, 4;
+    add.s64 %rd26, %rd7, %rd24;
+    add.s64 %rd27, %rd7, %rd25;
+    ld.shared.f32 %f17, [%rd26];
+    ld.shared.f32 %f18, [%rd27];
+    add.rn.f32 %f17, %f17, %f18;
+    st.shared.f32 [%rd26], %f17;
+AP_DENOM_REDUCE_SKIP:
+    bar.sync 0;
+    shr.u32 %r30, %r30, 1;
+    setp.gt.u32 %p11, %r30, 0;
+    @%p11 bra AP_DENOM_REDUCE_LOOP;
+
+    ld.shared.f32 %f19, [%rd7]; // denom
+    rcp.approx.ftz.f32 %f20, %f19;
+
+    mov.u32 %r32, %r9;          // d = tid
+AP_OUT_D_LOOP:
+    setp.ge.u32 %p12, %r32, %r3;
+    @%p12 bra AP_DONE;
+
+    mov.f32 %f21, 0f00000000;   // acc
+    mov.u32 %r33, 0;            // p
+AP_VALUE_LOOP:
+    setp.ge.u32 %p13, %r33, %r12;
+    @%p13 bra AP_GATE_WRITE;
+    add.u32 %r34, %r18, %r33;
+    mul.wide.u32 %rd28, %r34, 4;
+    add.s64 %rd29, %rd5, %rd28;
+    ld.global.f32 %f22, [%rd29]; // unnormalized weight
+    mul.lo.u32 %r35, %r33, %r13;
+    mad.lo.u32 %r36, %r14, %r3, %r35;
+    add.u32 %r37, %r36, %r32;
+    mul.wide.u32 %rd30, %r37, 4;
+    add.s64 %rd31, %rd4, %rd30;
+    ld.global.f32 %f23, [%rd31];
+    fma.rn.f32 %f21, %f22, %f23, %f21;
+    add.u32 %r33, %r33, 1;
+    bra AP_VALUE_LOOP;
+
+AP_GATE_WRITE:
+    mul.rn.f32 %f24, %f21, %f20;
+    add.u32 %r38, %r17, %r32;
+    mul.wide.u32 %rd32, %r38, 4;
+    add.s64 %rd33, %rd2, %rd32;
+    ld.global.f32 %f25, [%rd33]; // gate
+    neg.f32 %f26, %f25;
+    mov.f32 %f27, 0f3FB8AA3B;   // log2(e)
+    mul.rn.f32 %f28, %f26, %f27;
+    ex2.approx.ftz.f32 %f29, %f28;
+    mov.f32 %f30, 0f3F800000;   // 1.0
+    add.rn.f32 %f31, %f30, %f29;
+    rcp.approx.ftz.f32 %f32, %f31;
+    mul.rn.f32 %f33, %f24, %f32;
+    add.s64 %rd34, %rd6, %rd32;
+    st.global.f32 [%rd34], %f33;
+    add.u32 %r32, %r32, %r10;
+    bra AP_OUT_D_LOOP;
+
+AP_DONE:
+    ret;
+}

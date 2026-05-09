@@ -237,6 +237,7 @@ module ML::CUDA
       q_fn = mod.function("full_attn_q_split_norm_rope_probe")
       k_fn = mod.function("full_attn_k_norm_rope_cache_probe")
       attn_fn = mod.function("full_attn_decode_cache_probe")
+      attn_parallel_fn = mod.function("full_attn_decode_cache_parallel_probe")
       add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
       swiglu_fn = dn_mod.function("swiglu_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
@@ -245,6 +246,9 @@ module ML::CUDA
       q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
       out_proj_fn = @output_type.q4_k? ? q4_fn : q6_fn
       ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
+      use_parallel_attn = ENV["QWEN_CUDA_FULL_ATTN_PARALLEL_OFF"]? != "1"
+      attn_decode_fn = use_parallel_attn ? attn_parallel_fn : attn_fn
+      attn_decode_block = use_parallel_attn ? 256_u32 : 1_u32
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
                bytesize_f32(@cos_table.size), bytesize_f32(@sin_table.size),
@@ -404,7 +408,7 @@ module ML::CUDA
         if tok == 0
           ML::CUDA.launch!(q_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
           ML::CUDA.launch!(k_fn, @tokens.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
-          ML::CUDA.launch!(attn_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "attn decode cache")
+          ML::CUDA.launch!(attn_decode_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
           @tokens.times do |t|
             d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
             d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
@@ -430,7 +434,7 @@ module ML::CUDA
           @profile_qk_rope_ms += (Time.instant - t_qk).total_milliseconds
 
           t_attn = Time.instant
-          ML::CUDA.launch!(attn_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "attn decode cache")
+          ML::CUDA.launch!(attn_decode_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
           ML::CUDA.synchronize!("cuCtxSynchronize(full attn decode)")
           @profile_attn_decode_ms += (Time.instant - t_attn).total_milliseconds
 
