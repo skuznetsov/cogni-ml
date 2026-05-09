@@ -207,6 +207,18 @@ crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_r
 
 `cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. `--tokens N` runs a GPU-resident sequence through persistent conv/SSM state and compares all token outputs plus final recurrent states against the CPU reference. The probe now separates one-time weight upload from per-sequence input/state reset and prints `weight_upload_ms`; timed `cuda_ms_per_token` excludes the persistent weight upload. GGUF recurrent-layer tensor loading is routed through `QwenRecurrentLayerRunner::Weights.load`, so the probe no longer manually passes every raw tensor into the runner constructor. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
 
+Build the recurrent multi-layer stack scaffold:
+
+```sh
+crystal build -Dcpu_only bin/cuda_recurrent_stack_probe.cr -o build/cuda_recurrent_stack_probe
+./build/cuda_recurrent_stack_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layers 0,2,4 \
+  --tokens 2
+```
+
+`cuda_recurrent_stack_probe` chains multiple `QwenRecurrentLayerRunner` instances and compares the final hidden sequence plus each layer's recurrent conv/SSM state against the CPU reference. This is a correctness scaffold: it intentionally uses a host handoff between layer runners, so its timing is not an optimized multi-layer CUDA decode measurement. The next backend step is a device-resident handoff between recurrent layers.
+
 Build the Metal bridge once:
 
 ```sh

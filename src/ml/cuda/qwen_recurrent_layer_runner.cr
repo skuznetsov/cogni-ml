@@ -218,6 +218,12 @@ module ML::CUDA
       runner.reset_sequence
     end
 
+    def replace_sequence_input(xs : Array(Float32)) : Nil
+      raise ArgumentError.new("xs size mismatch") unless xs.size == @tokens * @hidden
+
+      @xs = xs
+    end
+
     def run_sequence : Nil
       runner.run_sequence
     end

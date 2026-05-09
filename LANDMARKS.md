@@ -9425,3 +9425,27 @@ Conclusion: the adapter is less overfit to layer0. The next CUDA/Linux gate is a
 - daedalus: The useful frame is inventory-driven execution, not layer0 constants. Future CUDA scaffolds should derive kernel choices from GGUF tensor metadata wherever the model format permits mixed quantization.
 - maieutic: The assumption that Q4_K_M implies a uniform per-tensor type pattern across recurrent layers was false.
 - adversary: This still validates independent layer execution with synthetic hidden inputs. It does not verify chained multi-layer hidden-state correctness.
+
+**decision_update_98:** Added the first CUDA multi-layer recurrent scaffold. New `ML::CUDA::QwenRecurrentStackRunner` chains multiple `QwenRecurrentLayerRunner` instances, and `bin/cuda_recurrent_stack_probe.cr` validates a recurrent-layer sequence against the CPU reference. The scaffold compares final hidden outputs and each layer's recurrent conv/SSM state. It intentionally uses a host handoff between layer runners, so it is a correctness/lifecycle proof and not a speed-optimized decode path.
+
+Conclusion: CUDA now has a verified multi-recurrent-layer composition boundary for Qwen3.5 9B layers `0,2,4`. The next speed-relevant CUDA gate is device-resident handoff between layer runners so stack execution stops copying final hidden rows through host memory between recurrent layers.
+
+**evidence_update_98:**
+- claim: "The recurrent stack scaffold has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_stack_syntax2 crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_stack_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: stack runner, recurrent layer runner, probe source, CPU reference, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The CUDA recurrent stack matches CPU references for Qwen3.5 9B layers 0,2,4."
+  source: remote `cuda_recurrent_stack_probe --layers 0,2,4 --tokens 2` -> `ok=true`, `final_all_cos=1.0`, `final_all_max_diff=1.7166138e-5`, all `layer*_conv_state_ok=true`, all `layer*_ssm_state_ok=true`, `cuda_ms_per_token=5.998`, `cpu_ms_per_token=12900.199`
+  verified_at: 2026-05-08
+  decay_trigger: stack handoff, recurrent runner output layout, CPU reference, model file, tensor layout, PTX source, or CUDA driver/PTX JIT changes
+- claim: "The current stack timing is not a speed claim."
+  source: implementation uses host handoff between layer runners after each layer (`read_outputs` then next runner input), so measured `cuda_ms_per_token` includes handoff/scaffold overhead absent from a future device-resident stack
+  verified_at: 2026-05-08
+  decay_trigger: stack runner handoff implementation changes
+
+**quadrumvirate_update_98:**
+- cassandra: The likely failure was hidden-state or recurrent-state drift across layer boundaries. The remote gate checked final hidden and each layer's recurrent state, not final output only.
+- daedalus: The next frame is device pointer handoff. Further host-mediated stack tuning is a local optimization trap because it optimizes a scaffold rather than the backend path we need.
+- maieutic: The assumption that multi-layer correctness implies multi-layer performance is false; the current scaffold proves lifecycle composition only.
+- adversary: This covers only recurrent layers with synthetic hidden inputs. Full-attention layers, KV cache, logits/top1, tokenizer/sampling, and end-to-end decode scheduling remain outside the CUDA path.
