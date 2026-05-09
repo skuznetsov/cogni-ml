@@ -9960,3 +9960,23 @@ Conclusion: the current full 9B CUDA mixed stack runs on RTX 5060 Ti, but the pe
 - daedalus: The frame shifts from local FFN retunes to full decode economics: persistent state lifecycle, reset amortization, and a stronger quantized GEMV algorithm.
 - maieutic: `perf_only=true` proves runtime viability and timing boundaries, not exact model correctness. Correctness must remain anchored to smaller CPU-oracle gates until a full correctness path is affordable.
 - adversary: Evidence is from one RTX 5060 Ti, one Qwen3.5 9B Q4_K_M model, and synthetic random hidden inputs rather than tokenizer-driven generation. Treat numbers as backend accounting, not user-facing generation throughput.
+
+**decision_update_122:** Added reset-free steady-state timing for the CUDA mixed stack. `QwenMixedStackRunner#run_sequence` can skip sequence/state reset, and `bin/cuda_mixed_stack_probe.cr --steady-reps=N` runs one reset priming pass before timing N reset-free runs. The option is restricted to `--perf-only` and rejects `--profile-phases`, keeping it as a timing probe rather than a correctness route.
+
+Conclusion: reset avoidance helps but is not the missing 2x. On the five-layer 9B slice, steady timing improves from `7.855ms/token` to `6.253ms/token`; on the full 9B stack, steady timing improves from the reset-amortized `27.994ms/token` to `25.859-25.891ms/token`. The next high-ROI exact work is the global quantized GEMV algorithm and/or a real tokenizer-driven decode loop for fair llama.cpp comparison, not more reset plumbing.
+
+**evidence_update_122:**
+- claim: "The steady-state no-reset path builds and runs in perf-only mode."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_steady_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0; remote `--layers=0,1,2,3,4 --tokens=1 --warmup=1 --skip-debug-readback --perf-only --steady-reps=4` -> `ok=true`, `cuda_ms=25.013`, `cuda_ms_per_token=6.253`
+  verified_at: 2026-05-09
+  decay_trigger: mixed-stack reset semantics, layer input ownership, recurrent/KV state lifetime, or perf-only CLI changes
+- claim: "Full-model reset-free steady timing is only a modest improvement."
+  source: remote `--all-layers --tokens=1 --warmup=1 --skip-debug-readback --perf-only --steady-reps=4` -> `ok=true`, `cuda_ms_per_token=25.859`; repeat with `--steady-reps=8` -> `ok=true`, `cuda_ms_per_token=25.891`; prior full `tokens=4` reset-amortized run was `27.994ms/token`
+  verified_at: 2026-05-09
+  decay_trigger: full-model runner implementation, steady-reps measurement policy, recurrent state dynamics, or GPU/load conditions changes
+
+**quadrumvirate_update_122:**
+- cassandra: Reset was visibly expensive in profiles, but full-model steady timing shows it cannot explain most of the wall.
+- daedalus: The optimization frame shifts again: remove setup where easy, but spend serious effort on GEMV throughput or on a real end-to-end decode comparison.
+- maieutic: The steady probe reuses synthetic hidden inputs and evolving recurrent states, so it estimates backend cost boundaries rather than semantic generation quality.
+- adversary: The no-reset path intentionally skips CPU oracle and has no tokenizer/sampler. It should not be cited as an end-to-end decode speed until a correctness-preserving generation loop exists.

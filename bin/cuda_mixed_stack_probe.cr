@@ -76,6 +76,7 @@ tokens = 2
 start_pos = 0
 max_seq = 16
 warmup = 0
+steady_reps = 0
 read_logits = false
 profile_phases = false
 debug_readback = true
@@ -91,6 +92,7 @@ OptionParser.parse do |p|
   p.on("--max-seq N", "KV cache capacity") { |v| max_seq = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--warmup N", "Untimed warmup stack runs") { |v| warmup = v.to_i }
+  p.on("--steady-reps N", "After one reset priming run, time N runs without sequence/state reset; requires --perf-only") { |v| steady_reps = v.to_i }
   p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
   p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
   p.on("--skip-debug-readback", "Read only output-head results; skip final hidden/state/KV debug buffers for perf attribution") { debug_readback = false }
@@ -107,6 +109,9 @@ raise "tokens must be positive" unless tokens > 0
 raise "start-pos must be non-negative" unless start_pos >= 0
 raise "max-seq must cover start-pos + tokens" unless max_seq >= start_pos + tokens
 raise "warmup must be non-negative" unless warmup >= 0
+raise "steady-reps must be non-negative" unless steady_reps >= 0
+raise "--steady-reps requires --perf-only" if steady_reps > 0 && !perf_only
+raise "--steady-reps does not support --profile-phases" if steady_reps > 0 && profile_phases
 
 eps = 1.0e-6_f32
 gguf = ML::GGUF::GGUFFile.new(model)
@@ -219,7 +224,20 @@ begin
 
   warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false) }
 
-  gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback)
+  measured_tokens = tokens
+  if steady_reps > 0
+    # Prime device inputs and decode states once, then measure the steady path
+    # where recurrent/KV state stays resident across decode steps.
+    mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
+    t_steady = Time.instant
+    steady_reps.times do
+      mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: false)
+    end
+    gpu_ms = (Time.instant - t_steady).total_milliseconds
+    measured_tokens = tokens * steady_reps
+  else
+    gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback)
+  end
   final_gpu_all = mixed_stack.final_gpu_all if debug_readback
 
   lines = [] of String
@@ -271,6 +289,7 @@ begin
   puts "start_pos=#{start_pos}"
   puts "max_seq=#{max_seq}"
   puts "warmup=#{warmup}"
+  puts "steady_reps=#{steady_reps}"
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"
@@ -279,7 +298,7 @@ begin
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
-  puts "cuda_ms_per_token=#{(gpu_ms / tokens).round(3)}"
+  puts "cuda_ms_per_token=#{(gpu_ms / measured_tokens).round(3)}"
   puts "cpu_ms=#{cpu_ms.round(3)}"
   puts "cpu_ms_per_token=#{(cpu_ms / tokens).round(3)}"
   mixed_stack.phase_lines.each { |line| puts line }

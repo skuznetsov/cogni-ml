@@ -43,7 +43,7 @@ module ML::CUDA
       elapsed
     end
 
-    def run_sequence(profile_phases : Bool = false, debug_readback : Bool = true) : Float64
+    def run_sequence(profile_phases : Bool = false, debug_readback : Bool = true, reset_sequence : Bool = true) : Float64
       @phase_lines.clear
       previous_output = 0_u64
       t_all = Time.instant
@@ -60,11 +60,15 @@ module ML::CUDA
           runner.use_device_sequence_input(previous_output)
         end
 
-        t_reset = Time.instant
-        runner.reset_sequence
-        if profile_phases
-          ML::CUDA.synchronize!("cuCtxSynchronize(mixed layer #{idx} reset)")
-          @phase_lines << "phase_layer#{@layer_ids[idx]}_reset_ms=#{((Time.instant - t_reset).total_milliseconds).round(3)}"
+        if reset_sequence
+          t_reset = Time.instant
+          runner.reset_sequence
+          if profile_phases
+            ML::CUDA.synchronize!("cuCtxSynchronize(mixed layer #{idx} reset)")
+            @phase_lines << "phase_layer#{@layer_ids[idx]}_reset_ms=#{((Time.instant - t_reset).total_milliseconds).round(3)}"
+          end
+        elsif profile_phases
+          @phase_lines << "phase_layer#{@layer_ids[idx]}_reset_ms=skipped"
         end
         t0 = Time.instant
         if profile_phases
@@ -82,11 +86,15 @@ module ML::CUDA
       end
 
       @head.use_device_sequence_input(previous_output)
-      t_head_reset = Time.instant
-      @head.reset_sequence
-      if profile_phases
-        ML::CUDA.synchronize!("cuCtxSynchronize(mixed head reset)")
-        @phase_lines << "phase_head_reset_ms=#{((Time.instant - t_head_reset).total_milliseconds).round(3)}"
+      if reset_sequence
+        t_head_reset = Time.instant
+        @head.reset_sequence
+        if profile_phases
+          ML::CUDA.synchronize!("cuCtxSynchronize(mixed head reset)")
+          @phase_lines << "phase_head_reset_ms=#{((Time.instant - t_head_reset).total_milliseconds).round(3)}"
+        end
+      elsif profile_phases
+        @phase_lines << "phase_head_reset_ms=skipped"
       end
       t_head = Time.instant
       if profile_phases
