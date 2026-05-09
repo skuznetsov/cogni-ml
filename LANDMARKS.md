@@ -10992,3 +10992,27 @@ Conclusion: the first semantic full-model point exposed a near-tie. For `input_t
 - daedalus: The next head acceleration frame should be risk-gated elimination, not another exact row-program retune.
 - maieutic: This still is not a prompt distribution; it is one semantic first-token state. Use it as a falsifier and instrumentation gate, not as a population estimate.
 - adversary: Any future approximate head/draft route must report accept/parity plus margin buckets; average speed without near-tie behavior is insufficient.
+
+**decision_update_163:** Added an exact CUDA-side top2 reducer for materialized-logits oracle runs. In `--read-logits` mode, `QwenOutputHeadRunner` now launches a GPU top2 scan/reduce over the logits buffer and reads back top1/top2 ids and values; the probe compares this CUDA top2 against a host scan of the copied GPU logits and the CPU oracle. The default fused Q6 top1 path remains unchanged and still skips materialized logits.
+
+Conclusion: CUDA-side top2/margin is now a verified measurement bridge for risk-gated shortlist/draft-head experiments. It is not a speedup yet because it runs on the materialized-logits oracle path, but it removes a correctness blind spot before building a fused-Q6 top2 or shortlist path.
+
+**evidence_update_163:**
+- claim: "CUDA top2 over materialized logits matches GPU-logit and CPU top2 on the semantic five-layer gate."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_top2_local crystal build bin/cuda_mixed_stack_probe.cr -o /tmp/cuda_mixed_stack_probe_cuda_top2_local --no-codegen`; remote `/tmp/cuda_mixed_stack_probe_cuda_top2 --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --layers=0,1,2,3,4 --tokens=1 --input-token=0 --start-pos=0 --max-seq=16 --warmup=1 --read-logits --skip-debug-readback --profile-phases` -> `ok=true`, `top2_gpu=top2_cpu=top2_cuda_gpu=16`, `top_margin_cuda_gpu=1.501703`, `top2_cuda_ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: output-head top2 PTX, logits materialization path, top2 comparison logic, or token-input semantics changes
+- claim: "Default fused Q6 top1 path still runs without read-logits/top2 materialization."
+  source: remote `/tmp/cuda_mixed_stack_probe_cuda_top2 --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --layers=0,1,2,3,4 --tokens=1 --input-token=0 --start-pos=0 --max-seq=16 --warmup=1 --skip-debug-readback --perf-only` -> `read_logits=false`, `top1_gpu=220`, `ok=true`, `cuda_ms=7.168`
+  verified_at: 2026-05-09
+  decay_trigger: fused Q6 top1 routing, output-head buffer layout, or perf-only path changes
+- claim: "CUDA top2 also matches on the full 9B semantic near-tie case."
+  source: remote `/tmp/cuda_mixed_stack_probe_cuda_top2 --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --all-layers --tokens=1 --input-token=0 --start-pos=0 --max-seq=16 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `top1_gpu=top1_cpu=198`, `top2_gpu=top2_cpu=top2_cuda_gpu=271`, `top_margin_cuda_gpu=0.018449`, `top2_cuda_ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: full mixed-stack layer order, output-head top2 PTX, CPU oracle, or model quantization changes
+
+**quadrumvirate_update_163:**
+- cassandra: This validates the measurement path, not a throughput path. Do not count it as acceleration.
+- daedalus: The next acceleration step can now target fused-Q6 top2/shortlist with an exact oracle comparator already in place.
+- maieutic: The near-tie case makes a hard gate mandatory; a shortlist that drops top2 would silently break exact greedy.
+- adversary: Keep top2 CUDA reporting tied to `--read-logits` until a fused top2 producer is implemented and A/B checked against this oracle.

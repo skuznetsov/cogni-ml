@@ -613,17 +613,27 @@ begin
     end
     margin_max_diff = max_abs_diff(gpu_top_margins, cpu_top_margins)
     margin_ok = margin_max_diff <= 5.0e-3_f32
+    cuda_top_margins = Array(Float32).new(tokens) do |tok|
+      output_head.top1_values_gpu[tok] - output_head.top2_values_gpu[tok]
+    end
+    cuda_top2_ok = output_head.top1_ids == gpu_top1_ids &&
+                   output_head.top2_ids_gpu == gpu_top2_ids &&
+                   max_abs_diff(cuda_top_margins, gpu_top_margins) <= 5.0e-3_f32
     lines << "top2_gpu=#{gpu_top2_ids.join(",")}"
     lines << "top2_cpu=#{cpu_top2_ids.join(",")}"
+    lines << "top2_cuda_gpu=#{output_head.top2_ids_gpu.join(",")}"
     lines << "top1_values_logits_gpu=#{gpu_top1_values.map { |v| v.round(6) }.join(",")}"
     lines << "top1_values_cpu=#{cpu_top1_values.map { |v| v.round(6) }.join(",")}"
     lines << "top2_values_gpu=#{gpu_top2_values.map { |v| v.round(6) }.join(",")}"
     lines << "top2_values_cpu=#{cpu_top2_values.map { |v| v.round(6) }.join(",")}"
+    lines << "top2_values_cuda_gpu=#{output_head.top2_values_gpu.map { |v| v.round(6) }.join(",")}"
     lines << "top_margin_gpu=#{gpu_top_margins.map { |v| v.round(6) }.join(",")}"
     lines << "top_margin_cpu=#{cpu_top_margins.map { |v| v.round(6) }.join(",")}"
+    lines << "top_margin_cuda_gpu=#{cuda_top_margins.map { |v| v.round(6) }.join(",")}"
     lines << "top_margin_max_diff=#{margin_max_diff}"
     lines << "top_margin_ok=#{margin_ok}"
-    ok = ok && margin_ok
+    lines << "top2_cuda_ok=#{cuda_top2_ok}"
+    ok = ok && margin_ok && cuda_top2_ok
   else
     lines << "logits_readback=false"
   end
