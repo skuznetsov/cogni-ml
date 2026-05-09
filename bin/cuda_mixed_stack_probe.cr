@@ -168,6 +168,7 @@ skip_output_head = false
 all_layers = false
 greedy_loop_tokens = 0
 greedy_loop_graph = false
+greedy_loop_no_graph = false
 greedy_loop_graph_device_ready = false
 greedy_loop_gpu_embedding = false
 greedy_loop_cpu_embedding = false
@@ -192,6 +193,7 @@ OptionParser.parse do |p|
   p.on("--all-layers", "Run all model layers instead of the explicit/default layer slice") { all_layers = true }
   p.on("--greedy-loop-tokens N", "Run an embedding-driven greedy decode loop for N generated tokens; forces --tokens=1") { |v| greedy_loop_tokens = v.to_i }
   p.on("--greedy-loop-graph", "Capture the reset-free greedy-loop body as a CUDA graph and replay it after the first token") { greedy_loop_graph = true }
+  p.on("--greedy-loop-no-graph", "Force direct per-token launches in --greedy-loop-tokens mode") { greedy_loop_no_graph = true }
   p.on("--greedy-loop-graph-device-ready", "Instantiate the greedy-loop CUDA graph with DEVICE_LAUNCH constraints; still host-launched by this probe") { greedy_loop_graph_device_ready = true }
   p.on("--greedy-loop-gpu-embedding", "Feed greedy-loop top1 ids back through a CUDA Q4_K token-embedding kernel instead of per-token CPU readback/embedding upload") { greedy_loop_gpu_embedding = true }
   p.on("--greedy-loop-cpu-embedding", "Force per-token CPU top1 readback and embedding upload in --greedy-loop-tokens mode") { greedy_loop_cpu_embedding = true }
@@ -217,6 +219,10 @@ raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps
 raise "--skip-output-head requires --perf-only" if skip_output_head && !perf_only
 raise "--skip-output-head is incompatible with --read-logits" if skip_output_head && read_logits
 raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
+if greedy_loop_tokens > 1 && !greedy_loop_no_graph
+  greedy_loop_graph = true
+end
+raise "use either --greedy-loop-graph or --greedy-loop-no-graph, not both" if greedy_loop_graph && greedy_loop_no_graph
 raise "--greedy-loop-graph requires --greedy-loop-tokens" if greedy_loop_graph && greedy_loop_tokens == 0
 raise "--greedy-loop-graph-device-ready requires --greedy-loop-graph" if greedy_loop_graph_device_ready && !greedy_loop_graph
 raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop_gpu_embedding && greedy_loop_tokens == 0
@@ -572,6 +578,7 @@ begin
   puts "steady_graph_reps=#{steady_graph_reps}"
   puts "greedy_loop_tokens=#{greedy_loop_tokens}"
   puts "greedy_loop_graph=#{greedy_loop_graph}"
+  puts "greedy_loop_no_graph=#{greedy_loop_no_graph}"
   puts "greedy_loop_gpu_embedding=#{greedy_loop_gpu_embedding}"
   puts "greedy_loop_cpu_embedding=#{greedy_loop_cpu_embedding}"
   puts "seed_token=#{seed_token}"

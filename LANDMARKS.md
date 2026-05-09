@@ -10833,6 +10833,26 @@ Conclusion: the gain is small but directionally correct and verified. Remote RTX
 - maieutic: The assumption "default-on is safe" is bounded to Q4_K token embeddings. The escape hatch keeps CPU feedback available for A/B and non-Q4 future models.
 - adversary: The timing gain is below 1%, so it should not be described as a breakthrough. Its value is architectural: fewer host roundtrips and a cleaner path to device-side speculative control.
 
+**decision_update_159b:** Promoted CUDA Graph replay to default-on for semantic greedy loops with more than one generated token. `bin/cuda_mixed_stack_probe.cr --greedy-loop-tokens=N` now auto-enables graph replay when `N > 1`, while `--greedy-loop-no-graph` forces the old direct-launch path for A/B. This compounds with default GPU token feedback and keeps graph setup outside the timed section, as before.
+
+Conclusion: the effect is small but reproducible enough for the semantic harness default. Remote RTX 5060 Ti full 9B gen64 checks favored graph+GPU feedback over direct GPU feedback: graph default `23.245/23.277 ms/tok` vs no-graph `23.361/23.403 ms/tok`; graph+CPU feedback measured `23.387 ms/tok`. Non-greedy full-logit oracle stayed exact.
+
+**evidence_update_159b:**
+- claim: "Default graph replay improves the semantic greedy-loop harness for gen64 while preserving exact output."
+  source: remote `/tmp/cuda_mixed_stack_probe_graph_default --all-layers --tokens=1 --max-seq=128 --greedy-loop-tokens=64 --perf-only --skip-debug-readback` -> default graph+GPU `23.245/23.277 ms/tok`, no-graph GPU `23.361/23.403 ms/tok`, all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph capture/replay path, greedy-loop state update, token feedback path, or timing harness changes
+- claim: "Non-greedy CUDA decode stayed exact after graph default option parsing."
+  source: remote five-layer full-logit oracle -> `cuda_ms=7.632`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: mixed-stack option parsing, graph defaults, or non-greedy run_sequence changes
+
+**quadrumvirate_update_159b:**
+- cassandra: Graph replay has repeatedly shown a sub-1% exact gain; defaulting it in the semantic harness removes a known launch/scheduler tax without changing model math.
+- daedalus: The more important value is control-plane consolidation: default graph + GPU feedback is a better base for future speculative CUDA scheduling than direct host launches.
+- maieutic: The gain is not large enough to justify production claims by itself; it is a harness/controller default, not a model-kernel breakthrough.
+- adversary: `--greedy-loop-no-graph` preserves a direct-launch fallback for driver or capture regressions.
+
 **decision_update_160:** Refreshed the Q8_1+DP4A hot-FFN draft-only evidence after current CUDA cleanups. The existing `bin/cuda_q4k_repack_probe.cr` Q8 path quantizes the activation vector and uses DP4A against Q4_K weights, so it remains approximate and unsuitable as an exact runner route without exact verification.
 
 Conclusion: the microkernel signal is real but too small for direct runner integration. Across hot `blk.{0,1,3}.ffn_gate/up.weight` tensors, raw Q4_K is about `0.1099-0.1100 ms`, Q8+DP4A with GPU quantized activations is about `0.1036 ms`, one-use-with-quant speedup is about `1.04x`, and reuse2-with-quant is about `1.05x`. Cosine stays around `0.999993` with max diff `~0.0056-0.0074`. Keep this as a possible draft/proposal-body ingredient, not a standalone exact speed path.
