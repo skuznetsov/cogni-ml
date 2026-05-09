@@ -10510,3 +10510,27 @@ Conclusion: the route preserved exact top1/logit behavior on the five-layer orac
 - daedalus: Selective tiny-kernel swaps are now a low-yield branch. The next CUDA speed work should change a larger fusion boundary or the row-compute/dequant schedule for hot body GEMVs without adding barriers or extra bytes.
 - maieutic: The hidden assumption was that a 1.4x microbench win on `4096x32` matters in the full model. Phase attribution shows alpha/beta is only about `0.038ms` per recurrent layer, so even perfect improvement has limited ceiling.
 - adversary: This refutes only this exact scale-regs alpha/beta route. It does not refute a future fused alpha+beta projection, broader producer-consumer fusion, or a new Q4 dequant schedule that also helps hot FFN rows.
+
+**decision_update_145:** Refuted manual unrolling of the Q6_K two-iteration decode GEMV inner loop. A temporary PTX generator duplicated the `WARP_N_LOOP` body of `q6_k_gemv_warp4_f32` for `n=0` and `n=1`, removing the loop branch while preserving the same raw GGUF layout and no-barrier warp reduction. This targeted the current Q6-heavy surfaces: output head/full logits and FFN-down GEMV.
+
+Conclusion: the unrolled Q6 body is exact but not faster. On `output.weight` full GEMV it regressed (`2.3041ms` raw vs `2.3711ms` unrolled), while `blk.0.ffn_down.weight` and `blk.1.ffn_down.weight` were neutral (`0.1284ms -> 0.1284ms`, `0.1286ms -> 0.1287ms`). The likely cause is instruction-cache/register scheduling pressure replacing a loop branch that the driver JIT already handles well. The temporary probe files were removed; do not hand-unroll Q6 body loops unless a future SASS/resource probe shows a different bottleneck.
+
+**evidence_update_145:**
+- claim: "Manual Q6_K `n=2` loop unroll preserves tensor-level correctness."
+  source: remote temporary `/tmp/cuda_q6_unroll_probe --tensor output.weight|blk.0.ffn_down.weight|blk.1.ffn_down.weight --reps 100 --warmup 10` -> `unroll_cos≈1.0`, max diff <= `1.527369e-6`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: Q6 PTX body, generated unroll transform, CUDA driver JIT, or tensor layout changes
+- claim: "Manual Q6_K `n=2` loop unroll regresses the large output-weight full GEMV."
+  source: remote `output.weight` shape `4096x248320` -> `raw_cuda_ms=2.3041`, `unroll_cuda_ms=2.3711`, `unroll_speedup=0.9717`
+  verified_at: 2026-05-09
+  decay_trigger: output-head tensor shape, Q6 body JIT scheduling, or GPU architecture changes
+- claim: "Manual Q6_K `n=2` loop unroll is neutral on FFN-down Q6 shapes."
+  source: remote `blk.0.ffn_down.weight` shape `12288x4096` -> `0.1284ms -> 0.1284ms`, speedup `1.0002`; `blk.1.ffn_down.weight` -> `0.1286ms -> 0.1287ms`, speedup `0.9986`
+  verified_at: 2026-05-09
+  decay_trigger: FFN-down tensor shape, Q6 body JIT scheduling, or GPU load changes
+
+**quadrumvirate_update_145:**
+- cassandra: Removing a tiny loop branch looked plausible but had a high risk of code-size/register-pressure regression; the large output shape confirms that risk.
+- daedalus: Do not spend more attempts on superficial PTX branch cleanup. Q6 speed needs either a different dot representation, a top1-specific algorithmic cut, or a larger producer-consumer fusion.
+- maieutic: The assumption "visible loop branch means runtime overhead" is not supported here; the branch is not the limiting cost.
+- adversary: This refutes only manual unrolling of the main Q6 body loop. It does not refute Q6 DP4A/activation-quant experiments, top1-only pruning, or output-head candidate shortlist ideas.
