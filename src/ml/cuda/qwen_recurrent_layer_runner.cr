@@ -309,16 +309,17 @@ module ML::CUDA
       attn_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
       swiglu_fn = dn_mod.function("swiglu_probe")
-      add_fn = dn_mod.function("add_vec_probe")
       conv_fn = dn_mod.function("recurrent_conv1d_silu_step_probe")
       norm_fn = dn_mod.function("l2_norm_128_probe")
       ab_fn = dn_mod.function("alpha_beta_transform_probe")
       dn_fn = dn_mod.function("deltanet_step_128_probe")
       post_fn = dn_mod.function("deltanet_post_norm_gate_128_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
+      q4_add_fn = q4_mod.function("q4_k_gemv_add_warp4_f32")
       q5_fn = q5_mod.function("q5_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
-      ffn_down_fn = @ffn_down_type.q4_k? ? q4_fn : q6_fn
+      q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
+      ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
                @qkv_raw.size.to_u64, @gate_raw.size.to_u64, @alpha_raw.size.to_u64, @beta_raw_w.size.to_u64,
@@ -376,7 +377,6 @@ module ML::CUDA
       ffn_grid = ((@ffn_dim + 3) // 4).to_u32
       hidden_grid = ((@hidden + 3) // 4).to_u32
       swiglu_grid = ((@ffn_dim + 127) // 128).to_u32
-      add_grid = ((@hidden + 127) // 128).to_u32
       conv_grid = ((@qkv_dim + 127) // 128).to_u32
       d_q = d_conv_out
       d_k = d_conv_out + bytesize_f32(@q_dim)
@@ -499,18 +499,13 @@ module ML::CUDA
       swiglu_params[2] = box_ptr(d_ffn_comb).as(Void*)
       swiglu_params[3] = box_u32(ffn_dim_u32).as(Void*)
 
-      ffn_down_params = Pointer(Void*).malloc(5)
+      ffn_down_params = Pointer(Void*).malloc(6)
       ffn_down_params[0] = box_ptr(d_ffn_down_w).as(Void*)
       ffn_down_params[1] = box_ptr(d_ffn_comb).as(Void*)
-      ffn_down_params[2] = box_ptr(d_ffn_out).as(Void*)
-      ffn_down_params[3] = box_u32(ffn_dim_u32).as(Void*)
-      ffn_down_params[4] = box_u32(hidden_u32).as(Void*)
-
-      final_add_params = Pointer(Void*).malloc(4)
-      final_add_params[0] = box_ptr(d_residual).as(Void*)
-      final_add_params[1] = box_ptr(d_ffn_out).as(Void*)
-      final_add_params[2] = d_final_cur_ptr.as(Void*)
-      final_add_params[3] = box_u32(hidden_u32).as(Void*)
+      ffn_down_params[2] = box_ptr(d_residual).as(Void*)
+      ffn_down_params[3] = d_final_cur_ptr.as(Void*)
+      ffn_down_params[4] = box_u32(ffn_dim_u32).as(Void*)
+      ffn_down_params[5] = box_u32(hidden_u32).as(Void*)
 
       run_token = ->(tok : Int32) {
         offset = bytesize_f32(tok * @hidden)
@@ -532,8 +527,7 @@ module ML::CUDA
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
         ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
-        ML::CUDA.launch!(ffn_down_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
-        ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
+        ML::CUDA.launch!(ffn_down_add_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add")
       }
 
       profile_run_token = ->(tok : Int32) {
@@ -593,14 +587,10 @@ module ML::CUDA
         @profile_swiglu_ms += (Time.instant - t_swiglu).total_milliseconds
 
         t_ffn_down = Time.instant
-        ML::CUDA.launch!(ffn_down_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
+        ML::CUDA.launch!(ffn_down_add_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add")
         ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn down)")
         @profile_ffn_down_ms += (Time.instant - t_ffn_down).total_milliseconds
 
-        t_final_add = Time.instant
-        ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent final add)")
-        @profile_final_add_ms += (Time.instant - t_final_add).total_milliseconds
         @profile_ffn_ms += (Time.instant - t_ffn).total_milliseconds
       }
 

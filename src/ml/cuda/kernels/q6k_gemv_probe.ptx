@@ -395,6 +395,218 @@ WARP_DONE:
     ret;
 }
 
+.visible .entry q6_k_gemv_add_warp4_f32(
+    .param .u64 w_raw,
+    .param .u64 x,
+    .param .u64 residual,
+    .param .u64 out,
+    .param .u32 in_dim,
+    .param .u32 out_dim
+)
+{
+    .reg .pred %p<6>;
+    .reg .b16 %h<2>;
+    .reg .b32 %r<80>;
+    .reg .b64 %rd<80>;
+    .reg .f32 %f<28>;
+    .shared .align 4 .b8 smem[512];
+
+    ld.param.u64 %rd1, [w_raw];
+    ld.param.u64 %rd2, [x];
+    ld.param.u64 %rd3, [residual];
+    ld.param.u64 %rd60, [out];
+    ld.param.u32 %r1, [in_dim];
+    ld.param.u32 %r2, [out_dim];
+
+    mov.u32 %r3, %tid.x;
+    mov.u32 %r4, %ctaid.x;
+    and.b32 %r5, %r3, 31;
+    shr.u32 %r6, %r3, 5;
+    shl.b32 %r7, %r4, 2;
+    add.u32 %r8, %r7, %r6;
+    setp.ge.u32 %p1, %r8, %r2;
+    @%p1 bra WARP_DONE;
+
+    shr.u32 %r9, %r1, 8;
+    mul.lo.u32 %r10, %r9, 210;
+    mul.wide.u32 %rd4, %r8, %r10;
+    add.s64 %rd5, %rd1, %rd4;
+
+    mov.f32 %f1, 0f00000000;
+    mov.u32 %r11, 0;
+
+WARP_BLOCK_LOOP:
+    setp.ge.u32 %p1, %r11, %r9;
+    @%p1 bra WARP_REDUCE_PREP;
+
+    mul.lo.u32 %r12, %r11, 210;
+    cvt.u64.u32 %rd6, %r12;
+    add.s64 %rd7, %rd5, %rd6;
+    add.s64 %rd8, %rd7, 128;
+    add.s64 %rd9, %rd7, 192;
+    add.s64 %rd10, %rd7, 208;
+    ld.global.u16 %h1, [%rd10];
+    cvt.f32.f16 %f2, %h1;
+
+    mov.u32 %r13, 0;
+
+WARP_N_LOOP:
+    setp.ge.u32 %p2, %r13, 2;
+    @%p2 bra WARP_NEXT_BLOCK;
+
+    mul.lo.u32 %r14, %r13, 64;
+    mul.lo.u32 %r15, %r13, 32;
+    shl.b32 %r16, %r13, 7;
+    shl.b32 %r17, %r13, 3;
+    shl.b32 %r18, %r11, 8;
+    add.u32 %r19, %r18, %r16;
+
+    add.u32 %r20, %r14, %r5;
+    cvt.u64.u32 %rd11, %r20;
+    add.s64 %rd12, %rd7, %rd11;
+    ld.global.u8 %r21, [%rd12];
+    add.u32 %r22, %r20, 32;
+    cvt.u64.u32 %rd13, %r22;
+    add.s64 %rd14, %rd7, %rd13;
+    ld.global.u8 %r23, [%rd14];
+    add.u32 %r24, %r15, %r5;
+    cvt.u64.u32 %rd15, %r24;
+    add.s64 %rd16, %rd8, %rd15;
+    ld.global.u8 %r25, [%rd16];
+
+    and.b32 %r26, %r21, 15;
+    and.b32 %r27, %r25, 3;
+    shl.b32 %r27, %r27, 4;
+    or.b32 %r26, %r26, %r27;
+    add.s32 %r26, %r26, -32;
+
+    and.b32 %r28, %r23, 15;
+    shr.u32 %r29, %r25, 2;
+    and.b32 %r29, %r29, 3;
+    shl.b32 %r29, %r29, 4;
+    or.b32 %r28, %r28, %r29;
+    add.s32 %r28, %r28, -32;
+
+    shr.u32 %r30, %r21, 4;
+    shr.u32 %r31, %r25, 4;
+    and.b32 %r31, %r31, 3;
+    shl.b32 %r31, %r31, 4;
+    or.b32 %r30, %r30, %r31;
+    add.s32 %r30, %r30, -32;
+
+    shr.u32 %r32, %r23, 4;
+    shr.u32 %r33, %r25, 6;
+    and.b32 %r33, %r33, 3;
+    shl.b32 %r33, %r33, 4;
+    or.b32 %r32, %r32, %r33;
+    add.s32 %r32, %r32, -32;
+
+    shr.u32 %r34, %r5, 4;
+    add.u32 %r35, %r17, %r34;
+    cvt.u64.u32 %rd17, %r35;
+    add.s64 %rd18, %rd9, %rd17;
+    ld.global.s8 %r36, [%rd18];
+    add.u32 %r37, %r35, 2;
+    cvt.u64.u32 %rd19, %r37;
+    add.s64 %rd20, %rd9, %rd19;
+    ld.global.s8 %r38, [%rd20];
+    add.u32 %r39, %r35, 4;
+    cvt.u64.u32 %rd21, %r39;
+    add.s64 %rd22, %rd9, %rd21;
+    ld.global.s8 %r40, [%rd22];
+    add.u32 %r41, %r35, 6;
+    cvt.u64.u32 %rd23, %r41;
+    add.s64 %rd24, %rd9, %rd23;
+    ld.global.s8 %r42, [%rd24];
+
+    cvt.rn.f32.s32 %f3, %r26;
+    cvt.rn.f32.s32 %f4, %r28;
+    cvt.rn.f32.s32 %f5, %r30;
+    cvt.rn.f32.s32 %f6, %r32;
+    cvt.rn.f32.s32 %f7, %r36;
+    cvt.rn.f32.s32 %f8, %r38;
+    cvt.rn.f32.s32 %f9, %r40;
+    cvt.rn.f32.s32 %f10, %r42;
+
+    mul.rn.f32 %f11, %f2, %f7;
+    mul.rn.f32 %f11, %f11, %f3;
+    mul.rn.f32 %f12, %f2, %f8;
+    mul.rn.f32 %f12, %f12, %f4;
+    mul.rn.f32 %f13, %f2, %f9;
+    mul.rn.f32 %f13, %f13, %f5;
+    mul.rn.f32 %f14, %f2, %f10;
+    mul.rn.f32 %f14, %f14, %f6;
+
+    add.u32 %r43, %r19, %r5;
+    mul.wide.u32 %rd25, %r43, 4;
+    add.s64 %rd26, %rd2, %rd25;
+    ld.global.f32 %f15, [%rd26];
+    fma.rn.f32 %f1, %f15, %f11, %f1;
+
+    add.u32 %r44, %r43, 32;
+    mul.wide.u32 %rd27, %r44, 4;
+    add.s64 %rd28, %rd2, %rd27;
+    ld.global.f32 %f16, [%rd28];
+    fma.rn.f32 %f1, %f16, %f12, %f1;
+
+    add.u32 %r45, %r43, 64;
+    mul.wide.u32 %rd29, %r45, 4;
+    add.s64 %rd30, %rd2, %rd29;
+    ld.global.f32 %f17, [%rd30];
+    fma.rn.f32 %f1, %f17, %f13, %f1;
+
+    add.u32 %r46, %r43, 96;
+    mul.wide.u32 %rd31, %r46, 4;
+    add.s64 %rd32, %rd2, %rd31;
+    ld.global.f32 %f18, [%rd32];
+    fma.rn.f32 %f1, %f18, %f14, %f1;
+
+    add.u32 %r13, %r13, 1;
+    bra WARP_N_LOOP;
+
+WARP_NEXT_BLOCK:
+    add.u32 %r11, %r11, 1;
+    bra WARP_BLOCK_LOOP;
+
+WARP_REDUCE_PREP:
+    mov.u32 %r47, 0xffffffff;
+    mov.b32 %r48, %f1;
+    shfl.sync.down.b32 %r49, %r48, 16, 31, %r47;
+    mov.b32 %f19, %r49;
+    add.rn.f32 %f1, %f1, %f19;
+    mov.b32 %r48, %f1;
+    shfl.sync.down.b32 %r49, %r48, 8, 31, %r47;
+    mov.b32 %f19, %r49;
+    add.rn.f32 %f1, %f1, %f19;
+    mov.b32 %r48, %f1;
+    shfl.sync.down.b32 %r49, %r48, 4, 31, %r47;
+    mov.b32 %f19, %r49;
+    add.rn.f32 %f1, %f1, %f19;
+    mov.b32 %r48, %f1;
+    shfl.sync.down.b32 %r49, %r48, 2, 31, %r47;
+    mov.b32 %f19, %r49;
+    add.rn.f32 %f1, %f1, %f19;
+    mov.b32 %r48, %f1;
+    shfl.sync.down.b32 %r49, %r48, 1, 31, %r47;
+    mov.b32 %f19, %r49;
+    add.rn.f32 %f1, %f1, %f19;
+    setp.ne.u32 %p4, %r5, 0;
+    @%p4 bra WARP_DONE;
+
+WARP_STORE:
+    mul.wide.u32 %rd38, %r8, 4;
+    add.s64 %rd39, %rd3, %rd38;
+    ld.global.f32 %f20, [%rd39];
+    add.rn.f32 %f1, %f1, %f20;
+    add.s64 %rd40, %rd60, %rd38;
+    st.global.f32 [%rd40], %f1;
+
+WARP_DONE:
+    ret;
+}
+
+
+
 .visible .entry q6_k_gemv_top1_partial_f32(
     .param .u64 w_raw,
     .param .u64 x,

@@ -223,11 +223,12 @@ module ML::CUDA
       attn_fn = mod.function("full_attn_decode_cache_probe")
       add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
       swiglu_fn = dn_mod.function("swiglu_probe")
-      add_fn = dn_mod.function("add_vec_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
+      q4_add_fn = q4_mod.function("q4_k_gemv_add_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
+      q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
       out_proj_fn = @output_type.q4_k? ? q4_fn : q6_fn
-      ffn_down_fn = @ffn_down_type.q4_k? ? q4_fn : q6_fn
+      ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
                bytesize_f32(@cos_table.size), bytesize_f32(@sin_table.size),
@@ -285,7 +286,6 @@ module ML::CUDA
       output_grid = ((@output_out_dim + 3) // 4).to_u32
       ffn_grid = ((@ffn_dim + 3) // 4).to_u32
       swiglu_grid = ((@ffn_dim + 127) // 128).to_u32
-      add_grid = ((@output_out_dim + 127) // 128).to_u32
 
       q_params = Pointer(Void*).malloc(10)
       q_params[0] = box_ptr(@q_full_device_ptr).as(Void*)
@@ -372,18 +372,13 @@ module ML::CUDA
       swiglu_params[2] = box_ptr(d_ffn_comb).as(Void*)
       swiglu_params[3] = box_u32(ffn_dim_u32).as(Void*)
 
-      ffn_down_params = Pointer(Void*).malloc(5)
+      ffn_down_params = Pointer(Void*).malloc(6)
       ffn_down_params[0] = box_ptr(d_ffn_down_w).as(Void*)
       ffn_down_params[1] = box_ptr(d_ffn_comb).as(Void*)
-      ffn_down_params[2] = box_ptr(d_ffn_out).as(Void*)
-      ffn_down_params[3] = box_u32(ffn_dim_u32).as(Void*)
-      ffn_down_params[4] = box_u32(output_out_dim_u32).as(Void*)
-
-      final_add_params = Pointer(Void*).malloc(4)
-      final_add_params[0] = box_ptr(d_residual).as(Void*)
-      final_add_params[1] = box_ptr(d_ffn_out).as(Void*)
-      final_add_params[2] = d_final_cur_ptr.as(Void*)
-      final_add_params[3] = box_u32(output_out_dim_u32).as(Void*)
+      ffn_down_params[2] = box_ptr(d_residual).as(Void*)
+      ffn_down_params[3] = d_final_cur_ptr.as(Void*)
+      ffn_down_params[4] = box_u32(ffn_dim_u32).as(Void*)
+      ffn_down_params[5] = box_u32(output_out_dim_u32).as(Void*)
 
       run_token = ->(tok : Int32) {
         # Kernels index token by block id; launch all token blocks once.
@@ -402,8 +397,7 @@ module ML::CUDA
             ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "full ffn gate")
             ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "full ffn up")
             ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu")
-            ML::CUDA.launch!(ffn_down_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down")
-            ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "full final add")
+            ML::CUDA.launch!(ffn_down_add_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add")
           end
         end
       }
@@ -453,14 +447,10 @@ module ML::CUDA
             @profile_swiglu_ms += (Time.instant - t_swiglu).total_milliseconds
 
             t_down = Time.instant
-            ML::CUDA.launch!(ffn_down_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down")
+            ML::CUDA.launch!(ffn_down_add_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add")
             ML::CUDA.synchronize!("cuCtxSynchronize(full ffn down)")
             @profile_ffn_down_ms += (Time.instant - t_down).total_milliseconds
 
-            t_final = Time.instant
-            ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "full final add")
-            ML::CUDA.synchronize!("cuCtxSynchronize(full final add)")
-            @profile_final_add_ms += (Time.instant - t_final).total_milliseconds
           end
         end
       }

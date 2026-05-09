@@ -10076,3 +10076,27 @@ Conclusion: this is a useful WBA negative case. Reducing apparent `x` traffic by
 - daedalus: The frame shifts from "reuse via shared memory" to "reuse without barriers" or "reduce dequant work per row."
 - maieutic: Apparent memory-traffic savings are not sufficient evidence; the synchronization topology matters more here.
 - adversary: Refutation is scoped to CTA-level shared x-cache with four row-warps on RTX 5060 Ti. It does not refute all x reuse strategies.
+
+**decision_update_127:** Fused FFN down projection with final residual add in CUDA recurrent and full-attention layers. New Q4/Q6 `*_gemv_add_warp4_f32` kernels add the residual inside the GEMV store path, so FFN down writes final hidden directly instead of materializing `ffn_out` and launching a separate `final_add` kernel.
+
+Conclusion: this is a small exact WBA cleanup. It removes a consumer launch and intermediate read/write without adding synchronization. The full-model win is modest (`~0.05ms/token`) because final add was already small, but the direction is validated: store-path fusions are safer than CTA-shared staging.
+
+**evidence_update_127:**
+- claim: "FFN down-add fusion preserves top1/logits correctness on the five-layer gate."
+  source: remote five-layer default `cuda_mixed_stack_probe --tokens=1 --warmup=1 --skip-debug-readback` -> `ok=true`, `top1_gpu=96939`, `top1_cpu=96939`, `cuda_ms=7.234`; remote `--read-logits` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.0728836e-5`, `top1_gpu=top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: Q4/Q6 add GEMV kernels, recurrent/full-attn FFN routing, residual buffer ownership, or output oracle changes
+- claim: "FFN down-add fusion is a small full 9B speedup."
+  source: remote full 9B ABBA `--steady-reps=16`: baseline fused-head `23.673/23.704ms/token`; down-add `23.657/23.653ms/token`, all `ok=true`, `top1_gpu=8894`
+  verified_at: 2026-05-09
+  decay_trigger: full-model runner, FFN down tensor types, GPU/load conditions, or benchmark harness changes
+- claim: "The separate final-add phase was eliminated in the profile path."
+  source: remote full profile after down-add -> every recurrent/full-attn `*_final_add_ms=0.0`, `cuda_ms=38.568`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: profile instrumentation, down-add route, or final-add kernel reintegration changes
+
+**quadrumvirate_update_127:**
+- cassandra: Expected gain was bounded by small final-add cost, but unlike x-cache it should not regress because it adds no barriers. Measurement matched.
+- daedalus: The successful frame is store-path fusion, not shared-memory staging.
+- maieutic: Removing a launch is not automatically a major speedup when GEMV dominates. Keep this as cleanup and move back to dequant/row compute.
+- adversary: The add variants are only used where the consumer is exactly residual add. Other GEMV call sites still use plain kernels.
