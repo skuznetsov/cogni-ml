@@ -10414,3 +10414,27 @@ Conclusion: the route preserved top1 on the tested slice, but did not improve wa
 - daedalus: DP4A remains potentially useful only if fused into a larger producer-consumer region or applied where activation quantization is already needed, not as a standalone extra launch before gate/up.
 - maieutic: The hidden assumption was that microbench speedup composes linearly into full decode. Full semantic timing falsified that.
 - adversary: This refutes only the first recurrent FFN integration. It does not refute a fused quant+dual-GEMV kernel, a draft-only route with lower quality requirements, or llama.cpp-style source kernels that avoid the extra launch/metadata layout used here.
+
+**decision_update_141:** Refuted an exact no-barrier cache-policy hint for Q4_K input-vector loads. A temporary probe variant loaded the two per-lane F32 activation values in `q4_k_gemv_warp4_f32` with `ld.global.ca.f32` instead of default `ld.global.f32`. This tested the useful part of the earlier shared `x` cache idea without adding `bar.sync`.
+
+Conclusion: cache hints are neutral on RTX 5060 Ti for current Q4_K decode GEMV. The hot FFN `4096x12288` shape stayed at about `0.1098ms`, FFN gate/up repeated the same neutral result, and the tiny `4096x32` projection was also unchanged. This supports the interpretation from the shared-cache refutation: the hardware cache path is already good enough for duplicated `x` reads, and the remaining Q4 bottleneck is not fixed by explicit cache residency hints. The temporary probe code was removed before commit.
+
+**evidence_update_141:**
+- claim: "The `ld.global.ca.f32` Q4_K variant preserved exact tensor-level correctness."
+  source: remote `/tmp/cuda_q4k_repack_probe_x_ca` on Qwen3.5 9B Q4_K_M tensors -> `raw_x_ca_cos=1.0`, max diff <= `4.6938658e-7`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: Q4_K PTX load policy, CUDA driver JIT, GPU architecture, or tensor shapes change
+- claim: "The cache-policy hint was neutral/slightly negative on hot FFN Q4_K shapes."
+  source: remote sweep `--reps 120 --warmup 12` -> `blk.0.ffn_up.weight` `raw_cuda_ms=0.1098`, `raw_x_ca_cuda_ms=0.1099`, `raw_x_ca_speedup=0.9986`; `blk.0.ffn_gate.weight` `0.1098` vs `0.1098`, speedup `0.9997`; `blk.1.ffn_up.weight` `0.1098` vs `0.1098`, speedup `0.9999`
+  verified_at: 2026-05-09
+  decay_trigger: cache policy, hot Q4 shapes, GPU load, or CUDA driver changes
+- claim: "The cache-policy hint was also neutral on tiny Q4_K projections."
+  source: remote `blk.0.ssm_alpha.weight` -> shape `4096x32`, `raw_cuda_ms=0.0065`, `raw_x_ca_cuda_ms=0.0065`, `raw_x_ca_speedup=1.0009`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: launch overhead, small projection shape, or GPU architecture changes
+
+**quadrumvirate_update_141:**
+- cassandra: The likely outcome was neutral because the previous shared-cache experiment showed barriers, not cache misses, dominated the failed x-cache route.
+- daedalus: Do not keep trying to force `x` residency locally. Next exact Q4 work needs a different dot/dequant schedule, fewer instructions per quant block, or a larger fusion boundary.
+- maieutic: The assumption "duplicated x loads are still a major uncached traffic source" is not supported for these shapes.
+- adversary: This refutes only `.ca` cache hints for activation loads. It does not refute source-level compiler scheduling, vectorized dequant, or fused dual-output kernels that eliminate duplicated work rather than hinting cache policy.
