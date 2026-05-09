@@ -9698,3 +9698,28 @@ Conclusion: the CUDA scaffold now has the correct decode-facing readback shape f
 - daedalus: The frame is now decode-facing output shape, not logits attribution. The next pivot is algorithmic within top1/topK reduction, because serial scanning resident logits is correct but slow.
 - maieutic: Avoid claiming performance from less readback. On this gate the serial top1 kernel made wall time worse than the previous logits-readback run; the verified claim is only resident top1 semantics.
 - adversary: Evidence covers one 9B five-layer slice and greedy top1. It does not cover topK/sampling, multiple tokens, all layers, 27B, repeated decode-loop state ownership, or optimized top1 reduction.
+
+
+**decision_update_110:** Replaced the serial resident CUDA top1 kernel with a simple two-phase parallel top1. `QwenOutputHeadRunner` now runs `output_top1_partial_scan_probe` with 256 CUDA threads over the resident logits vector, writes partial id/value pairs to scratch buffers, and then runs `output_top1_partial_reduce_probe` over those partials. Full logits readback remains optional via `--read-logits`.
+
+Conclusion: the resident top1 boundary now has the right parallel structure and remains exact for greedy top1, but the five-layer scaffold wall did not materially improve. The next useful CUDA gate is model-level decode-state ownership plus phase attribution, not further un-attributed top1 tuning.
+
+**evidence_update_110:**
+- claim: "The two-phase resident top1 path has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_top1_parallel_syntax2 crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: output-head runner source, top1 PTX, mixed probe source, Crystal compiler, or embedded PTX files change
+- claim: "The mixed CUDA stack can produce CPU-matching top1 with the parallel top1 path and no full logits readback."
+  source: remote default `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --start-pos 2 --max-seq 12` -> `ok=true`, `logits_readback=false`, `top1_gpu=96939`, `top1_cpu=96939`, `top1_values_gpu=7.527309`; hidden and layer state checks also remained ok
+  verified_at: 2026-05-08
+  decay_trigger: resident logits layout, top1 partial scan/reduce kernels, output tensor type/layout, mixed-stack sequencing, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+- claim: "The full-logits oracle path remains compatible with the parallel top1 path."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --start-pos 2 --max-seq 12 --read-logits` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.8119812e-5`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-08
+  decay_trigger: optional logits readback branch, output-head runner readback logic, top1 scratch buffers, or logits buffer layout changes
+
+**quadrumvirate_update_110:**
+- cassandra: The first parallel PTX attempt failed JIT with CUDA error 218; likely syntax was the issue. Rewriting to the style used by existing PTX (`mov %ntid.x`, positive predicate branches, `-FLT_MAX` literal) fixed module loading and preserved parity.
+- daedalus: The wall result refutes "top1 serial scan is the dominant mixed-stack wall" for this five-layer probe. The better frame is phase attribution across layer runners, full-attention serial decode, output GEMV, and synchronization.
+- maieutic: A parallel-looking kernel is not a speed claim. The verified claim is exact resident top1 with a parallel scan/reduce structure; measured scaffold wall stayed neutral within this evidence.
+- adversary: Evidence covers one 9B five-layer slice and greedy top1. It does not cover topK/sampling, all layers, 27B, repeated decode-loop state ownership, or a fully optimized reduction using shared memory/warp collectives.

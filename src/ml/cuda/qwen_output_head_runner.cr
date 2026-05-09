@@ -14,30 +14,37 @@ module ML::CUDA
     .target sm_80
     .address_size 64
 
-    .visible .entry output_top1_serial_probe(
+    .visible .entry output_top1_partial_scan_probe(
         .param .u64 logits,
-        .param .u64 out_ids,
-        .param .u64 out_values,
-        .param .u32 vocab
+        .param .u64 partial_ids,
+        .param .u64 partial_values,
+        .param .u32 vocab,
+        .param .u32 partial_stride
     )
     {
         .reg .pred %p<4>;
-        .reg .b32 %r<10>;
-        .reg .b64 %rd<10>;
+        .reg .b32 %r<17>;
+        .reg .b64 %rd<14>;
         .reg .f32 %f<4>;
 
         ld.param.u64 %rd1, [logits];
-        ld.param.u64 %rd2, [out_ids];
-        ld.param.u64 %rd3, [out_values];
+        ld.param.u64 %rd2, [partial_ids];
+        ld.param.u64 %rd3, [partial_values];
         ld.param.u32 %r1, [vocab];
+        ld.param.u32 %r8, [partial_stride];
 
         mov.u32 %r2, %tid.x;
-        setp.ne.u32 %p1, %r2, 0;
-        @%p1 bra DONE;
+        mov.u32 %r9, %ctaid.x;
+        setp.ge.u32 %p1, %r2, %r1;
+        @%p1 bra EMPTY;
 
-        ld.global.f32 %f1, [%rd1];
-        mov.u32 %r3, 0;
-        mov.u32 %r4, 1;
+        mul.wide.u32 %rd4, %r2, 4;
+        add.s64 %rd5, %rd1, %rd4;
+        ld.global.f32 %f1, [%rd5];
+        mov.u32 %r3, %r2;
+        mov.u32 %r12, %ntid.x;
+        add.u32 %r4, %r2, %r12;
+        bra LOOP;
 
     LOOP:
         setp.ge.u32 %p2, %r4, %r1;
@@ -46,7 +53,10 @@ module ML::CUDA
         add.s64 %rd5, %rd1, %rd4;
         ld.global.f32 %f2, [%rd5];
         setp.gt.f32 %p3, %f2, %f1;
-        @!%p3 bra NEXT;
+        @%p3 bra UPDATE;
+        bra NEXT;
+
+    UPDATE:
         mov.f32 %f1, %f2;
         mov.u32 %r3, %r4;
 
@@ -55,10 +65,91 @@ module ML::CUDA
         bra LOOP;
 
     STORE:
-        st.global.u32 [%rd2], %r3;
-        st.global.f32 [%rd3], %f1;
+        mul.lo.u32 %r10, %r9, %r8;
+        add.u32 %r11, %r10, %r2;
+        mul.wide.u32 %rd6, %r11, 4;
+        add.s64 %rd7, %rd2, %rd6;
+        add.s64 %rd8, %rd3, %rd6;
+        st.global.u32 [%rd7], %r3;
+        st.global.f32 [%rd8], %f1;
+        bra DONE;
+
+    EMPTY:
+        mov.f32 %f1, 0fFF7FFFFF;
+        mov.u32 %r3, 0;
+        mul.lo.u32 %r10, %r9, %r8;
+        add.u32 %r11, %r10, %r2;
+        mul.wide.u32 %rd6, %r11, 4;
+        add.s64 %rd7, %rd2, %rd6;
+        add.s64 %rd8, %rd3, %rd6;
+        st.global.u32 [%rd7], %r3;
+        st.global.f32 [%rd8], %f1;
 
     DONE:
+        ret;
+    }
+
+    .visible .entry output_top1_partial_reduce_probe(
+        .param .u64 partial_ids,
+        .param .u64 partial_values,
+        .param .u64 out_ids,
+        .param .u64 out_values,
+        .param .u32 partial_stride
+    )
+    {
+        .reg .pred %p<4>;
+        .reg .b32 %r<16>;
+        .reg .b64 %rd<18>;
+        .reg .f32 %f<6>;
+
+        ld.param.u64 %rd1, [partial_ids];
+        ld.param.u64 %rd2, [partial_values];
+        ld.param.u64 %rd3, [out_ids];
+        ld.param.u64 %rd4, [out_values];
+        ld.param.u32 %r1, [partial_stride];
+
+        mov.u32 %r2, %tid.x;
+        setp.ne.u32 %p1, %r2, 0;
+        @%p1 bra DONE2;
+
+        mov.u32 %r3, %ctaid.x;
+        mul.lo.u32 %r4, %r3, %r1;
+        mul.wide.u32 %rd5, %r4, 4;
+        add.s64 %rd6, %rd1, %rd5;
+        add.s64 %rd7, %rd2, %rd5;
+        ld.global.u32 %r5, [%rd6];
+        ld.global.f32 %f1, [%rd7];
+        mov.u32 %r6, 1;
+
+    LOOP2:
+        setp.ge.u32 %p2, %r6, %r1;
+        @%p2 bra STORE2;
+        add.u32 %r7, %r4, %r6;
+        mul.wide.u32 %rd8, %r7, 4;
+        add.s64 %rd9, %rd1, %rd8;
+        add.s64 %rd10, %rd2, %rd8;
+        ld.global.u32 %r8, [%rd9];
+        ld.global.f32 %f2, [%rd10];
+        setp.gt.f32 %p3, %f2, %f1;
+        @%p3 bra UPDATE2;
+        bra NEXT2;
+
+    UPDATE2:
+        mov.f32 %f1, %f2;
+        mov.u32 %r5, %r8;
+
+    NEXT2:
+        add.u32 %r6, %r6, 1;
+        bra LOOP2;
+
+    STORE2:
+        mul.wide.u32 %rd11, %r3, 4;
+        add.s64 %rd12, %rd3, %rd11;
+        add.s64 %rd13, %rd4, %rd11;
+        st.global.u32 [%rd12], %r5;
+        st.global.f32 [%rd13], %f1;
+
+    DONE2:
         ret;
     }
     PTX
@@ -179,18 +270,21 @@ module ML::CUDA
       norm_fn = dn_mod.function("rmsnorm_vec_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
-      top1_fn = top1_mod.function("output_top1_serial_probe")
+      top1_scan_fn = top1_mod.function("output_top1_partial_scan_probe")
+      top1_reduce_fn = top1_mod.function("output_top1_partial_reduce_probe")
       output_fn = @output_type.q4_k? ? q4_fn : q6_fn
+      top1_width = 256_u32
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
                @output_raw.size.to_u64, bytesize_f32(@tokens * @hidden), bytesize_f32(@tokens * @vocab),
+               bytesize_i32(top1_width.to_i32), bytesize_f32(top1_width.to_i32),
                bytesize_i32(@tokens), bytesize_f32(@tokens)]
       ptrs = sizes.map do |size_bytes|
         buffer = DeviceBuffer.new(size_bytes)
         @buffers << buffer
         buffer.ptr
       end
-      d_xs, d_norm_w, d_normed, d_output_w, d_normed_all, d_logits_all, d_top1_ids, d_top1_values = ptrs
+      d_xs, d_norm_w, d_normed, d_output_w, d_normed_all, d_logits_all, d_partial_ids, d_partial_values, d_top1_ids, d_top1_values = ptrs
       @owned_input_device_ptr = d_xs
       @input_device_base = d_xs
       @logits_device_ptr = d_logits_all
@@ -229,11 +323,19 @@ module ML::CUDA
       output_params[3] = box_u32(hidden_u32).as(Void*)
       output_params[4] = box_u32(vocab_u32).as(Void*)
 
-      top1_params = Pointer(Void*).malloc(4)
-      top1_params[0] = d_logits_cur_ptr.as(Void*)
-      top1_params[1] = d_top1_id_cur_ptr.as(Void*)
-      top1_params[2] = d_top1_value_cur_ptr.as(Void*)
-      top1_params[3] = box_u32(vocab_u32).as(Void*)
+      top1_scan_params = Pointer(Void*).malloc(5)
+      top1_scan_params[0] = d_logits_cur_ptr.as(Void*)
+      top1_scan_params[1] = box_ptr(d_partial_ids).as(Void*)
+      top1_scan_params[2] = box_ptr(d_partial_values).as(Void*)
+      top1_scan_params[3] = box_u32(vocab_u32).as(Void*)
+      top1_scan_params[4] = box_u32(top1_width).as(Void*)
+
+      top1_reduce_params = Pointer(Void*).malloc(5)
+      top1_reduce_params[0] = box_ptr(d_partial_ids).as(Void*)
+      top1_reduce_params[1] = box_ptr(d_partial_values).as(Void*)
+      top1_reduce_params[2] = d_top1_id_cur_ptr.as(Void*)
+      top1_reduce_params[3] = d_top1_value_cur_ptr.as(Void*)
+      top1_reduce_params[4] = box_u32(top1_width).as(Void*)
 
       run_token = ->(tok : Int32) {
         d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
@@ -243,7 +345,8 @@ module ML::CUDA
         d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
         ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, norm_params, "output norm")
         ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
-        ML::CUDA.launch!(top1_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_params, "output top1")
+        ML::CUDA.launch!(top1_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top1_scan_params, "output top1 scan")
+        ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
       }
 
       read_outputs = -> {
