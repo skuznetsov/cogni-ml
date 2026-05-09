@@ -196,6 +196,7 @@ greedy_loop_graph_device_ready = false
 greedy_loop_gpu_embedding = false
 greedy_loop_cpu_embedding = false
 seed_token = 0
+input_token = -1
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -221,6 +222,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-gpu-embedding", "Feed greedy-loop top1 ids back through a CUDA Q4_K token-embedding kernel instead of per-token CPU readback/embedding upload") { greedy_loop_gpu_embedding = true }
   p.on("--greedy-loop-cpu-embedding", "Force per-token CPU top1 readback and embedding upload in --greedy-loop-tokens mode") { greedy_loop_cpu_embedding = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
+  p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -250,6 +252,9 @@ raise "--greedy-loop-graph requires --greedy-loop-tokens" if greedy_loop_graph &
 raise "--greedy-loop-graph-device-ready requires --greedy-loop-graph" if greedy_loop_graph_device_ready && !greedy_loop_graph
 raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop_gpu_embedding && greedy_loop_tokens == 0
 raise "use either --greedy-loop-gpu-embedding or --greedy-loop-cpu-embedding, not both" if greedy_loop_gpu_embedding && greedy_loop_cpu_embedding
+raise "--input-token must be non-negative" if input_token < -1
+raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
+raise "--input-token requires --tokens=1" if input_token >= 0 && tokens != 1
 if greedy_loop_tokens > 0
   raise "--skip-output-head is incompatible with --greedy-loop-tokens" if skip_output_head
   raise "--greedy-loop-tokens currently requires --perf-only; it is a semantic timing harness, not a CPU oracle" unless perf_only
@@ -271,11 +276,15 @@ read_logits = false if perf_only
 rng = Random.new(seed)
 token_embd = load_quant_weight(gguf, "token_embd.weight")
 raise "seed-token #{seed_token} out of range" if seed_token < 0 || seed_token >= token_embd.out_dim
+raise "input-token #{input_token} out of range" if input_token >= token_embd.out_dim
 if greedy_loop_tokens > 0 && !greedy_loop_cpu_embedding && token_embd.type.q4_k?
   greedy_loop_gpu_embedding = true
 end
+semantic_input = greedy_loop_tokens > 0 || input_token >= 0
 xs = if greedy_loop_tokens > 0
        ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, seed_token)
+     elsif input_token >= 0
+       ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, input_token)
      else
        Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
      end
@@ -293,10 +302,10 @@ layers.each do |layer|
     weights = ML::CUDA::QwenRecurrentLayerRunner::Weights.load(gguf, layer, eps)
     recurrent_weights[layer] = weights
     conv_state_inits[layer] = Array(Float32).new((weights.conv_k - 1) * weights.qkv_dim) do
-      greedy_loop_tokens > 0 ? 0.0_f32 : ((rng.next_float - 0.5) * 0.05).to_f32
+      semantic_input ? 0.0_f32 : ((rng.next_float - 0.5) * 0.05).to_f32
     end
     ssm_state_inits[layer] = Array(Float32).new(weights.h_v * weights.s * weights.s) do
-      greedy_loop_tokens > 0 ? 0.0_f32 : ((rng.next_float - 0.5) * 0.05).to_f32
+      semantic_input ? 0.0_f32 : ((rng.next_float - 0.5) * 0.05).to_f32
     end
   end
 end
@@ -658,6 +667,7 @@ begin
   puts "greedy_loop_gpu_embedding=#{greedy_loop_gpu_embedding}"
   puts "greedy_loop_cpu_embedding=#{greedy_loop_cpu_embedding}"
   puts "seed_token=#{seed_token}"
+  puts "input_token=#{input_token}"
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"

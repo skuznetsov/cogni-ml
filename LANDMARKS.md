@@ -10972,3 +10972,23 @@ Conclusion: this gives a trustworthy confidence/margin observable for future sho
 - daedalus: The useful pivot is from more CTA retunes to observable confidence structure around the output head and proposals.
 - maieutic: Existing partial-top1 buffers cannot provide exact top2; correctness requires either full logits or a redesigned partial-top2 producer.
 - adversary: Keep this off the default speed path until a CUDA top2 producer is implemented and compared against full-logits margins. The all-layer margin point is synthetic/random-state evidence, not a prompt-suite distribution.
+
+**decision_update_162:** Added `--input-token ID` to the CUDA mixed-stack oracle. This path uses `token_embd[ID]` as the single non-greedy input and zeros recurrent conv/SSM states, so read-logits top2/margin can be measured on a semantic embedding state while keeping the exact CPU-vs-CUDA oracle boundary. It is intentionally incompatible with `--greedy-loop-tokens`; the greedy harness still uses `--seed-token` and remains perf-only.
+
+Conclusion: the first semantic full-model point exposed a near-tie. For `input_token=0`, full Qwen3.5 9B all-layer read-logits stayed exact but produced top1 `198`, top2 `271`, and margin only `0.018449`. This is a useful falsifier: head-shortlist or draft-head acceleration must be risk-gated and cannot assume wide margins even at the first semantic token state.
+
+**evidence_update_162:**
+- claim: "The non-greedy semantic input-token oracle preserves five-layer CUDA/CPU exactness."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_input_token_local crystal build bin/cuda_mixed_stack_probe.cr -o /tmp/cuda_mixed_stack_probe_input_token_local --no-codegen`; remote `/tmp/cuda_mixed_stack_probe_input_token --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --layers=0,1,2,3,4 --tokens=1 --input-token=0 --start-pos=0 --max-seq=16 --warmup=1 --read-logits --skip-debug-readback --profile-phases` -> `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=220`, `top2_gpu=top2_cpu=16`, `top_margin_gpu=1.501703`, `top_margin_ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: input-token setup, token embedding quantization, recurrent state init policy, or CUDA/CPU oracle path changes
+- claim: "The full 9B semantic input-token0 oracle can have a very small top1/top2 margin."
+  source: remote `/tmp/cuda_mixed_stack_probe_input_token --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --all-layers --tokens=1 --input-token=0 --start-pos=0 --max-seq=16 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=198`, `top2_gpu=top2_cpu=271`, `top_margin_gpu=0.018449`, `top_margin_ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: full mixed-stack layer order, input-token state semantics, output-head logits, or model quantization changes
+
+**quadrumvirate_update_162:**
+- cassandra: Real semantic inputs can produce narrow margins; fixed shortlist/draft-head shortcuts will be brittle without a confidence gate.
+- daedalus: The next head acceleration frame should be risk-gated elimination, not another exact row-program retune.
+- maieutic: This still is not a prompt distribution; it is one semantic first-token state. Use it as a falsifier and instrumentation gate, not as a population estimate.
+- adversary: Any future approximate head/draft route must report accept/parity plus margin buckets; average speed without near-tie behavior is insufficient.
