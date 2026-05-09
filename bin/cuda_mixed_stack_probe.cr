@@ -79,6 +79,8 @@ warmup = 0
 read_logits = false
 profile_phases = false
 debug_readback = true
+perf_only = false
+all_layers = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -92,6 +94,8 @@ OptionParser.parse do |p|
   p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
   p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
   p.on("--skip-debug-readback", "Read only output-head results; skip final hidden/state/KV debug buffers for perf attribution") { debug_readback = false }
+  p.on("--perf-only", "Skip CPU reference and hidden/state checks; reports CUDA timing/top1 only") { perf_only = true }
+  p.on("--all-layers", "Run all model layers instead of the explicit/default layer slice") { all_layers = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -107,8 +111,11 @@ raise "warmup must be non-negative" unless warmup >= 0
 eps = 1.0e-6_f32
 gguf = ML::GGUF::GGUFFile.new(model)
 hparams = ML::GGUF::Qwen35Hparams.new(gguf)
+layers = (0...hparams.n_layer).map(&.to_i32) if all_layers
 layers.each { |layer| raise "layer #{layer} out of range" unless layer < hparams.n_layer }
 hidden = hparams.n_embd
+debug_readback = false if perf_only
+read_logits = false if perf_only
 
 rng = Random.new(seed)
 xs = Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
@@ -130,49 +137,55 @@ layers.each do |layer|
   end
 end
 
-cpu_weights = ML::GGUF::Qwen35Weights.new(gguf, hparams)
-cpu_states = Array(ML::GGUF::Qwen35CPU::LayerState).new(hparams.n_layer) { ML::GGUF::Qwen35CPU::LayerState.new }
-recurrent_weights.each_key do |layer|
-  cpu_states[layer].conv_state = conv_state_inits[layer].dup
-  cpu_states[layer].ssm_state = ssm_state_inits[layer].dup
-end
-
-cpu_t0 = Time.instant
 cpu_current = xs.dup
-layers.each do |layer|
-  lw = cpu_weights.layers[layer]
-  out = Array(Float32).new(tokens * hidden, 0.0_f32)
+cpu_states = Array(ML::GGUF::Qwen35CPU::LayerState).new(hparams.n_layer) { ML::GGUF::Qwen35CPU::LayerState.new }
+cpu_ms = 0.0
+cpu_top1_ids = [] of Int32
+cpu_logits_all = [] of Float32
+
+unless perf_only
+  cpu_weights = ML::GGUF::Qwen35Weights.new(gguf, hparams)
+  recurrent_weights.each_key do |layer|
+    cpu_states[layer].conv_state = conv_state_inits[layer].dup
+    cpu_states[layer].ssm_state = ssm_state_inits[layer].dup
+  end
+
+  cpu_t0 = Time.instant
+  layers.each do |layer|
+    lw = cpu_weights.layers[layer]
+    out = Array(Float32).new(tokens * hidden, 0.0_f32)
+    tokens.times do |tok|
+      row = cpu_current[tok * hidden, hidden]
+      y = case lw
+          in ML::GGUF::Qwen35FullAttnWeights
+            ML::GGUF::Qwen35CPU.forward_full_attn_layer(row, start_pos + tok, lw, cpu_states[layer], hparams, max_seq)
+          in ML::GGUF::Qwen35RecurrentWeights
+            ML::GGUF::Qwen35CPU.forward_recurrent_layer(row, 0, lw, cpu_states[layer], hparams, max_seq)
+          end
+      hidden.times { |i| out[tok * hidden + i] = y[i] }
+    end
+    cpu_current = out
+  end
+  cpu_ms = (Time.instant - cpu_t0).total_milliseconds
+  cpu_logits_all = read_logits ? Array(Float32).new(tokens * head_weights.vocab, 0.0_f32) : [] of Float32
+  cpu_top1_ids = Array(Int32).new(tokens)
   tokens.times do |tok|
     row = cpu_current[tok * hidden, hidden]
-    y = case lw
-        in ML::GGUF::Qwen35FullAttnWeights
-          ML::GGUF::Qwen35CPU.forward_full_attn_layer(row, start_pos + tok, lw, cpu_states[layer], hparams, max_seq)
-        in ML::GGUF::Qwen35RecurrentWeights
-          ML::GGUF::Qwen35CPU.forward_recurrent_layer(row, 0, lw, cpu_states[layer], hparams, max_seq)
-        end
-    hidden.times { |i| out[tok * hidden + i] = y[i] }
-  end
-  cpu_current = out
-end
-cpu_ms = (Time.instant - cpu_t0).total_milliseconds
-cpu_logits_all = read_logits ? Array(Float32).new(tokens * head_weights.vocab, 0.0_f32) : [] of Float32
-cpu_top1_ids = Array(Int32).new(tokens)
-tokens.times do |tok|
-  row = cpu_current[tok * hidden, hidden]
-  normed = ML::GGUF::Qwen35CPU.rms_norm(row, head_weights.norm, hparams.rms_eps)
-  logits = ML::GGUF::QuantMatmul.matmul_add(normed, 1, head_weights.hidden,
-    head_weights.output_raw, head_weights.output_type, head_weights.vocab,
-    Array(Float32).new(head_weights.vocab, 0.0_f32))
-  best_id = 0
-  best = logits[0]
-  head_weights.vocab.times do |i|
-    cpu_logits_all[tok * head_weights.vocab + i] = logits[i] if read_logits
-    if logits[i] > best
-      best = logits[i]
-      best_id = i
+    normed = ML::GGUF::Qwen35CPU.rms_norm(row, head_weights.norm, hparams.rms_eps)
+    logits = ML::GGUF::QuantMatmul.matmul_add(normed, 1, head_weights.hidden,
+      head_weights.output_raw, head_weights.output_type, head_weights.vocab,
+      Array(Float32).new(head_weights.vocab, 0.0_f32))
+    best_id = 0
+    best = logits[0]
+    head_weights.vocab.times do |i|
+      cpu_logits_all[tok * head_weights.vocab + i] = logits[i] if read_logits
+      if logits[i] > best
+        best = logits[i]
+        best_id = i
+      end
     end
+    cpu_top1_ids << best_id
   end
-  cpu_top1_ids << best_id
 end
 
 cuda_ctx = nil.as(ML::CUDA::Context?)
@@ -211,13 +224,15 @@ begin
 
   lines = [] of String
   ok = true
-  if debug_readback
+  if perf_only
+    lines << "perf_only=true"
+  elsif debug_readback
     ok = report_pair("final_all", final_gpu_all, cpu_current, lines, 1.0e-2_f32)
   else
     lines << "debug_readback=false"
   end
   gpu_top1_ids = output_head.top1_ids
-  top1_ok = gpu_top1_ids == cpu_top1_ids
+  top1_ok = perf_only || gpu_top1_ids == cpu_top1_ids
   if read_logits
     logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
     ok = ok && logits_ok
@@ -225,11 +240,11 @@ begin
     lines << "logits_readback=false"
   end
   lines << "top1_gpu=#{gpu_top1_ids.join(",")}"
-  lines << "top1_cpu=#{cpu_top1_ids.join(",")}"
+  lines << "top1_cpu=#{perf_only ? "skipped" : cpu_top1_ids.join(",")}"
   lines << "top1_values_gpu=#{output_head.top1_values_gpu.map { |v| v.round(6) }.join(",")}"
-  lines << "top1_ok=#{top1_ok}"
+  lines << "top1_ok=#{perf_only ? "skipped" : top1_ok}"
   ok = ok && top1_ok
-  if debug_readback
+  if debug_readback && !perf_only
     runners.each_with_index do |runner, idx|
       layer = layers[idx]
       case runner
@@ -259,6 +274,7 @@ begin
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"
+  puts "perf_only=#{perf_only}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"

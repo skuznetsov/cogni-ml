@@ -9932,3 +9932,31 @@ Conclusion: same-row paired gate/up fusion is not enough on the current RTX 5060
 - daedalus: The frame shifts away from local FFN launch fusion. The next useful branches are full-model construction/perf accounting or a genuinely different GEMV algorithm.
 - maieutic: The assumption that x-load reuse dominates was false for this implementation/hardware. Weight dequant and occupancy effects likely dominate.
 - adversary: This refutes only the naive same-row paired warp4 implementation, not all possible FFN fusion or Q4 algorithms.
+
+**decision_update_121:** Added CPU-oracle-free full-model CUDA perf accounting. `bin/cuda_mixed_stack_probe.cr` now supports `--perf-only`, which skips CPU reference construction and all hidden/state/logit correctness readback, and `--all-layers`, which expands the layer list from parsed GGUF hparams. This gives a bounded full-model wall probe without pretending to be an end-to-end correctness oracle.
+
+Conclusion: the current full 9B CUDA mixed stack runs on RTX 5060 Ti, but the perf-only wall is still much slower than the five-layer proxy suggests. A one-token full-model perf run measured `36.619ms/token`; a profiled run measured `40.875ms` with `phase_head_ms=2.691` and most layer phases around `0.83-0.95ms`; a `tokens=4` run measured `27.994ms/token`. The new global bottleneck frame is persistent decode-state/setup plus many quantized GEMVs across 32 layers, not output-head top1 or naive FFN gate/up fusion.
+
+**evidence_update_121:**
+- claim: "`--perf-only` preserves the CUDA probe control flow while intentionally skipping CPU correctness checks."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_perf_only_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0; remote `--layers=0,1,2,3,4 --tokens=1 --warmup=1 --skip-debug-readback --perf-only` -> `ok=true`, `top1_cpu=skipped`, `top1_ok=skipped`, `cuda_ms=7.855`
+  verified_at: 2026-05-09
+  decay_trigger: probe CLI semantics, CPU oracle wiring, output-head top1 readback, or mixed-stack runner control flow changes
+- claim: "The full 9B CUDA mixed-stack can be constructed and timed in perf-only mode."
+  source: remote `cuda_mixed_stack_probe --all-layers --tokens=1 --warmup=0 --skip-debug-readback --perf-only` -> `ok=true`, `cuda_ms=36.619`, `weight_upload_ms=44993.223`, `top1_gpu=198`
+  verified_at: 2026-05-09
+  decay_trigger: full-model layer construction, GGUF tensor loading, CUDA memory budget, or model quantization changes
+- claim: "Full-model phase attribution shifts the next target away from output-head-only work."
+  source: remote `--all-layers --tokens=1 --warmup=0 --skip-debug-readback --perf-only --profile-phases` -> `ok=true`, `cuda_ms=40.875`, `phase_head_ms=2.691`, recurrent layers `~0.83-0.95ms`, full-attn layers `~0.84-0.90ms`, recurrent reset `~0.43ms/layer`
+  verified_at: 2026-05-09
+  decay_trigger: profile synchronization policy, reset ownership, layer runner implementation, or GPU/load conditions changes
+- claim: "The full-model multi-token perf-only path works but still has high per-token wall."
+  source: remote `--all-layers --tokens=4 --warmup=1 --skip-debug-readback --perf-only` -> `ok=true`, `cuda_ms=111.977`, `cuda_ms_per_token=27.994`, `top1_gpu=220,318,30828,685`
+  verified_at: 2026-05-09
+  decay_trigger: multi-token runner sequencing, recurrent state reset policy, full-attention cache sequencing, or timing harness changes
+
+**quadrumvirate_update_121:**
+- cassandra: The five-layer proxy understated global wall because output-head fixes do not erase 32 layers of GEMV and setup cost. Full-model accounting confirmed this.
+- daedalus: The frame shifts from local FFN retunes to full decode economics: persistent state lifecycle, reset amortization, and a stronger quantized GEMV algorithm.
+- maieutic: `perf_only=true` proves runtime viability and timing boundaries, not exact model correctness. Correctness must remain anchored to smaller CPU-oracle gates until a full correctness path is affordable.
+- adversary: Evidence is from one RTX 5060 Ti, one Qwen3.5 9B Q4_K_M model, and synthetic random hidden inputs rather than tokenizer-driven generation. Treat numbers as backend accounting, not user-facing generation throughput.
