@@ -9401,3 +9401,27 @@ Conclusion: the CUDA recurrent-layer boundary is now reusable at the layer-weigh
 - daedalus: The useful frame is no longer one giant probe. The reusable unit is now `Weights.load` plus a resident runner, which can be instantiated repeatedly for multi-layer CUDA scaffolding.
 - maieutic: The hidden assumption that adapter extraction is only cleanup is incomplete; it is a correctness boundary because model tensor routing becomes centralized and reusable.
 - adversary: Evidence is still one recurrent layer on one 9B GGUF. The adapter must be checked across additional recurrent layers before it is treated as a general model-loader component.
+
+**decision_update_97:** Generalized the CUDA recurrent runner for recurrent-layer `ffn_down` quantization variants. Multi-layer adapter validation showed Qwen3.5 9B layers `0` and `2` use Q6_K `ffn_down`, while layer `4` uses Q4_K `ffn_down`. `QwenRecurrentLayerRunner::Weights.load` now accepts Q4_K or Q6_K for `ffn_down`, stores the tensor type, and the runner dispatches the final FFN-down projection through the matching CUDA kernel. The CPU reference in `bin/cuda_recurrent_prep_output_probe.cr` now uses the same GGUF tensor type instead of assuming Q6_K.
+
+Conclusion: the adapter is less overfit to layer0. The next CUDA/Linux gate is a true multi-layer recurrent scaffold, but this should not be described as full Linux generation until full-attention layers, KV cache, logits/top1, and decode-loop state are split from Metal.
+
+**evidence_update_97:**
+- claim: "The Q4_K/Q6_K ffn_down recurrent-runner generalization has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4down_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: recurrent runner, probe CPU reference, GGUF tensor type handling, CUDA Q4/Q6 kernels, or model quantization changes
+- claim: "The adapter-backed recurrent runner matches CPU references across Qwen3.5 9B recurrent layers 0, 2, and 4."
+  source: remote Qwen3.5 9B layers `0,2,4`, each `--tokens 2 --reps 1 --warmup 1` -> all `ok=true`, all `conv_state_ok/ssm_state_ok/attn_out_ok/final_all_ok=true`, `cuda_ms_per_token=1.696/1.699/1.699`
+  verified_at: 2026-05-08
+  decay_trigger: adapter tensor lookup/validation, Qwen runner object, CUDA wrapper layer, recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+- claim: "Layer4's previous failure was a hard-coded quantization assumption, not a math/kernel parity failure."
+  source: remote tensor inventory: `blk.4.ffn_down.weight type=Q4_K`, while layers `0` and `2` have `ffn_down.weight type=Q6_K`; after dispatch-by-type, layer4 passes parity
+  verified_at: 2026-05-08
+  decay_trigger: model file or GGUF tensor inventory changes
+
+**quadrumvirate_update_97:**
+- cassandra: Multi-layer validation was expected to find either layer-shape drift or quantization drift. It found quantization drift in `ffn_down` and no parity drift after dispatch-by-type.
+- daedalus: The useful frame is inventory-driven execution, not layer0 constants. Future CUDA scaffolds should derive kernel choices from GGUF tensor metadata wherever the model format permits mixed quantization.
+- maieutic: The assumption that Q4_K_M implies a uniform per-tensor type pattern across recurrent layers was false.
+- adversary: This still validates independent layer execution with synthetic hidden inputs. It does not verify chained multi-layer hidden-state correctness.

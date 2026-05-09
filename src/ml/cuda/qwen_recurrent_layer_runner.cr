@@ -37,6 +37,7 @@ module ML::CUDA
       getter ffn_gate_raw : Bytes
       getter ffn_up_raw : Bytes
       getter ffn_down_raw : Bytes
+      getter ffn_down_type : ML::GGUF::TensorType
       getter conv1d : Array(Float32)
       getter dt_bias : Array(Float32)
       getter ssm_a : Array(Float32)
@@ -71,7 +72,8 @@ module ML::CUDA
         raise "expected Q5_K attn_qkv" unless qkv_info.type.q5_k?
         raise "expected Q4_K gate/alpha/beta" unless gate_info.type.q4_k? && alpha_info.type.q4_k? && beta_info.type.q4_k?
         raise "expected Q4_K ssm_out" unless out_info.type.q4_k?
-        raise "expected Q4_K ffn gate/up and Q6_K ffn down" unless ffn_gate_info.type.q4_k? && ffn_up_info.type.q4_k? && ffn_down_info.type.q6_k?
+        raise "expected Q4_K ffn gate/up and Q4_K/Q6_K ffn down" unless ffn_gate_info.type.q4_k? && ffn_up_info.type.q4_k? &&
+                                                                        (ffn_down_info.type.q4_k? || ffn_down_info.type.q6_k?)
 
         hidden = qkv_info.dims[0].to_i32
         ffn_dim = ffn_gate_info.dims[1].to_i32
@@ -107,7 +109,7 @@ module ML::CUDA
         new(h_k, h_v, s, conv_k, q_dim, v_dim, qkv_dim, inner_dim, scale, eps,
           hidden, ffn_dim, out_dim, attn_norm, qkv_raw, gate_raw, alpha_raw,
           beta_raw_w, out_raw, post_norm, ffn_gate_raw, ffn_up_raw,
-          ffn_down_raw, conv1d, dt_bias, ssm_a, ssm_norm)
+          ffn_down_raw, ffn_down_info.type, conv1d, dt_bias, ssm_a, ssm_norm)
       end
 
       def initialize(@h_k : Int32,
@@ -133,6 +135,7 @@ module ML::CUDA
                      @ffn_gate_raw : Bytes,
                      @ffn_up_raw : Bytes,
                      @ffn_down_raw : Bytes,
+                     @ffn_down_type : ML::GGUF::TensorType,
                      @conv1d : Array(Float32),
                      @dt_bias : Array(Float32),
                      @ssm_a : Array(Float32),
@@ -160,8 +163,8 @@ module ML::CUDA
         xs, conv_state_init, ssm_state_init, weights.attn_norm, weights.qkv_raw,
         weights.gate_raw, weights.alpha_raw, weights.beta_raw_w, weights.out_raw,
         weights.post_norm, weights.ffn_gate_raw, weights.ffn_up_raw,
-        weights.ffn_down_raw, weights.conv1d, weights.dt_bias, weights.ssm_a,
-        weights.ssm_norm)
+        weights.ffn_down_raw, weights.ffn_down_type, weights.conv1d,
+        weights.dt_bias, weights.ssm_a, weights.ssm_norm)
     end
 
     private def initialize(@tokens : Int32,
@@ -187,6 +190,7 @@ module ML::CUDA
                            @ffn_gate_raw : Bytes,
                            @ffn_up_raw : Bytes,
                            @ffn_down_raw : Bytes,
+                           @ffn_down_type : ML::GGUF::TensorType,
                            @conv1d : Array(Float32),
                            @dt_bias : Array(Float32),
                            @ssm_a : Array(Float32),
@@ -253,6 +257,7 @@ module ML::CUDA
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q5_fn = q5_mod.function("q5_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
+      ffn_down_fn = @ffn_down_type.q4_k? ? q4_fn : q6_fn
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
                @qkv_raw.size.to_u64, @gate_raw.size.to_u64, @alpha_raw.size.to_u64, @beta_raw_w.size.to_u64,
@@ -461,7 +466,7 @@ module ML::CUDA
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
         ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
-        ML::CUDA.launch!(q6_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
+        ML::CUDA.launch!(ffn_down_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
         ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
       }
 

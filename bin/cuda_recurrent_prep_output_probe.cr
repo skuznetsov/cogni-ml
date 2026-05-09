@@ -97,6 +97,7 @@ post_norm = weights.post_norm
 ffn_gate_raw = weights.ffn_gate_raw
 ffn_up_raw = weights.ffn_up_raw
 ffn_down_raw = weights.ffn_down_raw
+ffn_down_type = weights.ffn_down_type
 conv1d = weights.conv1d
 dt_bias = weights.dt_bias
 ssm_a = weights.ssm_a
@@ -174,7 +175,7 @@ tokens.times do |tok|
     gv = ffn_gate_cpu[i]
     (gv / (1.0_f32 + Math.exp(-gv).to_f32)) * ffn_up_cpu[i]
   end
-  ffn_out_cpu = ML::GGUF::QuantMatmul.matmul_add(ffn_comb_cpu, 1, ffn_dim, ffn_down_raw, ML::GGUF::TensorType::Q6_K, hidden, Array(Float32).new(hidden, 0.0_f32))
+  ffn_out_cpu = ML::GGUF::QuantMatmul.matmul_add(ffn_comb_cpu, 1, ffn_dim, ffn_down_raw, ffn_down_type, hidden, Array(Float32).new(hidden, 0.0_f32))
   hidden.times { |i| final_cpu_all[x_offset + i] = residual_cpu[i] + ffn_out_cpu[i] }
 end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds / tokens
