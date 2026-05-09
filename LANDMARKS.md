@@ -10462,3 +10462,27 @@ Conclusion: metadata-only repack is exact but not a hot decode path. It raises h
 - daedalus: The remaining exact Q4 path is not "predecode metadata"; it must reduce total work without materially increasing bytes, or fuse consumers so the extra representation is reused many times.
 - maieutic: The assumption "scale/min extraction is a dominant hot-shape cost" is false at this memory trade-off.
 - adversary: This refutes f32 metadata-only repack for decode GEMV. It does not refute a more compact f16/int metadata format, but such a format must prove exactness or be treated as approximate.
+
+**decision_update_143:** Added and tested an exact Q4_K scale-byte register extraction variant. The standalone probe now has a generated `q4_k_gemv_scale_regs_warp4_f32` PTX variant that loads the 12 packed scale/min bytes into three `u32` registers once per Q4_K block, then extracts all group scale/min values from registers instead of reissuing per-group global byte loads. This preserves the raw GGUF layout and adds no barriers or shuffles.
+
+Conclusion: scale-byte register extraction is not a hot FFN path, but it is a small exact candidate for tiny Q4 projections. On hot `4096x12288` FFN Q4_K tensors it regresses from `~0.1098ms` to `~0.1207ms`, likely because the extra register shifts/masks and register pressure outweigh the removed byte loads. On the tiny `4096x32` `ssm_alpha` shape it improves from `0.0064ms` to `0.0045ms`. Do not use this for FFN gate/up. A selective alpha/beta route may be worth a full-runner gate, but the expected full-model win is small.
+
+**evidence_update_143:**
+- claim: "Scale-byte register extraction preserves exact tensor-level correctness after byte masking fix."
+  source: remote `/tmp/cuda_q4k_repack_probe_scale_regs2` sweep -> `scale_regs_cos=1.0`, max diff <= `4.6938658e-7`, `ok=true` on tested Q4_K tensors
+  verified_at: 2026-05-09
+  decay_trigger: generated scale-reg PTX, Q4_K layout, or CPU reference changes
+- claim: "Scale-byte register extraction regresses hot FFN Q4_K shapes."
+  source: remote `--reps 120 --warmup 12` -> `blk.0.ffn_up.weight` `raw_cuda_ms=0.1098`, `scale_regs_cuda_ms=0.1207`, speedup `0.9091`; `blk.0.ffn_gate.weight` `0.1098 -> 0.1207`, speedup `0.9098`; `blk.1.ffn_up.weight` `0.1098 -> 0.1206`, speedup `0.9107`
+  verified_at: 2026-05-09
+  decay_trigger: hot Q4 tensor shapes, register allocation, CUDA driver JIT, or GPU architecture changes
+- claim: "Scale-byte register extraction speeds up tiny Q4_K projections."
+  source: remote `blk.0.ssm_alpha.weight` -> shape `4096x32`, `raw_cuda_ms=0.0064`, `scale_regs_cuda_ms=0.0045`, `scale_regs_speedup=1.4258`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: tiny projection route, launch overhead, or CUDA driver scheduling changes
+
+**quadrumvirate_update_143:**
+- cassandra: The hot-path failure mode is register pressure/instruction pressure replacing cheap cached byte loads; the results match this.
+- daedalus: The useful branch is now selective, not global: try this only for tiny alpha/beta-style projections where launch/row geometry dominates and the hot FFN penalty is avoided.
+- maieutic: The assumption "removing scale global byte loads always helps" is false; it depends strongly on output dimension and instruction balance.
+- adversary: This is tensor-level evidence. Before promoting even the tiny route, full-model semantic timing must show a measurable win and preserve top1.
