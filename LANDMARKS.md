@@ -9493,3 +9493,28 @@ Conclusion: CUDA now has reusable recurrent-layer and full-attention input-proje
 - daedalus: The correct next boundary is not another projection microbench; it is Q/K normalization, RoPE, and KV-cache write, because those are the next semantic steps before attention decode.
 - maieutic: The assumption that a projection runner is a full-attention runner is false; it only proves the reusable projection input side.
 - adversary: This does not cover attention scores/softmax, KV cache mutation, output projection, FFN, or full model decode.
+
+
+**decision_update_101:** Extended the reusable CUDA full-attention path from input projection to the Q/K normalization, RoPE, and KV-cache write boundary. `ML::CUDA::QwenFullAttnProjectionRunner` now exposes Q/K/V device pointers, and new `ML::CUDA::QwenFullAttnKVRunner` consumes those resident outputs to split Q/gate, apply Q/K RMSNorm plus precomputed RoPE tables, and write K/V rows into a resident cache at an arbitrary `start_pos`. `bin/cuda_full_attn_kv_probe.cr` owns the CPU-reference oracle and validates Q, gate, K, K-cache, and V-cache separately.
+
+Conclusion: CUDA now has an exact full-attention boundary through KV-cache mutation for Qwen3.5 9B full-attention layer `3`. This is still not a full full-attention layer runner: attention scores/softmax, value reduction, Q gate, output projection, residual/FFN, logits/top1, and model-level scheduling remain separate gates.
+
+**evidence_update_101:**
+- claim: "The full-attention KV boundary has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_full_kv_syntax crystal build -Dcpu_only --no-codegen bin/cuda_full_attn_kv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: full-attn projection runner, KV runner, probe source, CPU reference helpers, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The CUDA full-attention KV boundary matches CPU references on Qwen3.5 9B layer3 with a nonzero cache offset."
+  source: remote `cuda_full_attn_kv_probe --layer 3 --tokens 4 --start-pos 2 --max-seq 12` -> `ok=true`, Q/gate/K/K-cache/V-cache `cos=1.0`, max diffs `2.3841858e-6/1.013279e-6/1.4305115e-6/1.4305115e-6/7.1525574e-7`
+  verified_at: 2026-05-08
+  decay_trigger: Q/gate split layout, Q/K RMSNorm formula, RoPE table/layout, KV-cache offset layout, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+- claim: "The initial remote JIT failure was a stale embedded PTX binary, not a persistent CUDA syntax blocker."
+  source: after replacing the invalid RoPE negative expression with `sub.rn.f32` and rebuilding the probe so `read_file(...)` re-embedded PTX, remote `cuModuleLoadData` and correctness checks passed
+  verified_at: 2026-05-08
+  decay_trigger: embedded PTX source or build process changes
+
+**quadrumvirate_update_101:**
+- cassandra: The likely failures were RoPE sign mistakes, stale embedded PTX, and cache-offset indexing. The gate used `start_pos=2` and separate Q/gate/K/cache comparisons to avoid hiding those errors behind a single aggregate output.
+- daedalus: The next useful boundary is attention decode over resident KV, not more projection/post-projection microbenching. The CUDA path needs semantic layer completion before end-to-end Linux decode.
+- maieutic: The hidden assumption that PTX file sync is enough was false because the runner embeds PTX at compile time through `read_file(...)`; remote binaries must be rebuilt after PTX changes.
+- adversary: Evidence covers one Qwen3.5 9B full-attention layer and synthetic hidden inputs. It does not cover attention score numerics, output projection, FFN, logits, tokenizer, sampling, or model-level recurrent/full-attention scheduling.

@@ -1,0 +1,336 @@
+.version 8.0
+.target sm_80
+.address_size 64
+
+// Serial correctness-first split + RMSNorm + RoPE for full-attention Q.
+// Launch: grid=(tokens, n_head), block=(1).
+.visible .entry full_attn_q_split_norm_rope_probe(
+    .param .u64 q_full,
+    .param .u64 q_norm,
+    .param .u64 q_out,
+    .param .u64 gate_out,
+    .param .u64 cos_tbl,
+    .param .u64 sin_tbl,
+    .param .u32 n_head,
+    .param .u32 head_dim,
+    .param .u32 rope_dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32 %r<40>;
+    .reg .b64 %rd<52>;
+    .reg .f32 %f<32>;
+
+    ld.param.u64 %rd1, [q_full];
+    ld.param.u64 %rd2, [q_norm];
+    ld.param.u64 %rd3, [q_out];
+    ld.param.u64 %rd4, [gate_out];
+    ld.param.u64 %rd5, [cos_tbl];
+    ld.param.u64 %rd6, [sin_tbl];
+    ld.param.u32 %r1, [n_head];
+    ld.param.u32 %r2, [head_dim];
+    ld.param.u32 %r3, [rope_dim];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r4, %ctaid.x;      // tok
+    mov.u32 %r5, %ctaid.y;      // head
+    mov.u32 %r6, %tid.x;
+    setp.ne.u32 %p1, %r6, 0;
+    @%p1 bra Q_DONE;
+    setp.ge.u32 %p2, %r5, %r1;
+    @%p2 bra Q_DONE;
+
+    mul.lo.u32 %r7, %r1, %r2;   // q_dim
+    shl.b32 %r8, %r2, 1;        // 2 * head_dim
+    mul.lo.u32 %r9, %r1, %r8;   // q_full_dim
+    mul.lo.u32 %r10, %r4, %r9;
+    mad.lo.u32 %r11, %r5, %r8, %r10;  // src base
+    mul.lo.u32 %r12, %r4, %r7;
+    mad.lo.u32 %r13, %r5, %r2, %r12;  // dst base
+    shr.u32 %r14, %r3, 1;       // rope half
+
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r15, 0;
+Q_SUM:
+    setp.ge.u32 %p3, %r15, %r2;
+    @%p3 bra Q_INV;
+    add.u32 %r16, %r11, %r15;
+    mul.wide.u32 %rd7, %r16, 4;
+    add.s64 %rd8, %rd1, %rd7;
+    ld.global.f32 %f3, [%rd8];
+    fma.rn.f32 %f2, %f3, %f3, %f2;
+    add.u32 %r15, %r15, 1;
+    bra Q_SUM;
+
+Q_INV:
+    cvt.rn.f32.u32 %f4, %r2;
+    div.rn.f32 %f5, %f2, %f4;
+    add.rn.f32 %f5, %f5, %f1;
+    sqrt.rn.f32 %f6, %f5;
+    rcp.rn.f32 %f7, %f6;
+
+    mov.u32 %r17, 0;
+Q_ROPE_LOOP:
+    setp.ge.u32 %p4, %r17, %r14;
+    @%p4 bra Q_TAIL_PREP;
+
+    add.u32 %r18, %r17, %r14;        // paired dim
+    add.u32 %r19, %r11, %r17;
+    add.u32 %r20, %r11, %r18;
+    add.u32 %r21, %r13, %r17;
+    add.u32 %r22, %r13, %r18;
+    mul.wide.u32 %rd9, %r19, 4;
+    mul.wide.u32 %rd10, %r20, 4;
+    mul.wide.u32 %rd11, %r21, 4;
+    mul.wide.u32 %rd12, %r22, 4;
+    add.s64 %rd13, %rd1, %rd9;
+    add.s64 %rd14, %rd1, %rd10;
+    add.s64 %rd15, %rd3, %rd11;
+    add.s64 %rd16, %rd3, %rd12;
+    ld.global.f32 %f8, [%rd13];
+    ld.global.f32 %f9, [%rd14];
+
+    mul.wide.u32 %rd17, %r17, 4;
+    add.s64 %rd18, %rd2, %rd17;
+    add.u32 %r23, %r4, 0;
+    mul.lo.u32 %r24, %r23, %r14;
+    add.u32 %r25, %r24, %r17;
+    mul.wide.u32 %rd19, %r25, 4;
+    add.s64 %rd20, %rd5, %rd19;
+    add.s64 %rd21, %rd6, %rd19;
+    ld.global.f32 %f10, [%rd18];     // norm[i]
+    add.u32 %r26, %r18, 0;
+    mul.wide.u32 %rd22, %r26, 4;
+    add.s64 %rd23, %rd2, %rd22;
+    ld.global.f32 %f11, [%rd23];     // norm[i+half]
+    ld.global.f32 %f12, [%rd20];     // cos
+    ld.global.f32 %f13, [%rd21];     // sin
+
+    mul.rn.f32 %f14, %f8, %f7;
+    mul.rn.f32 %f15, %f14, %f10;     // x0
+    mul.rn.f32 %f16, %f9, %f7;
+    mul.rn.f32 %f17, %f16, %f11;     // x1
+    mul.rn.f32 %f18, %f15, %f12;
+    mul.rn.f32 %f19, %f17, %f13;     // x1*sin
+    sub.rn.f32 %f20, %f18, %f19;
+    mul.rn.f32 %f21, %f15, %f13;
+    fma.rn.f32 %f22, %f17, %f12, %f21;
+    st.global.f32 [%rd15], %f20;
+    st.global.f32 [%rd16], %f22;
+
+    add.u32 %r17, %r17, 1;
+    bra Q_ROPE_LOOP;
+
+Q_TAIL_PREP:
+    mov.u32 %r27, %r3;
+Q_TAIL_LOOP:
+    setp.ge.u32 %p5, %r27, %r2;
+    @%p5 bra Q_GATE_PREP;
+    add.u32 %r28, %r11, %r27;
+    add.u32 %r29, %r13, %r27;
+    mul.wide.u32 %rd24, %r28, 4;
+    mul.wide.u32 %rd25, %r29, 4;
+    add.s64 %rd26, %rd1, %rd24;
+    add.s64 %rd27, %rd3, %rd25;
+    mul.wide.u32 %rd28, %r27, 4;
+    add.s64 %rd29, %rd2, %rd28;
+    ld.global.f32 %f23, [%rd26];
+    ld.global.f32 %f24, [%rd29];
+    mul.rn.f32 %f25, %f23, %f7;
+    mul.rn.f32 %f26, %f25, %f24;
+    st.global.f32 [%rd27], %f26;
+    add.u32 %r27, %r27, 1;
+    bra Q_TAIL_LOOP;
+
+Q_GATE_PREP:
+    mov.u32 %r30, 0;
+Q_GATE_LOOP:
+    setp.ge.u32 %p6, %r30, %r2;
+    @%p6 bra Q_DONE;
+    add.u32 %r31, %r11, %r2;
+    add.u32 %r31, %r31, %r30;
+    add.u32 %r32, %r13, %r30;
+    mul.wide.u32 %rd30, %r31, 4;
+    mul.wide.u32 %rd31, %r32, 4;
+    add.s64 %rd32, %rd1, %rd30;
+    add.s64 %rd33, %rd4, %rd31;
+    ld.global.f32 %f27, [%rd32];
+    st.global.f32 [%rd33], %f27;
+    add.u32 %r30, %r30, 1;
+    bra Q_GATE_LOOP;
+
+Q_DONE:
+    ret;
+}
+
+// Serial correctness-first RMSNorm + RoPE for K and K/V cache append.
+// Launch: grid=(tokens, n_kv_head), block=(1).
+.visible .entry full_attn_k_norm_rope_cache_probe(
+    .param .u64 k_in,
+    .param .u64 v_in,
+    .param .u64 k_norm,
+    .param .u64 k_out,
+    .param .u64 k_cache,
+    .param .u64 v_cache,
+    .param .u64 cos_tbl,
+    .param .u64 sin_tbl,
+    .param .u32 n_kv_head,
+    .param .u32 head_dim,
+    .param .u32 rope_dim,
+    .param .u32 start_pos,
+    .param .u32 max_seq,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32 %r<42>;
+    .reg .b64 %rd<54>;
+    .reg .f32 %f<32>;
+
+    ld.param.u64 %rd1, [k_in];
+    ld.param.u64 %rd2, [v_in];
+    ld.param.u64 %rd3, [k_norm];
+    ld.param.u64 %rd4, [k_out];
+    ld.param.u64 %rd5, [k_cache];
+    ld.param.u64 %rd6, [v_cache];
+    ld.param.u64 %rd7, [cos_tbl];
+    ld.param.u64 %rd8, [sin_tbl];
+    ld.param.u32 %r1, [n_kv_head];
+    ld.param.u32 %r2, [head_dim];
+    ld.param.u32 %r3, [rope_dim];
+    ld.param.u32 %r4, [start_pos];
+    ld.param.u32 %r5, [max_seq];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r6, %ctaid.x;      // tok
+    mov.u32 %r7, %ctaid.y;      // kv head
+    mov.u32 %r8, %tid.x;
+    setp.ne.u32 %p1, %r8, 0;
+    @%p1 bra K_DONE;
+    setp.ge.u32 %p2, %r7, %r1;
+    @%p2 bra K_DONE;
+    add.u32 %r9, %r4, %r6;      // absolute pos
+    setp.ge.u32 %p3, %r9, %r5;
+    @%p3 bra K_DONE;
+
+    mul.lo.u32 %r10, %r1, %r2;  // kv_dim
+    mul.lo.u32 %r11, %r6, %r10;
+    mad.lo.u32 %r12, %r7, %r2, %r11; // seq base
+    mul.lo.u32 %r13, %r9, %r10;
+    mad.lo.u32 %r14, %r7, %r2, %r13; // cache base
+    shr.u32 %r15, %r3, 1;
+
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r16, 0;
+K_SUM:
+    setp.ge.u32 %p4, %r16, %r2;
+    @%p4 bra K_INV;
+    add.u32 %r17, %r12, %r16;
+    mul.wide.u32 %rd9, %r17, 4;
+    add.s64 %rd10, %rd1, %rd9;
+    ld.global.f32 %f3, [%rd10];
+    fma.rn.f32 %f2, %f3, %f3, %f2;
+    add.u32 %r16, %r16, 1;
+    bra K_SUM;
+
+K_INV:
+    cvt.rn.f32.u32 %f4, %r2;
+    div.rn.f32 %f5, %f2, %f4;
+    add.rn.f32 %f5, %f5, %f1;
+    sqrt.rn.f32 %f6, %f5;
+    rcp.rn.f32 %f7, %f6;
+
+    mov.u32 %r18, 0;
+K_ROPE_LOOP:
+    setp.ge.u32 %p5, %r18, %r15;
+    @%p5 bra K_TAIL_PREP;
+    add.u32 %r19, %r18, %r15;
+    add.u32 %r20, %r12, %r18;
+    add.u32 %r21, %r12, %r19;
+    add.u32 %r22, %r14, %r18;
+    add.u32 %r23, %r14, %r19;
+    mul.wide.u32 %rd11, %r20, 4;
+    mul.wide.u32 %rd12, %r21, 4;
+    mul.wide.u32 %rd13, %r22, 4;
+    mul.wide.u32 %rd14, %r23, 4;
+    add.s64 %rd15, %rd1, %rd11;
+    add.s64 %rd16, %rd1, %rd12;
+    add.s64 %rd17, %rd4, %rd11;
+    add.s64 %rd18, %rd4, %rd12;
+    add.s64 %rd19, %rd5, %rd13;
+    add.s64 %rd20, %rd5, %rd14;
+    ld.global.f32 %f8, [%rd15];
+    ld.global.f32 %f9, [%rd16];
+
+    mul.wide.u32 %rd21, %r18, 4;
+    add.s64 %rd22, %rd3, %rd21;
+    mul.wide.u32 %rd23, %r19, 4;
+    add.s64 %rd24, %rd3, %rd23;
+    mul.lo.u32 %r24, %r6, %r15;
+    add.u32 %r25, %r24, %r18;
+    mul.wide.u32 %rd25, %r25, 4;
+    add.s64 %rd26, %rd7, %rd25;
+    add.s64 %rd27, %rd8, %rd25;
+    ld.global.f32 %f10, [%rd22];
+    ld.global.f32 %f11, [%rd24];
+    ld.global.f32 %f12, [%rd26];
+    ld.global.f32 %f13, [%rd27];
+    mul.rn.f32 %f14, %f8, %f7;
+    mul.rn.f32 %f15, %f14, %f10;
+    mul.rn.f32 %f16, %f9, %f7;
+    mul.rn.f32 %f17, %f16, %f11;
+    mul.rn.f32 %f18, %f15, %f12;
+    mul.rn.f32 %f19, %f17, %f13;
+    sub.rn.f32 %f20, %f18, %f19;
+    mul.rn.f32 %f21, %f15, %f13;
+    fma.rn.f32 %f22, %f17, %f12, %f21;
+    st.global.f32 [%rd17], %f20;
+    st.global.f32 [%rd18], %f22;
+    st.global.f32 [%rd19], %f20;
+    st.global.f32 [%rd20], %f22;
+    add.u32 %r18, %r18, 1;
+    bra K_ROPE_LOOP;
+
+K_TAIL_PREP:
+    mov.u32 %r26, %r3;
+K_TAIL_LOOP:
+    setp.ge.u32 %p6, %r26, %r2;
+    @%p6 bra V_CACHE_PREP;
+    add.u32 %r27, %r12, %r26;
+    add.u32 %r28, %r14, %r26;
+    mul.wide.u32 %rd28, %r27, 4;
+    mul.wide.u32 %rd29, %r28, 4;
+    add.s64 %rd30, %rd1, %rd28;
+    add.s64 %rd31, %rd4, %rd28;
+    add.s64 %rd32, %rd5, %rd29;
+    mul.wide.u32 %rd33, %r26, 4;
+    add.s64 %rd34, %rd3, %rd33;
+    ld.global.f32 %f23, [%rd30];
+    ld.global.f32 %f24, [%rd34];
+    mul.rn.f32 %f25, %f23, %f7;
+    mul.rn.f32 %f26, %f25, %f24;
+    st.global.f32 [%rd31], %f26;
+    st.global.f32 [%rd32], %f26;
+    add.u32 %r26, %r26, 1;
+    bra K_TAIL_LOOP;
+
+V_CACHE_PREP:
+    mov.u32 %r29, 0;
+V_CACHE_LOOP:
+    setp.ge.u32 %p7, %r29, %r2;
+    @%p7 bra K_DONE;
+    add.u32 %r30, %r12, %r29;
+    add.u32 %r31, %r14, %r29;
+    mul.wide.u32 %rd35, %r30, 4;
+    mul.wide.u32 %rd36, %r31, 4;
+    add.s64 %rd37, %rd2, %rd35;
+    add.s64 %rd38, %rd6, %rd36;
+    ld.global.f32 %f27, [%rd37];
+    st.global.f32 [%rd38], %f27;
+    add.u32 %r29, %r29, 1;
+    bra V_CACHE_LOOP;
+
+K_DONE:
+    ret;
+}

@@ -53,6 +53,9 @@ module ML::CUDA
     getter q_gpu_all : Array(Float32)
     getter k_gpu_all : Array(Float32)
     getter v_gpu_all : Array(Float32)
+    getter q_device_ptr : DevicePtr
+    getter k_device_ptr : DevicePtr
+    getter v_device_ptr : DevicePtr
 
     def self.from_weights(weights : Weights, tokens : Int32, xs : Array(Float32)) : self
       new(tokens, weights.hidden, weights.q_dim, weights.k_dim, weights.v_dim,
@@ -80,6 +83,9 @@ module ML::CUDA
       @v_gpu_all = Array(Float32).new(@tokens * @v_dim, 0.0_f32)
       @input_device_base = nil.as(DevicePtr?)
       @owned_input_device_ptr = nil.as(DevicePtr?)
+      @q_device_ptr = 0_u64
+      @k_device_ptr = 0_u64
+      @v_device_ptr = 0_u64
       @closed = false
 
       build_runner
@@ -141,6 +147,9 @@ module ML::CUDA
       d_xs, d_q_w, d_k_w, d_v_w, d_q_all, d_k_all, d_v_all = ptrs
       @owned_input_device_ptr = d_xs
       @input_device_base = d_xs
+      @q_device_ptr = d_q_all
+      @k_device_ptr = d_k_all
+      @v_device_ptr = d_v_all
 
       upload_weights = -> {
         ML::CUDA.copy_htod!(d_q_w, @q_raw.to_unsafe.as(Void*), @q_raw.size.to_u64, "attn_q_w")

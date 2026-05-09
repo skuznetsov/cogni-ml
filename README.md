@@ -155,6 +155,20 @@ crystal build -Dcpu_only bin/cuda_attn_projection_probe.cr -o build/cuda_attn_pr
 `cuda_attn_projection_probe` runs `Q4_K attn_q + Q4_K attn_k + Q6_K attn_v` from one GPU-resident hidden vector and copies Q/K/V back only after all projections complete. It targets full-attention layers such as `blk.3` in Qwen3.5 9B.
 The probe now routes through `ML::CUDA::QwenFullAttnProjectionRunner`, supports `--tokens N`, and keeps Q/K/V outputs GPU-resident until the final correctness readback. It is the reusable input-projection boundary for future full-attention/KV CUDA work, not a complete full-attention layer runner yet.
 
+Build the full-attention Q/K normalization + RoPE + KV-cache boundary probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_full_attn_kv_probe.cr -o build/cuda_full_attn_kv_probe
+./build/cuda_full_attn_kv_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layer 3 \
+  --tokens 4 \
+  --start-pos 2 \
+  --max-seq 12
+```
+
+`cuda_full_attn_kv_probe` composes the projection runner with `ML::CUDA::QwenFullAttnKVRunner`: Q is split into normalized/RoPE'd Q and gate, K is RMSNormed/RoPE'd, and K/V rows are appended to a CUDA-resident cache at `start_pos`. It checks Q, gate, K, K-cache, and V-cache against the CPU Qwen reference. This is the next exact full-attention boundary after projection, but still stops before attention scores/softmax, gated output projection, FFN, logits, and model-level scheduling.
+
 Build the Q5_K CUDA recurrent-QKV probe:
 
 ```sh
