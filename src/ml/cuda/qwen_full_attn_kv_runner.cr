@@ -137,6 +137,7 @@ module ML::CUDA
       @output_device_ptr = 0_u64
       @cos_device_ptr = 0_u64
       @sin_device_ptr = 0_u64
+      @start_pos_device_ptr = 0_u64
       @start_pos_box = nil.as(Pointer(UInt32)?)
       @profile_qk_rope_ms = 0.0
       @profile_attn_decode_ms = 0.0
@@ -212,6 +213,7 @@ module ML::CUDA
       @cos_table = cos_table
       @sin_table = sin_table
       @start_pos_box.not_nil!.value = start_pos.to_u32
+      ML::CUDA.copy_htod!(@start_pos_device_ptr, @start_pos_box.not_nil!.as(Void*), 4_u64, "start_pos")
       ML::CUDA.copy_htod!(@cos_device_ptr, @cos_table.to_unsafe.as(Void*), bytesize_f32(@cos_table.size), "cos")
       ML::CUDA.copy_htod!(@sin_device_ptr, @sin_table.to_unsafe.as(Void*), bytesize_f32(@sin_table.size), "sin")
     end
@@ -252,6 +254,7 @@ module ML::CUDA
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
                bytesize_f32(@cos_table.size), bytesize_f32(@sin_table.size),
+               4_u64,
                bytesize_f32(@tokens * @q_dim), bytesize_f32(@tokens * @q_dim),
                bytesize_f32(@tokens * @kv_dim), bytesize_f32(@max_seq * @kv_dim),
                bytesize_f32(@max_seq * @kv_dim), bytesize_f32(@tokens * @n_head * @max_seq),
@@ -267,18 +270,20 @@ module ML::CUDA
         @buffers << buffer
         buffer.ptr
       end
-      d_q_norm, d_k_norm, d_cos, d_sin, d_q_out, d_gate_out, d_k_out, d_k_cache, d_v_cache, d_scores, d_attn_out, d_output_w, d_proj_out, d_residual_input, d_post_norm, d_residual, d_cur2, d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w, d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all = ptrs
+      d_q_norm, d_k_norm, d_cos, d_sin, d_start_pos, d_q_out, d_gate_out, d_k_out, d_k_cache, d_v_cache, d_scores, d_attn_out, d_output_w, d_proj_out, d_residual_input, d_post_norm, d_residual, d_cur2, d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w, d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all = ptrs
       @owned_residual_device_ptr = d_residual_input
       @residual_device_base = d_residual_input
       @output_device_ptr = d_final_all
       @cos_device_ptr = d_cos
       @sin_device_ptr = d_sin
+      @start_pos_device_ptr = d_start_pos
 
       upload_constants = -> {
         ML::CUDA.copy_htod!(d_q_norm, @q_norm.to_unsafe.as(Void*), bytesize_f32(@q_norm.size), "q_norm")
         ML::CUDA.copy_htod!(d_k_norm, @k_norm.to_unsafe.as(Void*), bytesize_f32(@k_norm.size), "k_norm")
         ML::CUDA.copy_htod!(d_cos, @cos_table.to_unsafe.as(Void*), bytesize_f32(@cos_table.size), "cos")
         ML::CUDA.copy_htod!(d_sin, @sin_table.to_unsafe.as(Void*), bytesize_f32(@sin_table.size), "sin")
+        ML::CUDA.copy_htod!(d_start_pos, @start_pos_box.not_nil!.as(Void*), 4_u64, "start_pos")
         ML::CUDA.copy_htod!(d_output_w, @output_raw.to_unsafe.as(Void*), @output_raw.size.to_u64, "attn_output_w")
         ML::CUDA.copy_htod!(d_post_norm, @post_norm.to_unsafe.as(Void*), bytesize_f32(@post_norm.size), "post_norm")
         ML::CUDA.copy_htod!(d_ffn_gate_w, @ffn_gate_raw.to_unsafe.as(Void*), @ffn_gate_raw.size.to_u64, "ffn_gate_w")
@@ -334,7 +339,7 @@ module ML::CUDA
       k_params[8] = box_u32(n_head_kv_u32).as(Void*)
       k_params[9] = box_u32(head_dim_u32).as(Void*)
       k_params[10] = box_u32(rope_dim_u32).as(Void*)
-      k_params[11] = @start_pos_box.not_nil!.as(Void*)
+      k_params[11] = box_ptr(d_start_pos).as(Void*)
       k_params[12] = box_u32(max_seq_u32).as(Void*)
       k_params[13] = box_f32(@eps).as(Void*)
 
@@ -349,7 +354,7 @@ module ML::CUDA
       attn_params[7] = box_u32(n_head_kv_u32).as(Void*)
       attn_params[8] = box_u32(head_dim_u32).as(Void*)
       attn_params[9] = box_u32(heads_per_group_u32).as(Void*)
-      attn_params[10] = @start_pos_box.not_nil!.as(Void*)
+      attn_params[10] = box_ptr(d_start_pos).as(Void*)
       attn_params[11] = box_u32(max_seq_u32).as(Void*)
       attn_params[12] = box_f32(scale).as(Void*)
 

@@ -178,7 +178,7 @@ Q_DONE:
     .param .u32 n_kv_head,
     .param .u32 head_dim,
     .param .u32 rope_dim,
-    .param .u32 start_pos,
+    .param .u64 start_pos_ptr,
     .param .u32 max_seq,
     .param .f32 eps
 )
@@ -196,10 +196,11 @@ Q_DONE:
     ld.param.u64 %rd6, [v_cache];
     ld.param.u64 %rd7, [cos_tbl];
     ld.param.u64 %rd8, [sin_tbl];
+    ld.param.u64 %rd53, [start_pos_ptr];
     ld.param.u32 %r1, [n_kv_head];
     ld.param.u32 %r2, [head_dim];
     ld.param.u32 %r3, [rope_dim];
-    ld.param.u32 %r4, [start_pos];
+    ld.global.u32 %r4, [%rd53];
     ld.param.u32 %r5, [max_seq];
     ld.param.f32 %f1, [eps];
 
@@ -350,7 +351,7 @@ K_DONE:
     .param .u32 n_kv_head,
     .param .u32 head_dim,
     .param .u32 heads_per_group,
-    .param .u32 start_pos,
+    .param .u64 start_pos_ptr,
     .param .u32 max_seq,
     .param .f32 scale
 )
@@ -370,7 +371,8 @@ K_DONE:
     ld.param.u32 %r2, [n_kv_head];
     ld.param.u32 %r3, [head_dim];
     ld.param.u32 %r4, [heads_per_group];
-    ld.param.u32 %r5, [start_pos];
+    ld.param.u64 %rd63, [start_pos_ptr];
+    ld.global.u32 %r5, [%rd63];
     ld.param.u32 %r6, [max_seq];
     ld.param.f32 %f1, [scale];
 
@@ -512,7 +514,7 @@ A_DONE:
     .param .u32 n_kv_head,
     .param .u32 head_dim,
     .param .u32 heads_per_group,
-    .param .u32 start_pos,
+    .param .u64 start_pos_ptr,
     .param .u32 max_seq,
     .param .f32 scale
 )
@@ -533,7 +535,8 @@ A_DONE:
     ld.param.u32 %r2, [n_kv_head];
     ld.param.u32 %r3, [head_dim];
     ld.param.u32 %r4, [heads_per_group];
-    ld.param.u32 %r5, [start_pos];
+    ld.param.u64 %rd95, [start_pos_ptr];
+    ld.global.u32 %r5, [%rd95];
     ld.param.u32 %r6, [max_seq];
     ld.param.f32 %f1, [scale];
 

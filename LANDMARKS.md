@@ -10582,3 +10582,31 @@ Conclusion: q/k dual projection is exact but not a robust full-model win. The fi
 - daedalus: Sibling projection fusion is useful only when launch/row-count overhead dominates. For larger projections, hot row compute remains the bottleneck.
 - maieutic: The hidden assumption "same pattern transfers because shapes match" is insufficient; phase share and full-model effect size decide promotion.
 - adversary: This refutes default promotion of full-attention q/k dual projection, not the recurrent alpha/beta route or future fusions that eliminate heavier intermediate traffic.
+
+**decision_update_148:** Added a semantic CUDA Graph probe for the real greedy-loop decode path. `bin/cuda_mixed_stack_probe.cr --greedy-loop-graph` captures the reset-free decode body after warmup and replays it for generated tokens after the first token; embedding upload, RoPE/position update, and top1 readback remain the same as the normal semantic loop. To make graph replay semantically valid, full-attention decode position is now device-resident: `full_attn_k_norm_rope_cache_probe`, serial attention, and parallel attention read `start_pos` through a stable device pointer instead of a captured scalar kernel parameter.
+
+Conclusion: semantic graph replay is exact and a small CUDA launch/orchestration win, not a breakthrough. The first naive graph attempt diverged because CUDA Graph capture froze scalar `start_pos`; moving `start_pos` to device memory fixed the divergence. Five-layer greedy-loop graph and normal modes now produce the same token sequence, and the five-layer `--read-logits` oracle remains exact (`logits_cos=1.0`, `top1_gpu=top1_cpu=100253`). Full 9B gen16 ABBA preserves token IDs and improves average wall by about `0.06ms/tok`: normal `23.838/23.862/23.875 ms/tok` vs graph `23.766/23.802/23.824 ms/tok`. Keep this as an explicit probe/knob rather than a default runtime path until it is wired into a practical CLI policy and repeated on longer contexts.
+
+**evidence_update_148:**
+- claim: "Scalar `start_pos` capture caused semantic graph replay divergence before the device-pointer fix."
+  source: remote temporary graph run before fix -> normal top1 `198,2,220,16,13,27416,...`, graph top1 `198,2,220,16,13,220,220,103998,...`
+  verified_at: 2026-05-09
+  decay_trigger: full-attn start_pos parameter passing, CUDA graph capture semantics, or greedy-loop harness changes
+- claim: "Device-resident `start_pos` restores semantic greedy-loop parity for graph replay."
+  source: remote five-layer `--greedy-loop-tokens=8` -> normal and graph both `top1_gpu=220,695,12,50,1458,1449,17961,17961`; full 9B gen16 ABBA normal and graph both `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`
+  verified_at: 2026-05-09
+  decay_trigger: start_pos device pointer, full-attn kernels, graph replay path, or semantic loop token feedback changes
+- claim: "The full-attn `start_pos` device-pointer change preserves the five-layer full-logit oracle."
+  source: remote `/tmp/cuda_mixed_stack_probe_semgraph2 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `cuda_ms=7.842`, `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: full-attn PTX parameter layout, CPU oracle, or CUDA driver JIT changes
+- claim: "Semantic CUDA Graph replay is a small full 9B gen16 speed win."
+  source: remote full 9B ABBA `--all-layers --greedy-loop-tokens=16 --seed-token=0 --perf-only --skip-debug-readback` -> normal `23.838/23.862/23.875 ms/tok`; graph `23.766/23.802/23.824 ms/tok`; graph body `23.555/23.590/23.612 ms/tok` vs normal body `23.611/23.661/23.674 ms/tok`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph driver path, semantic-loop harness, model route, GPU load/order, or generated-token length changes
+
+**quadrumvirate_update_148:**
+- cassandra: The predicted outcome was a small graph win because previous steady graph replay was only `0.4-0.6%`; semantic replay matches that scale.
+- daedalus: The useful graph lesson is not "wrap everything"; it is "graph capture requires device-resident mutable control values." This same pattern is required for future GPU-resident speculative controllers.
+- maieutic: The hidden assumption "captured graph will observe updated host scalar params" was false; CUDA graph nodes captured the scalar value, not the later host mutation.
+- adversary: This is a probe-level feature, not a production decode policy. It preserves tested token sequences and logits, but longer contexts/prompts and CLI integration still need gates before default promotion.
