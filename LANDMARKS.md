@@ -10893,6 +10893,22 @@ Conclusion: this is a small exact win and a cleaner controller boundary. It remo
 - maieutic: The visible attribution shift is not itself the win; the win is the total A/B delta and fewer host operations.
 - adversary: The extra `start_pos` load in Q RoPE can slightly affect narrow five-layer wall, so keep the claim scoped to semantic-loop control, not general layer speed.
 
+**decision_update_159e:** Refuted moving the graph bootstrap token1 position update onto the device. A temporary branch launched the device-side full-attention `start_pos` increment after direct token0, then skipped the host `update_decode_position` for token1. The hypothesis was that the graph loop could become fully host-position-free after token0.
+
+Conclusion: correctness held, but full 9B gen64 wall regressed/noised. Old device-position path measured `23.175/23.225 ms/tok`; the token1-device branch measured `23.227/23.262 ms/tok`. The branch was removed. Keep the current policy: host sets token0 and token1 positions, graph increments token2+ positions.
+
+**evidence_update_159e:**
+- claim: "Device-incrementing token1 position is not a speedup."
+  source: remote temporary `/tmp/cuda_mixed_stack_probe_pos1_device --all-layers --tokens=1 --max-seq=128 --greedy-loop-tokens=64 --perf-only --skip-debug-readback` -> old `23.175/23.225 ms/tok`, branch `23.227/23.262 ms/tok`, all `ok=true`; gen8 smoke and five-layer full-logit oracle also stayed exact
+  verified_at: 2026-05-09
+  decay_trigger: semantic graph bootstrap ordering, start_pos increment kernel, CUDA stream ordering, or timing harness changes
+
+**quadrumvirate_update_159e:**
+- cassandra: This was a micro-optimization trap: removing a tiny host update added ordering/launch work and worsened total wall.
+- daedalus: Stop shaving bootstrap setup. The remaining semantic gap to steady is mostly final synchronization/accounting and full model body, not token1 setup.
+- maieutic: Lower `greedy_position_ms` alone is not evidence of speed; total `cuda_ms_per_token` is authoritative.
+- adversary: Retaining host token1 setup is safer because it avoids relying on cross-stream ordering after the direct token0 wave.
+
 **decision_update_160:** Refreshed the Q8_1+DP4A hot-FFN draft-only evidence after current CUDA cleanups. The existing `bin/cuda_q4k_repack_probe.cr` Q8 path quantizes the activation vector and uses DP4A against Q4_K weights, so it remains approximate and unsuitable as an exact runner route without exact verification.
 
 Conclusion: the microkernel signal is real but too small for direct runner integration. Across hot `blk.{0,1,3}.ffn_gate/up.weight` tensors, raw Q4_K is about `0.1099-0.1100 ms`, Q8+DP4A with GPU quantized activations is about `0.1036 ms`, one-use-with-quant speedup is about `1.04x`, and reuse2-with-quant is about `1.05x`. Cosine stays around `0.999993` with max diff `~0.0056-0.0074`. Keep this as a possible draft/proposal-body ingredient, not a standalone exact speed path.
