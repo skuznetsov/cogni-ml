@@ -10706,3 +10706,19 @@ Conclusion: correctness held, but full-model speed was noise-level and not worth
 - daedalus: The head path needs an elimination/shortlist frame, not another CTA retune.
 - maieutic: The assumption "fewer partials matter" was only weakly true locally and disappeared at full-model scale.
 - adversary: The result does not refute output-head optimization generally; it refutes this exact 8-warps-per-CTA variant.
+
+**decision_update_154:** Refuted promoting a 512-thread final reduce for fused Q6 output-head top1. The temporary branch changed `output_top1_values_reduce_probe` from 256 to 512 threads with a larger shared-memory table. The hypothesis was that the final partial-max reduction over `ceil(vocab/4)` partials might be the remaining head bottleneck after Q6 row work.
+
+Conclusion: the signal was not robust. Initial five-layer top1 correctness held and local timing looked better, but repeated full 9B interleave showed only noise: old base `22.999 ms/tok`, old reduce512 `22.983 ms/tok`, final reduce512 `23.024 ms/tok`. The temporary code was removed. The Q6 head bottleneck is still the row dot/dequant work, not the final single-CTA reduce.
+
+**evidence_update_154:**
+- claim: "512-thread final top1 reduce is not a robust full-model speedup."
+  source: remote interleave after temporary branch -> five-layer top1 exact; full 9B steady oldbase `22.999 ms/tok`, oldr512 `22.983 ms/tok`, final r512 `23.024 ms/tok`
+  verified_at: 2026-05-09
+  decay_trigger: output-head reduce implementation, GPU scheduling/load, vocab size, or timing harness changes
+
+**quadrumvirate_update_154:**
+- cassandra: This matched the micro-optimization trap pattern: a small local head-gate win disappeared under full-model interleaving.
+- daedalus: Continue pivoting away from head CTA/reduce retuning; pursue elimination/shortlist or body row-compute changes.
+- maieutic: The assumption that final reduce was material was false at current scale; the body-floor and profile still point to Q6 row dot/dequant.
+- adversary: This refutes only the 512-thread reduce shape, not all head algorithms.
