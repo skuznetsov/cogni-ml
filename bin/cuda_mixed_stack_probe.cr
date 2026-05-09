@@ -77,6 +77,7 @@ start_pos = 0
 max_seq = 16
 warmup = 0
 steady_reps = 0
+steady_graph_reps = 0
 read_logits = false
 profile_phases = false
 debug_readback = true
@@ -93,6 +94,7 @@ OptionParser.parse do |p|
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--warmup N", "Untimed warmup stack runs") { |v| warmup = v.to_i }
   p.on("--steady-reps N", "After one reset priming run, time N runs without sequence/state reset; requires --perf-only") { |v| steady_reps = v.to_i }
+  p.on("--steady-graph-reps N", "Capture one reset-free steady wave as a CUDA graph and replay it N times; requires --perf-only") { |v| steady_graph_reps = v.to_i }
   p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
   p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
   p.on("--skip-debug-readback", "Read only output-head results; skip final hidden/state/KV debug buffers for perf attribution") { debug_readback = false }
@@ -110,8 +112,12 @@ raise "start-pos must be non-negative" unless start_pos >= 0
 raise "max-seq must cover start-pos + tokens" unless max_seq >= start_pos + tokens
 raise "warmup must be non-negative" unless warmup >= 0
 raise "steady-reps must be non-negative" unless steady_reps >= 0
+raise "steady-graph-reps must be non-negative" unless steady_graph_reps >= 0
 raise "--steady-reps requires --perf-only" if steady_reps > 0 && !perf_only
 raise "--steady-reps does not support --profile-phases" if steady_reps > 0 && profile_phases
+raise "--steady-graph-reps requires --perf-only" if steady_graph_reps > 0 && !perf_only
+raise "--steady-graph-reps does not support --profile-phases" if steady_graph_reps > 0 && profile_phases
+raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps > 0 && steady_graph_reps > 0
 
 eps = 1.0e-6_f32
 gguf = ML::GGUF::GGUFFile.new(model)
@@ -225,7 +231,34 @@ begin
   warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false) }
 
   measured_tokens = tokens
-  if steady_reps > 0
+  if steady_graph_reps > 0
+    mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
+    stream = ML::CUDA::CUDAStream.new
+    graph = nil.as(ML::CUDA::CUDAGraph?)
+    graph_exec = nil.as(ML::CUDA::CUDAGraphExec?)
+    begin
+      ML::CUDA.with_stream(stream) do
+        stream.begin_capture
+        mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: false,
+          sync_end: false, read_head_outputs: false)
+        graph = stream.end_capture
+      end
+      graph_exec = graph.not_nil!.instantiate
+      graph.not_nil!.close
+      t_graph = Time.instant
+      steady_graph_reps.times do
+        graph_exec.not_nil!.launch(stream)
+      end
+      stream.synchronize
+      gpu_ms = (Time.instant - t_graph).total_milliseconds
+      measured_tokens = tokens * steady_graph_reps
+      mixed_stack.read_head_outputs
+    ensure
+      graph_exec.try(&.close)
+      graph.try(&.close)
+      stream.close
+    end
+  elsif steady_reps > 0
     # Prime device inputs and decode states once, then measure the steady path
     # where recurrent/KV state stays resident across decode steps.
     mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
@@ -290,6 +323,7 @@ begin
   puts "max_seq=#{max_seq}"
   puts "warmup=#{warmup}"
   puts "steady_reps=#{steady_reps}"
+  puts "steady_graph_reps=#{steady_graph_reps}"
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"

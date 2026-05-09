@@ -43,7 +43,11 @@ module ML::CUDA
       elapsed
     end
 
-    def run_sequence(profile_phases : Bool = false, debug_readback : Bool = true, reset_sequence : Bool = true) : Float64
+    def run_sequence(profile_phases : Bool = false,
+                     debug_readback : Bool = true,
+                     reset_sequence : Bool = true,
+                     sync_end : Bool = true,
+                     read_head_outputs : Bool = true) : Float64
       @phase_lines.clear
       previous_output = 0_u64
       t_all = Time.instant
@@ -102,12 +106,12 @@ module ML::CUDA
         @phase_lines << "phase_head_ms=#{((Time.instant - t_head).total_milliseconds).round(3)}"
       else
         @head.run_sequence
-        ML::CUDA.synchronize!("cuCtxSynchronize(mixed stack)")
+        ML::CUDA.synchronize!("cuCtxSynchronize(mixed stack)") if sync_end
       end
 
       t_read = Time.instant
       @runners.each(&.read_outputs) if debug_readback
-      @head.read_outputs
+      @head.read_outputs if read_head_outputs
       @phase_lines << "phase_readback_ms=#{((Time.instant - t_read).total_milliseconds).round(3)}" if profile_phases
 
       if debug_readback
@@ -122,6 +126,10 @@ module ML::CUDA
       elapsed = (Time.instant - t_all).total_milliseconds
       @phase_lines << "phase_total_ms=#{elapsed.round(3)}" if profile_phases
       elapsed
+    end
+
+    def read_head_outputs : Nil
+      @head.read_outputs
     end
 
     def close : Nil

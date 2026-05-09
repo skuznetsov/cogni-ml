@@ -4,6 +4,9 @@ lib LibCUDADriver
   alias CUcontext = Void*
   alias CUmodule = Void*
   alias CUfunction = Void*
+  alias CUstream = Void*
+  alias CUgraph = Void*
+  alias CUgraphExec = Void*
   alias CUdeviceptr = UInt64
 
   fun cuInit(flags : UInt32) : Int32
@@ -15,6 +18,15 @@ lib LibCUDADriver
   fun cuModuleLoadData(mod : CUmodule*, image : Void*) : Int32
   fun cuModuleUnload(mod : CUmodule) : Int32
   fun cuModuleGetFunction(fn : CUfunction*, mod : CUmodule, name : UInt8*) : Int32
+  fun cuStreamCreate(stream : CUstream*, flags : UInt32) : Int32
+  fun cuStreamDestroy_v2(stream : CUstream) : Int32
+  fun cuStreamSynchronize(stream : CUstream) : Int32
+  fun cuStreamBeginCapture(stream : CUstream, mode : Int32) : Int32
+  fun cuStreamEndCapture(stream : CUstream, graph : CUgraph*) : Int32
+  fun cuGraphInstantiate(exec : CUgraphExec*, graph : CUgraph, flags : UInt64) : Int32
+  fun cuGraphLaunch(exec : CUgraphExec, stream : CUstream) : Int32
+  fun cuGraphDestroy(graph : CUgraph) : Int32
+  fun cuGraphExecDestroy(exec : CUgraphExec) : Int32
   fun cuMemAlloc_v2(dptr : CUdeviceptr*, bytesize : LibC::SizeT) : Int32
   fun cuMemFree_v2(dptr : CUdeviceptr) : Int32
   fun cuMemcpyHtoD_v2(dst : CUdeviceptr, src : Void*, bytesize : LibC::SizeT) : Int32
@@ -28,6 +40,7 @@ end
 
 module ML::CUDA
   alias DevicePtr = LibCUDADriver::CUdeviceptr
+  @@current_stream = Pointer(Void).null
 
   def self.check!(code : Int32, what : String) : Nil
     raise "#{what} failed with CUDA error #{code}" unless code == 0
@@ -119,6 +132,83 @@ module ML::CUDA
     end
   end
 
+  class CUDAStream
+    getter handle : LibCUDADriver::CUstream
+
+    def initialize(flags : UInt32 = 0_u32)
+      @handle = Pointer(Void).null
+      ML::CUDA.check! LibCUDADriver.cuStreamCreate(pointerof(@handle), flags), "cuStreamCreate"
+      @closed = false
+    end
+
+    def synchronize : Nil
+      ML::CUDA.check! LibCUDADriver.cuStreamSynchronize(@handle), "cuStreamSynchronize"
+    end
+
+    def begin_capture(mode : Int32 = 1) : Nil
+      ML::CUDA.check! LibCUDADriver.cuStreamBeginCapture(@handle, mode), "cuStreamBeginCapture"
+    end
+
+    def end_capture : CUDAGraph
+      graph = Pointer(Void).null
+      ML::CUDA.check! LibCUDADriver.cuStreamEndCapture(@handle, pointerof(graph)), "cuStreamEndCapture"
+      CUDAGraph.new(graph)
+    end
+
+    def close : Nil
+      return if @closed
+
+      LibCUDADriver.cuStreamDestroy_v2(@handle) unless @handle.null?
+      @closed = true
+    end
+  end
+
+  class CUDAGraph
+    def initialize(@handle : LibCUDADriver::CUgraph)
+      @closed = false
+    end
+
+    def instantiate : CUDAGraphExec
+      exec = Pointer(Void).null
+      ML::CUDA.check! LibCUDADriver.cuGraphInstantiate(pointerof(exec), @handle, 0_u64), "cuGraphInstantiate"
+      CUDAGraphExec.new(exec)
+    end
+
+    def close : Nil
+      return if @closed
+
+      LibCUDADriver.cuGraphDestroy(@handle) unless @handle.null?
+      @closed = true
+    end
+  end
+
+  class CUDAGraphExec
+    def initialize(@handle : LibCUDADriver::CUgraphExec)
+      @closed = false
+    end
+
+    def launch(stream : CUDAStream) : Nil
+      ML::CUDA.check! LibCUDADriver.cuGraphLaunch(@handle, stream.handle), "cuGraphLaunch"
+    end
+
+    def close : Nil
+      return if @closed
+
+      LibCUDADriver.cuGraphExecDestroy(@handle) unless @handle.null?
+      @closed = true
+    end
+  end
+
+  def self.with_stream(stream : CUDAStream) : Nil
+    previous = @@current_stream
+    @@current_stream = stream.handle
+    begin
+      yield
+    ensure
+      @@current_stream = previous
+    end
+  end
+
   def self.copy_htod!(dst : DevicePtr, src : Void*, bytesize : LibC::SizeT, what : String) : Nil
     check! LibCUDADriver.cuMemcpyHtoD_v2(dst, src, bytesize), "cuMemcpyHtoD(#{what})"
   end
@@ -137,7 +227,7 @@ module ML::CUDA
                    params : Void**, label : String,
                    shared_mem_bytes : UInt32 = 0_u32) : Nil
     check! LibCUDADriver.cuLaunchKernel(fn.handle, grid_x, grid_y, grid_z,
-      block_x, block_y, block_z, shared_mem_bytes, Pointer(Void).null,
+      block_x, block_y, block_z, shared_mem_bytes, @@current_stream,
       params, Pointer(Void*).null), "cuLaunchKernel(#{label})"
   end
 

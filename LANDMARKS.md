@@ -10004,3 +10004,27 @@ Conclusion: this is the first full-model CUDA speedup from the LTP/WBA framing r
 - daedalus: The useful frame is now explicit WBA: eliminate barriers/syncs inside and between waves before inventing approximate math.
 - maieutic: The microbench alone understated Q4 value; full-stack aggregation revealed the real effect. Future CUDA work should keep both micro and full-stack A/B gates.
 - adversary: The full-model gate is still perf-only and synthetic-input. It proves backend timing improvement, not tokenizer-driven generation throughput or full hidden/state correctness.
+
+**decision_update_124:** Added a CUDA Graph replay falsifier for launch/wave overhead. The CUDA driver wrapper now exposes streams and graph capture/instantiate/launch, `ML::CUDA.launch!` can use a scoped current stream, and the mixed-stack runner can enqueue a reset-free wave without an end sync or output readback. `bin/cuda_mixed_stack_probe.cr --steady-graph-reps=N` captures one reset-free perf-only wave and replays it N times.
+
+Conclusion: CUDA Graph replay is valid infrastructure, but it is not the next major speed lever after warp-barrier removal. Full 9B graph replay improves steady timing by only about `0.4-0.6%`; launch overhead is now small relative to the GPU compute/memory work inside the quantized GEMV waves.
+
+**evidence_update_124:**
+- claim: "CUDA Graph capture/replay works for a reset-free mixed-stack wave."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_graph_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0; remote five-layer `--steady-graph-reps=4 --perf-only` -> `ok=true`, `cuda_ms_per_token=5.817`, `top1_gpu=3509`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA driver wrapper, stream routing, mixed-stack enqueue semantics, or graph capture policy changes
+- claim: "The normal non-graph correctness path remains intact after adding stream routing."
+  source: remote five-layer `cuda_mixed_stack_probe --tokens=1 --warmup=3 --skip-debug-readback` -> `ok=true`, `top1_gpu=96939`, `top1_cpu=96939`, `cuda_ms=7.672`
+  verified_at: 2026-05-09
+  decay_trigger: launch stream routing, output-head top1, CPU oracle path, or driver wrapper changes
+- claim: "Full 9B CUDA Graph replay is nearly neutral versus steady host launches."
+  source: remote full 9B ABBA: `reps=4` steady `23.662/23.699ms/token` vs graph `23.570/23.597ms/token`; `reps=16` steady `23.843/23.851ms/token` vs graph `23.719/23.742ms/token`, all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA driver/JIT, launch count, graph replay path, GPU/load conditions, or mixed-stack runner changes
+
+**quadrumvirate_update_124:**
+- cassandra: If CPU launch overhead dominated, graph replay would have produced a visible multi-percent win. It did not.
+- daedalus: The frame shifts back from host scheduling to device work: quantized GEMV dequant/tiling and memory traffic are the larger remaining surface.
+- maieutic: A tiny graph win is not a reason to complicate the production path prematurely. Keep it as a measurement/backend option until real decode integration needs it.
+- adversary: Graph evidence is perf-only and reset-free. It does not validate full correctness, sampling behavior, or tokenizer-driven generation.
