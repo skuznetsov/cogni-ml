@@ -9820,3 +9820,23 @@ Conclusion: after separating reset, hidden-size RMSNorm is no longer a recurrent
 - daedalus: The frame shifts from optimizing recurrent RMSNorm further to separating cold-sequence setup from steady decode and then attacking true execution hot spots.
 - maieutic: A phase label is only valid if preceding asynchronous work has already been accounted for. The reset split is now the falsifier against misattributed first-kernel timings.
 - adversary: This is a measurement improvement, not a runtime speedup. Evidence is one remote 9B five-layer profile and should be rechecked after state ownership changes.
+
+**decision_update_115:** Added deep recurrent projection/FFN attribution and refuted the simple Q6 warp-count retune. `QwenRecurrentLayerRunner#run_sequence_profiled` now reports `qkv`, `gate`, `alpha_beta_proj`, `ffn_gate`, `ffn_up`, `swiglu`, `ffn_down`, and `final_add` in addition to aggregate phases. A Q6 `warp8` output-head variant was tested remotely but reverted because it preserved parity while making output logits slightly slower.
+
+Conclusion: recurrent FFN time is not hidden in SwiGLU; it is dominated by three quantized GEMVs of similar size. The first obvious Q6 output-head scheduling change (`4` rows/block -> `8` rows/block) is refuted for this RTX 5060 Ti gate. The next exact speed branch should either reduce intermediate FFN traffic with paired projection fusion, add full-attention subphase attribution, or change the output-head algorithm more substantially than block packing.
+
+**evidence_update_115:**
+- claim: "Deep recurrent attribution preserves mixed-stack parity and shows FFN is GEMV-dominated."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases` -> `ok=true`, recurrent `ffn_gate_ms≈0.148-0.149`, `ffn_up_ms≈0.145`, `swiglu_ms≈0.007-0.008`, `ffn_down_ms≈0.143-0.153`, `qkv_ms≈0.106-0.108`
+  verified_at: 2026-05-09
+  decay_trigger: recurrent profile path, FFN launch graph, quantized GEMV kernels, model quantization mix, or GPU/load conditions changes
+- claim: "Q6 warp8 output-head scheduling is not a win on this gate."
+  source: remote temporary `q6_k_gemv_warp8_f32` output-head run -> `ok=true`, `phase_head_logits_ms=2.344`, `phase_head_ms=2.710`, `phase_total_ms=10.294`, worse than the prior reset-separated baseline (`phase_head_logits_ms≈2.315`, `phase_total_ms≈9.994`)
+  verified_at: 2026-05-09
+  decay_trigger: GPU architecture, Q6 kernel implementation, output vocab/hidden shape, or benchmark harness changes
+
+**quadrumvirate_update_115:**
+- cassandra: The tempting branch was to fuse the visible activation kernel, but attribution shows `swiglu` is too small to matter alone. The first Q6 block-packing retune also did not improve wall.
+- daedalus: The frame shifts from launch-count cosmetics to memory traffic and GEMV algorithm shape. FFN paired projection fusion must prove it reduces traffic enough; otherwise it is likely a small win at best.
+- maieutic: A larger CUDA block is not automatically better; it can lower block count while hurting occupancy/scheduling enough to lose.
+- adversary: The deep attribution adds synchronization between subkernels, so absolute subphase sums are profiling signals, not default-runtime timings. The Q6 warp8 refutation is scoped to one GPU/model/slice.

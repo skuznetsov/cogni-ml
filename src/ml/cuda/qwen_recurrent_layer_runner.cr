@@ -215,6 +215,14 @@ module ML::CUDA
       @profile_projection_ms = 0.0
       @profile_recurrent_core_ms = 0.0
       @profile_ffn_ms = 0.0
+      @profile_qkv_ms = 0.0
+      @profile_gate_ms = 0.0
+      @profile_alpha_beta_ms = 0.0
+      @profile_ffn_gate_ms = 0.0
+      @profile_ffn_up_ms = 0.0
+      @profile_swiglu_ms = 0.0
+      @profile_ffn_down_ms = 0.0
+      @profile_final_add_ms = 0.0
       @closed = false
 
       build_runner
@@ -250,12 +258,28 @@ module ML::CUDA
       @profile_projection_ms = 0.0
       @profile_recurrent_core_ms = 0.0
       @profile_ffn_ms = 0.0
+      @profile_qkv_ms = 0.0
+      @profile_gate_ms = 0.0
+      @profile_alpha_beta_ms = 0.0
+      @profile_ffn_gate_ms = 0.0
+      @profile_ffn_up_ms = 0.0
+      @profile_swiglu_ms = 0.0
+      @profile_ffn_down_ms = 0.0
+      @profile_final_add_ms = 0.0
       t_total = Time.instant
       profile_runner.run_sequence
       phase_lines << "#{prefix}_attn_norm_ms=#{@profile_attn_norm_ms.round(3)}"
       phase_lines << "#{prefix}_projection_ms=#{@profile_projection_ms.round(3)}"
+      phase_lines << "#{prefix}_qkv_ms=#{@profile_qkv_ms.round(3)}"
+      phase_lines << "#{prefix}_gate_ms=#{@profile_gate_ms.round(3)}"
+      phase_lines << "#{prefix}_alpha_beta_proj_ms=#{@profile_alpha_beta_ms.round(3)}"
       phase_lines << "#{prefix}_recurrent_core_ms=#{@profile_recurrent_core_ms.round(3)}"
       phase_lines << "#{prefix}_ffn_ms=#{@profile_ffn_ms.round(3)}"
+      phase_lines << "#{prefix}_ffn_gate_ms=#{@profile_ffn_gate_ms.round(3)}"
+      phase_lines << "#{prefix}_ffn_up_ms=#{@profile_ffn_up_ms.round(3)}"
+      phase_lines << "#{prefix}_swiglu_ms=#{@profile_swiglu_ms.round(3)}"
+      phase_lines << "#{prefix}_ffn_down_ms=#{@profile_ffn_down_ms.round(3)}"
+      phase_lines << "#{prefix}_final_add_ms=#{@profile_final_add_ms.round(3)}"
       phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
     end
 
@@ -523,11 +547,21 @@ module ML::CUDA
         @profile_attn_norm_ms += (Time.instant - t_norm).total_milliseconds
 
         t_proj = Time.instant
+        t_qkv = Time.instant
         ML::CUDA.launch!(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent qkv)")
+        @profile_qkv_ms += (Time.instant - t_qkv).total_milliseconds
+
+        t_gate = Time.instant
         ML::CUDA.launch!(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent gate)")
+        @profile_gate_ms += (Time.instant - t_gate).total_milliseconds
+
+        t_alpha_beta = Time.instant
         ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
         ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj")
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent projections)")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent alpha/beta)")
+        @profile_alpha_beta_ms += (Time.instant - t_alpha_beta).total_milliseconds
         @profile_projection_ms += (Time.instant - t_proj).total_milliseconds
 
         t_core = Time.instant
@@ -543,12 +577,30 @@ module ML::CUDA
         @profile_recurrent_core_ms += (Time.instant - t_core).total_milliseconds
 
         t_ffn = Time.instant
+        t_ffn_gate = Time.instant
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn gate)")
+        @profile_ffn_gate_ms += (Time.instant - t_ffn_gate).total_milliseconds
+
+        t_ffn_up = Time.instant
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn up)")
+        @profile_ffn_up_ms += (Time.instant - t_ffn_up).total_milliseconds
+
+        t_swiglu = Time.instant
         ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent swiglu)")
+        @profile_swiglu_ms += (Time.instant - t_swiglu).total_milliseconds
+
+        t_ffn_down = Time.instant
         ML::CUDA.launch!(ffn_down_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn down)")
+        @profile_ffn_down_ms += (Time.instant - t_ffn_down).total_milliseconds
+
+        t_final_add = Time.instant
         ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn)")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent final add)")
+        @profile_final_add_ms += (Time.instant - t_final_add).total_milliseconds
         @profile_ffn_ms += (Time.instant - t_ffn).total_milliseconds
       }
 
