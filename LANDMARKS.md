@@ -9381,3 +9381,23 @@ Conclusion: the CUDA recurrent-layer path now has a real Qwen-specific object bo
 - daedalus: The abstraction boundary is now Qwen recurrent-layer execution, not raw CUDA lifecycle. The next frame is a GGUF-to-runner adapter and then multiple layer instances.
 - maieutic: The hidden assumption was that closure-captured locals and kernel param pointers have equivalent lifetime after object extraction. They do not when the setup method returns.
 - adversary: The runner still takes many raw tensors as constructor parameters and only covers recurrent layers. It does not cover full-attention layers, KV cache, logits, tokenizer, or sampling.
+
+**decision_update_96:** Added the GGUF-to-runner adapter for the CUDA Qwen recurrent layer. `QwenRecurrentLayerRunner::Weights.load` now owns recurrent-layer tensor lookup, quantization/shape validation, dimensions/constants, and raw tensor reads. `bin/cuda_recurrent_prep_output_probe.cr` keeps CPU reference and reporting, but creates the CUDA runner through `QwenRecurrentLayerRunner.from_weights(...)` instead of manually passing every tensor buffer.
+
+Conclusion: the CUDA recurrent-layer boundary is now reusable at the layer-weight loading level. The next CUDA/Linux gate should validate the adapter over several recurrent layers and then build a multi-layer recurrent sequence scaffold. This is still not a Linux `qwen35_generate` path: full-attention layers, KV cache, logits/top1, tokenizer/sampling loop, and model-level state routing remain outside the CUDA backend split.
+
+**evidence_update_96:**
+- claim: "The GGUF recurrent-runner adapter has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_gguf_adapter_syntax2 crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_prep_output_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: `src/ml/cuda/qwen_recurrent_layer_runner.cr`, `bin/cuda_recurrent_prep_output_probe.cr`, GGUF reader/tensor metadata, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The adapter-backed recurrent runner matches the CPU reference on remote Qwen3.5 9B layer0."
+  source: remote Qwen3.5 9B layer0 `--tokens 4 --reps 1 --warmup 1` -> `weight_upload_ms=21.772`, `cuda_ms_per_token=1.646`, `cpu_ms_per_token=4637.984`, `conv_state/ssm_state/attn_out/final_all cos=1.0`, all `*_ok=true`, final `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: adapter tensor lookup/validation, Qwen runner object, CUDA wrapper layer, recurrent layer formula, PTX source, CUDA driver/PTX JIT, model file, tensor layout, CPU reference, or launch order changes
+
+**quadrumvirate_update_96:**
+- cassandra: The likely regression was moving tensor shape/type assumptions out of the probe and accidentally changing one dimension or quantization expectation. The local build plus remote parity run tested the adapter-backed path end to end for layer0.
+- daedalus: The useful frame is no longer one giant probe. The reusable unit is now `Weights.load` plus a resident runner, which can be instantiated repeatedly for multi-layer CUDA scaffolding.
+- maieutic: The hidden assumption that adapter extraction is only cleanup is incomplete; it is a correctness boundary because model tensor routing becomes centralized and reusable.
+- adversary: Evidence is still one recurrent layer on one 9B GGUF. The adapter must be checked across additional recurrent layers before it is treated as a general model-loader component.

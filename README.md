@@ -84,7 +84,7 @@ The CUDA smoke is a backend boundary probe only: it links `libcuda`, loads embed
 
 CUDA probe code uses `src/ml/cuda/driver.cr` for reusable CUDA context, module/function, launch, copy, synchronize, and device-buffer ownership. This is intentionally small: it owns the raw CUDA Driver API lifecycle and calls, while higher-level layer execution is still probe-local until the CUDA backend split is promoted.
 It also provides `ML::CUDA::ResidentSequenceRunner`, a thin lifecycle facade for resident sequence probes with explicit `upload_weights`, `reset_sequence`, `run_sequence`, and `read_outputs` phases.
-`src/ml/cuda/qwen_recurrent_layer_runner.cr` is the first Qwen-specific runner extraction: it owns one recurrent layer's CUDA modules, device buffers, kernel parameters, weight upload, sequence reset, token launch graph, and output readback. GGUF tensor loading and CPU-reference comparison intentionally remain in the probe.
+`src/ml/cuda/qwen_recurrent_layer_runner.cr` is the first Qwen-specific runner extraction: it owns one recurrent layer's CUDA modules, device buffers, kernel parameters, weight upload, sequence reset, token launch graph, and output readback. `QwenRecurrentLayerRunner::Weights.load` owns GGUF tensor lookup, tensor-shape/type validation, and raw weight reads for the runner. CPU-reference comparison intentionally remains in the probe.
 
 Build the first quantized CUDA correctness probe on NVIDIA/Linux hosts:
 
@@ -205,7 +205,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_prep_output_probe.cr -o build/cuda_r
   --warmup 2
 ```
 
-`cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. `--tokens N` runs a GPU-resident sequence through persistent conv/SSM state and compares all token outputs plus final recurrent states against the CPU reference. The probe now separates one-time weight upload from per-sequence input/state reset and prints `weight_upload_ms`; timed `cuda_ms_per_token` excludes the persistent weight upload. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
+`cuda_recurrent_prep_output_probe` now composes one full recurrent layer token slice: input RMSNorm, real recurrent projection bundle (`attn_qkv`, `attn_gate`, `ssm_alpha`, `ssm_beta`), recurrent conv prep, alpha/beta transforms, DeltaNet, post RMSNorm/SiLU, Q4_K `ssm_out`, residual add, post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q6_K FFN down, and final residual. `--tokens N` runs a GPU-resident sequence through persistent conv/SSM state and compares all token outputs plus final recurrent states against the CPU reference. The probe now separates one-time weight upload from per-sequence input/state reset and prints `weight_upload_ms`; timed `cuda_ms_per_token` excludes the persistent weight upload. GGUF recurrent-layer tensor loading is routed through `QwenRecurrentLayerRunner::Weights.load`, so the probe no longer manually passes every raw tensor into the runner constructor. It is still a standalone one-layer probe, not an end-to-end Linux decoder.
 
 Build the Metal bridge once:
 

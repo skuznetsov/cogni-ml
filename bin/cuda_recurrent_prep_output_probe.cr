@@ -71,66 +71,36 @@ raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
 raise "tokens must be positive" unless tokens > 0
 
-h_k = 16
-h_v = 32
-s = 128
-conv_k = 4
-q_dim = h_k * s
-v_dim = h_v * s
-qkv_dim = 2 * q_dim + v_dim
-inner_dim = v_dim
-scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
 eps = 1.0e-6_f32
 
 gguf = ML::GGUF::GGUFFile.new(model)
-prefix = "blk.#{layer}"
-attn_norm_info = gguf.tensor("#{prefix}.attn_norm.weight") || raise "missing #{prefix}.attn_norm.weight"
-qkv_info = gguf.tensor("#{prefix}.attn_qkv.weight") || raise "missing #{prefix}.attn_qkv.weight"
-gate_info = gguf.tensor("#{prefix}.attn_gate.weight") || raise "missing #{prefix}.attn_gate.weight"
-alpha_info = gguf.tensor("#{prefix}.ssm_alpha.weight") || raise "missing #{prefix}.ssm_alpha.weight"
-beta_info = gguf.tensor("#{prefix}.ssm_beta.weight") || raise "missing #{prefix}.ssm_beta.weight"
-out_info = gguf.tensor("#{prefix}.ssm_out.weight") || raise "missing #{prefix}.ssm_out.weight"
-post_norm_info = gguf.tensor("#{prefix}.post_attention_norm.weight") || raise "missing #{prefix}.post_attention_norm.weight"
-ffn_gate_info = gguf.tensor("#{prefix}.ffn_gate.weight") || raise "missing #{prefix}.ffn_gate.weight"
-ffn_up_info = gguf.tensor("#{prefix}.ffn_up.weight") || raise "missing #{prefix}.ffn_up.weight"
-ffn_down_info = gguf.tensor("#{prefix}.ffn_down.weight") || raise "missing #{prefix}.ffn_down.weight"
-conv_info = gguf.tensor("#{prefix}.ssm_conv1d.weight") || raise "missing #{prefix}.ssm_conv1d.weight"
-dt_info = gguf.tensor("#{prefix}.ssm_dt.bias") || raise "missing #{prefix}.ssm_dt.bias"
-a_info = gguf.tensor("#{prefix}.ssm_a") || raise "missing #{prefix}.ssm_a"
-norm_info = gguf.tensor("#{prefix}.ssm_norm.weight") || raise "missing #{prefix}.ssm_norm.weight"
-raise "expected Q5_K attn_qkv" unless qkv_info.type.q5_k?
-raise "expected Q4_K gate/alpha/beta" unless gate_info.type.q4_k? && alpha_info.type.q4_k? && beta_info.type.q4_k?
-raise "expected Q4_K ssm_out" unless out_info.type.q4_k?
-raise "expected Q4_K ffn gate/up and Q6_K ffn down" unless ffn_gate_info.type.q4_k? && ffn_up_info.type.q4_k? && ffn_down_info.type.q6_k?
-hidden = qkv_info.dims[0].to_i32
-ffn_dim = ffn_gate_info.dims[1].to_i32
-raise "attn_qkv shape mismatch" unless qkv_info.dims[1].to_i32 == qkv_dim
-raise "attn_gate shape mismatch" unless gate_info.dims[0].to_i32 == hidden && gate_info.dims[1].to_i32 == inner_dim
-raise "ssm_alpha/beta shape mismatch" unless alpha_info.dims[0].to_i32 == hidden && alpha_info.dims[1].to_i32 == h_v &&
-                                      beta_info.dims[0].to_i32 == hidden && beta_info.dims[1].to_i32 == h_v
-raise "ssm_out input mismatch" unless out_info.dims[0].to_i32 == inner_dim
-raise "ffn shape mismatch" unless ffn_gate_info.dims[0].to_i32 == hidden && ffn_up_info.dims[0].to_i32 == hidden &&
-                                ffn_up_info.dims[1].to_i32 == ffn_dim && ffn_down_info.dims[0].to_i32 == ffn_dim &&
-                                ffn_down_info.dims[1].to_i32 == hidden
-out_dim = out_info.dims[1].to_i32
-attn_norm = gguf.read_tensor_f32(attn_norm_info)
-qkv_raw = gguf.read_tensor_raw(qkv_info)
-gate_raw = gguf.read_tensor_raw(gate_info)
-alpha_raw = gguf.read_tensor_raw(alpha_info)
-beta_raw_w = gguf.read_tensor_raw(beta_info)
-out_raw = gguf.read_tensor_raw(out_info)
-post_norm = gguf.read_tensor_f32(post_norm_info)
-ffn_gate_raw = gguf.read_tensor_raw(ffn_gate_info)
-ffn_up_raw = gguf.read_tensor_raw(ffn_up_info)
-ffn_down_raw = gguf.read_tensor_raw(ffn_down_info)
-conv1d = gguf.read_tensor_f32(conv_info)
-dt_bias = gguf.read_tensor_f32(dt_info)
-ssm_a = gguf.read_tensor_f32(a_info)
-ssm_norm = gguf.read_tensor_f32(norm_info)
-raise "conv1d size mismatch" unless conv1d.size == qkv_dim * conv_k
-raise "dt/ssm_a size mismatch" unless dt_bias.size == h_v && ssm_a.size == h_v
-raise "ssm_norm size mismatch" unless ssm_norm.size == s
-raise "norm size mismatch" unless attn_norm.size == hidden && post_norm.size == hidden
+weights = ML::CUDA::QwenRecurrentLayerRunner::Weights.load(gguf, layer, eps)
+h_k = weights.h_k
+h_v = weights.h_v
+s = weights.s
+conv_k = weights.conv_k
+q_dim = weights.q_dim
+v_dim = weights.v_dim
+qkv_dim = weights.qkv_dim
+inner_dim = weights.inner_dim
+scale = weights.scale
+hidden = weights.hidden
+ffn_dim = weights.ffn_dim
+out_dim = weights.out_dim
+attn_norm = weights.attn_norm
+qkv_raw = weights.qkv_raw
+gate_raw = weights.gate_raw
+alpha_raw = weights.alpha_raw
+beta_raw_w = weights.beta_raw_w
+out_raw = weights.out_raw
+post_norm = weights.post_norm
+ffn_gate_raw = weights.ffn_gate_raw
+ffn_up_raw = weights.ffn_up_raw
+ffn_down_raw = weights.ffn_down_raw
+conv1d = weights.conv1d
+dt_bias = weights.dt_bias
+ssm_a = weights.ssm_a
+ssm_norm = weights.ssm_norm
 
 rng = Random.new(seed)
 xs = Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
@@ -218,13 +188,7 @@ begin
   cc_major = cuda_ctx.compute_capability_major
   cc_minor = cuda_ctx.compute_capability_minor
 
-  runner = ML::CUDA::QwenRecurrentLayerRunner.new(
-    tokens, hidden, ffn_dim, qkv_dim, q_dim, inner_dim, h_k, h_v, scale, eps,
-    xs, conv_state_init, ssm_state_init,
-    attn_norm, qkv_raw, gate_raw, alpha_raw, beta_raw_w, out_raw,
-    post_norm, ffn_gate_raw, ffn_up_raw, ffn_down_raw,
-    conv1d, dt_bias, ssm_a, ssm_norm
-  )
+  runner = ML::CUDA::QwenRecurrentLayerRunner.from_weights(weights, tokens, xs, conv_state_init, ssm_state_init)
 
   upload_t0 = Time.instant
   runner.upload_weights
