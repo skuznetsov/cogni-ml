@@ -338,7 +338,10 @@ final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
 
 begin
   cuda_ctx = ML::CUDA::Context.create
-  cos_table, sin_table = rope_tables(tokens, start_pos, hparams.rope_dim_count, hparams.rope_freq_base)
+  # Full-attention CUDA kernels index RoPE tables by absolute decode position,
+  # so upload a resident table once and update only start_pos in token loops.
+  rope_table_tokens = greedy_loop_tokens > 0 ? max_seq : Math.max(max_seq, start_pos + tokens)
+  cos_table, sin_table = rope_tables(rope_table_tokens, 0, hparams.rope_dim_count, hparams.rope_freq_base)
 
   layers.each_with_index do |layer, idx|
     layer_input = idx == 0 ? xs : Array(Float32).new(tokens * hidden, 0.0_f32)
@@ -370,8 +373,7 @@ begin
       warm_token = seed_token
       Math.min(greedy_loop_tokens, 2).times do |i|
         pos = start_pos + i
-        cos_pos, sin_pos = rope_tables(1, pos, hparams.rope_dim_count, hparams.rope_freq_base)
-        mixed_stack.update_decode_position(pos, cos_pos, sin_pos)
+        mixed_stack.update_decode_position(pos)
         mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, warm_token))
         mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: i == 0)
         mixed_stack.read_head_outputs
@@ -389,6 +391,7 @@ begin
         graph_stream.not_nil!.begin_capture
         mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: false,
           sync_end: false, read_head_outputs: false)
+        mixed_stack.increment_decode_position
         graph = graph_stream.not_nil!.end_capture
       end
       graph_exec = if greedy_loop_graph_device_ready
@@ -413,8 +416,9 @@ begin
       greedy_loop_tokens.times do |i|
         pos = start_pos + i
         t_position = Time.instant
-        cos_pos, sin_pos = rope_tables(1, pos, hparams.rope_dim_count, hparams.rope_freq_base)
-        mixed_stack.update_decode_position(pos, cos_pos, sin_pos)
+        if !greedy_loop_graph || i <= 1
+          mixed_stack.update_decode_position(pos)
+        end
         greedy_position_ms += (Time.instant - t_position).total_milliseconds
 
         t_embedding = Time.instant

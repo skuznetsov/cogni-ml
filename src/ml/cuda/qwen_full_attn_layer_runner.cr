@@ -111,6 +111,14 @@ module ML::CUDA
       @kv.update_decode_position(start_pos, cos_table, sin_table)
     end
 
+    def update_decode_position(start_pos : Int32) : Nil
+      @kv.update_decode_position(start_pos)
+    end
+
+    def increment_decode_position : Nil
+      @kv.increment_decode_position
+    end
+
     def output_device_ptr : DevicePtr
       @kv.output_device_ptr
     end

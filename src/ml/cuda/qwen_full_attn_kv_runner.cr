@@ -7,6 +7,7 @@ module ML::CUDA
   # rows to the layer KV cache.
   class QwenFullAttnKVRunner
     @profile_runner : ResidentSequenceRunner?
+    @increment_start_pos : Proc(Nil)?
 
     FULL_ATTN_POST_PTX = {{ read_file("src/ml/cuda/kernels/fullattn_post_probe.ptx") }}
     DN_PTX             = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
@@ -101,7 +102,8 @@ module ML::CUDA
       raise ArgumentError.new("attn_output input mismatch") unless weights.output_in_dim == @n_head * @head_dim
       raise ArgumentError.new("residual input size mismatch") unless residual_input.size == @tokens * weights.output_out_dim
       half = @rope_dim // 2
-      raise ArgumentError.new("cos/sin table size mismatch") unless cos_table.size == @tokens * half && sin_table.size == @tokens * half
+      min_rope_table = (@start_pos + @tokens) * half
+      raise ArgumentError.new("cos/sin table size mismatch") unless cos_table.size >= min_rope_table && sin_table.size >= min_rope_table
 
       @attn_norm = weights.attn_norm
       @q_norm = weights.q_norm
@@ -207,7 +209,8 @@ module ML::CUDA
     def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
       raise ArgumentError.new("start_pos must be non-negative") unless start_pos >= 0
       half = @rope_dim // 2
-      raise ArgumentError.new("cos/sin table size mismatch") unless cos_table.size == @tokens * half && sin_table.size == @tokens * half
+      min_rope_table = (start_pos + @tokens) * half
+      raise ArgumentError.new("cos/sin table size mismatch") unless cos_table.size >= min_rope_table && sin_table.size >= min_rope_table
 
       @start_pos = start_pos
       @cos_table = cos_table
@@ -216,6 +219,17 @@ module ML::CUDA
       ML::CUDA.copy_htod!(@start_pos_device_ptr, @start_pos_box.not_nil!.as(Void*), 4_u64, "start_pos")
       ML::CUDA.copy_htod!(@cos_device_ptr, @cos_table.to_unsafe.as(Void*), bytesize_f32(@cos_table.size), "cos")
       ML::CUDA.copy_htod!(@sin_device_ptr, @sin_table.to_unsafe.as(Void*), bytesize_f32(@sin_table.size), "sin")
+    end
+
+    def update_decode_position(start_pos : Int32) : Nil
+      raise ArgumentError.new("start_pos must be non-negative") unless start_pos >= 0
+      half = @rope_dim // 2
+      min_rope_table = (start_pos + @tokens) * half
+      raise ArgumentError.new("resident cos/sin table too small") unless @cos_table.size >= min_rope_table && @sin_table.size >= min_rope_table
+
+      @start_pos = start_pos
+      @start_pos_box.not_nil!.value = start_pos.to_u32
+      ML::CUDA.copy_htod!(@start_pos_device_ptr, @start_pos_box.not_nil!.as(Void*), 4_u64, "start_pos")
     end
 
     def read_outputs : Nil
@@ -237,6 +251,7 @@ module ML::CUDA
       q6_mod = CUDAModule.load(Q6K_PTX, "q6")
       @modules.concat([mod, dn_mod, q4_mod, q6_mod])
       q_fn = mod.function("full_attn_q_split_norm_rope_probe")
+      increment_u32_fn = mod.function("increment_u32_probe")
       k_fn = mod.function("full_attn_k_norm_rope_cache_probe")
       attn_fn = mod.function("full_attn_decode_cache_probe")
       attn_parallel_fn = mod.function("full_attn_decode_cache_parallel_probe")
@@ -315,17 +330,25 @@ module ML::CUDA
       ffn_grid = ((@ffn_dim + 3) // 4).to_u32
       swiglu_grid = ((@ffn_dim + 127) // 128).to_u32
 
-      q_params = Pointer(Void*).malloc(10)
+      q_params = Pointer(Void*).malloc(11)
       q_params[0] = box_ptr(@q_full_device_ptr).as(Void*)
       q_params[1] = box_ptr(d_q_norm).as(Void*)
       q_params[2] = box_ptr(d_q_out).as(Void*)
       q_params[3] = box_ptr(d_gate_out).as(Void*)
       q_params[4] = box_ptr(d_cos).as(Void*)
       q_params[5] = box_ptr(d_sin).as(Void*)
-      q_params[6] = box_u32(n_head_u32).as(Void*)
-      q_params[7] = box_u32(head_dim_u32).as(Void*)
-      q_params[8] = box_u32(rope_dim_u32).as(Void*)
-      q_params[9] = box_f32(@eps).as(Void*)
+      q_params[6] = box_ptr(d_start_pos).as(Void*)
+      q_params[7] = box_u32(n_head_u32).as(Void*)
+      q_params[8] = box_u32(head_dim_u32).as(Void*)
+      q_params[9] = box_u32(rope_dim_u32).as(Void*)
+      q_params[10] = box_f32(@eps).as(Void*)
+
+      increment_params = Pointer(Void*).malloc(1)
+      increment_params[0] = box_ptr(d_start_pos).as(Void*)
+      @increment_start_pos = -> {
+        ML::CUDA.launch!(increment_u32_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32,
+          increment_params, "increment full-attn start_pos")
+      }
 
       k_params = Pointer(Void*).malloc(14)
       k_params[0] = box_ptr(@k_device_ptr).as(Void*)
@@ -498,6 +521,10 @@ module ML::CUDA
 
     private def runner : ResidentSequenceRunner
       @runner.not_nil!
+    end
+
+    def increment_decode_position : Nil
+      @increment_start_pos.not_nil!.call
     end
 
     private def profile_runner : ResidentSequenceRunner

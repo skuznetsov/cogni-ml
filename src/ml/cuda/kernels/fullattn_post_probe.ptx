@@ -2,6 +2,26 @@
 .target sm_80
 .address_size 64
 
+.visible .entry increment_u32_probe(
+    .param .u64 value_ptr
+)
+{
+    .reg .pred %p;
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<4>;
+
+    ld.param.u64 %rd1, [value_ptr];
+    mov.u32 %r1, %tid.x;
+    setp.ne.u32 %p, %r1, 0;
+    @%p bra INC_DONE;
+    ld.global.u32 %r2, [%rd1];
+    add.u32 %r2, %r2, 1;
+    st.global.u32 [%rd1], %r2;
+
+INC_DONE:
+    ret;
+}
+
 // Serial correctness-first split + RMSNorm + RoPE for full-attention Q.
 // Launch: grid=(tokens, n_head), block=(1).
 .visible .entry full_attn_q_split_norm_rope_probe(
@@ -11,6 +31,7 @@
     .param .u64 gate_out,
     .param .u64 cos_tbl,
     .param .u64 sin_tbl,
+    .param .u64 start_pos_ptr,
     .param .u32 n_head,
     .param .u32 head_dim,
     .param .u32 rope_dim,
@@ -18,8 +39,8 @@
 )
 {
     .reg .pred %p<8>;
-    .reg .b32 %r<40>;
-    .reg .b64 %rd<52>;
+    .reg .b32 %r<42>;
+    .reg .b64 %rd<54>;
     .reg .f32 %f<32>;
 
     ld.param.u64 %rd1, [q_full];
@@ -28,10 +49,12 @@
     ld.param.u64 %rd4, [gate_out];
     ld.param.u64 %rd5, [cos_tbl];
     ld.param.u64 %rd6, [sin_tbl];
+    ld.param.u64 %rd52, [start_pos_ptr];
     ld.param.u32 %r1, [n_head];
     ld.param.u32 %r2, [head_dim];
     ld.param.u32 %r3, [rope_dim];
     ld.param.f32 %f1, [eps];
+    ld.global.u32 %r40, [%rd52];
 
     mov.u32 %r4, %ctaid.x;      // tok
     mov.u32 %r5, %ctaid.y;      // head
@@ -93,7 +116,7 @@ Q_ROPE_LOOP:
 
     mul.wide.u32 %rd17, %r17, 4;
     add.s64 %rd18, %rd2, %rd17;
-    add.u32 %r23, %r4, 0;
+    add.u32 %r23, %r4, %r40;
     mul.lo.u32 %r24, %r23, %r14;
     add.u32 %r25, %r24, %r17;
     mul.wide.u32 %rd19, %r25, 4;
@@ -268,7 +291,7 @@ K_ROPE_LOOP:
     add.s64 %rd22, %rd3, %rd21;
     mul.wide.u32 %rd23, %r19, 4;
     add.s64 %rd24, %rd3, %rd23;
-    mul.lo.u32 %r24, %r6, %r15;
+    mul.lo.u32 %r24, %r9, %r15;
     add.u32 %r25, %r24, %r18;
     mul.wide.u32 %rd25, %r25, 4;
     add.s64 %rd26, %rd7, %rd25;

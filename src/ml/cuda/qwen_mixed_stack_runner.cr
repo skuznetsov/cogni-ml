@@ -66,6 +66,28 @@ module ML::CUDA
       end
     end
 
+    def update_decode_position(start_pos : Int32) : Nil
+      @runners.each do |runner|
+        case runner
+        in QwenFullAttnLayerRunner
+          runner.update_decode_position(start_pos)
+        in QwenRecurrentLayerRunner
+          # Recurrent DeltaNet layers keep position only through their resident state.
+        end
+      end
+    end
+
+    def increment_decode_position : Nil
+      @runners.each do |runner|
+        case runner
+        in QwenFullAttnLayerRunner
+          runner.increment_decode_position
+        in QwenRecurrentLayerRunner
+          # Recurrent DeltaNet layers keep position only through their resident state.
+        end
+      end
+    end
+
     def first_sequence_input_device_ptr : DevicePtr
       case first = @runners.first
       in QwenRecurrentLayerRunner

@@ -10869,6 +10869,30 @@ Conclusion: the branch was not robust enough to keep. It changed where waits app
 - maieutic: The high `position_ms` attribution was a symptom of synchronization placement, not proof that CPU RoPE computation was expensive.
 - adversary: Generic async host copies are risky unless source lifetime is pinned and ordered. Do not broaden `copy_htod!` semantics without a stronger win and lifetime contract.
 
+**decision_update_159d:** Eliminated per-token CUDA RoPE table uploads in the semantic greedy-loop path. Full-attention Q/K post kernels now index RoPE tables by absolute decode position (`start_pos + tok`) instead of token-local row, `bin/cuda_mixed_stack_probe.cr` uploads a resident RoPE table covering `max_seq`, and CUDA Graph replay records a tiny device-side increment of each full-attention layer's `start_pos` counter after the token wave. The host now updates decode position for token 0/1 only; later graph launches advance position on device.
+
+Conclusion: this is a small exact win and a cleaner controller boundary. It removes repeated host cos/sin uploads and most host position-update work from graph replay. Remote full 9B gen64 A/B improved from old graph+GPU `23.271/23.310 ms/tok` to new `23.191/23.240 ms/tok`. Attribution now shows `greedy_position_ms_per_token≈0.063`; the expected GPU wait moves to final readback, so total `cuda_ms_per_token` remains the only speed metric.
+
+**evidence_update_159d:**
+- claim: "Resident absolute-position RoPE tables preserve exact CUDA decode semantics."
+  source: remote `/tmp/cuda_mixed_stack_probe_device_pos --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: full-attention Q/K RoPE kernels, RoPE table sizing, decode-position counter, or full-attention runner changes
+- claim: "Device-side graph position advancement gives a modest full 9B semantic speedup."
+  source: remote old/new A/B with `--all-layers --tokens=1 --max-seq=128 --greedy-loop-tokens=64 --perf-only --skip-debug-readback` -> old `23.271/23.310 ms/tok`, new `23.191/23.240 ms/tok`, all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: graph capture body, start_pos increment kernel, token feedback path, or CUDA driver scheduling changes
+- claim: "Non-graph semantic and steady non-greedy paths remain valid after the RoPE-table change."
+  source: remote no-graph gen64 -> `23.237 ms/tok`, `ok=true`; remote full 9B steady -> `22.825 ms/tok`, `top1_gpu=8894`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: greedy-loop scheduler, steady timing path, or RoPE table indexing changes
+
+**quadrumvirate_update_159d:**
+- cassandra: Eliminating per-token host copies is more robust than making them async; observed speedup is small because the GPU body still dominates.
+- daedalus: This is a controller-boundary improvement, not a GEMV breakthrough. It moves CUDA closer to device-side speculative scheduling.
+- maieutic: The visible attribution shift is not itself the win; the win is the total A/B delta and fewer host operations.
+- adversary: The extra `start_pos` load in Q RoPE can slightly affect narrow five-layer wall, so keep the claim scoped to semantic-loop control, not general layer speed.
+
 **decision_update_160:** Refreshed the Q8_1+DP4A hot-FFN draft-only evidence after current CUDA cleanups. The existing `bin/cuda_q4k_repack_probe.cr` Q8 path quantizes the activation vector and uses DP4A against Q4_K weights, so it remains approximate and unsuitable as an exact runner route without exact verification.
 
 Conclusion: the microkernel signal is real but too small for direct runner integration. Across hot `blk.{0,1,3}.ffn_gate/up.weight` tensors, raw Q4_K is about `0.1099-0.1100 ms`, Q8+DP4A with GPU quantized activations is about `0.1036 ms`, one-use-with-quant speedup is about `1.04x`, and reuse2-with-quant is about `1.05x`. Cosine stays around `0.999993` with max diff `~0.0056-0.0074`. Keep this as a possible draft/proposal-body ingredient, not a standalone exact speed path.
