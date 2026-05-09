@@ -10314,3 +10314,27 @@ Conclusion: correctness held, but performance regressed badly in the five-layer 
 - daedalus: The next Q4 path should not broadcast current metadata; it should change the dequant algorithm or data layout so less metadata work exists in the first place.
 - maieutic: The hidden assumption was that scale/min extraction dominated enough to pay for four broadcasts per group. Five-layer wall falsified it.
 - adversary: This refutes only lane0 scale/min broadcast in the current GGUF layout. It does not refute offline repacking, vectorized load grouping, or C++/CUDA-source kernels with compiler-scheduled dequant.
+
+**decision_update_137:** Added and used a standalone CUDA Q4_K repacked-layout microbench. `bin/cuda_q4k_repack_probe.cr` compares the current raw GGUF Q4_K warp4 GEMV against an offline-repacked layout where each 4-bit weight is expanded to one byte and each packed scale/min is pre-expanded to f32. This tests a deliberate VRAM-for-less-bitwork trade-off before wiring any model path.
+
+Conclusion: the naive repacked layout is exact but not faster. On the hot `4096x12288` FFN shape it uses `2.222x` more weight memory and regresses CUDA GEMV from `0.1099ms` to `0.1843ms`. On the tiny `4096x32` projection shape it is neutral. The bottleneck is not just Q4 scale/nibble bitwork; the expanded byte layout adds too much memory traffic. Keep the probe, but do not integrate this repacked format.
+
+**evidence_update_137:**
+- claim: "The repacked Q4_K probe compiles and preserves numeric correctness."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4_repack_syntax crystal build -Dcpu_only --no-codegen bin/cuda_q4k_repack_probe.cr` -> exit 0; remote hot/tiny tensor runs both reported `raw_cos=1.0`, `repacked_cos=1.0`, max diff `3.5762787e-7`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: repack probe, Q4_K CPU decode helper, raw Q4 CUDA kernel, or CUDA driver changes
+- claim: "Naive Q4 repacking regresses the hot FFN GEMV shape."
+  source: remote `/tmp/cuda_q4k_repack_probe --tensor blk.0.ffn_up.weight --reps 50 --warmup 5` -> shape `4096x12288`, `raw_bytes=28311552`, `repacked_bytes=62914560`, `repack_ratio=2.222`, `raw_cuda_ms=0.1099`, `repacked_cuda_ms=0.1843`, `speedup=0.5964`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: Q4 repacked layout, GPU memory bandwidth/cache behavior, tensor shape, or raw Q4 kernel changes
+- claim: "Naive Q4 repacking is neutral on tiny Q4 projections."
+  source: remote `/tmp/cuda_q4k_repack_probe --tensor blk.0.ssm_alpha.weight --reps 100 --warmup 5` -> shape `4096x32`, `raw_cuda_ms=0.0065`, `repacked_cuda_ms=0.0065`, `speedup=0.9913`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: small projection route, launch overhead, or repacked kernel changes
+
+**quadrumvirate_update_137:**
+- cassandra: The risk was that removing bitwork by expanding data would lose to extra memory traffic. The hot FFN result confirms it.
+- daedalus: The useful repack direction is not "one byte per q"; it must compress better or exploit vectorized/tensor-core-friendly compute.
+- maieutic: The hidden assumption was that dequant instruction count dominates over weight traffic. This layout falsifies that for Q4_K on RTX 5060 Ti.
+- adversary: This refutes only the naive u8 qvals + f32 scale/min layout. It does not refute more compact repacks, predecoded fp16 upper-bound probes, or source-level CUDA kernels with better compiler scheduling.
