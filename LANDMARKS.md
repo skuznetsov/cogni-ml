@@ -10280,3 +10280,37 @@ Conclusion: the current body GEMV kernels are not limited by static shared/local
 - daedalus: Next speed work should shift from metadata/resource cleanup to executed instruction count, memory layout, and no-barrier dequant/dot transforms.
 - maieutic: The key assumption now verified is that the JIT-visible resource footprint is not the primary obstacle for body GEMV.
 - adversary: `cuFuncGetAttribute` is not a full SASS disassembly and does not expose instruction mix. It is sufficient for registers/shared/local memory, not for proving dequant instruction bottlenecks.
+
+**correction_update_135:** Corrected the interpretation of `decision_update_134`. The first resource report was collected after the temporary no-unused-smem PTX had been synced to the remote host, not from the committed PTX. Re-syncing the committed Q5/Q6 PTX showed the committed body GEMV kernels still report `512` static shared bytes because the PTX contains stale `.shared smem[512]` declarations, even though the no-unused-smem branch proved removing them does not improve wall time.
+
+Conclusion: the resource probe is valid; the earlier "current body GEMV has 0 shared" conclusion was too broad. The corrected invariant is: committed body GEMV reports `512 shared`, no-unused-smem reports `0 shared`, but A/B timing remained neutral/slightly negative. Therefore, static shared-byte reduction alone is not a performance lever on RTX 5060 Ti for these kernels.
+
+**evidence_update_135:**
+- claim: "The committed PTX body GEMV kernels report 512 static shared bytes through the driver JIT."
+  source: remote resource probe after re-syncing committed q5/q6 PTX -> `q4_k_gemv_warp4_f32,40,512,0`; `q4_k_gemv_add_warp4_f32,40,512,0`; `q5_k_gemv_warp4_f32,40,512,0`; `q6_k_gemv_warp4_f32,48,512,0`; `q6_k_gemv_add_warp4_f32,48,512,0`
+  verified_at: 2026-05-09
+  decay_trigger: PTX shared declarations, resource probe list, CUDA driver JIT, or remote file sync changes
+- claim: "The no-unused-smem falsifier remains valid despite the corrected resource interpretation."
+  source: previous remote A/B from `decision_update_133`: semantic old/new `24.037/24.057ms/token` vs `24.039/24.066ms/token`; steady old/new `23.170/23.209ms/token` vs `23.194/23.213ms/token`, all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: no-unused-smem branch implementation, timing harness, GPU load, or driver JIT changes
+
+**decision_update_136:** Refuted a Q4_K scale/min broadcast dequant variant. The temporary `q4_k_gemv_scale_broadcast_warp4_f32` computed per-block scale/min metadata only in lane 0 and broadcast it to the row warp with `shfl.sync.idx`, then routed Q4 projections through `QWEN_CUDA_Q4_SCALE_BCAST=1`.
+
+Conclusion: correctness held, but performance regressed badly in the five-layer full-logit gate. The extra shuffle/control overhead was worse than redundant per-lane scale/min extraction. The code was removed. Do not retry Q4 scale broadcast unless the new premise removes more work, such as a broader dequant layout change or offline repacking.
+
+**evidence_update_136:**
+- claim: "Q4 scale broadcast preserved the five-layer full-logit oracle but regressed wall time."
+  source: remote temporary `QWEN_CUDA_Q4_SCALE_BCAST=1 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `cuda_ms=8.853`; default same binary `cuda_ms=7.704`
+  verified_at: 2026-05-09
+  decay_trigger: Q4 dequant PTX, route env gating, GPU architecture, or five-layer oracle changes
+- claim: "The temporary Q4 scale-broadcast code was removed after refutation."
+  source: local restore of q4 PTX and Q4 runner routing files to committed state; follow-up syntax gate required before commit
+  verified_at: 2026-05-09
+  decay_trigger: future Q4 scale/dequant experiments
+
+**quadrumvirate_update_136:**
+- cassandra: This matched the risk pattern from prior retunes: reducing apparent redundant work does not help if it adds warp-control/shuffle overhead on every quant block.
+- daedalus: The next Q4 path should not broadcast current metadata; it should change the dequant algorithm or data layout so less metadata work exists in the first place.
+- maieutic: The hidden assumption was that scale/min extraction dominated enough to pay for four broadcasts per group. Five-layer wall falsified it.
+- adversary: This refutes only lane0 scale/min broadcast in the current GGUF layout. It does not refute offline repacking, vectorized load grouping, or C++/CUDA-source kernels with compiler-scheduled dequant.
