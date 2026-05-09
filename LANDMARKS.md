@@ -10746,3 +10746,27 @@ Conclusion: correctness held, but the full-model signal was a stable regression.
 - daedalus: Stop spending attempts on row-warps-per-CTA retunes. The next plausible CUDA lever is boundary elimination: fused FFN diamond pieces, shortlist/draft-head cuts, or a genuinely different Q6 dot/dequant schedule.
 - maieutic: The key false assumption was that fewer CTAs improves the Q6 FFN-down wall. The full-model regression suggests occupancy/scheduling/cache effects dominate that simple packing argument.
 - adversary: This refutes only naive Q6 FFN-down add warp8 packing on this host/model. It does not refute Q6 activation quantization, candidate shortlist, or super-fused FFN producer-consumer designs.
+
+**decision_update_156:** Refuted reusing the existing Q4 dual-GEMV kernel for hot FFN `gate + up` projections. A temporary `QWEN_CUDA_Q4_FFN_DUAL=1` route launched `q4_k_dual_gemv_warp4_f32` over `ffn_gate.weight` and `ffn_up.weight` in recurrent and full-attention layers, replacing two separate Q4 launches with one dual launch. This deliberately tested the cheap sibling-fusion variant before building a larger same-row dual kernel.
+
+Conclusion: the route is exact but too slow for hot FFN. Five-layer `start_pos=63 --read-logits` preserved logits/top1 (`logits_cos=1.0`, `top1_gpu=top1_cpu=100253`), but local wall already regressed: base `7.679/7.667 ms`, dual `7.738/7.689 ms`. Full 9B steady ABBA regressed clearly: base `22.908/22.939/22.959 ms/tok`, dual `23.176/23.219/23.225 ms/tok`. The temporary runner route was removed. The existing dual kernel helps tiny alpha/beta because launch count dominates, but it does not create same-row activation reuse; on hot FFN its selection/branch overhead outweighs the saved launch.
+
+**evidence_update_156:**
+- claim: "Existing Q4 dual-GEMV FFN gate/up route preserves five-layer full-logit correctness."
+  source: remote temporary `/tmp/cuda_mixed_stack_probe_q4ffndual --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> base `7.679/7.667 ms`, dual `7.738/7.689 ms`, all `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: Q4 dual kernel, FFN gate/up routing, CUDA driver scheduling, or five-layer oracle changes
+- claim: "Existing Q4 dual-GEMV FFN gate/up route regresses full 9B steady decode."
+  source: remote temporary full 9B ABBA `QWEN_CUDA_Q4_FFN_DUAL=1 --all-layers --tokens=1 --max-seq=64 --warmup=1 --steady-reps=16 --skip-debug-readback --perf-only` -> base `22.908/22.939/22.959 ms/tok`, dual `23.176/23.219/23.225 ms/tok`, same `top1_gpu=8894`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA scheduling/load, Q4 dual kernel, FFN tensor shapes, or mixed-stack timing harness changes
+- claim: "The temporary Q4 FFN dual route was removed after refutation."
+  source: local `git diff -- src/ml/cuda/qwen_recurrent_layer_runner.cr src/ml/cuda/qwen_full_attn_kv_runner.cr` -> empty after removal
+  verified_at: 2026-05-09
+  decay_trigger: future runner edits
+
+**quadrumvirate_update_156:**
+- cassandra: This matched the sibling-fusion transfer risk from full-attention q/k: a dual launch that does not reduce hot row work can regress even when a tiny-shape sibling pair benefits.
+- daedalus: The useful FFN frame is not "one launch for two matrices" but "one row program computes gate/up for the same output index while reusing activation loads" or a larger FFN diamond cut.
+- maieutic: The cheap test answered the assumption cheaply: launch removal alone is insufficient for hot FFN gate/up.
+- adversary: This does not refute a future same-row dual Q4 kernel with real x reuse. It refutes only reusing the existing across-matrix row-selection dual kernel for hot FFN.
