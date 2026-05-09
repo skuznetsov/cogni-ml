@@ -53,6 +53,29 @@ def report_pair(name : String, gpu : Array(Float32), cpu : Array(Float32), lines
   ok
 end
 
+def top2_from_logits(logits : Array(Float32), tok : Int32, vocab : Int32)
+  offset = tok * vocab
+  best_id = 0
+  second_id = 0
+  best = -Float32::INFINITY
+  second = -Float32::INFINITY
+
+  vocab.times do |i|
+    v = logits[offset + i]
+    if v > best
+      second = best
+      second_id = best_id
+      best = v
+      best_id = i
+    elsif v > second
+      second = v
+      second_id = i
+    end
+  end
+
+  {best_id, best, second_id, second, best - second}
+end
+
 def rope_tables(tokens : Int32, start_pos : Int32, rope_dim : Int32, freq_base : Float32) : {Array(Float32), Array(Float32)}
   half = rope_dim // 2
   cos_table = Array(Float32).new(tokens * half, 0.0_f32)
@@ -282,6 +305,10 @@ cpu_current = xs.dup
 cpu_states = Array(ML::GGUF::Qwen35CPU::LayerState).new(hparams.n_layer) { ML::GGUF::Qwen35CPU::LayerState.new }
 cpu_ms = 0.0
 cpu_top1_ids = [] of Int32
+cpu_top2_ids = [] of Int32
+cpu_top1_values = [] of Float32
+cpu_top2_values = [] of Float32
+cpu_top_margins = [] of Float32
 cpu_logits_all = [] of Float32
 cpu_weights = nil.as(ML::GGUF::Qwen35Weights?)
 
@@ -311,6 +338,10 @@ unless perf_only
   cpu_ms = (Time.instant - cpu_t0).total_milliseconds
   cpu_logits_all = read_logits ? Array(Float32).new(tokens * head_weights.vocab, 0.0_f32) : [] of Float32
   cpu_top1_ids = Array(Int32).new(tokens)
+  cpu_top2_ids = Array(Int32).new(tokens)
+  cpu_top1_values = Array(Float32).new(tokens)
+  cpu_top2_values = Array(Float32).new(tokens)
+  cpu_top_margins = Array(Float32).new(tokens)
   tokens.times do |tok|
     row = cpu_current[tok * hidden, hidden]
     normed = ML::GGUF::Qwen35CPU.rms_norm(row, head_weights.norm, hparams.rms_eps)
@@ -318,15 +349,27 @@ unless perf_only
       head_weights.output_raw, head_weights.output_type, head_weights.vocab,
       Array(Float32).new(head_weights.vocab, 0.0_f32))
     best_id = 0
-    best = logits[0]
+    second_id = 0
+    best = -Float32::INFINITY
+    second = -Float32::INFINITY
     head_weights.vocab.times do |i|
-      cpu_logits_all[tok * head_weights.vocab + i] = logits[i] if read_logits
-      if logits[i] > best
-        best = logits[i]
+      v = logits[i]
+      cpu_logits_all[tok * head_weights.vocab + i] = v if read_logits
+      if v > best
+        second = best
+        second_id = best_id
+        best = v
         best_id = i
+      elsif v > second
+        second = v
+        second_id = i
       end
     end
     cpu_top1_ids << best_id
+    cpu_top2_ids << second_id
+    cpu_top1_values << best
+    cpu_top2_values << second
+    cpu_top_margins << (best - second)
   end
 end
 
@@ -543,6 +586,35 @@ begin
   if read_logits && greedy_loop_tokens == 0
     logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
     ok = ok && logits_ok
+    gpu_top2_ids = [] of Int32
+    gpu_top1_values = [] of Float32
+    gpu_top2_values = [] of Float32
+    gpu_top_margins = [] of Float32
+    tokens.times do |tok|
+      gpu_best_id, gpu_best, gpu_second_id, gpu_second, gpu_margin =
+        top2_from_logits(output_head.logits_gpu_all, tok, head_weights.vocab)
+      gpu_top2_ids << gpu_second_id
+      gpu_top1_values << gpu_best
+      gpu_top2_values << gpu_second
+      gpu_top_margins << gpu_margin
+      if gpu_best_id != gpu_top1_ids[tok]
+        lines << "logits_top1_scan_mismatch_tok#{tok}=#{gpu_best_id}:#{gpu_top1_ids[tok]}"
+        ok = false
+      end
+    end
+    margin_max_diff = max_abs_diff(gpu_top_margins, cpu_top_margins)
+    margin_ok = margin_max_diff <= 5.0e-3_f32
+    lines << "top2_gpu=#{gpu_top2_ids.join(",")}"
+    lines << "top2_cpu=#{cpu_top2_ids.join(",")}"
+    lines << "top1_values_logits_gpu=#{gpu_top1_values.map { |v| v.round(6) }.join(",")}"
+    lines << "top1_values_cpu=#{cpu_top1_values.map { |v| v.round(6) }.join(",")}"
+    lines << "top2_values_gpu=#{gpu_top2_values.map { |v| v.round(6) }.join(",")}"
+    lines << "top2_values_cpu=#{cpu_top2_values.map { |v| v.round(6) }.join(",")}"
+    lines << "top_margin_gpu=#{gpu_top_margins.map { |v| v.round(6) }.join(",")}"
+    lines << "top_margin_cpu=#{cpu_top_margins.map { |v| v.round(6) }.join(",")}"
+    lines << "top_margin_max_diff=#{margin_max_diff}"
+    lines << "top_margin_ok=#{margin_ok}"
+    ok = ok && margin_ok
   else
     lines << "logits_readback=false"
   end

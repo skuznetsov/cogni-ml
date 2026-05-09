@@ -10948,3 +10948,23 @@ Conclusion: the microkernel signal is real but too small for direct runner integ
 - daedalus: Do not re-open exact Q8+DP4A runner integration; the useful pivot is approximate self-spec/draft-only usage with exact target verification.
 - maieutic: High cosine is not a correctness guarantee. Greedy top1 parity must be enforced by verifier if this route proposes tokens.
 - adversary: This does not refute Q8+DP4A inside a larger cheap drafter; it only refutes using the current microkernel as a standalone exact CUDA speed path.
+
+**decision_update_161:** Added exact top2/margin instrumentation for CUDA read-logits oracle runs. The probe now scans copied GPU logits and CPU oracle logits for top1/top2 ids, top1/top2 values, and top margin. This is intentionally restricted to `--read-logits` attribution/oracle mode; deriving top2 from existing CUDA partial-top1 buffers would be wrong because the true second-best token can be in the same CTA/stripe as top1 and would be discarded by the current partial max interface.
+
+Conclusion: this gives a trustworthy confidence/margin observable for future shortlist, draft-head, and risk-gated self-draft work without changing the default fused Q6 top1 speed path. It is instrumentation, not a speedup.
+
+**evidence_update_161:**
+- claim: "CUDA read-logits top2/margin instrumentation preserves the five-layer oracle."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_top2_local crystal build bin/cuda_mixed_stack_probe.cr -o /tmp/cuda_mixed_stack_probe_top2_local --no-codegen`; remote `/tmp/cuda_mixed_stack_probe_top2 --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback --profile-phases` -> `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `top2_gpu=top2_cpu=96939`, `top_margin_gpu=0.231215`, `top_margin_max_diff=9.536743e-7`, `top_margin_ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: output-head logits path, CPU oracle logits path, vocab/top1 semantics, or CUDA mixed-stack probe reporting changes
+- claim: "Default CUDA fused top1 perf path is not modified by the top2 oracle reporting."
+  source: remote `/tmp/cuda_mixed_stack_probe_top2 --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --skip-debug-readback --perf-only` -> `ok=true`, `read_logits=false`, `top1_gpu=100253`, `cuda_ms=7.196`
+  verified_at: 2026-05-09
+  decay_trigger: output-head default fused top1 route, perf-only path, or probe option parsing changes
+
+**quadrumvirate_update_161:**
+- cassandra: Top2/margin is a measurement branch; it should not be sold as a speedup. Its value is preventing blind shortlist/draft-head guesses.
+- daedalus: The useful pivot is from more CTA retunes to observable confidence structure around the output head and proposals.
+- maieutic: Existing partial-top1 buffers cannot provide exact top2; correctness requires either full logits or a redesigned partial-top2 producer.
+- adversary: Keep this off the default speed path until a CUDA top2 producer is implemented and compared against full-logits margins.
