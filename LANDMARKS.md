@@ -9840,3 +9840,27 @@ Conclusion: recurrent FFN time is not hidden in SwiGLU; it is dominated by three
 - daedalus: The frame shifts from launch-count cosmetics to memory traffic and GEMV algorithm shape. FFN paired projection fusion must prove it reduces traffic enough; otherwise it is likely a small win at best.
 - maieutic: A larger CUDA block is not automatically better; it can lower block count while hurting occupancy/scheduling enough to lose.
 - adversary: The deep attribution adds synchronization between subkernels, so absolute subphase sums are profiling signals, not default-runtime timings. The Q6 warp8 refutation is scoped to one GPU/model/slice.
+
+**decision_update_116:** Added opt-in CUDA perf-mode readback for mixed-stack probes. `bin/cuda_mixed_stack_probe.cr` now accepts `--skip-debug-readback`; `QwenMixedStackRunner#run_sequence` can skip final hidden/state/KV debug buffer readback while still reading output-head top1/logits. This keeps a cheap greedy top1 oracle but removes correctness-debug DtoH copies from performance timing.
+
+Conclusion: debug readback was a large measurement tax, not decode work. On the 9B five-layer gate, profile readback dropped from `1.85ms` to `0.025ms`, total profile wall dropped to `8.349ms`, default non-profile perf wall to `7.795ms`, and a `tokens=4` perf smoke measured `6.518ms/token`, all with top1 parity. Future CUDA performance claims should state whether debug readback is enabled.
+
+**evidence_update_116:**
+- claim: "Skip-debug readback preserves output-head top1 parity and removes oracle DtoH cost from profile timing."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases --skip-debug-readback` -> `ok=true`, `debug_readback=false`, `top1_gpu=96939`, `top1_cpu=96939`, `phase_readback_ms=0.025`, `phase_total_ms=8.349`
+  verified_at: 2026-05-09
+  decay_trigger: mixed-stack readback policy, output-head readback logic, CLI option semantics, or top1 oracle changes
+- claim: "Default non-profile perf-mode timing improves after skipping debug readback."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 3 --skip-debug-readback` -> `ok=true`, `cuda_ms=7.795`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: timing harness, warmup policy, readback policy, GPU/load conditions, or output-head runner changes
+- claim: "Perf-mode readback skip works for repeated-token state progression at the top1 boundary."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 4 --warmup 1 --skip-debug-readback` -> `ok=true`, `cuda_ms=26.072`, `cuda_ms_per_token=6.518`, top1 GPU/CPU sequence `258,92564,46,61394`
+  verified_at: 2026-05-09
+  decay_trigger: token loop sequencing, state progression, top1 oracle, or debug-readback skip logic changes
+
+**quadrumvirate_update_116:**
+- cassandra: Without an explicit flag, benchmark numbers would keep mixing decode work with correctness-debug transfers. The new flag makes that boundary visible.
+- daedalus: This is not a kernel speedup; it is eliminating measurement/debug work from perf-mode timing. It should not replace full correctness gates.
+- maieutic: Top1 parity alone does not prove hidden/state parity for a run with debug readback disabled. It is valid only after nearby full-debug parity gates pass.
+- adversary: Evidence covers 9B layers `0..4` and greedy top1. Full hidden/state/KV correctness is intentionally skipped in perf mode and must be verified with debug readback in adjacent gates.

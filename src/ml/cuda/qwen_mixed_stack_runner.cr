@@ -43,7 +43,7 @@ module ML::CUDA
       elapsed
     end
 
-    def run_sequence(profile_phases : Bool = false) : Float64
+    def run_sequence(profile_phases : Bool = false, debug_readback : Bool = true) : Float64
       @phase_lines.clear
       previous_output = 0_u64
       t_all = Time.instant
@@ -99,15 +99,17 @@ module ML::CUDA
       end
 
       t_read = Time.instant
-      @runners.each(&.read_outputs)
+      @runners.each(&.read_outputs) if debug_readback
       @head.read_outputs
       @phase_lines << "phase_readback_ms=#{((Time.instant - t_read).total_milliseconds).round(3)}" if profile_phases
 
-      case last = @runners.last
-      in QwenRecurrentLayerRunner
-        @final_gpu_all = last.final_gpu_all.dup
-      in QwenFullAttnLayerRunner
-        @final_gpu_all = last.final_gpu_all.dup
+      if debug_readback
+        case last = @runners.last
+        in QwenRecurrentLayerRunner
+          @final_gpu_all = last.final_gpu_all.dup
+        in QwenFullAttnLayerRunner
+          @final_gpu_all = last.final_gpu_all.dup
+        end
       end
 
       elapsed = (Time.instant - t_all).total_milliseconds

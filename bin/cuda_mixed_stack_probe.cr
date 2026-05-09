@@ -78,6 +78,7 @@ max_seq = 16
 warmup = 0
 read_logits = false
 profile_phases = false
+debug_readback = true
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -90,6 +91,7 @@ OptionParser.parse do |p|
   p.on("--warmup N", "Untimed warmup stack runs") { |v| warmup = v.to_i }
   p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
   p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
+  p.on("--skip-debug-readback", "Read only output-head results; skip final hidden/state/KV debug buffers for perf attribution") { debug_readback = false }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -202,13 +204,18 @@ begin
 
   weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
 
-  warmup.times { mixed_stack.run_sequence(profile_phases: false) }
+  warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false) }
 
-  gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases)
-  final_gpu_all = mixed_stack.final_gpu_all
+  gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback)
+  final_gpu_all = mixed_stack.final_gpu_all if debug_readback
 
   lines = [] of String
-  ok = report_pair("final_all", final_gpu_all, cpu_current, lines, 1.0e-2_f32)
+  ok = true
+  if debug_readback
+    ok = report_pair("final_all", final_gpu_all, cpu_current, lines, 1.0e-2_f32)
+  else
+    lines << "debug_readback=false"
+  end
   gpu_top1_ids = output_head.top1_ids
   top1_ok = gpu_top1_ids == cpu_top1_ids
   if read_logits
@@ -222,20 +229,22 @@ begin
   lines << "top1_values_gpu=#{output_head.top1_values_gpu.map { |v| v.round(6) }.join(",")}"
   lines << "top1_ok=#{top1_ok}"
   ok = ok && top1_ok
-  runners.each_with_index do |runner, idx|
-    layer = layers[idx]
-    case runner
-    in ML::CUDA::QwenRecurrentLayerRunner
-      conv_ok = report_pair("layer#{layer}_conv_state", runner.conv_state_gpu, cpu_states[layer].conv_state.not_nil!, lines, 2.0e-5_f32)
-      ssm_ok = report_pair("layer#{layer}_ssm_state", runner.ssm_state_gpu, cpu_states[layer].ssm_state.not_nil!, lines, 1.0e-3_f32)
-      ok = ok && conv_ok && ssm_ok
-    in ML::CUDA::QwenFullAttnLayerRunner
-      kv = runner.kv
-      k_cpu = cpu_states[layer].k_cache || Array(Float32).new(max_seq * hparams.n_head_kv * hparams.head_dim, 0.0_f32)
-      v_cpu = cpu_states[layer].v_cache || Array(Float32).new(max_seq * hparams.n_head_kv * hparams.head_dim, 0.0_f32)
-      k_ok = report_pair("layer#{layer}_k_cache", kv.k_cache_gpu, k_cpu, lines, 2.0e-4_f32)
-      v_ok = report_pair("layer#{layer}_v_cache", kv.v_cache_gpu, v_cpu, lines, 1.0e-3_f32)
-      ok = ok && k_ok && v_ok
+  if debug_readback
+    runners.each_with_index do |runner, idx|
+      layer = layers[idx]
+      case runner
+      in ML::CUDA::QwenRecurrentLayerRunner
+        conv_ok = report_pair("layer#{layer}_conv_state", runner.conv_state_gpu, cpu_states[layer].conv_state.not_nil!, lines, 2.0e-5_f32)
+        ssm_ok = report_pair("layer#{layer}_ssm_state", runner.ssm_state_gpu, cpu_states[layer].ssm_state.not_nil!, lines, 1.0e-3_f32)
+        ok = ok && conv_ok && ssm_ok
+      in ML::CUDA::QwenFullAttnLayerRunner
+        kv = runner.kv
+        k_cpu = cpu_states[layer].k_cache || Array(Float32).new(max_seq * hparams.n_head_kv * hparams.head_dim, 0.0_f32)
+        v_cpu = cpu_states[layer].v_cache || Array(Float32).new(max_seq * hparams.n_head_kv * hparams.head_dim, 0.0_f32)
+        k_ok = report_pair("layer#{layer}_k_cache", kv.k_cache_gpu, k_cpu, lines, 2.0e-4_f32)
+        v_ok = report_pair("layer#{layer}_v_cache", kv.v_cache_gpu, v_cpu, lines, 1.0e-3_f32)
+        ok = ok && k_ok && v_ok
+      end
     end
   end
 
@@ -249,6 +258,7 @@ begin
   puts "warmup=#{warmup}"
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"
+  puts "debug_readback=#{debug_readback}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
