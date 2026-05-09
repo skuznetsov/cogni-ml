@@ -84,8 +84,7 @@ module ML::CUDA
       phase_lines << "#{prefix}_projection_ms=#{((Time.instant - t_projection).total_milliseconds).round(3)}"
 
       t_kv = Time.instant
-      @kv.run_sequence
-      ML::CUDA.synchronize!("cuCtxSynchronize(full attention kv_tail)")
+      @kv.run_sequence_profiled(phase_lines, "#{prefix}_kv")
       phase_lines << "#{prefix}_kv_tail_ms=#{((Time.instant - t_kv).total_milliseconds).round(3)}"
       phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
     end

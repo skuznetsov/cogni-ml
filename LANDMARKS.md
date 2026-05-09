@@ -9880,3 +9880,19 @@ Conclusion: on the current 9B five-layer perf-profile, full-attention layer3 is 
 - daedalus: The frame shifts from projection GEMV tuning to attention/tail internals.
 - maieutic: This is still layer-level attribution. KV/tail bundles several operations, so it needs another split before implementation work.
 - adversary: Evidence covers one full-attention layer (`3`) in one 9B slice and greedy top1 only under skip-debug-readback.
+
+**decision_update_118:** Added deep full-attention KV/tail attribution. `QwenFullAttnKVRunner#run_sequence_profiled` now reports q/k RoPE-cache, attention decode, attention output projection, post-attention add+RMSNorm, FFN gate/up/SwiGLU/down, and final add. The full-attention layer wrapper forwards those lines under the layer prefix.
+
+Conclusion: for the current short-context 9B slice, full-attention is not attention-decode dominated. Layer3 KV/tail is mostly the same FFN GEMV pattern as recurrent layers: gate/up/down each cost about `0.144-0.147ms`, while actual attention decode is only `0.064ms`. This shifts the next exact optimization target toward shared FFN traffic reduction rather than attention-specific kernels.
+
+**evidence_update_118:**
+- claim: "Deep full-attention attribution preserves top1 parity and shows FFN GEMVs dominate KV/tail."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases --skip-debug-readback` -> `ok=true`, `phase_layer3_kv_qk_rope_ms=0.071`, `phase_layer3_kv_attn_decode_ms=0.064`, `phase_layer3_kv_out_proj_ms=0.061`, `phase_layer3_kv_ffn_gate_ms=0.147`, `phase_layer3_kv_ffn_up_ms=0.144`, `phase_layer3_kv_ffn_down_ms=0.144`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: full-attn KV runner, attention context length, FFN tensor quantization, profile synchronization, or GPU/load conditions changes
+
+**quadrumvirate_update_118:**
+- cassandra: The likely mistaken branch would have been optimizing the attention decode kernel first. Attribution shows it is currently a small part of the layer for short context.
+- daedalus: Recurrent and full-attention layers now share the same main structure: FFN GEMVs dominate after normalization/top1/readback fixes.
+- maieutic: This conclusion is context-length sensitive. At long contexts, attention decode/KV traffic may become dominant and must be remeasured.
+- adversary: Evidence is from `max_seq=16`, one full-attention layer, one token, and skip-debug top1-only correctness. Long-context and full-debug gates remain separate.
