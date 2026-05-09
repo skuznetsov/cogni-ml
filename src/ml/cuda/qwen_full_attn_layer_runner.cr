@@ -103,6 +103,10 @@ module ML::CUDA
       @kv.use_device_residual_input(@projection.sequence_input_device_ptr)
     end
 
+    def sequence_input_device_ptr : DevicePtr
+      @projection.sequence_input_device_ptr
+    end
+
     def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
       @kv.update_decode_position(start_pos, cos_table, sin_table)
     end

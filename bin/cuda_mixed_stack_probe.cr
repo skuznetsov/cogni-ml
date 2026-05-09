@@ -77,6 +77,80 @@ def load_quant_weight(gguf : ML::GGUF::GGUFFile, name : String) : ML::GGUF::Quan
   ML::GGUF::QuantWeight.new(raw, info.type, out_dim, in_dim)
 end
 
+class CudaQ4KTokenEmbedder
+  EMBED_Q4K_PTX = {{ read_file("src/ml/cuda/kernels/embed_q4k_probe.ptx") }}
+
+  def initialize(token_embd : ML::GGUF::QuantWeight,
+                 @token_ids_device_ptr : ML::CUDA::DevicePtr,
+                 @output_device_ptr : ML::CUDA::DevicePtr,
+                 @history_tokens : Int32)
+    raise "GPU token embedding currently requires Q4_K token embeddings" unless token_embd.type.q4_k?
+    raise "embedding dim #{token_embd.in_dim} must be divisible by 256" unless token_embd.in_dim % 256 == 0
+    raise "history tokens must be positive" unless @history_tokens > 0
+
+    @hidden = token_embd.in_dim
+    @vocab = token_embd.out_dim
+    @module = ML::CUDA::CUDAModule.load(EMBED_Q4K_PTX, "embed_q4k")
+    @fn = @module.function("embed_q4k_f32_from_token_id_cuda")
+    @weight = ML::CUDA::DeviceBuffer.new(token_embd.raw.size.to_u64)
+    @history = ML::CUDA::DeviceBuffer.new(bytesize_i32(@history_tokens))
+    @history_gpu = Array(Int32).new(@history_tokens, 0)
+    @token_index = Pointer(UInt32).malloc(1)
+    @param_keepalive = [] of Void*
+    @params = Pointer(Void*).malloc(7)
+    @params[0] = box_ptr(@weight.ptr).as(Void*)
+    @params[1] = box_ptr(@token_ids_device_ptr).as(Void*)
+    @params[2] = box_ptr(@output_device_ptr).as(Void*)
+    @params[3] = box_ptr(@history.ptr).as(Void*)
+    @params[4] = @token_index.as(Void*)
+    @params[5] = box_u32(@hidden.to_u32).as(Void*)
+    @params[6] = box_u32(@vocab.to_u32).as(Void*)
+    @closed = false
+
+    ML::CUDA.copy_htod!(@weight.ptr, token_embd.raw.to_unsafe.as(Void*), token_embd.raw.size.to_u64, "token_embd_q4k")
+  end
+
+  def record_and_embed(token_index : Int32) : Nil
+    raise "token index out of range" if token_index < 0 || token_index >= @history_tokens
+
+    @token_index.value = token_index.to_u32
+    grid = ((@hidden + 255) // 256).to_u32
+    ML::CUDA.launch!(@fn, grid, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, @params, "embed q4k token id")
+  end
+
+  def read_history : Array(Int32)
+    ML::CUDA.copy_dtoh!(@history_gpu.to_unsafe.as(Void*), @history.ptr, bytesize_i32(@history_tokens), "gpu_embedding_history")
+    @history_gpu
+  end
+
+  def close : Nil
+    return if @closed
+
+    @weight.close
+    @history.close
+    @module.close
+    @closed = true
+  end
+
+  private def box_ptr(value : ML::CUDA::DevicePtr) : Pointer(ML::CUDA::DevicePtr)
+    ptr = Pointer(ML::CUDA::DevicePtr).malloc(1)
+    ptr.value = value
+    @param_keepalive << ptr.as(Void*)
+    ptr
+  end
+
+  private def box_u32(value : UInt32) : Pointer(UInt32)
+    ptr = Pointer(UInt32).malloc(1)
+    ptr.value = value
+    @param_keepalive << ptr.as(Void*)
+    ptr
+  end
+
+  private def bytesize_i32(elements : Int32) : LibC::SizeT
+    (elements * sizeof(Int32)).to_u64
+  end
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 layers = [0, 1, 2, 3, 4]
 seed = 41_u64
@@ -94,6 +168,7 @@ all_layers = false
 greedy_loop_tokens = 0
 greedy_loop_graph = false
 greedy_loop_graph_device_ready = false
+greedy_loop_gpu_embedding = false
 seed_token = 0
 
 OptionParser.parse do |p|
@@ -115,6 +190,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-tokens N", "Run an embedding-driven greedy decode loop for N generated tokens; forces --tokens=1") { |v| greedy_loop_tokens = v.to_i }
   p.on("--greedy-loop-graph", "Capture the reset-free greedy-loop body as a CUDA graph and replay it after the first token") { greedy_loop_graph = true }
   p.on("--greedy-loop-graph-device-ready", "Instantiate the greedy-loop CUDA graph with DEVICE_LAUNCH constraints; still host-launched by this probe") { greedy_loop_graph_device_ready = true }
+  p.on("--greedy-loop-gpu-embedding", "Feed greedy-loop top1 ids back through a CUDA Q4_K token-embedding kernel instead of per-token CPU readback/embedding upload") { greedy_loop_gpu_embedding = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -137,6 +213,7 @@ raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps
 raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
 raise "--greedy-loop-graph requires --greedy-loop-tokens" if greedy_loop_graph && greedy_loop_tokens == 0
 raise "--greedy-loop-graph-device-ready requires --greedy-loop-graph" if greedy_loop_graph_device_ready && !greedy_loop_graph
+raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop_gpu_embedding && greedy_loop_tokens == 0
 if greedy_loop_tokens > 0
   raise "--greedy-loop-tokens currently requires --perf-only; it is a semantic timing harness, not a CPU oracle" unless perf_only
   raise "--greedy-loop-tokens is incompatible with --steady-reps/--steady-graph-reps" if steady_reps > 0 || steady_graph_reps > 0
@@ -288,6 +365,7 @@ begin
     graph_stream = nil.as(ML::CUDA::CUDAStream?)
     graph = nil.as(ML::CUDA::CUDAGraph?)
     graph_exec = nil.as(ML::CUDA::CUDAGraphExec?)
+    gpu_embedder = nil.as(CudaQ4KTokenEmbedder?)
     if greedy_loop_graph && greedy_loop_tokens > 1
       graph_stream = ML::CUDA::CUDAStream.new
       ML::CUDA.with_stream(graph_stream.not_nil!) do
@@ -307,6 +385,11 @@ begin
       graph_stream.not_nil!.synchronize
     end
 
+    if greedy_loop_gpu_embedding
+      gpu_embedder = CudaQ4KTokenEmbedder.new(token_embd, mixed_stack.top1_ids_device_ptr,
+        mixed_stack.first_sequence_input_device_ptr, greedy_loop_tokens)
+    end
+
     gpu_token = seed_token
     gpu_t0 = Time.instant
     begin
@@ -318,26 +401,49 @@ begin
         greedy_position_ms += (Time.instant - t_position).total_milliseconds
 
         t_embedding = Time.instant
-        mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+        unless greedy_loop_gpu_embedding && i > 0
+          mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+        end
         greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
 
         t_body = Time.instant
         if greedy_loop_graph && i > 0
           graph_exec.not_nil!.launch(graph_stream.not_nil!)
-          graph_stream.not_nil!.synchronize
+          graph_stream.not_nil!.synchronize unless greedy_loop_gpu_embedding
         else
           mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: i == 0,
-            read_head_outputs: false)
+            sync_end: !greedy_loop_gpu_embedding, read_head_outputs: false)
         end
         greedy_body_ms += (Time.instant - t_body).total_milliseconds
 
+        if greedy_loop_gpu_embedding
+          t_feedback = Time.instant
+          if stream = graph_stream
+            ML::CUDA.with_stream(stream) { gpu_embedder.not_nil!.record_and_embed(i) }
+          else
+            gpu_embedder.not_nil!.record_and_embed(i)
+          end
+          greedy_embedding_ms += (Time.instant - t_feedback).total_milliseconds
+        else
+          t_read = Time.instant
+          mixed_stack.read_head_outputs
+          greedy_read_ms += (Time.instant - t_read).total_milliseconds
+          gpu_token = output_head.top1_ids[0]
+          greedy_gpu_ids << gpu_token
+        end
+      end
+      if greedy_loop_gpu_embedding
         t_read = Time.instant
-        mixed_stack.read_head_outputs
+        if stream = graph_stream
+          stream.synchronize
+        else
+          ML::CUDA.synchronize!("cuCtxSynchronize(gpu embedding greedy loop)")
+        end
+        greedy_gpu_ids = gpu_embedder.not_nil!.read_history
         greedy_read_ms += (Time.instant - t_read).total_milliseconds
-        gpu_token = output_head.top1_ids[0]
-        greedy_gpu_ids << gpu_token
       end
     ensure
+      gpu_embedder.try(&.close)
       graph_exec.try(&.close)
       graph.try(&.close)
       graph_stream.try(&.close)
@@ -453,6 +559,7 @@ begin
   puts "steady_graph_reps=#{steady_graph_reps}"
   puts "greedy_loop_tokens=#{greedy_loop_tokens}"
   puts "greedy_loop_graph=#{greedy_loop_graph}"
+  puts "greedy_loop_gpu_embedding=#{greedy_loop_gpu_embedding}"
   puts "seed_token=#{seed_token}"
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"

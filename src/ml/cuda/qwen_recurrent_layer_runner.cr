@@ -256,6 +256,10 @@ module ML::CUDA
       @input_device_base = ptr
     end
 
+    def sequence_input_device_ptr : DevicePtr
+      @input_device_base.not_nil!
+    end
+
     def run_sequence : Nil
       runner.run_sequence
     end

@@ -66,6 +66,19 @@ module ML::CUDA
       end
     end
 
+    def first_sequence_input_device_ptr : DevicePtr
+      case first = @runners.first
+      in QwenRecurrentLayerRunner
+        first.sequence_input_device_ptr
+      in QwenFullAttnLayerRunner
+        first.sequence_input_device_ptr
+      end
+    end
+
+    def top1_ids_device_ptr : DevicePtr
+      @head.top1_ids_device_ptr
+    end
+
     def run_sequence(profile_phases : Bool = false,
                      debug_readback : Bool = true,
                      reset_sequence : Bool = true,

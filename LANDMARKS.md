@@ -10654,3 +10654,23 @@ Conclusion: device-launch-ready instantiation is compatible with the current sem
 - daedalus: The value is not launch overhead reduction. The frame shift is preparing captured decode subgraphs to be callable by a future GPU controller.
 - maieutic: The key assumption was that the current graph body is legal under device-launch constraints. Remote instantiation and replay tested that assumption directly.
 - adversary: This does not prove actual device-side launch or speculative branching works. It only proves the current graph can be instantiated with the device-launch flag and host-replayed without parity loss.
+
+**decision_update_151:** Added a GPU-resident greedy feedback skeleton for the CUDA semantic decode harness. `bin/cuda_mixed_stack_probe.cr --greedy-loop-gpu-embedding` keeps the generated top1 id on device, records it into a device history buffer, and uses a new `embed_q4k_f32_from_token_id_cuda` kernel to dequantize the Q4_K token embedding directly into the first layer input buffer for the next decode step. The final token history is copied back once after the loop. This removes the per-token CPU top1 readback and CPU embedding lookup/upload from the feedback dependency chain.
+
+Conclusion: GPU-resident feedback is exact on the tested token sequence and gives a small but real total-wall signal. Five-layer token parity held. Full 9B gen16 ABBA preserved token IDs and measured CPU-feedback normal `23.849/23.880 ms/tok`, GPU-feedback normal `23.788/23.819`, graph CPU-feedback `23.837/23.873`, graph GPU-feedback `23.793/23.795`. The apparent `greedy_read_ms` increase in GPU-feedback mode is phase accounting: without per-token synchronizes, the final history read absorbs queued body work. For this mode, compare total `cuda_ms_per_token`, not subphase read time.
+
+**evidence_update_151:**
+- claim: "The CUDA Q4_K token-embedding feedback kernel preserves five-layer greedy token sequence."
+  source: remote `/tmp/cuda_mixed_stack_probe_gpuembed --layers=0,1,2,3,4 --greedy-loop-tokens=8 --seed-token=0 --perf-only --skip-debug-readback` -> CPU feedback and GPU feedback both `top1_gpu=220,695,12,50,1458,1449,17961,17961`; timings `5.842` vs `5.849 ms/tok`
+  verified_at: 2026-05-09
+  decay_trigger: token embedding quant type/layout, Q4_K dequant kernel, output-head top1 buffer ownership, or semantic-loop scheduling changes
+- claim: "GPU-resident feedback preserves full 9B gen16 token sequence and slightly improves total semantic wall."
+  source: remote full 9B ABBA -> CPU-feedback normal `23.849/23.880 ms/tok`, GPU-feedback normal `23.788/23.819`, graph CPU-feedback `23.837/23.873`, graph GPU-feedback `23.793/23.795`; all modes generated `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA feedback kernel, graph launch path, host synchronization boundaries, GPU load/order, or generated-token length changes
+
+**quadrumvirate_update_151:**
+- cassandra: Expected effect was small because CPU embedding/readback was only about `0.09 ms/tok`; measured total-wall gain is in that range.
+- daedalus: The useful frame is not "make embedding faster" but "remove CPU from the token-feedback dependency chain" so future controllers can branch or speculate on GPU.
+- maieutic: The hidden risk was Q4_K row dequant mismatch. Token-sequence parity across five-layer and full 9B checks is the current guard, but a direct embedding-vector oracle would be a stronger next check if this path becomes production.
+- adversary: This is still a harness skeleton. It does not yet eliminate host-side RoPE/position updates or implement GPU-side accept/reject control; it only removes the top1/embedding feedback round trip.

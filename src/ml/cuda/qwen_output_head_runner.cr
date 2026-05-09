@@ -280,6 +280,7 @@ module ML::CUDA
     getter top1_ids_gpu : Array(Int32)
     getter top1_values_gpu : Array(Float32)
     getter logits_device_ptr : DevicePtr
+    getter top1_ids_device_ptr : DevicePtr
 
     def self.from_weights(weights : Weights,
                           tokens : Int32,
@@ -309,6 +310,7 @@ module ML::CUDA
       @input_device_base = nil.as(DevicePtr?)
       @owned_input_device_ptr = nil.as(DevicePtr?)
       @logits_device_ptr = 0_u64
+      @top1_ids_device_ptr = 0_u64
       @logits_gpu_all = Array(Float32).new(@tokens * @vocab, 0.0_f32)
       @top1_ids_gpu = Array(Int32).new(@tokens, 0)
       @top1_values_gpu = Array(Float32).new(@tokens, 0.0_f32)
@@ -405,6 +407,7 @@ module ML::CUDA
       @owned_input_device_ptr = d_xs
       @input_device_base = d_xs
       @logits_device_ptr = d_logits_all
+      @top1_ids_device_ptr = d_top1_ids
 
       upload_weights = -> {
         ML::CUDA.copy_htod!(d_norm_w, @norm.to_unsafe.as(Void*), bytesize_f32(@norm.size), "output_norm")
