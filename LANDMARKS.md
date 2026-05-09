@@ -10390,3 +10390,27 @@ Conclusion: Q8_1 + DP4A is a real but modest CUDA body-GEMV lever on RTX 5060 Ti
 - daedalus: The useful frame is not "decode bigger weights"; it is "compress activations once, reuse them across multiple Q4 consumers, and move dot work to integer units."
 - maieutic: The key caveat is quality/exactness. This path changes the activation values, so it cannot silently replace exact verifier GEMV.
 - adversary: This evidence is tensor-level, not full-model semantic proof. Next gate must test an opt-in draft/speed-mode Q4 route against top1/acceptance/parity before any production integration.
+
+**decision_update_140:** Refuted the first model-runner integration of the Q8_1+DP4A Q4 route. A temporary `QWEN_CUDA_Q4_Q8_DP4A_FFN=1` branch routed only recurrent-layer FFN gate/up through a GPU Q8 quantizer plus DP4A Q4 GEMV, leaving exact output verification unchanged. This was the smallest safe full-model gate after the tensor-level win.
+
+Conclusion: the route preserved top1 on the tested slice, but did not improve wall time. Five-layer full-logit oracle was neutral (`7.713ms` default vs `7.711ms` q8), while full 9B semantic gen16 was slightly slower (`24.096ms/tok` default vs `24.117ms/tok` q8) with the same generated top1 sequence. Profiled recurrent FFN gate/up timings were also neutral/noisy. The temporary runner integration and extracted PTX/helper files were removed; keep the standalone tensor probe as evidence, but do not promote recurrent FFN Q8+DP4A as-is.
+
+**evidence_update_140:**
+- claim: "Recurrent FFN Q8+DP4A preserved the five-layer full-logit/top1 oracle."
+  source: remote temporary `QWEN_CUDA_Q4_Q8_DP4A_FFN=1 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> q8 `cuda_ms=7.711`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`; default same binary `cuda_ms=7.713`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: recurrent runner routing, Q8 DP4A PTX, GPU architecture, or five-layer oracle changes
+- claim: "Recurrent FFN Q8+DP4A did not improve full 9B semantic greedy-loop wall time."
+  source: remote full 9B `--all-layers --greedy-loop-tokens=16 --seed-token=0 --perf-only --skip-debug-readback` -> default `cuda_ms_per_token=24.096`, `greedy_body_ms_per_token=23.933`; q8 `cuda_ms_per_token=24.117`, `greedy_body_ms_per_token=23.944`; generated top1 sequence identical: `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`
+  verified_at: 2026-05-09
+  decay_trigger: semantic-loop harness, recurrent FFN routing, Q8 quant overhead, or CUDA scheduling changes
+- claim: "Phase attribution did not show a stable recurrent FFN gate/up win."
+  source: remote five-layer profile -> default recurrent `ffn_gate≈0.136-0.137ms`, `ffn_up≈0.132-0.134ms`, `phase_total_ms=7.912`; q8 `ffn_gate≈0.136-0.137ms`, `ffn_up≈0.132-0.144ms`, `phase_total_ms=7.930`
+  verified_at: 2026-05-09
+  decay_trigger: profiler sync boundaries, Q8 route coverage, or GPU load changes
+
+**quadrumvirate_update_140:**
+- cassandra: The tensor-level win was too small to survive runner-level metadata traffic, one extra quant launch, and partial model coverage.
+- daedalus: DP4A remains potentially useful only if fused into a larger producer-consumer region or applied where activation quantization is already needed, not as a standalone extra launch before gate/up.
+- maieutic: The hidden assumption was that microbench speedup composes linearly into full decode. Full semantic timing falsified that.
+- adversary: This refutes only the first recurrent FFN integration. It does not refute a fused quant+dual-GEMV kernel, a draft-only route with lower quality requirements, or llama.cpp-style source kernels that avoid the extra launch/metadata layout used here.
