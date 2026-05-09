@@ -202,34 +202,34 @@ NEXT_BLOCK:
     bra BLOCK_LOOP;
 
 REDUCE_PREP:
-    shl.b32 %r55, %r3, 2;
-    mov.u64 %rd40, smem;
-    cvt.u64.u32 %rd41, %r55;
-    add.s64 %rd42, %rd40, %rd41;
-    st.shared.f32 [%rd42], %f1;
-    bar.sync 0;
-
+    mov.u32 %r55, 0xffffffff;
+    mov.b32 %r56, %f1;
+    shfl.sync.down.b32 %r57, %r56, 16, 31, %r55;
+    mov.b32 %f14, %r57;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r56, %f1;
+    shfl.sync.down.b32 %r57, %r56, 8, 31, %r55;
+    mov.b32 %f14, %r57;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r56, %f1;
+    shfl.sync.down.b32 %r57, %r56, 4, 31, %r55;
+    mov.b32 %f14, %r57;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r56, %f1;
+    shfl.sync.down.b32 %r57, %r56, 2, 31, %r55;
+    mov.b32 %f14, %r57;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r56, %f1;
+    shfl.sync.down.b32 %r57, %r56, 1, 31, %r55;
+    mov.b32 %f14, %r57;
+    add.rn.f32 %f1, %f1, %f14;
     setp.ne.u32 %p6, %r5, 0;
     @%p6 bra DONE;
 
-    shl.b32 %r56, %r6, 7;
-    mov.f32 %f14, 0f00000000;
-    mov.u32 %r57, 0;
-SUM_LOOP:
-    setp.ge.u32 %p7, %r57, 32;
-    @%p7 bra STORE;
-    shl.b32 %r58, %r57, 2;
-    add.u32 %r59, %r56, %r58;
-    cvt.u64.u32 %rd43, %r59;
-    add.s64 %rd44, %rd40, %rd43;
-    ld.shared.f32 %f15, [%rd44];
-    add.rn.f32 %f14, %f14, %f15;
-    add.u32 %r57, %r57, 1;
-    bra SUM_LOOP;
 STORE:
     mul.wide.u32 %rd45, %r8, 4;
     add.s64 %rd46, %rd3, %rd45;
-    st.global.f32 [%rd46], %f14;
+    st.global.f32 [%rd46], %f1;
 DONE:
     ret;
 }

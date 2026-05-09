@@ -400,36 +400,34 @@ WARP_NEXT_BLOCK:
     bra WARP_BLOCK_LOOP;
 
 WARP_REDUCE_PREP:
-    shl.b32 %r46, %r3, 2;
-    mov.u64 %rd37, smem;
-    cvt.u64.u32 %rd38, %r46;
-    add.s64 %rd39, %rd37, %rd38;
-    st.shared.f32 [%rd39], %f1;
-    bar.sync 0;
-
+    mov.u32 %r46, 0xffffffff;
+    mov.b32 %r47, %f1;
+    shfl.sync.down.b32 %r48, %r47, 16, 31, %r46;
+    mov.b32 %f14, %r48;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r47, %f1;
+    shfl.sync.down.b32 %r48, %r47, 8, 31, %r46;
+    mov.b32 %f14, %r48;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r47, %f1;
+    shfl.sync.down.b32 %r48, %r47, 4, 31, %r46;
+    mov.b32 %f14, %r48;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r47, %f1;
+    shfl.sync.down.b32 %r48, %r47, 2, 31, %r46;
+    mov.b32 %f14, %r48;
+    add.rn.f32 %f1, %f1, %f14;
+    mov.b32 %r47, %f1;
+    shfl.sync.down.b32 %r48, %r47, 1, 31, %r46;
+    mov.b32 %f14, %r48;
+    add.rn.f32 %f1, %f1, %f14;
     setp.ne.u32 %p4, %r5, 0;
     @%p4 bra WARP_DONE;
-
-    shl.b32 %r47, %r6, 7;
-    mov.f32 %f14, 0f00000000;
-    mov.u32 %r48, 0;
-
-WARP_SUM_LOOP:
-    setp.ge.u32 %p5, %r48, 32;
-    @%p5 bra WARP_STORE;
-    shl.b32 %r49, %r48, 2;
-    add.u32 %r50, %r47, %r49;
-    cvt.u64.u32 %rd40, %r50;
-    add.s64 %rd41, %rd37, %rd40;
-    ld.shared.f32 %f15, [%rd41];
-    add.rn.f32 %f14, %f14, %f15;
-    add.u32 %r48, %r48, 1;
-    bra WARP_SUM_LOOP;
 
 WARP_STORE:
     mul.wide.u32 %rd42, %r8, 4;
     add.s64 %rd43, %rd3, %rd42;
-    st.global.f32 [%rd43], %f14;
+    st.global.f32 [%rd43], %f1;
 
 WARP_DONE:
     ret;

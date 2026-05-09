@@ -9980,3 +9980,27 @@ Conclusion: reset avoidance helps but is not the missing 2x. On the five-layer 9
 - daedalus: The optimization frame shifts again: remove setup where easy, but spend serious effort on GEMV throughput or on a real end-to-end decode comparison.
 - maieutic: The steady probe reuses synthetic hidden inputs and evolving recurrent states, so it estimates backend cost boundaries rather than semantic generation quality.
 - adversary: The no-reset path intentionally skips CPU oracle and has no tokenizer/sampler. It should not be cited as an end-to-end decode speed until a correctness-preserving generation loop exists.
+
+**decision_update_123:** Applied a CUDA LTP/WBA-style barrier removal to quantized GEMV. Q4_K, Q5_K, and Q6_K warp4 GEMV kernels now use `shfl.sync.down` tree reductions inside a row warp instead of shared-memory stores, `bar.sync`, and a lane0 serial sum loop.
+
+Conclusion: this is the first full-model CUDA speedup from the LTP/WBA framing rather than local retuning. Q4-only shuffle reduction improved full 9B steady timing from about `25.6ms/token` to `24.18ms/token`; extending the same pattern to Q5/Q6 improved it further to `23.81-23.83ms/token`. The win is exact at the tested top1 boundary and directly removes unnecessary synchronization.
+
+**evidence_update_123:**
+- claim: "Barrier-free Q4/Q5/Q6 warp reductions preserve kernel correctness."
+  source: local no-codegen for `bin/cuda_mixed_stack_probe.cr`, `bin/cuda_q5k_gemv_probe.cr`, and `bin/cuda_q6k_gemv_probe.cr` -> exit 0; remote microbench Q4 `blk.0.ffn_up.weight` -> `cuda_ms=0.118`, `ok=true`; Q5 `blk.0.attn_qkv.weight` -> `cuda_ms=0.078`, `ok=true`; Q6 `blk.0.ffn_down.weight` -> `cuda_ms=0.133`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: quantized GEMV PTX, GPU architecture, tensor layout, or reduction implementation changes
+- claim: "Barrier-free reductions preserve mixed-stack top1 parity on the 9B five-layer gate."
+  source: remote `cuda_mixed_stack_probe --layers=0,1,2,3,4 --tokens=1 --warmup=3 --skip-debug-readback` with Q4/Q5/Q6 shuffle kernels -> `ok=true`, `top1_gpu=96939`, `top1_cpu=96939`, `cuda_ms=7.469`
+  verified_at: 2026-05-09
+  decay_trigger: mixed-stack layer routing, output-head top1, quantized GEMV kernels, or model quantization changes
+- claim: "Barrier-free reductions improve full 9B steady perf-only timing on RTX 5060 Ti."
+  source: remote ABBA-style full steady gate: committed baseline `25.596/25.578ms/token`; Q4-only shuffle `24.18ms/token`; Q4/Q5/Q6 shuffle `23.805/23.833ms/token`, all `ok=true`, `top1_gpu=695`
+  verified_at: 2026-05-09
+  decay_trigger: GPU/load conditions, CUDA driver/JIT, full-model runner, or quantized GEMV kernel changes
+
+**quadrumvirate_update_123:**
+- cassandra: The first reduction cleanup could have been neutral if dequant dominated. The A/B shows synchronization removal is large enough to matter at full-model scale.
+- daedalus: The useful frame is now explicit WBA: eliminate barriers/syncs inside and between waves before inventing approximate math.
+- maieutic: The microbench alone understated Q4 value; full-stack aggregation revealed the real effect. Future CUDA work should keep both micro and full-stack A/B gates.
+- adversary: The full-model gate is still perf-only and synthetic-input. It proves backend timing improvement, not tokenizer-driven generation throughput or full hidden/state correctness.
