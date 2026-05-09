@@ -10794,3 +10794,57 @@ Conclusion: correctness held, but performance regressed substantially. Five-laye
 - daedalus: The next FFN acceleration attempt must reduce mathematical work or use a different representation, not just co-schedule two full GEMVs in one row program.
 - maieutic: The hidden assumption "activation loads dominate gate/up" was false on this GPU/path; dequant and scheduling pressure dominate.
 - adversary: This refutes this no-barrier same-row row-warp design. It does not refute approximate/draft FFN surrogates, activation-quant DP4A in draft mode, or shortlist/head-elimination paths.
+
+**decision_update_158:** Added an operational persistence landmark for the remote CUDA node. The reboot-surviving root is `/mnt/reefy-data/persisten/cogni-ml`; it contains the Qwen3.5 9B GGUF model copy, `cogni-tools`, `activate-cogni-cuda.sh`, a workspace mirror, and `restore-cogni-ml.sh`. Use `/mnt/reefy-data/persisten/cogni-ml/restore-cogni-ml.sh` after node reset, then continue work from `$HOME/work/cogni-ml` or the persistent mirror.
+
+**evidence_update_158:**
+- claim: "The remote CUDA node has a reboot-surviving cogni-ml workspace and model path."
+  source: remote `du -sh /mnt/reefy-data/persisten/cogni-ml/*` and restore-script inspection during CUDA setup; model size `5627044256` bytes; workspace mirror synced through commit `ef0dd29`
+  verified_at: 2026-05-09
+  decay_trigger: remote storage cleanup, node account change, model replacement, or workspace mirror resync
+
+**quadrumvirate_update_158:**
+- cassandra: Losing remote setup state is a high-friction failure mode for CUDA iteration; persistent storage directly reduces recovery time.
+- daedalus: This is not a performance lever, but it protects the experimental loop and avoids repeating environment reconstruction.
+- maieutic: The path name is intentionally recorded exactly as provided by the user: `/mnt/reefy-data/persisten/`.
+- adversary: This does not guarantee the remote host is currently online or that `$HOME/work/cogni-ml` is fresh; run the restore script and `git status` before timing claims after reboot.
+
+**decision_update_159:** Promoted CUDA semantic greedy-loop GPU feedback to default-on when `token_embd.weight` is Q4_K. `bin/cuda_mixed_stack_probe.cr --greedy-loop-tokens` now auto-enables the existing CUDA token-embedding feedback path unless `--greedy-loop-cpu-embedding` is passed. The old explicit `--greedy-loop-gpu-embedding` flag remains valid. This is an exact WBA cleanup for the semantic timing harness: keep token id -> next embedding feedback resident on GPU and do one history readback at the end.
+
+Conclusion: the gain is small but directionally correct and verified. Remote RTX 5060 Ti full 9B gen16 measured default GPU feedback at `23.751 ms/tok` vs forced CPU feedback at `23.817 ms/tok`; with CUDA graph replay, default GPU feedback measured `23.717 ms/tok` vs graph+CPU feedback `23.806 ms/tok`. Non-greedy paths were unaffected in the adversary checks.
+
+**evidence_update_159:**
+- claim: "CUDA semantic greedy loop now defaults to GPU feedback for Q4_K token embeddings and preserves exact output."
+  source: remote `/tmp/cuda_mixed_stack_probe_gpu_embed_default --all-layers --tokens=1 --max-seq=64 --greedy-loop-tokens=16 --perf-only --skip-debug-readback` -> `greedy_loop_gpu_embedding=true`, `cuda_ms_per_token=23.751`, `ok=true`; forced `--greedy-loop-cpu-embedding` -> `23.817`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: token embedding quantization, greedy-loop feedback path, output-head top1 buffer, CUDA graph path, or timing harness changes
+- claim: "The graph semantic loop also benefits from default GPU feedback."
+  source: remote same binary with `--greedy-loop-graph` -> default GPU feedback `23.717 ms/tok`, forced CPU feedback `23.806 ms/tok`, both `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph capture/replay implementation, stream synchronization, or token feedback path changes
+- claim: "Non-greedy CUDA decode paths stayed exact after the default change."
+  source: local no-codegen build passed; remote five-layer full-logit oracle -> `cuda_ms=7.643`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`; remote full 9B steady -> `cuda_ms_per_token=22.966`, `top1_gpu=8894`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: mixed-stack option parsing, greedy-loop conditionals, output-head runner, or model state setup changes
+
+**quadrumvirate_update_159:**
+- cassandra: Per-token host feedback is a small but avoidable synchronization/transfer path; making GPU feedback default should help semantic runs without affecting non-greedy probes.
+- daedalus: This is not a new GEMV optimization; it shifts the control boundary toward a GPU-resident controller, which is the useful frame for later speculative CUDA work.
+- maieutic: The assumption "default-on is safe" is bounded to Q4_K token embeddings. The escape hatch keeps CPU feedback available for A/B and non-Q4 future models.
+- adversary: The timing gain is below 1%, so it should not be described as a breakthrough. Its value is architectural: fewer host roundtrips and a cleaner path to device-side speculative control.
+
+**decision_update_160:** Refreshed the Q8_1+DP4A hot-FFN draft-only evidence after current CUDA cleanups. The existing `bin/cuda_q4k_repack_probe.cr` Q8 path quantizes the activation vector and uses DP4A against Q4_K weights, so it remains approximate and unsuitable as an exact runner route without exact verification.
+
+Conclusion: the microkernel signal is real but too small for direct runner integration. Across hot `blk.{0,1,3}.ffn_gate/up.weight` tensors, raw Q4_K is about `0.1099-0.1100 ms`, Q8+DP4A with GPU quantized activations is about `0.1036 ms`, one-use-with-quant speedup is about `1.04x`, and reuse2-with-quant is about `1.05x`. Cosine stays around `0.999993` with max diff `~0.0056-0.0074`. Keep this as a possible draft/proposal-body ingredient, not a standalone exact speed path.
+
+**evidence_update_160:**
+- claim: "Q8_1+DP4A hot FFN remains only a modest draft-only lever."
+  source: remote `/tmp/cuda_q4k_repack_probe_refresh --tensor blk.{0,1,3}.ffn_{gate,up}.weight --reps=80 --warmup=10` -> raw `~0.1099 ms`, Q8+DP4A GPU-quant `~0.1036 ms`, one-use `~1.04x`, reuse2 `~1.05x`, `q8_dp4a_gpu_quant_cos≈0.999993`, max diff `0.0056-0.0074`
+  verified_at: 2026-05-09
+  decay_trigger: Q4_K raw kernel, Q8 quant kernel, DP4A kernel, CUDA architecture, or FFN tensor layout changes
+
+**quadrumvirate_update_160:**
+- cassandra: A 4-5% microkernel lever will disappear in full-run overhead unless it is part of a bigger draft/proposal controller.
+- daedalus: Do not re-open exact Q8+DP4A runner integration; the useful pivot is approximate self-spec/draft-only usage with exact target verification.
+- maieutic: High cosine is not a correctness guarantee. Greedy top1 parity must be enforced by verifier if this route proposes tokens.
+- adversary: This does not refute Q8+DP4A inside a larger cheap drafter; it only refutes using the current microkernel as a standalone exact CUDA speed path.

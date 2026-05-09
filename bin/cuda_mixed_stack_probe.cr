@@ -170,6 +170,7 @@ greedy_loop_tokens = 0
 greedy_loop_graph = false
 greedy_loop_graph_device_ready = false
 greedy_loop_gpu_embedding = false
+greedy_loop_cpu_embedding = false
 seed_token = 0
 
 OptionParser.parse do |p|
@@ -193,6 +194,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-graph", "Capture the reset-free greedy-loop body as a CUDA graph and replay it after the first token") { greedy_loop_graph = true }
   p.on("--greedy-loop-graph-device-ready", "Instantiate the greedy-loop CUDA graph with DEVICE_LAUNCH constraints; still host-launched by this probe") { greedy_loop_graph_device_ready = true }
   p.on("--greedy-loop-gpu-embedding", "Feed greedy-loop top1 ids back through a CUDA Q4_K token-embedding kernel instead of per-token CPU readback/embedding upload") { greedy_loop_gpu_embedding = true }
+  p.on("--greedy-loop-cpu-embedding", "Force per-token CPU top1 readback and embedding upload in --greedy-loop-tokens mode") { greedy_loop_cpu_embedding = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -218,6 +220,7 @@ raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
 raise "--greedy-loop-graph requires --greedy-loop-tokens" if greedy_loop_graph && greedy_loop_tokens == 0
 raise "--greedy-loop-graph-device-ready requires --greedy-loop-graph" if greedy_loop_graph_device_ready && !greedy_loop_graph
 raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop_gpu_embedding && greedy_loop_tokens == 0
+raise "use either --greedy-loop-gpu-embedding or --greedy-loop-cpu-embedding, not both" if greedy_loop_gpu_embedding && greedy_loop_cpu_embedding
 if greedy_loop_tokens > 0
   raise "--skip-output-head is incompatible with --greedy-loop-tokens" if skip_output_head
   raise "--greedy-loop-tokens currently requires --perf-only; it is a semantic timing harness, not a CPU oracle" unless perf_only
@@ -239,6 +242,9 @@ read_logits = false if perf_only
 rng = Random.new(seed)
 token_embd = load_quant_weight(gguf, "token_embd.weight")
 raise "seed-token #{seed_token} out of range" if seed_token < 0 || seed_token >= token_embd.out_dim
+if greedy_loop_tokens > 0 && !greedy_loop_cpu_embedding && token_embd.type.q4_k?
+  greedy_loop_gpu_embedding = true
+end
 xs = if greedy_loop_tokens > 0
        ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, seed_token)
      else
@@ -567,6 +573,7 @@ begin
   puts "greedy_loop_tokens=#{greedy_loop_tokens}"
   puts "greedy_loop_graph=#{greedy_loop_graph}"
   puts "greedy_loop_gpu_embedding=#{greedy_loop_gpu_embedding}"
+  puts "greedy_loop_cpu_embedding=#{greedy_loop_cpu_embedding}"
   puts "seed_token=#{seed_token}"
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"
