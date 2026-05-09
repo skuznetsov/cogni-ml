@@ -154,6 +154,102 @@ module ML::CUDA
     DONE2:
         ret;
     }
+
+    .visible .entry output_top1_values_reduce_probe(
+        .param .u64 input_ids,
+        .param .u64 input_values,
+        .param .u64 out_ids,
+        .param .u64 out_values,
+        .param .u32 count
+    )
+    {
+        .reg .pred %p<5>;
+        .reg .b32 %r<32>;
+        .reg .b64 %rd<24>;
+        .reg .f32 %f<6>;
+        .shared .align 4 .b8 reduce_smem[2048];
+
+        ld.param.u64 %rd1, [input_ids];
+        ld.param.u64 %rd2, [input_values];
+        ld.param.u64 %rd3, [out_ids];
+        ld.param.u64 %rd4, [out_values];
+        ld.param.u32 %r1, [count];
+
+        mov.u32 %r2, %tid.x;
+        mov.u32 %r3, %ntid.x;
+        mov.f32 %f1, 0fFF7FFFFF;
+        mov.u32 %r4, 0;
+        mov.u32 %r5, %r2;
+
+    VALUES_LOOP:
+        setp.ge.u32 %p1, %r5, %r1;
+        @%p1 bra VALUES_STORE_LOCAL;
+        mul.wide.u32 %rd5, %r5, 4;
+        add.s64 %rd6, %rd1, %rd5;
+        add.s64 %rd7, %rd2, %rd5;
+        ld.global.u32 %r6, [%rd6];
+        ld.global.f32 %f2, [%rd7];
+        setp.gt.f32 %p2, %f2, %f1;
+        @%p2 bra VALUES_UPDATE;
+        bra VALUES_NEXT;
+
+    VALUES_UPDATE:
+        mov.f32 %f1, %f2;
+        mov.u32 %r4, %r6;
+
+    VALUES_NEXT:
+        add.u32 %r5, %r5, %r3;
+        bra VALUES_LOOP;
+
+    VALUES_STORE_LOCAL:
+        shl.b32 %r7, %r2, 2;
+        mov.u64 %rd8, reduce_smem;
+        cvt.u64.u32 %rd9, %r7;
+        add.s64 %rd10, %rd8, %rd9;
+        st.shared.f32 [%rd10], %f1;
+        add.u32 %r8, %r7, 1024;
+        cvt.u64.u32 %rd11, %r8;
+        add.s64 %rd12, %rd8, %rd11;
+        st.shared.u32 [%rd12], %r4;
+        bar.sync 0;
+
+        setp.ne.u32 %p3, %r2, 0;
+        @%p3 bra VALUES_DONE;
+
+        ld.shared.f32 %f3, [reduce_smem];
+        ld.shared.u32 %r9, [reduce_smem+1024];
+        mov.u32 %r10, 1;
+
+    VALUES_REDUCE_LOOP:
+        setp.ge.u32 %p4, %r10, 256;
+        @%p4 bra VALUES_REDUCE_STORE;
+        shl.b32 %r11, %r10, 2;
+        cvt.u64.u32 %rd13, %r11;
+        add.s64 %rd14, %rd8, %rd13;
+        ld.shared.f32 %f4, [%rd14];
+        add.u32 %r12, %r11, 1024;
+        cvt.u64.u32 %rd15, %r12;
+        add.s64 %rd16, %rd8, %rd15;
+        ld.shared.u32 %r13, [%rd16];
+        setp.gt.f32 %p2, %f4, %f3;
+        @%p2 bra VALUES_REDUCE_UPDATE;
+        bra VALUES_REDUCE_NEXT;
+
+    VALUES_REDUCE_UPDATE:
+        mov.f32 %f3, %f4;
+        mov.u32 %r9, %r13;
+
+    VALUES_REDUCE_NEXT:
+        add.u32 %r10, %r10, 1;
+        bra VALUES_REDUCE_LOOP;
+
+    VALUES_REDUCE_STORE:
+        st.global.u32 [%rd3], %r9;
+        st.global.f32 [%rd4], %f3;
+
+    VALUES_DONE:
+        ret;
+    }
     PTX
 
     class Weights
@@ -287,14 +383,18 @@ module ML::CUDA
       norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
+      q6_top1_partial_fn = q6_mod.function("q6_k_gemv_top1_partial_f32")
       top1_scan_fn = top1_mod.function("output_top1_partial_scan_probe")
       top1_reduce_fn = top1_mod.function("output_top1_partial_reduce_probe")
+      top1_values_reduce_fn = top1_mod.function("output_top1_values_reduce_probe")
       output_fn = @output_type.q4_k? ? q4_fn : q6_fn
-      top1_width = 256_u32
+      fused_q6_top1 = @output_type.q6_k? && !@read_logits
+      vocab_grid = ((@vocab + 3) // 4).to_u32
+      top1_width = fused_q6_top1 ? vocab_grid : 256_u32
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
                @output_raw.size.to_u64, bytesize_f32(@tokens * @hidden), bytesize_f32(@tokens * @vocab),
-               bytesize_i32(top1_width.to_i32), bytesize_f32(top1_width.to_i32),
+               bytesize_i32(@tokens * top1_width.to_i32), bytesize_f32(@tokens * top1_width.to_i32),
                bytesize_i32(@tokens), bytesize_f32(@tokens)]
       ptrs = sizes.map do |size_bytes|
         buffer = DeviceBuffer.new(size_bytes)
@@ -319,10 +419,11 @@ module ML::CUDA
 
       hidden_u32 = @hidden.to_u32
       vocab_u32 = @vocab.to_u32
-      vocab_grid = ((@vocab + 3) // 4).to_u32
       d_x_cur_ptr = box_ptr(d_xs)
       d_normed_cur_ptr = box_ptr(d_normed)
       d_logits_cur_ptr = box_ptr(d_logits_all)
+      d_partial_ids_cur_ptr = box_ptr(d_partial_ids)
+      d_partial_values_cur_ptr = box_ptr(d_partial_values)
       d_top1_id_cur_ptr = box_ptr(d_top1_ids)
       d_top1_value_cur_ptr = box_ptr(d_top1_values)
 
@@ -340,10 +441,18 @@ module ML::CUDA
       output_params[3] = box_u32(hidden_u32).as(Void*)
       output_params[4] = box_u32(vocab_u32).as(Void*)
 
+      q6_top1_partial_params = Pointer(Void*).malloc(6)
+      q6_top1_partial_params[0] = box_ptr(d_output_w).as(Void*)
+      q6_top1_partial_params[1] = d_normed_cur_ptr.as(Void*)
+      q6_top1_partial_params[2] = d_partial_ids_cur_ptr.as(Void*)
+      q6_top1_partial_params[3] = d_partial_values_cur_ptr.as(Void*)
+      q6_top1_partial_params[4] = box_u32(hidden_u32).as(Void*)
+      q6_top1_partial_params[5] = box_u32(vocab_u32).as(Void*)
+
       top1_scan_params = Pointer(Void*).malloc(5)
       top1_scan_params[0] = d_logits_cur_ptr.as(Void*)
-      top1_scan_params[1] = box_ptr(d_partial_ids).as(Void*)
-      top1_scan_params[2] = box_ptr(d_partial_values).as(Void*)
+      top1_scan_params[1] = d_partial_ids_cur_ptr.as(Void*)
+      top1_scan_params[2] = d_partial_values_cur_ptr.as(Void*)
       top1_scan_params[3] = box_u32(vocab_u32).as(Void*)
       top1_scan_params[4] = box_u32(top1_width).as(Void*)
 
@@ -358,12 +467,19 @@ module ML::CUDA
         d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
         d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
         d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+        d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
+        d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
         d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
         d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
         ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm")
-        ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
-        ML::CUDA.launch!(top1_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top1_scan_params, "output top1 scan")
-        ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
+        if fused_q6_top1
+          ML::CUDA.launch!(q6_top1_partial_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, q6_top1_partial_params, "output q6 top1 partial")
+          ML::CUDA.launch!(top1_values_reduce_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 values reduce")
+        else
+          ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
+          ML::CUDA.launch!(top1_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top1_scan_params, "output top1 scan")
+          ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
+        end
       }
 
       profile_run_token = ->(tok : Int32) {
@@ -377,16 +493,28 @@ module ML::CUDA
         t_logits = Time.instant
         d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
         d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
-        ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
+        d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
+        d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
+        if fused_q6_top1
+          ML::CUDA.launch!(q6_top1_partial_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, q6_top1_partial_params, "output q6 top1 partial")
+        else
+          ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
+        end
         ML::CUDA.synchronize!("cuCtxSynchronize(output head logits)")
         @profile_head_logits_ms += (Time.instant - t_logits).total_milliseconds
 
         t_top1 = Time.instant
         d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+        d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
+        d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
         d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
         d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
-        ML::CUDA.launch!(top1_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top1_scan_params, "output top1 scan")
-        ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
+        if fused_q6_top1
+          ML::CUDA.launch!(top1_values_reduce_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 values reduce")
+        else
+          ML::CUDA.launch!(top1_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top1_scan_params, "output top1 scan")
+          ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
+        end
         ML::CUDA.synchronize!("cuCtxSynchronize(output head top1)")
         @profile_head_top1_ms += (Time.instant - t_top1).total_milliseconds
       }

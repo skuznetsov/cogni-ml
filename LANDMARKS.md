@@ -10028,3 +10028,27 @@ Conclusion: CUDA Graph replay is valid infrastructure, but it is not the next ma
 - daedalus: The frame shifts back from host scheduling to device work: quantized GEMV dequant/tiling and memory traffic are the larger remaining surface.
 - maieutic: A tiny graph win is not a reason to complicate the production path prematurely. Keep it as a measurement/backend option until real decode integration needs it.
 - adversary: Graph evidence is perf-only and reset-free. It does not validate full correctness, sampling behavior, or tokenizer-driven generation.
+
+**decision_update_125:** Added an exact fused Q6 output-head top1 path. `q6_k_gemv_top1_partial_f32` computes Q6 lm-head rows and emits one partial max/id per CTA instead of materializing full vocab logits; `output_top1_values_reduce_probe` reduces those partials in parallel. `QwenOutputHeadRunner` uses it only for default Q6 top1-only mode, while `--read-logits` stays on the full-logits oracle path.
+
+Conclusion: avoiding materialized vocab logits is a correct but small full-model win. It cuts output-head top1 overhead significantly (`0.333ms -> 0.097ms` in the profiled gate) and moves head wall from `2.599ms` to `2.385ms`, but full 9B steady improves only about `0.8-1.0%` because body GEMVs dominate.
+
+**evidence_update_125:**
+- claim: "Fused Q6 output-head top1 preserves default top1 correctness and leaves the logits oracle intact."
+  source: remote five-layer default `cuda_mixed_stack_probe --tokens=1 --warmup=1 --skip-debug-readback` -> `ok=true`, `top1_gpu=96939`, `top1_cpu=96939`, `cuda_ms=7.264`; remote `--read-logits` oracle -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.0728836e-5`, `top1_gpu=top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: output-head runner, Q6 PTX, logits/top1 oracle policy, or model output tensor type changes
+- claim: "Fused Q6 output-head top1 improves full 9B steady timing modestly."
+  source: remote full 9B ABBA `--steady-reps=16`: previous graph binary `23.853/23.912ms/token`; fused-head binary `23.657/23.666ms/token`, all `ok=true`, `top1_gpu=8894`
+  verified_at: 2026-05-09
+  decay_trigger: full-model runner, output-head tensor type, CUDA driver/JIT, or GPU/load conditions changes
+- claim: "The head profile improvement comes from reducing top1/materialization overhead, not faster Q6 row compute."
+  source: remote full profile after fused head -> `phase_head_logits_ms=2.251`, `phase_head_top1_ms=0.097`, `phase_head_ms=2.385`, compared with prior `phase_head_logits_ms=2.238`, `phase_head_top1_ms=0.333`, `phase_head_ms=2.599`
+  verified_at: 2026-05-09
+  decay_trigger: profile synchronization policy, output-head kernel sequence, or top1 reduction kernel changes
+
+**quadrumvirate_update_125:**
+- cassandra: The first fused attempt regressed because a serial partial reducer turned `62k` partials into a bottleneck. Parallel partial reduction fixed the branch.
+- daedalus: The useful abstraction is "do not materialize intermediates if the consumer only needs a reduction." This may generalize, but only where the consumer is immediate and exact.
+- maieutic: The win is bounded because the output head is no longer the dominant wall. It should not distract from body GEMV work.
+- adversary: This path is Q6/top1-only. Sampling modes needing logits, Q4 output heads, or full-logit diagnostics still use the old materialized-logits path.
