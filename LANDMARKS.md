@@ -10100,3 +10100,31 @@ Conclusion: this is a small exact WBA cleanup. It removes a consumer launch and 
 - daedalus: The successful frame is store-path fusion, not shared-memory staging.
 - maieutic: Removing a launch is not automatically a major speedup when GEMV dominates. Keep this as cleanup and move back to dequant/row compute.
 - adversary: The add variants are only used where the consumer is exactly residual add. Other GEMV call sites still use plain kernels.
+
+**decision_update_128:** Added a semantic CUDA greedy-loop timing harness for the mixed-stack probe. `bin/cuda_mixed_stack_probe.cr --greedy-loop-tokens=N --seed-token=ID --perf-only --tokens=1` now feeds the first layer from real token embeddings, updates full-attention decode position/RoPE tables per generated token, preserves CUDA-resident recurrent/KV state across tokens, reads the resident top1 id, and feeds it back as the next token embedding. The runner changes are reusable: first-layer host input can be uploaded without resetting state, and full-attention layers can update decode position without reconstruction.
+
+Conclusion: the previous reset-free full-model CUDA steady probe was useful but optimistic for real decode because it held full-attention cache length at one. The semantic loop exposes the real next bottleneck: full-attention decode cost grows with `cache_len`, and the current CUDA attention kernel is still correctness-first serial per `(token, head)`. Embedding/position/top1-control overhead is small; body work dominates.
+
+**evidence_update_128:**
+- claim: "The normal non-greedy CUDA correctness path survives semantic-loop plumbing."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_semantic_syntax5 crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0; remote five-layer `--tokens=1 --warmup=1 --skip-debug-readback` -> `ok=true`, `top1_gpu=96939`, `top1_cpu=96939`, `cuda_ms=7.269`
+  verified_at: 2026-05-09
+  decay_trigger: mixed-stack input upload, full-attn position update, output-head top1, or runner reset semantics changes
+- claim: "The semantic full 9B greedy loop runs end-to-end in perf-only mode and is slower than the synthetic steady lower bound."
+  source: remote full 9B `--all-layers --tokens=1 --max-seq=64 --warmup=1 --greedy-loop-tokens=16 --seed-token=0 --skip-debug-readback --perf-only` -> `ok=true`, `cuda_ms_per_token=25.554`, top1 sequence `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`; same binary synthetic `--steady-reps=16` -> `23.668ms/token`
+  verified_at: 2026-05-09
+  decay_trigger: semantic loop scheduling, full-attn cache implementation, token embedding route, or timing harness changes
+- claim: "Semantic-loop overhead outside the model body is not the main gap."
+  source: same semantic full 9B run -> `greedy_position_ms_per_token=0.077`, `greedy_embedding_ms_per_token=0.070`, `greedy_read_ms_per_token=0.018`, `greedy_body_ms_per_token=25.387`
+  verified_at: 2026-05-09
+  decay_trigger: embedding route, top1 readback policy, position table update policy, or body timing split changes
+- claim: "Full-attention serial decode is the main new context-length bottleneck."
+  source: remote full 9B `--all-layers --tokens=1 --start-pos=63 --max-seq=64 --skip-debug-readback --perf-only --profile-phases` -> `cuda_ms=47.142`, full-attn layers show `phase_layer*_kv_attn_decode_ms≈1.145-1.159ms`; start-pos 0 profile shows `phase_layer3_kv_attn_decode_ms=0.074`, `phase_layer7_kv_attn_decode_ms=0.074`, `phase_layer31_kv_attn_decode_ms=0.065`, `cuda_ms=38.478`
+  verified_at: 2026-05-09
+  decay_trigger: `full_attn_decode_cache_probe` kernel, context length, full-attn layer count, or profile synchronization policy changes
+
+**quadrumvirate_update_128:**
+- cassandra: The likely hidden flaw in prior full-model CUDA numbers was synthetic steady-state measuring `cache_len=1`. Semantic-loop evidence confirmed it.
+- daedalus: The next frame shift is from GEMV-only decode to context-length-aware attention: replace the serial correctness attention kernel with a warp/block parallel exact decode kernel before judging CUDA competitiveness.
+- maieutic: Token embedding, RoPE table upload, and top1 DtoH were plausible suspects, but attribution shows they are too small to explain the gap.
+- adversary: The semantic loop is perf-only and uses top1 ids without CPU semantic oracle; correctness remains anchored by the five-layer top1/logit gates. The attention profile uses mostly zero historical KV rows in the synthetic start-pos test, so it measures kernel scaling cost rather than full user prompt quality.

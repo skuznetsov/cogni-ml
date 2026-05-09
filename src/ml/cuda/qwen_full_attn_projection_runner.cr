@@ -119,6 +119,12 @@ module ML::CUDA
       @input_device_base = @owned_input_device_ptr
     end
 
+    def upload_sequence_input(xs : Array(Float32)) : Nil
+      replace_sequence_input(xs)
+      ML::CUDA.copy_htod!(@owned_input_device_ptr.not_nil!, @xs.to_unsafe.as(Void*),
+        bytesize_f32(@tokens * @hidden), "attn_xs")
+    end
+
     def use_device_sequence_input(ptr : DevicePtr) : Nil
       raise ArgumentError.new("device input pointer must be non-zero") if ptr == 0_u64
 

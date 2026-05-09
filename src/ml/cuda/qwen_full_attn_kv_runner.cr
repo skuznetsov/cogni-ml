@@ -135,6 +135,9 @@ module ML::CUDA
       @residual_device_base = nil.as(DevicePtr?)
       @owned_residual_device_ptr = nil.as(DevicePtr?)
       @output_device_ptr = 0_u64
+      @cos_device_ptr = 0_u64
+      @sin_device_ptr = 0_u64
+      @start_pos_box = nil.as(Pointer(UInt32)?)
       @profile_qk_rope_ms = 0.0
       @profile_attn_decode_ms = 0.0
       @profile_out_proj_ms = 0.0
@@ -200,6 +203,19 @@ module ML::CUDA
       @residual_device_base = ptr
     end
 
+    def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
+      raise ArgumentError.new("start_pos must be non-negative") unless start_pos >= 0
+      half = @rope_dim // 2
+      raise ArgumentError.new("cos/sin table size mismatch") unless cos_table.size == @tokens * half && sin_table.size == @tokens * half
+
+      @start_pos = start_pos
+      @cos_table = cos_table
+      @sin_table = sin_table
+      @start_pos_box.not_nil!.value = start_pos.to_u32
+      ML::CUDA.copy_htod!(@cos_device_ptr, @cos_table.to_unsafe.as(Void*), bytesize_f32(@cos_table.size), "cos")
+      ML::CUDA.copy_htod!(@sin_device_ptr, @sin_table.to_unsafe.as(Void*), bytesize_f32(@sin_table.size), "sin")
+    end
+
     def read_outputs : Nil
       runner.read_outputs
     end
@@ -251,6 +267,8 @@ module ML::CUDA
       @owned_residual_device_ptr = d_residual_input
       @residual_device_base = d_residual_input
       @output_device_ptr = d_final_all
+      @cos_device_ptr = d_cos
+      @sin_device_ptr = d_sin
 
       upload_constants = -> {
         ML::CUDA.copy_htod!(d_q_norm, @q_norm.to_unsafe.as(Void*), bytesize_f32(@q_norm.size), "q_norm")
@@ -277,6 +295,7 @@ module ML::CUDA
       head_dim_u32 = @head_dim.to_u32
       rope_dim_u32 = @rope_dim.to_u32
       start_pos_u32 = @start_pos.to_u32
+      @start_pos_box = box_u32(start_pos_u32)
       max_seq_u32 = @max_seq.to_u32
       heads_per_group_u32 = (@n_head // @n_head_kv).to_u32
       scale = (1.0_f64 / Math.sqrt(@head_dim.to_f64)).to_f32
@@ -311,7 +330,7 @@ module ML::CUDA
       k_params[8] = box_u32(n_head_kv_u32).as(Void*)
       k_params[9] = box_u32(head_dim_u32).as(Void*)
       k_params[10] = box_u32(rope_dim_u32).as(Void*)
-      k_params[11] = box_u32(start_pos_u32).as(Void*)
+      k_params[11] = @start_pos_box.not_nil!.as(Void*)
       k_params[12] = box_u32(max_seq_u32).as(Void*)
       k_params[13] = box_f32(@eps).as(Void*)
 
@@ -326,7 +345,7 @@ module ML::CUDA
       attn_params[7] = box_u32(n_head_kv_u32).as(Void*)
       attn_params[8] = box_u32(head_dim_u32).as(Void*)
       attn_params[9] = box_u32(heads_per_group_u32).as(Void*)
-      attn_params[10] = box_u32(start_pos_u32).as(Void*)
+      attn_params[10] = @start_pos_box.not_nil!.as(Void*)
       attn_params[11] = box_u32(max_seq_u32).as(Void*)
       attn_params[12] = box_f32(scale).as(Void*)
 
@@ -450,7 +469,6 @@ module ML::CUDA
             ML::CUDA.launch!(ffn_down_add_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add")
             ML::CUDA.synchronize!("cuCtxSynchronize(full ffn down)")
             @profile_ffn_down_ms += (Time.instant - t_down).total_milliseconds
-
           end
         end
       }

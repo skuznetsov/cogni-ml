@@ -98,6 +98,15 @@ module ML::CUDA
       @kv.use_device_residual_input(ptr)
     end
 
+    def upload_sequence_input(xs : Array(Float32)) : Nil
+      @projection.upload_sequence_input(xs)
+      @kv.use_device_residual_input(@projection.sequence_input_device_ptr)
+    end
+
+    def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
+      @kv.update_decode_position(start_pos, cos_table, sin_table)
+    end
+
     def output_device_ptr : DevicePtr
       @kv.output_device_ptr
     end

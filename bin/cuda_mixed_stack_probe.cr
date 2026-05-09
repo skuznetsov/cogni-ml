@@ -69,6 +69,14 @@ def rope_tables(tokens : Int32, start_pos : Int32, rope_dim : Int32, freq_base :
   {cos_table, sin_table}
 end
 
+def load_quant_weight(gguf : ML::GGUF::GGUFFile, name : String) : ML::GGUF::QuantWeight
+  info = gguf.tensor(name) || raise "missing #{name}"
+  raw = gguf.read_tensor_raw(info)
+  in_dim = info.dims[0].to_i32
+  out_dim = info.dims.size >= 2 ? info.dims[1].to_i32 : 1
+  ML::GGUF::QuantWeight.new(raw, info.type, out_dim, in_dim)
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 layers = [0, 1, 2, 3, 4]
 seed = 41_u64
@@ -83,6 +91,8 @@ profile_phases = false
 debug_readback = true
 perf_only = false
 all_layers = false
+greedy_loop_tokens = 0
+seed_token = 0
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -100,6 +110,8 @@ OptionParser.parse do |p|
   p.on("--skip-debug-readback", "Read only output-head results; skip final hidden/state/KV debug buffers for perf attribution") { debug_readback = false }
   p.on("--perf-only", "Skip CPU reference and hidden/state checks; reports CUDA timing/top1 only") { perf_only = true }
   p.on("--all-layers", "Run all model layers instead of the explicit/default layer slice") { all_layers = true }
+  p.on("--greedy-loop-tokens N", "Run an embedding-driven greedy decode loop for N generated tokens; forces --tokens=1") { |v| greedy_loop_tokens = v.to_i }
+  p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -118,6 +130,14 @@ raise "--steady-reps does not support --profile-phases" if steady_reps > 0 && pr
 raise "--steady-graph-reps requires --perf-only" if steady_graph_reps > 0 && !perf_only
 raise "--steady-graph-reps does not support --profile-phases" if steady_graph_reps > 0 && profile_phases
 raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps > 0 && steady_graph_reps > 0
+raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
+if greedy_loop_tokens > 0
+  raise "--greedy-loop-tokens currently requires --perf-only; it is a semantic timing harness, not a CPU oracle" unless perf_only
+  raise "--greedy-loop-tokens is incompatible with --steady-reps/--steady-graph-reps" if steady_reps > 0 || steady_graph_reps > 0
+  raise "--greedy-loop-tokens is incompatible with --profile-phases" if profile_phases
+  raise "--greedy-loop-tokens requires --tokens=1" unless tokens == 1
+  raise "max-seq must cover start-pos + greedy-loop-tokens" unless max_seq >= start_pos + greedy_loop_tokens
+end
 
 eps = 1.0e-6_f32
 gguf = ML::GGUF::GGUFFile.new(model)
@@ -129,7 +149,13 @@ debug_readback = false if perf_only
 read_logits = false if perf_only
 
 rng = Random.new(seed)
-xs = Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
+token_embd = load_quant_weight(gguf, "token_embd.weight")
+raise "seed-token #{seed_token} out of range" if seed_token < 0 || seed_token >= token_embd.out_dim
+xs = if greedy_loop_tokens > 0
+       ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, seed_token)
+     else
+       Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
+     end
 
 recurrent_weights = {} of Int32 => ML::CUDA::QwenRecurrentLayerRunner::Weights
 full_weights = {} of Int32 => ML::CUDA::QwenFullAttnLayerRunner::Weights
@@ -143,8 +169,12 @@ layers.each do |layer|
   else
     weights = ML::CUDA::QwenRecurrentLayerRunner::Weights.load(gguf, layer, eps)
     recurrent_weights[layer] = weights
-    conv_state_inits[layer] = Array(Float32).new((weights.conv_k - 1) * weights.qkv_dim) { ((rng.next_float - 0.5) * 0.05).to_f32 }
-    ssm_state_inits[layer] = Array(Float32).new(weights.h_v * weights.s * weights.s) { ((rng.next_float - 0.5) * 0.05).to_f32 }
+    conv_state_inits[layer] = Array(Float32).new((weights.conv_k - 1) * weights.qkv_dim) do
+      greedy_loop_tokens > 0 ? 0.0_f32 : ((rng.next_float - 0.5) * 0.05).to_f32
+    end
+    ssm_state_inits[layer] = Array(Float32).new(weights.h_v * weights.s * weights.s) do
+      greedy_loop_tokens > 0 ? 0.0_f32 : ((rng.next_float - 0.5) * 0.05).to_f32
+    end
   end
 end
 
@@ -153,6 +183,7 @@ cpu_states = Array(ML::GGUF::Qwen35CPU::LayerState).new(hparams.n_layer) { ML::G
 cpu_ms = 0.0
 cpu_top1_ids = [] of Int32
 cpu_logits_all = [] of Float32
+cpu_weights = nil.as(ML::GGUF::Qwen35Weights?)
 
 unless perf_only
   cpu_weights = ML::GGUF::Qwen35Weights.new(gguf, hparams)
@@ -163,7 +194,7 @@ unless perf_only
 
   cpu_t0 = Time.instant
   layers.each do |layer|
-    lw = cpu_weights.layers[layer]
+    lw = cpu_weights.not_nil!.layers[layer]
     out = Array(Float32).new(tokens * hidden, 0.0_f32)
     tokens.times do |tok|
       row = cpu_current[tok * hidden, hidden]
@@ -228,63 +259,118 @@ begin
 
   weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
 
-  warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false) }
-
   measured_tokens = tokens
-  if steady_graph_reps > 0
-    mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
-    stream = ML::CUDA::CUDAStream.new
-    graph = nil.as(ML::CUDA::CUDAGraph?)
-    graph_exec = nil.as(ML::CUDA::CUDAGraphExec?)
-    begin
-      ML::CUDA.with_stream(stream) do
-        stream.begin_capture
-        mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: false,
-          sync_end: false, read_head_outputs: false)
-        graph = stream.end_capture
+  greedy_gpu_ids = [] of Int32
+  greedy_position_ms = 0.0
+  greedy_embedding_ms = 0.0
+  greedy_body_ms = 0.0
+  greedy_read_ms = 0.0
+  if greedy_loop_tokens > 0
+    warmup.times do
+      warm_token = seed_token
+      Math.min(greedy_loop_tokens, 2).times do |i|
+        pos = start_pos + i
+        cos_pos, sin_pos = rope_tables(1, pos, hparams.rope_dim_count, hparams.rope_freq_base)
+        mixed_stack.update_decode_position(pos, cos_pos, sin_pos)
+        mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, warm_token))
+        mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: i == 0)
+        mixed_stack.read_head_outputs
+        warm_token = output_head.top1_ids[0]
       end
-      graph_exec = graph.not_nil!.instantiate
-      graph.not_nil!.close
-      t_graph = Time.instant
-      steady_graph_reps.times do
-        graph_exec.not_nil!.launch(stream)
-      end
-      stream.synchronize
-      gpu_ms = (Time.instant - t_graph).total_milliseconds
-      measured_tokens = tokens * steady_graph_reps
+    end
+
+    gpu_token = seed_token
+    gpu_t0 = Time.instant
+    greedy_loop_tokens.times do |i|
+      pos = start_pos + i
+      t_position = Time.instant
+      cos_pos, sin_pos = rope_tables(1, pos, hparams.rope_dim_count, hparams.rope_freq_base)
+      mixed_stack.update_decode_position(pos, cos_pos, sin_pos)
+      greedy_position_ms += (Time.instant - t_position).total_milliseconds
+
+      t_embedding = Time.instant
+      mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+      greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
+
+      t_body = Time.instant
+      mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: i == 0,
+        read_head_outputs: false)
+      greedy_body_ms += (Time.instant - t_body).total_milliseconds
+
+      t_read = Time.instant
       mixed_stack.read_head_outputs
-    ensure
-      graph_exec.try(&.close)
-      graph.try(&.close)
-      stream.close
+      greedy_read_ms += (Time.instant - t_read).total_milliseconds
+      gpu_token = output_head.top1_ids[0]
+      greedy_gpu_ids << gpu_token
     end
-  elsif steady_reps > 0
-    # Prime device inputs and decode states once, then measure the steady path
-    # where recurrent/KV state stays resident across decode steps.
-    mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
-    t_steady = Time.instant
-    steady_reps.times do
-      mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: false)
-    end
-    gpu_ms = (Time.instant - t_steady).total_milliseconds
-    measured_tokens = tokens * steady_reps
+    gpu_ms = (Time.instant - gpu_t0).total_milliseconds
+    measured_tokens = greedy_loop_tokens
   else
-    gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback)
+    warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false) }
+
+    if steady_graph_reps > 0
+      mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
+      stream = ML::CUDA::CUDAStream.new
+      graph = nil.as(ML::CUDA::CUDAGraph?)
+      graph_exec = nil.as(ML::CUDA::CUDAGraphExec?)
+      begin
+        ML::CUDA.with_stream(stream) do
+          stream.begin_capture
+          mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: false,
+            sync_end: false, read_head_outputs: false)
+          graph = stream.end_capture
+        end
+        graph_exec = graph.not_nil!.instantiate
+        graph.not_nil!.close
+        t_graph = Time.instant
+        steady_graph_reps.times do
+          graph_exec.not_nil!.launch(stream)
+        end
+        stream.synchronize
+        gpu_ms = (Time.instant - t_graph).total_milliseconds
+        measured_tokens = tokens * steady_graph_reps
+        mixed_stack.read_head_outputs
+      ensure
+        graph_exec.try(&.close)
+        graph.try(&.close)
+        stream.close
+      end
+    elsif steady_reps > 0
+      # Prime device inputs and decode states once, then measure the steady path
+      # where recurrent/KV state stays resident across decode steps.
+      mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
+      t_steady = Time.instant
+      steady_reps.times do
+        mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: false)
+      end
+      gpu_ms = (Time.instant - t_steady).total_milliseconds
+      measured_tokens = tokens * steady_reps
+    else
+      gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback)
+    end
   end
   final_gpu_all = mixed_stack.final_gpu_all if debug_readback
 
   lines = [] of String
   ok = true
-  if perf_only
+  if greedy_loop_tokens > 0
+    if perf_only
+      lines << "perf_only=true"
+    elsif debug_readback
+      lines << "final_all_check=skipped_for_greedy_loop"
+    else
+      lines << "debug_readback=false"
+    end
+  elsif perf_only
     lines << "perf_only=true"
   elsif debug_readback
     ok = report_pair("final_all", final_gpu_all, cpu_current, lines, 1.0e-2_f32)
   else
     lines << "debug_readback=false"
   end
-  gpu_top1_ids = output_head.top1_ids
+  gpu_top1_ids = greedy_loop_tokens > 0 ? greedy_gpu_ids : output_head.top1_ids
   top1_ok = perf_only || gpu_top1_ids == cpu_top1_ids
-  if read_logits
+  if read_logits && greedy_loop_tokens == 0
     logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
     ok = ok && logits_ok
   else
@@ -295,7 +381,7 @@ begin
   lines << "top1_values_gpu=#{output_head.top1_values_gpu.map { |v| v.round(6) }.join(",")}"
   lines << "top1_ok=#{perf_only ? "skipped" : top1_ok}"
   ok = ok && top1_ok
-  if debug_readback && !perf_only
+  if debug_readback && !perf_only && greedy_loop_tokens == 0
     runners.each_with_index do |runner, idx|
       layer = layers[idx]
       case runner
@@ -324,6 +410,8 @@ begin
   puts "warmup=#{warmup}"
   puts "steady_reps=#{steady_reps}"
   puts "steady_graph_reps=#{steady_graph_reps}"
+  puts "greedy_loop_tokens=#{greedy_loop_tokens}"
+  puts "seed_token=#{seed_token}"
   puts "read_logits=#{read_logits}"
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"
@@ -334,7 +422,18 @@ begin
   puts "cuda_ms=#{gpu_ms.round(3)}"
   puts "cuda_ms_per_token=#{(gpu_ms / measured_tokens).round(3)}"
   puts "cpu_ms=#{cpu_ms.round(3)}"
-  puts "cpu_ms_per_token=#{(cpu_ms / tokens).round(3)}"
+  puts "cpu_ms_per_token=#{(cpu_ms / (greedy_loop_tokens > 0 ? greedy_loop_tokens : tokens)).round(3)}"
+  if greedy_loop_tokens > 0
+    denom = greedy_loop_tokens.to_f64
+    puts "greedy_position_ms=#{greedy_position_ms.round(3)}"
+    puts "greedy_position_ms_per_token=#{(greedy_position_ms / denom).round(3)}"
+    puts "greedy_embedding_ms=#{greedy_embedding_ms.round(3)}"
+    puts "greedy_embedding_ms_per_token=#{(greedy_embedding_ms / denom).round(3)}"
+    puts "greedy_body_ms=#{greedy_body_ms.round(3)}"
+    puts "greedy_body_ms_per_token=#{(greedy_body_ms / denom).round(3)}"
+    puts "greedy_read_ms=#{greedy_read_ms.round(3)}"
+    puts "greedy_read_ms_per_token=#{(greedy_read_ms / denom).round(3)}"
+  end
   mixed_stack.phase_lines.each { |line| puts line }
   lines.each { |line| puts line }
   puts "ok=#{ok}"

@@ -43,6 +43,29 @@ module ML::CUDA
       elapsed
     end
 
+    def upload_first_sequence_input(xs : Array(Float32)) : Nil
+      raise ArgumentError.new("xs size mismatch") unless xs.size == @tokens * @hidden
+
+      @xs = xs
+      case first = @runners.first
+      in QwenRecurrentLayerRunner
+        first.upload_sequence_input(xs)
+      in QwenFullAttnLayerRunner
+        first.upload_sequence_input(xs)
+      end
+    end
+
+    def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
+      @runners.each do |runner|
+        case runner
+        in QwenFullAttnLayerRunner
+          runner.update_decode_position(start_pos, cos_table, sin_table)
+        in QwenRecurrentLayerRunner
+          # Recurrent DeltaNet layers keep position only through their resident state.
+        end
+      end
+    end
+
     def run_sequence(profile_phases : Bool = false,
                      debug_readback : Bool = true,
                      reset_sequence : Bool = true,
