@@ -10909,6 +10909,22 @@ Conclusion: correctness held, but full 9B gen64 wall regressed/noised. Old devic
 - maieutic: Lower `greedy_position_ms` alone is not evidence of speed; total `cuda_ms_per_token` is authoritative.
 - adversary: Retaining host token1 setup is safer because it avoids relying on cross-stream ordering after the direct token0 wave.
 
+**decision_update_159f:** Re-checked CUDA Graph device-ready instantiation after resident RoPE/device-position cleanup. Earlier device-ready graph launch was neutral; the question was whether reducing host-side position work made device-launch-ready graph constraints beneficial.
+
+Conclusion: still neutral. Remote full 9B gen64 measured normal graph `23.112/23.139 ms/tok` vs device-ready graph `23.112/23.152 ms/tok`, all `ok=true`. Keep `--greedy-loop-graph-device-ready` as compatibility groundwork for future GPU-side controller experiments, not as a default speed path.
+
+**evidence_update_159f:**
+- claim: "Device-ready graph instantiation is still not a semantic-loop speedup."
+  source: remote `/tmp/cuda_mixed_stack_probe_device_ready_recheck --all-layers --tokens=1 --max-seq=128 --greedy-loop-tokens=64 --perf-only --skip-debug-readback [--greedy-loop-graph-device-ready]` -> normal `23.112/23.139 ms/tok`, device-ready `23.112/23.152 ms/tok`, all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph launch mode, GPU-side controller implementation, driver version, or semantic-loop scheduler changes
+
+**quadrumvirate_update_159f:**
+- cassandra: Device-ready constraints alone do not reduce host launches in this harness; neutral result matches the previous pattern.
+- daedalus: A real gain needs actual device-side launch/control, not just device-ready instantiation with host launches.
+- maieutic: "Device-ready" sounds like acceleration, but current implementation still host-launches the graph.
+- adversary: Do not promote this flag by name without measuring end-to-end semantic wall.
+
 **decision_update_160:** Refreshed the Q8_1+DP4A hot-FFN draft-only evidence after current CUDA cleanups. The existing `bin/cuda_q4k_repack_probe.cr` Q8 path quantizes the activation vector and uses DP4A against Q4_K weights, so it remains approximate and unsuitable as an exact runner route without exact verification.
 
 Conclusion: the microkernel signal is real but too small for direct runner integration. Across hot `blk.{0,1,3}.ffn_gate/up.weight` tensors, raw Q4_K is about `0.1099-0.1100 ms`, Q8+DP4A with GPU quantized activations is about `0.1036 ms`, one-use-with-quant speedup is about `1.04x`, and reuse2-with-quant is about `1.05x`. Cosine stays around `0.999993` with max diff `~0.0056-0.0074`. Keep this as a possible draft/proposal-body ingredient, not a standalone exact speed path.
