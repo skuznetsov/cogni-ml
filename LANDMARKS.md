@@ -10362,3 +10362,31 @@ Conclusion: F32 dequantized weights are not a decode speed path for hot Q4 GEMV.
 - daedalus: The next viable path is not larger decoded weights; it is making compact Q4 compute better or batching enough rows/tokens to use tensor-core-style paths.
 - maieutic: The hidden assumption "dequant is the bottleneck" is false for the hot single-token GEMV shape if removing dequant requires a 7x weight read.
 - adversary: This refutes F32 full dequant for decode GEMV, not F16, tensor-core batched prefill, or compact repacks that keep memory close to Q4_K.
+
+**decision_update_139:** Extended the CUDA Q4_K repack probe with a llama.cpp-inspired Q8_1 activation + DP4A path. The probe now quantizes the input vector to Q8_1 on GPU, compares host/GPU Q8 packs for correctness, and runs a DP4A Q4_K GEMV using compact raw Q4 bytes plus pre-expanded Q4 scale/min metadata. This is deliberately an approximate upper-bound branch: Q8 activation quantization is not exact relative to the current F32-input Q4_K GEMV, so it is a candidate for draft/speed-mode routing only unless a later full-model top1/parity gate proves acceptable.
+
+Conclusion: Q8_1 + DP4A is a real but modest CUDA body-GEMV lever on RTX 5060 Ti. On hot FFN Q4_K `4096x12288` tensors, DP4A alone improves raw Q4 GEMV by about `1.06x`; including GPU Q8 quantization gives about `1.04x` for one use and `1.05x` when the quantized activation is reused for the usual FFN gate+up pair. Tiny `4096x32` Q4 projections improve more (`~1.95x` DP4A-only, `~1.50x` with two-use quant reuse), but their absolute wall is small. The route is not a 2x breakthrough by itself, but it is the first positive CUDA Q4 row-compute result after several refuted retunes and repacks.
+
+**evidence_update_139:**
+- claim: "The Q8_1 GPU quantizer produces the same packs/scales as the host quantizer in the probe."
+  source: remote `/tmp/cuda_q4k_q8_dp4a_probe5 --tensor blk.0.ffn_up.weight --reps 80 --warmup 8` -> `q8_quant_pack_mismatches=0`, `q8_quant_scale_max_diff=0.0`
+  verified_at: 2026-05-09
+  decay_trigger: Q8 quantizer PTX, host quantizer, CUDA driver JIT, or input rounding policy changes
+- claim: "Q8_1 + DP4A improves hot Q4_K FFN GEMV modestly, even after GPU quantization overhead."
+  source: remote `--tensor blk.0.ffn_up.weight --reps 100 --warmup 10` -> `raw_cuda_ms=0.1098`, `q8_dp4a_cuda_ms=0.1036`, `q8_quant_cuda_ms=0.0020`, `q8_dp4a_oneuse_with_quant_speedup=1.0405`, `q8_dp4a_reuse2_with_quant_speedup=1.0506`, `q8_dp4a_cos=0.99999293`, `q8_dp4a_max_diff=0.0056332806`
+  verified_at: 2026-05-09
+  decay_trigger: Q4_K DP4A PTX, activation distribution, tensor shape, GPU architecture, or timing harness changes
+- claim: "The same hot-shape Q8_1 + DP4A speedup repeats on FFN gate and the next layer's FFN up."
+  source: remote sweep -> `blk.0.ffn_gate.weight` `raw_cuda_ms=0.1098`, `q8_dp4a_cuda_ms=0.1036`, `reuse2_with_quant_speedup=1.0503`; `blk.1.ffn_up.weight` `raw_cuda_ms=0.1098`, `q8_dp4a_cuda_ms=0.1037`, `reuse2_with_quant_speedup=1.0497`; all `q8_quant_pack_mismatches=0`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: FFN tensor types/shapes, Q8 quantizer, or CUDA scheduling changes
+- claim: "Tiny Q4_K projections benefit more proportionally but remain small in absolute time."
+  source: remote `--tensor blk.0.ssm_alpha.weight --reps 100 --warmup 10` -> `shape=4096x32`, `raw_cuda_ms=0.0064`, `q8_dp4a_cuda_ms=0.0033`, `q8_quant_cuda_ms=0.0020`, `q8_dp4a_reuse2_with_quant_speedup=1.4954`, `q8_dp4a_cos=0.99998547`, `q8_dp4a_max_diff=0.010517836`
+  verified_at: 2026-05-09
+  decay_trigger: small projection routing, quant overhead, launch overhead, or GPU architecture changes
+
+**quadrumvirate_update_139:**
+- cassandra: The likely failure mode was quantization overhead erasing the DP4A win. It does erase part of it, but not all when gate/up reuse the same packed activation.
+- daedalus: The useful frame is not "decode bigger weights"; it is "compress activations once, reuse them across multiple Q4 consumers, and move dot work to integer units."
+- maieutic: The key caveat is quality/exactness. This path changes the activation values, so it cannot silently replace exact verifier GEMV.
+- adversary: This evidence is tensor-level, not full-model semantic proof. Next gate must test an opt-in draft/speed-mode Q4 route against top1/acceptance/parity before any production integration.
