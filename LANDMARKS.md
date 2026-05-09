@@ -10562,3 +10562,23 @@ Conclusion: this is a small but real exact WBA cleanup. The standalone alpha/bet
 - daedalus: The useful pattern is "fuse sibling tiny projections with identical input/output geometry" rather than "micro-optimize one tiny projection body."
 - maieutic: The ceiling is limited because alpha/beta was only a small phase, so this is a cleanup, not the next breakthrough.
 - adversary: The result is exact on the tested oracle and semantic token sequence, with an env escape hatch for regression isolation. It does not reduce the dominant FFN/body GEMV wall; continue searching for larger Q4/Q6 row-compute or diamond fusions.
+
+**decision_update_147:** Refuted promotion of the same Q4 dual-GEMV route for full-attention `attn_q + attn_k` projections. A temporary branch reused `q4_k_dual_gemv_warp4_f32` in `QwenFullAttnProjectionRunner` when `q_dim == k_dim`, leaving `attn_v` separate. This tested whether the successful recurrent alpha/beta sibling-fusion pattern transfers to the larger full-attention q/k projections.
+
+Conclusion: q/k dual projection is exact but not a robust full-model win. The five-layer oracle stayed exact and showed a small positive local signal (`7.669ms` default vs `7.698ms` with q/k dual disabled), but full 9B semantic gen16 was effectively noise: default `23.776/23.833 ms/tok` vs q/k-disabled `23.801/23.814 ms/tok`. The mean delta is about `0.003ms/tok`, below promotion threshold. The temporary q/k runner route was removed; keep the dual kernel only for recurrent alpha/beta where the full semantic signal is much stronger.
+
+**evidence_update_147:**
+- claim: "Temporary q/k dual projection preserved the five-layer full-logit/top1 oracle."
+  source: remote temporary `/tmp/cuda_mixed_stack_probe_q4dual_qk --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> default `cuda_ms=7.669`, `QWEN_CUDA_Q4_ATTN_QK_DUAL_OFF=1` `cuda_ms=7.698`; both `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: full-attn projection runner, q4 dual PTX, q/k tensor shapes, or five-layer oracle changes
+- claim: "Temporary q/k dual projection did not produce a robust full 9B semantic win."
+  source: remote full 9B `--all-layers --greedy-loop-tokens=16 --seed-token=0 --perf-only --skip-debug-readback` -> default `23.776/23.833 ms/tok`, q/k-disabled `23.801/23.814 ms/tok`, generated token sequence identical
+  verified_at: 2026-05-09
+  decay_trigger: semantic-loop harness, full-attn q/k routing, GPU load/order, or model tensor mix changes
+
+**quadrumvirate_update_147:**
+- cassandra: The transfer risk was that q/k projections are larger and less launch-dominated than alpha/beta; full semantic timing confirms the benefit is too small.
+- daedalus: Sibling projection fusion is useful only when launch/row-count overhead dominates. For larger projections, hot row compute remains the bottleneck.
+- maieutic: The hidden assumption "same pattern transfers because shapes match" is insufficient; phase share and full-model effect size decide promotion.
+- adversary: This refutes default promotion of full-attention q/k dual projection, not the recurrent alpha/beta route or future fusions that eliminate heavier intermediate traffic.
