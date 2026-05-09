@@ -9912,3 +9912,23 @@ Conclusion: changing Q4 FFN gate/up from `4` rows/block to `8` rows/block is not
 - daedalus: The useful next frame is traffic reduction/fusion, not block packing.
 - maieutic: The assumption that larger blocks improve occupancy was false for this workload/hardware pair.
 - adversary: Refutation is scoped to RTX 5060 Ti, Qwen3.5 9B FFN shapes, and this PTX implementation.
+
+**decision_update_120:** Prototyped and refuted correctness-first paired Q4_K FFN gate/up fusion. The temporary PTX kernel computed the same output row for `ffn_gate` and `ffn_up` in one warp and reused `x` loads, then recurrent and full-attention FFN gate/up launches were routed through it. Parity held, but the fused path did not improve profile or non-profile wall, so the code was reverted.
+
+Conclusion: same-row paired gate/up fusion is not enough on the current RTX 5060 Ti gate. The expected saved `x` traffic was outweighed by extra register pressure/dequant work/scheduling effects. Future FFN work needs a more substantial Q4/Q6 GEMV algorithmic change, a different tiling shape, or a higher-level architecture path; naive pair fusion should not be retried without a new premise.
+
+**evidence_update_120:**
+- claim: "Paired Q4_K FFN gate/up fusion preserves top1 parity but does not speed up this CUDA gate."
+  source: remote temporary paired run `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases --skip-debug-readback` -> `ok=true`, `phase_total_ms=8.5`, recurrent `ffn_gate_up_ms≈0.295`, full-attn `phase_layer3_kv_ffn_gate_up_ms=0.289`; non-profile `tokens=1 --warmup 3 --skip-debug-readback` -> `cuda_ms=7.817`; `tokens=4 --skip-debug-readback` -> `cuda_ms_per_token=6.574`
+  verified_at: 2026-05-09
+  decay_trigger: paired kernel algorithm, GPU architecture, FFN shapes, model quantization, or measurement harness changes
+- claim: "The temporary paired fusion branch was reverted after refutation."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_after_pair_refute_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0; `git diff --stat` after revert shows no paired-kernel source changes
+  verified_at: 2026-05-09
+  decay_trigger: q4 kernel source or runner FFN launch wiring changes
+
+**quadrumvirate_update_120:**
+- cassandra: The predicted risk was that pair fusion saves x loads but loses to register pressure and doubled dequant work inside one warp. The remote gate matched that risk.
+- daedalus: The frame shifts away from local FFN launch fusion. The next useful branches are full-model construction/perf accounting or a genuinely different GEMV algorithm.
+- maieutic: The assumption that x-load reuse dominates was false for this implementation/hardware. Weight dequant and occupancy effects likely dominate.
+- adversary: This refutes only the naive same-row paired warp4 implementation, not all possible FFN fusion or Q4 algorithms.
