@@ -10674,3 +10674,19 @@ Conclusion: GPU-resident feedback is exact on the tested token sequence and give
 - daedalus: The useful frame is not "make embedding faster" but "remove CPU from the token-feedback dependency chain" so future controllers can branch or speculate on GPU.
 - maieutic: The hidden risk was Q4_K row dequant mismatch. Token-sequence parity across five-layer and full 9B checks is the current guard, but a direct embedding-vector oracle would be a stronger next check if this path becomes production.
 - adversary: This is still a harness skeleton. It does not yet eliminate host-side RoPE/position updates or implement GPU-side accept/reject control; it only removes the top1/embedding feedback round trip.
+
+**decision_update_152:** Added a CUDA body-floor probe for the mixed-stack harness. `bin/cuda_mixed_stack_probe.cr --skip-output-head` runs all model layers but skips output RMSNorm, lm-head, and top1 reduction, and is restricted to `--perf-only`. This measures the exact model-body floor without pretending to generate valid next tokens.
+
+Conclusion: output-head/top1 is a large isolated cost, but body GEMV remains dominant. On the refreshed RTX 5060 Ti host with Qwen3.5 9B Q4_K_M and `--all-layers --tokens=1 --max-seq=64 --warmup=1 --steady-reps=16 --skip-debug-readback --perf-only`, normal head mode measured `22.901/22.923 ms/tok`; `--skip-output-head` measured `20.533/20.548 ms/tok`. The implied output-head cost is about `2.37 ms/tok` or roughly `10.4%` of the current steady decode wall. This justifies separate head-shortlist/draft-head work, but cannot alone produce a 2x speedup.
+
+**evidence_update_152:**
+- claim: "Skipping output-head/top1 gives an exact body-floor measurement for steady decode."
+  source: local no-codegen build passed; remote `/tmp/cuda_mixed_stack_probe_test --all-layers --tokens=1 --max-seq=64 --warmup=1 --steady-reps=16 --skip-debug-readback --perf-only [--skip-output-head]` -> head `22.901/22.923 ms/tok`, nohead `20.533/20.548 ms/tok`, both `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: output-head runner, mixed-stack run_sequence, model quantization, GPU host setup, or steady timing harness changes
+
+**quadrumvirate_update_152:**
+- cassandra: Head cost was expected to be material after the fused Q6 top1 path still profiled around `2.3-2.4 ms`; steady body-floor confirms it.
+- daedalus: The useful split is now explicit: body optimizations target ~20.5 ms/tok, while head elimination/shortlist targets a separate ~2.37 ms/tok ceiling.
+- maieutic: `--skip-output-head` is not a generation path and must stay perf-only; it removes logits/top1 semantics by design.
+- adversary: Do not use this to claim model speed. It is a lower-bound attribution probe. Valid next-token generation still requires the head unless a verified shortlist/draft-head path restores exact top1.

@@ -83,7 +83,8 @@ module ML::CUDA
                      debug_readback : Bool = true,
                      reset_sequence : Bool = true,
                      sync_end : Bool = true,
-                     read_head_outputs : Bool = true) : Float64
+                     read_head_outputs : Bool = true,
+                     run_head : Bool = true) : Float64
       @phase_lines.clear
       previous_output = 0_u64
       t_all = Time.instant
@@ -125,29 +126,35 @@ module ML::CUDA
         previous_output = runner.output_device_ptr
       end
 
-      @head.use_device_sequence_input(previous_output)
-      if reset_sequence
-        t_head_reset = Time.instant
-        @head.reset_sequence
-        if profile_phases
-          ML::CUDA.synchronize!("cuCtxSynchronize(mixed head reset)")
-          @phase_lines << "phase_head_reset_ms=#{((Time.instant - t_head_reset).total_milliseconds).round(3)}"
+      if run_head
+        @head.use_device_sequence_input(previous_output)
+        if reset_sequence
+          t_head_reset = Time.instant
+          @head.reset_sequence
+          if profile_phases
+            ML::CUDA.synchronize!("cuCtxSynchronize(mixed head reset)")
+            @phase_lines << "phase_head_reset_ms=#{((Time.instant - t_head_reset).total_milliseconds).round(3)}"
+          end
+        elsif profile_phases
+          @phase_lines << "phase_head_reset_ms=skipped"
         end
-      elsif profile_phases
-        @phase_lines << "phase_head_reset_ms=skipped"
-      end
-      t_head = Time.instant
-      if profile_phases
-        @head.run_sequence_profiled(@phase_lines)
-        @phase_lines << "phase_head_ms=#{((Time.instant - t_head).total_milliseconds).round(3)}"
+        t_head = Time.instant
+        if profile_phases
+          @head.run_sequence_profiled(@phase_lines)
+          @phase_lines << "phase_head_ms=#{((Time.instant - t_head).total_milliseconds).round(3)}"
+        else
+          @head.run_sequence
+          ML::CUDA.synchronize!("cuCtxSynchronize(mixed stack)") if sync_end
+        end
       else
-        @head.run_sequence
+        @phase_lines << "phase_head_reset_ms=skipped"
+        @phase_lines << "phase_head_ms=skipped"
         ML::CUDA.synchronize!("cuCtxSynchronize(mixed stack)") if sync_end
       end
 
       t_read = Time.instant
       @runners.each(&.read_outputs) if debug_readback
-      @head.read_outputs if read_head_outputs
+      @head.read_outputs if run_head && read_head_outputs
       @phase_lines << "phase_readback_ms=#{((Time.instant - t_read).total_milliseconds).round(3)}" if profile_phases
 
       if debug_readback

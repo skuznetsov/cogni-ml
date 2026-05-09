@@ -164,6 +164,7 @@ read_logits = false
 profile_phases = false
 debug_readback = true
 perf_only = false
+skip_output_head = false
 all_layers = false
 greedy_loop_tokens = 0
 greedy_loop_graph = false
@@ -186,6 +187,7 @@ OptionParser.parse do |p|
   p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
   p.on("--skip-debug-readback", "Read only output-head results; skip final hidden/state/KV debug buffers for perf attribution") { debug_readback = false }
   p.on("--perf-only", "Skip CPU reference and hidden/state checks; reports CUDA timing/top1 only") { perf_only = true }
+  p.on("--skip-output-head", "Perf-only body-floor probe: run model layers but skip output norm/lm-head/top1") { skip_output_head = true }
   p.on("--all-layers", "Run all model layers instead of the explicit/default layer slice") { all_layers = true }
   p.on("--greedy-loop-tokens N", "Run an embedding-driven greedy decode loop for N generated tokens; forces --tokens=1") { |v| greedy_loop_tokens = v.to_i }
   p.on("--greedy-loop-graph", "Capture the reset-free greedy-loop body as a CUDA graph and replay it after the first token") { greedy_loop_graph = true }
@@ -210,11 +212,14 @@ raise "--steady-reps does not support --profile-phases" if steady_reps > 0 && pr
 raise "--steady-graph-reps requires --perf-only" if steady_graph_reps > 0 && !perf_only
 raise "--steady-graph-reps does not support --profile-phases" if steady_graph_reps > 0 && profile_phases
 raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps > 0 && steady_graph_reps > 0
+raise "--skip-output-head requires --perf-only" if skip_output_head && !perf_only
+raise "--skip-output-head is incompatible with --read-logits" if skip_output_head && read_logits
 raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
 raise "--greedy-loop-graph requires --greedy-loop-tokens" if greedy_loop_graph && greedy_loop_tokens == 0
 raise "--greedy-loop-graph-device-ready requires --greedy-loop-graph" if greedy_loop_graph_device_ready && !greedy_loop_graph
 raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop_gpu_embedding && greedy_loop_tokens == 0
 if greedy_loop_tokens > 0
+  raise "--skip-output-head is incompatible with --greedy-loop-tokens" if skip_output_head
   raise "--greedy-loop-tokens currently requires --perf-only; it is a semantic timing harness, not a CPU oracle" unless perf_only
   raise "--greedy-loop-tokens is incompatible with --steady-reps/--steady-graph-reps" if steady_reps > 0 || steady_graph_reps > 0
   raise "--greedy-loop-tokens is incompatible with --profile-phases" if profile_phases
@@ -451,10 +456,10 @@ begin
     gpu_ms = (Time.instant - gpu_t0).total_milliseconds
     measured_tokens = greedy_loop_tokens
   else
-    warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false) }
+    warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false, run_head: !skip_output_head) }
 
     if steady_graph_reps > 0
-      mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
+      mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true, run_head: !skip_output_head)
       stream = ML::CUDA::CUDAStream.new
       graph = nil.as(ML::CUDA::CUDAGraph?)
       graph_exec = nil.as(ML::CUDA::CUDAGraphExec?)
@@ -462,7 +467,7 @@ begin
         ML::CUDA.with_stream(stream) do
           stream.begin_capture
           mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: false,
-            sync_end: false, read_head_outputs: false)
+            sync_end: false, read_head_outputs: false, run_head: !skip_output_head)
           graph = stream.end_capture
         end
         graph_exec = graph.not_nil!.instantiate
@@ -476,7 +481,7 @@ begin
         stream.synchronize
         gpu_ms = (Time.instant - t_graph).total_milliseconds
         measured_tokens = tokens * steady_graph_reps
-        mixed_stack.read_head_outputs
+        mixed_stack.read_head_outputs unless skip_output_head
       ensure
         graph_exec.try(&.close)
         graph.try(&.close)
@@ -485,15 +490,17 @@ begin
     elsif steady_reps > 0
       # Prime device inputs and decode states once, then measure the steady path
       # where recurrent/KV state stays resident across decode steps.
-      mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true)
+      mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true, run_head: !skip_output_head)
       t_steady = Time.instant
       steady_reps.times do
-        mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: false)
+        mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: false,
+          run_head: !skip_output_head)
       end
       gpu_ms = (Time.instant - t_steady).total_milliseconds
       measured_tokens = tokens * steady_reps
     else
-      gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback)
+      gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback,
+        run_head: !skip_output_head)
     end
   end
   final_gpu_all = mixed_stack.final_gpu_all if debug_readback
@@ -515,8 +522,8 @@ begin
   else
     lines << "debug_readback=false"
   end
-  gpu_top1_ids = greedy_loop_tokens > 0 ? greedy_gpu_ids : output_head.top1_ids
-  top1_ok = perf_only || gpu_top1_ids == cpu_top1_ids
+  gpu_top1_ids = skip_output_head ? [] of Int32 : (greedy_loop_tokens > 0 ? greedy_gpu_ids : output_head.top1_ids)
+  top1_ok = skip_output_head || perf_only || gpu_top1_ids == cpu_top1_ids
   if read_logits && greedy_loop_tokens == 0
     logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
     ok = ok && logits_ok
@@ -565,6 +572,7 @@ begin
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"
   puts "perf_only=#{perf_only}"
+  puts "skip_output_head=#{skip_output_head}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
