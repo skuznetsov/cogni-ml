@@ -9606,3 +9606,28 @@ Conclusion: CUDA now verifies Qwen3.5 9B full-attention layer semantics from res
 - daedalus: The frame shifted from "finish another tail piece" to "define a composable layer boundary". Full-attention semantics are now present, but still split across a projection runner and a KV/tail runner.
 - maieutic: The remaining hidden assumption is that semantic completeness equals backend readiness. It does not: model-level scheduling, restored prefix KV, logits/top1, and an optimized attention decode kernel remain outside this proof.
 - adversary: Evidence covers one 9B full-attention layer, synthetic residual inputs, zero-initialized prefix cache rows before `start_pos`, and the current Q4/Q6 tensor pattern. It does not cover nonzero restored prefix KV, 27B shape variants, mixed full/recurrent stack handoff, logits/top1, tokenizer/sampling, or performance-optimized attention decode.
+
+
+**decision_update_106:** Added a composable CUDA full-attention layer runner. `ML::CUDA::QwenFullAttnLayerRunner` wraps the full-attention projection runner and KV/tail runner behind one residual-hidden-to-final-hidden boundary. `QwenFullAttnProjectionRunner` now exposes its active sequence input device pointer, and `QwenFullAttnKVRunner` can consume an external residual input pointer plus exposes its final hidden output device pointer. The full-attention probe now routes through this wrapper instead of manually sequencing projection and KV/tail work.
+
+Conclusion: CUDA now has reusable recurrent-layer runners, a recurrent stack runner, and a full-attention layer runner with device-resident input/output handoff hooks. The next backend gate is mixed-stack composition in Qwen layer order, not more one-layer semantic proof. The main caveat remains that full-attention decode uses a correctness-first serial attention kernel, so mixed-stack correctness should precede performance claims.
+
+**evidence_update_106:**
+- claim: "The full-attention layer runner wrapper has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_full_layer_syntax crystal build -Dcpu_only --no-codegen bin/cuda_full_attn_kv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: full-attention layer runner, projection runner pointer API, KV runner external residual API, Crystal compiler, or embedded PTX files change
+- claim: "The wrapper-backed CUDA full-attention probe matches CPU references from residual hidden input through final hidden output on Qwen3.5 9B layer3."
+  source: remote `cuda_full_attn_kv_probe --layer 3 --tokens 4 --start-pos 2 --max-seq 12` -> `ok=true`, `final_cos=1.0`, `final_max_diff=4.005432e-5`; Q/gate/K/attn/proj/K-cache/V-cache also remained `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: layer wrapper sequencing, residual input handoff, projection output handoff, KV/tail runner launch order, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+- claim: "The projection-only runner path remains compatible after adding layer-runner hooks."
+  source: remote `cuda_attn_projection_probe --layer 3 --tokens 2 --reps 1 --warmup 0` -> `ok=true`, Q/K/V all `cos=1.0`
+  verified_at: 2026-05-08
+  decay_trigger: projection runner optional-norm branch, sequence input pointer API, CUDA module loading, Q/K/V GEMV kernels, model file, or CPU reference changes
+
+**quadrumvirate_update_106:**
+- cassandra: The likely failure was hidden double-upload or stale residual pointer use after wrapping. The wrapper shares the projection runner's active input device pointer with the KV/tail runner, and the remote final-hidden parity gate would catch stale or mismatched residual data.
+- daedalus: The useful abstraction boundary is now the model layer, not projection/KV micro-slices. Mixed-stack composition can build on recurrent and full-attention layer objects instead of growing probes sideways.
+- maieutic: The full-attention layer runner is a semantics boundary, not a speed-optimized boundary. Serial full-attention decode remains intentionally slow and should not be confused with final CUDA throughput.
+- adversary: Evidence covers one 9B full-attention layer and synthetic residual inputs. It does not cover nonzero restored prefix KV, 27B full-attention variants, full/recurrent mixed stack state ordering, logits/top1, tokenizer/sampling, or optimized full-attention decode.

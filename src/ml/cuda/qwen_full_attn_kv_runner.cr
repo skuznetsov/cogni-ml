@@ -72,6 +72,7 @@ module ML::CUDA
     getter attn_gpu_all : Array(Float32)
     getter proj_gpu_all : Array(Float32)
     getter final_gpu_all : Array(Float32)
+    getter output_device_ptr : DevicePtr
     getter k_cache_gpu : Array(Float32)
     getter v_cache_gpu : Array(Float32)
 
@@ -129,6 +130,9 @@ module ML::CUDA
       @modules = [] of CUDAModule
       @buffers = [] of DeviceBuffer
       @param_keepalive = [] of Void*
+      @residual_device_base = nil.as(DevicePtr?)
+      @owned_residual_device_ptr = nil.as(DevicePtr?)
+      @output_device_ptr = 0_u64
       @closed = false
 
       build_runner
@@ -138,9 +142,26 @@ module ML::CUDA
       runner.upload_weights
     end
 
+    def reset_sequence : Nil
+      runner.reset_sequence
+    end
+
     def run_sequence : Nil
       runner.reset_sequence
       runner.run_sequence
+    end
+
+    def replace_residual_input(residual_input : Array(Float32)) : Nil
+      raise ArgumentError.new("residual input size mismatch") unless residual_input.size == @tokens * @output_out_dim
+
+      @residual_input = residual_input
+      @residual_device_base = @owned_residual_device_ptr
+    end
+
+    def use_device_residual_input(ptr : DevicePtr) : Nil
+      raise ArgumentError.new("device residual pointer must be non-zero") if ptr == 0_u64
+
+      @residual_device_base = ptr
     end
 
     def read_outputs : Nil
@@ -190,6 +211,9 @@ module ML::CUDA
         buffer.ptr
       end
       d_q_norm, d_k_norm, d_cos, d_sin, d_q_out, d_gate_out, d_k_out, d_k_cache, d_v_cache, d_scores, d_attn_out, d_output_w, d_proj_out, d_residual_input, d_post_norm, d_residual, d_cur2, d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w, d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all = ptrs
+      @owned_residual_device_ptr = d_residual_input
+      @residual_device_base = d_residual_input
+      @output_device_ptr = d_final_all
 
       upload_constants = -> {
         ML::CUDA.copy_htod!(d_q_norm, @q_norm.to_unsafe.as(Void*), bytesize_f32(@q_norm.size), "q_norm")
@@ -206,7 +230,9 @@ module ML::CUDA
       reset_sequence = -> {
         # Projection outputs are already device-resident inputs. KV cache rows
         # written by this probe are overwritten before comparison.
-        ML::CUDA.copy_htod!(d_residual_input, @residual_input.to_unsafe.as(Void*), bytesize_f32(@residual_input.size), "residual_input")
+        if @residual_device_base == d_residual_input
+          ML::CUDA.copy_htod!(d_residual_input, @residual_input.to_unsafe.as(Void*), bytesize_f32(@residual_input.size), "residual_input")
+        end
       }
 
       n_head_u32 = @n_head.to_u32
@@ -333,7 +359,7 @@ module ML::CUDA
             d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
             d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
             ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
-            d_residual_cur_ptr.value = d_residual_input + bytesize_f32(t * @output_out_dim)
+            d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
             d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
             d_final_cur_ptr.value = d_final_all + bytesize_f32(t * @output_out_dim)
             ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm")

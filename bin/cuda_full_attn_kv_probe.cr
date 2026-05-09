@@ -8,8 +8,7 @@ require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_meta"
 require "../src/ml/gguf/quant_matmul"
-require "../src/ml/cuda/qwen_full_attn_projection_runner"
-require "../src/ml/cuda/qwen_full_attn_kv_runner"
+require "../src/ml/cuda/qwen_full_attn_layer_runner"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
@@ -91,8 +90,9 @@ gguf = ML::GGUF::GGUFFile.new(model)
 hparams = ML::GGUF::Qwen35Hparams.new(gguf)
 raise "layer #{layer} is not full-attention" unless hparams.full_attention?(layer)
 
-proj_weights = ML::CUDA::QwenFullAttnProjectionRunner::Weights.load(gguf, layer)
-kv_weights = ML::CUDA::QwenFullAttnKVRunner::Weights.load(gguf, layer)
+layer_weights = ML::CUDA::QwenFullAttnLayerRunner::Weights.load(gguf, layer)
+proj_weights = layer_weights.projection
+kv_weights = layer_weights.kv
 hidden = proj_weights.hidden
 n_head = hparams.n_head
 n_head_kv = hparams.n_head_kv
@@ -206,24 +206,18 @@ tokens.times do |tok|
 end
 
 cuda_ctx = nil.as(ML::CUDA::Context?)
-proj = nil.as(ML::CUDA::QwenFullAttnProjectionRunner?)
-kv = nil.as(ML::CUDA::QwenFullAttnKVRunner?)
+full = nil.as(ML::CUDA::QwenFullAttnLayerRunner?)
 
 begin
   cuda_ctx = ML::CUDA::Context.create
-  proj = ML::CUDA::QwenFullAttnProjectionRunner.from_weights_with_input_norm(proj_weights, tokens, residual_xs,
-    kv_weights.attn_norm, hparams.rms_eps)
-  proj.upload_weights
-  proj.reset_sequence
-  proj.run_sequence
-  ML::CUDA.synchronize!("cuCtxSynchronize(projection)")
-
-  kv = ML::CUDA::QwenFullAttnKVRunner.new(tokens, max_seq, start_pos, n_head, n_head_kv, head_dim, rope_dim,
-    hparams.rms_eps, proj.q_device_ptr, proj.k_device_ptr, proj.v_device_ptr, kv_weights, residual_xs, cos_table, sin_table)
-  kv.upload_constants
-  kv.run_sequence
-  ML::CUDA.synchronize!("cuCtxSynchronize(kv)")
-  kv.read_outputs
+  full = ML::CUDA::QwenFullAttnLayerRunner.from_weights(layer_weights, tokens, max_seq, start_pos,
+    n_head, n_head_kv, head_dim, rope_dim, hparams.rms_eps, residual_xs, cos_table, sin_table)
+  full.upload_weights
+  full.reset_sequence
+  full.run_sequence
+  ML::CUDA.synchronize!("cuCtxSynchronize(full_attn)")
+  full.read_outputs
+  kv = full.kv
 
   lines = [] of String
   ok = true
@@ -251,8 +245,7 @@ begin
   lines.each { |line| puts line }
   puts "ok=#{ok}"
 ensure
-  kv.try(&.close)
-  proj.try(&.close)
+  full.try(&.close)
   cuda_ctx.try(&.close)
   gguf.close
 end
