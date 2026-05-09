@@ -9804,3 +9804,19 @@ Conclusion: after the top1 stride fix, the next wall was not DeltaNet math; it w
 - daedalus: The useful pivot was eliminate serial hidden-vector kernels before touching heavier Q4/Q6 GEMV. The data shows normalization was a structural tax across recurrent, full-attention, and head boundaries.
 - maieutic: The assumption that DeltaNet recurrence was the next wall was too coarse. In the current CUDA scaffold, recurrent core after parallel add+RMSNorm is only about `0.132ms/layer`; FFN and output logits are now more important.
 - adversary: Evidence covers one RTX 5060 Ti, Qwen3.5 9B, layers `0..4`, greedy top1, and `tokens=1/4`. It does not yet cover all model layers, 27B, topK sampling, end-to-end generate, or CUDA-vs-Metal throughput parity.
+
+**decision_update_114:** Split CUDA mixed-stack reset timing from per-layer execution timing. The previous recurrent subphase attribution charged `reset_sequence` HtoD state copies to the first synchronized kernel in each recurrent layer, making `attn_norm` look about 10x slower than the same output-head norm. `QwenMixedStackRunner` now reports `phase_layer*_reset_ms` and `phase_head_reset_ms` before layer/head execution when `--profile-phases` is enabled.
+
+Conclusion: after separating reset, hidden-size RMSNorm is no longer a recurrent-layer wall (`~0.028-0.030ms/layer`). The remaining one-token profile includes cold sequence reset costs (`~0.40ms` per recurrent layer), which should be treated differently from steady-state decode. The new execution hot spots are output logits (`~2.315ms`), recurrent FFN (`~0.42ms/layer`), full-attention layer execution (`~0.725ms`), and debug readback (`~1.822ms`).
+
+**evidence_update_114:**
+- claim: "Reset attribution separates HtoD state reset from recurrent norm execution."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases` -> `ok=true`, recurrent `phase_layer*_reset_ms≈0.401-0.421`, `phase_layer*_attn_norm_ms≈0.028-0.030`, `phase_total_ms=9.994`
+  verified_at: 2026-05-09
+  decay_trigger: mixed-stack profiling policy, runner reset semantics, CUDA copy behavior, or state-buffer ownership changes
+
+**quadrumvirate_update_114:**
+- cassandra: The likely measurement bug was synchronization debt from reset copies being assigned to the first profiled kernel. The new reset lines confirm that pattern.
+- daedalus: The frame shifts from optimizing recurrent RMSNorm further to separating cold-sequence setup from steady decode and then attacking true execution hot spots.
+- maieutic: A phase label is only valid if preceding asynchronous work has already been accounted for. The reset split is now the falsifier against misattributed first-kernel timings.
+- adversary: This is a measurement improvement, not a runtime speedup. Evidence is one remote 9B five-layer profile and should be rechecked after state ownership changes.

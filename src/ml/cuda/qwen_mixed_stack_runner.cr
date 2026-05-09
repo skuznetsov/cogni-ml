@@ -60,7 +60,12 @@ module ML::CUDA
           runner.use_device_sequence_input(previous_output)
         end
 
+        t_reset = Time.instant
         runner.reset_sequence
+        if profile_phases
+          ML::CUDA.synchronize!("cuCtxSynchronize(mixed layer #{idx} reset)")
+          @phase_lines << "phase_layer#{@layer_ids[idx]}_reset_ms=#{((Time.instant - t_reset).total_milliseconds).round(3)}"
+        end
         t0 = Time.instant
         if profile_phases
           case runner
@@ -78,7 +83,12 @@ module ML::CUDA
       end
 
       @head.use_device_sequence_input(previous_output)
+      t_head_reset = Time.instant
       @head.reset_sequence
+      if profile_phases
+        ML::CUDA.synchronize!("cuCtxSynchronize(mixed head reset)")
+        @phase_lines << "phase_head_reset_ms=#{((Time.instant - t_head_reset).total_milliseconds).round(3)}"
+      end
       t_head = Time.instant
       if profile_phases
         @head.run_sequence_profiled(@phase_lines)
