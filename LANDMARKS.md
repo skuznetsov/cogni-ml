@@ -9673,3 +9673,28 @@ Conclusion: the CUDA scaffold now covers a Qwen body slice through logits/top1, 
 - daedalus: Full logits readback is a correctness boundary, not the final decode design. The next frame should eliminate logits readback with resident top1/topK and then wrap layer/head runners in a model-level state object.
 - maieutic: Matching hidden states does not automatically prove output-head correctness; logits/top1 are now directly checked.
 - adversary: Evidence covers one 9B five-layer slice and one token. It does not cover all layers, 27B, topK/sampling, repeated decode-loop state ownership, or performance after replacing the serial full-attention kernel.
+
+
+**decision_update_109:** Replaced default full-logits readback with a resident CUDA top1 boundary. `QwenOutputHeadRunner` now launches a correctness-first `output_top1_serial_probe` over resident logits, stores top1 id/value in device buffers, and copies back only top1 outputs by default. `bin/cuda_mixed_stack_probe.cr` keeps `--read-logits` as an optional adversary oracle for full-logits comparison.
+
+Conclusion: the CUDA scaffold now has the correct decode-facing readback shape for greedy output: hidden/state debug readback aside, the output head no longer requires copying the full vocab logits to know top1. This is not a speed win yet because the first top1 kernel is intentionally serial; the next performance gate is a parallel top1/topK reduction.
+
+**evidence_update_109:**
+- claim: "The resident-top1 output-head path has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_top1_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: output-head runner source, top1 PTX, mixed probe source, Crystal compiler, or embedded PTX files change
+- claim: "The mixed CUDA stack can produce CPU-matching top1 without full logits readback."
+  source: remote default `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --start-pos 2 --max-seq 12` -> `ok=true`, `logits_readback=false`, `top1_gpu=96939`, `top1_cpu=96939`, `top1_values_gpu=7.527309`; hidden and layer state checks also remained ok
+  verified_at: 2026-05-08
+  decay_trigger: resident logits layout, top1 kernel, output tensor type/layout, mixed-stack sequencing, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+- claim: "The full-logits oracle path remains compatible after adding resident top1."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --start-pos 2 --max-seq 12 --read-logits` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.8119812e-5`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-08
+  decay_trigger: optional logits readback branch, output-head runner readback logic, or logits buffer layout changes
+
+**quadrumvirate_update_109:**
+- cassandra: The likely failures were wrong logits pointer offsets, top1 tie/order mismatch, and breaking the existing logits oracle. The remote default and `--read-logits` runs cover those separately.
+- daedalus: The frame is now decode-facing output shape, not logits attribution. The next pivot is algorithmic within top1/topK reduction, because serial scanning resident logits is correct but slow.
+- maieutic: Avoid claiming performance from less readback. On this gate the serial top1 kernel made wall time worse than the previous logits-readback run; the verified claim is only resident top1 semantics.
+- adversary: Evidence covers one 9B five-layer slice and greedy top1. It does not cover topK/sampling, multiple tokens, all layers, 27B, repeated decode-loop state ownership, or optimized top1 reduction.

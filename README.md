@@ -246,7 +246,7 @@ crystal build -Dcpu_only bin/cuda_mixed_stack_probe.cr -o build/cuda_mixed_stack
   --max-seq 12
 ```
 
-`cuda_mixed_stack_probe` composes `QwenRecurrentLayerRunner` and `QwenFullAttnLayerRunner` in model layer order with device-resident hidden handoff across recurrent/full-attention boundaries, then runs `QwenOutputHeadRunner` for output RMSNorm and quantized lm-head projection. It compares the final hidden sequence, logits/top1, recurrent conv/SSM states, and full-attention KV cache rows against the CPU reference. This is the first mixed-stack CUDA correctness scaffold through logits; it still stops before tokenizer/sampling, repeated decode-loop state ownership, and optimized resident top1/topK kernels.
+`cuda_mixed_stack_probe` composes `QwenRecurrentLayerRunner` and `QwenFullAttnLayerRunner` in model layer order with device-resident hidden handoff across recurrent/full-attention boundaries, then runs `QwenOutputHeadRunner` for output RMSNorm, quantized lm-head projection, and resident top1. By default the probe copies back only the CUDA top1 id/value plus hidden/state debug outputs; pass `--read-logits` to also copy full logits for attribution. It compares the final hidden sequence, top1, recurrent conv/SSM states, and full-attention KV cache rows against the CPU reference. This is the first mixed-stack CUDA correctness scaffold through resident top1; it still stops before tokenizer/sampling, repeated decode-loop state ownership, and an optimized parallel topK kernel. The current resident top1 kernel is serial and correctness-first.
 
 Build the Metal bridge once:
 

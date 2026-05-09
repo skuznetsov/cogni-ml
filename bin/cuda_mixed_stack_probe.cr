@@ -77,6 +77,7 @@ tokens = 2
 start_pos = 0
 max_seq = 16
 warmup = 0
+read_logits = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -87,6 +88,7 @@ OptionParser.parse do |p|
   p.on("--max-seq N", "KV cache capacity") { |v| max_seq = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--warmup N", "Untimed warmup stack runs") { |v| warmup = v.to_i }
+  p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -150,7 +152,7 @@ layers.each do |layer|
   cpu_current = out
 end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds
-cpu_logits_all = Array(Float32).new(tokens * head_weights.vocab, 0.0_f32)
+cpu_logits_all = read_logits ? Array(Float32).new(tokens * head_weights.vocab, 0.0_f32) : [] of Float32
 cpu_top1_ids = Array(Int32).new(tokens)
 tokens.times do |tok|
   row = cpu_current[tok * hidden, hidden]
@@ -161,7 +163,7 @@ tokens.times do |tok|
   best_id = 0
   best = logits[0]
   head_weights.vocab.times do |i|
-    cpu_logits_all[tok * head_weights.vocab + i] = logits[i]
+    cpu_logits_all[tok * head_weights.vocab + i] = logits[i] if read_logits
     if logits[i] > best
       best = logits[i]
       best_id = i
@@ -191,7 +193,7 @@ begin
     end
   end
   head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, tokens,
-    Array(Float32).new(tokens * hidden, 0.0_f32), hparams.rms_eps)
+    Array(Float32).new(tokens * hidden, 0.0_f32), hparams.rms_eps, read_logits: read_logits)
   output_head = head.not_nil!
 
   upload_t0 = Time.instant
@@ -239,13 +241,19 @@ begin
 
   lines = [] of String
   ok = report_pair("final_all", final_gpu_all, cpu_current, lines, 1.0e-2_f32)
-  logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
   gpu_top1_ids = output_head.top1_ids
   top1_ok = gpu_top1_ids == cpu_top1_ids
+  if read_logits
+    logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
+    ok = ok && logits_ok
+  else
+    lines << "logits_readback=false"
+  end
   lines << "top1_gpu=#{gpu_top1_ids.join(",")}"
   lines << "top1_cpu=#{cpu_top1_ids.join(",")}"
+  lines << "top1_values_gpu=#{output_head.top1_values_gpu.map { |v| v.round(6) }.join(",")}"
   lines << "top1_ok=#{top1_ok}"
-  ok = ok && logits_ok && top1_ok
+  ok = ok && top1_ok
   runners.each_with_index do |runner, idx|
     layer = layers[idx]
     case runner
@@ -271,6 +279,7 @@ begin
   puts "start_pos=#{start_pos}"
   puts "max_seq=#{max_seq}"
   puts "warmup=#{warmup}"
+  puts "read_logits=#{read_logits}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
