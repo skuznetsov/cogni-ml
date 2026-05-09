@@ -217,7 +217,7 @@ crystal build -Dcpu_only bin/cuda_recurrent_stack_probe.cr -o build/cuda_recurre
   --tokens 2
 ```
 
-`cuda_recurrent_stack_probe` chains multiple `QwenRecurrentLayerRunner` instances and compares the final hidden sequence plus each layer's recurrent conv/SSM state against the CPU reference. This is a correctness scaffold: it intentionally uses a host handoff between layer runners, so its timing is not an optimized multi-layer CUDA decode measurement. The next backend step is a device-resident handoff between recurrent layers.
+`cuda_recurrent_stack_probe` chains multiple `QwenRecurrentLayerRunner` instances and compares the final hidden sequence plus each layer's recurrent conv/SSM state against the CPU reference. The default path hands each recurrent layer's CUDA output buffer directly to the next layer's CUDA input; `--host-handoff` keeps the older host-copy route as a debug oracle. This is still a recurrent-only scaffold, not an end-to-end Linux decoder.
 
 Build the Metal bridge once:
 

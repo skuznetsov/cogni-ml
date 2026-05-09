@@ -2,8 +2,9 @@ require "./qwen_recurrent_layer_runner"
 
 module ML::CUDA
   # Correctness-first scaffold for chaining several recurrent-layer CUDA
-  # runners. This intentionally uses a host handoff between layers so it can
-  # validate lifecycle/state composition before a later device-resident handoff.
+  # runners. Default mode hands each layer's device output directly to the next
+  # layer's device input; host-handoff mode is retained as a falsifier/debug
+  # path.
   class QwenRecurrentStackRunner
     getter layer_ids : Array(Int32)
     getter runners : Array(QwenRecurrentLayerRunner)
@@ -25,7 +26,8 @@ module ML::CUDA
                    @tokens : Int32,
                    @xs : Array(Float32),
                    conv_state_inits : Array(Array(Float32)),
-                   ssm_state_inits : Array(Array(Float32)))
+                   ssm_state_inits : Array(Array(Float32)),
+                   @host_handoff : Bool = false)
       raise ArgumentError.new("at least one recurrent layer required") if @layer_ids.empty?
       raise ArgumentError.new("layer/weight count mismatch") unless @layer_ids.size == weights.size
       raise ArgumentError.new("conv_state count mismatch") unless conv_state_inits.size == weights.size
@@ -48,16 +50,11 @@ module ML::CUDA
     end
 
     def run_sequence : Nil
-      current = @xs
-      @runners.each_with_index do |runner, idx|
-        runner.replace_sequence_input(current)
-        runner.reset_sequence
-        runner.run_sequence
-        ML::CUDA.synchronize!("cuCtxSynchronize(stack layer #{idx})")
-        runner.read_outputs
-        current = runner.final_gpu_all.dup
+      if @host_handoff
+        run_sequence_host_handoff
+      else
+        run_sequence_device_handoff
       end
-      @final_gpu_all = current
     end
 
     def close : Nil
@@ -65,6 +62,36 @@ module ML::CUDA
 
       @runners.each(&.close)
       @closed = true
+    end
+
+    private def run_sequence_device_handoff : Nil
+      previous_output = 0_u64
+      @runners.each_with_index do |runner, idx|
+        if idx == 0
+          runner.replace_sequence_input(@xs)
+        else
+          runner.use_device_sequence_input(previous_output)
+        end
+        runner.reset_sequence
+        runner.run_sequence
+        previous_output = runner.output_device_ptr
+      end
+      ML::CUDA.synchronize!("cuCtxSynchronize(stack device handoff)")
+      @runners.each(&.read_outputs)
+      @final_gpu_all = @runners.last.final_gpu_all.dup
+    end
+
+    private def run_sequence_host_handoff : Nil
+      current = @xs
+      @runners.each_with_index do |runner, idx|
+        runner.replace_sequence_input(current)
+        runner.reset_sequence
+        runner.run_sequence
+        ML::CUDA.synchronize!("cuCtxSynchronize(stack host layer #{idx})")
+        runner.read_outputs
+        current = runner.final_gpu_all.dup
+      end
+      @final_gpu_all = current
     end
   end
 end

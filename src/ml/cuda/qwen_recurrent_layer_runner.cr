@@ -152,6 +152,7 @@ module ML::CUDA
     getter ssm_state_gpu : Array(Float32)
     getter attn_out_gpu : Array(Float32)
     getter final_gpu_all : Array(Float32)
+    getter output_device_ptr : DevicePtr
 
     def self.from_weights(weights : Weights,
                           tokens : Int32,
@@ -205,6 +206,9 @@ module ML::CUDA
       @ssm_state_gpu = Array(Float32).new(@ssm_state_init.size, 0.0_f32)
       @attn_out_gpu = Array(Float32).new(@hidden, 0.0_f32)
       @final_gpu_all = Array(Float32).new(@tokens * @hidden, 0.0_f32)
+      @input_device_base = nil.as(DevicePtr?)
+      @owned_input_device_ptr = nil.as(DevicePtr?)
+      @output_device_ptr = 0_u64
       @closed = false
 
       build_runner
@@ -222,6 +226,13 @@ module ML::CUDA
       raise ArgumentError.new("xs size mismatch") unless xs.size == @tokens * @hidden
 
       @xs = xs
+      @input_device_base = @owned_input_device_ptr
+    end
+
+    def use_device_sequence_input(ptr : DevicePtr) : Nil
+      raise ArgumentError.new("device input pointer must be non-zero") if ptr == 0_u64
+
+      @input_device_base = ptr
     end
 
     def run_sequence : Nil
@@ -280,6 +291,9 @@ module ML::CUDA
       end
 
       d_xs, d_attn_norm_w, d_cur, d_qkv_w, d_gate_w, d_alpha_w, d_beta_w, d_conv_state, d_ssm_state, d_qkv, d_conv_w, d_conv_out, d_alpha, d_beta_raw, d_dt, d_a, d_g, d_b, d_z, d_norm, d_out_w, d_attn_out, d_post_norm_w, d_residual, d_cur2, d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w, d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all = ptrs
+      @owned_input_device_ptr = d_xs
+      @input_device_base = d_xs
+      @output_device_ptr = d_final_all
 
       upload_weights = -> {
         ML::CUDA.copy_htod!(d_attn_norm_w, @attn_norm.to_unsafe.as(Void*), bytesize_f32(@hidden), "attn_norm")
@@ -299,7 +313,9 @@ module ML::CUDA
       }
 
       reset_sequence = -> {
-        ML::CUDA.copy_htod!(d_xs, @xs.to_unsafe.as(Void*), bytesize_f32(@tokens * @hidden), "xs")
+        if @input_device_base == d_xs
+          ML::CUDA.copy_htod!(d_xs, @xs.to_unsafe.as(Void*), bytesize_f32(@tokens * @hidden), "xs")
+        end
         ML::CUDA.copy_htod!(d_conv_state, @conv_state_init.to_unsafe.as(Void*), bytesize_f32(@conv_state_init.size), "conv_state")
         ML::CUDA.copy_htod!(d_ssm_state, @ssm_state_init.to_unsafe.as(Void*), bytesize_f32(@ssm_state_init.size), "ssm_state")
       }
@@ -454,7 +470,7 @@ module ML::CUDA
 
       run_token = ->(tok : Int32) {
         offset = bytesize_f32(tok * @hidden)
-        d_x_cur_ptr.value = d_xs + offset
+        d_x_cur_ptr.value = @input_device_base.not_nil! + offset
         d_final_cur_ptr.value = d_final_all + offset
         ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
         ML::CUDA.launch!(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj")

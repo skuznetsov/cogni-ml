@@ -9449,3 +9449,27 @@ Conclusion: CUDA now has a verified multi-recurrent-layer composition boundary f
 - daedalus: The next frame is device pointer handoff. Further host-mediated stack tuning is a local optimization trap because it optimizes a scaffold rather than the backend path we need.
 - maieutic: The assumption that multi-layer correctness implies multi-layer performance is false; the current scaffold proves lifecycle composition only.
 - adversary: This covers only recurrent layers with synthetic hidden inputs. Full-attention layers, KV cache, logits/top1, tokenizer/sampling, and end-to-end decode scheduling remain outside the CUDA path.
+
+**decision_update_99:** Replaced the CUDA recurrent stack's default host handoff with device-resident layer handoff. `QwenRecurrentLayerRunner` now exposes its output device pointer and can use an external device pointer as the next sequence input. `QwenRecurrentStackRunner` defaults to passing each layer's CUDA output buffer directly into the next layer runner, while `--host-handoff` remains available in `bin/cuda_recurrent_stack_probe.cr` as a debug oracle.
+
+Conclusion: the recurrent-only CUDA stack no longer requires layer-to-layer host copies. This removes the main artificial scaffold bottleneck for recurrent-layer composition. The next backend boundary is full-attention/KV support or a mixed recurrent/full-attention stack, not more recurrent-only host plumbing.
+
+**evidence_update_99:**
+- claim: "The device-handoff recurrent stack has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_stack_device_syntax crystal build -Dcpu_only --no-codegen bin/cuda_recurrent_stack_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: layer runner device pointer API, stack runner, probe source, CUDA Driver API signatures, or embedded PTX files change
+- claim: "Device-handoff and host-handoff stack modes both preserve CPU parity on Qwen3.5 9B layers 0,2,4."
+  source: remote `cuda_recurrent_stack_probe --layers 0,2,4 --tokens 2` -> device `ok=true`, `cuda_ms_per_token=6.092`; remote `--host-handoff` -> `ok=true`, `cuda_ms_per_token=6.213`; both had `final_all_cos=1.0` and all layer state ok flags true
+  verified_at: 2026-05-08
+  decay_trigger: stack handoff, recurrent runner output layout, CPU reference, model file, tensor layout, PTX source, or CUDA driver/PTX JIT changes
+- claim: "The device-handoff stack remains correct across a longer sequence smoke."
+  source: remote `cuda_recurrent_stack_probe --layers 0,2,4 --tokens 4 --warmup 1` -> `handoff=device`, `ok=true`, `final_all_cos=1.0`, `final_all_max_diff=3.4332275e-5`, all layer state ok flags true, `cuda_ms_per_token=5.539`
+  verified_at: 2026-05-08
+  decay_trigger: same as device-handoff stack parity
+
+**quadrumvirate_update_99:**
+- cassandra: The likely failure was stale device input pointer routing between layers. The remote device-vs-host oracle showed identical parity and no state drift.
+- daedalus: Recurrent-only composition is now structurally adequate for this stage. The next pivot should be full-attention/KV or model-level mixed stack, not further polishing a recurrent-only micro-stack.
+- maieutic: The assumption that removing host copies would create a large immediate timing win was not supported on tiny `tokens=2`; correctness and architecture improved, but kernels still dominate.
+- adversary: This is still synthetic hidden input over recurrent layers only. It does not cover full-attention layers, KV cache, logits/top1, tokenizer/sampling, or end-to-end decode scheduling.

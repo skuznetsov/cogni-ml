@@ -1,8 +1,8 @@
 # CUDA recurrent multi-layer scaffold probe for Qwen GGUF weights.
 #
-# This is a correctness scaffold, not a speed path: it chains recurrent-layer
-# CUDA runners with a host handoff between layers so state/lifecycle composition
-# can be verified before a later device-resident handoff.
+# This is a correctness scaffold, not an end-to-end decoder: it chains
+# recurrent-layer CUDA runners and can compare device-resident layer handoff
+# against the older host-handoff debug mode.
 
 require "option_parser"
 require "../src/ml/gguf/reader"
@@ -54,6 +54,7 @@ layers = [0, 2, 4]
 seed = 31_u64
 tokens = 2
 warmup = 0
+host_handoff = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_recurrent_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--seed N] [--warmup N]"
@@ -62,6 +63,7 @@ OptionParser.parse do |p|
   p.on("--tokens N", "Sequence length for recurrent state progression") { |v| tokens = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--warmup N", "Untimed warmup stack runs") { |v| warmup = v.to_i }
+  p.on("--host-handoff", "Debug mode: copy each layer output through host before the next layer") { host_handoff = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -120,7 +122,7 @@ stack = nil.as(ML::CUDA::QwenRecurrentStackRunner?)
 
 begin
   cuda_ctx = ML::CUDA::Context.create
-  stack = ML::CUDA::QwenRecurrentStackRunner.new(layers, cuda_weights, tokens, xs, conv_state_inits, ssm_state_inits)
+  stack = ML::CUDA::QwenRecurrentStackRunner.new(layers, cuda_weights, tokens, xs, conv_state_inits, ssm_state_inits, host_handoff)
 
   upload_t0 = Time.instant
   stack.upload_weights
@@ -147,6 +149,7 @@ begin
   puts "layers=#{layers.join(",")}"
   puts "tokens=#{tokens}"
   puts "warmup=#{warmup}"
+  puts "handoff=#{host_handoff ? "host" : "device"}"
   puts "hidden=#{hidden}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
