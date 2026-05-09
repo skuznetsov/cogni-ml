@@ -11,10 +11,9 @@ require "../src/ml/gguf/quant_matmul"
 require "../src/ml/cuda/qwen_recurrent_layer_runner"
 require "../src/ml/cuda/qwen_full_attn_layer_runner"
 require "../src/ml/cuda/qwen_output_head_runner"
+require "../src/ml/cuda/qwen_mixed_stack_runner"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
-
-alias MixedRunner = ML::CUDA::QwenRecurrentLayerRunner | ML::CUDA::QwenFullAttnLayerRunner
 
 def parse_layers(value : String) : Array(Int32)
   value.split(",").map(&.strip).reject(&.empty?).map(&.to_i)
@@ -78,6 +77,7 @@ start_pos = 0
 max_seq = 16
 warmup = 0
 read_logits = false
+profile_phases = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -89,6 +89,7 @@ OptionParser.parse do |p|
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--warmup N", "Untimed warmup stack runs") { |v| warmup = v.to_i }
   p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
+  p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -173,8 +174,9 @@ tokens.times do |tok|
 end
 
 cuda_ctx = nil.as(ML::CUDA::Context?)
-runners = [] of MixedRunner
+runners = [] of ML::CUDA::QwenMixedStackRunner::LayerRunner
 head = nil.as(ML::CUDA::QwenOutputHeadRunner?)
+stack = nil.as(ML::CUDA::QwenMixedStackRunner?)
 final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
 
 begin
@@ -195,49 +197,15 @@ begin
   head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, tokens,
     Array(Float32).new(tokens * hidden, 0.0_f32), hparams.rms_eps, read_logits: read_logits)
   output_head = head.not_nil!
+  stack = ML::CUDA::QwenMixedStackRunner.new(layers, runners, output_head, tokens, hidden, xs)
+  mixed_stack = stack.not_nil!
 
-  upload_t0 = Time.instant
-  runners.each(&.upload_weights)
-  output_head.upload_weights
-  ML::CUDA.synchronize!("cuCtxSynchronize(mixed upload)")
-  weight_upload_ms = (Time.instant - upload_t0).total_milliseconds
+  weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
 
-  run_once = -> {
-    previous_output = 0_u64
-    runners.each_with_index do |runner, idx|
-      if idx == 0
-        case runner
-        in ML::CUDA::QwenRecurrentLayerRunner
-          runner.replace_sequence_input(xs)
-        in ML::CUDA::QwenFullAttnLayerRunner
-          # The first full-attention layer, if selected, owns the initial input buffer.
-        end
-      else
-        runner.use_device_sequence_input(previous_output)
-      end
-      runner.reset_sequence
-      runner.run_sequence
-      previous_output = runner.output_device_ptr
-    end
-    output_head.use_device_sequence_input(previous_output)
-    output_head.reset_sequence
-    output_head.run_sequence
-    ML::CUDA.synchronize!("cuCtxSynchronize(mixed stack)")
-    runners.each(&.read_outputs)
-    output_head.read_outputs
-    case last = runners.last
-    in ML::CUDA::QwenRecurrentLayerRunner
-      final_gpu_all = last.final_gpu_all.dup
-    in ML::CUDA::QwenFullAttnLayerRunner
-      final_gpu_all = last.final_gpu_all.dup
-    end
-  }
+  warmup.times { mixed_stack.run_sequence(profile_phases: false) }
 
-  warmup.times { run_once.call }
-
-  gpu_t0 = Time.instant
-  run_once.call
-  gpu_ms = (Time.instant - gpu_t0).total_milliseconds
+  gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases)
+  final_gpu_all = mixed_stack.final_gpu_all
 
   lines = [] of String
   ok = report_pair("final_all", final_gpu_all, cpu_current, lines, 1.0e-2_f32)
@@ -280,6 +248,7 @@ begin
   puts "max_seq=#{max_seq}"
   puts "warmup=#{warmup}"
   puts "read_logits=#{read_logits}"
+  puts "profile_phases=#{profile_phases}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
@@ -287,11 +256,11 @@ begin
   puts "cuda_ms_per_token=#{(gpu_ms / tokens).round(3)}"
   puts "cpu_ms=#{cpu_ms.round(3)}"
   puts "cpu_ms_per_token=#{(cpu_ms / tokens).round(3)}"
+  mixed_stack.phase_lines.each { |line| puts line }
   lines.each { |line| puts line }
   puts "ok=#{ok}"
 ensure
-  head.try(&.close)
-  runners.reverse_each(&.close)
+  stack.try(&.close)
   cuda_ctx.try(&.close)
   gguf.close
 end

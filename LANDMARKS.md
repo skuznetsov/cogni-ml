@@ -9723,3 +9723,28 @@ Conclusion: the resident top1 boundary now has the right parallel structure and 
 - daedalus: The wall result refutes "top1 serial scan is the dominant mixed-stack wall" for this five-layer probe. The better frame is phase attribution across layer runners, full-attention serial decode, output GEMV, and synchronization.
 - maieutic: A parallel-looking kernel is not a speed claim. The verified claim is exact resident top1 with a parallel scan/reduce structure; measured scaffold wall stayed neutral within this evidence.
 - adversary: Evidence covers one 9B five-layer slice and greedy top1. It does not cover topK/sampling, all layers, 27B, repeated decode-loop state ownership, or a fully optimized reduction using shared memory/warp collectives.
+
+
+**decision_update_111:** Added the CUDA model-slice decode state object and phase attribution. New `ML::CUDA::QwenMixedStackRunner` owns the recurrent/full-attention layer runner list plus the output head, centralizes the device-resident hidden handoff loop, and supports attribution mode by synchronizing after each layer/head runner. `bin/cuda_mixed_stack_probe.cr` now uses this object instead of keeping the runner loop probe-local.
+
+Conclusion: CUDA now has a reusable model-slice state boundary instead of only probe-local sequencing. The first attribution result shows that, for the current 9B five-layer slice, the output head is the dominant wall (`phase_head_ms=14.301` of `phase_total_ms=25.595`), while each layer runner is roughly `1.56-1.76ms` and readback is `1.925ms`. The next optimization target should be the output head, not the recurrent/full-attention layer handoff.
+
+**evidence_update_111:**
+- claim: "The model-slice runner and phase-attribution path have local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_model_state_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: mixed stack runner source, mixed probe source, runner APIs, Crystal compiler, or embedded PTX files change
+- claim: "The default model-slice runner path preserves mixed-stack parity."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --start-pos 2 --max-seq 12` -> `ok=true`, `top1_gpu=96939`, `top1_cpu=96939`, hidden/state/KV checks ok
+  verified_at: 2026-05-08
+  decay_trigger: model-slice runner handoff loop, output-head runner, layer runners, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+- claim: "Phase attribution identifies the output head as the current five-layer scaffold wall."
+  source: remote same gate with `--profile-phases` -> `ok=true`, `phase_layer0_ms=1.652`, `phase_layer1_ms=1.747`, `phase_layer2_ms=1.749`, `phase_layer3_ms=1.561`, `phase_layer4_ms=1.759`, `phase_head_ms=14.301`, `phase_readback_ms=1.925`, `phase_total_ms=25.595`
+  verified_at: 2026-05-08
+  decay_trigger: output-head kernel changes, layer runner changes, profiling synchronization policy, GPU/load conditions, model shape, or token/layer slice changes
+
+**quadrumvirate_update_111:**
+- cassandra: The likely failures were behavior drift while moving the handoff loop out of the probe and attribution accidentally changing correctness. Default and `--profile-phases` remote gates both preserved parity.
+- daedalus: The frame shifts from "which layer runner is slow" to "the output head dominates this slice". A full-logits/materialized-head path is the current bottleneck even after resident top1 readback.
+- maieutic: The phase result is scoped to one 9B five-layer slice, one token, and synchronization-heavy attribution. It should guide the next gate but not be generalized to full-model throughput without broader measurement.
+- adversary: Evidence does not yet cover all layers, 27B, repeated decode-loop state reuse, tokenizer/sampling, topK sampling, or an optimized full-attention decode kernel. The output-head conclusion may shift after full-model construction or head fusion.
