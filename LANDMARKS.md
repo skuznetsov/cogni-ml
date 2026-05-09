@@ -9560,3 +9560,24 @@ Conclusion: CUDA full-attention layer semantics are now verified through attenti
 - daedalus: The next frame is complete layer semantics, not micro-optimizing the serial attention kernel yet. Residual/FFN composition will expose buffer ownership and handoff requirements for mixed full-attention/recurrent stacks.
 - maieutic: The assumption that `QwenFullAttnKVRunner` is only KV work is now stale; it is becoming a full-attention layer slice runner, so names/docs should be revisited once residual/FFN is included.
 - adversary: Evidence covers one 9B full-attention layer, synthetic hidden inputs, Q4_K output projection, and zero-initialized prefix cache rows before `start_pos`. It does not yet cover restored nonzero prefix KV, Q6_K output projections if present in other models, residual/FFN, logits/top1, or model-level scheduling.
+
+
+**decision_update_104:** Added the CUDA full-attention layer tail after projected attention output. `QwenFullAttnKVRunner` now uploads residual hidden inputs and full-attention tail weights, then reuses existing CUDA primitives for residual add + post-attention RMSNorm, Q4_K FFN gate/up, SwiGLU, Q4_K/Q6_K FFN down, and final residual add. The probe now precomputes the initial `attn_norm` projection input on CPU, runs the projection runner plus CUDA tail, and compares final hidden output separately against the CPU reference.
+
+Conclusion: CUDA now verifies Qwen3.5 9B full-attention layer semantics from normalized projection input through final hidden output for layer `3`. This is not yet a clean full layer runner because the initial `attn_norm` is still CPU-precomputed in the probe; the next boundary should move that norm into CUDA and make the interface accept residual hidden states directly.
+
+**evidence_update_104:**
+- claim: "The full-attention CUDA tail has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_full_tail_syntax crystal build -Dcpu_only --no-codegen bin/cuda_full_attn_kv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: KV runner weights, residual/FFN launch order, reused DeltaNet helper PTX, Q4/Q6 GEMV kernels, probe CPU oracle, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The CUDA full-attention tail final hidden matches CPU references on Qwen3.5 9B layer3 with a nonzero cache offset."
+  source: remote `cuda_full_attn_kv_probe --layer 3 --tokens 4 --start-pos 2 --max-seq 12` -> `ok=true`, `final_cos=1.0`, `final_max_diff=6.67572e-6`; Q/gate/K/attn/proj/K-cache/V-cache also remained `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: residual input layout, post-attention RMSNorm, FFN tensor type/layout, SwiGLU math, final residual layout, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+
+**quadrumvirate_update_104:**
+- cassandra: The likely failures were mixing residual input with normalized projection input, FFN-down quantization drift, and per-token pointer offsets. The gate used separate residual/projection inputs, tensor-type dispatch, and `tokens=4` to cover these.
+- daedalus: The runner name `QwenFullAttnKVRunner` is now too narrow; after initial `attn_norm` is moved into CUDA, rename or wrap it as a full-attention layer runner instead of continuing to grow a KV-named class.
+- maieutic: The hidden assumption that this is a complete device-side full-attention layer is false; the probe still computes `attn_norm` on CPU before the projection runner. The verified claim is narrower: normalized-input full-attention tail through final hidden.
+- adversary: Evidence covers one 9B layer, synthetic hidden inputs, zero-initialized prefix cache rows before `start_pos`, and the current Q4/Q6 tensor pattern. It does not yet cover restored nonzero prefix KV, initial CUDA `attn_norm`, mixed full/recurrent stack handoff, logits/top1, or model-level scheduling.

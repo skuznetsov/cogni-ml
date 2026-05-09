@@ -167,7 +167,7 @@ crystal build -Dcpu_only bin/cuda_full_attn_kv_probe.cr -o build/cuda_full_attn_
   --max-seq 12
 ```
 
-`cuda_full_attn_kv_probe` composes the projection runner with `ML::CUDA::QwenFullAttnKVRunner`: Q is split into normalized/RoPE'd Q and gate, K is RMSNormed/RoPE'd, K/V rows are appended to a CUDA-resident cache at `start_pos`, a correctness-first serial CUDA kernel computes GQA scores, softmax, value reduction, and Q-gate multiplication, and the resident gated attention output is projected through `attn_output.weight`. It checks Q, gate, K, gated attention output, projected attention output, K-cache, and V-cache against the CPU Qwen reference. This is the next exact full-attention boundary after projection, but still stops before residual add, post-attention RMSNorm, FFN, logits, and model-level scheduling.
+`cuda_full_attn_kv_probe` composes the projection runner with `ML::CUDA::QwenFullAttnKVRunner`: Q is split into normalized/RoPE'd Q and gate, K is RMSNormed/RoPE'd, K/V rows are appended to a CUDA-resident cache at `start_pos`, a correctness-first serial CUDA kernel computes GQA scores, softmax, value reduction, and Q-gate multiplication, the resident gated attention output is projected through `attn_output.weight`, and the layer tail runs residual add, post-attention RMSNorm, FFN gate/up/SwiGLU/down, and final residual. It checks Q, gate, K, gated attention output, projected attention output, final hidden, K-cache, and V-cache against the CPU Qwen reference. The probe still precomputes the initial `attn_norm` input for the projection runner on CPU; full Linux decode needs that input norm plus model-level scheduling before this becomes an end-to-end layer path.
 
 Build the Q5_K CUDA recurrent-QKV probe:
 

@@ -105,7 +105,13 @@ raise "projection k/v dimension mismatch" unless proj_weights.k_dim == kv_dim &&
 raise "attn output projection mismatch" unless kv_weights.output_in_dim == q_dim && kv_weights.output_out_dim == hidden
 
 rng = Random.new(seed)
-xs = Array(Float32).new(tokens * hidden) { rng.rand(-1.0_f32..1.0_f32) }
+residual_xs = Array(Float32).new(tokens * hidden) { rng.rand(-1.0_f32..1.0_f32) }
+projection_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
+tokens.times do |tok|
+  x = residual_xs[tok * hidden, hidden]
+  cur = ML::GGUF::Qwen35CPU.rms_norm(x, kv_weights.attn_norm, hparams.rms_eps)
+  hidden.times { |i| projection_xs[tok * hidden + i] = cur[i] }
+end
 cos_table, sin_table = rope_tables(tokens, start_pos, rope_dim, hparams.rope_freq_base)
 
 q_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
@@ -113,13 +119,14 @@ gate_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
 k_cpu_all = Array(Float32).new(tokens * kv_dim, 0.0_f32)
 attn_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
 proj_cpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
+final_cpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
 k_cache_cpu = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
 v_cache_cpu = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
 heads_per_group = n_head // n_head_kv
 scale = (1.0_f64 / Math.sqrt(head_dim.to_f64)).to_f32
 
 tokens.times do |tok|
-  x = xs[tok * hidden, hidden]
+  x = projection_xs[tok * hidden, hidden]
   q_full = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, proj_weights.q_raw, ML::GGUF::TensorType::Q4_K, proj_weights.q_dim, Array(Float32).new(proj_weights.q_dim, 0.0_f32))
   k = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, proj_weights.k_raw, ML::GGUF::TensorType::Q4_K, kv_dim, Array(Float32).new(kv_dim, 0.0_f32))
   v = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, proj_weights.v_raw, proj_weights.v_type, kv_dim, Array(Float32).new(kv_dim, 0.0_f32))
@@ -179,6 +186,23 @@ tokens.times do |tok|
     kv_weights.output_raw, kv_weights.output_type, hidden,
     Array(Float32).new(hidden, 0.0_f32))
   hidden.times { |i| proj_cpu_all[tok * hidden + i] = proj[i] }
+
+  residual = Array(Float32).new(hidden) { |i| residual_xs[tok * hidden + i] + proj[i] }
+  cur2 = ML::GGUF::Qwen35CPU.rms_norm(residual, kv_weights.post_norm, hparams.rms_eps)
+  ffn_gate = ML::GGUF::QuantMatmul.matmul_add(cur2, 1, hidden,
+    kv_weights.ffn_gate_raw, ML::GGUF::TensorType::Q4_K, kv_weights.ffn_dim,
+    Array(Float32).new(kv_weights.ffn_dim, 0.0_f32))
+  ffn_up = ML::GGUF::QuantMatmul.matmul_add(cur2, 1, hidden,
+    kv_weights.ffn_up_raw, ML::GGUF::TensorType::Q4_K, kv_weights.ffn_dim,
+    Array(Float32).new(kv_weights.ffn_dim, 0.0_f32))
+  ffn_comb = Array(Float32).new(kv_weights.ffn_dim) do |i|
+    gv = ffn_gate[i]
+    (gv / (1.0_f32 + Math.exp(-gv).to_f32)) * ffn_up[i]
+  end
+  ffn_out = ML::GGUF::QuantMatmul.matmul_add(ffn_comb, 1, kv_weights.ffn_dim,
+    kv_weights.ffn_down_raw, kv_weights.ffn_down_type, hidden,
+    Array(Float32).new(hidden, 0.0_f32))
+  hidden.times { |i| final_cpu_all[tok * hidden + i] = residual[i] + ffn_out[i] }
 end
 
 cuda_ctx = nil.as(ML::CUDA::Context?)
@@ -187,14 +211,14 @@ kv = nil.as(ML::CUDA::QwenFullAttnKVRunner?)
 
 begin
   cuda_ctx = ML::CUDA::Context.create
-  proj = ML::CUDA::QwenFullAttnProjectionRunner.from_weights(proj_weights, tokens, xs)
+  proj = ML::CUDA::QwenFullAttnProjectionRunner.from_weights(proj_weights, tokens, projection_xs)
   proj.upload_weights
   proj.reset_sequence
   proj.run_sequence
   ML::CUDA.synchronize!("cuCtxSynchronize(projection)")
 
   kv = ML::CUDA::QwenFullAttnKVRunner.new(tokens, max_seq, start_pos, n_head, n_head_kv, head_dim, rope_dim,
-    hparams.rms_eps, proj.q_device_ptr, proj.k_device_ptr, proj.v_device_ptr, kv_weights, cos_table, sin_table)
+    hparams.rms_eps, proj.q_device_ptr, proj.k_device_ptr, proj.v_device_ptr, kv_weights, residual_xs, cos_table, sin_table)
   kv.upload_constants
   kv.run_sequence
   ML::CUDA.synchronize!("cuCtxSynchronize(kv)")
@@ -207,6 +231,7 @@ begin
   ok &&= report_pair("k", kv.k_gpu_all, k_cpu_all, lines, 2.0e-4_f32)
   ok &&= report_pair("attn", kv.attn_gpu_all, attn_cpu_all, lines, 2.0e-3_f32)
   ok &&= report_pair("proj", kv.proj_gpu_all, proj_cpu_all, lines, 2.0e-3_f32)
+  ok &&= report_pair("final", kv.final_gpu_all, final_cpu_all, lines, 5.0e-3_f32)
   ok &&= report_pair("k_cache", kv.k_cache_gpu, k_cache_cpu, lines, 2.0e-4_f32)
   ok &&= report_pair("v_cache", kv.v_cache_gpu, v_cache_cpu, lines, 1.0e-3_f32)
 
