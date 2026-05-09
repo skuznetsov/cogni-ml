@@ -7,19 +7,31 @@ module ML::CUDA
   # rows to the layer KV cache.
   class QwenFullAttnKVRunner
     FULL_ATTN_POST_PTX = {{ read_file("src/ml/cuda/kernels/fullattn_post_probe.ptx") }}
+    Q4K_PTX            = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+    Q6K_PTX            = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
 
     class Weights
       getter q_norm : Array(Float32)
       getter k_norm : Array(Float32)
+      getter output_raw : Bytes
+      getter output_type : ML::GGUF::TensorType
+      getter output_in_dim : Int32
+      getter output_out_dim : Int32
 
       def self.load(gguf : ML::GGUF::GGUFFile, layer : Int32) : self
         prefix = "blk.#{layer}"
         q_norm_info = gguf.tensor("#{prefix}.attn_q_norm.weight") || raise "missing #{prefix}.attn_q_norm.weight"
         k_norm_info = gguf.tensor("#{prefix}.attn_k_norm.weight") || raise "missing #{prefix}.attn_k_norm.weight"
-        new(gguf.read_tensor_f32(q_norm_info), gguf.read_tensor_f32(k_norm_info))
+        output_info = gguf.tensor("#{prefix}.attn_output.weight") || raise "missing #{prefix}.attn_output.weight"
+        raise "expected Q4_K/Q6_K attn_output" unless output_info.type.q4_k? || output_info.type.q6_k?
+        new(gguf.read_tensor_f32(q_norm_info), gguf.read_tensor_f32(k_norm_info),
+          gguf.read_tensor_raw(output_info), output_info.type,
+          output_info.dims[0].to_i32, output_info.dims[1].to_i32)
       end
 
-      def initialize(@q_norm : Array(Float32), @k_norm : Array(Float32))
+      def initialize(@q_norm : Array(Float32), @k_norm : Array(Float32),
+                     @output_raw : Bytes, @output_type : ML::GGUF::TensorType,
+                     @output_in_dim : Int32, @output_out_dim : Int32)
       end
     end
 
@@ -27,6 +39,7 @@ module ML::CUDA
     getter gate_gpu_all : Array(Float32)
     getter k_gpu_all : Array(Float32)
     getter attn_gpu_all : Array(Float32)
+    getter proj_gpu_all : Array(Float32)
     getter k_cache_gpu : Array(Float32)
     getter v_cache_gpu : Array(Float32)
 
@@ -49,11 +62,16 @@ module ML::CUDA
       raise ArgumentError.new("rope_dim must be even") unless @rope_dim.even?
       raise ArgumentError.new("q_norm size mismatch") unless weights.q_norm.size == @head_dim
       raise ArgumentError.new("k_norm size mismatch") unless weights.k_norm.size == @head_dim
+      raise ArgumentError.new("attn_output input mismatch") unless weights.output_in_dim == @n_head * @head_dim
       half = @rope_dim // 2
       raise ArgumentError.new("cos/sin table size mismatch") unless cos_table.size == @tokens * half && sin_table.size == @tokens * half
 
       @q_norm = weights.q_norm
       @k_norm = weights.k_norm
+      @output_raw = weights.output_raw
+      @output_type = weights.output_type
+      @output_in_dim = weights.output_in_dim
+      @output_out_dim = weights.output_out_dim
       @cos_table = cos_table
       @sin_table = sin_table
       @q_dim = @n_head * @head_dim
@@ -62,6 +80,7 @@ module ML::CUDA
       @gate_gpu_all = Array(Float32).new(@tokens * @q_dim, 0.0_f32)
       @k_gpu_all = Array(Float32).new(@tokens * @kv_dim, 0.0_f32)
       @attn_gpu_all = Array(Float32).new(@tokens * @q_dim, 0.0_f32)
+      @proj_gpu_all = Array(Float32).new(@tokens * @output_out_dim, 0.0_f32)
       @k_cache_gpu = Array(Float32).new(@max_seq * @kv_dim, 0.0_f32)
       @v_cache_gpu = Array(Float32).new(@max_seq * @kv_dim, 0.0_f32)
       @modules = [] of CUDAModule
@@ -95,29 +114,36 @@ module ML::CUDA
 
     private def build_runner : Nil
       mod = CUDAModule.load(FULL_ATTN_POST_PTX, "fullattn_post")
-      @modules << mod
+      q4_mod = CUDAModule.load(Q4K_PTX, "q4")
+      q6_mod = CUDAModule.load(Q6K_PTX, "q6")
+      @modules.concat([mod, q4_mod, q6_mod])
       q_fn = mod.function("full_attn_q_split_norm_rope_probe")
       k_fn = mod.function("full_attn_k_norm_rope_cache_probe")
       attn_fn = mod.function("full_attn_decode_cache_probe")
+      q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
+      q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
+      out_proj_fn = @output_type.q4_k? ? q4_fn : q6_fn
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
                bytesize_f32(@cos_table.size), bytesize_f32(@sin_table.size),
                bytesize_f32(@tokens * @q_dim), bytesize_f32(@tokens * @q_dim),
                bytesize_f32(@tokens * @kv_dim), bytesize_f32(@max_seq * @kv_dim),
                bytesize_f32(@max_seq * @kv_dim), bytesize_f32(@tokens * @n_head * @max_seq),
-               bytesize_f32(@tokens * @q_dim)]
+               bytesize_f32(@tokens * @q_dim), @output_raw.size.to_u64,
+               bytesize_f32(@tokens * @output_out_dim)]
       ptrs = sizes.map do |size_bytes|
         buffer = DeviceBuffer.new(size_bytes)
         @buffers << buffer
         buffer.ptr
       end
-      d_q_norm, d_k_norm, d_cos, d_sin, d_q_out, d_gate_out, d_k_out, d_k_cache, d_v_cache, d_scores, d_attn_out = ptrs
+      d_q_norm, d_k_norm, d_cos, d_sin, d_q_out, d_gate_out, d_k_out, d_k_cache, d_v_cache, d_scores, d_attn_out, d_output_w, d_proj_out = ptrs
 
       upload_constants = -> {
         ML::CUDA.copy_htod!(d_q_norm, @q_norm.to_unsafe.as(Void*), bytesize_f32(@q_norm.size), "q_norm")
         ML::CUDA.copy_htod!(d_k_norm, @k_norm.to_unsafe.as(Void*), bytesize_f32(@k_norm.size), "k_norm")
         ML::CUDA.copy_htod!(d_cos, @cos_table.to_unsafe.as(Void*), bytesize_f32(@cos_table.size), "cos")
         ML::CUDA.copy_htod!(d_sin, @sin_table.to_unsafe.as(Void*), bytesize_f32(@sin_table.size), "sin")
+        ML::CUDA.copy_htod!(d_output_w, @output_raw.to_unsafe.as(Void*), @output_raw.size.to_u64, "attn_output_w")
       }
 
       reset_sequence = -> {
@@ -133,6 +159,9 @@ module ML::CUDA
       max_seq_u32 = @max_seq.to_u32
       heads_per_group_u32 = (@n_head // @n_head_kv).to_u32
       scale = (1.0_f64 / Math.sqrt(@head_dim.to_f64)).to_f32
+      output_in_dim_u32 = @output_in_dim.to_u32
+      output_out_dim_u32 = @output_out_dim.to_u32
+      output_grid = ((@output_out_dim + 3) // 4).to_u32
 
       q_params = Pointer(Void*).malloc(10)
       q_params[0] = box_ptr(@q_full_device_ptr).as(Void*)
@@ -177,12 +206,26 @@ module ML::CUDA
       attn_params[11] = box_u32(max_seq_u32).as(Void*)
       attn_params[12] = box_f32(scale).as(Void*)
 
+      d_attn_cur_ptr = box_ptr(d_attn_out)
+      d_proj_cur_ptr = box_ptr(d_proj_out)
+      out_proj_params = Pointer(Void*).malloc(5)
+      out_proj_params[0] = box_ptr(d_output_w).as(Void*)
+      out_proj_params[1] = d_attn_cur_ptr.as(Void*)
+      out_proj_params[2] = d_proj_cur_ptr.as(Void*)
+      out_proj_params[3] = box_u32(output_in_dim_u32).as(Void*)
+      out_proj_params[4] = box_u32(output_out_dim_u32).as(Void*)
+
       run_token = ->(tok : Int32) {
         # Kernels index token by block id; launch all token blocks once.
         if tok == 0
           ML::CUDA.launch!(q_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
           ML::CUDA.launch!(k_fn, @tokens.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
           ML::CUDA.launch!(attn_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "attn decode cache")
+          @tokens.times do |t|
+            d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
+            d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
+            ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
+          end
         end
       }
 
@@ -191,6 +234,7 @@ module ML::CUDA
         ML::CUDA.copy_dtoh!(@gate_gpu_all.to_unsafe.as(Void*), d_gate_out, bytesize_f32(@gate_gpu_all.size), "gate_out")
         ML::CUDA.copy_dtoh!(@k_gpu_all.to_unsafe.as(Void*), d_k_out, bytesize_f32(@k_gpu_all.size), "k_out")
         ML::CUDA.copy_dtoh!(@attn_gpu_all.to_unsafe.as(Void*), d_attn_out, bytesize_f32(@attn_gpu_all.size), "attn_out")
+        ML::CUDA.copy_dtoh!(@proj_gpu_all.to_unsafe.as(Void*), d_proj_out, bytesize_f32(@proj_gpu_all.size), "proj_out")
         ML::CUDA.copy_dtoh!(@k_cache_gpu.to_unsafe.as(Void*), d_k_cache, bytesize_f32(@k_cache_gpu.size), "k_cache")
         ML::CUDA.copy_dtoh!(@v_cache_gpu.to_unsafe.as(Void*), d_v_cache, bytesize_f32(@v_cache_gpu.size), "v_cache")
       }

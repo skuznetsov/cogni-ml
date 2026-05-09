@@ -9539,3 +9539,24 @@ Conclusion: CUDA now validates full-attention semantics through gated attention 
 - daedalus: Keep this as a semantic boundary. The speed frame is later: replace the serial PTX with a warp/online-softmax kernel only after `attn_output` projection and layer residual/FFN composition are correct.
 - maieutic: The assumption that "full-attention decode" means an optimized kernel is false in this checkpoint; this is a correctness-first decode oracle running on CUDA.
 - adversary: Evidence covers synthetic hidden inputs, zero-initialized prefix cache rows before `start_pos`, and one 9B full-attention layer. It does not yet cover nonzero restored prefix KV, output projection, residual/FFN, logits/top1, or model-level scheduling.
+
+
+**decision_update_103:** Attached the `attn_output.weight` projection to the CUDA full-attention decode boundary. `QwenFullAttnKVRunner::Weights` now loads the full-attention output projection tensor, validates its input dimension against `n_head * head_dim`, uploads it with the runner constants, and dispatches Q4_K/Q6_K GEMV by tensor type from the resident gated attention output. The probe now compares `proj` separately against CPU `QuantMatmul`.
+
+Conclusion: CUDA full-attention layer semantics are now verified through attention output projection for Qwen3.5 9B layer `3`. The remaining semantic layer work is residual add, post-attention RMSNorm, FFN gate/up/SwiGLU/down, and final residual; only after that should the serial attention decode PTX be replaced with a fast warp/online-softmax kernel.
+
+**evidence_update_103:**
+- claim: "The projected full-attention decode boundary has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_attn_proj_syntax crystal build -Dcpu_only --no-codegen bin/cuda_full_attn_kv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: output projection tensor loading, Q4/Q6 GEMV kernels, KV runner launch order, probe CPU oracle, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The CUDA projected attention output matches CPU references on Qwen3.5 9B layer3 with a nonzero cache offset."
+  source: remote `cuda_full_attn_kv_probe --layer 3 --tokens 4 --start-pos 2 --max-seq 12` -> `ok=true`, `proj_cos=1.0`, `proj_max_diff=1.4305115e-6`; Q/gate/K/attn/K-cache/V-cache also remained `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: attn_output tensor type/layout, GEMV ABI, gated attention output layout, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+
+**quadrumvirate_update_103:**
+- cassandra: The likely failure was per-token pointer offsetting into the resident attention output or assuming a fixed output quantization type. The gate used `tokens=4` and dispatch-by-GGUF-type to cover both risks for the current 9B layer.
+- daedalus: The next frame is complete layer semantics, not micro-optimizing the serial attention kernel yet. Residual/FFN composition will expose buffer ownership and handoff requirements for mixed full-attention/recurrent stacks.
+- maieutic: The assumption that `QwenFullAttnKVRunner` is only KV work is now stale; it is becoming a full-attention layer slice runner, so names/docs should be revisited once residual/FFN is included.
+- adversary: Evidence covers one 9B full-attention layer, synthetic hidden inputs, Q4_K output projection, and zero-initialized prefix cache rows before `start_pos`. It does not yet cover restored nonzero prefix KV, Q6_K output projections if present in other models, residual/FFN, logits/top1, or model-level scheduling.

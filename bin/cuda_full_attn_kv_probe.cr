@@ -102,6 +102,7 @@ q_dim = n_head * head_dim
 kv_dim = n_head_kv * head_dim
 raise "projection q dimension mismatch" unless proj_weights.q_dim == 2 * q_dim
 raise "projection k/v dimension mismatch" unless proj_weights.k_dim == kv_dim && proj_weights.v_dim == kv_dim
+raise "attn output projection mismatch" unless kv_weights.output_in_dim == q_dim && kv_weights.output_out_dim == hidden
 
 rng = Random.new(seed)
 xs = Array(Float32).new(tokens * hidden) { rng.rand(-1.0_f32..1.0_f32) }
@@ -111,6 +112,7 @@ q_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
 gate_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
 k_cpu_all = Array(Float32).new(tokens * kv_dim, 0.0_f32)
 attn_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
+proj_cpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
 k_cache_cpu = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
 v_cache_cpu = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
 heads_per_group = n_head // n_head_kv
@@ -171,6 +173,12 @@ tokens.times do |tok|
       attn_cpu_all[out_off + d] = acc * (1.0_f32 / (1.0_f32 + Math.exp(-gate_v).to_f32))
     end
   end
+
+  attn_o = attn_cpu_all[tok * q_dim, q_dim]
+  proj = ML::GGUF::QuantMatmul.matmul_add(attn_o, 1, q_dim,
+    kv_weights.output_raw, kv_weights.output_type, hidden,
+    Array(Float32).new(hidden, 0.0_f32))
+  hidden.times { |i| proj_cpu_all[tok * hidden + i] = proj[i] }
 end
 
 cuda_ctx = nil.as(ML::CUDA::Context?)
@@ -198,6 +206,7 @@ begin
   ok &&= report_pair("gate", kv.gate_gpu_all, gate_cpu_all, lines, 1.0e-3_f32)
   ok &&= report_pair("k", kv.k_gpu_all, k_cpu_all, lines, 2.0e-4_f32)
   ok &&= report_pair("attn", kv.attn_gpu_all, attn_cpu_all, lines, 2.0e-3_f32)
+  ok &&= report_pair("proj", kv.proj_gpu_all, proj_cpu_all, lines, 2.0e-3_f32)
   ok &&= report_pair("k_cache", kv.k_cache_gpu, k_cache_cpu, lines, 2.0e-4_f32)
   ok &&= report_pair("v_cache", kv.v_cache_gpu, v_cache_cpu, lines, 1.0e-3_f32)
 
