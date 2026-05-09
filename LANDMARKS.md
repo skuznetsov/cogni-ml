@@ -10962,9 +10962,13 @@ Conclusion: this gives a trustworthy confidence/margin observable for future sho
   source: remote `/tmp/cuda_mixed_stack_probe_top2 --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --skip-debug-readback --perf-only` -> `ok=true`, `read_logits=false`, `top1_gpu=100253`, `cuda_ms=7.196`
   verified_at: 2026-05-09
   decay_trigger: output-head default fused top1 route, perf-only path, or probe option parsing changes
+- claim: "The same top2/margin oracle also works after the full 9B CUDA body."
+  source: remote `/tmp/cuda_mixed_stack_probe_top2b --model /mnt/reefy-data/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf --all-layers --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=198`, `top2_gpu=top2_cpu=20565`, `top_margin_gpu=2.306178`, `top_margin_ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: full mixed-stack layer order, output-head logits path, CPU oracle, or synthetic input generation changes
 
 **quadrumvirate_update_161:**
 - cassandra: Top2/margin is a measurement branch; it should not be sold as a speedup. Its value is preventing blind shortlist/draft-head guesses.
 - daedalus: The useful pivot is from more CTA retunes to observable confidence structure around the output head and proposals.
 - maieutic: Existing partial-top1 buffers cannot provide exact top2; correctness requires either full logits or a redesigned partial-top2 producer.
-- adversary: Keep this off the default speed path until a CUDA top2 producer is implemented and compared against full-logits margins.
+- adversary: Keep this off the default speed path until a CUDA top2 producer is implemented and compared against full-logits margins. The all-layer margin point is synthetic/random-state evidence, not a prompt-suite distribution.
