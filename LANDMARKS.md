@@ -10690,3 +10690,19 @@ Conclusion: output-head/top1 is a large isolated cost, but body GEMV remains dom
 - daedalus: The useful split is now explicit: body optimizations target ~20.5 ms/tok, while head elimination/shortlist targets a separate ~2.37 ms/tok ceiling.
 - maieutic: `--skip-output-head` is not a generation path and must stay perf-only; it removes logits/top1 semantics by design.
 - adversary: Do not use this to claim model speed. It is a lower-bound attribution probe. Valid next-token generation still requires the head unless a verified shortlist/draft-head path restores exact top1.
+
+**decision_update_153:** Refuted promoting a Q6 output-head top1 `warp8` partial kernel. The temporary branch duplicated `q6_k_gemv_top1_partial_f32` as an 8-warps-per-CTA variant, reducing partial top1 width from `ceil(vocab/4)` to `ceil(vocab/8)` and launching 256-thread CTAs. The hypothesis was that fewer partials and fewer CTAs would improve the isolated output-head cost measured by the body-floor probe.
+
+Conclusion: correctness held, but full-model speed was noise-level and not worth keeping the duplicated PTX. Five-layer `start_pos=63` top1 oracle improved locally (`7.216/7.220 ms` base vs `7.158/7.181 ms` warp8), but full 9B steady `--all-layers --steady-reps=16` was effectively neutral: base `22.903/22.942/22.970 ms/tok`, warp8 `22.902/22.925/22.949 ms/tok`. The temporary branch was removed. Future head work should target algorithmic shortlist/draft-head reduction or bigger row-compute changes, not CTA packing of the same exact Q6 top1 work.
+
+**evidence_update_153:**
+- claim: "Q6 top1 warp8 is exact on the five-layer oracle but not a meaningful full 9B win."
+  source: remote temporary `/tmp/cuda_mixed_stack_probe_q6top1w8` -> five-layer top1 `top1_gpu=top1_cpu=100253`, full steady base `22.903/22.942/22.970 ms/tok`, warp8 `22.902/22.925/22.949 ms/tok`, same top1 id `8894`
+  verified_at: 2026-05-09
+  decay_trigger: output-head kernel implementation, GPU scheduling, vocab/head quantization, or steady timing harness changes
+
+**quadrumvirate_update_153:**
+- cassandra: CTA packing can reduce partial-reduce overhead, but it does not reduce the dominant Q6 row dot/dequant work; observed full-model delta matches that ceiling.
+- daedalus: The head path needs an elimination/shortlist frame, not another CTA retune.
+- maieutic: The assumption "fewer partials matter" was only weakly true locally and disappeared at full-model scale.
+- adversary: The result does not refute output-head optimization generally; it refutes this exact 8-warps-per-CTA variant.
