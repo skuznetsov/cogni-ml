@@ -11016,3 +11016,27 @@ Conclusion: CUDA-side top2/margin is now a verified measurement bridge for risk-
 - daedalus: The next acceleration step can now target fused-Q6 top2/shortlist with an exact oracle comparator already in place.
 - maieutic: The near-tie case makes a hard gate mandatory; a shortlist that drops top2 would silently break exact greedy.
 - adversary: Keep top2 CUDA reporting tied to `--read-logits` until a fused top2 producer is implemented and A/B checked against this oracle.
+
+**decision_update_164:** CUDA semantic greedy-loop graph replay is no longer auto-enabled by `--greedy-loop-tokens > 1`. After the current CUDA cleanup sequence, the captured greedy graph body can segfault inside `cuGraphInstantiate` on the RTX 5060 Ti / driver 595 test node before CUDA returns an error code. The default semantic path now stays on stable direct GPU-feedback replay; `--greedy-loop-graph` remains available for explicit graph debugging, and `QWEN_CUDA_GREEDY_GRAPH_DEFAULT=1` restores the old auto-default for controlled experiments.
+
+Conclusion: this is a stability fix and a branch-pruning result, not a throughput regression to chase. A tiny CUDA Driver graph smoke still works, so the Driver graph API/ABI is not generally broken. llama.cpp fusion-off timing on the same model shows CUDA graph/op fusion is only about a 1% lever for TG128; the remaining gap should be attacked through quant GEMV/MMVQ-style body attribution or proposal-body reduction, not by assuming graph fusion is the missing breakthrough.
+
+**evidence_update_164:**
+- claim: "CUDA graph auto-default is unsafe for the current semantic greedy body."
+  source: remote rebuilt `bin/cuda_mixed_stack_probe.cr --all-layers --tokens=1 --max-seq=160 --greedy-loop-tokens=128 --perf-only --skip-debug-readback` crashed at `cuGraphInstantiate`; after disabling auto-default, remote gen16 showed `greedy_loop_graph=false`, `greedy_loop_gpu_embedding=true`, `cuda_ms_per_token=23.581`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph capture body, graph parameter lifetime, CUDA driver version, greedy-loop scheduler, or device-position/feedback kernels change
+- claim: "CUDA graphs are not globally broken on the test host."
+  source: remote minimal CUDA Driver API smoke using `cuStreamBeginCapture`, `cuLaunchKernel`, `cuStreamEndCapture`, `cuGraphInstantiate`, `cuGraphUpload`, and `cuGraphLaunch` returned `out=1`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA driver/toolchain update or graph API wrapper changes
+- claim: "llama.cpp CUDA op fusion is not the major TG128 gap on this workload."
+  source: remote `/mnt/reefy-data/persisten/cogni-ml/bin/llama-bench-cuda -m Qwen3.5-9B-Q4_K_M.gguf -ngl 99 -fa 1 -p 64 -n 128 -r 2 -o md` -> default `69.25 +/- 0.09 tok/s`; with `GGML_CUDA_DISABLE_FUSION=1` -> `68.56 +/- 0.16 tok/s`
+  verified_at: 2026-05-09
+  decay_trigger: llama.cpp CUDA fusion code, model quantization, GPU driver/toolchain, or benchmark harness changes
+
+**quadrumvirate_update_164:**
+- cassandra: Treat the graph body as a crash-risk branch until parameter lifetime and graph contents are isolated; do not make it the default scheduler.
+- daedalus: The useful pivot is from launch/graph fusion to body attribution: exact quantized GEMV algorithm, MMVQ/Q8_1-style activation handling, output-head elimination, or cheaper verified proposal sources.
+- maieutic: "Fusion" was the wrong assumed bottleneck because disabling llama.cpp fusion barely moves the same workload.
+- adversary: The explicit graph flag remains for falsification, but default runs must use the stable direct path so timing gates do not die before producing evidence.

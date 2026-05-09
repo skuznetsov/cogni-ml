@@ -244,7 +244,11 @@ raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps
 raise "--skip-output-head requires --perf-only" if skip_output_head && !perf_only
 raise "--skip-output-head is incompatible with --read-logits" if skip_output_head && read_logits
 raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
-if greedy_loop_tokens > 1 && !greedy_loop_no_graph
+# CUDA graph replay is intentionally opt-in. On the RTX 5060 Ti / driver 595
+# test node the current captured greedy body can segfault inside
+# cuGraphInstantiate before CUDA returns an error code. Keep the explicit flag
+# for graph debugging, but default to the stable direct-launch semantic path.
+if greedy_loop_tokens > 1 && !greedy_loop_no_graph && ENV["QWEN_CUDA_GREEDY_GRAPH_DEFAULT"]? == "1"
   greedy_loop_graph = true
 end
 raise "use either --greedy-loop-graph or --greedy-loop-no-graph, not both" if greedy_loop_graph && greedy_loop_no_graph
