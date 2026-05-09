@@ -9652,3 +9652,24 @@ Conclusion: CUDA now crosses the recurrent/full-attention boundary in Qwen layer
 - daedalus: The frame is now model-body composition. The next useful boundary is output norm + logits/top1, not more hidden-only stack proof.
 - maieutic: The scaffold time is not a throughput estimate for production because the full-attention kernel is serial and the probe does not include tokenizer/sampling or persistent model-level state objects.
 - adversary: Evidence covers one 9B five-layer slice and synthetic residual inputs. It does not cover all layers, 27B, logits/top1, restored nonzero prefix KV from previous decode calls, repeated decode-loop calls, or optimized full-attention decode.
+
+
+**decision_update_108:** Added the CUDA output-head boundary on top of the mixed stack. New `ML::CUDA::QwenOutputHeadRunner` runs output RMSNorm and Q4_K/Q6_K lm-head projection from a device-resident hidden pointer, reads logits back for correctness, and reports host-computed top1 ids. `bin/cuda_mixed_stack_probe.cr` now chains model-body runners into the output head and compares logits/top1 against the CPU reference.
+
+Conclusion: the CUDA scaffold now covers a Qwen body slice through logits/top1, not only hidden states. The next useful backend boundary is resident top1/topK without full logits readback plus a model-level decode state object that owns layer runners and sequence state across repeated token steps.
+
+**evidence_update_108:**
+- claim: "The CUDA output-head runner and mixed-stack logits path have local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_mixed_head_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: output-head runner source, mixed probe source, Q4/Q6 output GEMV kernels, Crystal compiler, or embedded PTX files change
+- claim: "The mixed CUDA stack through logits/top1 matches CPU references on a recurrent/full-attention/recurrent Qwen3.5 9B slice."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --start-pos 2 --max-seq 12` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.8119812e-5`, `top1_gpu=96939`, `top1_cpu=96939`; hidden and layer state checks also remained ok
+  verified_at: 2026-05-08
+  decay_trigger: output norm formula, output tensor type/layout, output runner pointer ownership, mixed-stack sequencing, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+
+**quadrumvirate_update_108:**
+- cassandra: The likely failures were output tensor type mismatch, tied-output models without `output.weight`, and logits/top1 drift after hidden-state parity. The runner accepts Q4_K/Q6_K and falls back to `token_embd.weight` if the GGUF omits `output.weight`.
+- daedalus: Full logits readback is a correctness boundary, not the final decode design. The next frame should eliminate logits readback with resident top1/topK and then wrap layer/head runners in a model-level state object.
+- maieutic: Matching hidden states does not automatically prove output-head correctness; logits/top1 are now directly checked.
+- adversary: Evidence covers one 9B five-layer slice and one token. It does not cover all layers, 27B, topK/sampling, repeated decode-loop state ownership, or performance after replacing the serial full-attention kernel.

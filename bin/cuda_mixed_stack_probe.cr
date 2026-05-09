@@ -7,8 +7,10 @@
 require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/quant_matmul"
 require "../src/ml/cuda/qwen_recurrent_layer_runner"
 require "../src/ml/cuda/qwen_full_attn_layer_runner"
+require "../src/ml/cuda/qwen_output_head_runner"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
@@ -108,6 +110,7 @@ xs = Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32
 
 recurrent_weights = {} of Int32 => ML::CUDA::QwenRecurrentLayerRunner::Weights
 full_weights = {} of Int32 => ML::CUDA::QwenFullAttnLayerRunner::Weights
+head_weights = ML::CUDA::QwenOutputHeadRunner::Weights.load(gguf)
 conv_state_inits = {} of Int32 => Array(Float32)
 ssm_state_inits = {} of Int32 => Array(Float32)
 
@@ -147,9 +150,29 @@ layers.each do |layer|
   cpu_current = out
 end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds
+cpu_logits_all = Array(Float32).new(tokens * head_weights.vocab, 0.0_f32)
+cpu_top1_ids = Array(Int32).new(tokens)
+tokens.times do |tok|
+  row = cpu_current[tok * hidden, hidden]
+  normed = ML::GGUF::Qwen35CPU.rms_norm(row, head_weights.norm, hparams.rms_eps)
+  logits = ML::GGUF::QuantMatmul.matmul_add(normed, 1, head_weights.hidden,
+    head_weights.output_raw, head_weights.output_type, head_weights.vocab,
+    Array(Float32).new(head_weights.vocab, 0.0_f32))
+  best_id = 0
+  best = logits[0]
+  head_weights.vocab.times do |i|
+    cpu_logits_all[tok * head_weights.vocab + i] = logits[i]
+    if logits[i] > best
+      best = logits[i]
+      best_id = i
+    end
+  end
+  cpu_top1_ids << best_id
+end
 
 cuda_ctx = nil.as(ML::CUDA::Context?)
 runners = [] of MixedRunner
+head = nil.as(ML::CUDA::QwenOutputHeadRunner?)
 final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
 
 begin
@@ -167,9 +190,13 @@ begin
         conv_state_inits[layer], ssm_state_inits[layer])
     end
   end
+  head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, tokens,
+    Array(Float32).new(tokens * hidden, 0.0_f32), hparams.rms_eps)
+  output_head = head.not_nil!
 
   upload_t0 = Time.instant
   runners.each(&.upload_weights)
+  output_head.upload_weights
   ML::CUDA.synchronize!("cuCtxSynchronize(mixed upload)")
   weight_upload_ms = (Time.instant - upload_t0).total_milliseconds
 
@@ -190,8 +217,12 @@ begin
       runner.run_sequence
       previous_output = runner.output_device_ptr
     end
+    output_head.use_device_sequence_input(previous_output)
+    output_head.reset_sequence
+    output_head.run_sequence
     ML::CUDA.synchronize!("cuCtxSynchronize(mixed stack)")
     runners.each(&.read_outputs)
+    output_head.read_outputs
     case last = runners.last
     in ML::CUDA::QwenRecurrentLayerRunner
       final_gpu_all = last.final_gpu_all.dup
@@ -208,6 +239,13 @@ begin
 
   lines = [] of String
   ok = report_pair("final_all", final_gpu_all, cpu_current, lines, 1.0e-2_f32)
+  logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
+  gpu_top1_ids = output_head.top1_ids
+  top1_ok = gpu_top1_ids == cpu_top1_ids
+  lines << "top1_gpu=#{gpu_top1_ids.join(",")}"
+  lines << "top1_cpu=#{cpu_top1_ids.join(",")}"
+  lines << "top1_ok=#{top1_ok}"
+  ok = ok && logits_ok && top1_ok
   runners.each_with_index do |runner, idx|
     layer = layers[idx]
     case runner
@@ -234,6 +272,7 @@ begin
   puts "max_seq=#{max_seq}"
   puts "warmup=#{warmup}"
   puts "hidden=#{hidden}"
+  puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
   puts "cuda_ms_per_token=#{(gpu_ms / tokens).round(3)}"
@@ -242,6 +281,7 @@ begin
   lines.each { |line| puts line }
   puts "ok=#{ok}"
 ensure
+  head.try(&.close)
   runners.reverse_each(&.close)
   cuda_ctx.try(&.close)
   gguf.close

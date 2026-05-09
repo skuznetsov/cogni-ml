@@ -246,7 +246,7 @@ crystal build -Dcpu_only bin/cuda_mixed_stack_probe.cr -o build/cuda_mixed_stack
   --max-seq 12
 ```
 
-`cuda_mixed_stack_probe` composes `QwenRecurrentLayerRunner` and `QwenFullAttnLayerRunner` in model layer order with device-resident hidden handoff across recurrent/full-attention boundaries. It compares the final hidden sequence, recurrent conv/SSM states, and full-attention KV cache rows against the CPU reference. This is the first mixed-stack CUDA correctness scaffold; it still stops before output norm/logits/top1, tokenizer/sampling, and end-to-end decode scheduling.
+`cuda_mixed_stack_probe` composes `QwenRecurrentLayerRunner` and `QwenFullAttnLayerRunner` in model layer order with device-resident hidden handoff across recurrent/full-attention boundaries, then runs `QwenOutputHeadRunner` for output RMSNorm and quantized lm-head projection. It compares the final hidden sequence, logits/top1, recurrent conv/SSM states, and full-attention KV cache rows against the CPU reference. This is the first mixed-stack CUDA correctness scaffold through logits; it still stops before tokenizer/sampling, repeated decode-loop state ownership, and optimized resident top1/topK kernels.
 
 Build the Metal bridge once:
 
