@@ -25,6 +25,7 @@ lib LibCUDADriver
   fun cuStreamBeginCapture(stream : CUstream, mode : Int32) : Int32
   fun cuStreamEndCapture(stream : CUstream, graph : CUgraph*) : Int32
   fun cuGraphInstantiate(exec : CUgraphExec*, graph : CUgraph, flags : UInt64) : Int32
+  fun cuGraphUpload(exec : CUgraphExec, stream : CUstream) : Int32
   fun cuGraphLaunch(exec : CUgraphExec, stream : CUstream) : Int32
   fun cuGraphDestroy(graph : CUgraph) : Int32
   fun cuGraphExecDestroy(exec : CUgraphExec) : Int32
@@ -210,6 +211,10 @@ module ML::CUDA
 
     def launch(stream : CUDAStream) : Nil
       ML::CUDA.check! LibCUDADriver.cuGraphLaunch(@handle, stream.handle), "cuGraphLaunch"
+    end
+
+    def upload(stream : CUDAStream) : Nil
+      ML::CUDA.check! LibCUDADriver.cuGraphUpload(@handle, stream.handle), "cuGraphUpload"
     end
 
     def close : Nil

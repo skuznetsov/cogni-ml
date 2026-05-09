@@ -10610,3 +10610,23 @@ Conclusion: semantic graph replay is exact and a small CUDA launch/orchestration
 - daedalus: The useful graph lesson is not "wrap everything"; it is "graph capture requires device-resident mutable control values." This same pattern is required for future GPU-resident speculative controllers.
 - maieutic: The hidden assumption "captured graph will observe updated host scalar params" was false; CUDA graph nodes captured the scalar value, not the later host mutation.
 - adversary: This is a probe-level feature, not a production decode policy. It preserves tested token sequences and logits, but longer contexts/prompts and CLI integration still need gates before default promotion.
+
+**decision_update_149:** Added explicit `cuGraphUpload` support to the CUDA driver wrapper and graph probes. `CUDAGraphExec#upload(stream)` now uploads captured graph executables before timing in both steady graph replay and semantic greedy-loop graph replay. This removes implicit first-launch upload work from the measured region and is required groundwork for later device graph launch experiments.
+
+Conclusion: explicit upload is correctness-neutral and keeps the semantic graph win small. Full 9B gen16 after upload still preserves the token sequence and measures normal `23.824/23.868 ms/tok` versus graph `23.801/23.811 ms/tok`. The smaller delta versus the previous ABBA means part of the graph "win" was first-launch/upload accounting, but graph replay remains a valid low-overhead skeleton for future GPU-resident controllers.
+
+**evidence_update_149:**
+- claim: "Explicit graph upload preserves semantic greedy-loop token parity."
+  source: remote `/tmp/cuda_mixed_stack_probe_graphupload --all-layers --greedy-loop-tokens=16 --seed-token=0 --perf-only --skip-debug-readback --greedy-loop-graph` -> same token sequence as normal: `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA driver graph wrapper, graph upload API, semantic-loop graph path, or full-attn start_pos handling changes
+- claim: "Explicit graph upload keeps only a very small full 9B gen16 speed signal."
+  source: remote ABBA after upload -> normal `23.824/23.868 ms/tok`, graph `23.801/23.811 ms/tok`; graph body `23.589/23.597 ms/tok` vs normal body `23.626/23.668 ms/tok`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA graph upload behavior, GPU load/order, semantic-loop harness, or generated-token length changes
+
+**quadrumvirate_update_149:**
+- cassandra: If first graph launch paid implicit upload cost, explicit upload should shrink variance and reduce apparent graph benefit; observed results match that.
+- daedalus: Graph replay is now infrastructure, not a standalone speed lever. The next graph work should use the uploaded graph as a branch/scheduler substrate, not keep tuning launch overhead.
+- maieutic: The key assumption to keep checking is whether graph timing includes one-time setup. Explicit upload moves setup outside the measured region.
+- adversary: This does not prove production device graph launch works; it only verifies host-side upload/replay plumbing through the driver API.

@@ -296,6 +296,8 @@ begin
       graph_exec = graph.not_nil!.instantiate
       graph.not_nil!.close
       graph = nil
+      graph_exec.not_nil!.upload(graph_stream.not_nil!)
+      graph_stream.not_nil!.synchronize
     end
 
     gpu_token = seed_token
@@ -352,6 +354,8 @@ begin
         end
         graph_exec = graph.not_nil!.instantiate
         graph.not_nil!.close
+        graph_exec.not_nil!.upload(stream)
+        stream.synchronize
         t_graph = Time.instant
         steady_graph_reps.times do
           graph_exec.not_nil!.launch(stream)
