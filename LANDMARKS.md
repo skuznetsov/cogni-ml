@@ -10176,3 +10176,31 @@ Conclusion: the new premise was not enough. Correctness held, but full semantic 
 - daedalus: The row-packing frame is now weak. Next CUDA body work should change the inner dequant/dot algorithm or fuse larger producer-consumer regions.
 - maieutic: The assumption that CTA count is material was false for this workload; per-warp row compute and dequant throughput dominate.
 - adversary: This refutes only naive Q4 warp8 row packing on RTX 5060 Ti. It does not refute warp-specialized vectorized dequant, tensor-core batch paths, or offline repacking.
+
+**decision_update_131:** Refuted a 128-thread specialization of the parallel CUDA full-attention decode kernel for Qwen `head_dim=128`. The temporary opt-in `QWEN_CUDA_FULL_ATTN_PARALLEL128=1` duplicated `full_attn_decode_cache_parallel_probe` with 128-thread CTAs and shorter shared-memory reductions. The premise was that the default 256-thread CTA leaves half the threads idle for `head_dim=128`.
+
+Conclusion: correctness held, but the specialization did not improve full-model wall time. Five-layer full-logit timing improved in one narrow gate (`7.897ms -> 7.705ms`), but the full 9B semantic loop regressed slightly and long-context profile was neutral. The code was removed. Keep the default 256-thread attention kernel; future attention work needs a real algorithmic change such as online softmax/score-buffer elimination, not just smaller CTAs.
+
+**evidence_update_131:**
+- claim: "The 128-thread full-attention variant preserved the five-layer full-logit oracle."
+  source: remote temporary `QWEN_CUDA_FULL_ATTN_PARALLEL128=1 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `cuda_ms=7.705`; default same binary `cuda_ms=7.897`
+  verified_at: 2026-05-09
+  decay_trigger: full-attn PTX, launch block size, GPU architecture, or full-logit oracle policy changes
+- claim: "The 128-thread full-attention variant was not a full 9B semantic win."
+  source: remote full 9B semantic gen16 A/B: default `24.089/24.113ms/token`, `greedy_body_ms_per_token=23.925/23.948`; `QWEN_CUDA_FULL_ATTN_PARALLEL128=1` `24.125/24.132ms/token`, `greedy_body_ms_per_token=23.960/23.966`, all `ok=true` with identical top1 sequence
+  verified_at: 2026-05-09
+  decay_trigger: semantic-loop timing, full-attn scheduling, GPU/load conditions, or context length changes
+- claim: "The 128-thread variant was neutral at a longer synthetic context."
+  source: remote full 9B `start_pos=1023 max_seq=1024 --profile-phases` A/B: default `45.048/45.122ms`, parallel128 `45.166/45.034ms`; full-attn layer decode phases stayed around `0.88-0.89ms/layer` in both modes, all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: context length, score-buffer layout, full-attn kernel implementation, or GPU architecture changes
+- claim: "The temporary parallel128 code was removed after refutation."
+  source: local source restored by removing `full_attn_decode_cache_parallel128_probe` and its runner env routing; follow-up syntax gate required before commit
+  verified_at: 2026-05-09
+  decay_trigger: future full-attn block-size experiments
+
+**quadrumvirate_update_131:**
+- cassandra: The narrow five-layer win was likely scheduling noise or a local layer mix effect; full semantic A/B correctly rejected it as a default.
+- daedalus: Smaller CTA is a local retune, not a paradigm shift. The next attention branch should eliminate score-buffer global writes/reads or reduce softmax passes.
+- maieutic: The hidden assumption was that idle threads dominate the attention wall. Long-context evidence shows memory passes and barriers dominate instead.
+- adversary: This refutes only the 128-thread clone on RTX 5060 Ti. It does not refute warp-specialized online softmax, persistent KV tiling, or tensor-core prefill attention paths.
