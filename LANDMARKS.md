@@ -9473,3 +9473,23 @@ Conclusion: the recurrent-only CUDA stack no longer requires layer-to-layer host
 - daedalus: Recurrent-only composition is now structurally adequate for this stage. The next pivot should be full-attention/KV or model-level mixed stack, not further polishing a recurrent-only micro-stack.
 - maieutic: The assumption that removing host copies would create a large immediate timing win was not supported on tiny `tokens=2`; correctness and architecture improved, but kernels still dominate.
 - adversary: This is still synthetic hidden input over recurrent layers only. It does not cover full-attention layers, KV cache, logits/top1, tokenizer/sampling, or end-to-end decode scheduling.
+
+**decision_update_100:** Extracted the first reusable CUDA full-attention boundary. New `ML::CUDA::QwenFullAttnProjectionRunner` owns a full-attention layer's Q/K/V input projection bundle, supports multi-token hidden sequences, uses shared CUDA Driver API ownership, and dispatches the V projection by GGUF tensor type (`Q4_K` or `Q6_K`). `bin/cuda_attn_projection_probe.cr` now uses this runner instead of declaring a probe-local CUDA FFI surface.
+
+Conclusion: CUDA now has reusable recurrent-layer and full-attention input-projection objects. This is still not a full-attention layer runner: Q/K RMSNorm, RoPE, KV cache write, attention decode, output projection, FFN, logits, and model scheduling remain separate gates.
+
+**evidence_update_100:**
+- claim: "The full-attention projection runner has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_full_proj_syntax crystal build -Dcpu_only --no-codegen bin/cuda_attn_projection_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: full-attn projection runner, shared CUDA driver, probe source, Crystal compiler, CUDA Driver API signatures, or Q4/Q6 PTX files change
+- claim: "The runner-backed full-attention projection probe matches CPU references on Qwen3.5 9B layer3."
+  source: remote `cuda_attn_projection_probe --layer 3 --tokens 4 --reps 3 --warmup 1` -> `ok=true`, `q_cos=1.0`, `k_cos=1.0`, `v_cos=1.0`, max diffs `1.013279e-6/5.9604645e-7/7.1525574e-7`, `weight_upload_ms=4.021`, `cuda_ms_per_token=0.107`
+  verified_at: 2026-05-08
+  decay_trigger: Q/K/V tensor layout, runner sequence offsets, CUDA Q4/Q6 kernels, model file, CPU reference, or CUDA driver/PTX JIT changes
+
+**quadrumvirate_update_100:**
+- cassandra: The likely regression was pointer/offset handling after moving the old one-vector probe into a reusable sequence runner. The remote `tokens=4` run directly exercised per-token offsets.
+- daedalus: The correct next boundary is not another projection microbench; it is Q/K normalization, RoPE, and KV-cache write, because those are the next semantic steps before attention decode.
+- maieutic: The assumption that a projection runner is a full-attention runner is false; it only proves the reusable projection input side.
+- adversary: This does not cover attention scores/softmax, KV cache mutation, output projection, FFN, or full model decode.

@@ -153,6 +153,7 @@ crystal build -Dcpu_only bin/cuda_attn_projection_probe.cr -o build/cuda_attn_pr
 ```
 
 `cuda_attn_projection_probe` runs `Q4_K attn_q + Q4_K attn_k + Q6_K attn_v` from one GPU-resident hidden vector and copies Q/K/V back only after all projections complete. It targets full-attention layers such as `blk.3` in Qwen3.5 9B.
+The probe now routes through `ML::CUDA::QwenFullAttnProjectionRunner`, supports `--tokens N`, and keeps Q/K/V outputs GPU-resident until the final correctness readback. It is the reusable input-projection boundary for future full-attention/KV CUDA work, not a complete full-attention layer runner yet.
 
 Build the Q5_K CUDA recurrent-QKV probe:
 
