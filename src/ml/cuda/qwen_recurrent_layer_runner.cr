@@ -12,6 +12,7 @@ module ML::CUDA
 
     DN_PTX  = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
     Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+    Q4K_DUAL_PTX = {{ read_file("src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx") }}
     Q5K_PTX = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
     Q6K_PTX = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
 
@@ -308,9 +309,10 @@ module ML::CUDA
     private def build_runner : Nil
       dn_mod = CUDAModule.load(DN_PTX, "delta")
       q4_mod = CUDAModule.load(Q4K_PTX, "q4")
+      q4_dual_mod = CUDAModule.load(Q4K_DUAL_PTX, "q4_dual")
       q5_mod = CUDAModule.load(Q5K_PTX, "q5")
       q6_mod = CUDAModule.load(Q6K_PTX, "q6")
-      @modules.concat([dn_mod, q4_mod, q5_mod, q6_mod])
+      @modules.concat([dn_mod, q4_mod, q4_dual_mod, q5_mod, q6_mod])
 
       attn_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
@@ -322,10 +324,12 @@ module ML::CUDA
       post_fn = dn_mod.function("deltanet_post_norm_gate_128_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q4_add_fn = q4_mod.function("q4_k_gemv_add_warp4_f32")
+      q4_dual_fn = q4_dual_mod.function("q4_k_dual_gemv_warp4_f32")
       q5_fn = q5_mod.function("q5_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
       ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
+      use_alpha_beta_dual = ENV["QWEN_CUDA_Q4_ALPHA_BETA_DUAL_OFF"]? != "1"
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
                @qkv_raw.size.to_u64, @gate_raw.size.to_u64, @alpha_raw.size.to_u64, @beta_raw_w.size.to_u64,
@@ -380,6 +384,7 @@ module ML::CUDA
       qkv_grid = ((@qkv_dim + 3) // 4).to_u32
       inner_grid = ((@inner_dim + 3) // 4).to_u32
       h_v_grid = ((@h_v + 3) // 4).to_u32
+      alpha_beta_dual_grid = (((@h_v * 2) + 3) // 4).to_u32
       ffn_grid = ((@ffn_dim + 3) // 4).to_u32
       hidden_grid = ((@hidden + 3) // 4).to_u32
       swiglu_grid = ((@ffn_dim + 127) // 128).to_u32
@@ -424,6 +429,15 @@ module ML::CUDA
       beta_proj_params[2] = box_ptr(d_beta_raw).as(Void*)
       beta_proj_params[3] = box_u32(hidden_u32).as(Void*)
       beta_proj_params[4] = box_u32(h_v_u32).as(Void*)
+
+      alpha_beta_dual_proj_params = Pointer(Void*).malloc(7)
+      alpha_beta_dual_proj_params[0] = box_ptr(d_alpha_w).as(Void*)
+      alpha_beta_dual_proj_params[1] = box_ptr(d_beta_w).as(Void*)
+      alpha_beta_dual_proj_params[2] = box_ptr(d_cur).as(Void*)
+      alpha_beta_dual_proj_params[3] = box_ptr(d_alpha).as(Void*)
+      alpha_beta_dual_proj_params[4] = box_ptr(d_beta_raw).as(Void*)
+      alpha_beta_dual_proj_params[5] = box_u32(hidden_u32).as(Void*)
+      alpha_beta_dual_proj_params[6] = box_u32(h_v_u32).as(Void*)
 
       conv_params = Pointer(Void*).malloc(5)
       conv_params[0] = box_ptr(d_conv_state).as(Void*)
@@ -520,8 +534,12 @@ module ML::CUDA
         ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
         ML::CUDA.launch!(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj")
         ML::CUDA.launch!(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj")
-        ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
-        ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj")
+        if use_alpha_beta_dual
+          ML::CUDA.launch!(q4_dual_fn, alpha_beta_dual_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_beta_dual_proj_params, "alpha beta dual proj")
+        else
+          ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
+          ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj")
+        end
         ML::CUDA.launch!(conv_fn, conv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, conv_params, "conv prep")
         ML::CUDA.launch!(norm_fn, @h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_norm_params, "q norm")
         ML::CUDA.launch!(norm_fn, @h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_norm_params, "k norm")
@@ -558,8 +576,12 @@ module ML::CUDA
         @profile_gate_ms += (Time.instant - t_gate).total_milliseconds
 
         t_alpha_beta = Time.instant
-        ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
-        ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj")
+        if use_alpha_beta_dual
+          ML::CUDA.launch!(q4_dual_fn, alpha_beta_dual_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_beta_dual_proj_params, "alpha beta dual proj")
+        else
+          ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
+          ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj")
+        end
         ML::CUDA.synchronize!("cuCtxSynchronize(recurrent alpha/beta)")
         @profile_alpha_beta_ms += (Time.instant - t_alpha_beta).total_milliseconds
         @profile_projection_ms += (Time.instant - t_proj).total_milliseconds

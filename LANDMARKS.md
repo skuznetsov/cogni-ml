@@ -10534,3 +10534,31 @@ Conclusion: the unrolled Q6 body is exact but not faster. On `output.weight` ful
 - daedalus: Do not spend more attempts on superficial PTX branch cleanup. Q6 speed needs either a different dot representation, a top1-specific algorithmic cut, or a larger producer-consumer fusion.
 - maieutic: The assumption "visible loop branch means runtime overhead" is not supported here; the branch is not the limiting cost.
 - adversary: This refutes only manual unrolling of the main Q6 body loop. It does not refute Q6 DP4A/activation-quant experiments, top1-only pruning, or output-head candidate shortlist ideas.
+
+**decision_update_146:** Added an exact CUDA Q4_K dual GEMV for recurrent `ssm_alpha + ssm_beta` projections. The new `q4_k_dual_gemv_warp4_f32` kernel maps one launch over two same-shape Q4_K matrices, selecting alpha or beta by output-row range and writing to the two existing output buffers. It preserves the raw GGUF layout, uses the existing no-barrier warp reduction body, and is default-on with `QWEN_CUDA_Q4_ALPHA_BETA_DUAL_OFF=1` as the A/B escape hatch.
+
+Conclusion: this is a small but real exact WBA cleanup. The standalone alpha/beta pair probe improved `4096x32` projection pairs from `~0.01276ms` to `~0.00812ms` (`~1.57x`) on the first three recurrent blocks. The five-layer full-logit oracle stayed exact and improved from `7.720ms` with the escape hatch to `7.665ms` default. Full 9B semantic gen16 ABBA preserved the generated token sequence and improved from `24.099/24.101/24.126 ms/tok` off to `23.763/23.814/23.812 ms/tok` default. Phase attribution confirms the intended mechanism: recurrent `alpha_beta_proj_ms` drops from about `0.038-0.039ms` to `0.025-0.026ms` per recurrent layer.
+
+**evidence_update_146:**
+- claim: "The dual alpha/beta Q4_K kernel preserves tensor-level correctness and improves the isolated projection pair."
+  source: remote temporary `/tmp/cuda_q4_dual_ab_probe --prefix blk.0|blk.1|blk.2 --reps 300 --warmup 30` -> separate `~0.01276ms`, dual `~0.00812ms`, speedup `~1.571x`, `ok=true`, max diff <= `8.34465e-7`
+  verified_at: 2026-05-09
+  decay_trigger: q4 dual PTX, recurrent alpha/beta tensor shapes, CUDA driver JIT, or GPU architecture changes
+- claim: "Default-on dual alpha/beta preserves the five-layer full-logit/top1 oracle and improves that gate."
+  source: remote `/tmp/cuda_mixed_stack_probe_q4dual --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> default `cuda_ms=7.665`, off `cuda_ms=7.720`; both `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: recurrent runner routing, q4 dual PTX, five-layer oracle, or CUDA scheduling changes
+- claim: "Dual alpha/beta improves full 9B semantic gen16 timing without changing generated token IDs."
+  source: remote ABBA-style full 9B `--all-layers --greedy-loop-tokens=16 --seed-token=0 --perf-only --skip-debug-readback` -> default `23.763/23.814/23.812 ms/tok`; `QWEN_CUDA_Q4_ALPHA_BETA_DUAL_OFF=1` `24.099/24.101/24.126 ms/tok`; generated top1 sequence identical: `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`
+  verified_at: 2026-05-09
+  decay_trigger: semantic-loop harness, recurrent routing, GPU load/order, or model tensor mix changes
+- claim: "Phase attribution shows the intended alpha/beta projection reduction."
+  source: remote five-layer profile -> default `phase_layer{0,1,2,4}_alpha_beta_proj_ms=0.025/0.025/0.026/0.026`, total `7.861ms`; off `0.039/0.038/0.039/0.039`, total `7.909ms`
+  verified_at: 2026-05-09
+  decay_trigger: profile sync boundaries, recurrent projection implementation, or CUDA scheduling changes
+
+**quadrumvirate_update_146:**
+- cassandra: Unlike scale-regs, launch fusion had a clear tiny-shape mechanism and no hot FFN downside; full semantic timing confirmed the microbench direction.
+- daedalus: The useful pattern is "fuse sibling tiny projections with identical input/output geometry" rather than "micro-optimize one tiny projection body."
+- maieutic: The ceiling is limited because alpha/beta was only a small phase, so this is a cleanup, not the next breakthrough.
+- adversary: The result is exact on the tested oracle and semantic token sequence, with an env escape hatch for regression isolation. It does not reduce the dominant FFN/body GEMV wall; continue searching for larger Q4/Q6 row-compute or diamond fusions.
