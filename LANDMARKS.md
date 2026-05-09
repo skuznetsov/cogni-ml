@@ -9896,3 +9896,19 @@ Conclusion: for the current short-context 9B slice, full-attention is not attent
 - daedalus: Recurrent and full-attention layers now share the same main structure: FFN GEMVs dominate after normalization/top1/readback fixes.
 - maieutic: This conclusion is context-length sensitive. At long contexts, attention decode/KV traffic may become dominant and must be remeasured.
 - adversary: Evidence is from `max_seq=16`, one full-attention layer, one token, and skip-debug top1-only correctness. Long-context and full-debug gates remain separate.
+
+**decision_update_119:** Refuted simple Q4_K `warp8` block packing for FFN gate/up. A temporary `q4_k_gemv_warp8_f32` variant was wired only into FFN gate/up in recurrent and full-attention layers, then tested on the remote 9B five-layer perf-profile. It preserved top1 parity but slowed the profile, so the code was reverted.
+
+Conclusion: changing Q4 FFN gate/up from `4` rows/block to `8` rows/block is not the FFN breakthrough on this GPU. A future paired gate+up fusion must win by reducing intermediate writes/reads or reusing input loads, not by simple CTA count reduction.
+
+**evidence_update_119:**
+- claim: "Q4_K warp8 FFN gate/up block packing is not a win on the current CUDA gate."
+  source: remote temporary Q4 warp8 FFN run `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases --skip-debug-readback` -> `ok=true`, `phase_total_ms=9.025`, `phase_head_ms=2.705`, recurrent/full-attn FFN gate/up did not improve versus the prior `8.528ms` profile
+  verified_at: 2026-05-09
+  decay_trigger: GPU architecture, Q4 kernel implementation, FFN dimensions, runner wiring, or benchmarking harness changes
+
+**quadrumvirate_update_119:**
+- cassandra: The likely outcome matched the Q6 warp8 refutation: fewer CTAs alone did not improve the GEMV wall.
+- daedalus: The useful next frame is traffic reduction/fusion, not block packing.
+- maieutic: The assumption that larger blocks improve occupancy was false for this workload/hardware pair.
+- adversary: Refutation is scoped to RTX 5060 Ti, Qwen3.5 9B FFN shapes, and this PTX implementation.
