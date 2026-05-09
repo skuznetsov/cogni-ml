@@ -234,6 +234,20 @@ crystal build -Dcpu_only bin/cuda_recurrent_stack_probe.cr -o build/cuda_recurre
 
 `cuda_recurrent_stack_probe` chains multiple `QwenRecurrentLayerRunner` instances and compares the final hidden sequence plus each layer's recurrent conv/SSM state against the CPU reference. The default path hands each recurrent layer's CUDA output buffer directly to the next layer's CUDA input; `--host-handoff` keeps the older host-copy route as a debug oracle. This is still a recurrent-only scaffold, not an end-to-end Linux decoder.
 
+Build the mixed recurrent/full-attention CUDA stack probe:
+
+```sh
+crystal build -Dcpu_only bin/cuda_mixed_stack_probe.cr -o build/cuda_mixed_stack_probe
+./build/cuda_mixed_stack_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --layers 0,1,2,3,4 \
+  --tokens 2 \
+  --start-pos 2 \
+  --max-seq 12
+```
+
+`cuda_mixed_stack_probe` composes `QwenRecurrentLayerRunner` and `QwenFullAttnLayerRunner` in model layer order with device-resident hidden handoff across recurrent/full-attention boundaries. It compares the final hidden sequence, recurrent conv/SSM states, and full-attention KV cache rows against the CPU reference. This is the first mixed-stack CUDA correctness scaffold; it still stops before output norm/logits/top1, tokenizer/sampling, and end-to-end decode scheduling.
+
 Build the Metal bridge once:
 
 ```sh

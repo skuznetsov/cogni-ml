@@ -9631,3 +9631,24 @@ Conclusion: CUDA now has reusable recurrent-layer runners, a recurrent stack run
 - daedalus: The useful abstraction boundary is now the model layer, not projection/KV micro-slices. Mixed-stack composition can build on recurrent and full-attention layer objects instead of growing probes sideways.
 - maieutic: The full-attention layer runner is a semantics boundary, not a speed-optimized boundary. Serial full-attention decode remains intentionally slow and should not be confused with final CUDA throughput.
 - adversary: Evidence covers one 9B full-attention layer and synthetic residual inputs. It does not cover nonzero restored prefix KV, 27B full-attention variants, full/recurrent mixed stack state ordering, logits/top1, tokenizer/sampling, or optimized full-attention decode.
+
+
+**decision_update_107:** Added the first CUDA mixed recurrent/full-attention stack scaffold. `bin/cuda_mixed_stack_probe.cr` composes `QwenRecurrentLayerRunner` and `QwenFullAttnLayerRunner` in model layer order with device-resident hidden handoff between layers. The probe compares final hidden output, recurrent conv/SSM states, and full-attention KV cache rows against the CPU reference.
+
+Conclusion: CUDA now crosses the recurrent/full-attention boundary in Qwen layer order without host hidden handoff. This is the first backend-level model-body scaffold, but it intentionally stops before output norm/logits/top1 and still uses the serial correctness full-attention decode kernel.
+
+**evidence_update_107:**
+- claim: "The mixed recurrent/full-attention CUDA stack probe has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_mixed_syntax crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: mixed probe source, recurrent runner API, full-attention layer runner API, Crystal compiler, or embedded PTX files change
+- claim: "The mixed CUDA stack matches CPU references across recurrent and full-attention layers in model order."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 2 --start-pos 2 --max-seq 12` -> `ok=true`, `final_all_cos=1.0`, `final_all_max_diff=1.5258789e-5`; layer0/1/2/4 recurrent states and layer3 KV cache all ok
+  verified_at: 2026-05-08
+  decay_trigger: model layer order, recurrent state progression, full-attention KV cache semantics, device handoff pointer ownership, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+
+**quadrumvirate_update_107:**
+- cassandra: The likely failures were off-by-one layer order, stale hidden handoff after the full-attention layer, and KV cache position mismatch. The chosen `0,1,2,3,4` gate forced recurrent->full->recurrent transitions and nonzero `start_pos`.
+- daedalus: The frame is now model-body composition. The next useful boundary is output norm + logits/top1, not more hidden-only stack proof.
+- maieutic: The scaffold time is not a throughput estimate for production because the full-attention kernel is serial and the probe does not include tokenizer/sampling or persistent model-level state objects.
+- adversary: Evidence covers one 9B five-layer slice and synthetic residual inputs. It does not cover all layers, 27B, logits/top1, restored nonzero prefix KV from previous decode calls, repeated decode-loop calls, or optimized full-attention decode.
