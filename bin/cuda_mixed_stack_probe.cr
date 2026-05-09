@@ -340,7 +340,7 @@ begin
   cuda_ctx = ML::CUDA::Context.create
   # Full-attention CUDA kernels index RoPE tables by absolute decode position,
   # so upload a resident table once and update only start_pos in token loops.
-  rope_table_tokens = greedy_loop_tokens > 0 ? max_seq : Math.max(max_seq, start_pos + tokens)
+  rope_table_tokens = start_pos + (greedy_loop_tokens > 0 ? greedy_loop_tokens : tokens)
   cos_table, sin_table = rope_tables(rope_table_tokens, 0, hparams.rope_dim_count, hparams.rope_freq_base)
 
   layers.each_with_index do |layer, idx|

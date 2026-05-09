@@ -10893,6 +10893,14 @@ Conclusion: this is a small exact win and a cleaner controller boundary. It remo
 - maieutic: The visible attribution shift is not itself the win; the win is the total A/B delta and fewer host operations.
 - adversary: The extra `start_pos` load in Q RoPE can slightly affect narrow five-layer wall, so keep the claim scoped to semantic-loop control, not general layer speed.
 
+**decision_update_159d2:** Tightened resident RoPE table sizing. The CUDA semantic probe now uploads RoPE rows only through the highest absolute position it can reach (`start_pos + greedy_loop_tokens` for semantic loops, otherwise `start_pos + tokens`) instead of blindly using `max_seq`. This does not target measured decode wall, but avoids over-allocating/uploading RoPE tables on long-context probes.
+
+**evidence_update_159d2:**
+- claim: "Reachable-position RoPE sizing preserves exactness."
+  source: local no-codegen build passed; remote `/tmp/cuda_mixed_stack_probe_rope_sized` five-layer full-logit oracle -> `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`; full 9B gen64 -> `23.161 ms/tok`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: RoPE table sizing, semantic-loop position range, full-attention kernel indexing, or long-context probe changes
+
 **decision_update_159e:** Refuted moving the graph bootstrap token1 position update onto the device. A temporary branch launched the device-side full-attention `start_pos` increment after direct token0, then skipped the host `update_decode_position` for token1. The hypothesis was that the graph loop could become fully host-position-free after token0.
 
 Conclusion: correctness held, but full 9B gen64 wall regressed/noised. Old device-position path measured `23.175/23.225 ms/tok`; the token1-device branch measured `23.227/23.262 ms/tok`. The branch was removed. Keep the current policy: host sets token0 and token1 positions, graph increments token2+ positions.
