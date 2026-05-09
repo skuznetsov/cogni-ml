@@ -572,6 +572,339 @@ ADDRMS_DONE:
     ret;
 }
 
+// Parallel RMSNorm over one vector. Launch: grid=(1), block=(256).
+.visible .entry rmsnorm_vec_parallel_probe(
+    .param .u64 x,
+    .param .u64 norm,
+    .param .u64 out,
+    .param .u32 dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<10>;
+    .reg .b32 %r<20>;
+    .reg .b64 %rd<24>;
+    .reg .f32 %f<20>;
+    .shared .align 4 .b8 smem[1024];
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [norm];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [dim];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r4, %r2;
+
+RMSP_SUM:
+    setp.ge.u32 %p1, %r4, %r1;
+    @%p1 bra RMSP_STORE_SUM;
+    mul.wide.u32 %rd4, %r4, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f3, [%rd5];
+    fma.rn.f32 %f2, %f3, %f3, %f2;
+    add.u32 %r4, %r4, %r3;
+    bra RMSP_SUM;
+
+RMSP_STORE_SUM:
+    mul.wide.u32 %rd6, %r2, 4;
+    cvta.shared.u64 %rd7, smem;
+    add.s64 %rd8, %rd7, %rd6;
+    st.shared.f32 [%rd8], %f2;
+    bar.sync 0;
+
+    setp.ge.u32 %p2, %r2, 128;
+    @%p2 bra RMSP_R128_DONE;
+    add.u32 %r5, %r2, 128;
+    mul.wide.u32 %rd9, %r5, 4;
+    add.s64 %rd10, %rd7, %rd9;
+    ld.shared.f32 %f4, [%rd10];
+    add.rn.f32 %f2, %f2, %f4;
+    st.shared.f32 [%rd8], %f2;
+RMSP_R128_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p3, %r2, 64;
+    @%p3 bra RMSP_R64_DONE;
+    ld.shared.f32 %f2, [%rd8];
+    add.u32 %r6, %r2, 64;
+    mul.wide.u32 %rd11, %r6, 4;
+    add.s64 %rd12, %rd7, %rd11;
+    ld.shared.f32 %f5, [%rd12];
+    add.rn.f32 %f2, %f2, %f5;
+    st.shared.f32 [%rd8], %f2;
+RMSP_R64_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p4, %r2, 32;
+    @%p4 bra RMSP_R32_DONE;
+    ld.shared.f32 %f2, [%rd8];
+    add.u32 %r7, %r2, 32;
+    mul.wide.u32 %rd13, %r7, 4;
+    add.s64 %rd14, %rd7, %rd13;
+    ld.shared.f32 %f6, [%rd14];
+    add.rn.f32 %f2, %f2, %f6;
+    st.shared.f32 [%rd8], %f2;
+RMSP_R32_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p5, %r2, 16;
+    @%p5 bra RMSP_R16_DONE;
+    ld.shared.f32 %f2, [%rd8];
+    add.u32 %r8, %r2, 16;
+    mul.wide.u32 %rd15, %r8, 4;
+    add.s64 %rd16, %rd7, %rd15;
+    ld.shared.f32 %f7, [%rd16];
+    add.rn.f32 %f2, %f2, %f7;
+    st.shared.f32 [%rd8], %f2;
+RMSP_R16_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p6, %r2, 8;
+    @%p6 bra RMSP_R8_DONE;
+    ld.shared.f32 %f2, [%rd8];
+    add.u32 %r9, %r2, 8;
+    mul.wide.u32 %rd17, %r9, 4;
+    add.s64 %rd18, %rd7, %rd17;
+    ld.shared.f32 %f8, [%rd18];
+    add.rn.f32 %f2, %f2, %f8;
+    st.shared.f32 [%rd8], %f2;
+RMSP_R8_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p7, %r2, 4;
+    @%p7 bra RMSP_R4_DONE;
+    ld.shared.f32 %f2, [%rd8];
+    add.u32 %r10, %r2, 4;
+    mul.wide.u32 %rd19, %r10, 4;
+    add.s64 %rd20, %rd7, %rd19;
+    ld.shared.f32 %f9, [%rd20];
+    add.rn.f32 %f2, %f2, %f9;
+    st.shared.f32 [%rd8], %f2;
+RMSP_R4_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p8, %r2, 2;
+    @%p8 bra RMSP_R2_DONE;
+    ld.shared.f32 %f2, [%rd8];
+    add.u32 %r11, %r2, 2;
+    mul.wide.u32 %rd21, %r11, 4;
+    add.s64 %rd22, %rd7, %rd21;
+    ld.shared.f32 %f10, [%rd22];
+    add.rn.f32 %f2, %f2, %f10;
+    st.shared.f32 [%rd8], %f2;
+RMSP_R2_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p9, %r2, 1;
+    @%p9 bra RMSP_INV_DONE;
+    ld.shared.f32 %f2, [%rd8];
+    add.s64 %rd23, %rd8, 4;
+    ld.shared.f32 %f11, [%rd23];
+    add.rn.f32 %f2, %f2, %f11;
+    cvt.rn.f32.u32 %f12, %r1;
+    div.rn.f32 %f13, %f2, %f12;
+    add.rn.f32 %f13, %f13, %f1;
+    sqrt.rn.f32 %f14, %f13;
+    rcp.rn.f32 %f15, %f14;
+    st.shared.f32 [%rd7], %f15;
+RMSP_INV_DONE:
+    bar.sync 0;
+
+    ld.shared.f32 %f16, [%rd7];
+    mov.u32 %r12, %r2;
+RMSP_WRITE:
+    setp.ge.u32 %p1, %r12, %r1;
+    @%p1 bra RMSP_DONE;
+    mul.wide.u32 %rd4, %r12, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd9, %rd2, %rd4;
+    add.s64 %rd10, %rd3, %rd4;
+    ld.global.f32 %f3, [%rd5];
+    ld.global.f32 %f4, [%rd9];
+    mul.rn.f32 %f5, %f3, %f16;
+    mul.rn.f32 %f6, %f5, %f4;
+    st.global.f32 [%rd10], %f6;
+    add.u32 %r12, %r12, %r3;
+    bra RMSP_WRITE;
+
+RMSP_DONE:
+    ret;
+}
+
+// Parallel residual add + RMSNorm. Launch: grid=(1), block=(256).
+.visible .entry add_rmsnorm_vec_parallel_probe(
+    .param .u64 x,
+    .param .u64 add,
+    .param .u64 norm,
+    .param .u64 residual_out,
+    .param .u64 normed_out,
+    .param .u32 dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<10>;
+    .reg .b32 %r<20>;
+    .reg .b64 %rd<28>;
+    .reg .f32 %f<22>;
+    .shared .align 4 .b8 smem[1024];
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [add];
+    ld.param.u64 %rd3, [norm];
+    ld.param.u64 %rd4, [residual_out];
+    ld.param.u64 %rd5, [normed_out];
+    ld.param.u32 %r1, [dim];
+    ld.param.f32 %f1, [eps];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r4, %r2;
+
+ADDRMSP_SUM:
+    setp.ge.u32 %p1, %r4, %r1;
+    @%p1 bra ADDRMSP_STORE_SUM;
+    mul.wide.u32 %rd6, %r4, 4;
+    add.s64 %rd7, %rd1, %rd6;
+    add.s64 %rd8, %rd2, %rd6;
+    add.s64 %rd9, %rd4, %rd6;
+    ld.global.f32 %f3, [%rd7];
+    ld.global.f32 %f4, [%rd8];
+    add.rn.f32 %f5, %f3, %f4;
+    st.global.f32 [%rd9], %f5;
+    fma.rn.f32 %f2, %f5, %f5, %f2;
+    add.u32 %r4, %r4, %r3;
+    bra ADDRMSP_SUM;
+
+ADDRMSP_STORE_SUM:
+    mul.wide.u32 %rd10, %r2, 4;
+    cvta.shared.u64 %rd11, smem;
+    add.s64 %rd12, %rd11, %rd10;
+    st.shared.f32 [%rd12], %f2;
+    bar.sync 0;
+
+    setp.ge.u32 %p2, %r2, 128;
+    @%p2 bra ADDRMSP_R128_DONE;
+    add.u32 %r5, %r2, 128;
+    mul.wide.u32 %rd13, %r5, 4;
+    add.s64 %rd14, %rd11, %rd13;
+    ld.shared.f32 %f6, [%rd14];
+    add.rn.f32 %f2, %f2, %f6;
+    st.shared.f32 [%rd12], %f2;
+ADDRMSP_R128_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p3, %r2, 64;
+    @%p3 bra ADDRMSP_R64_DONE;
+    ld.shared.f32 %f2, [%rd12];
+    add.u32 %r6, %r2, 64;
+    mul.wide.u32 %rd15, %r6, 4;
+    add.s64 %rd16, %rd11, %rd15;
+    ld.shared.f32 %f7, [%rd16];
+    add.rn.f32 %f2, %f2, %f7;
+    st.shared.f32 [%rd12], %f2;
+ADDRMSP_R64_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p4, %r2, 32;
+    @%p4 bra ADDRMSP_R32_DONE;
+    ld.shared.f32 %f2, [%rd12];
+    add.u32 %r7, %r2, 32;
+    mul.wide.u32 %rd17, %r7, 4;
+    add.s64 %rd18, %rd11, %rd17;
+    ld.shared.f32 %f8, [%rd18];
+    add.rn.f32 %f2, %f2, %f8;
+    st.shared.f32 [%rd12], %f2;
+ADDRMSP_R32_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p5, %r2, 16;
+    @%p5 bra ADDRMSP_R16_DONE;
+    ld.shared.f32 %f2, [%rd12];
+    add.u32 %r8, %r2, 16;
+    mul.wide.u32 %rd19, %r8, 4;
+    add.s64 %rd20, %rd11, %rd19;
+    ld.shared.f32 %f9, [%rd20];
+    add.rn.f32 %f2, %f2, %f9;
+    st.shared.f32 [%rd12], %f2;
+ADDRMSP_R16_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p6, %r2, 8;
+    @%p6 bra ADDRMSP_R8_DONE;
+    ld.shared.f32 %f2, [%rd12];
+    add.u32 %r9, %r2, 8;
+    mul.wide.u32 %rd21, %r9, 4;
+    add.s64 %rd22, %rd11, %rd21;
+    ld.shared.f32 %f10, [%rd22];
+    add.rn.f32 %f2, %f2, %f10;
+    st.shared.f32 [%rd12], %f2;
+ADDRMSP_R8_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p7, %r2, 4;
+    @%p7 bra ADDRMSP_R4_DONE;
+    ld.shared.f32 %f2, [%rd12];
+    add.u32 %r10, %r2, 4;
+    mul.wide.u32 %rd23, %r10, 4;
+    add.s64 %rd24, %rd11, %rd23;
+    ld.shared.f32 %f11, [%rd24];
+    add.rn.f32 %f2, %f2, %f11;
+    st.shared.f32 [%rd12], %f2;
+ADDRMSP_R4_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p8, %r2, 2;
+    @%p8 bra ADDRMSP_R2_DONE;
+    ld.shared.f32 %f2, [%rd12];
+    add.u32 %r11, %r2, 2;
+    mul.wide.u32 %rd25, %r11, 4;
+    add.s64 %rd26, %rd11, %rd25;
+    ld.shared.f32 %f12, [%rd26];
+    add.rn.f32 %f2, %f2, %f12;
+    st.shared.f32 [%rd12], %f2;
+ADDRMSP_R2_DONE:
+    bar.sync 0;
+
+    setp.ge.u32 %p9, %r2, 1;
+    @%p9 bra ADDRMSP_INV_DONE;
+    ld.shared.f32 %f2, [%rd12];
+    add.s64 %rd27, %rd12, 4;
+    ld.shared.f32 %f13, [%rd27];
+    add.rn.f32 %f2, %f2, %f13;
+    cvt.rn.f32.u32 %f14, %r1;
+    div.rn.f32 %f15, %f2, %f14;
+    add.rn.f32 %f15, %f15, %f1;
+    sqrt.rn.f32 %f16, %f15;
+    rcp.rn.f32 %f17, %f16;
+    st.shared.f32 [%rd11], %f17;
+ADDRMSP_INV_DONE:
+    bar.sync 0;
+
+    ld.shared.f32 %f18, [%rd11];
+    mov.u32 %r12, %r2;
+ADDRMSP_WRITE:
+    setp.ge.u32 %p1, %r12, %r1;
+    @%p1 bra ADDRMSP_DONE;
+    mul.wide.u32 %rd6, %r12, 4;
+    add.s64 %rd7, %rd4, %rd6;
+    add.s64 %rd8, %rd3, %rd6;
+    add.s64 %rd9, %rd5, %rd6;
+    ld.global.f32 %f3, [%rd7];
+    ld.global.f32 %f4, [%rd8];
+    mul.rn.f32 %f5, %f3, %f18;
+    mul.rn.f32 %f6, %f5, %f4;
+    st.global.f32 [%rd9], %f6;
+    add.u32 %r12, %r12, %r3;
+    bra ADDRMSP_WRITE;
+
+ADDRMSP_DONE:
+    ret;
+}
+
 .visible .entry swiglu_probe(
     .param .u64 gate,
     .param .u64 up,

@@ -8,6 +8,8 @@ module ML::CUDA
   # and launch parameter blocks. GGUF loading and CPU-reference checks stay
   # outside so the extraction remains a narrow backend boundary.
   class QwenRecurrentLayerRunner
+    @profile_runner : ResidentSequenceRunner?
+
     DN_PTX  = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
     Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
     Q5K_PTX = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
@@ -209,6 +211,10 @@ module ML::CUDA
       @input_device_base = nil.as(DevicePtr?)
       @owned_input_device_ptr = nil.as(DevicePtr?)
       @output_device_ptr = 0_u64
+      @profile_attn_norm_ms = 0.0
+      @profile_projection_ms = 0.0
+      @profile_recurrent_core_ms = 0.0
+      @profile_ffn_ms = 0.0
       @closed = false
 
       build_runner
@@ -239,6 +245,20 @@ module ML::CUDA
       runner.run_sequence
     end
 
+    def run_sequence_profiled(phase_lines : Array(String), prefix : String) : Nil
+      @profile_attn_norm_ms = 0.0
+      @profile_projection_ms = 0.0
+      @profile_recurrent_core_ms = 0.0
+      @profile_ffn_ms = 0.0
+      t_total = Time.instant
+      profile_runner.run_sequence
+      phase_lines << "#{prefix}_attn_norm_ms=#{@profile_attn_norm_ms.round(3)}"
+      phase_lines << "#{prefix}_projection_ms=#{@profile_projection_ms.round(3)}"
+      phase_lines << "#{prefix}_recurrent_core_ms=#{@profile_recurrent_core_ms.round(3)}"
+      phase_lines << "#{prefix}_ffn_ms=#{@profile_ffn_ms.round(3)}"
+      phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
+    end
+
     def run_repeated(reps : Int32) : Int32
       runner.run_repeated(reps)
     end
@@ -262,8 +282,8 @@ module ML::CUDA
       q6_mod = CUDAModule.load(Q6K_PTX, "q6")
       @modules.concat([dn_mod, q4_mod, q5_mod, q6_mod])
 
-      attn_norm_fn = dn_mod.function("rmsnorm_vec_probe")
-      add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_probe")
+      attn_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
+      add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
       swiglu_fn = dn_mod.function("swiglu_probe")
       add_fn = dn_mod.function("add_vec_probe")
       conv_fn = dn_mod.function("recurrent_conv1d_silu_step_probe")
@@ -472,7 +492,7 @@ module ML::CUDA
         offset = bytesize_f32(tok * @hidden)
         d_x_cur_ptr.value = @input_device_base.not_nil! + offset
         d_final_cur_ptr.value = d_final_all + offset
-        ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+        ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
         ML::CUDA.launch!(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj")
         ML::CUDA.launch!(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj")
         ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
@@ -484,12 +504,52 @@ module ML::CUDA
         ML::CUDA.launch!(dn_fn, @h_v.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, dn_params, "delta step")
         ML::CUDA.launch!(post_fn, @h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, post_params, "post gate")
         ML::CUDA.launch!(q4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out")
-        ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
+        ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
         ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
         ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
         ML::CUDA.launch!(ffn_down_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
         ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
+      }
+
+      profile_run_token = ->(tok : Int32) {
+        offset = bytesize_f32(tok * @hidden)
+        d_x_cur_ptr.value = @input_device_base.not_nil! + offset
+        d_final_cur_ptr.value = d_final_all + offset
+
+        t_norm = Time.instant
+        ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent attn norm)")
+        @profile_attn_norm_ms += (Time.instant - t_norm).total_milliseconds
+
+        t_proj = Time.instant
+        ML::CUDA.launch!(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj")
+        ML::CUDA.launch!(q4_fn, inner_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj")
+        ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj")
+        ML::CUDA.launch!(q4_fn, h_v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent projections)")
+        @profile_projection_ms += (Time.instant - t_proj).total_milliseconds
+
+        t_core = Time.instant
+        ML::CUDA.launch!(conv_fn, conv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, conv_params, "conv prep")
+        ML::CUDA.launch!(norm_fn, @h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_norm_params, "q norm")
+        ML::CUDA.launch!(norm_fn, @h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_norm_params, "k norm")
+        ML::CUDA.launch!(ab_fn, 1_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ab_params, "alpha beta")
+        ML::CUDA.launch!(dn_fn, @h_v.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, dn_params, "delta step")
+        ML::CUDA.launch!(post_fn, @h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, post_params, "post gate")
+        ML::CUDA.launch!(q4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out")
+        ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent core)")
+        @profile_recurrent_core_ms += (Time.instant - t_core).total_milliseconds
+
+        t_ffn = Time.instant
+        ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
+        ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
+        ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
+        ML::CUDA.launch!(ffn_down_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down")
+        ML::CUDA.launch!(add_fn, add_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, final_add_params, "final add")
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn)")
+        @profile_ffn_ms += (Time.instant - t_ffn).total_milliseconds
       }
 
       read_outputs = -> {
@@ -499,10 +559,15 @@ module ML::CUDA
         ML::CUDA.copy_dtoh!(@final_gpu_all.to_unsafe.as(Void*), d_final_all, bytesize_f32(@final_gpu_all.size), "finals")
       }
       @runner = ResidentSequenceRunner.new(@tokens, upload_weights, reset_sequence, run_token, read_outputs)
+      @profile_runner = ResidentSequenceRunner.new(@tokens, upload_weights, reset_sequence, profile_run_token, read_outputs)
     end
 
     private def runner : ResidentSequenceRunner
       @runner.not_nil!
+    end
+
+    private def profile_runner : ResidentSequenceRunner
+      @profile_runner.not_nil!
     end
 
     private def box_ptr(value : DevicePtr) : Pointer(DevicePtr)

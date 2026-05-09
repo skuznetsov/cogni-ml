@@ -9776,3 +9776,31 @@ Conclusion: the previously refuted-looking "top1 is not the wall" result was mea
 - daedalus: The frame shifted from "avoid materializing logits" to "stop duplicate reduction work". Since Q6 logits are only about `2.3ms` in the current slice, direct fused top1 is no longer the first target unless future full-model attribution changes the balance.
 - maieutic: The assumption that a parallel top1 kernel is fast was false; it had the right structure but wrong stride. The falsifier is subphase timing plus reading the PTX loop increment.
 - adversary: Evidence covers one remote RTX 5060 Ti, one 9B five-layer slice, one token, and greedy top1. It does not yet cover all layers, 27B, multi-token decode, topK/sampling, or end-to-end tokenizer/sampler integration.
+
+**decision_update_113:** Added recurrent-layer subphase attribution and parallel hidden-size RMSNorm kernels for CUDA. `QwenRecurrentLayerRunner#run_sequence_profiled` now splits recurrent layer time into `attn_norm`, quantized projections, recurrent core, and FFN. New PTX entries `rmsnorm_vec_parallel_probe` and `add_rmsnorm_vec_parallel_probe` replace the prior serial one-thread hidden-vector RMSNorm paths in recurrent, full-attention, and output-head runners.
+
+Conclusion: after the top1 stride fix, the next wall was not DeltaNet math; it was serial normalization. Parallel RMSNorm reduced the five-layer 9B scaffold from `14.301ms` to `9.944ms` in profiling mode and to `9.664ms` in default mode, with exact parity preserved. The current post-fix profile says the next exact bottlenecks are output logits, recurrent FFN projections, and remaining full-attention/readback attribution rather than normalization.
+
+**evidence_update_113:**
+- claim: "Recurrent subphase attribution and parallel RMSNorm preserve one-token mixed-stack parity."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases` -> `ok=true`, `phase_total_ms=9.944`, `phase_head_ms=2.689`, `phase_head_norm_ms=0.026`, recurrent `attn_norm_ms≈0.294-0.300`, `recurrent_core_ms≈0.132`, `ffn_ms≈0.416-0.427`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: RMSNorm PTX, recurrent/full-attn/output runner launch shapes, model shape, GPU/load conditions, or CPU reference changes
+- claim: "The default non-profile path benefits from parallel RMSNorm."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 3` -> `ok=true`, `cuda_ms=9.664`, `logits_readback=false`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: benchmark command, warmup policy, RMSNorm PTX, runner launch graph, or GPU/load conditions
+- claim: "The full-logits oracle remains compatible with parallel RMSNorm."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --read-logits` -> `ok=true`, `cuda_ms=9.912`, `logits_cos=1.0`, `logits_max_diff=1.001358e-5`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: logits oracle path, RMSNorm numerical drift, output-head runner, or CPU reference changes
+- claim: "Parallel RMSNorm preserves repeated-token state progression."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 4 --warmup 1` -> `ok=true`, `cuda_ms=28.122`, `cuda_ms_per_token=7.031`, `final_all_cos=1.0`, top1 GPU/CPU sequence `258,92564,46,61394`
+  verified_at: 2026-05-09
+  decay_trigger: recurrent state progression, full-attn KV cache, RMSNorm PTX, token loop sequencing, or model file changes
+
+**quadrumvirate_update_113:**
+- cassandra: The likely failure was numerical drift from parallel reduction order. The observed max diffs stayed within the existing tolerance and top1/logits parity held on both top1-only and full-logits paths.
+- daedalus: The useful pivot was eliminate serial hidden-vector kernels before touching heavier Q4/Q6 GEMV. The data shows normalization was a structural tax across recurrent, full-attention, and head boundaries.
+- maieutic: The assumption that DeltaNet recurrence was the next wall was too coarse. In the current CUDA scaffold, recurrent core after parallel add+RMSNorm is only about `0.132ms/layer`; FFN and output logits are now more important.
+- adversary: Evidence covers one RTX 5060 Ti, Qwen3.5 9B, layers `0..4`, greedy top1, and `tokens=1/4`. It does not yet cover all model layers, 27B, topK sampling, end-to-end generate, or CUDA-vs-Metal throughput parity.

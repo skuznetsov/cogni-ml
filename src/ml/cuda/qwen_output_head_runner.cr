@@ -284,7 +284,7 @@ module ML::CUDA
       top1_mod = CUDAModule.load(TOP1_PTX, "top1_head")
       @modules.concat([dn_mod, q4_mod, q6_mod, top1_mod])
 
-      norm_fn = dn_mod.function("rmsnorm_vec_probe")
+      norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       top1_scan_fn = top1_mod.function("output_top1_partial_scan_probe")
@@ -360,7 +360,7 @@ module ML::CUDA
         d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
         d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
         d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
-        ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, norm_params, "output norm")
+        ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm")
         ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
         ML::CUDA.launch!(top1_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top1_scan_params, "output top1 scan")
         ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
@@ -370,7 +370,7 @@ module ML::CUDA
         t_norm = Time.instant
         d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
         d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
-        ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, norm_params, "output norm")
+        ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm")
         ML::CUDA.synchronize!("cuCtxSynchronize(output head norm)")
         @profile_head_norm_ms += (Time.instant - t_norm).total_milliseconds
 

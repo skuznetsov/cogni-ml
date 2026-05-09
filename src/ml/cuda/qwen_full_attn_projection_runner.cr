@@ -155,7 +155,7 @@ module ML::CUDA
       q6_mod = CUDAModule.load(Q6K_PTX, "q6")
       @modules.concat([dn_mod, q4_mod, q6_mod])
 
-      input_norm_fn = dn_mod.function("rmsnorm_vec_probe")
+      input_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       v_fn = @v_type.q4_k? ? q4_fn : q6_fn
@@ -239,7 +239,7 @@ module ML::CUDA
         if @input_norm
           d_norm_cur_ptr.value = d_norm_all + x_offset
           d_proj_input_cur_ptr.value = d_norm_all + x_offset
-          ML::CUDA.launch!(input_norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, input_norm_params, "attn input norm")
+          ML::CUDA.launch!(input_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, input_norm_params, "attn input norm")
         else
           d_proj_input_cur_ptr.value = d_x_cur_ptr.value
         end
