@@ -9864,3 +9864,19 @@ Conclusion: debug readback was a large measurement tax, not decode work. On the 
 - daedalus: This is not a kernel speedup; it is eliminating measurement/debug work from perf-mode timing. It should not replace full correctness gates.
 - maieutic: Top1 parity alone does not prove hidden/state parity for a run with debug readback disabled. It is valid only after nearby full-debug parity gates pass.
 - adversary: Evidence covers 9B layers `0..4` and greedy top1. Full hidden/state/KV correctness is intentionally skipped in perf mode and must be verified with debug readback in adjacent gates.
+
+**decision_update_117:** Added layer-level full-attention CUDA attribution. `QwenFullAttnLayerRunner#run_sequence_profiled` now separates the input-normalization/QKV projection bundle from the KV-cache/attention/tail runner when mixed-stack `--profile-phases` is enabled.
+
+Conclusion: on the current 9B five-layer perf-profile, full-attention layer3 is dominated by the KV/attention/tail half (`0.594ms`), not the projection half (`0.151ms`). The next full-attention optimization should instrument inside `QwenFullAttnKVRunner` before touching projection kernels.
+
+**evidence_update_117:**
+- claim: "Full-attention layer-level attribution preserves top1 parity and identifies KV/tail as the larger subphase."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases --skip-debug-readback` -> `ok=true`, `phase_layer3_projection_ms=0.151`, `phase_layer3_kv_tail_ms=0.594`, `phase_layer3_ms=0.752`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: full-attention layer wrapper, projection runner, KV/tail runner, model attention type, or profile synchronization policy changes
+
+**quadrumvirate_update_117:**
+- cassandra: Optimizing full-attention Q/K/V projections first would likely be a local-optimization trap for this slice; the measured larger subphase is KV/tail.
+- daedalus: The frame shifts from projection GEMV tuning to attention/tail internals.
+- maieutic: This is still layer-level attribution. KV/tail bundles several operations, so it needs another split before implementation work.
+- adversary: Evidence covers one full-attention layer (`3`) in one 9B slice and greedy top1 only under skip-debug-readback.

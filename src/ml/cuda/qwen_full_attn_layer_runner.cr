@@ -75,6 +75,21 @@ module ML::CUDA
       @kv.run_sequence
     end
 
+    def run_sequence_profiled(phase_lines : Array(String), prefix : String) : Nil
+      t_total = Time.instant
+
+      t_projection = Time.instant
+      @projection.run_sequence
+      ML::CUDA.synchronize!("cuCtxSynchronize(full attention projection)")
+      phase_lines << "#{prefix}_projection_ms=#{((Time.instant - t_projection).total_milliseconds).round(3)}"
+
+      t_kv = Time.instant
+      @kv.run_sequence
+      ML::CUDA.synchronize!("cuCtxSynchronize(full attention kv_tail)")
+      phase_lines << "#{prefix}_kv_tail_ms=#{((Time.instant - t_kv).total_milliseconds).round(3)}"
+      phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
+    end
+
     def read_outputs : Nil
       @kv.read_outputs
     end

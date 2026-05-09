@@ -72,8 +72,7 @@ module ML::CUDA
           in QwenRecurrentLayerRunner
             runner.run_sequence_profiled(@phase_lines, "phase_layer#{@layer_ids[idx]}")
           in QwenFullAttnLayerRunner
-            runner.run_sequence
-            ML::CUDA.synchronize!("cuCtxSynchronize(mixed layer #{idx})")
+            runner.run_sequence_profiled(@phase_lines, "phase_layer#{@layer_ids[idx]}")
           end
           @phase_lines << "phase_layer#{@layer_ids[idx]}_ms=#{((Time.instant - t0).total_milliseconds).round(3)}"
         else
