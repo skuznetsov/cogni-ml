@@ -10338,3 +10338,27 @@ Conclusion: the naive repacked layout is exact but not faster. On the hot `4096x
 - daedalus: The useful repack direction is not "one byte per q"; it must compress better or exploit vectorized/tensor-core-friendly compute.
 - maieutic: The hidden assumption was that dequant instruction count dominates over weight traffic. This layout falsifies that for Q4_K on RTX 5060 Ti.
 - adversary: This refutes only the naive u8 qvals + f32 scale/min layout. It does not refute more compact repacks, predecoded fp16 upper-bound probes, or source-level CUDA kernels with better compiler scheduling.
+
+**decision_update_138:** Extended the Q4_K repack probe with a fully dequantized F32-weight upper-bound kernel. This tests whether eliminating all Q4_K dequant bitwork can beat the raw Q4 kernel if we accept a much larger resident weight layout.
+
+Conclusion: F32 dequantized weights are not a decode speed path for hot Q4 GEMV. The hot `4096x12288` FFN shape regressed from `0.1099ms` raw Q4 to `0.4764ms` F32 with `7.111x` memory. The tiny `4096x32` projection shape showed a small F32 win (`0.0065ms -> 0.0060ms`), but the absolute gain is negligible and the hot FFN result dominates. Current raw Q4_K is winning because reduced memory traffic outweighs runtime dequant cost.
+
+**evidence_update_138:**
+- claim: "F32 full-dequantized Q4 weights preserve correctness in the probe."
+  source: remote `/tmp/cuda_q4k_repack_probe_f32` on `blk.0.ffn_up.weight` and `blk.0.ssm_alpha.weight` -> `f32_cos=1.0`, `f32_max_diff=3.5762787e-7`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: F32 probe kernel, Q4 dequant helper, tensor layout, or CUDA driver changes
+- claim: "F32 full-dequantized weights are much slower for hot FFN Q4 GEMV."
+  source: remote `--tensor blk.0.ffn_up.weight --reps 50 --warmup 5` -> shape `4096x12288`, `raw_cuda_ms=0.1099`, `f32_cuda_ms=0.4764`, `f32_speedup=0.2307`, `f32_ratio=7.111`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: GPU memory bandwidth/cache behavior, F32 kernel implementation, or hot Q4 tensor shapes change
+- claim: "F32 full-dequantized weights are only marginally faster on tiny projections."
+  source: remote `--tensor blk.0.ssm_alpha.weight --reps 100 --warmup 5` -> shape `4096x32`, `raw_cuda_ms=0.0065`, `f32_cuda_ms=0.0060`, `f32_speedup=1.0825`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: launch overhead, tiny projection route, or F32 kernel changes
+
+**quadrumvirate_update_138:**
+- cassandra: The hot FFN result confirms the memory-traffic failure mode for naive dequantized layouts.
+- daedalus: The next viable path is not larger decoded weights; it is making compact Q4 compute better or batching enough rows/tokens to use tensor-core-style paths.
+- maieutic: The hidden assumption "dequant is the bottleneck" is false for the hot single-token GEMV shape if removing dequant requires a 7x weight read.
+- adversary: This refutes F32 full dequant for decode GEMV, not F16, tensor-core batched prefill, or compact repacks that keep memory close to Q4_K.
