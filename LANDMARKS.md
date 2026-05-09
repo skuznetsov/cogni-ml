@@ -10204,3 +10204,31 @@ Conclusion: correctness held, but the specialization did not improve full-model 
 - daedalus: Smaller CTA is a local retune, not a paradigm shift. The next attention branch should eliminate score-buffer global writes/reads or reduce softmax passes.
 - maieutic: The hidden assumption was that idle threads dominate the attention wall. Long-context evidence shows memory passes and barriers dominate instead.
 - adversary: This refutes only the 128-thread clone on RTX 5060 Ti. It does not refute warp-specialized online softmax, persistent KV tiling, or tensor-core prefill attention paths.
+
+**decision_update_132:** Refuted a CTA-level online-softmax CUDA full-attention decode variant. The temporary `QWEN_CUDA_FULL_ATTN_ONLINE128=1` path maintained running `(max, denom, acc[d])` while scanning KV so it avoided global score/weight materialization, but it still used shared-memory dot reductions and a barrier chain per position.
+
+Conclusion: the math was close enough for the tested full-logit/top1 gates, but the implementation was not a speed win. At ctx64 semantic decode it regressed slightly; at ctx1024 it was neutral; at ctx4096 the first run looked tiny-positive but repeated A/B was negative. The code was removed. If we revisit online attention, the new premise must remove the shared-memory/barrier cascade, for example warp-level dot reductions or a persistent tiled design, not just move softmax state into registers.
+
+**evidence_update_132:**
+- claim: "The online-softmax variant preserved the five-layer full-logit oracle."
+  source: remote temporary `QWEN_CUDA_FULL_ATTN_ONLINE128=1 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.0967255e-5`, `top1_gpu=top1_cpu=100253`, `cuda_ms=7.721`; default same binary `cuda_ms=7.734`
+  verified_at: 2026-05-09
+  decay_trigger: full-attn online PTX, softmax arithmetic order, or logits oracle policy changes
+- claim: "The online-softmax variant regressed full 9B semantic ctx64 decode."
+  source: remote full 9B semantic gen16 A/B: default `24.115/24.126ms/token`, `greedy_body_ms_per_token=23.949/23.959`; online128 `24.128/24.144ms/token`, `greedy_body_ms_per_token=23.961/23.980`, all `ok=true` with identical top1 sequence
+  verified_at: 2026-05-09
+  decay_trigger: semantic-loop timing, full-attn online kernel, GPU/load conditions, or context length changes
+- claim: "The online-softmax variant was neutral/negative at longer synthetic contexts."
+  source: remote full 9B profile A/B: ctx1024 default `44.948/45.022ms` vs online128 `44.953/45.098ms`; ctx4096 repeated default `65.581/65.645ms` vs online128 `65.616/65.707ms`; all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: context length, score-buffer layout, online-softmax kernel implementation, or GPU architecture changes
+- claim: "The temporary online-softmax code was removed after refutation."
+  source: local source restored by removing `full_attn_decode_cache_online128_probe` and its runner env routing; follow-up syntax gate required before commit
+  verified_at: 2026-05-09
+  decay_trigger: future online-attention experiments
+
+**quadrumvirate_update_132:**
+- cassandra: Eliminating global score traffic sounded attractive, but the implementation kept the expensive per-position shared-memory reductions.
+- daedalus: The correct frame is not "online softmax" alone; it is "online softmax with fewer synchronization rounds than the current kernel."
+- maieutic: The hidden assumption was that score-buffer traffic dominates. The evidence says reduction/barrier topology dominates on RTX 5060 Ti for these shapes.
+- adversary: This refutes only the CTA/shared-memory online128 implementation. It does not refute warp-shuffle online attention, FlashAttention-style tiling for prefill, or long-context kernels with different KV layout.
