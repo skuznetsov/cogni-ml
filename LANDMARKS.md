@@ -10486,3 +10486,27 @@ Conclusion: scale-byte register extraction is not a hot FFN path, but it is a sm
 - daedalus: The useful branch is now selective, not global: try this only for tiny alpha/beta-style projections where launch/row geometry dominates and the hot FFN penalty is avoided.
 - maieutic: The assumption "removing scale global byte loads always helps" is false; it depends strongly on output dimension and instruction balance.
 - adversary: This is tensor-level evidence. Before promoting even the tiny route, full-model semantic timing must show a measurable win and preserve top1.
+
+**decision_update_144:** Refuted the selective recurrent `ssm_alpha/ssm_beta` scale-regs route. The temporary runner branch loaded the standalone `q4_k_gemv_scale_regs_warp4_f32` PTX only when `QWEN_CUDA_Q4_SCALE_REGS_TINY=1` and used it only for recurrent alpha/beta projections; FFN gate/up stayed on the default Q4 kernel. This was the smallest full-model gate for the tiny-shape tensor win from update 143.
+
+Conclusion: the route preserved exact top1/logit behavior on the five-layer oracle and the full 9B semantic generated-token sequence, but it did not improve wall time. The five-layer oracle showed only a noise-level gain (`7.724ms` default vs `7.709ms` scale-regs), phase attribution left `alpha_beta_proj_ms` unchanged at about `0.038-0.039ms`, and full 9B gen16 semantic A/B regressed slightly (`24.055/24.098/24.120 ms/tok` default vs `24.095/24.102/24.129 ms/tok` scale-regs). The temporary runner integration and extracted PTX file were removed. Keep the standalone tensor probe result as a narrow lesson, but do not route alpha/beta through scale-regs in the model runner.
+
+**evidence_update_144:**
+- claim: "Selective alpha/beta scale-regs preserved the five-layer full-logit/top1 oracle."
+  source: remote temporary `QWEN_CUDA_Q4_SCALE_REGS_TINY=1 --layers=0,1,2,3,4 --tokens=1 --start-pos=63 --max-seq=64 --warmup=1 --read-logits --skip-debug-readback` -> scale-regs `cuda_ms=7.709`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`; default same binary `cuda_ms=7.724`, `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: recurrent alpha/beta routing, generated scale-reg PTX, CUDA driver JIT, GPU architecture, or five-layer oracle changes
+- claim: "Selective alpha/beta scale-regs did not improve full 9B semantic greedy-loop wall time."
+  source: remote full 9B `--all-layers --greedy-loop-tokens=16 --seed-token=0 --perf-only --skip-debug-readback` repeated 3x -> default `24.055/24.098/24.120 ms/tok`; scale-regs `24.095/24.102/24.129 ms/tok`; generated top1 sequence identical: `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`
+  verified_at: 2026-05-09
+  decay_trigger: semantic-loop harness, recurrent alpha/beta routing, CUDA scheduling, or tensor mix changes
+- claim: "Phase attribution showed no measurable alpha/beta projection win from selective scale-regs."
+  source: remote five-layer `--profile-phases --perf-only --skip-debug-readback` -> default `phase_layer{0,1,2,4}_alpha_beta_proj_ms=0.038/0.038/0.038/0.039`, `phase_total_ms=7.918`; scale-regs `0.038/0.038/0.038/0.039`, `phase_total_ms=7.914`
+  verified_at: 2026-05-09
+  decay_trigger: profile sync boundaries, tiny Q4 projection mix, or GPU load changes
+
+**quadrumvirate_update_144:**
+- cassandra: The expected failure mode was that the tiny tensor-level win would be too small to survive full-runner overhead and whole-model noise; the full semantic gate confirms it.
+- daedalus: Selective tiny-kernel swaps are now a low-yield branch. The next CUDA speed work should change a larger fusion boundary or the row-compute/dequant schedule for hot body GEMVs without adding barriers or extra bytes.
+- maieutic: The hidden assumption was that a 1.4x microbench win on `4096x32` matters in the full model. Phase attribution shows alpha/beta is only about `0.038ms` per recurrent layer, so even perfect improvement has limited ceiling.
+- adversary: This refutes only this exact scale-regs alpha/beta route. It does not refute a future fused alpha+beta projection, broader producer-consumer fusion, or a new Q4 dequant schedule that also helps hot FFN rows.
