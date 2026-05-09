@@ -10232,3 +10232,27 @@ Conclusion: the math was close enough for the tested full-logit/top1 gates, but 
 - daedalus: The correct frame is not "online softmax" alone; it is "online softmax with fewer synchronization rounds than the current kernel."
 - maieutic: The hidden assumption was that score-buffer traffic dominates. The evidence says reduction/barrier topology dominates on RTX 5060 Ti for these shapes.
 - adversary: This refutes only the CTA/shared-memory online128 implementation. It does not refute warp-shuffle online attention, FlashAttention-style tiling for prefill, or long-context kernels with different KV layout.
+
+**decision_update_133:** Refuted removing leftover unused `.shared smem[512]` declarations from Q4/Q5/Q6 body GEMV PTX as a performance lever. After LTP/WBA shuffle reductions, the declarations looked stale in the warp4 body kernels; Q6 top1 still had real shared-memory use and was left untouched in the temporary branch.
+
+Conclusion: the cleanup was correctness-safe but performance-neutral/slightly negative in full-model A/B. This means ptxas either eliminates the unused shared allocation or the occupancy/resource effect is below measurement noise on RTX 5060 Ti. The code was reverted. Do not count static shared declaration cleanup as a speed path unless a resource report or fresh GPU architecture gives a new premise.
+
+**evidence_update_133:**
+- claim: "Removing unused shared declarations preserved five-layer correctness but did not improve semantic decode."
+  source: remote temporary no-unused-smem binary: five-layer `start_pos=63 --read-logits` -> `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`; full 9B semantic ABBA old/new `24.037/24.057ms/token` vs `24.039/24.066ms/token`, all `ok=true`
+  verified_at: 2026-05-09
+  decay_trigger: Q4/Q5/Q6 PTX resource usage, ptxas version, GPU architecture, or semantic timing harness changes
+- claim: "Removing unused shared declarations did not improve synthetic steady timing."
+  source: remote full 9B steady `--steady-reps=16` ABBA old/new `23.170/23.209ms/token` vs `23.194/23.213ms/token`, all `ok=true`, `top1_gpu=8894`
+  verified_at: 2026-05-09
+  decay_trigger: CUDA driver/JIT, ptxas resource allocation, or mixed-stack steady harness changes
+- claim: "The temporary no-unused-smem code was removed after refutation."
+  source: local PTX files restored to the committed shared-memory declarations; follow-up syntax gate required before commit
+  verified_at: 2026-05-09
+  decay_trigger: future body GEMV PTX cleanup
+
+**quadrumvirate_update_133:**
+- cassandra: This was expected to be small; measurement says it is not a speed lever.
+- daedalus: Dead declaration cleanup is not equivalent to reducing executed synchronization or memory traffic.
+- maieutic: The hidden assumption was that declared shared memory constrained occupancy. The timing evidence does not support that for the current kernels.
+- adversary: This refutes only the current PTX/JIT/GPU combination. It does not replace real resource-report analysis with `ptxas -v` if we later add an offline compilation path.
