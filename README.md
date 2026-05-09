@@ -167,7 +167,7 @@ crystal build -Dcpu_only bin/cuda_full_attn_kv_probe.cr -o build/cuda_full_attn_
   --max-seq 12
 ```
 
-`cuda_full_attn_kv_probe` composes the projection runner with `ML::CUDA::QwenFullAttnKVRunner`: Q is split into normalized/RoPE'd Q and gate, K is RMSNormed/RoPE'd, and K/V rows are appended to a CUDA-resident cache at `start_pos`. It checks Q, gate, K, K-cache, and V-cache against the CPU Qwen reference. This is the next exact full-attention boundary after projection, but still stops before attention scores/softmax, gated output projection, FFN, logits, and model-level scheduling.
+`cuda_full_attn_kv_probe` composes the projection runner with `ML::CUDA::QwenFullAttnKVRunner`: Q is split into normalized/RoPE'd Q and gate, K is RMSNormed/RoPE'd, K/V rows are appended to a CUDA-resident cache at `start_pos`, and a correctness-first serial CUDA kernel computes GQA scores, softmax, value reduction, and Q-gate multiplication. It checks Q, gate, K, gated attention output, K-cache, and V-cache against the CPU Qwen reference. This is the next exact full-attention boundary after projection, but still stops before the `attn_output` projection, residual/FFN, logits, and model-level scheduling.
 
 Build the Q5_K CUDA recurrent-QKV probe:
 

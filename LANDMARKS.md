@@ -9518,3 +9518,24 @@ Conclusion: CUDA now has an exact full-attention boundary through KV-cache mutat
 - daedalus: The next useful boundary is attention decode over resident KV, not more projection/post-projection microbenching. The CUDA path needs semantic layer completion before end-to-end Linux decode.
 - maieutic: The hidden assumption that PTX file sync is enough was false because the runner embeds PTX at compile time through `read_file(...)`; remote binaries must be rebuilt after PTX changes.
 - adversary: Evidence covers one Qwen3.5 9B full-attention layer and synthetic hidden inputs. It does not cover attention score numerics, output projection, FFN, logits, tokenizer, sampling, or model-level recurrent/full-attention scheduling.
+
+
+**decision_update_102:** Added the first CUDA full-attention decode boundary over resident KV cache. `full_attn_decode_cache_probe` is intentionally correctness-first: one serial CUDA thread per `(token, q_head)` computes GQA scores, softmax, value reduction, and Q-gate sigmoid multiplication into a resident attention-output buffer. `ML::CUDA::QwenFullAttnKVRunner` now launches this after Q/K normalization, RoPE, and K/V cache writes, and `bin/cuda_full_attn_kv_probe.cr` compares `attn` separately against the CPU Qwen reference.
+
+Conclusion: CUDA now validates full-attention semantics through gated attention output for Qwen3.5 9B full-attention layer `3`. This is a semantic/correctness gate, not the final fast kernel: the current decode PTX is serial by design and should be replaced by a warp/online-softmax kernel after output projection and layer integration are proven.
+
+**evidence_update_102:**
+- claim: "The gated attention decode boundary has local syntax coverage."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_attn_decode_syntax crystal build -Dcpu_only --no-codegen bin/cuda_full_attn_kv_probe.cr` -> exit 0
+  verified_at: 2026-05-08
+  decay_trigger: attention decode PTX, KV runner launch order, probe CPU oracle, Crystal compiler, CUDA Driver API signatures, or embedded PTX files change
+- claim: "The CUDA gated attention output matches CPU references on Qwen3.5 9B layer3 with a nonzero cache offset."
+  source: remote `cuda_full_attn_kv_probe --layer 3 --tokens 4 --start-pos 2 --max-seq 12` -> `ok=true`, `attn_cos=1.0`, `attn_max_diff=8.34465e-7`, while Q/gate/K/K-cache/V-cache also remained `ok=true`
+  verified_at: 2026-05-08
+  decay_trigger: GQA grouping, softmax math, Q-gate sigmoid, cache layout, start-position semantics, model file, tensor layout, CPU reference, PTX source, or CUDA driver/PTX JIT changes
+
+**quadrumvirate_update_102:**
+- cassandra: The likely failures were GQA head mapping, softmax over the wrong cache length, and approximate-exp drift. Separate `attn` comparison with `start_pos=2` directly covered those risks.
+- daedalus: Keep this as a semantic boundary. The speed frame is later: replace the serial PTX with a warp/online-softmax kernel only after `attn_output` projection and layer residual/FFN composition are correct.
+- maieutic: The assumption that "full-attention decode" means an optimized kernel is false in this checkpoint; this is a correctness-first decode oracle running on CUDA.
+- adversary: Evidence covers synthetic hidden inputs, zero-initialized prefix cache rows before `start_pos`, and one 9B full-attention layer. It does not yet cover nonzero restored prefix KV, output projection, residual/FFN, logits/top1, or model-level scheduling.

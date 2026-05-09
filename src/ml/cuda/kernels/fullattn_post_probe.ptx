@@ -334,3 +334,164 @@ V_CACHE_LOOP:
 K_DONE:
     ret;
 }
+
+// Correctness-first gated GQA attention decode over a resident KV cache.
+// Launch: grid=(tokens, n_head), block=(1).
+// This intentionally uses one serial thread per (token, head) so the boundary
+// is easy to validate before replacing it with a warp/online-softmax kernel.
+.visible .entry full_attn_decode_cache_probe(
+    .param .u64 q_in,
+    .param .u64 gate_in,
+    .param .u64 k_cache,
+    .param .u64 v_cache,
+    .param .u64 scores,
+    .param .u64 attn_out,
+    .param .u32 n_head,
+    .param .u32 n_kv_head,
+    .param .u32 head_dim,
+    .param .u32 heads_per_group,
+    .param .u32 start_pos,
+    .param .u32 max_seq,
+    .param .f32 scale
+)
+{
+    .reg .pred %p<9>;
+    .reg .b32 %r<48>;
+    .reg .b64 %rd<64>;
+    .reg .f32 %f<32>;
+
+    ld.param.u64 %rd1, [q_in];
+    ld.param.u64 %rd2, [gate_in];
+    ld.param.u64 %rd3, [k_cache];
+    ld.param.u64 %rd4, [v_cache];
+    ld.param.u64 %rd5, [scores];
+    ld.param.u64 %rd6, [attn_out];
+    ld.param.u32 %r1, [n_head];
+    ld.param.u32 %r2, [n_kv_head];
+    ld.param.u32 %r3, [head_dim];
+    ld.param.u32 %r4, [heads_per_group];
+    ld.param.u32 %r5, [start_pos];
+    ld.param.u32 %r6, [max_seq];
+    ld.param.f32 %f1, [scale];
+
+    mov.u32 %r7, %ctaid.x;      // tok
+    mov.u32 %r8, %ctaid.y;      // q head
+    mov.u32 %r9, %tid.x;
+    setp.ne.u32 %p1, %r9, 0;
+    @%p1 bra A_DONE;
+    setp.ge.u32 %p2, %r8, %r1;
+    @%p2 bra A_DONE;
+
+    add.u32 %r10, %r5, %r7;     // absolute position
+    setp.ge.u32 %p3, %r10, %r6;
+    @%p3 bra A_DONE;
+    add.u32 %r11, %r10, 1;      // cache_len = pos + 1
+    mul.lo.u32 %r12, %r2, %r3;  // kv_dim
+    div.u32 %r13, %r8, %r4;     // kv_h = q_h / heads_per_group
+    mul.lo.u32 %r14, %r7, %r1;
+    add.u32 %r15, %r14, %r8;
+    mul.lo.u32 %r16, %r15, %r3; // q/gate/out base
+    mul.lo.u32 %r17, %r15, %r6; // scores base [tok, head, max_seq]
+
+    mov.f32 %f2, 0fFF7FFFFF;    // max score ~= -FLT_MAX
+    mov.u32 %r18, 0;            // p
+A_SCORE_LOOP:
+    setp.ge.u32 %p4, %r18, %r11;
+    @%p4 bra A_DENOM_PREP;
+
+    mul.lo.u32 %r19, %r18, %r12;
+    mad.lo.u32 %r20, %r13, %r3, %r19; // K cache base for p, kv_h
+    mov.f32 %f3, 0f00000000;    // dot
+    mov.u32 %r21, 0;            // d
+A_DOT_LOOP:
+    setp.ge.u32 %p5, %r21, %r3;
+    @%p5 bra A_SCORE_STORE;
+    add.u32 %r22, %r16, %r21;
+    add.u32 %r23, %r20, %r21;
+    mul.wide.u32 %rd7, %r22, 4;
+    mul.wide.u32 %rd8, %r23, 4;
+    add.s64 %rd9, %rd1, %rd7;
+    add.s64 %rd10, %rd3, %rd8;
+    ld.global.f32 %f4, [%rd9];
+    ld.global.f32 %f5, [%rd10];
+    fma.rn.f32 %f3, %f4, %f5, %f3;
+    add.u32 %r21, %r21, 1;
+    bra A_DOT_LOOP;
+
+A_SCORE_STORE:
+    mul.rn.f32 %f6, %f3, %f1;
+    max.ftz.f32 %f2, %f2, %f6;
+    add.u32 %r24, %r17, %r18;
+    mul.wide.u32 %rd11, %r24, 4;
+    add.s64 %rd12, %rd5, %rd11;
+    st.global.f32 [%rd12], %f6;
+    add.u32 %r18, %r18, 1;
+    bra A_SCORE_LOOP;
+
+A_DENOM_PREP:
+    mov.f32 %f7, 0f00000000;    // denom
+    mov.u32 %r25, 0;
+A_DENOM_LOOP:
+    setp.ge.u32 %p6, %r25, %r11;
+    @%p6 bra A_OUT_PREP;
+    add.u32 %r26, %r17, %r25;
+    mul.wide.u32 %rd13, %r26, 4;
+    add.s64 %rd14, %rd5, %rd13;
+    ld.global.f32 %f8, [%rd14];
+    sub.rn.f32 %f9, %f8, %f2;
+    mov.f32 %f10, 0f3FB8AA3B;   // log2(e)
+    mul.rn.f32 %f11, %f9, %f10;
+    ex2.approx.ftz.f32 %f12, %f11;
+    add.rn.f32 %f7, %f7, %f12;
+    st.global.f32 [%rd14], %f12; // store unnormalized exp(score - max)
+    add.u32 %r25, %r25, 1;
+    bra A_DENOM_LOOP;
+
+A_OUT_PREP:
+    rcp.approx.ftz.f32 %f13, %f7; // inv denom
+    mov.u32 %r27, 0;              // d
+A_OUT_LOOP:
+    setp.ge.u32 %p7, %r27, %r3;
+    @%p7 bra A_DONE;
+
+    mov.f32 %f14, 0f00000000;    // acc
+    mov.u32 %r28, 0;
+A_VALUE_LOOP:
+    setp.ge.u32 %p8, %r28, %r11;
+    @%p8 bra A_GATE_WRITE;
+    add.u32 %r29, %r17, %r28;
+    mul.wide.u32 %rd15, %r29, 4;
+    add.s64 %rd16, %rd5, %rd15;
+    ld.global.f32 %f15, [%rd16]; // unnormalized weight
+    mul.lo.u32 %r30, %r28, %r12;
+    mad.lo.u32 %r31, %r13, %r3, %r30;
+    add.u32 %r32, %r31, %r27;
+    mul.wide.u32 %rd17, %r32, 4;
+    add.s64 %rd18, %rd4, %rd17;
+    ld.global.f32 %f16, [%rd18];
+    fma.rn.f32 %f14, %f15, %f16, %f14;
+    add.u32 %r28, %r28, 1;
+    bra A_VALUE_LOOP;
+
+A_GATE_WRITE:
+    mul.rn.f32 %f17, %f14, %f13;
+    add.u32 %r33, %r16, %r27;
+    mul.wide.u32 %rd19, %r33, 4;
+    add.s64 %rd20, %rd2, %rd19;
+    ld.global.f32 %f18, [%rd20]; // gate
+    neg.f32 %f19, %f18;
+    mov.f32 %f20, 0f3FB8AA3B;   // log2(e)
+    mul.rn.f32 %f21, %f19, %f20;
+    ex2.approx.ftz.f32 %f22, %f21;
+    mov.f32 %f23, 0f3F800000;   // 1.0
+    add.rn.f32 %f24, %f23, %f22;
+    rcp.approx.ftz.f32 %f25, %f24;
+    mul.rn.f32 %f26, %f17, %f25;
+    add.s64 %rd21, %rd6, %rd19;
+    st.global.f32 [%rd21], %f26;
+    add.u32 %r27, %r27, 1;
+    bra A_OUT_LOOP;
+
+A_DONE:
+    ret;
+}

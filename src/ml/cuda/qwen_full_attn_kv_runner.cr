@@ -26,6 +26,7 @@ module ML::CUDA
     getter q_gpu_all : Array(Float32)
     getter gate_gpu_all : Array(Float32)
     getter k_gpu_all : Array(Float32)
+    getter attn_gpu_all : Array(Float32)
     getter k_cache_gpu : Array(Float32)
     getter v_cache_gpu : Array(Float32)
 
@@ -60,6 +61,7 @@ module ML::CUDA
       @q_gpu_all = Array(Float32).new(@tokens * @q_dim, 0.0_f32)
       @gate_gpu_all = Array(Float32).new(@tokens * @q_dim, 0.0_f32)
       @k_gpu_all = Array(Float32).new(@tokens * @kv_dim, 0.0_f32)
+      @attn_gpu_all = Array(Float32).new(@tokens * @q_dim, 0.0_f32)
       @k_cache_gpu = Array(Float32).new(@max_seq * @kv_dim, 0.0_f32)
       @v_cache_gpu = Array(Float32).new(@max_seq * @kv_dim, 0.0_f32)
       @modules = [] of CUDAModule
@@ -96,18 +98,20 @@ module ML::CUDA
       @modules << mod
       q_fn = mod.function("full_attn_q_split_norm_rope_probe")
       k_fn = mod.function("full_attn_k_norm_rope_cache_probe")
+      attn_fn = mod.function("full_attn_decode_cache_probe")
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
                bytesize_f32(@cos_table.size), bytesize_f32(@sin_table.size),
                bytesize_f32(@tokens * @q_dim), bytesize_f32(@tokens * @q_dim),
                bytesize_f32(@tokens * @kv_dim), bytesize_f32(@max_seq * @kv_dim),
-               bytesize_f32(@max_seq * @kv_dim)]
+               bytesize_f32(@max_seq * @kv_dim), bytesize_f32(@tokens * @n_head * @max_seq),
+               bytesize_f32(@tokens * @q_dim)]
       ptrs = sizes.map do |size_bytes|
         buffer = DeviceBuffer.new(size_bytes)
         @buffers << buffer
         buffer.ptr
       end
-      d_q_norm, d_k_norm, d_cos, d_sin, d_q_out, d_gate_out, d_k_out, d_k_cache, d_v_cache = ptrs
+      d_q_norm, d_k_norm, d_cos, d_sin, d_q_out, d_gate_out, d_k_out, d_k_cache, d_v_cache, d_scores, d_attn_out = ptrs
 
       upload_constants = -> {
         ML::CUDA.copy_htod!(d_q_norm, @q_norm.to_unsafe.as(Void*), bytesize_f32(@q_norm.size), "q_norm")
@@ -127,6 +131,8 @@ module ML::CUDA
       rope_dim_u32 = @rope_dim.to_u32
       start_pos_u32 = @start_pos.to_u32
       max_seq_u32 = @max_seq.to_u32
+      heads_per_group_u32 = (@n_head // @n_head_kv).to_u32
+      scale = (1.0_f64 / Math.sqrt(@head_dim.to_f64)).to_f32
 
       q_params = Pointer(Void*).malloc(10)
       q_params[0] = box_ptr(@q_full_device_ptr).as(Void*)
@@ -156,11 +162,27 @@ module ML::CUDA
       k_params[12] = box_u32(max_seq_u32).as(Void*)
       k_params[13] = box_f32(@eps).as(Void*)
 
+      attn_params = Pointer(Void*).malloc(13)
+      attn_params[0] = box_ptr(d_q_out).as(Void*)
+      attn_params[1] = box_ptr(d_gate_out).as(Void*)
+      attn_params[2] = box_ptr(d_k_cache).as(Void*)
+      attn_params[3] = box_ptr(d_v_cache).as(Void*)
+      attn_params[4] = box_ptr(d_scores).as(Void*)
+      attn_params[5] = box_ptr(d_attn_out).as(Void*)
+      attn_params[6] = box_u32(n_head_u32).as(Void*)
+      attn_params[7] = box_u32(n_head_kv_u32).as(Void*)
+      attn_params[8] = box_u32(head_dim_u32).as(Void*)
+      attn_params[9] = box_u32(heads_per_group_u32).as(Void*)
+      attn_params[10] = box_u32(start_pos_u32).as(Void*)
+      attn_params[11] = box_u32(max_seq_u32).as(Void*)
+      attn_params[12] = box_f32(scale).as(Void*)
+
       run_token = ->(tok : Int32) {
         # Kernels index token by block id; launch all token blocks once.
         if tok == 0
           ML::CUDA.launch!(q_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
           ML::CUDA.launch!(k_fn, @tokens.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
+          ML::CUDA.launch!(attn_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "attn decode cache")
         end
       }
 
@@ -168,6 +190,7 @@ module ML::CUDA
         ML::CUDA.copy_dtoh!(@q_gpu_all.to_unsafe.as(Void*), d_q_out, bytesize_f32(@q_gpu_all.size), "q_out")
         ML::CUDA.copy_dtoh!(@gate_gpu_all.to_unsafe.as(Void*), d_gate_out, bytesize_f32(@gate_gpu_all.size), "gate_out")
         ML::CUDA.copy_dtoh!(@k_gpu_all.to_unsafe.as(Void*), d_k_out, bytesize_f32(@k_gpu_all.size), "k_out")
+        ML::CUDA.copy_dtoh!(@attn_gpu_all.to_unsafe.as(Void*), d_attn_out, bytesize_f32(@attn_gpu_all.size), "attn_out")
         ML::CUDA.copy_dtoh!(@k_cache_gpu.to_unsafe.as(Void*), d_k_cache, bytesize_f32(@k_cache_gpu.size), "k_cache")
         ML::CUDA.copy_dtoh!(@v_cache_gpu.to_unsafe.as(Void*), d_v_cache, bytesize_f32(@v_cache_gpu.size), "v_cache")
       }

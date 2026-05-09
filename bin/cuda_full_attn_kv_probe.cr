@@ -110,8 +110,11 @@ cos_table, sin_table = rope_tables(tokens, start_pos, rope_dim, hparams.rope_fre
 q_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
 gate_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
 k_cpu_all = Array(Float32).new(tokens * kv_dim, 0.0_f32)
+attn_cpu_all = Array(Float32).new(tokens * q_dim, 0.0_f32)
 k_cache_cpu = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
 v_cache_cpu = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+heads_per_group = n_head // n_head_kv
+scale = (1.0_f64 / Math.sqrt(head_dim.to_f64)).to_f32
 
 tokens.times do |tok|
   x = xs[tok * hidden, hidden]
@@ -144,6 +147,30 @@ tokens.times do |tok|
     k_cache_cpu[cache_idx] = k[i]
     v_cache_cpu[cache_idx] = v[i]
   end
+
+  cache_len = start_pos + tok + 1
+  scores = Array(Float32).new(cache_len, 0.0_f32)
+  n_head.times do |h|
+    kv_h = h // heads_per_group
+    q_off = h * head_dim
+    cache_len.times do |p|
+      k_off = p * kv_dim + kv_h * head_dim
+      dot = 0.0_f32
+      head_dim.times { |d| dot += q[q_off + d] * k_cache_cpu[k_off + d] }
+      scores[p] = dot * scale
+    end
+    ML::GGUF::Qwen35CPU.softmax_slice!(scores, 0, cache_len)
+    out_off = tok * q_dim + h * head_dim
+    head_dim.times do |d|
+      acc = 0.0_f32
+      cache_len.times do |p|
+        v_off = p * kv_dim + kv_h * head_dim
+        acc += scores[p] * v_cache_cpu[v_off + d]
+      end
+      gate_v = gate[h * head_dim + d]
+      attn_cpu_all[out_off + d] = acc * (1.0_f32 / (1.0_f32 + Math.exp(-gate_v).to_f32))
+    end
+  end
 end
 
 cuda_ctx = nil.as(ML::CUDA::Context?)
@@ -170,6 +197,7 @@ begin
   ok &&= report_pair("q", kv.q_gpu_all, q_cpu_all, lines, 2.0e-4_f32)
   ok &&= report_pair("gate", kv.gate_gpu_all, gate_cpu_all, lines, 1.0e-3_f32)
   ok &&= report_pair("k", kv.k_gpu_all, k_cpu_all, lines, 2.0e-4_f32)
+  ok &&= report_pair("attn", kv.attn_gpu_all, attn_cpu_all, lines, 2.0e-3_f32)
   ok &&= report_pair("k_cache", kv.k_cache_gpu, k_cache_cpu, lines, 2.0e-4_f32)
   ok &&= report_pair("v_cache", kv.v_cache_gpu, v_cache_cpu, lines, 1.0e-3_f32)
 
