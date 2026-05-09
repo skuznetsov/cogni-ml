@@ -10256,3 +10256,27 @@ Conclusion: the cleanup was correctness-safe but performance-neutral/slightly ne
 - daedalus: Dead declaration cleanup is not equivalent to reducing executed synchronization or memory traffic.
 - maieutic: The hidden assumption was that declared shared memory constrained occupancy. The timing evidence does not support that for the current kernels.
 - adversary: This refutes only the current PTX/JIT/GPU combination. It does not replace real resource-report analysis with `ptxas -v` if we later add an offline compilation path.
+
+**decision_update_134:** Added a CUDA Driver resource-attribution probe using `cuFuncGetAttribute`. `bin/cuda_kernel_resource_probe.cr` loads the embedded hot PTX modules through the active CUDA driver JIT and reports registers, static shared memory, local memory, max threads, PTX version, and binary version for selected kernels. This works on the remote host even without standalone `ptxas`, `nvdisasm`, or `cuobjdump`.
+
+Conclusion: the current body GEMV kernels are not limited by static shared/local memory allocation. The driver JIT reports Q4/Q5 body GEMV as `40 regs, 0 shared, 0 local`, Q6 body GEMV as `48 regs, 0 shared, 0 local`, Q6 fused top1 as `48 regs, 512 shared`, and full-attention parallel decode as `34 regs, 1024 shared`. This supports the current CUDA direction: optimize executed dequant/dot instructions and producer-consumer boundaries, not stale declarations or launch metadata.
+
+**evidence_update_134:**
+- claim: "The CUDA resource probe compiles and runs through the active driver JIT on RTX 5060 Ti."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_resource_syntax2 crystal build -Dcpu_only --no-codegen bin/cuda_kernel_resource_probe.cr` -> exit 0; remote `/tmp/cuda_kernel_resource_probe --format csv` -> `device=NVIDIA GeForce RTX 5060 Ti cc=12.0` and kernel attribute rows
+  verified_at: 2026-05-09
+  decay_trigger: CUDA driver wrapper, embedded PTX modules, remote CUDA host, or kernel function names change
+- claim: "Hot body GEMV kernels have no JIT-reported static shared/local memory use."
+  source: remote resource probe -> `q4_k_gemv_warp4_f32,40,0,0`; `q4_k_gemv_add_warp4_f32,40,0,0`; `q5_k_gemv_warp4_f32,40,0,0`; `q6_k_gemv_warp4_f32,48,0,0`; `q6_k_gemv_add_warp4_f32,48,0,0`
+  verified_at: 2026-05-09
+  decay_trigger: PTX changes, driver JIT changes, GPU architecture, or build flags change
+- claim: "Attention and top1 kernels with real shared use are visible in the resource report."
+  source: remote resource probe -> `q6_k_gemv_top1_partial_f32,48,512,0`; `full_attn_decode_cache_parallel_probe,34,1024,0`; RMSNorm parallel kernels report `1024` shared
+  verified_at: 2026-05-09
+  decay_trigger: attention/top1 PTX changes, CUDA driver changes, or probe function list changes
+
+**quadrumvirate_update_134:**
+- cassandra: The resource report explains why unused shared declaration cleanup was neutral: the body GEMV kernels already report zero shared memory.
+- daedalus: Next speed work should shift from metadata/resource cleanup to executed instruction count, memory layout, and no-barrier dequant/dot transforms.
+- maieutic: The key assumption now verified is that the JIT-visible resource footprint is not the primary obstacle for body GEMV.
+- adversary: `cuFuncGetAttribute` is not a full SASS disassembly and does not expose instruction mix. It is sufficient for registers/shared/local memory, not for proving dequant instruction bottlenecks.

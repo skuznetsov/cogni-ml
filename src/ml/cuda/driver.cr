@@ -18,6 +18,7 @@ lib LibCUDADriver
   fun cuModuleLoadData(mod : CUmodule*, image : Void*) : Int32
   fun cuModuleUnload(mod : CUmodule) : Int32
   fun cuModuleGetFunction(fn : CUfunction*, mod : CUmodule, name : UInt8*) : Int32
+  fun cuFuncGetAttribute(pi : Int32*, attrib : Int32, hfunc : CUfunction) : Int32
   fun cuStreamCreate(stream : CUstream*, flags : UInt32) : Int32
   fun cuStreamDestroy_v2(stream : CUstream) : Int32
   fun cuStreamSynchronize(stream : CUstream) : Int32
@@ -130,6 +131,26 @@ module ML::CUDA
 
     def initialize(@handle : LibCUDADriver::CUfunction, @name : String)
     end
+
+    def attribute(attr : FunctionAttribute) : Int32
+      value = uninitialized Int32
+      ML::CUDA.check! LibCUDADriver.cuFuncGetAttribute(pointerof(value), attr.value, @handle),
+        "cuFuncGetAttribute(#{@name}, #{attr})"
+      value
+    end
+  end
+
+  enum FunctionAttribute
+    MaxThreadsPerBlock            = 0
+    SharedSizeBytes               = 1
+    ConstSizeBytes                = 2
+    LocalSizeBytes                = 3
+    NumRegs                       = 4
+    PtxVersion                    = 5
+    BinaryVersion                 = 6
+    CacheModeCa                   = 7
+    MaxDynamicSharedSizeBytes     = 8
+    PreferredSharedMemoryCarveout = 9
   end
 
   class CUDAStream
