@@ -10853,6 +10853,22 @@ Conclusion: the effect is small but reproducible enough for the semantic harness
 - maieutic: The gain is not large enough to justify production claims by itself; it is a harness/controller default, not a model-kernel breakthrough.
 - adversary: `--greedy-loop-no-graph` preserves a direct-launch fallback for driver or capture regressions.
 
+**decision_update_159c:** Refuted the first async/pinned host-copy decode-position update branch. Semantic graph+GPU feedback attribution reported `greedy_position_ms_per_token≈22.4ms`, but this was primarily where the host blocked on prior GPU work while synchronously updating full-attention `start_pos`, `cos`, and `sin` buffers. A temporary branch added stream-scoped HtoD async copies and persistent pinned host buffers for those tiny updates.
+
+Conclusion: the branch was not robust enough to keep. It changed where waits appeared (`position` dropped and final readback absorbed the wait), but full gen64 wall did not improve reliably: temporary pinned build measured default graph `23.372/23.456 ms/tok` against no-graph `23.406/23.418 ms/tok`, which is noise/regression compared with the previous graph default signal. The code branch was removed. The correct next frame is copy elimination, not async copy tuning: preupload RoPE tables and update one shared device position counter, or move position advancement into a GPU-side controller.
+
+**evidence_update_159c:**
+- claim: "Async/pinned host-copy position updates are not a robust semantic-loop speedup."
+  source: remote temporary `/tmp/cuda_mixed_stack_probe_pinned_pos --all-layers --tokens=1 --max-seq=128 --greedy-loop-tokens=64 --perf-only --skip-debug-readback` -> graph default `23.372/23.456 ms/tok`, no-graph `23.406/23.418 ms/tok`, all `ok=true`; local branch diff removed and no-codegen build returned clean
+  verified_at: 2026-05-09
+  decay_trigger: decode-position update architecture, RoPE table storage, CUDA stream/copy policy, or semantic-loop timing harness changes
+
+**quadrumvirate_update_159c:**
+- cassandra: The branch matched the micro-optimization trap: it moved synchronization accounting more than it reduced total work.
+- daedalus: Pivot from "make tiny host copies async" to "eliminate tiny host copies from the per-token loop."
+- maieutic: The high `position_ms` attribution was a symptom of synchronization placement, not proof that CPU RoPE computation was expensive.
+- adversary: Generic async host copies are risky unless source lifetime is pinned and ordered. Do not broaden `copy_htod!` semantics without a stronger win and lifetime contract.
+
 **decision_update_160:** Refreshed the Q8_1+DP4A hot-FFN draft-only evidence after current CUDA cleanups. The existing `bin/cuda_q4k_repack_probe.cr` Q8 path quantizes the activation vector and uses DP4A against Q4_K weights, so it remains approximate and unsuitable as an exact runner route without exact verification.
 
 Conclusion: the microkernel signal is real but too small for direct runner integration. Across hot `blk.{0,1,3}.ffn_gate/up.weight` tensors, raw Q4_K is about `0.1099-0.1100 ms`, Q8+DP4A with GPU quantized activations is about `0.1036 ms`, one-use-with-quant speedup is about `1.04x`, and reuse2-with-quant is about `1.05x`. Cosine stays around `0.999993` with max diff `~0.0056-0.0074`. Keep this as a possible draft/proposal-body ingredient, not a standalone exact speed path.
