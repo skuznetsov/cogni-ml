@@ -73,11 +73,11 @@ module ML::CUDA
       @head.use_device_sequence_input(previous_output)
       @head.reset_sequence
       t_head = Time.instant
-      @head.run_sequence
       if profile_phases
-        ML::CUDA.synchronize!("cuCtxSynchronize(mixed head)")
+        @head.run_sequence_profiled(@phase_lines)
         @phase_lines << "phase_head_ms=#{((Time.instant - t_head).total_milliseconds).round(3)}"
       else
+        @head.run_sequence
         ML::CUDA.synchronize!("cuCtxSynchronize(mixed stack)")
       end
 

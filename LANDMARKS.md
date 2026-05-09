@@ -9748,3 +9748,31 @@ Conclusion: CUDA now has a reusable model-slice state boundary instead of only p
 - daedalus: The frame shifts from "which layer runner is slow" to "the output head dominates this slice". A full-logits/materialized-head path is the current bottleneck even after resident top1 readback.
 - maieutic: The phase result is scoped to one 9B five-layer slice, one token, and synchronization-heavy attribution. It should guide the next gate but not be generalized to full-model throughput without broader measurement.
 - adversary: Evidence does not yet cover all layers, 27B, repeated decode-loop state reuse, tokenizer/sampling, topK sampling, or an optimized full-attention decode kernel. The output-head conclusion may shift after full-model construction or head fusion.
+
+**decision_update_112:** Added output-head subphase attribution and fixed the CUDA resident top1 scan stride. `QwenOutputHeadRunner#run_sequence_profiled` now splits the mixed-stack head phase into RMSNorm, logits GEMV, and top1 scan timings. Attribution exposed a concrete PTX bug in `output_top1_partial_scan_probe`: each thread advanced through vocab with `+1`, so 256 threads redundantly scanned nearly the same logits. The scan now advances by `%ntid.x` (`blockDim.x`), preserving the two-phase exact top1 structure while eliminating the duplicate work.
+
+Conclusion: the previously refuted-looking "top1 is not the wall" result was measurement without enough attribution. After attribution, top1 was the dominant output-head subphase; after the stride fix, the five-layer CUDA scaffold wall dropped from `25.447ms` to `14.074ms` on the same remote 9B gate, with exact hidden/logits/top1 parity preserved. The next optimization target should be re-attributed from the new baseline: layer runners and output logits now dominate, not top1.
+
+**evidence_update_112:**
+- claim: "Output-head subphase attribution identifies the resident top1 scan as the pre-fix wall."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases` before stride fix -> `ok=true`, `phase_head_norm_ms=0.336`, `phase_head_logits_ms=2.321`, `phase_head_top1_ms=11.689`, `phase_head_ms=14.351`, `phase_total_ms=25.447`
+  verified_at: 2026-05-09
+  decay_trigger: output-head profile path, top1 PTX, logits kernel, model shape, GPU/load conditions, or mixed-stack sequencing changes
+- claim: "The fixed-stride resident top1 path preserves default top1 parity and materially reduces the five-layer scaffold wall."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --profile-phases` after stride fix -> `ok=true`, `phase_head_norm_ms=0.335`, `phase_head_logits_ms=2.328`, `phase_head_top1_ms=0.333`, `phase_head_ms=3.002`, `phase_total_ms=14.074`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: top1 PTX, output-head runner, model tensor layout, CUDA driver/PTX JIT, or profiling synchronization policy changes
+- claim: "The non-profile default path also benefits from the stride fix."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 3` -> `ok=true`, `cuda_ms=13.962`, `logits_readback=false`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: benchmark command, warmup policy, GPU/load conditions, output-head PTX, or layer runner changes
+- claim: "The full-logits oracle path remains compatible after the stride fix."
+  source: remote `cuda_mixed_stack_probe --layers 0,1,2,3,4 --tokens 1 --warmup 1 --read-logits --profile-phases` -> `ok=true`, `logits_cos=1.0`, `logits_max_diff=1.335144e-5`, `top1_gpu=96939`, `top1_cpu=96939`
+  verified_at: 2026-05-09
+  decay_trigger: optional logits readback branch, logits buffer layout, top1 scan/reduce kernels, or CPU logits reference changes
+
+**quadrumvirate_update_112:**
+- cassandra: The likely failure was optimizing a guessed fused-head path while the actual wall sat in an uninspected subphase. Attribution prevented that local-optimization trap and exposed a one-line stride bug.
+- daedalus: The frame shifted from "avoid materializing logits" to "stop duplicate reduction work". Since Q6 logits are only about `2.3ms` in the current slice, direct fused top1 is no longer the first target unless future full-model attribution changes the balance.
+- maieutic: The assumption that a parallel top1 kernel is fast was false; it had the right structure but wrong stride. The falsifier is subphase timing plus reading the PTX loop increment.
+- adversary: Evidence covers one remote RTX 5060 Ti, one 9B five-layer slice, one token, and greedy top1. It does not yet cover all layers, 27B, multi-token decode, topK/sampling, or end-to-end tokenizer/sampler integration.

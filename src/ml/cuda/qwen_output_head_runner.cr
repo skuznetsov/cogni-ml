@@ -6,6 +6,8 @@ module ML::CUDA
   # projection and resident top1. Full logits readback is optional for
   # correctness attribution; the default decode-facing path reads only top1.
   class QwenOutputHeadRunner
+    @profile_runner : ResidentSequenceRunner?
+
     DN_PTX   = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
     Q4K_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
     Q6K_PTX  = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
@@ -61,7 +63,7 @@ module ML::CUDA
         mov.u32 %r3, %r4;
 
     NEXT:
-        add.u32 %r4, %r4, 1;
+        add.u32 %r4, %r4, %r12;
         bra LOOP;
 
     STORE:
@@ -214,6 +216,9 @@ module ML::CUDA
       @logits_gpu_all = Array(Float32).new(@tokens * @vocab, 0.0_f32)
       @top1_ids_gpu = Array(Int32).new(@tokens, 0)
       @top1_values_gpu = Array(Float32).new(@tokens, 0.0_f32)
+      @profile_head_norm_ms = 0.0
+      @profile_head_logits_ms = 0.0
+      @profile_head_top1_ms = 0.0
       @closed = false
 
       build_runner
@@ -242,6 +247,18 @@ module ML::CUDA
 
     def run_sequence : Nil
       runner.run_sequence
+    end
+
+    def run_sequence_profiled(phase_lines : Array(String)) : Nil
+      @profile_head_norm_ms = 0.0
+      @profile_head_logits_ms = 0.0
+      @profile_head_top1_ms = 0.0
+      t_total = Time.instant
+      profile_runner.run_sequence
+      phase_lines << "phase_head_norm_ms=#{@profile_head_norm_ms.round(3)}"
+      phase_lines << "phase_head_logits_ms=#{@profile_head_logits_ms.round(3)}"
+      phase_lines << "phase_head_top1_ms=#{@profile_head_top1_ms.round(3)}"
+      phase_lines << "phase_head_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
     end
 
     def read_outputs : Nil
@@ -349,6 +366,31 @@ module ML::CUDA
         ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
       }
 
+      profile_run_token = ->(tok : Int32) {
+        t_norm = Time.instant
+        d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
+        d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
+        ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, norm_params, "output norm")
+        ML::CUDA.synchronize!("cuCtxSynchronize(output head norm)")
+        @profile_head_norm_ms += (Time.instant - t_norm).total_milliseconds
+
+        t_logits = Time.instant
+        d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
+        d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+        ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
+        ML::CUDA.synchronize!("cuCtxSynchronize(output head logits)")
+        @profile_head_logits_ms += (Time.instant - t_logits).total_milliseconds
+
+        t_top1 = Time.instant
+        d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+        d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
+        d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
+        ML::CUDA.launch!(top1_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top1_scan_params, "output top1 scan")
+        ML::CUDA.launch!(top1_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 reduce")
+        ML::CUDA.synchronize!("cuCtxSynchronize(output head top1)")
+        @profile_head_top1_ms += (Time.instant - t_top1).total_milliseconds
+      }
+
       read_outputs = -> {
         if @read_logits
           ML::CUDA.copy_dtoh!(@logits_gpu_all.to_unsafe.as(Void*), d_logits_all, bytesize_f32(@logits_gpu_all.size), "output_logits")
@@ -357,10 +399,15 @@ module ML::CUDA
         ML::CUDA.copy_dtoh!(@top1_values_gpu.to_unsafe.as(Void*), d_top1_values, bytesize_f32(@top1_values_gpu.size), "output_top1_values")
       }
       @runner = ResidentSequenceRunner.new(@tokens, upload_weights, reset_sequence, run_token, read_outputs)
+      @profile_runner = ResidentSequenceRunner.new(@tokens, upload_weights, reset_sequence, profile_run_token, read_outputs)
     end
 
     private def runner : ResidentSequenceRunner
       @runner.not_nil!
+    end
+
+    private def profile_runner : ResidentSequenceRunner
+      @profile_runner.not_nil!
     end
 
     private def box_ptr(value : DevicePtr) : Pointer(DevicePtr)
