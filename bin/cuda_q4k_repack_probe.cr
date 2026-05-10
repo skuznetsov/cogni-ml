@@ -669,6 +669,203 @@ Q8_DONE:
 }
 PTX
 
+Q8_RAW_DP4A_PTX = <<-PTX
+.version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry q4_k_raw_q8_dp4a_gemv_warp4_f32(
+    .param .u64 w_raw,
+    .param .u64 q8_packs,
+    .param .u64 q8_scales,
+    .param .u64 out,
+    .param .u32 in_dim,
+    .param .u32 out_dim
+)
+{
+    .reg .pred %p<10>;
+    .reg .b16 %h<3>;
+    .reg .b32 %r<112>;
+    .reg .b64 %rd<80>;
+    .reg .f32 %f<20>;
+
+    ld.param.u64 %rd1, [w_raw];
+    ld.param.u64 %rd2, [q8_packs];
+    ld.param.u64 %rd3, [q8_scales];
+    ld.param.u64 %rd4, [out];
+    ld.param.u32 %r1, [in_dim];
+    ld.param.u32 %r2, [out_dim];
+
+    mov.u32 %r3, %tid.x;
+    mov.u32 %r4, %ctaid.x;
+    and.b32 %r5, %r3, 31;       // lane
+    shr.u32 %r6, %r3, 5;        // warp id inside CTA
+    shl.b32 %r7, %r4, 2;
+    add.u32 %r8, %r7, %r6;      // row
+    setp.ge.u32 %p1, %r8, %r2;
+    @%p1 bra RAW_Q8_DONE;
+
+    shr.u32 %r9, %r1, 8;        // blocks_per_row
+    mul.lo.u32 %r10, %r9, 144;  // raw row bytes
+    mul.wide.u32 %rd7, %r8, %r10;
+    add.s64 %rd8, %rd1, %rd7;   // row base
+
+    mov.f32 %f1, 0f00000000;    // acc
+    mov.u32 %r11, 0;            // q4 block index
+
+RAW_Q8_BLOCK_LOOP:
+    setp.ge.u32 %p2, %r11, %r9;
+    @%p2 bra RAW_Q8_REDUCE;
+
+    mul.lo.u32 %r12, %r11, 144;
+    cvt.u64.u32 %rd9, %r12;
+    add.s64 %rd10, %rd8, %rd9;  // q4 block base
+    ld.global.u16 %h1, [%rd10];
+    add.s64 %rd20, %rd10, 2;
+    ld.global.u16 %h2, [%rd20];
+    cvt.f32.f16 %f2, %h1;       // d
+    cvt.f32.f16 %f3, %h2;       // dmin
+    add.s64 %rd21, %rd10, 4;    // scales base
+    add.s64 %rd11, %rd10, 16;   // qs base
+
+    // Each warp lane processes two 4-element packs per 256-value Q4_K block.
+    mov.u32 %r13, 0;
+
+RAW_Q8_PACK_ITER:
+    setp.ge.u32 %p3, %r13, 2;
+    @%p3 bra RAW_Q8_NEXT_BLOCK;
+
+    mad.lo.u32 %r14, %r13, 32, %r5; // pack index 0..63
+    shr.u32 %r15, %r14, 3;          // subblock 0..7
+    and.b32 %r16, %r14, 7;          // 4-value pack inside subblock
+    shl.b32 %r17, %r16, 2;          // byte offset inside 32-byte subblock
+    shr.u32 %r18, %r15, 1;          // q4 byte group 0..3
+    shl.b32 %r19, %r18, 5;
+    add.u32 %r20, %r19, %r17;
+    cvt.u64.u32 %rd12, %r20;
+    add.s64 %rd13, %rd11, %rd12;
+    ld.global.u32 %r21, [%rd13];    // four packed q4 bytes
+
+    and.b32 %r22, %r15, 1;
+    setp.ne.u32 %p4, %r22, 0;
+    @%p4 bra RAW_Q8_HIGH_NIBBLE;
+RAW_Q8_LOW_NIBBLE:
+    and.b32 %r23, %r21, 252645135;  // 0x0f0f0f0f
+    bra RAW_Q8_NIBBLE_DONE;
+RAW_Q8_HIGH_NIBBLE:
+    shr.u32 %r24, %r21, 4;
+    and.b32 %r23, %r24, 252645135;  // 0x0f0f0f0f
+
+RAW_Q8_NIBBLE_DONE:
+    shl.b32 %r25, %r11, 6;
+    add.u32 %r26, %r25, %r14;
+    mul.wide.u32 %rd14, %r26, 4;
+    add.s64 %rd15, %rd2, %rd14;
+    ld.global.u32 %r27, [%rd15];    // four signed q8 bytes
+
+    mov.u32 %r28, 0;
+    dp4a.s32.s32 %r28, %r23, %r27, %r28;
+    mov.u32 %r29, 0;
+    mov.u32 %r30, 16843009;         // 0x01010101
+    dp4a.s32.s32 %r29, %r30, %r27, %r29;
+
+    setp.lt.u32 %p5, %r15, 4;
+    @%p5 bra RAW_Q8_SCALE_LOW;
+
+RAW_Q8_SCALE_HIGH:
+    add.u32 %r40, %r15, 4;
+    cvt.u64.u32 %rd30, %r40;
+    add.s64 %rd31, %rd21, %rd30;
+    ld.global.u8 %r41, [%rd31];     // packed high scale/min
+    and.b32 %r42, %r41, 15;
+
+    add.u32 %r43, %r15, -4;
+    cvt.u64.u32 %rd32, %r43;
+    add.s64 %rd33, %rd21, %rd32;
+    ld.global.u8 %r44, [%rd33];
+    shr.u32 %r45, %r44, 6;
+    shl.b32 %r45, %r45, 4;
+    or.b32 %r50, %r42, %r45;        // sc
+
+    shr.u32 %r46, %r41, 4;
+    cvt.u64.u32 %rd34, %r15;
+    add.s64 %rd35, %rd21, %rd34;
+    ld.global.u8 %r47, [%rd35];
+    shr.u32 %r48, %r47, 6;
+    shl.b32 %r48, %r48, 4;
+    or.b32 %r51, %r46, %r48;        // min
+    bra RAW_Q8_SCALE_DONE;
+
+RAW_Q8_SCALE_LOW:
+    cvt.u64.u32 %rd36, %r15;
+    add.s64 %rd37, %rd21, %rd36;
+    ld.global.u8 %r50, [%rd37];
+    and.b32 %r50, %r50, 63;         // sc
+    add.u32 %r52, %r15, 4;
+    cvt.u64.u32 %rd38, %r52;
+    add.s64 %rd39, %rd21, %rd38;
+    ld.global.u8 %r51, [%rd39];
+    and.b32 %r51, %r51, 63;         // min
+
+RAW_Q8_SCALE_DONE:
+    shl.b32 %r34, %r11, 3;
+    add.u32 %r35, %r34, %r15;
+    mul.wide.u32 %rd19, %r35, 4;
+    add.s64 %rd22, %rd3, %rd19;
+    ld.global.f32 %f4, [%rd22];     // Q8 activation scale
+
+    cvt.rn.f32.s32 %f5, %r28;
+    cvt.rn.f32.s32 %f6, %r29;
+    cvt.rn.f32.u32 %f7, %r50;
+    cvt.rn.f32.u32 %f8, %r51;
+    mul.rn.f32 %f9, %f2, %f7;
+    mul.rn.f32 %f10, %f3, %f8;
+    mul.rn.f32 %f11, %f9, %f5;
+    neg.f32 %f12, %f6;
+    fma.rn.f32 %f11, %f10, %f12, %f11;
+    fma.rn.f32 %f1, %f4, %f11, %f1;
+
+    add.u32 %r13, %r13, 1;
+    bra RAW_Q8_PACK_ITER;
+
+RAW_Q8_NEXT_BLOCK:
+    add.u32 %r11, %r11, 1;
+    bra RAW_Q8_BLOCK_LOOP;
+
+RAW_Q8_REDUCE:
+    mov.u32 %r60, 0xffffffff;
+    mov.b32 %r61, %f1;
+    shfl.sync.down.b32 %r62, %r61, 16, 31, %r60;
+    mov.b32 %f13, %r62;
+    add.rn.f32 %f1, %f1, %f13;
+    mov.b32 %r61, %f1;
+    shfl.sync.down.b32 %r62, %r61, 8, 31, %r60;
+    mov.b32 %f13, %r62;
+    add.rn.f32 %f1, %f1, %f13;
+    mov.b32 %r61, %f1;
+    shfl.sync.down.b32 %r62, %r61, 4, 31, %r60;
+    mov.b32 %f13, %r62;
+    add.rn.f32 %f1, %f1, %f13;
+    mov.b32 %r61, %f1;
+    shfl.sync.down.b32 %r62, %r61, 2, 31, %r60;
+    mov.b32 %f13, %r62;
+    add.rn.f32 %f1, %f1, %f13;
+    mov.b32 %r61, %f1;
+    shfl.sync.down.b32 %r62, %r61, 1, 31, %r60;
+    mov.b32 %f13, %r62;
+    add.rn.f32 %f1, %f1, %f13;
+
+    setp.ne.u32 %p6, %r5, 0;
+    @%p6 bra RAW_Q8_DONE;
+    mul.wide.u32 %rd23, %r8, 4;
+    add.s64 %rd24, %rd4, %rd23;
+    st.global.f32 [%rd24], %f1;
+
+RAW_Q8_DONE:
+    ret;
+}
+PTX
+
 Q8_QUANT_PTX = <<-PTX
 .version 8.0
 .target sm_80
@@ -957,14 +1154,16 @@ begin
   repack_mod = ML::CUDA::CUDAModule.load(REPACK_PTX, "q4_repack")
   f32_mod = ML::CUDA::CUDAModule.load(F32_PTX, "q4_f32")
   q8_mod = ML::CUDA::CUDAModule.load(Q8_DP4A_PTX, "q4_q8_dp4a")
+  q8_raw_mod = ML::CUDA::CUDAModule.load(Q8_RAW_DP4A_PTX, "q4_raw_q8_dp4a")
   q8_quant_mod = ML::CUDA::CUDAModule.load(Q8_QUANT_PTX, "q8_quant")
-  modules.concat([raw_mod, scale_regs_mod, meta_mod, repack_mod, f32_mod, q8_mod, q8_quant_mod])
+  modules.concat([raw_mod, scale_regs_mod, meta_mod, repack_mod, f32_mod, q8_mod, q8_raw_mod, q8_quant_mod])
   raw_fn = raw_mod.function("q4_k_gemv_warp4_f32")
   scale_regs_fn = scale_regs_mod.function("q4_k_gemv_scale_regs_warp4_f32")
   meta_fn = meta_mod.function("q4_k_meta_gemv_warp4_f32")
   repack_fn = repack_mod.function("q4_k_repacked_gemv_warp4_f32")
   f32_fn = f32_mod.function("f32_gemv_warp4_f32")
   q8_fn = q8_mod.function("q4_k_q8_dp4a_gemv_warp4_f32")
+  q8_raw_fn = q8_raw_mod.function("q4_k_raw_q8_dp4a_gemv_warp4_f32")
   q8_quant_fn = q8_quant_mod.function("quantize_q8_1_f32")
 
   d_raw = ML::CUDA::DeviceBuffer.new(w_raw.size.to_u64)
@@ -983,8 +1182,10 @@ begin
   d_repack_out = ML::CUDA::DeviceBuffer.new(bytesize_f32(out_dim))
   d_f32_out = ML::CUDA::DeviceBuffer.new(bytesize_f32(out_dim))
   d_q8_out = ML::CUDA::DeviceBuffer.new(bytesize_f32(out_dim))
+  d_q8_raw_out = ML::CUDA::DeviceBuffer.new(bytesize_f32(out_dim))
+  d_q8_raw_gpu_out = ML::CUDA::DeviceBuffer.new(bytesize_f32(out_dim))
   d_q8_gpu_out = ML::CUDA::DeviceBuffer.new(bytesize_f32(out_dim))
-  buffers.concat([d_raw, d_qvals, d_scales, d_mins, d_q8_packs, d_q8_scales, d_q8_gpu_packs, d_q8_gpu_scales, d_f32, d_x, d_raw_out, d_scale_regs_out, d_meta_out, d_repack_out, d_f32_out, d_q8_out, d_q8_gpu_out])
+  buffers.concat([d_raw, d_qvals, d_scales, d_mins, d_q8_packs, d_q8_scales, d_q8_gpu_packs, d_q8_gpu_scales, d_f32, d_x, d_raw_out, d_scale_regs_out, d_meta_out, d_repack_out, d_f32_out, d_q8_out, d_q8_raw_out, d_q8_raw_gpu_out, d_q8_gpu_out])
 
   ML::CUDA.copy_htod!(d_raw.ptr, w_raw.to_unsafe.as(Void*), w_raw.size.to_u64, "raw")
   ML::CUDA.copy_htod!(d_qvals.ptr, repacked.qvals.to_unsafe.as(Void*), repacked.qvals.size.to_u64, "qvals")
@@ -1074,6 +1275,18 @@ begin
   q8_params[6] = pointerof(in_dim_u32).as(Void*)
   q8_params[7] = pointerof(out_dim_u32).as(Void*)
 
+  q8_raw_params = Pointer(Void*).malloc(6)
+  q8_raw_w = d_raw.ptr
+  q8_raw_packs_ptr = d_q8_packs.ptr
+  q8_raw_input_scales_ptr = d_q8_scales.ptr
+  q8_raw_out = d_q8_raw_out.ptr
+  q8_raw_params[0] = pointerof(q8_raw_w).as(Void*)
+  q8_raw_params[1] = pointerof(q8_raw_packs_ptr).as(Void*)
+  q8_raw_params[2] = pointerof(q8_raw_input_scales_ptr).as(Void*)
+  q8_raw_params[3] = pointerof(q8_raw_out).as(Void*)
+  q8_raw_params[4] = pointerof(in_dim_u32).as(Void*)
+  q8_raw_params[5] = pointerof(out_dim_u32).as(Void*)
+
   q8_quant_params = Pointer(Void*).malloc(4)
   q8_quant_x = d_x.ptr
   q8_quant_packs = d_q8_gpu_packs.ptr
@@ -1099,17 +1312,31 @@ begin
   q8_gpu_params[6] = pointerof(in_dim_u32).as(Void*)
   q8_gpu_params[7] = pointerof(out_dim_u32).as(Void*)
 
+  q8_raw_gpu_params = Pointer(Void*).malloc(6)
+  q8_raw_gpu_w = d_raw.ptr
+  q8_raw_gpu_packs_ptr = d_q8_gpu_packs.ptr
+  q8_raw_gpu_input_scales_ptr = d_q8_gpu_scales.ptr
+  q8_raw_gpu_out_ptr = d_q8_raw_gpu_out.ptr
+  q8_raw_gpu_params[0] = pointerof(q8_raw_gpu_w).as(Void*)
+  q8_raw_gpu_params[1] = pointerof(q8_raw_gpu_packs_ptr).as(Void*)
+  q8_raw_gpu_params[2] = pointerof(q8_raw_gpu_input_scales_ptr).as(Void*)
+  q8_raw_gpu_params[3] = pointerof(q8_raw_gpu_out_ptr).as(Void*)
+  q8_raw_gpu_params[4] = pointerof(in_dim_u32).as(Void*)
+  q8_raw_gpu_params[5] = pointerof(out_dim_u32).as(Void*)
+
   raw_ms = run_kernel(raw_fn, grid, block, raw_params, reps, warmup)
   scale_regs_ms = run_kernel(scale_regs_fn, grid, block, scale_regs_params, reps, warmup)
   meta_ms_gpu = run_kernel(meta_fn, grid, block, meta_params, reps, warmup)
   repack_ms_gpu = run_kernel(repack_fn, grid, block, repack_params, reps, warmup)
   f32_ms_gpu = run_kernel(f32_fn, grid, block, f32_params, reps, warmup)
   q8_ms_gpu = run_kernel(q8_fn, grid, block, q8_params, reps, warmup)
+  q8_raw_ms_gpu = run_kernel(q8_raw_fn, grid, block, q8_raw_params, reps, warmup)
   q8_quant_grid = (in_dim // 32).to_u32
   q8_quant_ms_gpu = run_kernel(q8_quant_fn, q8_quant_grid, 32_u32, q8_quant_params, reps, warmup)
   ML::CUDA.launch!(q8_quant_fn, q8_quant_grid, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, q8_quant_params, "q8_quant_for_output")
   ML::CUDA.synchronize!("cuCtxSynchronize(q8_quant_for_output)")
   q8_gpu_ms = run_kernel(q8_fn, grid, block, q8_gpu_params, reps, warmup)
+  q8_raw_gpu_ms = run_kernel(q8_raw_fn, grid, block, q8_raw_gpu_params, reps, warmup)
 
   raw_gpu = Array(Float32).new(out_dim, 0.0_f32)
   scale_regs_gpu = Array(Float32).new(out_dim, 0.0_f32)
@@ -1117,7 +1344,9 @@ begin
   repack_gpu = Array(Float32).new(out_dim, 0.0_f32)
   f32_gpu = Array(Float32).new(out_dim, 0.0_f32)
   q8_gpu = Array(Float32).new(out_dim, 0.0_f32)
+  q8_raw_gpu = Array(Float32).new(out_dim, 0.0_f32)
   q8_gpu_quant = Array(Float32).new(out_dim, 0.0_f32)
+  q8_raw_gpu_quant = Array(Float32).new(out_dim, 0.0_f32)
   q8_gpu_packs_host = Array(UInt32).new(q8_input.packs.size, 0_u32)
   q8_gpu_scales_host = Array(Float32).new(q8_input.scales.size, 0.0_f32)
   ML::CUDA.copy_dtoh!(raw_gpu.to_unsafe.as(Void*), d_raw_out.ptr, bytesize_f32(out_dim), "raw_out")
@@ -1126,7 +1355,9 @@ begin
   ML::CUDA.copy_dtoh!(repack_gpu.to_unsafe.as(Void*), d_repack_out.ptr, bytesize_f32(out_dim), "repack_out")
   ML::CUDA.copy_dtoh!(f32_gpu.to_unsafe.as(Void*), d_f32_out.ptr, bytesize_f32(out_dim), "f32_out")
   ML::CUDA.copy_dtoh!(q8_gpu.to_unsafe.as(Void*), d_q8_out.ptr, bytesize_f32(out_dim), "q8_out")
+  ML::CUDA.copy_dtoh!(q8_raw_gpu.to_unsafe.as(Void*), d_q8_raw_out.ptr, bytesize_f32(out_dim), "q8_raw_out")
   ML::CUDA.copy_dtoh!(q8_gpu_quant.to_unsafe.as(Void*), d_q8_gpu_out.ptr, bytesize_f32(out_dim), "q8_gpu_quant_out")
+  ML::CUDA.copy_dtoh!(q8_raw_gpu_quant.to_unsafe.as(Void*), d_q8_raw_gpu_out.ptr, bytesize_f32(out_dim), "q8_raw_gpu_quant_out")
   ML::CUDA.copy_dtoh!(q8_gpu_packs_host.to_unsafe.as(Void*), d_q8_gpu_packs.ptr, q8_input.packs.size.to_u64 * 4_u64, "q8_gpu_packs")
   ML::CUDA.copy_dtoh!(q8_gpu_scales_host.to_unsafe.as(Void*), d_q8_gpu_scales.ptr, bytesize_f32(q8_input.scales.size), "q8_gpu_scales")
 
@@ -1142,8 +1373,12 @@ begin
   f32_cos = cosine(f32_gpu, cpu)
   q8_max = max_abs_diff(q8_gpu, cpu)
   q8_cos = cosine(q8_gpu, cpu)
+  q8_raw_max = max_abs_diff(q8_raw_gpu, cpu)
+  q8_raw_cos = cosine(q8_raw_gpu, cpu)
   q8_gpu_quant_max = max_abs_diff(q8_gpu_quant, cpu)
   q8_gpu_quant_cos = cosine(q8_gpu_quant, cpu)
+  q8_raw_gpu_quant_max = max_abs_diff(q8_raw_gpu_quant, cpu)
+  q8_raw_gpu_quant_cos = cosine(q8_raw_gpu_quant, cpu)
   q8_pack_mismatches = 0
   first_q8_pack_mismatch = ""
   q8_input.packs.each_with_index do |v, i|
@@ -1178,15 +1413,20 @@ begin
   puts "repacked_cuda_ms=#{repack_ms_gpu.round(4)}"
   puts "f32_cuda_ms=#{f32_ms_gpu.round(4)}"
   puts "q8_dp4a_cuda_ms=#{q8_ms_gpu.round(4)}"
+  puts "q8_raw_dp4a_cuda_ms=#{q8_raw_ms_gpu.round(4)}"
   puts "q8_quant_cuda_ms=#{q8_quant_ms_gpu.round(4)}"
   puts "q8_dp4a_gpu_quant_cuda_ms=#{q8_gpu_ms.round(4)}"
+  puts "q8_raw_dp4a_gpu_quant_cuda_ms=#{q8_raw_gpu_ms.round(4)}"
   puts "scale_regs_speedup=#{(raw_ms / scale_regs_ms).round(4)}"
   puts "meta_speedup=#{(raw_ms / meta_ms_gpu).round(4)}"
   puts "repacked_speedup=#{(raw_ms / repack_ms_gpu).round(4)}"
   puts "f32_speedup=#{(raw_ms / f32_ms_gpu).round(4)}"
   puts "q8_dp4a_speedup=#{(raw_ms / q8_ms_gpu).round(4)}"
+  puts "q8_raw_dp4a_speedup=#{(raw_ms / q8_raw_ms_gpu).round(4)}"
   puts "q8_dp4a_oneuse_with_quant_speedup=#{(raw_ms / (q8_quant_ms_gpu + q8_gpu_ms)).round(4)}"
   puts "q8_dp4a_reuse2_with_quant_speedup=#{((2.0_f64 * raw_ms) / (q8_quant_ms_gpu + 2.0_f64 * q8_gpu_ms)).round(4)}"
+  puts "q8_raw_dp4a_oneuse_with_quant_speedup=#{(raw_ms / (q8_quant_ms_gpu + q8_raw_gpu_ms)).round(4)}"
+  puts "q8_raw_dp4a_reuse2_with_quant_speedup=#{((2.0_f64 * raw_ms) / (q8_quant_ms_gpu + 2.0_f64 * q8_raw_gpu_ms)).round(4)}"
   puts "raw_cos=#{raw_cos.round(8)}"
   puts "raw_max_diff=#{raw_max}"
   puts "scale_regs_cos=#{scale_regs_cos.round(8)}"
@@ -1199,8 +1439,12 @@ begin
   puts "f32_max_diff=#{f32_max}"
   puts "q8_dp4a_cos=#{q8_cos.round(8)}"
   puts "q8_dp4a_max_diff=#{q8_max}"
+  puts "q8_raw_dp4a_cos=#{q8_raw_cos.round(8)}"
+  puts "q8_raw_dp4a_max_diff=#{q8_raw_max}"
   puts "q8_dp4a_gpu_quant_cos=#{q8_gpu_quant_cos.round(8)}"
   puts "q8_dp4a_gpu_quant_max_diff=#{q8_gpu_quant_max}"
+  puts "q8_raw_dp4a_gpu_quant_cos=#{q8_raw_gpu_quant_cos.round(8)}"
+  puts "q8_raw_dp4a_gpu_quant_max_diff=#{q8_raw_gpu_quant_max}"
   puts "q8_quant_pack_mismatches=#{q8_pack_mismatches}"
   puts "q8_quant_first_pack_mismatch=#{first_q8_pack_mismatch}"
   puts "q8_quant_scale_max_diff=#{q8_scale_max}"

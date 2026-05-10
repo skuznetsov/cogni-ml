@@ -11093,3 +11093,27 @@ Conclusion: the new Ubuntu-based container is usable for the CUDA optimization t
 - daedalus: Keep a compatibility symlink for old commands, but make new durable scripts prefer `/build/persisten` directly.
 - maieutic: A short `gen16` smoke only proves environment viability; it does not replace the longer semantic benchmark gate.
 - adversary: Because `/mnt` is ephemeral in this container, any reboot can remove the compatibility symlink; recreate it before using old commands or change commands to `/build/persisten`.
+
+**decision_update_167:** Added a probe-only raw-layout Q4_K + Q8_1 DP4A CUDA path to `bin/cuda_q4k_repack_probe.cr`. Unlike the earlier Q8_1+DP4A probe, this variant does not read preexpanded f32 Q4 scale/min arrays. It keeps the original GGUF Q4_K block layout, extracts the packed Q4_K scale/min bytes in the kernel, loads the block `d/dmin` half values directly, and uses DP4A against a Q8_1-quantized activation vector.
+
+Conclusion: the llama-style raw-layout direction is validated as a real microkernel lever. On hot Qwen3.5 FFN Q4_K gate/up tensors, current raw F32-activation GEMV is about `0.1098-0.1099 ms`, old preexpanded-metadata Q8 DP4A is about `0.1036 ms`, and the new raw-layout Q8 DP4A is about `0.0612-0.0616 ms`. This is a stable `~1.73x` one-use speedup including GPU activation quantization, and much closer to llama.cpp's `~40us` hot-shape MMVQ. It remains approximate with respect to the current F32-activation runner (`cos≈0.999993`, max diff `~0.0056-0.0074`), so it is not an exact default route until full-layer top1/parity and semantic greedy gates pass.
+
+**evidence_update_167:**
+- claim: "The raw-layout Q4_K+Q8_1 DP4A probe builds locally and remotely."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_q4_raw_q8_local crystal build bin/cuda_q4k_repack_probe.cr -Dcpu_only --no-codegen`; remote `/build/persisten/cogni-ml/cogni-tools/crystal-1.20.1-1/bin/crystal build bin/cuda_q4k_repack_probe.cr -Dcpu_only -Duse_pcre2 -o /build/persisten/cogni-ml/tmp/cuda_q4k_repack_probe_raw_q8_v2 ...` -> `build_ok`
+  verified_at: 2026-05-10
+  decay_trigger: probe PTX, Crystal compiler, CUDA driver/toolchain, or remote distro library changes
+- claim: "Raw-layout Q8 DP4A materially improves hot Q4_K FFN probe speed versus the current raw F32-activation kernel."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_q4k_repack_probe_raw_q8_v2 --tensor blk.{0,1,3}.ffn_{gate,up}.weight --reps=80 --warmup=10` -> `raw_cuda_ms≈0.1098-0.1099`, `q8_raw_dp4a_cuda_ms≈0.0612-0.0616`, `q8_raw_dp4a_oneuse_with_quant_speedup≈1.7259-1.7362`, `ok=true`
+  verified_at: 2026-05-10
+  decay_trigger: Q4_K raw kernel, Q8 quant kernel, raw-layout DP4A PTX, CUDA architecture, or Qwen3.5 tensor layout changes
+- claim: "The new raw-layout Q8 route is approximate and must be verifier-gated before runner promotion."
+  source: same remote hot-tensor sweep -> `q8_raw_dp4a_cos≈0.99999283-0.99999315`, `q8_raw_dp4a_max_diff≈0.0056-0.0074`, `q8_quant_pack_mismatches=0`
+  verified_at: 2026-05-10
+  decay_trigger: activation distribution, Q8 quantization policy, top1 margin distribution, or exact verifier integration
+
+**quadrumvirate_update_167:**
+- cassandra: The old Q8_1+DP4A false negative was a metadata-layout artifact; the raw-layout variant changes the tested premise and should stay alive.
+- daedalus: The useful frame is alternate dot/dequant representation, not another CTA packing or launch-fusion tweak.
+- maieutic: Microkernel cosine is not a correctness proof; top1/parity gates decide whether this can be used in decode, and exact verification is mandatory for proposal paths.
+- adversary: Promote only behind an explicit opt-in runner gate first; if top1 changes on narrow-margin semantic states, keep it as draft/proposal-body machinery rather than exact inference.
