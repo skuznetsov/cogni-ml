@@ -11040,3 +11040,27 @@ Conclusion: this is a stability fix and a branch-pruning result, not a throughpu
 - daedalus: The useful pivot is from launch/graph fusion to body attribution: exact quantized GEMV algorithm, MMVQ/Q8_1-style activation handling, output-head elimination, or cheaper verified proposal sources.
 - maieutic: "Fusion" was the wrong assumed bottleneck because disabling llama.cpp fusion barely moves the same workload.
 - adversary: The explicit graph flag remains for falsification, but default runs must use the stable direct path so timing gates do not die before producing evidence.
+
+**decision_update_165:** llama.cpp's CUDA advantage on the RTX 5060 Ti is now pinned to the hot Q4_K MMVQ dot/dequant path, not to generic graph/op fusion. The relevant code path is `ggml_cuda_mul_mat_vec_q`: it quantizes the F32 activation vector to Q8_1, then runs raw-layout Q4/Q5/Q6_K vec-dot kernels using DP4A and the original GGUF scale/min bytes. This is materially different from our current exact CUDA runner, which uses F32 activations and scalar dequant/FMA PTX for Q4/Q5/Q6_K.
+
+Conclusion: the biggest exact CUDA body lever is a raw-layout llama-style Q4_K MMVQ probe. The previous `cuda_q4k_repack_probe.cr` Q8_1+DP4A result was only `~1.04x` because it used a naive/preexpanded metadata path; it did not falsify llama-style MMVQ. The hot Q4 FFN projections show a large gap: llama.cpp `39.63us` versus our current `~109.9us`. Q6 has a smaller but still real gap (`100.50us` versus `~128.4us`). Start with a probe-only raw Q4_K MMVQ kernel; promote only after full-run top1/parity and wall timing justify it.
+
+**evidence_update_165:**
+- claim: "llama.cpp CUDA MMVQ is much faster than our current hot Q4_K FFN gate/up kernel on the same GPU class."
+  source: remote `test-backend-ops perf -o MUL_MAT -p type_a=q4_K,type_b=f32,m=12288,n=1,k=4096` after adding temporary external llama.cpp perf cases -> `39.63 us/run`; prior current-source `cuda_q4k_repack_probe` hot FFN raw Q4_K refresh -> `~0.1099 ms`
+  verified_at: 2026-05-09
+  decay_trigger: llama.cpp MMVQ implementation, our Q4_K PTX, CUDA driver/toolchain, or Qwen3.5 tensor shapes change
+- claim: "llama.cpp CUDA Q6_K is faster than our FFN-down Q6_K, but by a smaller factor than Q4_K."
+  source: remote `test-backend-ops perf -o MUL_MAT -p type_a=q6_K,type_b=f32,m=4096,n=1,k=12288` -> `100.50 us/run`; prior current-source Q6 FFN-down probe -> `~0.1284 ms`
+  verified_at: 2026-05-09
+  decay_trigger: llama.cpp MMVQ/MMQ dispatch, our Q6_K PTX, CUDA driver/toolchain, or Qwen3.5 tensor shapes change
+- claim: "llama.cpp tiny Q4_K MMVQ is also faster, but the absolute win is small."
+  source: remote `test-backend-ops perf -o MUL_MAT -p type_a=q4_K,type_b=f32,m=32,n=1,k=4096` -> `4.50 us/run`; prior current-source tiny Q4 raw probe around alpha/beta shape -> `~0.0064 ms`
+  verified_at: 2026-05-09
+  decay_trigger: tiny projection routing, alpha/beta dual kernel, llama.cpp MMVQ tuning, or CUDA driver/toolchain change
+
+**quadrumvirate_update_165:**
+- cassandra: A naive Q8_1+DP4A retry would repeat the old false negative; the useful target is llama's raw-layout metadata handling plus DP4A dot shape.
+- daedalus: The frame shift is from "fuse more kernels" to "change the exact dot representation for Q4 hot projections."
+- maieutic: The gap is not proven for every layer/operator; it is strongest for Q4 FFN gate/up and smaller for Q6/down/tiny projections.
+- adversary: Do not promote approximate activation quantization into exact decode without verifier evidence. Probe first, then full-layer top1/parity, then semantic greedy timing.
