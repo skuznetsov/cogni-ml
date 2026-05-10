@@ -687,6 +687,7 @@ begin
   puts "debug_readback=#{debug_readback}"
   puts "perf_only=#{perf_only}"
   puts "skip_output_head=#{skip_output_head}"
+  puts "q4_raw_q8_ffn=#{ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"

@@ -11117,3 +11117,27 @@ Conclusion: the llama-style raw-layout direction is validated as a real microker
 - daedalus: The useful frame is alternate dot/dequant representation, not another CTA packing or launch-fusion tweak.
 - maieutic: Microkernel cosine is not a correctness proof; top1/parity gates decide whether this can be used in decode, and exact verification is mandatory for proposal paths.
 - adversary: Promote only behind an explicit opt-in runner gate first; if top1 changes on narrow-margin semantic states, keep it as draft/proposal-body machinery rather than exact inference.
+
+**decision_update_168:** Added the raw-layout Q4_K+Q8_1 DP4A path behind the opt-in runner flag `QWEN_CUDA_Q4_RAW_Q8_FFN=1` for recurrent FFN gate/up only. The default runner path remains unchanged, and `bin/cuda_mixed_stack_probe.cr` now prints `q4_raw_q8_ffn=` so timing logs cannot silently mix exact and approximate modes.
+
+Conclusion: this is not an exact inference route. The five-layer read-logits gate keeps top1 unchanged but fails strict logits parity (`logits_cos=0.99997902`, `ok=false`), and the full 9B semantic gen16 sequence diverges immediately on the known near-tie first state (`default top1=198`, raw-Q8 top1=271`). The speed signal is real (`23.62-23.64 ms/tok` default vs `21.31-21.32 ms/tok` raw-Q8, about `~9.8%` faster), but the route belongs in approximate draft/proposal experiments or risk-gated verifier paths, not default exact decode.
+
+**evidence_update_168:**
+- claim: "The opt-in raw-Q8 runner route builds and leaves default mode explicit in logs."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_raw_q8_runner_local4 crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen`; remote build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_raw_q8_runner_fix` after PTX packaging fix -> `build_ok`
+  verified_at: 2026-05-10
+  decay_trigger: runner wiring, PTX module packaging, probe reporting, Crystal compiler, or CUDA driver changes
+- claim: "Raw-Q8 FFN is not an exact logits-preserving route on the five-layer oracle."
+  source: remote default five-layer read-logits -> `cuda_ms=8.422`, `logits_cos=1.0`, `top1_gpu=top1_cpu=100253`, `ok=true`; with `QWEN_CUDA_Q4_RAW_Q8_FFN=1` -> `cuda_ms=7.978`, `logits_cos=0.99997902`, `top1_gpu=top1_cpu=100253`, `ok=false`
+  verified_at: 2026-05-10
+  decay_trigger: Q4 raw-Q8 kernel, recurrent FFN wiring, logits oracle thresholds, model quantization, or input state
+- claim: "Raw-Q8 FFN changes full 9B greedy tokens despite improving wall time."
+  source: remote full 9B gen16 ABBA -> default `23.619/23.644 ms/tok`, tokens start `198,2,220,16,...`; raw-Q8 `21.308/21.321 ms/tok`, tokens start `271,2,220,16,...`; all perf-only runs `ok=true` because CPU oracle is skipped
+  verified_at: 2026-05-10
+  decay_trigger: semantic input seed, top1 margin distribution, raw-Q8 route, or exact verifier integration
+
+**quadrumvirate_update_168:**
+- cassandra: A 10% wall gain with first-token divergence is a classic approximate-speed trap; keep the speed signal but do not promote as exact.
+- daedalus: The productive pivot is to use raw-Q8 inside self-draft/proposal bodies, where exact verification can reject divergence, or under a margin/risk gate.
+- maieutic: `perf_only ok=true` does not mean parity; it only means the perf harness did not run the CPU oracle.
+- adversary: Any future report using this flag must print the flag, compare token sequences, and include accept/parity if used in self-spec.
