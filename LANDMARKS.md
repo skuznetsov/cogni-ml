@@ -11064,3 +11064,32 @@ Conclusion: the biggest exact CUDA body lever is a raw-layout llama-style Q4_K M
 - daedalus: The frame shift is from "fuse more kernels" to "change the exact dot representation for Q4 hot projections."
 - maieutic: The gap is not proven for every layer/operator; it is strongest for Q4 FFN gate/up and smaller for Q6/down/tiny projections.
 - adversary: Do not promote approximate activation quantization into exact decode without verifier evidence. Probe first, then full-layer top1/parity, then semantic greedy timing.
+
+
+**decision_update_166:** The reefy.ai CUDA container moved its persistent root from `/mnt/reefy-data/persisten` to `/build/persisten`, while preserving the old data under `/build/persisten/cogni-ml`. The durable remote workspace is not a git checkout, so local committed state should be synced by archive/rsync before remote CUDA experiments. The old `/mnt/reefy-data/persisten` path is now an ephemeral compatibility symlink that may need to be recreated after host/container reboot.
+
+Conclusion: the new Ubuntu-based container is usable for the CUDA optimization track after a small environment bootstrap. Crystal builds should use `-Duse_pcre2` and explicit system library paths because this image has `libpcre2` but no legacy `libpcre.so`. The exact current CUDA speed target remains llama-style raw-layout Q4_K MMVQ; the migration did not invalidate the operator attribution.
+
+**evidence_update_166:**
+- claim: "The migrated reefy.ai host has the expected GPU, model, toolchain, and persistent workspace under `/build/persisten`."
+  source: remote `ssh app-dev-ubuntu@gputer--ssh--6be20df04dd5.reefy.ai` -> host `7400be4f1f65`, GPU `NVIDIA GeForce RTX 5060 Ti`, driver `595.45.04`, VRAM `16311 MiB`, Crystal `1.20.1`, CUDA `12.9`, model `/build/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf`, probe source present under `/build/persisten/cogni-ml/work/cogni-ml`
+  verified_at: 2026-05-10
+  decay_trigger: reefy.ai container rebuild, firmware/driver update, persistent-volume remount, or path migration
+- claim: "The remote workspace key files match local committed HEAD after archive sync."
+  source: local and remote `sha256sum bin/cuda_mixed_stack_probe.cr LANDMARKS.md TODO.md` matched: `bac19e...`, `c2d921...`, `7ca3f...`
+  verified_at: 2026-05-10
+  decay_trigger: local commit, remote archive sync, or manual remote edit
+- claim: "Crystal CUDA probe builds and runs on the migrated image with PCRE2/system-link flags."
+  source: remote `crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 ... --link-flags="-L/usr/lib -L/usr/lib/x86_64-linux-gnu ..."`; then `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_smoke --all-layers --greedy-loop-tokens=16 --perf-only --skip-debug-readback` -> `greedy_loop_graph=false`, `cuda_ms_per_token=23.723`, `ok=true`
+  verified_at: 2026-05-10
+  decay_trigger: Crystal package, distro libraries, CUDA driver/toolchain, probe link flags, or default graph mode changes
+- claim: "llama.cpp baselines still run after migration and the Q4_K hot-shape attribution remains in the same range."
+  source: remote `/build/persisten/cogni-ml/llama.cpp-build-cuda/bin/llama-bench -m Qwen3.5-9B-Q4_K_M.gguf -ngl 99 -fa 1 -p 64 -n 64 -r 1 -o md` -> `pp64 1717.89 tok/s`, `tg64 68.84 tok/s`; remote `test-backend-ops perf -o MUL_MAT -p type_a=q4_K,type_b=f32,m=12288,n=1,k=4096` -> `40.43 us/run`
+  verified_at: 2026-05-10
+  decay_trigger: llama.cpp rebuild, GPU driver/toolchain, model file, or test-backend temporary shape patch changes
+
+**quadrumvirate_update_166:**
+- cassandra: Host migration failures are path/linker failures first; do not misdiagnose them as CUDA regressions.
+- daedalus: Keep a compatibility symlink for old commands, but make new durable scripts prefer `/build/persisten` directly.
+- maieutic: A short `gen16` smoke only proves environment viability; it does not replace the longer semantic benchmark gate.
+- adversary: Because `/mnt` is ephemeral in this container, any reboot can remove the compatibility symlink; recreate it before using old commands or change commands to `/build/persisten`.
