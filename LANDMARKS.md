@@ -11607,3 +11607,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The frame shifts from "fuse the dense FFN" to "avoid dense FFN in proposal lanes via PCA/block selectors, then verify exactly."
 - maieutic: The speed objective is accepted tokens per wall second, not FFN hidden reconstruction or isolated kernel microbench speed.
 - adversary: Do not build a sparse or PCA FFN production kernel from quality-only probes; require acceptance, parity, and wall speed on mixed prompts with the exact verifier in the loop.
+
+**decision_update_192:** Refreshed the JSONL mixed-policy 27B gate and closed the harness-safety speed item at smoke level. `--prompts-jsonl` correctly handled a literal markdown table prompt containing `|`; the old pipe-delimiter hazard did not recur. The current small-gate ordering is unchanged: cheap exact n-gram target-only risk beats neural default when a clean repeat exists, and fail-closes to target-like behavior when it does not. Staged/replay variants remain research-only because they did not show a robust advantage over plain target-only risk in the refreshed control gate.
+
+**evidence_update_192:**
+- claim: "JSONL prompt input handles literal pipe prompts in the current sweep harness."
+  source: local `/tmp/qwen36_jsonl_gate_20260514153827/all.log`, 27B target + 0.8B draft, JSONL prompt `repeat_markdown_pipe` containing markdown table pipes -> sweep completed with `9/9` cycle dumps and no delimiter corruption/parity failure
+  verified_at: 2026-05-14
+  decay_trigger: sweep prompt parsing, JSONL schema, prompt manifest generation, or runner argument forwarding changes
+- claim: "`ngram_target_only_risk` remains the strongest small-gate policy versus neural default."
+  source: same gate -> default average `76.77 ms/tok`, `54.17%` acceptance; `ngram_target_only_risk` average `53.13 ms/tok`, `100%` acceptance, wins `3/3` paired rows; staged/replay risk average `64.48 ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, n-gram risk gate, target/draft model files, Metal runtime, or generated length changes
+- claim: "No-chunk n-gram rows are target-like in the explicit control; the useful speed comes from accepted clean repeats."
+  source: local `/tmp/qwen36_jsonl_target_control_20260514154059/all.log` -> target_only average `50.71 ms/tok`; `ngram_target_only_risk` average `46.43 ms/tok`; clean `repeat_alpha_beta` accepted `8/8` at `37.31 ms/tok` vs target-only `50.65`, while pipe/code no-chunk rows stayed around target-only timing
+  verified_at: 2026-05-14
+  decay_trigger: target-only loop overhead, n-gram risk gate, prompt mix, or verifier timing changes
+
+**quadrumvirate_update_192:**
+- cassandra: Single-run 27B timings are noisy, but paired policy ordering is consistent with the prior proposal-portfolio gates.
+- daedalus: The path is not "add more verifier modes"; it is "route cheap exact copy spans and otherwise avoid speculative overhead."
+- maieutic: A speed win on repeats does not generalize to non-repeat prompts; the router must fail closed.
+- adversary: Do not promote staged/replay or learned category routing from this gate. Require a larger held-out suite before changing product defaults beyond the already opt-in auto profile.
