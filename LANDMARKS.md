@@ -11539,3 +11539,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next improvement should broaden training/eval data and route classes, not hand-tune more shape thresholds.
 - maieutic: `100%` acceptance on 20 synthetic prompts is not broad product evidence; it is a regression guard for the current branch.
 - adversary: Keep the explicit model/threshold knobs. Do not bake `0.8` into `qwen35_generate auto` without a larger held-out suite and same-prompt llama comparison.
+
+**decision_update_188:** Refuted GPU/session-persistent n-gram lookup as the next local optimization. After accept-accounting and indexed CPU lookup, no-chunk fallback paths spend effectively all wall time in exact target verification, not proposal lookup. Keep the CPU indexed n-gram path and defer GPU lookup until a real long mixed-history workload shows proposal time as a material wall component.
+
+**evidence_update_188:**
+- claim: "No-chunk target-only fallback n-gram proposal overhead is currently negligible."
+  source: local `/tmp/qwen35_ngram_proposal_overhead_nochunk.log`, prompts `code_random`, `chat_open`, `math_open`, `tokens=32`, policy `ngram_target_only_risk_min8_model_long08` -> cycle summary `96` target-only fallback cycles, `proposal=0.975ms`, `verify_ms=1929.2ms`, wall `1931.3ms`; target-only no-proposal control wall `1944.8ms`
+  verified_at: 2026-05-14
+  decay_trigger: much longer history, mixed-history workload, n-gram index changes, GPU resident branch ledger, or verifier timing changes
+
+**quadrumvirate_update_188:**
+- cassandra: GPU lookup would be a local optimization trap on current workloads.
+- daedalus: The real bottleneck after fail-closed routing is exact target stepping; proposal work only matters when history scanning becomes visible again.
+- maieutic: "GPU-side is faster" is not sufficient; it must reduce measured wall in the active route.
+- adversary: Do not delete the idea. Reopen it only with a workload where proposal time is at least a few percent of wall or where GPU lookup shares a resident branch ledger already needed for another reason.
