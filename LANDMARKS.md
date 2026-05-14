@@ -11553,3 +11553,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The real bottleneck after fail-closed routing is exact target stepping; proposal work only matters when history scanning becomes visible again.
 - maieutic: "GPU-side is faster" is not sufficient; it must reduce measured wall in the active route.
 - adversary: Do not delete the idea. Reopen it only with a workload where proposal time is at least a few percent of wall or where GPU lookup shares a resident branch ledger already needed for another reason.
+
+**decision_update_189:** Refuted branch-state ledger work as the next self-spec lever under the current routes. Backup/copy costs are measurable but too small relative to draft and target verification. The same mixed gate also found a fresh false positive for the long-threshold n-gram router alias, so router quality remains a higher priority than state-copy microstructure.
+
+**evidence_update_189:**
+- claim: "Branch-state backup/copy is not the current wall."
+  source: local `/tmp/qwen35_branch_state_share_gate.log`, prompts `france`, `quick_fox`, `repeat_dog_cat`, `code_loop`, policies `default` and `ngram_target_only_risk_min8_model_long08`, `tokens=32` -> neural cycles wall `1538.1ms`, backup `23.906ms` (`~1.6%`); n-gram cycles wall `433.3ms`, backup `7.974ms` (`~1.8%`); verifier+drafters dominate (`draft=493.2ms`, `verify=1018.0ms` for neural)
+  verified_at: 2026-05-14
+  decay_trigger: new self-spec route with larger backup/resync cost, branch-state implementation, or verifier/draft body speedup
+- claim: "`ngram_target_only_risk_min8_model_long08` is not robust enough for product routing."
+  source: same gate -> `code_loop` under long08 policy produced `0/16` accepted with router score `0.9577`, regressing to `24.67ms/tok` vs target-only `20.06ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: router model, feature set, prompt suite, long threshold, or code-prompt risk gate changes
+
+**quadrumvirate_update_189:**
+- cassandra: Optimizing branch-state copies now would likely yield sub-2% ceiling on these routes.
+- daedalus: The next useful pivot is router confidence/semantic features or proposal-body cost reduction, not state-copy layout.
+- maieutic: A low branch-state percentage today can become relevant after verifier/draft body speedups; this is a deferral, not permanent deletion.
+- adversary: The long08 alias should stay a research baseline with explicit caveats because high router score can still select bad code chunks.
