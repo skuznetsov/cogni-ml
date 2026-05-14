@@ -137,4 +137,14 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.lag_ratio(ids, 8).should be < 0.20
     ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 8).should be_true
   end
+
+  it "risk-gates CSV-like diverse tails with only weak lag-four reuse" do
+    ids = [1, 2, 3, 4, 1, 6, 7, 8, 1, 10, 11, 12, 13, 14, 15, 16]
+
+    ML::GGUF::NgramDraft.pair_unique_ratio(ids).should eq(1.0)
+    ML::GGUF::NgramDraft.lag_ratio(ids, 4).should be > 0.10
+    ML::GGUF::NgramDraft.lag_ratio(ids, 4).should be < 0.20
+    ML::GGUF::NgramDraft.lag_ratio(ids, 8).should be < 0.20
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 3).should be_true
+  end
 end

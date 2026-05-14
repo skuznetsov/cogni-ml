@@ -11247,3 +11247,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The lever is not "staged vs chunk" globally, but a dynamic verifier-shape choice per candidate chunk.
 - maieutic: We need features that predict early rejection, not features that merely identify repetition. `match_len` alone is weak because accepted and rejected examples overlap.
 - adversary: Keep `--ngram-probe-gate` research-only/default-off until a paired prompt-suite router shows net speed gain and exact parity.
+
+**decision_update_174:** The better cheap n-gram policy is currently `risk skip vs bulk`, not always-on `probe vs bulk`. On the 9B repeat prompt suite, probe gates improved some early rejects but paid too much on fully accepted chunks. Existing `--ngram-risk-gate` was already stronger, and combining it with `--ngram-min-candidates 16` skipped short low-economics chunks. Broadened the high-pair-uniqueness weak-lag risk condition (`lag4 < 0.20`) to catch CSV-like bad tails that were previously verified and rejected expensively. Added sweep alias `ngram_target_only_risk_min16` for repeatable gates.
+
+**evidence_update_174:**
+- claim: "Always-on probe gates are weaker than risk skipping on the current repeat-suite."
+  source: local `/tmp/qwen35_spec_accept_probe` sweep over `bin/qwen35_spec_router_prompt_suite --categories repeat`, `tokens=16`, `ngram_gamma=16`, `ngram_min=2`, `ngram_max=8` -> averages: bulk `17.05ms/tok`, risk `15.41ms/tok`, probe1 `16.92ms/tok`, probe2 `16.55ms/tok`; all runs preserved exact greedy parity
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, n-gram risk/probe policy, verifier cost curve, or model/tokenizer changes
+- claim: "Adding `--ngram-min-candidates 16` improves the repeat-suite risk policy by skipping short low-economics chunks."
+  source: local repeat-suite sweep with `--ngram-min-candidates 16` -> `ngram_target_only` average `16.30ms/tok`, `ngram_target_only_risk` average `14.52ms/tok`; `repeat_sql_values` was skipped as `0/0` instead of paying for a `4/9` chunk
+  verified_at: 2026-05-14
+  decay_trigger: generation length, gamma, prompt distribution, or min-candidate economics change
+- claim: "Broader weak-lag risk gating catches CSV-like bad tails without harming the tested positive repeat chunks."
+  source: local code change `lag4 < 0.10` -> `lag4 < 0.20`, `crystal spec spec/ngram_draft_spec.cr` -> `19 examples, 0 failures`; release repeat-suite with `--ngram-min-candidates 16` -> risk average `13.51ms/tok`, skipped `repeat_csv_header`, `repeat_yaml_hosts`, `repeat_json_pairs`, and `repeat_sql_values`, while keeping `repeat_alpha4`, `repeat_log_level`, `repeat_markdown_tbl`, and `repeat_abab` at `~7.88-8.20ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: risk gate thresholds, repeat prompt mix, candidate feature extraction, or n-gram acceptance distribution changes
+- claim: "The tightened risk/min16 route does not create a structured-suite speed claim."
+  source: local structured-suite adversary with `tokens=16`, `ngram_min=2`, `ngram_gamma=16`, `--ngram-min-candidates 16` -> no n-gram chunks were proposed (`0/0`), average was near target-only (`19.27ms/tok` bulk vs `19.77ms/tok` risk, noise/regression), so structured prompts remain fail-closed/neutral rather than a promoted route
+  verified_at: 2026-05-14
+  decay_trigger: structured prompt mix, min-candidates threshold, or n-gram proposal behavior changes
+
+**quadrumvirate_update_174:**
+- cassandra: Probe gates feel attractive after seeing early-reject waste, but the aggregate economics favor skipping high-risk chunks first.
+- daedalus: Pivot from verifier-shape tuning to action selection: skip, bulk verify, or probe+bulk. Current data supports skip/bulk; probe is a third action only for a narrower future class.
+- maieutic: `accepted/proposed` can be misleading when `proposed=0`; fail-closed target-only rows preserve parity but only win by avoiding a bad speculative chunk, not by accelerating target decode.
+- adversary: The risk threshold is empirical and should stay behind `--ngram-risk-gate`; broader prompt/model gates are required before default promotion.

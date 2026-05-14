@@ -197,7 +197,7 @@ module ML::GGUF
 
       return false if ids.size < min_size
 
-      pair_unique_ratio(ids) > 0.90 && lag_ratio(ids, 4) < 0.10 && lag_ratio(ids, 8) < 0.20
+      pair_unique_ratio(ids) > 0.90 && lag_ratio(ids, 4) < 0.20 && lag_ratio(ids, 8) < 0.20
     end
 
     def match_len(history : Array(Int32), max_ngram : Int32, min_ngram : Int32) : Int32
