@@ -85,7 +85,18 @@ record CandidateStats,
   lag1_ratio : Float64,
   lag2_ratio : Float64,
   lag4_ratio : Float64,
-  lag8_ratio : Float64
+  lag8_ratio : Float64,
+  newline_token_ratio : Float64,
+  single_letter_ratio : Float64,
+  word_like_ratio : Float64,
+  numeric_ratio : Float64,
+  punct_like_ratio : Float64,
+  non_ascii_ratio : Float64
+
+def feature_f(features : Hash(String, JSON::Any), key : String) : Float64
+  value = features[key]?
+  value ? value.as_f : 0.0
+end
 
 def lag_ratio(ids : Array(Int32), lag : Int32) : Float64
   return 0.0 if ids.size <= lag
@@ -112,9 +123,31 @@ def exact_period(ids : Array(Int32), max_period : Int32) : Int32
 end
 
 def candidate_stats(rec : JSON::Any) : CandidateStats
+  if raw_features = rec["candidate_features"]?
+    features = raw_features.as_h
+    return CandidateStats.new(
+      feature_f(features, "candidate_features_present") > 0.0,
+      feature_f(features, "candidate_unique_ratio"),
+      feature_f(features, "candidate_pair_unique_ratio"),
+      feature_f(features, "candidate_entropy_norm"),
+      feature_f(features, "candidate_longest_run_ratio"),
+      feature_f(features, "candidate_exact_period_over_8"),
+      feature_f(features, "candidate_lag1_ratio"),
+      feature_f(features, "candidate_lag2_ratio"),
+      feature_f(features, "candidate_lag4_ratio"),
+      feature_f(features, "candidate_lag8_ratio"),
+      feature_f(features, "candidate_newline_token_ratio"),
+      feature_f(features, "candidate_single_letter_ratio"),
+      feature_f(features, "candidate_word_like_ratio"),
+      feature_f(features, "candidate_numeric_ratio"),
+      feature_f(features, "candidate_punct_like_ratio"),
+      feature_f(features, "candidate_non_ascii_ratio")
+    )
+  end
+
   ids = json_i_array(rec, "candidates")
   n = ids.size
-  return CandidateStats.new(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) if n == 0
+  return CandidateStats.new(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) if n == 0
 
   counts = Hash(Int32, Int32).new(0)
   ids.each { |id| counts[id] += 1 }
@@ -158,7 +191,13 @@ def candidate_stats(rec : JSON::Any) : CandidateStats
     lag_ratio(ids, 1),
     lag_ratio(ids, 2),
     lag_ratio(ids, 4),
-    lag_ratio(ids, 8)
+    lag_ratio(ids, 8),
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
   )
 end
 
@@ -305,6 +344,12 @@ begin
           "candidate_lag2_ratio"          => candidates.lag2_ratio,
           "candidate_lag4_ratio"          => candidates.lag4_ratio,
           "candidate_lag8_ratio"          => candidates.lag8_ratio,
+          "candidate_newline_token_ratio" => candidates.newline_token_ratio,
+          "candidate_single_letter_ratio" => candidates.single_letter_ratio,
+          "candidate_word_like_ratio"     => candidates.word_like_ratio,
+          "candidate_numeric_ratio"       => candidates.numeric_ratio,
+          "candidate_punct_like_ratio"    => candidates.punct_like_ratio,
+          "candidate_non_ascii_ratio"     => candidates.non_ascii_ratio,
           "draft_ms"                      => json_f(rec, "draft_ms"),
           "target_verify_ms"              => json_f(rec, "target_verify_ms"),
           "target_backup_ms"              => json_f(rec, "target_backup_ms"),

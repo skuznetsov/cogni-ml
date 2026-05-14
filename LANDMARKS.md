@@ -11673,3 +11673,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The frame shifts from "more n-gram shape thresholds" to "cheap semantic/token-class features plus held-out router scoring."
 - maieutic: The model did not reject period-4 repetition generally; it rejected a particular single-letter pattern. Treating that as a period rule would be the wrong abstraction.
 - adversary: `candidate_word_like_ratio` is still shallow semantics. It must be tested on code identifiers, variables, and acronym-heavy prompts before promotion.
+
+**decision_update_195:** Threaded safe `candidate_features` through the offline router dataset/train/eval path. The dataset extractor now uses cycle JSONL `candidate_features` when raw `candidates` are absent, and train/eval know the token-class feature names, so default privacy-preserving dumps can feed learned-router experiments.
+
+**evidence_update_195:**
+- claim: "Router dataset extraction preserves candidate token-class features without raw token IDs."
+  source: local `crystal run bin/qwen35_spec_router_dataset.cr -- --input /tmp/qwen35_token_class_period4_gate --out /tmp/qwen35_token_class_period4_rows.jsonl` -> `24` rows; n-gram rows preserve bad `p4_letters_xyzw` as `candidate_single_letter_ratio=1.0`, `candidate_word_like_ratio=0.0`, and useful period-4 rows as `candidate_single_letter_ratio=0.0`, `candidate_word_like_ratio=1.0`
+  verified_at: 2026-05-14
+  decay_trigger: cycle dump schema, dataset extractor, candidate feature names, or tokenizer class feature code changes
+- claim: "Offline train/eval accepts the extended candidate feature set."
+  source: local `crystal build --no-codegen` for `bin/qwen35_spec_router_dataset.cr`, `bin/qwen35_spec_router_train.cr`, and `bin/qwen35_spec_router_eval.cr`; tiny sanity train/eval on `/tmp/qwen35_token_class_period4_rows.jsonl` with `--exclude-kind target_only,neural_early_reject --no-sweep-feature --holdout-by prompt` -> train/holdout/eval all `1.000` on the six-row toy n-gram set, selecting the five positive rows and rejecting the one bad row
+  verified_at: 2026-05-14
+  decay_trigger: trainer feature vector, eval feature mapping, router model JSON schema, or dataset row schema changes
+
+**quadrumvirate_update_195:**
+- cassandra: Plumbing success on a six-row toy set is not router quality; it only removes a data-path blocker.
+- daedalus: The next branch should be a held-out route gate with token-class features, not another hand threshold.
+- maieutic: If a learned model needs raw token IDs to work, it violates the privacy-preserving dump premise; this path keeps the feature boundary clean.
+- adversary: The toy train/eval is intentionally overfit. Do not report it as performance evidence.

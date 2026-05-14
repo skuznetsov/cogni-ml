@@ -117,6 +117,18 @@ def feature_value(name : String, rec : JSON::Any) : Float64
     f(rec, "candidate_lag4_ratio").clamp(0.0, 1.0)
   when "candidate_lag8_ratio"
     f(rec, "candidate_lag8_ratio").clamp(0.0, 1.0)
+  when "candidate_newline_token_ratio"
+    f(rec, "candidate_newline_token_ratio").clamp(0.0, 1.0)
+  when "candidate_single_letter_ratio"
+    f(rec, "candidate_single_letter_ratio").clamp(0.0, 1.0)
+  when "candidate_word_like_ratio"
+    f(rec, "candidate_word_like_ratio").clamp(0.0, 1.0)
+  when "candidate_numeric_ratio"
+    f(rec, "candidate_numeric_ratio").clamp(0.0, 1.0)
+  when "candidate_punct_like_ratio"
+    f(rec, "candidate_punct_like_ratio").clamp(0.0, 1.0)
+  when "candidate_non_ascii_ratio"
+    f(rec, "candidate_non_ascii_ratio").clamp(0.0, 1.0)
   else
     if name.starts_with?("category=")
       s(rec, "prompt_category") == name["category=".size..] ? 1.0 : 0.0

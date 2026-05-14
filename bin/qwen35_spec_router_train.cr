@@ -148,6 +148,12 @@ candidate_feature_names = [
   "candidate_lag2_ratio",
   "candidate_lag4_ratio",
   "candidate_lag8_ratio",
+  "candidate_newline_token_ratio",
+  "candidate_single_letter_ratio",
+  "candidate_word_like_ratio",
+  "candidate_numeric_ratio",
+  "candidate_punct_like_ratio",
+  "candidate_non_ascii_ratio",
 ]
 
 candidate_offset = -1
@@ -210,6 +216,12 @@ def feature_vector(row : Row,
     x[candidate_offset + 7] = row.f("candidate_lag2_ratio").clamp(0.0, 1.0)
     x[candidate_offset + 8] = row.f("candidate_lag4_ratio").clamp(0.0, 1.0)
     x[candidate_offset + 9] = row.f("candidate_lag8_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 10] = row.f("candidate_newline_token_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 11] = row.f("candidate_single_letter_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 12] = row.f("candidate_word_like_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 13] = row.f("candidate_numeric_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 14] = row.f("candidate_punct_like_ratio").clamp(0.0, 1.0)
+    x[candidate_offset + 15] = row.f("candidate_non_ascii_ratio").clamp(0.0, 1.0)
   end
 
   if category_offset >= 0 && (idx = category_index[row.s("prompt_category")]?)
