@@ -11589,3 +11589,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful frame is not "make raw-Q8 exact"; it is "use raw-Q8 where exact target margins say approximate proposals are likely safe, then verify."
 - maieutic: Proposal acceptance must be measured against exact target top1 and exact target margin; approximate raw-Q8 margin is a suspect feature until calibrated.
 - adversary: This local scaffold is not speed evidence. Promotion still requires a remote mixed-prompt CUDA run with raw-Q8 on, exact target verification, parity, wall timing, and bucketed acceptance.
+
+**decision_update_191:** Revisited the FFN diamond fusion TODO against the current refutation ledger. The exact full-FFN diamond remains a dead branch unless the algorithmic boundary changes: smaller gate/up pairing, gate/up plus SwiGLU, in-place activation, and naive no-activation-store output-tile streaming are all already refuted. The live FFN acceleration routes are proposal-only: `pca-updown` and decision-boundary block selection can reduce or skip dense FFN work inside a draft lane, but only if execution stays multi-token/layer-resident and exact verifier acceptance remains high.
+
+**evidence_update_191:**
+- claim: "Exact small-boundary FFN fusion is refuted by prior gates, not merely unimplemented."
+  source: current TODO/LANDMARKS ledger: dual Q4 gate/up GEMV lost decode A/B; Q8 gate/up+SwiGLU fused removed trace rows but regressed draft wall; in-place decode SwiGLU stayed correctness-safe but lost/noisy; naive no-store FFN diamond has a recompute lower bound around `41.9x` slower at b64
+  verified_at: 2026-05-14
+  decay_trigger: new quantized dot representation, selected-block FFN algorithm, multi-token/layer-resident draft scheduler, or a new same-workload benchmark overturns those gates
+- claim: "The useful FFN diamond branch is approximate proposal-only, not exact target replacement."
+  source: existing `pca-updown` ledger: integrated layer chunk won versus dense full-layer FFN (`27B 18.036ms -> 9.134ms`, `9B 16.494ms -> 10.904ms`), but current single-token wall routing regressed or lost acceptance; blocktop/blockpred quality gates preserve parity in some slices but dense-probe wall/selector evidence is not yet enough for sparse kernel promotion
+  verified_at: 2026-05-14
+  decay_trigger: broader prompt suite, resident multi-token draft execution, better pre-FFN selector, or exact verifier/router economics changes
+
+**quadrumvirate_update_191:**
+- cassandra: Another exact gate/up fusion would likely repeat the register-pressure/local-optimization failure pattern.
+- daedalus: The frame shifts from "fuse the dense FFN" to "avoid dense FFN in proposal lanes via PCA/block selectors, then verify exactly."
+- maieutic: The speed objective is accepted tokens per wall second, not FFN hidden reconstruction or isolated kernel microbench speed.
+- adversary: Do not build a sparse or PCA FFN production kernel from quality-only probes; require acceptance, parity, and wall speed on mixed prompts with the exact verifier in the loop.
