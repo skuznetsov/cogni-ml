@@ -17,6 +17,31 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 2, min_ngram: 2, recursive: true).should eq([3, 4, 1, 2])
   end
 
+  it "keeps indexed candidates equivalent to the stateless scanner" do
+    history = [10, 11, 12, 13, 14, 10, 11, 12]
+    index = ML::GGUF::NgramDraft::IndexedHistory.new(history, max_ngram: 4, min_ngram: 2)
+
+    index.candidates(gamma: 4).should eq(ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 4, min_ngram: 2))
+    index.match_len.should eq(ML::GGUF::NgramDraft.match_len(history, max_ngram: 4, min_ngram: 2))
+  end
+
+  it "updates indexed candidates incrementally" do
+    index = ML::GGUF::NgramDraft::IndexedHistory.new([1, 2, 3, 4], max_ngram: 2, min_ngram: 2)
+    index.candidates(gamma: 4).should eq([] of Int32)
+
+    index.append(1)
+    index.append(2)
+    index.candidates(gamma: 4).should eq([3, 4, 1, 2])
+    index.match_len.should eq(2)
+  end
+
+  it "keeps indexed recursive expansion equivalent to the stateless scanner" do
+    history = [1, 2, 3, 4, 1, 2]
+    index = ML::GGUF::NgramDraft::IndexedHistory.new(history, max_ngram: 2, min_ngram: 2)
+
+    index.candidates(gamma: 4, recursive: true).should eq(ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 2, min_ngram: 2, recursive: true))
+  end
+
   it "reports the suffix match length used by the n-gram draft" do
     history = [1, 2, 3, 4, 1, 2]
 

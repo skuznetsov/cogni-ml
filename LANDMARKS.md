@@ -11141,3 +11141,109 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The productive pivot is to use raw-Q8 inside self-draft/proposal bodies, where exact verification can reject divergence, or under a margin/risk gate.
 - maieutic: `perf_only ok=true` does not mean parity; it only means the perf harness did not run the CPU oracle.
 - adversary: Any future report using this flag must print the flag, compare token sequences, and include accept/parity if used in self-spec.
+
+**decision_update_169:** External source audit against local llama.cpp, vLLM, and MLX points to scheduler/data-structure and proposal-economics gaps, not another blind CTA retune. llama.cpp's CUDA MMVQ path uses raw quant blocks plus Q8_1 activation dots and has built-in gate/GLU fusion hooks; this confirms the current raw-layout Q8 DP4A work is aligned with their hot-kernel advantage, but our strict-token evidence keeps it draft/proposal-only until exact verifier acceptance is measured. vLLM shows three reusable patterns: GPU-resident n-gram proposal, KV block accounting with speculative lookahead slots, and GPU-side rejection/greedy acceptance kernels. MLX reinforces the LTP/WBA framing: choose graph/eval boundaries that batch useful work, compile/fuse stable elementwise diamonds, and specialize Metal paths by shape/device rather than relying on generic micro-fusion.
+
+**evidence_update_169:**
+- claim: "llama.cpp's relevant CUDA edge is raw quant dot/dequant plus optional GLU fusion, not CUDA graphs."
+  source: local `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/vecdotq.cuh:501-527` shows Q4_K+Q8_1 DP4A/min-sub math; `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/mmvq.cu:391-586` shows the quantized matvec fusion path computing optional gate and SwiGLU/GEGLU in-kernel
+  verified_at: 2026-05-14
+  decay_trigger: llama.cpp CUDA MMVQ rewrite, GGUF quant layout change, or our Q4/Q8 runner promotion
+- claim: "vLLM keeps speculative proposal/verification metadata GPU-resident where possible and models speculative slots explicitly."
+  source: local `/Users/sergey/SrcArchives/AI/vllm/vllm/v1/spec_decode/ngram_proposer_gpu.py:46-208` implements GPU tensor n-gram lookup; `/Users/sergey/SrcArchives/AI/vllm/vllm/v1/core/kv_cache_manager.py:225-290` documents `new + lookahead` speculative slot allocation; `/Users/sergey/SrcArchives/AI/vllm/vllm/v1/worker/gpu/spec_decode/probabilistic_rejection_sampler_utils.py:213-241` accepts greedy draft tokens by comparing against target argmax on GPU
+  verified_at: 2026-05-14
+  decay_trigger: vLLM speculative decode rewrite, our n-gram/router path rewrite, or branch-state allocator changes
+- claim: "MLX's source-level lesson for our Metal path is larger stable eval/fusion boundaries, not many tiny eager evaluations."
+  source: local `/Users/sergey/SrcArchives/AI/mlx/docs/src/usage/lazy_evaluation.rst:64-87` warns about fixed evaluation overhead and graph-size tradeoff; `/Users/sergey/SrcArchives/AI/mlx/docs/src/usage/compile.rst:8-11` describes graph fusion; `/Users/sergey/SrcArchives/AI/mlx/mlx/backend/metal/quantized.cpp:84-126` and `/Users/sergey/SrcArchives/AI/mlx/mlx/backend/metal/scaled_dot_product_attention.cpp:631-756` show shape/device-specific dispatch gates
+  verified_at: 2026-05-14
+  decay_trigger: MLX compile/eval rewrite, Metal backend rewrite, or our wave scheduler redesign
+
+**quadrumvirate_update_169:**
+- cassandra: The easy failure is to copy individual mechanisms (CUDA graphs, one more fused row kernel, or n-gram alone) while missing their economic role: reduce CPU round-trips, batch verification, and avoid repeated state work.
+- daedalus: Reframe LTP/WBA from "fuse kernels" to "make speculative branches and exact verifier rows first-class wave batches": proposal sources feed a resident branch ledger, verifier consumes them in one GPU-side acceptance pass, and only accepted prefix state becomes canonical.
+- maieutic: Exact decode cannot use approximate raw-Q8/shortlist tricks directly. They become valuable only when paired with margin/risk gates and exact verifier parity; n-gram/cache proposals are exact but need GPU/session persistence to avoid CPU orchestration costs.
+- adversary: Do not reopen already-refuted broad branches (`QWEN35_HEAD_FULL_ROWS`, naive row packing, CPU draft, graph default) unless the new experiment changes the premise: resident branch-state, GPU n-gram, or a larger algebraic FFN/proposal diamond.
+
+**decision_update_170:** First non-CUDA speculative-economics slice landed as a session-resident exact n-gram index. `ML::GGUF::NgramDraft::IndexedHistory` incrementally indexes repeated suffix positions and is now used by `qwen35_generate` and `qwen35_speculative_accept` instead of rescanning the full history for every n-gram proposal/match-length query. A/B escape hatches are `QWEN35_NGRAM_INDEX_OFF=1` and `QWEN35_SPEC_NGRAM_INDEX_OFF=1`. This deliberately does not touch CUDA PTX or runners; it isolates the scheduling/data-structure lever before any GPU n-gram port.
+
+**evidence_update_170:**
+- claim: "Indexed n-gram proposals preserve the stateless scanner semantics on the focused cases."
+  source: local `crystal spec spec/ngram_draft_spec.cr` -> `18 examples, 0 failures`; added equivalence checks for non-recursive, recursive, and incremental append behavior
+  verified_at: 2026-05-14
+  decay_trigger: n-gram candidate semantics, recursive extension, or risk-gate feature changes
+- claim: "The generator and speculative acceptance probes type-check with the indexed n-gram path."
+  source: local `crystal build bin/qwen35_generate.cr --no-codegen` and `crystal build bin/qwen35_speculative_accept.cr --no-codegen` -> exit 0
+  verified_at: 2026-05-14
+  decay_trigger: CLI n-gram loop changes, Crystal compiler changes, or Qwen35 script wiring changes
+- claim: "A longer synthetic indexed smoke matches stateless candidates and match length."
+  source: local `crystal eval` over 5000-token periodic history -> `indexed_ngram_smoke ok candidates=32 match_len=8`
+  verified_at: 2026-05-14
+  decay_trigger: IndexedHistory keying/index update logic or scanner semantics changes
+- claim: "Indexed and scanner n-gram modes preserve exact output on a repeated-token semantic smoke."
+  source: local `/tmp/qwen35_spec_accept_ngram_index --ngram --ngram-target-only --ngram-gamma 32 --ngram-min 2 --ngram-max 8 --tokens 12 --verify chunk-inplace 'A B C D A B C D A B'` with index on/off -> both `accepted=12/12`, `generated=\" C D A B C D A B C D A B\"`; warmed timing was noise-level (`~122.6ms` on vs `~121.0ms` off), so no speed claim
+  verified_at: 2026-05-14
+  decay_trigger: n-gram CLI wiring, tokenizer/model changes, verifier semantics, or Metal runtime changes
+
+**quadrumvirate_update_170:**
+- cassandra: This should reduce CPU proposal overhead on long/session prompts, but it will not by itself fix verifier/body dominance; do not over-claim speed before paired prompt-suite timing.
+- daedalus: The index is a stepping stone toward GPU/session-persistent n-gram, not the end state. The next frame shift is to make proposal lookup resident and acceptance GPU-side.
+- maieutic: The critical assumption is exact semantic equivalence with the old scanner. Focused specs and synthetic smoke support this, but real prompt-suite parity/timing is still pending.
+- adversary: CUDA remains untouched; any future speed claim needs same-prompt A/B through `qwen35_speculative_sweep`/`qwen35_speculative_accept`, including reject-heavy prompts.
+
+**decision_update_171:** Paired prompt-suite timing refutes CPU `IndexedHistory` as a standalone end-to-end speed lever for current Metal n-gram target-only decode. The index is still useful infrastructure because it makes exact no-match lookups bounded for long sessions, but the tested repeated-match decode path is dominated by verifier/Metal work rather than suffix scanning. Next work should instrument verifier-side accept accounting and branch-state commit costs before moving lookup itself onto the GPU.
+
+**evidence_update_171:**
+- claim: "Indexed and scanner n-gram target-only modes have noise-level end-to-end timing differences on the tested repeated prompt suite."
+  source: local `/tmp/qwen35_ngram_index_ab.py` using `/tmp/qwen35_spec_accept_ngram_index --ngram --ngram-target-only --ngram-gamma 32 --ngram-min 2 --ngram-max 8 --tokens 48 --verify chunk-inplace` with index on/off -> short repeat `6.470ms/tok` indexed vs `6.370ms/tok` scanner, long repeat `7.535ms/tok` indexed vs `7.690ms/tok` scanner, structured repeat `8.770ms/tok` indexed vs `8.400ms/tok` scanner; every run accepted `48/48`
+  verified_at: 2026-05-14
+  decay_trigger: n-gram verifier route, prompt suite, Metal runtime, or indexed scanner implementation changes
+- claim: "The index materially removes worst-case CPU rescanning for no-match long histories, but that is not the current repeated-match decode bottleneck."
+  source: local pure proposer `crystal eval` over synthetic histories -> periodic histories were mixed/noise-level (`~0.43x-1.67x`) because the scanner finds a near-tail match quickly, while no-match random histories improved strongly (`random4096`: `666.658us` scanner vs `6.509us` indexed; `random65536`: `6376.879us` scanner vs `4.198us` indexed)
+  verified_at: 2026-05-14
+  decay_trigger: n-gram lookup algorithm, keying strategy, or history distributions change
+
+**quadrumvirate_update_171:**
+- cassandra: A correct CPU data structure can still disappear under verifier wall; this branch is useful for long-session robustness but not a breakthrough path by itself.
+- daedalus: Pivot from "accelerate proposal lookup" to "attribute and batch the full proposal -> verify -> accept -> commit chain." GPU lookup only matters if it is part of a resident branch ledger.
+- maieutic: The assumption that long repeated prompts stress scanner cost was weak; repeated patterns often produce near-tail matches, so no-match/mixed histories are the real scanner stress case.
+- adversary: Do not report indexed n-gram as faster. Report it as exact and bounded; speed claims require accept-accounting deltas or long no-match session workloads.
+
+**decision_update_172:** Added explicit verifier-side accounting for speculative cycles. `qwen35_speculative_accept --dump-cycles` now records proposal lookup, CPU accept-scan, canonical history/index commit, and target replay time separately from existing draft/verify/backup/resync fields. `qwen35_speculative_sweep` surfaces proposal/accept/commit totals in its cycle JSONL summary. This confirms the current repeated n-gram target-only path is verifier-dominated: lookup/accept/commit are microsecond-scale while target verify is millisecond-scale.
+
+**evidence_update_172:**
+- claim: "Speculative accounting fields build and remain compatible with focused n-gram specs."
+  source: local `crystal build bin/qwen35_speculative_accept.cr --no-codegen`, `crystal build bin/qwen35_speculative_sweep.cr --no-codegen`, and `crystal spec spec/ngram_draft_spec.cr` -> `18 examples, 0 failures`
+  verified_at: 2026-05-14
+  decay_trigger: cycle dump schema, sweep summary, n-gram loop timing, or Crystal JSON serialization changes
+- claim: "For a repeated accepted n-gram chunk, proposal/accept/commit are not the wall bottleneck."
+  source: local `/tmp/qwen35_spec_accept_accounting --ngram --ngram-target-only --ngram-gamma 32 --ngram-min 2 --ngram-max 8 --tokens 24 --verify chunk-inplace --dump-cycles /tmp/qwen35_accounting_cycles.jsonl 'A B C D A B C D A B'` -> stdout `spec_accounting proposal=0.067 ms accept_scan=0.003 ms commit=0.05 ms`, cycle JSON `target_verify_ms=193.348625`, `target_backup_ms=10.952041`, `wall_ms=204.360375`, accepted `24/24`
+  verified_at: 2026-05-14
+  decay_trigger: Metal verifier route, model/tokenizer, warmup state, or timing instrumentation changes
+- claim: "The sweep summary now exposes accounting fields for future prompt-suite gates."
+  source: local `crystal run bin/qwen35_speculative_sweep.cr -- --runner /tmp/qwen35_spec_accept_accounting --tokens 24 --reps 1 --policies ngram_target_only --only-prompts 'rep::A B C D A B C D A B' ... --dump-cycles-dir /tmp/qwen35_accounting_sweep` -> cycle summary `proposal 0.041`, `accept 0.003`, `commit 0.047`, `verify_ms 143.1`, `wall_ms 148.4`
+  verified_at: 2026-05-14
+  decay_trigger: sweep parser/output format, cycle dump schema, or runner timing changes
+
+**quadrumvirate_update_172:**
+- cassandra: The measured bottleneck is target chunk verification and backup/copy behavior, not CPU proposal lookup or accept scanning.
+- daedalus: The next lever is resident verifier/branch-state scheduling: reduce target backup/copy/replay and make accepted-prefix commit cheap, instead of moving a microsecond lookup to GPU first.
+- maieutic: `spec_wall` can be fast while cycle lookup is irrelevant; the right question is whether verifier work is necessary, batchable, or avoidable for accepted spans.
+- adversary: The accounting smoke is a repeated happy path. Reject-heavy prompts still need measurement before branch-state ledger work is promoted.
+
+**decision_update_173:** Added a default-off n-gram `probe+bulk` verifier knob. `--ngram-probe-gate N` verifies the first `N` n-gram candidates before bulk-verifying the remaining candidates; `--ngram-probe-min N` controls the minimum chunk size. This is a targeted answer to the reject-heavy finding where full chunk verification pays for 16 candidates even when the first or second candidate rejects. It is not promoted as a default because fully accepted chunks still prefer one bulk verifier call.
+
+**evidence_update_173:**
+- claim: "Probe+bulk reduces reject-at-0 and reject-at-1 n-gram target-only wall time while preserving exact output."
+  source: local `/tmp/qwen35_spec_accept_probe --ngram --ngram-target-only --ngram-gamma 16 --ngram-min 2 --ngram-max 8 --tokens 16 --verify chunk-inplace --ngram-probe-gate N --ngram-probe-min 2 ...` -> reject-at-0 prompt moved from `~425-430ms` bulk to `~325-329ms` with `probe_gate=1`; reject-at-1 numeric prompt moved from `~420ms` bulk to `~340ms` with `probe_gate=2`; generated text matched target greedy in all successful runs
+  verified_at: 2026-05-14
+  decay_trigger: n-gram verifier loop, target chunk verifier cost curve, reject prompt distribution, or probe gate logic changes
+- claim: "Probe+bulk is not a safe always-on default for accepted chunks."
+  source: local accepted-repeat prompt `A B C D A B C D A B`, `tokens=16`, `gamma=16` -> bulk chunk `~123.6-127.6ms`, `probe_gate=1` `~147-149ms`, `probe_gate=2` `~156ms`, full staged gate1/2/4 much worse; all accepted `16/16`
+  verified_at: 2026-05-14
+  decay_trigger: verifier warmup behavior, Metal chunk verifier scaling, n-gram acceptance distribution, or gate policy changes
+
+**quadrumvirate_update_173:**
+- cassandra: Early probe verification is valuable only when reject probability is high enough; always-on probe repeats the old staged-verifier tax on exact repeats.
+- daedalus: The lever is not "staged vs chunk" globally, but a dynamic verifier-shape choice per candidate chunk.
+- maieutic: We need features that predict early rejection, not features that merely identify repetition. `match_len` alone is weak because accepted and rejected examples overlap.
+- adversary: Keep `--ngram-probe-gate` research-only/default-off until a paired prompt-suite router shows net speed gain and exact parity.

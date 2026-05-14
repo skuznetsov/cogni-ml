@@ -47,6 +47,8 @@ ngram_max = (ENV["QWEN35_SPEC_NGRAM_MAX"]? || "8").to_i
 ngram_stage_min_env = ENV["QWEN35_SPEC_NGRAM_STAGE_MIN"]?
 ngram_stage_min = (ngram_stage_min_env || (ngram_gamma + 1).to_s).to_i
 ngram_stage_min_explicit = !ngram_stage_min_env.nil?
+ngram_probe_gate = (ENV["QWEN35_SPEC_NGRAM_PROBE_GATE"]? || "0").to_i
+ngram_probe_min = (ENV["QWEN35_SPEC_NGRAM_PROBE_MIN"]? || "2").to_i
 ngram_risk_min_size = (ENV["QWEN35_SPEC_NGRAM_RISK_MIN_SIZE"]? || "16").to_i
 ngram_min_candidates = (ENV["QWEN35_SPEC_NGRAM_MIN_CANDIDATES"]? || "0").to_i
 ngram_risk_gate = ENV["QWEN35_SPEC_NGRAM_RISK_GATE"]? == "1"
@@ -54,6 +56,7 @@ ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 ngram_replay_on_reject = ENV["QWEN35_SPEC_NGRAM_REPLAY_ON_REJECT"]? == "1"
 ngram_target_only = ENV["QWEN35_SPEC_NGRAM_TARGET_ONLY"]? == "1"
+ngram_index_enabled = ENV["QWEN35_SPEC_NGRAM_INDEX_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
@@ -84,6 +87,8 @@ OptionParser.parse(ARGV) do |parser|
     ngram_stage_min = value.to_i
     ngram_stage_min_explicit = true
   end
+  parser.on("--ngram-probe-gate N", "Research: verify the first N n-gram candidates before bulk-verifying the rest; 0 disables (default)") { |value| ngram_probe_gate = value.to_i }
+  parser.on("--ngram-probe-min N", "Minimum n-gram chunk size for --ngram-probe-gate (default: 2)") { |value| ngram_probe_min = value.to_i }
   parser.on("--ngram-risk-min-size N", "Minimum candidate size for the n-gram risk gate (default: 16)") { |value| ngram_risk_min_size = value.to_i }
   parser.on("--ngram-min-candidates N", "Skip n-gram chunks shorter than N candidates; 0 preserves historical behavior") { |value| ngram_min_candidates = value.to_i }
   parser.on("--ngram-risk-gate", "Research: skip n-gram chunks whose candidate-token shape matches known bad repeat tails") { ngram_risk_gate = true }
@@ -122,6 +127,8 @@ raise ArgumentError.new("QWEN35_SPEC_NGRAM_GAMMA must be positive") unless ngram
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN must be positive") unless ngram_min > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MAX must be >= QWEN35_SPEC_NGRAM_MIN") unless ngram_max >= ngram_min
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_STAGE_MIN must be positive") unless ngram_stage_min > 0
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_PROBE_GATE must be non-negative") unless ngram_probe_gate >= 0
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_PROBE_MIN must be positive") unless ngram_probe_min > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_RISK_MIN_SIZE must be positive") unless ngram_risk_min_size > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN_CANDIDATES must be non-negative") unless ngram_min_candidates >= 0
 raise ArgumentError.new("router model not found: #{router_model_path}") if router_model_path && !File.file?(router_model_path.not_nil!)
@@ -257,27 +264,6 @@ def token_ids_hash(ids : Array(Int32)) : String
   fnv1a64_hex(bytes)
 end
 
-def ngram_match_len(history : Array(Int32), max_ngram : Int32, min_ngram : Int32) : Int32
-  return 0 if history.empty?
-  max_len = Math.min(max_ngram, history.size)
-  max_len.downto(min_ngram) do |n|
-    suffix_start = history.size - n
-    i = history.size - n - 1
-    while i >= 0
-      matched = true
-      n.times do |j|
-        if history[i + j] != history[suffix_start + j]
-          matched = false
-          break
-        end
-      end
-      return n if matched && i + n < history.size
-      i -= 1
-    end
-  end
-  0
-end
-
 class SpecRouterModel
   getter threshold : Float64
   getter feature_names : Array(String)
@@ -402,6 +388,10 @@ private class CycleDump
   property ngram_disabled_after : Bool
   property candidate_hash : String
   property candidates : Array(Int32)?
+  property proposal_ms : Float64 = 0.0
+  property accept_scan_ms : Float64 = 0.0
+  property commit_ms : Float64 = 0.0
+  property target_replay_ms : Float64 = 0.0
   property draft_ms : Float64
   property target_verify_ms : Float64
   property target_backup_ms : Float64
@@ -463,7 +453,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -499,6 +489,7 @@ end
 
 generated_ids = [] of Int32
 history = prompt_ids.dup
+ngram_history = ngram_index_enabled ? ML::GGUF::NgramDraft::IndexedHistory.new(history, ngram_max, ngram_min) : nil
 pending_draft_tokens = [] of Int32
 pending_draft_start_pos = 0
 ngram_disabled = false
@@ -513,6 +504,9 @@ ngram_router_checks = 0
 ngram_router_skips = 0
 ngram_router_score_sum = 0.0
 target_verify_ms = 0.0
+proposal_ms = 0.0
+accept_scan_ms = 0.0
+commit_ms = 0.0
 draft_ms = 0.0
 target_backup_ms = 0.0
 target_replay_ms = 0.0
@@ -533,16 +527,29 @@ draft_backup_skips = 0
 wall0 = Time.instant
 while generated_ids.size < n_gen
   history_size_before = generated_ids.size
+  cycle_proposal_ms = 0.0
 
   if ngram_enabled && !ngram_disabled
-    ngram_candidates = ML::GGUF::NgramDraft.candidates(
-      history,
-      Math.min(ngram_gamma, n_gen - generated_ids.size),
-      ngram_max,
-      ngram_min,
-      recursive: ngram_recursive,
-      min_candidates: ngram_min_candidates)
-    match_len = ngram_match_len(history, ngram_max, ngram_min)
+    proposal0 = Time.instant
+    ngram_candidates = if index = ngram_history
+                         index.candidates(
+                           Math.min(ngram_gamma, n_gen - generated_ids.size),
+                           recursive: ngram_recursive,
+                           min_candidates: ngram_min_candidates)
+                       else
+                         ML::GGUF::NgramDraft.candidates(
+                           history,
+                           Math.min(ngram_gamma, n_gen - generated_ids.size),
+                           ngram_max,
+                           ngram_min,
+                           recursive: ngram_recursive,
+                           min_candidates: ngram_min_candidates)
+                       end
+    match_len = if index = ngram_history
+                  index.match_len
+                else
+                  ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+                end
     if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       ngram_candidates = [] of Int32
@@ -557,6 +564,8 @@ while generated_ids.size < n_gen
         ngram_candidates = [] of Int32
       end
     end
+    cycle_proposal_ms = (Time.instant - proposal0).total_milliseconds
+    proposal_ms += cycle_proposal_ms
 
     unless ngram_candidates.empty?
       cycle_wall0 = Time.instant
@@ -565,8 +574,15 @@ while generated_ids.size < n_gen
       cycle_target_backup0 = target_backup_ms
       cycle_draft_backup0 = draft_backup_ms
       cycle_draft_resync0 = draft_resync_ms
+      cycle_accept_scan0 = accept_scan_ms
+      cycle_commit0 = commit_ms
+      cycle_target_replay0 = target_replay_ms
       ngram_disabled_before = ngram_disabled
-      match_len = ngram_match_len(history, ngram_max, ngram_min)
+      match_len = if index = ngram_history
+                    index.match_len
+                  else
+                    ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+                  end
       ngram_cycles += 1
       ngram_proposed += ngram_candidates.size
       proposed += ngram_candidates.size
@@ -578,9 +594,20 @@ while generated_ids.size < n_gen
       reject_index = -1
       ngram_offset = 0
       stage_ngram = verify_mode == "staged" && ngram_candidates.size >= ngram_stage_min
+      probe_ngram = ngram_probe_gate > 0 &&
+                    ngram_candidates.size >= ngram_probe_min &&
+                    ngram_candidates.size > ngram_probe_gate
       while ngram_offset < ngram_candidates.size
         remaining = ngram_candidates.size - ngram_offset
-        stage_len = stage_ngram ? Math.min(stage_gate, remaining) : remaining
+        stage_len = if probe_ngram && ngram_offset == 0
+                      Math.min(ngram_probe_gate, remaining)
+                    elsif probe_ngram
+                      remaining
+                    elsif stage_ngram
+                      Math.min(stage_gate, remaining)
+                    else
+                      remaining
+                    end
         stage_len = Math.min(stage_len, n_gen - generated_ids.size)
         break if stage_len <= 0
         stage_candidates = ngram_candidates[ngram_offset, stage_len]
@@ -600,6 +627,7 @@ while generated_ids.size < n_gen
         end
 
         expected = target_next
+        accept0 = Time.instant
         stage_candidates.each_with_index do |cand, i|
           break if generated_ids.size >= n_gen
           if cand == expected
@@ -619,6 +647,7 @@ while generated_ids.size < n_gen
             break
           end
         end
+        accept_scan_ms += (Time.instant - accept0).total_milliseconds
 
         if rejected
           ngram_disabled = true if ngram_disable_after_reject
@@ -649,11 +678,15 @@ while generated_ids.size < n_gen
         pending_draft_tokens.concat(correction_or_accepted)
       end
       if generated_ids.size > history_size_before
-        history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+        commit0 = Time.instant
+        new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+        history.concat(new_history)
+        ngram_history.try &.append(new_history)
+        commit_ms += (Time.instant - commit0).total_milliseconds
       end
       if dump_cycles_path
         record_candidates = dump_cycle_token_ids ? ngram_candidates.dup : nil
-        cycle_dumps << CycleDump.new(
+        record = CycleDump.new(
           prompt_hash, target_model_id, draft_model_id,
           "ngram", "ngram", verify_mode,
           cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
@@ -667,6 +700,11 @@ while generated_ids.size < n_gen
           draft_backup_ms - cycle_draft_backup0,
           draft_resync_ms - cycle_draft_resync0,
           (Time.instant - cycle_wall0).total_milliseconds)
+        record.proposal_ms = cycle_proposal_ms
+        record.accept_scan_ms = accept_scan_ms - cycle_accept_scan0
+        record.commit_ms = commit_ms - cycle_commit0
+        record.target_replay_ms = target_replay_ms - cycle_target_replay0
+        cycle_dumps << record
       end
       next
     end
@@ -679,8 +717,13 @@ while generated_ids.size < n_gen
     cycle_target_backup0 = target_backup_ms
     cycle_draft_backup0 = draft_backup_ms
     cycle_draft_resync0 = draft_resync_ms
+    cycle_commit0 = commit_ms
     cycle_start_pos = pos
-    cycle_ngram_match_len = ngram_match_len(history, ngram_max, ngram_min)
+    cycle_ngram_match_len = if index = ngram_history
+                              index.match_len
+                            else
+                              ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+                            end
     generated_ids << target_next
     if generated_ids.size < n_gen
       tv0 = Time.instant
@@ -689,9 +732,13 @@ while generated_ids.size < n_gen
     end
     pos += 1
     ngram_target_only_tokens += 1
-    history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+    commit0 = Time.instant
+    new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+    history.concat(new_history)
+    ngram_history.try &.append(new_history)
+    commit_ms += (Time.instant - commit0).total_milliseconds
     if dump_cycles_path
-      cycle_dumps << CycleDump.new(
+      record = CycleDump.new(
         prompt_hash, target_model_id, draft_model_id,
         "target_only", "ngram_target_only", verify_mode,
         cycle_start_pos, history_size_before, 1,
@@ -705,6 +752,9 @@ while generated_ids.size < n_gen
         draft_backup_ms - cycle_draft_backup0,
         draft_resync_ms - cycle_draft_resync0,
         (Time.instant - cycle_wall0).total_milliseconds)
+      record.proposal_ms = cycle_proposal_ms
+      record.commit_ms = commit_ms - cycle_commit0
+      cycle_dumps << record
     end
     next
   end
@@ -725,7 +775,9 @@ while generated_ids.size < n_gen
     end
     pos += 1
     plain_fallback_tokens += 1
-    history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+    new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+    history.concat(new_history)
+    ngram_history.try &.append(new_history)
     if dump_cycles_path
       cycle_dumps << CycleDump.new(
         prompt_hash, target_model_id, draft_model_id,
@@ -764,7 +816,11 @@ while generated_ids.size < n_gen
   cycle_start_pos = pos
   cycle_gamma = adaptive_gamma ? current_gamma : gamma
   draft_next_at_cycle = draft_next
-  cycle_ngram_match_len = ngram_match_len(history, ngram_max, ngram_min)
+  cycle_ngram_match_len = if index = ngram_history
+                            index.match_len
+                          else
+                            ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+                          end
   gamma_sum += cycle_gamma
   gamma_max_seen = Math.max(gamma_max_seen, cycle_gamma)
   correction_or_accepted = [] of Int32
@@ -1057,7 +1113,9 @@ while generated_ids.size < n_gen
   end
 
   if generated_ids.size > history_size_before
-    history.concat(generated_ids[history_size_before, generated_ids.size - history_size_before])
+    new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+    history.concat(new_history)
+    ngram_history.try &.append(new_history)
   end
 
   if dump_cycles_path
@@ -1165,6 +1223,7 @@ puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} 
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms target_replay=#{target_replay_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
+puts "spec_accounting proposal=#{proposal_ms.round(3)} ms accept_scan=#{accept_scan_ms.round(3)} ms commit=#{commit_ms.round(3)} ms"
 puts profile_report.not_nil! if profile_report
 puts "note=exact speculative probe; speedup still needs lower draft cost and/or verifier rollback overhead removal"
 puts "generated=#{tok.decode(generated_ids).inspect}"

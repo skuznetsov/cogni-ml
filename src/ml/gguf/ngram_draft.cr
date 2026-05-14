@@ -4,6 +4,143 @@ module ML::GGUF
   module NgramDraft
     extend self
 
+    class IndexedHistory
+      getter history : Array(Int32)
+      getter min_ngram : Int32
+      getter max_ngram : Int32
+
+      def initialize(history : Array(Int32),
+                     @max_ngram : Int32,
+                     @min_ngram : Int32)
+        raise ArgumentError.new("min_ngram must be positive") unless @min_ngram > 0
+        raise ArgumentError.new("max_ngram must be >= min_ngram") unless @max_ngram >= @min_ngram
+
+        @history = [] of Int32
+        @positions = Hash(String, Array(Int32)).new { |hash, key| hash[key] = [] of Int32 }
+        append(history)
+      end
+
+      def append(ids : Array(Int32)) : Nil
+        ids.each { |id| append(id) }
+      end
+
+      def append(id : Int32) : Nil
+        @history << id
+        index_suffixes_ending_at(@history.size - 1)
+      end
+
+      def candidates(gamma : Int32,
+                     recursive : Bool = false,
+                     min_candidates : Int32 = 0) : Array(Int32)
+        raise ArgumentError.new("gamma must be positive") unless gamma > 0
+        raise ArgumentError.new("min_candidates must be non-negative") unless min_candidates >= 0
+        return [] of Int32 if @history.empty?
+
+        result = if recursive
+                   first = candidates_once(gamma)
+                   if first.empty? || first.size >= gamma
+                     first
+                   else
+                     scratch = fork
+                     scratch.append(first)
+                     expanded = first
+                     while expanded.size < gamma
+                       chunk = scratch.candidates_once(gamma - expanded.size)
+                       break if chunk.empty?
+
+                       expanded.concat(chunk)
+                       scratch.append(chunk)
+                     end
+                     expanded
+                   end
+                 else
+                   candidates_once(gamma)
+                 end
+
+        if min_candidates > 0 && result.size < min_candidates
+          [] of Int32
+        else
+          result
+        end
+      end
+
+      def match_len : Int32
+        return 0 if @history.empty?
+
+        max_len = Math.min(@max_ngram, @history.size)
+        max_len.downto(@min_ngram) do |n|
+          return n if latest_prior_match_start(n)
+        end
+        0
+      end
+
+      def fork : IndexedHistory
+        copy = IndexedHistory.allocate
+        copy.initialize_copy(@history, @max_ngram, @min_ngram, @positions)
+        copy
+      end
+
+      protected def initialize_copy(history : Array(Int32),
+                                    @max_ngram : Int32,
+                                    @min_ngram : Int32,
+                                    positions : Hash(String, Array(Int32))) : Nil
+        @history = history.dup
+        @positions = Hash(String, Array(Int32)).new { |hash, key| hash[key] = [] of Int32 }
+        positions.each do |key, values|
+          @positions[key] = values.dup
+        end
+      end
+
+      protected def candidates_once(gamma : Int32) : Array(Int32)
+        max_len = Math.min(@max_ngram, @history.size)
+        max_len.downto(@min_ngram) do |n|
+          if start = latest_prior_match_start(n)
+            result = [] of Int32
+            k = start + n
+            while k < @history.size && result.size < gamma
+              result << @history[k]
+              k += 1
+            end
+            return result unless result.empty?
+          end
+        end
+
+        [] of Int32
+      end
+
+      private def latest_prior_match_start(n : Int32) : Int32?
+        suffix_start = @history.size - n
+        return nil if suffix_start <= 0
+
+        positions = @positions[key_at(suffix_start, n)]?
+        return nil unless positions
+
+        positions.reverse_each do |start|
+          return start if start < suffix_start && start + n < @history.size
+        end
+        nil
+      end
+
+      private def index_suffixes_ending_at(index : Int32) : Nil
+        1.upto(@max_ngram) do |n|
+          next if n < @min_ngram
+
+          start = index - n + 1
+          next if start < 0
+
+          @positions[key_at(start, n)] << start
+        end
+      end
+
+      private def key_at(start : Int32, n : Int32) : String
+        io = IO::Memory.new(n * 4)
+        n.times do |j|
+          io.write_bytes(@history[start + j], IO::ByteFormat::LittleEndian)
+        end
+        io.to_s
+      end
+    end
+
     def candidates(history : Array(Int32),
                    gamma : Int32,
                    max_ngram : Int32,

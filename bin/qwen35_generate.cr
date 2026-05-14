@@ -70,6 +70,7 @@ ngram_risk_gate = if value = ENV["QWEN35_NGRAM_RISK_GATE"]?
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 ngram_replay_on_reject = ENV["QWEN35_NGRAM_REPLAY_ON_REJECT"]? == "1"
+ngram_index_enabled = ENV["QWEN35_NGRAM_INDEX_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
@@ -491,10 +492,11 @@ if speculative_decode_enabled && !output_ids.empty?
   STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
-  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} min_candidates=#{ngram_min_candidates} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject} replay_on_reject=#{ngram_replay_on_reject}"
+  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} min_candidates=#{ngram_min_candidates} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject} replay_on_reject=#{ngram_replay_on_reject} index=#{ngram_index_enabled}"
   decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
+  ngram_history = ngram_index_enabled ? ML::GGUF::NgramDraft::IndexedHistory.new(history, ngram_max, ngram_min) : nil
   ngram_disabled = false
   ngram_cycles = 0
   ngram_accepted = 0
@@ -505,10 +507,23 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
   while output_ids.size < n_gen
     remaining = n_gen - output_ids.size
-    candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(
-      history, Math.min(ngram_gamma, remaining), ngram_max, ngram_min,
-      recursive: ngram_recursive, min_candidates: ngram_min_candidates)
-    match_len = ngram_disabled ? 0 : ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+    candidates = if ngram_disabled
+                   [] of Int32
+                 elsif index = ngram_history
+                   index.candidates(Math.min(ngram_gamma, remaining),
+                     recursive: ngram_recursive, min_candidates: ngram_min_candidates)
+                 else
+                   ML::GGUF::NgramDraft.candidates(
+                     history, Math.min(ngram_gamma, remaining), ngram_max, ngram_min,
+                     recursive: ngram_recursive, min_candidates: ngram_min_candidates)
+                 end
+    match_len = if ngram_disabled
+                  0
+                elsif index = ngram_history
+                  index.match_len
+                else
+                  ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+                end
     if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       candidates = [] of Int32
@@ -519,6 +534,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
       emitted = next_id
       output_ids << emitted
       history << emitted
+      ngram_history.try &.append(emitted)
       if output_ids.size < n_gen && emitted != tok.eos_id
         top, _top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, emitted, pos, state)
         next_id = top
@@ -563,6 +579,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
         if cand == expected
           output_ids << cand
           history << cand
+          ngram_history.try &.append(cand)
           accepted_or_corrected << cand
           stage_accepted_or_corrected << cand
           ngram_accepted += 1
@@ -571,6 +588,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
         else
           output_ids << expected
           history << expected
+          ngram_history.try &.append(expected)
           accepted_or_corrected << expected
           stage_accepted_or_corrected << expected
           rejected = true

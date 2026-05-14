@@ -59,6 +59,9 @@ class CycleStats
   property rejects : Int32 = 0
   property generated : Int32 = 0
   property gain_ms : Float64 = 0.0
+  property proposal_ms : Float64 = 0.0
+  property accept_scan_ms : Float64 = 0.0
+  property commit_ms : Float64 = 0.0
   property wall_ms : Float64 = 0.0
   property draft_ms : Float64 = 0.0
   property verify_ms : Float64 = 0.0
@@ -71,6 +74,9 @@ class CycleStats
     @rejects += 1 if json_i(rec, "reject_index") >= 0
     @generated += json_i(rec, "generated_count")
     @gain_ms += json_f(rec, "expected_gain_ms")
+    @proposal_ms += json_f(rec, "proposal_ms")
+    @accept_scan_ms += json_f(rec, "accept_scan_ms")
+    @commit_ms += json_f(rec, "commit_ms")
     @wall_ms += json_f(rec, "wall_ms")
     @draft_ms += json_f(rec, "draft_ms")
     @verify_ms += json_f(rec, "target_verify_ms")
@@ -145,7 +151,7 @@ prompts = [
   PromptCase.new("quick_brown_fox", "The quick brown fox"),
   PromptCase.new("code_fibonacci", "def fibonacci(n):"),
 ]
-policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "router16", "router16_staged", "fixed16", "staged16", "hybrid", "ngram", "ngram_risk", "ngram_replay", "ngram_replay_risk", "ngram_target_only", "ngram_target_only_risk", "ngram_target_only_staged", "ngram_target_only_staged_risk", "ngram_target_only_staged_replay_risk", "ngram_target_only_replay_risk", "ngram_bootstrap32_s2", "ngram_router16", "ngram_router16_risk", "ngram_router16_staged", "ngram_router16_staged_risk", "ngram_router16_staged_model", "ngram_fixed16", "ngram_staged16", "ngram_guard"]
+policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "router16", "router16_staged", "fixed16", "staged16", "hybrid", "ngram", "ngram_risk", "ngram_replay", "ngram_replay_risk", "ngram_target_only", "ngram_target_only_probe1", "ngram_target_only_risk", "ngram_target_only_staged", "ngram_target_only_staged_risk", "ngram_target_only_staged_replay_risk", "ngram_target_only_replay_risk", "ngram_bootstrap32_s2", "ngram_router16", "ngram_router16_risk", "ngram_router16_staged", "ngram_router16_staged_risk", "ngram_router16_staged_model", "ngram_fixed16", "ngram_staged16", "ngram_guard"]
 extra_args = [] of String
 dump_cycles_dir = ENV["QWEN35_SPEC_SWEEP_DUMP_CYCLES_DIR"]?
 dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
@@ -159,7 +165,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--gamma N", "Initial speculative gamma (default: 4)") { |v| gamma = v.to_i }
   p.on("--max-gamma N", "Maximum adaptive gamma (default: 32)") { |v| max_gamma = v.to_i }
   p.on("--reps N", "Repeat each policy/prompt this many times (default: 1)") { |v| reps = v.to_i }
-  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,router16,router16_staged,fixed16,staged16,hybrid,ngram,ngram_risk,ngram_replay,ngram_replay_risk,ngram_target_only,ngram_target_only_risk,ngram_target_only_staged,ngram_target_only_staged_risk,ngram_target_only_staged_replay_risk,ngram_target_only_replay_risk,ngram_bootstrap32_s2,ngram_router16,ngram_router16_risk,ngram_router16_staged,ngram_router16_staged_risk,ngram_router16_staged_model,ngram_fixed16,ngram_staged16,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
+  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,router16,router16_staged,fixed16,staged16,hybrid,ngram,ngram_risk,ngram_replay,ngram_replay_risk,ngram_target_only,ngram_target_only_probe1,ngram_target_only_risk,ngram_target_only_staged,ngram_target_only_staged_risk,ngram_target_only_staged_replay_risk,ngram_target_only_replay_risk,ngram_bootstrap32_s2,ngram_router16,ngram_router16_risk,ngram_router16_staged,ngram_router16_staged_risk,ngram_router16_staged_model,ngram_fixed16,ngram_staged16,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
     policy_names = v.split(',').map(&.strip).reject(&.empty?)
   end
   p.on("--prompt TEXT", "Add one prompt; can be passed multiple times. Optional NAME::TEXT gives a stable dataset label.") do |v|
@@ -214,6 +220,7 @@ policies = {
   "ngram_replay"                         => Policy.new("ngram_replay", ["--ngram", "--ngram-replay-on-reject"], {} of String => String),
   "ngram_replay_risk"                    => Policy.new("ngram_replay_risk", ["--ngram", "--ngram-risk-gate", "--ngram-replay-on-reject"], {} of String => String),
   "ngram_target_only"                    => Policy.new("ngram_target_only", ["--ngram", "--ngram-target-only"], {} of String => String),
+  "ngram_target_only_probe1"             => Policy.new("ngram_target_only_probe1", ["--ngram", "--ngram-target-only", "--ngram-probe-gate", "1", "--ngram-probe-min", "2"], {} of String => String),
   "ngram_target_only_risk"               => Policy.new("ngram_target_only_risk", ["--ngram", "--ngram-risk-gate", "--ngram-target-only"], {} of String => String),
   "ngram_target_only_staged"             => Policy.new("ngram_target_only_staged", ["--ngram", "--ngram-target-only", "--verify", "staged", "--stage-gate", "4", "--ngram-stage-min", "8"], {} of String => String),
   "ngram_target_only_staged_risk"        => Policy.new("ngram_target_only_staged_risk", ["--ngram", "--ngram-risk-gate", "--ngram-target-only", "--verify", "staged", "--stage-gate", "4", "--ngram-stage-min", "8"], {} of String => String),
@@ -416,13 +423,14 @@ if dump_cycles_dir
   unless stats.empty?
     puts
     puts "Cycle JSONL summary"
-    printf "%-28s %7s %9s %9s %8s %10s %9s %9s %9s\n",
-      "policy/kind", "cycles", "accepted", "proposed", "rejects", "gain_ms", "wall_ms", "draft_ms", "verify_ms"
+    printf "%-28s %7s %9s %9s %8s %10s %9s %9s %9s %9s %9s %9s\n",
+      "policy/kind", "cycles", "accepted", "proposed", "rejects", "gain_ms", "wall_ms", "proposal", "accept", "commit", "draft_ms", "verify_ms"
     stats.keys.sort.each do |key|
       stat = stats[key]
-      printf "%-28s %7d %9d %9d %8d %10.1f %9.1f %9.1f %9.1f\n",
+      printf "%-28s %7d %9d %9d %8d %10.1f %9.1f %9.3f %9.3f %9.3f %9.1f %9.1f\n",
         key, stat.count, stat.accepted, stat.proposed, stat.rejects,
-        stat.gain_ms, stat.wall_ms, stat.draft_ms, stat.verify_ms
+        stat.gain_ms, stat.wall_ms, stat.proposal_ms, stat.accept_scan_ms,
+        stat.commit_ms, stat.draft_ms, stat.verify_ms
     end
   end
 end
