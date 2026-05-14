@@ -65,6 +65,8 @@ dump_cycles_path = ENV["QWEN35_SPEC_DUMP_CYCLES"]?
 dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
 router_model_path = ENV["QWEN35_SPEC_ROUTER_MODEL"]?
 prompt_category = ENV["QWEN35_SPEC_PROMPT_CATEGORY"]? || "unknown"
+router_long_threshold = ENV["QWEN35_SPEC_ROUTER_LONG_THRESHOLD"]?.try(&.to_f)
+router_long_min = (ENV["QWEN35_SPEC_ROUTER_LONG_MIN"]? || "16").to_i
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_speculative_accept [--target PATH] [--draft PATH] [--gamma N] [--max-gamma N] [--bootstrap-gamma N] [--adaptive|--no-adaptive] [--tokens N] [--verify serial|chunk|chunk-inplace|hybrid|staged] [--ngram] [prompt]"
@@ -104,6 +106,8 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
   parser.on("--dump-cycle-token-ids", "Include raw token ids in --dump-cycles records; default only writes stable hashes") { dump_cycle_token_ids = true }
   parser.on("--router-model PATH", "Research: logistic router JSON used to gate n-gram chunks before verification") { |path| router_model_path = path }
+  parser.on("--router-long-threshold X", "Research: stricter router threshold for long n-gram chunks") { |value| router_long_threshold = value.to_f }
+  parser.on("--router-long-min N", "Candidate count where --router-long-threshold applies (default: 16)") { |value| router_long_min = value.to_i }
   parser.on("--prompt-category NAME", "Research: prompt category feature for router models (default: env QWEN35_SPEC_PROMPT_CATEGORY or unknown)") { |value| prompt_category = value }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -135,6 +139,8 @@ raise ArgumentError.new("QWEN35_SPEC_NGRAM_PROBE_GATE must be non-negative") unl
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_PROBE_MIN must be positive") unless ngram_probe_min > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_RISK_MIN_SIZE must be positive") unless ngram_risk_min_size > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN_CANDIDATES must be non-negative") unless ngram_min_candidates >= 0
+raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_MIN must be positive") unless router_long_min > 0
+raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_THRESHOLD must be in [0,1]") if router_long_threshold && !(0.0..1.0).includes?(router_long_threshold.not_nil!)
 raise ArgumentError.new("router model not found: #{router_model_path}") if router_model_path && !File.file?(router_model_path.not_nil!)
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
@@ -405,6 +411,8 @@ private class CycleDump
   property draft_resync_ms : Float64
   property wall_ms : Float64
   property expected_gain_ms : Float64?
+  property router_score : Float64?
+  property router_candidate_count : Int32 = 0
 
   def initialize(@prompt_hash : String,
                  @target_model : String,
@@ -433,7 +441,8 @@ private class CycleDump
                  @draft_backup_ms : Float64,
                  @draft_resync_ms : Float64,
                  @wall_ms : Float64,
-                 @expected_gain_ms : Float64? = nil)
+                 @expected_gain_ms : Float64? = nil,
+                 @router_score : Float64? = nil)
   end
 end
 
@@ -535,6 +544,8 @@ wall0 = Time.instant
 while generated_ids.size < n_gen
   history_size_before = generated_ids.size
   cycle_proposal_ms = 0.0
+  cycle_router_score = nil.as(Float64?)
+  cycle_router_candidate_count = 0
 
   if !target_only && ngram_enabled && !ngram_disabled
     proposal0 = Time.instant
@@ -562,11 +573,17 @@ while generated_ids.size < n_gen
       ngram_candidates = [] of Int32
     end
     if router_model && !ngram_candidates.empty?
+      cycle_router_candidate_count = ngram_candidates.size
       score = router_model.not_nil!.score(ngram_router_features(
         ngram_candidates, generated_ids.size, match_len, ngram_max, ngram_disabled, verify_mode, draft_model_id, prompt_category))
+      cycle_router_score = score
       ngram_router_checks += 1
       ngram_router_score_sum += score
-      if score < router_model.not_nil!.threshold
+      threshold = router_model.not_nil!.threshold
+      if long_threshold = router_long_threshold
+        threshold = Math.max(threshold, long_threshold) if ngram_candidates.size >= router_long_min
+      end
+      if score < threshold
         ngram_router_skips += 1
         ngram_candidates = [] of Int32
       end
@@ -728,6 +745,8 @@ while generated_ids.size < n_gen
         record.accept_scan_ms = accept_scan_ms - cycle_accept_scan0
         record.commit_ms = commit_ms - cycle_commit0
         record.target_replay_ms = target_replay_ms - cycle_target_replay0
+        record.router_score = cycle_router_score
+        record.router_candidate_count = cycle_router_candidate_count
         cycle_dumps << record
       end
       next
@@ -786,6 +805,8 @@ while generated_ids.size < n_gen
         (Time.instant - cycle_wall0).total_milliseconds)
       record.proposal_ms = cycle_proposal_ms
       record.commit_ms = commit_ms - cycle_commit0
+      record.router_score = cycle_router_score
+      record.router_candidate_count = cycle_router_candidate_count
       cycle_dumps << record
     end
     next

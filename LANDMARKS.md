@@ -11491,3 +11491,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The bigger route remains unresolved: avoid needing probe2 on high-confidence accepted repeats, but retain a cheap abort for doubtful chunks.
 - maieutic: The skip is exact because it compares against target-computed `target_next`, not a learned score; the cost is still the probe prefix itself.
 - adversary: Do not promote `--ngram-probe-gate 2` globally from this. It fixes a false-positive wall spike but regresses clean accepted chunks.
+
+**decision_update_186:** Added router-score observability and a default-off long-chunk threshold for learned n-gram routing. Cycle JSONL records can now include `router_score` and `router_candidate_count`, including skipped candidates that fall through to exact target-only. `--router-long-threshold X` / `--router-long-min N` applies a stricter score threshold only to long candidate chunks, avoiding the global-threshold failure mode where useful medium fact chunks are skipped.
+
+**evidence_update_186:**
+- claim: "Router score separates the bad long repeat from good long repeats, but not from medium fact chunks; threshold must be length-aware."
+  source: local `/tmp/qwen35_router_score_targeted12_gate`, model `/tmp/qwen35_router_combined_dataset/model_no_category.json` -> `repeat_xyz4` score `0.7893`, accepted `2/16`, expected gain `-120.0ms`; good long repeats `repeat_red_blue` and `repeat_one_two` score `0.8755`, accepted `16/16`; useful medium fact chunks `fact_germany_capital` and `fact_italy_capital` score `0.796`, accepted `11/11`
+  verified_at: 2026-05-14
+  decay_trigger: router model, feature set, prompt suite, threshold, or n-gram candidate lengths change
+- claim: "A long-only threshold of `0.8` fixes the targeted false positive without losing the observed medium fact wins."
+  source: local `/tmp/qwen35_router_long_threshold_targeted12_gate.log`, `--router-long-threshold 0.8 --router-long-min 16`, targeted12 -> model policy average `16.13ms/tok`, `100%` acceptance, versus target-only `19.28ms/tok`; Germany/Italy kept `11/11`; red/blue and one/two kept `16/16`; initial `repeat_xyz4` 16-candidate chunk was skipped and a later shorter chunk accepted `10/10`
+  verified_at: 2026-05-14
+  decay_trigger: router model, long threshold, prompt mix, target verifier timing, or n-gram recursive generation changes
+- claim: "The broad held-out suite remains fail-closed under the long-threshold route."
+  source: local `/tmp/qwen35_router_long_threshold_heldout28_gate.log`, 28 prompts, model policy with long threshold -> every row proposed `0/0`; average `19.49ms/tok` vs target-only `19.47ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: held-out prompt mix, candidate generation, or threshold changes
+- claim: "Instrumentation and threshold code compile and n-gram specs still pass."
+  source: local `crystal spec spec/ngram_draft_spec.cr` -> `21 examples, 0 failures`; `crystal build bin/qwen35_speculative_accept.cr --no-codegen`; release builds `/tmp/qwen35_spec_accept_router_score` and `/tmp/qwen35_spec_accept_router_long`
+  verified_at: 2026-05-14
+  decay_trigger: speculative harness schema, router JSON schema, Crystal compiler, or Metal bridge changes
+
+**quadrumvirate_update_186:**
+- cassandra: Length-aware score thresholds are a better fit than global score thresholds for current n-gram router rows.
+- daedalus: This shifts the router from "one classifier threshold" to "economics by chunk class": medium chunks and long chunks have different false-positive costs.
+- maieutic: The evidence is still small and synthetic; the threshold is an experiment knob, not a product default.
+- adversary: `repeat_xyz4` later accepting `10/10` shows that skipping one bad long chunk does not mean disabling the prompt category; the router should reassess after each exact fallback step.
