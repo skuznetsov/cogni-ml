@@ -351,6 +351,69 @@ def add_candidate_features(features : Hash(String, Float64), ids : Array(Int32))
   features["candidate_lag8_ratio"] = ML::GGUF::NgramDraft.lag_ratio(ids, 8)
 end
 
+def ascii_alpha?(ch : Char) : Bool
+  (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+end
+
+def ascii_digit?(ch : Char) : Bool
+  ch >= '0' && ch <= '9'
+end
+
+def ascii_alnum?(ch : Char) : Bool
+  ascii_alpha?(ch) || ascii_digit?(ch)
+end
+
+def all_chars?(text : String, &block : Char -> Bool) : Bool
+  return false if text.empty?
+  text.each_char do |ch|
+    return false unless yield ch
+  end
+  true
+end
+
+def add_candidate_token_class_features(features : Hash(String, Float64),
+                                       ids : Array(Int32),
+                                       tokenizer : ML::GGUF::Qwen35Tokenizer)
+  return if ids.empty?
+
+  newline = 0
+  single_letter = 0
+  word_like = 0
+  numeric = 0
+  punct_like = 0
+  non_ascii = 0
+
+  ids.each do |id|
+    raw = tokenizer.decode_single(id)
+    newline += 1 if raw.includes?('\n') || raw.includes?('\r')
+    piece = raw.strip
+    if piece.each_char.any? { |ch| ch.ord > 127 }
+      non_ascii += 1
+      next
+    end
+
+    if all_chars?(piece) { |ch| ascii_alpha?(ch) }
+      if piece.size == 1
+        single_letter += 1
+      else
+        word_like += 1
+      end
+    elsif all_chars?(piece) { |ch| ascii_digit?(ch) }
+      numeric += 1
+    elsif !piece.empty? && all_chars?(piece) { |ch| !ascii_alnum?(ch) }
+      punct_like += 1
+    end
+  end
+
+  denom = ids.size.to_f
+  features["candidate_newline_token_ratio"] = newline.to_f / denom
+  features["candidate_single_letter_ratio"] = single_letter.to_f / denom
+  features["candidate_word_like_ratio"] = word_like.to_f / denom
+  features["candidate_numeric_ratio"] = numeric.to_f / denom
+  features["candidate_punct_like_ratio"] = punct_like.to_f / denom
+  features["candidate_non_ascii_ratio"] = non_ascii.to_f / denom
+end
+
 def ngram_router_features(candidates : Array(Int32),
                           generated_before : Int32,
                           match_len : Int32,
@@ -358,7 +421,8 @@ def ngram_router_features(candidates : Array(Int32),
                           ngram_disabled_before : Bool,
                           verify_mode : String,
                           draft_model_id : String,
-                          prompt_category : String) : Hash(String, Float64)
+                          prompt_category : String,
+                          tokenizer : ML::GGUF::Qwen35Tokenizer) : Hash(String, Float64)
   proposed = candidates.size
   features = Hash(String, Float64).new(0.0)
   features["bias"] = 1.0
@@ -369,6 +433,7 @@ def ngram_router_features(candidates : Array(Int32),
   features["ngram_match_ratio"] = ngram_max > 0 ? match_len.clamp(0, ngram_max).to_f / ngram_max : 0.0
   features["ngram_disabled_before"] = ngram_disabled_before ? 1.0 : 0.0
   add_candidate_features(features, candidates)
+  add_candidate_token_class_features(features, candidates, tokenizer)
   features["kind=ngram"] = 1.0
   features["verify=#{verify_mode}"] = 1.0
   features["draft=#{draft_model_id}"] = 1.0
@@ -378,10 +443,12 @@ end
 
 def ngram_candidate_feature_dump(candidates : Array(Int32),
                                  match_len : Int32,
-                                 ngram_max : Int32) : Hash(String, Float64)
+                                 ngram_max : Int32,
+                                 tokenizer : ML::GGUF::Qwen35Tokenizer) : Hash(String, Float64)
   features = Hash(String, Float64).new(0.0)
   features["ngram_match_ratio"] = ngram_max > 0 ? match_len.clamp(0, ngram_max).to_f / ngram_max : 0.0
   add_candidate_features(features, candidates)
+  add_candidate_token_class_features(features, candidates, tokenizer)
   features
 end
 
@@ -394,6 +461,7 @@ private class CycleDump
   property kind : String
   property policy : String
   property verify_mode : String
+  property prompt_category : String = ""
   property position : Int32
   property generated_before : Int32
   property generated_count : Int32
@@ -579,7 +647,7 @@ while generated_ids.size < n_gen
                 else
                   ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
                 end
-    cycle_candidate_features = ngram_candidates.empty? ? nil : ngram_candidate_feature_dump(ngram_candidates, match_len, ngram_max)
+    cycle_candidate_features = ngram_candidates.empty? ? nil : ngram_candidate_feature_dump(ngram_candidates, match_len, ngram_max, tok)
     if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       ngram_candidates = [] of Int32
@@ -587,7 +655,7 @@ while generated_ids.size < n_gen
     if router_model && !ngram_candidates.empty?
       cycle_router_candidate_count = ngram_candidates.size
       score = router_model.not_nil!.score(ngram_router_features(
-        ngram_candidates, generated_ids.size, match_len, ngram_max, ngram_disabled, verify_mode, draft_model_id, prompt_category))
+        ngram_candidates, generated_ids.size, match_len, ngram_max, ngram_disabled, verify_mode, draft_model_id, prompt_category, tok))
       cycle_router_score = score
       ngram_router_checks += 1
       ngram_router_score_sum += score
@@ -759,6 +827,7 @@ while generated_ids.size < n_gen
         record.target_replay_ms = target_replay_ms - cycle_target_replay0
         record.router_score = cycle_router_score
         record.router_candidate_count = cycle_router_candidate_count
+        record.prompt_category = prompt_category
         record.candidate_features = cycle_candidate_features
         cycle_dumps << record
       end
@@ -820,6 +889,7 @@ while generated_ids.size < n_gen
       record.commit_ms = commit_ms - cycle_commit0
       record.router_score = cycle_router_score
       record.router_candidate_count = cycle_router_candidate_count
+      record.prompt_category = prompt_category
       record.candidate_features = cycle_candidate_features
       cycle_dumps << record
     end
@@ -864,6 +934,7 @@ while generated_ids.size < n_gen
         draft_resync_ms - cycle_draft_resync0,
         (Time.instant - cycle_wall0).total_milliseconds)
       record.commit_ms = commit_ms - cycle_commit0
+      record.prompt_category = prompt_category
       cycle_dumps << record
     end
     next
@@ -1222,6 +1293,7 @@ while generated_ids.size < n_gen
       draft_resync_ms - cycle_draft_resync0,
       (Time.instant - cycle_wall0).total_milliseconds)
     record.commit_ms = commit_ms - cycle_commit0
+    record.prompt_category = prompt_category
     cycle_dumps << record
   end
 

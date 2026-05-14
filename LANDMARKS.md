@@ -11651,3 +11651,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful pivot is not another immediate threshold, but making accepted and rejected chunk shapes comparable in the same cycle schema.
 - maieutic: If a false-positive and true-positive chunk share all current features, that is evidence to add semantic/context features rather than another shape rule.
 - adversary: These dumps are observability, not a speed win. Promotion still requires held-out router gates with parity, acceptance, and wall timing.
+
+**decision_update_194:** Added candidate token-class ratios to both learned-router inputs and speculative cycle dumps, and added `prompt_category` to cycle dumps. The new period-4 gate confirms a useful boundary: pure shape features cannot distinguish all false positives, but cheap decoded-token classes can provide the missing context without dumping raw token IDs.
+
+**evidence_update_194:**
+- claim: "Shape-only period features are insufficient for period-4 n-gram routing."
+  source: local `/tmp/qwen35_period4_gate`, 9B target, `tokens=16`, policies `target_only,ngram_target_only_risk_min8,ngram_target_only_probe2` -> `p4_letters_xyzw` accepted `1/15` and regressed (`29.63ms/tok` risk-min8 vs `20.68ms/tok` target), while `p4_colors`, `p4_dirs`, and `p4_nums` each accepted `15/15` and ran around `9.6-10.0ms/tok`; all four period-4 proposal rows shared the same old shape features (`unique=0.267`, `pair=0.286`, `entropy=0.509`, `period=0.5`, `lag2=0`, `lag4=1`, `lag8=1`)
+  verified_at: 2026-05-14
+  decay_trigger: tokenizer/model changes, n-gram candidate shape features, prompt suite, or risk gate changes
+- claim: "Token-class candidate features separate the observed bad period-4 letter cycle from useful word-like period-4 cycles."
+  source: local `/tmp/qwen35_token_class_period4_gate` with the updated runner -> bad `p4_letters_xyzw` record has `candidate_single_letter_ratio=1.0`, `candidate_word_like_ratio=0.0`, `accepted=1/15`; useful `p4_colors`, `p4_dirs`, and `p4_nums` records have `candidate_single_letter_ratio=0.0`, `candidate_word_like_ratio=1.0`, `accepted=15/15`
+  verified_at: 2026-05-14
+  decay_trigger: token decoder, token-class feature code, tokenizer vocabulary, prompt suite, or router model changes
+- claim: "The updated instrumentation builds and keeps focused n-gram specs green."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_token_class_build crystal build bin/qwen35_speculative_accept.cr --no-codegen` -> exit 0; local `crystal spec spec/ngram_draft_spec.cr` -> `21 examples, 0 failures`; release Metal build `/tmp/qwen35_spec_accept_token_class` -> exit 0
+  verified_at: 2026-05-14
+  decay_trigger: CycleDump schema, Crystal compiler, Metal link flags, tokenizer decode, or n-gram spec changes
+
+**quadrumvirate_update_194:**
+- cassandra: A single-letter skip rule would overfit unless tested on code/math prompts; keep this as a feature, not a hard policy.
+- daedalus: The frame shifts from "more n-gram shape thresholds" to "cheap semantic/token-class features plus held-out router scoring."
+- maieutic: The model did not reject period-4 repetition generally; it rejected a particular single-letter pattern. Treating that as a period rule would be the wrong abstraction.
+- adversary: `candidate_word_like_ratio` is still shallow semantics. It must be tested on code identifiers, variables, and acronym-heavy prompts before promotion.
