@@ -11629,3 +11629,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The path is not "add more verifier modes"; it is "route cheap exact copy spans and otherwise avoid speculative overhead."
 - maieutic: A speed win on repeats does not generalize to non-repeat prompts; the router must fail closed.
 - adversary: Do not promote staged/replay or learned category routing from this gate. Require a larger held-out suite before changing product defaults beyond the already opt-in auto profile.
+
+**decision_update_193:** Added non-secret numeric candidate-shape observability to n-gram speculative cycle dumps. The goal is to make router false positives falsifiable before adding another rule or learned gate: cycle JSONL now carries `candidate_features` for proposed n-gram chunks, while raw token IDs remain behind the existing explicit dump-token opt-in.
+
+**evidence_update_193:**
+- claim: "`candidate_features` is present on n-gram proposal records and does not require raw token IDs."
+  source: local `/tmp/qwen35_candidate_features_repeat.jsonl`, prompt `alpha beta gamma alpha beta gamma alpha beta gamma alpha beta`, `tokens=16`, `--ngram-target-only --ngram-risk-gate --ngram-min-candidates 8` -> `accepted=16/16`, `8.57ms/tok`, one `policy=ngram` record with `candidate_features` including `ngram_match_ratio`, `candidate_unique_ratio`, `candidate_pair_unique_ratio`, entropy/run/period/lag ratios
+  verified_at: 2026-05-14
+  decay_trigger: cycle dump schema, n-gram risk path, dump-token policy, or speculative accept loop changes
+- claim: "The same schema captures bad n-gram proposals for later router analysis."
+  source: local `/tmp/qwen35_candidate_features_xyz.jsonl`, synthetic prompt `x y z w x y z w x y`, same flags -> n-gram proposal `accepted=1/15`, `28.36ms/tok` vs target `20.55ms/tok`, bad `policy=ngram` record includes `candidate_features` with `lag4=1.0`, `lag8=1.0`, and high period signal
+  verified_at: 2026-05-14
+  decay_trigger: tokenizer/model changes, prompt suite changes, n-gram candidate feature calculation, or verifier accounting changes
+- claim: "The instrumentation builds and keeps focused n-gram specs green."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_candidate_features_build crystal build bin/qwen35_speculative_accept.cr --no-codegen` -> exit 0; local `crystal spec spec/ngram_draft_spec.cr` -> `21 examples, 0 failures`; release Metal build `/tmp/qwen35_spec_accept_candidate_features` -> exit 0
+  verified_at: 2026-05-14
+  decay_trigger: Crystal compiler, Metal link flags, n-gram spec changes, or serialization schema changes
+
+**quadrumvirate_update_193:**
+- cassandra: The previous router branch was under-instrumented; adding rules without feature dumps risks overfitting anecdotes.
+- daedalus: The useful pivot is not another immediate threshold, but making accepted and rejected chunk shapes comparable in the same cycle schema.
+- maieutic: If a false-positive and true-positive chunk share all current features, that is evidence to add semantic/context features rather than another shape rule.
+- adversary: These dumps are observability, not a speed win. Promotion still requires held-out router gates with parity, acceptance, and wall timing.

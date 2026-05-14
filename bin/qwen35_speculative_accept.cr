@@ -376,6 +376,15 @@ def ngram_router_features(candidates : Array(Int32),
   features
 end
 
+def ngram_candidate_feature_dump(candidates : Array(Int32),
+                                 match_len : Int32,
+                                 ngram_max : Int32) : Hash(String, Float64)
+  features = Hash(String, Float64).new(0.0)
+  features["ngram_match_ratio"] = ngram_max > 0 ? match_len.clamp(0, ngram_max).to_f / ngram_max : 0.0
+  add_candidate_features(features, candidates)
+  features
+end
+
 private class CycleDump
   include JSON::Serializable
 
@@ -413,6 +422,7 @@ private class CycleDump
   property expected_gain_ms : Float64?
   property router_score : Float64?
   property router_candidate_count : Int32 = 0
+  property candidate_features : Hash(String, Float64)?
 
   def initialize(@prompt_hash : String,
                  @target_model : String,
@@ -546,6 +556,7 @@ while generated_ids.size < n_gen
   cycle_proposal_ms = 0.0
   cycle_router_score = nil.as(Float64?)
   cycle_router_candidate_count = 0
+  cycle_candidate_features = nil.as(Hash(String, Float64)?)
 
   if !target_only && ngram_enabled && !ngram_disabled
     proposal0 = Time.instant
@@ -568,6 +579,7 @@ while generated_ids.size < n_gen
                 else
                   ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
                 end
+    cycle_candidate_features = ngram_candidates.empty? ? nil : ngram_candidate_feature_dump(ngram_candidates, match_len, ngram_max)
     if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       ngram_candidates = [] of Int32
@@ -747,6 +759,7 @@ while generated_ids.size < n_gen
         record.target_replay_ms = target_replay_ms - cycle_target_replay0
         record.router_score = cycle_router_score
         record.router_candidate_count = cycle_router_candidate_count
+        record.candidate_features = cycle_candidate_features
         cycle_dumps << record
       end
       next
@@ -807,6 +820,7 @@ while generated_ids.size < n_gen
       record.commit_ms = commit_ms - cycle_commit0
       record.router_score = cycle_router_score
       record.router_candidate_count = cycle_router_candidate_count
+      record.candidate_features = cycle_candidate_features
       cycle_dumps << record
     end
     next
