@@ -11517,3 +11517,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This shifts the router from "one classifier threshold" to "economics by chunk class": medium chunks and long chunks have different false-positive costs.
 - maieutic: The evidence is still small and synthetic; the threshold is an experiment knob, not a product default.
 - adversary: `repeat_xyz4` later accepting `10/10` shows that skipping one bad long chunk does not mean disabling the prompt category; the router should reassess after each exact fallback step.
+
+**decision_update_187:** Added reusable sweep alias `ngram_target_only_risk_min8_model_long08` for the long-threshold learned n-gram policy. The alias combines `--ngram --ngram-risk-gate --ngram-target-only --ngram-min-candidates 8`, the selected router model, and `--router-long-threshold 0.8 --router-long-min 16`. This keeps the long-threshold experiment repeatable without changing product auto behavior.
+
+**evidence_update_187:**
+- claim: "The long-threshold route survives a small adversarial stress gate without new rejected chunks."
+  source: local `/tmp/qwen35_router_long_threshold_stress20_gate.log`, 20 prompts across facts, natural repeats, uppercase/mixed synthetic repeats, code, math, chat, template -> model policy average `17.93ms/tok` with `100%` acceptance vs target-only `19.55ms/tok`; n-gram cycles accepted `54/54`; code/math/chat/template and synthetic uppercase/mixed repeats mostly fail-closed `0/0`
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, router model, long threshold, n-gram risk gate, or target output distribution changes
+- claim: "The same stress gate preserves useful fact/repeat chunks."
+  source: same gate -> `fact_spain_capital` and `fact_poland_capital` accepted `11/11` around `14.0ms/tok`; `repeat_dog_cat` and `repeat_sun_moon` accepted `16/16` around `8.3ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: prompt mix, candidate generation, router threshold, or verifier timing changes
+- claim: "The reusable alias builds and is selectable by the sweep harness."
+  source: local `crystal build bin/qwen35_speculative_sweep.cr --no-codegen`; release build `/tmp/qwen35_spec_sweep_router_long_alias`; smoke `/tmp/qwen35_router_long_alias_smoke.log` selected `ngram_target_only_risk_min8_model_long08` and produced `2/2` cycle dumps
+  verified_at: 2026-05-14
+  decay_trigger: sweep policy list, CLI option names, router model requirement, or harness argument forwarding changes
+
+**quadrumvirate_update_187:**
+- cassandra: The policy is now strong enough as a research sweep baseline, not as a product default.
+- daedalus: The next improvement should broaden training/eval data and route classes, not hand-tune more shape thresholds.
+- maieutic: `100%` acceptance on 20 synthetic prompts is not broad product evidence; it is a regression guard for the current branch.
+- adversary: Keep the explicit model/threshold knobs. Do not bake `0.8` into `qwen35_generate auto` without a larger held-out suite and same-prompt llama comparison.
