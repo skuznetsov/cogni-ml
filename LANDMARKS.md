@@ -11291,3 +11291,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The bigger frame remains verifier/body economics: avoid bad verifier work, shrink draft work, or batch target verify more effectively.
 - maieutic: The branch ledger may still matter at larger gamma/longer runs/reject-heavy neural paths; this smoke only bounds the short accepted/repeat path.
 - adversary: Do not demote branch-ledger work completely; require a larger reject-heavy mixed suite before deciding it is refuted.
+
+**decision_update_176:** Re-ran the `ngram_target_only_risk_min16` category-balanced adversary gate with `tokens=16`, because the earlier `tokens=12` gate was invalid for n-gram speed evidence under `--ngram-min-candidates 16`. The corrected gate confirms the policy fail-closes on non-repeat categories: it proposes no n-gram chunks on the tested fact/code/math/chat/template prompts. Its apparent wins versus neural default mostly come from avoiding bad self-spec cycles and falling back to exact target decode, not from n-gram acceleration.
+
+**evidence_update_176:**
+- claim: "The corrected non-repeat category gate gives no n-gram speed claim for `ngram_target_only_risk_min16`."
+  source: local category gate `/tmp/qwen35_ngram_risk_min16_category_t16_gate/all.log`, using `/tmp/qwen35_spec_accept_risk_tweak`, `tokens=16`, `ngram_gamma=16`, `ngram_min=2`, `ngram_max=8`, `verify=chunk-inplace`, categories `fact/code/math/chat/template`, two prompts each -> every risk/min16 row reported `accepted/proposed=0/0`; paired ratios versus neural default were fact `0.965x`, code `1.107x`, math `0.864x`, chat `0.814x`, template `0.828x`
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite composition, n-gram min-candidates threshold, risk gate thresholds, neural default policy, or Metal verifier timing changes
+- claim: "The useful non-repeat behavior of risk/min16 is fail-closed fallback, not proposal acceleration."
+  source: same gate -> cycle summaries for risk/min16 are all `ngram_target_only/target_only` with `proposed=0`, while neural default rows show costly neural cycles with low/partial acceptance in code/math/chat/template; no exact n-gram chunk was exercised outside repeat-like prompts
+  verified_at: 2026-05-14
+  decay_trigger: candidate generator, prompt distribution, or fallback policy changes
+
+**quadrumvirate_update_176:**
+- cassandra: A conservative n-gram shape gate can look faster than neural default on broad prompts simply by not speculating; this is useful product behavior but weak speed evidence.
+- daedalus: The next speed lever is a policy router that chooses among exact target fallback, neural/self-draft, and n-gram chunks by expected cycle economics, not a stronger n-gram threshold alone.
+- maieutic: `speedup vs default` is not the same as `n-gram acceleration`; when `proposed=0`, the evidence supports "avoid bad work" only.
+- adversary: Keep `ngram_target_only_risk_min16` as opt-in/fail-closed. Do not promote it as a broad default without a larger prompt gate and comparison against plain exact target, not just neural default.
