@@ -11421,3 +11421,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Shift the remaining size-8 problem to router context: prompt category, local generated context, or a learned expected-gain score.
 - maieutic: A chunk can be high-diversity and still correct; uniqueness alone is not a risk signal.
 - adversary: Do not over-promote the medium lag-8 rule as complete. It is a partial product improvement plus a clearer boundary for the next router.
+
+**decision_update_183:** Added a research-only category bridge for learned n-gram expected-gain routing. `bin/qwen35_speculative_accept.cr` now accepts `--prompt-category` / `QWEN35_SPEC_PROMPT_CATEGORY` and emits `category=<name>` into n-gram router features. `bin/qwen35_speculative_sweep.cr` derives categories from prompt names (`fact_*`, `repeat_*`, `templ_*` -> `template`, etc.) and adds the `ngram_target_only_risk_min8_model` sweep policy. This validates the router-context frame from update 182 without changing product `qwen35_generate auto`.
+
+**evidence_update_183:**
+- claim: "A category-aware learned router can reject the known bad size-8 chat chunk while preserving the known good size-8 template chunk."
+  source: local `/tmp/qwen35_router_category_runtime_gate.log`, runner `/tmp/qwen35_spec_accept_router_cat`, policy `ngram_target_only_risk_min8_model`, model `/tmp/qwen35_medium_router_dataset/model.json`, `tokens=16`, `ngram_gamma=16`, `ngram_min=2`, `ngram_max=8`, `verify=chunk-inplace` -> `chat_recipe` selected `0/0` and measured `20.51ms/tok` vs ungated min8 `0/8` at `25.80ms/tok`; `templ_benchmark_metal_gemv` kept `8/8` at `16.89ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: router feature set, prompt labels, model training data, n-gram risk gate, verifier timing, or product auto integration changes
+- claim: "The same runtime bridge preserves useful fact/repeat medium chunks on this focused gate."
+  source: same gate -> `fact_france_capital` kept `11/11` at `14.14ms/tok`; `repeat_alpha4` kept `16/16` at `8.13ms/tok`; average `ngram_target_only_risk_min8_model` was `16.34ms/tok` with `100%` acceptance over six prompts, versus target-only `19.34ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite size, router threshold/model, category derivation, or target model output distribution changes
+- claim: "The bridge compiles and the sweep policy is executable."
+  source: local `crystal build bin/qwen35_speculative_accept.cr --no-codegen`, `crystal build bin/qwen35_speculative_sweep.cr --no-codegen`; release builds `/tmp/qwen35_spec_accept_router_cat` and `/tmp/qwen35_spec_sweep_router_cat`; focused runtime sweep completed with `24/24` cycle JSONL dumps in `/tmp/qwen35_router_category_runtime_gate`
+  verified_at: 2026-05-14
+  decay_trigger: harness CLI options, router JSON schema, Crystal compiler/runtime, or Metal bridge changes
+
+**quadrumvirate_update_183:**
+- cassandra: Category/context is a useful signal for the remaining size-8 ambiguity, but the current model is tiny and prompt-label-derived.
+- daedalus: This moves the problem from brittle hand-coded shape rules to learned expected-gain routing, while keeping exact verification as the final correctness boundary.
+- maieutic: Category labels are an experimental proxy for semantic context; product auto needs either reliable prompt classification or richer local/generated-context features before promotion.
+- adversary: Do not claim broad generality from this six-prompt gate. The result only justifies a larger held-out router suite and keeps `qwen35_generate auto` unchanged.

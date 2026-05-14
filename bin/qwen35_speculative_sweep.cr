@@ -122,6 +122,18 @@ def safe_name(name : String) : String
   safe.empty? ? "prompt" : safe
 end
 
+def prompt_category(name : String) : String
+  head = name.split('_', 2)[0]? || ""
+  case head
+  when "", "prompt"
+    "unknown"
+  when "templ"
+    "template"
+  else
+    head
+  end
+end
+
 def write_prompt_manifest(dir : String, prompts : Array(PromptCase), include_text : Bool)
   Dir.mkdir_p(dir)
   path = File.join(dir, "prompt_manifest.jsonl")
@@ -153,7 +165,7 @@ prompts = [
   PromptCase.new("quick_brown_fox", "The quick brown fox"),
   PromptCase.new("code_fibonacci", "def fibonacci(n):"),
 ]
-policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "router16", "router16_staged", "fixed16", "staged16", "hybrid", "target_only", "ngram", "ngram_risk", "ngram_replay", "ngram_replay_risk", "ngram_target_only", "ngram_target_only_min8", "ngram_target_only_probe1", "ngram_target_only_probe2", "ngram_target_only_risk", "ngram_target_only_risk_min8", "ngram_target_only_risk_min12", "ngram_target_only_risk_min16", "ngram_target_only_staged", "ngram_target_only_staged_risk", "ngram_target_only_staged_replay_risk", "ngram_target_only_replay_risk", "ngram_bootstrap32_s2", "ngram_router16", "ngram_router16_risk", "ngram_router16_staged", "ngram_router16_staged_risk", "ngram_router16_staged_model", "ngram_fixed16", "ngram_staged16", "ngram_guard"]
+policy_names = ["default", "guard", "bootstrap32", "bootstrap32_s2", "bootstrap32_guard", "router16", "router16_staged", "fixed16", "staged16", "hybrid", "target_only", "ngram", "ngram_risk", "ngram_replay", "ngram_replay_risk", "ngram_target_only", "ngram_target_only_min8", "ngram_target_only_probe1", "ngram_target_only_probe2", "ngram_target_only_risk", "ngram_target_only_risk_min8", "ngram_target_only_risk_min8_model", "ngram_target_only_risk_min12", "ngram_target_only_risk_min16", "ngram_target_only_staged", "ngram_target_only_staged_risk", "ngram_target_only_staged_replay_risk", "ngram_target_only_replay_risk", "ngram_bootstrap32_s2", "ngram_router16", "ngram_router16_risk", "ngram_router16_staged", "ngram_router16_staged_risk", "ngram_router16_staged_model", "ngram_fixed16", "ngram_staged16", "ngram_guard"]
 extra_args = [] of String
 dump_cycles_dir = ENV["QWEN35_SPEC_SWEEP_DUMP_CYCLES_DIR"]?
 dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
@@ -167,7 +179,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--gamma N", "Initial speculative gamma (default: 4)") { |v| gamma = v.to_i }
   p.on("--max-gamma N", "Maximum adaptive gamma (default: 32)") { |v| max_gamma = v.to_i }
   p.on("--reps N", "Repeat each policy/prompt this many times (default: 1)") { |v| reps = v.to_i }
-  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,router16,router16_staged,fixed16,staged16,hybrid,target_only,ngram,ngram_risk,ngram_replay,ngram_replay_risk,ngram_target_only,ngram_target_only_min8,ngram_target_only_probe1,ngram_target_only_probe2,ngram_target_only_risk,ngram_target_only_risk_min8,ngram_target_only_risk_min12,ngram_target_only_risk_min16,ngram_target_only_staged,ngram_target_only_staged_risk,ngram_target_only_staged_replay_risk,ngram_target_only_replay_risk,ngram_bootstrap32_s2,ngram_router16,ngram_router16_risk,ngram_router16_staged,ngram_router16_staged_risk,ngram_router16_staged_model,ngram_fixed16,ngram_staged16,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
+  p.on("--policies LIST", "Comma-separated policies: default,guard,bootstrap32,bootstrap32_s2,bootstrap32_guard,router16,router16_staged,fixed16,staged16,hybrid,target_only,ngram,ngram_risk,ngram_replay,ngram_replay_risk,ngram_target_only,ngram_target_only_min8,ngram_target_only_probe1,ngram_target_only_probe2,ngram_target_only_risk,ngram_target_only_risk_min8,ngram_target_only_risk_min8_model,ngram_target_only_risk_min12,ngram_target_only_risk_min16,ngram_target_only_staged,ngram_target_only_staged_risk,ngram_target_only_staged_replay_risk,ngram_target_only_replay_risk,ngram_bootstrap32_s2,ngram_router16,ngram_router16_risk,ngram_router16_staged,ngram_router16_staged_risk,ngram_router16_staged_model,ngram_fixed16,ngram_staged16,ngram_guard; *_guard explicitly enables research-only guarded verifier") do |v|
     policy_names = v.split(',').map(&.strip).reject(&.empty?)
   end
   p.on("--prompt TEXT", "Add one prompt; can be passed multiple times. Optional NAME::TEXT gives a stable dataset label.") do |v|
@@ -228,6 +240,7 @@ policies = {
   "ngram_target_only_probe2"             => Policy.new("ngram_target_only_probe2", ["--ngram", "--ngram-target-only", "--ngram-probe-gate", "2", "--ngram-probe-min", "3"], {} of String => String),
   "ngram_target_only_risk"               => Policy.new("ngram_target_only_risk", ["--ngram", "--ngram-risk-gate", "--ngram-target-only"], {} of String => String),
   "ngram_target_only_risk_min8"          => Policy.new("ngram_target_only_risk_min8", ["--ngram", "--ngram-risk-gate", "--ngram-target-only", "--ngram-min-candidates", "8"], {} of String => String),
+  "ngram_target_only_risk_min8_model"    => Policy.new("ngram_target_only_risk_min8_model", ["--ngram", "--ngram-risk-gate", "--ngram-target-only", "--ngram-min-candidates", "8"] + model_args, {} of String => String),
   "ngram_target_only_risk_min12"         => Policy.new("ngram_target_only_risk_min12", ["--ngram", "--ngram-risk-gate", "--ngram-target-only", "--ngram-min-candidates", "12"], {} of String => String),
   "ngram_target_only_risk_min16"         => Policy.new("ngram_target_only_risk_min16", ["--ngram", "--ngram-risk-gate", "--ngram-target-only", "--ngram-min-candidates", "16"], {} of String => String),
   "ngram_target_only_staged"             => Policy.new("ngram_target_only_staged", ["--ngram", "--ngram-target-only", "--verify", "staged", "--stage-gate", "4", "--ngram-stage-min", "8"], {} of String => String),
@@ -279,6 +292,7 @@ def run_one(runner : String,
   ]
   args.concat(policy.args)
   args.concat(extra_args)
+  args.concat(["--prompt-category", prompt_category(prompt.name)])
   cycle_dump_path = nil.as(String?)
   if dir = dump_cycles_dir
     Dir.mkdir_p(dir)
