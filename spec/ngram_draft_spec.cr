@@ -105,6 +105,23 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 5).should be_true
   end
 
+  it "keeps medium chunks with strong lag-eight continuation" do
+    ids = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3]
+
+    ML::GGUF::NgramDraft.lag_ratio(ids, 8).should eq(1.0)
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 2).should be_false
+  end
+
+  it "risk-gates medium chunks without strong lag-eight continuation" do
+    code_like = [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4]
+    math_like = [1, 2, 3, 4, 5, 6, 7, 8, 9, 2, 10, 11]
+
+    ML::GGUF::NgramDraft.lag_ratio(code_like, 8).should be < 0.75
+    ML::GGUF::NgramDraft.risky_candidate_shape?(code_like, min_size: 16, match_len: 2).should be_true
+    ML::GGUF::NgramDraft.lag_ratio(math_like, 8).should be < 0.75
+    ML::GGUF::NgramDraft.risky_candidate_shape?(math_like, min_size: 16, match_len: 2).should be_true
+  end
+
   it "risk-gates small-period prefixes that overrun into a different tail" do
     ids = [15, 13, 15, 13, 15, 13, 16, 198, 220, 471, 803, 25, 13053, 198]
 

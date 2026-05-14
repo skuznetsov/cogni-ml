@@ -11381,3 +11381,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Move to chunk-shape/category/economics classification: allow medium fact-like periodic chunks, reject code/math/template low-accept tails, keep high-confidence repeats.
 - maieutic: The relevant target is expected wall versus exact target-only, not acceptance rate alone; a `100%` fail-closed row can still be slower through proposal overhead/noise.
 - adversary: This is still a small handpicked gate. The conclusion is strong only for rejecting global-threshold promotion, not for locking final classifier rules.
+
+**decision_update_181:** Promoted the first medium-chunk risk feature into `NgramDraft.risky_candidate_shape?`. For candidate chunks with size `9..15` and weak suffix evidence (`match_len < 5`), require strong lag-8 continuation (`lag8 >= 0.75`). This keeps medium prompt-echo/fact chunks such as France/Japan while rejecting code/math/template tails that previously paid bulk verification and rejected early. Existing compact fully-periodic chunks with stronger match evidence remain allowed.
+
+**evidence_update_181:**
+- claim: "The medium lag-8 risk rule preserves useful medium chunks and rejects the sampled bad tails."
+  source: local token-id feature probe `/tmp/qwen35_ngram_medium_feature_probe` -> France `11/11` chunk had `match_len=2`, `lag8=1.0`, expected gain `+90.2ms`; bad code/math chunks had `match_len=2`, `lag8=0..0.25`, expected gain around `-115..-124ms`; focused `crystal spec spec/ngram_draft_spec.cr` -> `21 examples, 0 failures`
+  verified_at: 2026-05-14
+  decay_trigger: candidate feature extraction, risk rule thresholds, prompt distribution, or n-gram recursive generation changes
+- claim: "The rule improves the targeted policy gate without losing clean repeat/fact wins."
+  source: local `/tmp/qwen35_medium_risk_validation_gate/all.log`, runner `/tmp/qwen35_spec_accept_medium_risk`, prompts France/Japan/code/math/template/repeat/csv, `tokens=16` -> `ngram_target_only_risk_min8` averaged `16.51ms/tok` with `100%` acceptance versus target-only `19.21ms/tok`; France/Japan kept `11/11`, repeat kept `16/16`, code/math/template/csv produced `0/0` fail-closed rows
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, Metal verifier timing, risk thresholds, or target model changes
+- claim: "The product auto path benefits from the same rule with current min8 default."
+  source: local `/tmp/qwen35_generate_medium_risk_smoke/all.log`, `QWEN35_DECODE_POLICY=auto`, `QWEN35_NGRAM_MIN_CANDIDATES=8`, `QWEN35_NGRAM_MIN=2`, `QWEN35_NGRAM_GAMMA=16` -> repeat `16/16` at `8.14ms/tok`, France `11/11` at `14.14ms/tok`, `def fibonacci(n : Int32)` `0/0` at `19.41ms/tok` with `disabled=true`, template `0/0` at `19.51ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: qwen35_generate auto defaults, risk gate implementation, or prompt/model output distribution changes
+
+**quadrumvirate_update_181:**
+- cassandra: The rule is intentionally conservative and likely improves the current auto profile by removing known medium bad tails.
+- daedalus: This is a feature-level gate, not another global threshold: use continuation structure (`lag8`) plus suffix evidence (`match_len`) to choose bulk verify vs exact target fallback.
+- maieutic: The rule assumes useful medium chunks have strong lag-8 continuation; larger prompt gates should search for false negatives.
+- adversary: Keep `QWEN35_NGRAM_RISK_GATE` as the product safety switch; do not remove the ability to disable or retune this heuristic.
