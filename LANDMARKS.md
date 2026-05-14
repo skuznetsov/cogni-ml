@@ -11443,3 +11443,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This moves the problem from brittle hand-coded shape rules to learned expected-gain routing, while keeping exact verification as the final correctness boundary.
 - maieutic: Category labels are an experimental proxy for semantic context; product auto needs either reliable prompt classification or richer local/generated-context features before promotion.
 - adversary: Do not claim broad generality from this six-prompt gate. The result only justifies a larger held-out router suite and keeps `qwen35_generate auto` unchanged.
+
+**decision_update_184:** Larger router validation says the category bridge is useful infrastructure, but the current learned n-gram router is not product-ready. A broad 28-prompt held-out suite produced no n-gram chunks under the current risk/min8 policy, so it only validates fail-closed overhead. A targeted 12-prompt held-out suite preserved the intended fact/repeat wins, but exposed two false-positive classes: an unnatural single-letter repeat (`repeat_xyz4`, accepted `2/16`) and a code continuation (`code_loop_crystal`, accepted `0/8`) for the old category model. Retraining a combined no-category/candidate-feature model fixes the code/math false positives in this small fit check, but still misses `repeat_xyz4`; adding `probe2` does not solve reject-at-2 after a two-token accepted prefix and slows accepted chunks. Do not productize learned n-gram gating yet.
+
+**evidence_update_184:**
+- claim: "Broad held-out category validation does not show router harm, but also does not exercise positive n-gram recall."
+  source: local `/tmp/qwen35_router_category_heldout28_gate.log`, 28 prompts excluding prior n-gram training rows, policies `target_only,ngram_target_only_risk_min8,ngram_target_only_risk_min8_model,ngram_target_only_risk_min16`, `tokens=16` -> all n-gram policies reported `0/0` proposed/accepted on every prompt; averages stayed target-like (`target_only 19.81ms/tok`, model min8 `19.74ms/tok`)
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, n-gram policy, model outputs, or router candidate generation changes
+- claim: "Targeted held-out validation keeps several useful wins but exposes false positives in the old category model."
+  source: local `/tmp/qwen35_router_category_targeted12_gate.log` -> `fact_germany_capital` and `fact_italy_capital` kept `11/11` at `~13.7ms/tok`; `repeat_red_blue` and `repeat_one_two` kept `16/16` at `~8.2-8.3ms/tok`; old model still let `repeat_xyz4` through with `2/16` at `26.31ms/tok` and `code_loop_crystal` through with `0/8` at `25.95ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: router model, candidate features, prompt categories, or risk gate changes
+- claim: "A combined candidate-feature model can fit some new negatives, but not the repeat-xyz failure."
+  source: local combined dataset `/tmp/qwen35_router_combined_dataset/rows.jsonl` built from prior, broad-heldout, and targeted gates; `model_no_category.json` training log -> holdout `acc=1.000 precision=1.000 recall=1.000` on only 8 prompt-heldout n-gram rows; runtime fit check `/tmp/qwen35_router_combined_nocat_targeted12_fit_gate.log` -> skips `code_loop_crystal` and `math_integral` (`0/0`) while preserving Germany/Italy and red/blue/one/two, but still accepts `repeat_xyz4 2/16`
+  verified_at: 2026-05-14
+  decay_trigger: dataset growth, train/holdout split, feature set, or threshold changes
+- claim: "Always applying probe2 is not the missing fix."
+  source: local `/tmp/qwen35_router_targeted12_probe2_gate.log` with `--ngram-probe-gate 2 --ngram-probe-min 8` -> model still accepts `repeat_xyz4 2/16` at `26.71ms/tok`; accepted fact chunks slow from `~13.7ms/tok` to `~15.8-16.2ms/tok`, and accepted repeats slow from `~8.2ms/tok` to `~10.1-10.2ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: verifier staging/probe implementation, prompt mix, or chunk verifier cost changes
+
+**quadrumvirate_update_184:**
+- cassandra: Learned gating is promising for code/math/chat negatives, but repeat-like prompts need a stronger semantic or model-confidence signal than category and current shape features.
+- daedalus: The bad `repeat_xyz4` case reframes the issue: not all syntactic repeats are model-likely continuations. We need either target-side cheap confidence, calibrated prefix probing beyond two tokens, or a semantic/naturalness feature.
+- maieutic: A positive category (`repeat`) is not enough evidence that a chunk is valuable; the model may stop the pattern after a short prefix.
+- adversary: Do not add a one-off uppercase-letter rule. It would overfit the counterexample and not solve the general "syntactic repeat vs model-likely repeat" distinction.
