@@ -11469,3 +11469,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The bad `repeat_xyz4` case reframes the issue: not all syntactic repeats are model-likely continuations. We need either target-side cheap confidence, calibrated prefix probing beyond two tokens, or a semantic/naturalness feature.
 - maieutic: A positive category (`repeat`) is not enough evidence that a chunk is valuable; the model may stop the pattern after a short prefix.
 - adversary: Do not add a one-off uppercase-letter rule. It would overfit the counterexample and not solve the general "syntactic repeat vs model-likely repeat" distinction.
+
+**decision_update_185:** Added an exact early-mismatch skip for the opt-in n-gram probe path. After a probe prefix is accepted, the target verifier has already advanced `target_next`. If the next remaining n-gram candidate differs from that exact `target_next`, the harness now emits the correction and advances one exact target step instead of launching a bulk suffix verifier that is guaranteed to reject. This is not a heuristic and does not change default n-gram behavior unless `--ngram-probe-gate` is enabled.
+
+**evidence_update_185:**
+- claim: "The early-mismatch skip removes the expensive guaranteed-reject suffix for the `repeat_xyz4` probe2 false positive."
+  source: local before/after targeted probe2 gates with combined no-category model, `tokens=16`, `--ngram-probe-gate 2 --ngram-probe-min 8`: before `/tmp/qwen35_router_targeted12_probe2_gate.log` -> `repeat_xyz4` model row `26.71ms/tok`, accepted `2/16`; after `/tmp/qwen35_router_targeted12_probe2_mismatch_gate.log` -> `repeat_xyz4` model row `19.86ms/tok`, accepted `2/16`
+  verified_at: 2026-05-14
+  decay_trigger: n-gram probe implementation, target verifier state handling, prompt suite, or chunk verifier timing changes
+- claim: "Probe2 plus early-mismatch skip is still not a product default because fully accepted chunks slow down."
+  source: same after gate -> accepted fact chunks `~15.9ms/tok` versus no-probe targeted gate `/tmp/qwen35_router_combined_nocat_targeted12_fit_gate.log` at `~13.9-14.35ms/tok`; accepted repeats `~10.18-10.31ms/tok` versus no-probe `~8.33-8.54ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: accepted verifier chunk cost, probe length, row-batched top1 route, or prompt mix changes
+- claim: "The harness change compiles and focused n-gram specs still pass."
+  source: local `crystal spec spec/ngram_draft_spec.cr` -> `21 examples, 0 failures`; `crystal build bin/qwen35_speculative_accept.cr --no-codegen`; release build `/tmp/qwen35_spec_accept_probe_mismatch`; focused runtime gate completed with `24/24` cycle dumps
+  verified_at: 2026-05-14
+  decay_trigger: Crystal compiler, speculative harness CLI, n-gram verifier control flow, or Metal bridge changes
+
+**quadrumvirate_update_185:**
+- cassandra: This helps exactly the "accepted short prefix then guaranteed bad suffix" pattern.
+- daedalus: The bigger route remains unresolved: avoid needing probe2 on high-confidence accepted repeats, but retain a cheap abort for doubtful chunks.
+- maieutic: The skip is exact because it compares against target-computed `target_next`, not a learned score; the cost is still the probe prefix itself.
+- adversary: Do not promote `--ngram-probe-gate 2` globally from this. It fixes a false-positive wall spike but regresses clean accepted chunks.

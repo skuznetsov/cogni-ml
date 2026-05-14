@@ -617,6 +617,23 @@ while generated_ids.size < n_gen
                     end
         stage_len = Math.min(stage_len, n_gen - generated_ids.size)
         break if stage_len <= 0
+        if probe_ngram && ngram_offset > 0 && ngram_candidates[ngram_offset] != target_next
+          stage_start_pos = cycle_start_pos + ngram_offset
+          correction = target_next
+          generated_ids << correction
+          correction_or_accepted << correction
+          rejected = true
+          reject_index = ngram_offset
+          ngram_disabled = true if ngram_disable_after_reject
+          if generated_ids.size < n_gen
+            tv1 = Time.instant
+            corrected = target_prefill_top1s_for_future(target, [correction], stage_start_pos, target_state, allow_guarded_verifier, generated_ids.size - 1, n_gen)
+            target_verify_ms += (Time.instant - tv1).total_milliseconds
+            target_next = corrected[-1][0] unless corrected.empty?
+          end
+          pos += 1
+          break
+        end
         stage_candidates = ngram_candidates[ngram_offset, stage_len]
         stage_start_pos = cycle_start_pos + ngram_offset
         stage_correction_or_accepted = [] of Int32
