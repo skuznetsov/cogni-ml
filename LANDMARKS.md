@@ -11731,3 +11731,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next useful pivot is not making raw-Q8 exact; it is using exact/margin hints to choose when approximate proposal work is worth verifying.
 - maieutic: Five-layer high-margin acceptance does not generalize to full-model prompt distributions; only the all-layer near-tie falsifier is strong for the risk-gate premise.
 - adversary: Do not promote raw-Q8 to default decode or report a mixed-prompt speedup. Need a faster dataset path or cached oracle to bucket many all-layer states.
+
+**decision_update_198:** Added telemetry-only prefill policy hints to the speculative acceptance harness. The hint is a cheap prior over `ngram`, `neural`, and `target_only`, computed after target/draft prefill from existing data: prompt n-gram continuation shape, prompt token-class ratios, simple code/math/structured markers, and target/draft prefill top1 agreement. It is printed and copied into every cycle JSONL record, but it does not change execution behavior.
+
+**evidence_update_198:**
+- claim: "Prefill policy hint telemetry builds and does not alter the verified greedy output path."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prefill_hint_accept_build3 crystal build bin/qwen35_speculative_accept.cr --no-codegen --error-trace` -> exit 0; `crystal spec spec/ngram_draft_spec.cr` -> `21 examples, 0 failures`; release Metal build `/tmp/qwen35_spec_accept_prefill_hint` -> exit 0; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prefill_hint_dataset_build2 crystal build bin/qwen35_spec_router_dataset.cr --no-codegen --error-trace` -> exit 0
+  verified_at: 2026-05-14
+  decay_trigger: speculative accept loop, CycleDump schema, n-gram feature code, tokenizer decode, or Metal link path changes
+- claim: "The hint distinguishes a clean repeat prompt from a code-like prompt in smoke tests."
+  source: local `/tmp/qwen35_spec_accept_prefill_hint --tokens 8 --ngram --ngram-risk-gate --ngram-target-only --ngram-min-candidates 8 --dump-cycles /tmp/qwen35_prefill_hint_repeat.jsonl \"alpha beta gamma ...\"` -> stdout `policy_hint=ngram score=0.9312 reason=prefill_repeat_candidate_32_match_7`, JSONL first row has `policy_hint=ngram`, positive expected gain; local code prompt with `--target-only --dump-cycles /tmp/qwen35_prefill_hint_code.jsonl` -> stdout/JSONL `policy_hint=target_only score=0.65 reason=code_or_math_marker_without_safe_repeat`
+  verified_at: 2026-05-14
+  decay_trigger: prompt marker heuristics, n-gram hint scoring, tokenizer/model files, or prompt suite changes
+- claim: "Router dataset extraction preserves prefill hint fields for offline evaluation."
+  source: local `crystal run bin/qwen35_spec_router_dataset.cr -- --input /tmp/qwen35_prefill_hint_repeat.jsonl --input /tmp/qwen35_prefill_hint_code.jsonl --out /tmp/qwen35_prefill_hint_rows.jsonl` -> `5` rows; row fields include `policy_hint`, `policy_hint_score`, and `policy_hint_reason`
+  verified_at: 2026-05-14
+  decay_trigger: dataset extractor, CycleDump schema, or router row schema changes
+
+**quadrumvirate_update_198:**
+- cassandra: Telemetry-only is the correct first slice; changing execution now would overfit two smokes.
+- daedalus: This shifts routing from local candidate-shape rules toward prompt/prefill priors plus exact cycle outcomes.
+- maieutic: A "topic" hint is only a prior. It must be judged against actual accepted/proposed/wall rows before becoming a switch.
+- adversary: The current marker heuristic is intentionally shallow and may misclassify code-like math/text. Promotion requires held-out sweep evidence and fail-closed behavior.

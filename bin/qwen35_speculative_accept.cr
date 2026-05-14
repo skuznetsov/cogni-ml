@@ -452,6 +452,99 @@ def ngram_candidate_feature_dump(candidates : Array(Int32),
   features
 end
 
+private record PrefillPolicyHint,
+  policy : String,
+  score : Float64,
+  reason : String,
+  features : Hash(String, Float64)
+
+def prompt_marker_features(prompt : String) : Hash(String, Float64)
+  lower = prompt.downcase
+  features = Hash(String, Float64).new(0.0)
+  code_like = lower.includes?("def ") ||
+              lower.includes?("function ") ||
+              lower.includes?("class ") ||
+              lower.includes?("import ") ||
+              lower.includes?("return ") ||
+              prompt.includes?("```") ||
+              prompt.includes?("=>") ||
+              prompt.includes?("::")
+  math_like = lower.includes?("prove") ||
+              lower.includes?("solve") ||
+              lower.includes?("integral") ||
+              lower.includes?("derivative") ||
+              lower.includes?("equation") ||
+              lower.includes?("sqrt") ||
+              prompt.includes?("=")
+  structured_like = prompt.includes?("{") ||
+                    prompt.includes?("[") ||
+                    prompt.includes?("|") ||
+                    prompt.includes?("- ") ||
+                    prompt.includes?(":") ||
+                    lower.includes?("json") ||
+                    lower.includes?("yaml") ||
+                    lower.includes?("table")
+  features["prefill_marker_code_like"] = code_like ? 1.0 : 0.0
+  features["prefill_marker_math_like"] = math_like ? 1.0 : 0.0
+  features["prefill_marker_structured_like"] = structured_like ? 1.0 : 0.0
+  features["prefill_marker_newline_count_over_16"] = prompt.count('\n').clamp(0, 16).to_f / 16.0
+  features
+end
+
+def prefill_policy_hint(prompt : String,
+                        prompt_ids : Array(Int32),
+                        tokenizer : ML::GGUF::Qwen35Tokenizer,
+                        target_next : Int32,
+                        draft_next : Int32,
+                        ngram_gamma : Int32,
+                        ngram_min : Int32,
+                        ngram_max : Int32,
+                        ngram_recursive : Bool,
+                        ngram_risk_min_size : Int32) : PrefillPolicyHint
+  features = Hash(String, Float64).new(0.0)
+  features["prefill_prompt_tokens_over_128"] = prompt_ids.size.clamp(0, 512).to_f / 128.0
+  features["prefill_prompt_bytes_over_1024"] = prompt.bytesize.clamp(0, 4096).to_f / 1024.0
+  features["prefill_target_draft_top1_agree"] = target_next == draft_next ? 1.0 : 0.0
+
+  prompt_token_features = Hash(String, Float64).new(0.0)
+  add_candidate_token_class_features(prompt_token_features, prompt_ids, tokenizer)
+  prompt_token_features.each do |name, value|
+    features["prefill_prompt_#{name.sub("candidate_", "")}"] = value
+  end
+  prompt_marker_features(prompt).each { |name, value| features[name] = value }
+
+  max_candidates = Math.min(ngram_gamma, 32)
+  ngram_candidates = if prompt_ids.empty?
+                       [] of Int32
+                     else
+                       ML::GGUF::NgramDraft.candidates(prompt_ids, max_candidates, ngram_max, ngram_min, recursive: ngram_recursive)
+                     end
+  match_len = ML::GGUF::NgramDraft.match_len(prompt_ids, ngram_max, ngram_min)
+  ngram_risky = ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
+  features["prefill_ngram_candidates_over_32"] = ngram_candidates.size.clamp(0, 32).to_f / 32.0
+  features["prefill_ngram_match_ratio"] = ngram_max > 0 ? match_len.clamp(0, ngram_max).to_f / ngram_max : 0.0
+  features["prefill_ngram_risky"] = ngram_risky ? 1.0 : 0.0
+
+  if ngram_candidates.size >= 8 && !ngram_risky
+    score = 0.55 + 0.25 * features["prefill_ngram_candidates_over_32"] + 0.15 * features["prefill_ngram_match_ratio"]
+    return PrefillPolicyHint.new("ngram", Math.min(score, 0.95), "prefill_repeat_candidate_#{ngram_candidates.size}_match_#{match_len}", features)
+  end
+
+  if features["prefill_marker_code_like"] > 0.0 || features["prefill_marker_math_like"] > 0.0
+    return PrefillPolicyHint.new("target_only", 0.65, "code_or_math_marker_without_safe_repeat", features)
+  end
+
+  if features["prefill_target_draft_top1_agree"] > 0.0
+    return PrefillPolicyHint.new("neural", 0.62, "target_draft_prefill_top1_agree", features)
+  end
+
+  if features["prefill_marker_structured_like"] > 0.0 && ngram_candidates.size >= 4 && !ngram_risky
+    return PrefillPolicyHint.new("ngram", 0.55, "structured_prompt_with_short_repeat_candidate_#{ngram_candidates.size}", features)
+  end
+
+  PrefillPolicyHint.new("target_only", 0.50, "no_strong_prefill_spec_signal", features)
+end
+
 private class CycleDump
   include JSON::Serializable
 
@@ -491,6 +584,10 @@ private class CycleDump
   property router_score : Float64?
   property router_candidate_count : Int32 = 0
   property candidate_features : Hash(String, Float64)?
+  property policy_hint : String?
+  property policy_hint_score : Float64?
+  property policy_hint_reason : String?
+  property policy_hint_features : Hash(String, Float64)?
 
   def initialize(@prompt_hash : String,
                  @target_model : String,
@@ -522,6 +619,13 @@ private class CycleDump
                  @expected_gain_ms : Float64? = nil,
                  @router_score : Float64? = nil)
   end
+end
+
+def attach_policy_hint(record : CycleDump, hint : PrefillPolicyHint) : Nil
+  record.policy_hint = hint.policy
+  record.policy_hint_score = hint.score
+  record.policy_hint_reason = hint.reason
+  record.policy_hint_features = hint.features
 end
 
 puts "Loading tokenizer and models..."
@@ -562,6 +666,10 @@ end
 
 target_next = prefill_next(target, prompt_ids, target_state)
 draft_next = prefill_next(draft, prompt_ids, draft_state)
+policy_hint = prefill_policy_hint(
+  prompt, prompt_ids, tok, target_next, draft_next,
+  ngram_gamma, ngram_min, ngram_max, ngram_recursive, ngram_risk_min_size)
+puts "policy_hint=#{policy_hint.policy} score=#{policy_hint.score.round(4)} reason=#{policy_hint.reason}"
 verifier_warmup_ms = 0.0
 if warm_verifier && n_gen > 1
   warm_len = Math.min(gamma, n_gen)
@@ -1340,6 +1448,7 @@ if path = dump_cycles_path
   plain_ms_per_token = plain_ms / n_gen
   cycle_dumps.each do |record|
     record.expected_gain_ms = record.generated_count * plain_ms_per_token - record.wall_ms
+    attach_policy_hint(record, policy_hint)
   end
   dir = File.dirname(path)
   Dir.mkdir_p(dir) unless dir.empty? || dir == "."
