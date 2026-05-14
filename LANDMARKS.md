@@ -11345,3 +11345,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Shift from "make one speculative route faster" to "route each cycle to the cheapest exact action": target-only, n-gram bulk, or neural/self-draft.
 - maieutic: A route that is slower than exact target must be skipped even if it is faster than another bad speculative route.
 - adversary: The suite is still tiny (`2` prompts per category plus one rerun); promote the routing principle, not fixed thresholds, until a larger prompt distribution confirms it.
+
+**decision_update_179:** Do not promote `ngram_min_candidates=16` into `qwen35_generate auto`. It is a useful strict research/sweep alias for rejecting low-economics chunks, but product auto needs to keep shorter accepted chunks. The current `auto` default of `min_candidates=8` remains justified until a better chunk-risk policy separates useful short chunks from bad short tails.
+
+**evidence_update_179:**
+- claim: "`min_candidates=16` would skip at least one useful product-auto n-gram chunk."
+  source: local release Metal generate smoke `/tmp/qwen35_generate_auto_probe`, `QWEN35_DECODE_POLICY=auto`, `QWEN35_NGRAM_MIN=2`, `QWEN35_NGRAM_MAX=8`, `QWEN35_NGRAM_GAMMA=16`, prompts `A B C D A B C D A B`, `The capital of France is`, `def fibonacci(n):`, tokens `16`; `/tmp/qwen35_generate_auto_min_gate/all.log` -> France min8 accepted `11/11` at `14.39ms/tok`, min16 proposed `0/0` and took `19.72ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: qwen35_generate auto defaults, n-gram risk gate, prompt/model output distribution, or verifier timing changes
+- claim: "The same smoke keeps clean repeats fast and code fail-closed under both thresholds."
+  source: same gate -> repeat min8 `16/16` at `8.28ms/tok`, repeat min16 `16/16` at `8.13ms/tok`; code min8 `0/0` at `19.91ms/tok`, code min16 `0/0` at `19.8ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, risk gate thresholds, min-candidate economics, or decode implementation changes
+
+**quadrumvirate_update_179:**
+- cassandra: Raising the product threshold would reduce bad chunks but also remove some real accepted medium chunks.
+- daedalus: The missing piece is not a single global minimum; it is a chunk-shape/economics classifier that can allow medium high-confidence chunks and reject medium bad tails.
+- maieutic: `min16 improved repeat-suite risk` and `min16 should be default` are different claims; the latter is falsified by a product prompt.
+- adversary: Keep this as a small counterexample, not a final defense of `min8`; larger product prompts can still justify a richer policy.
