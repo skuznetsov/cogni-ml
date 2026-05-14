@@ -11309,3 +11309,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed lever is a policy router that chooses among exact target fallback, neural/self-draft, and n-gram chunks by expected cycle economics, not a stronger n-gram threshold alone.
 - maieutic: `speedup vs default` is not the same as `n-gram acceleration`; when `proposed=0`, the evidence supports "avoid bad work" only.
 - adversary: Keep `ngram_target_only_risk_min16` as opt-in/fail-closed. Do not promote it as a broad default without a larger prompt gate and comparison against plain exact target, not just neural default.
+
+**decision_update_177:** Added an explicit exact `target_only` control route to the speculative harness and sweep. This separates "do no proposal work" from the older `ngram_target_only` fallback path, which still performs n-gram proposal checks before falling through. The route is a measurement/control tool for future policy economics: target-only exact decode versus neural/self-draft versus n-gram chunks.
+
+**evidence_update_177:**
+- claim: "`--target-only` builds, preserves exact greedy output, and emits clean cycle accounting."
+  source: local `crystal build bin/qwen35_speculative_accept.cr --no-codegen`, `crystal build bin/qwen35_speculative_sweep.cr --no-codegen`, `crystal spec spec/ngram_draft_spec.cr` -> `19 examples, 0 failures`; release Metal smoke `/tmp/qwen35_spec_accept_target_only2 --target-only --tokens 4 --dump-cycles /tmp/qwen35_target_only_cycles2.jsonl 'The capital of France is'` -> `target_only=true`, `target_only=4`, `ngram_target_only=0`, `accept_rate=100.0%`, generated `Paris.\nThe`, cycle records `policy=target_only`
+  verified_at: 2026-05-14
+  decay_trigger: speculative harness loop, target-only branch, cycle dump schema, or target greedy oracle changes
+- claim: "The sweep harness can compare `target_only` against n-gram fallback policies."
+  source: local `/tmp/qwen35_spec_sweep_target_only --runner /tmp/qwen35_spec_accept_target_only2 --tokens 4 --policies target_only,ngram_target_only_risk_min16 --only-prompts 'fr::The capital of France is' ...` -> printed both policies and cycle summary rows `target_only/target_only` and `ngram_target_only/target_only`; target-only proposal time was `0.000ms`
+  verified_at: 2026-05-14
+  decay_trigger: sweep policy map, CLI options, or cycle summary parser changes
+
+**quadrumvirate_update_177:**
+- cassandra: Without a clean target-only row, broad-prompt "speedups" can be misattributed to n-gram or neural policy behavior.
+- daedalus: The policy-router frame should optimize action selection among exact target, neural draft, and copy-proposal chunks rather than assuming every cycle needs a proposal.
+- maieutic: The critical distinction is "faster than default neural speculation" versus "faster than exact target decode"; both must be visible in the same harness.
+- adversary: The target-only smoke is short (`tokens=4`) and not a performance claim. Use it as instrumentation proof until larger prompt-suite gates are run.
