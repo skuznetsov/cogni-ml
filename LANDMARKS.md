@@ -11273,3 +11273,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Pivot from verifier-shape tuning to action selection: skip, bulk verify, or probe+bulk. Current data supports skip/bulk; probe is a third action only for a narrower future class.
 - maieutic: `accepted/proposed` can be misleading when `proposed=0`; fail-closed target-only rows preserve parity but only win by avoiding a bad speculative chunk, not by accelerating target decode.
 - adversary: The risk threshold is empirical and should stay behind `--ngram-risk-gate`; broader prompt/model gates are required before default promotion.
+
+**decision_update_175:** Completed branch-state timing instrumentation for the current speculative probe. Neural and plain-fallback paths now record canonical history/index `commit_ms`, and the sweep cycle summary prints aggregate `backup` and `replay` columns in addition to proposal/accept/commit/draft/verify. On the current short mixed gate, branch-state copy/commit is measurable but not the dominant wall; target verification and draft body still dominate.
+
+**evidence_update_175:**
+- claim: "Branch-state timing fields build and are visible in sweep output."
+  source: local `crystal build bin/qwen35_speculative_accept.cr --no-codegen`, `crystal build bin/qwen35_speculative_sweep.cr --no-codegen`, and `crystal spec spec/ngram_draft_spec.cr` -> `19 examples, 0 failures`
+  verified_at: 2026-05-14
+  decay_trigger: cycle dump schema, sweep summary, neural loop commit logic, or JSON serialization changes
+- claim: "On a short mixed 9B gate, backup/commit are not the primary wall."
+  source: local release Metal smoke `/tmp/qwen35_spec_accept_branch_accounting2` with prompts `france|repeat`, `tokens=8`, policies `default,ngram_router16`, dumped to `/tmp/qwen35_branch_accounting_smoke2` -> neural cycles `wall=466.1ms`, `draft_ms=134.4`, `verify_ms=317.8`, `backup=13.806`, `commit=0.054`; n-gram cycle `wall=102.7ms`, `verify_ms=100.1`, `backup=2.653`, `commit=0.023`
+  verified_at: 2026-05-14
+  decay_trigger: prompt mix, generation length, verifier route, draft model, or state-copy implementation changes
+
+**quadrumvirate_update_175:**
+- cassandra: A resident branch ledger can remove some copy cost, but this gate does not support treating it as the next breakthrough by itself.
+- daedalus: The bigger frame remains verifier/body economics: avoid bad verifier work, shrink draft work, or batch target verify more effectively.
+- maieutic: The branch ledger may still matter at larger gamma/longer runs/reject-heavy neural paths; this smoke only bounds the short accepted/repeat path.
+- adversary: Do not demote branch-ledger work completely; require a larger reject-heavy mixed suite before deciding it is refuted.

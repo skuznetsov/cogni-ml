@@ -66,6 +66,7 @@ class CycleStats
   property draft_ms : Float64 = 0.0
   property verify_ms : Float64 = 0.0
   property backup_ms : Float64 = 0.0
+  property replay_ms : Float64 = 0.0
 
   def add(rec : JSON::Any)
     @count += 1
@@ -81,6 +82,7 @@ class CycleStats
     @draft_ms += json_f(rec, "draft_ms")
     @verify_ms += json_f(rec, "target_verify_ms")
     @backup_ms += json_f(rec, "target_backup_ms") + json_f(rec, "draft_backup_ms") + json_f(rec, "draft_resync_ms")
+    @replay_ms += json_f(rec, "target_replay_ms")
   end
 end
 
@@ -425,14 +427,14 @@ if dump_cycles_dir
   unless stats.empty?
     puts
     puts "Cycle JSONL summary"
-    printf "%-28s %7s %9s %9s %8s %10s %9s %9s %9s %9s %9s %9s\n",
-      "policy/kind", "cycles", "accepted", "proposed", "rejects", "gain_ms", "wall_ms", "proposal", "accept", "commit", "draft_ms", "verify_ms"
+    printf "%-28s %7s %9s %9s %8s %10s %9s %9s %9s %9s %9s %9s %9s %9s\n",
+      "policy/kind", "cycles", "accepted", "proposed", "rejects", "gain_ms", "wall_ms", "proposal", "accept", "commit", "backup", "replay", "draft_ms", "verify_ms"
     stats.keys.sort.each do |key|
       stat = stats[key]
-      printf "%-28s %7d %9d %9d %8d %10.1f %9.1f %9.3f %9.3f %9.3f %9.1f %9.1f\n",
+      printf "%-28s %7d %9d %9d %8d %10.1f %9.1f %9.3f %9.3f %9.3f %9.3f %9.3f %9.1f %9.1f\n",
         key, stat.count, stat.accepted, stat.proposed, stat.rejects,
         stat.gain_ms, stat.wall_ms, stat.proposal_ms, stat.accept_scan_ms,
-        stat.commit_ms, stat.draft_ms, stat.verify_ms
+        stat.commit_ms, stat.backup_ms, stat.replay_ms, stat.draft_ms, stat.verify_ms
     end
   end
 end

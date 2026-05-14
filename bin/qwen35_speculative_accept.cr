@@ -766,6 +766,7 @@ while generated_ids.size < n_gen
     cycle_target_backup0 = target_backup_ms
     cycle_draft_backup0 = draft_backup_ms
     cycle_draft_resync0 = draft_resync_ms
+    cycle_commit0 = commit_ms
     cycle_start_pos = pos
     generated_ids << target_next
     if generated_ids.size < n_gen
@@ -775,11 +776,13 @@ while generated_ids.size < n_gen
     end
     pos += 1
     plain_fallback_tokens += 1
+    commit0 = Time.instant
     new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
     history.concat(new_history)
     ngram_history.try &.append(new_history)
+    commit_ms += (Time.instant - commit0).total_milliseconds
     if dump_cycles_path
-      cycle_dumps << CycleDump.new(
+      record = CycleDump.new(
         prompt_hash, target_model_id, draft_model_id,
         "target_only", "plain_fallback", verify_mode,
         cycle_start_pos, history_size_before, 1,
@@ -793,6 +796,8 @@ while generated_ids.size < n_gen
         draft_backup_ms - cycle_draft_backup0,
         draft_resync_ms - cycle_draft_resync0,
         (Time.instant - cycle_wall0).total_milliseconds)
+      record.commit_ms = commit_ms - cycle_commit0
+      cycle_dumps << record
     end
     next
   end
@@ -813,6 +818,7 @@ while generated_ids.size < n_gen
   cycle_target_backup0 = target_backup_ms
   cycle_draft_backup0 = draft_backup_ms
   cycle_draft_resync0 = draft_resync_ms
+  cycle_commit0 = commit_ms
   cycle_start_pos = pos
   cycle_gamma = adaptive_gamma ? current_gamma : gamma
   draft_next_at_cycle = draft_next
@@ -1113,9 +1119,11 @@ while generated_ids.size < n_gen
   end
 
   if generated_ids.size > history_size_before
+    commit0 = Time.instant
     new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
     history.concat(new_history)
     ngram_history.try &.append(new_history)
+    commit_ms += (Time.instant - commit0).total_milliseconds
   end
 
   if dump_cycles_path
@@ -1132,7 +1140,7 @@ while generated_ids.size < n_gen
              "neural"
            end
     record_candidates = dump_cycle_token_ids ? candidate_snapshot.dup : nil
-    cycle_dumps << CycleDump.new(
+    record = CycleDump.new(
       prompt_hash, target_model_id, draft_model_id,
       kind, "neural", verify_mode,
       cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
@@ -1146,6 +1154,8 @@ while generated_ids.size < n_gen
       draft_backup_ms - cycle_draft_backup0,
       draft_resync_ms - cycle_draft_resync0,
       (Time.instant - cycle_wall0).total_milliseconds)
+    record.commit_ms = commit_ms - cycle_commit0
+    cycle_dumps << record
   end
 
   if adaptive_gamma
