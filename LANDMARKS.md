@@ -11691,3 +11691,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next branch should be a held-out route gate with token-class features, not another hand threshold.
 - maieutic: If a learned model needs raw token IDs to work, it violates the privacy-preserving dump premise; this path keeps the feature boundary clean.
 - adversary: The toy train/eval is intentionally overfit. Do not report it as performance evidence.
+
+**decision_update_196:** Refuted a naive hand-coded "single-letter period-4 skip" rule. The bad `x/y/z/w` chunk is real, but other single-letter periodic prompts accept cleanly and are strong speed wins, so the useful direction remains learned/contextual routing rather than another shape/token-class threshold.
+
+**evidence_update_196:**
+- claim: "Single-letter periodic n-gram chunks are not generally unsafe."
+  source: local `/tmp/qwen35_single_letter_stress`, 9B target, `tokens=16`, policies `target_only,ngram_target_only_risk_min8` -> `p4_letters_abcd`, `p4_letters_ijkl`, `p4_caps_abcd`, `p3_letters_abc`, and `p2_letters_ab` each accepted `15-16/16` and ran roughly `2x` faster than target-only; `p4_letters_xyzw` remained bad (`1/15`, `28.06ms/tok` vs target `20.08ms/tok`)
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, tokenizer/model, n-gram risk gate, token-class features, or verifier mode changes
+
+**quadrumvirate_update_196:**
+- cassandra: A direct single-letter skip would throw away real wins.
+- daedalus: The failure boundary is likely token/content/context-specific, not a simple period/token-class predicate.
+- maieutic: The fact that `x/y/z/w` fails does not justify the abstraction "single-letter cycles fail"; tested counterexamples disprove it.
+- adversary: Do not patch the product router from this anecdote. Use the feature in a held-out learned-router gate.
