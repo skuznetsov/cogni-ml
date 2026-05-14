@@ -11571,3 +11571,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next useful pivot is router confidence/semantic features or proposal-body cost reduction, not state-copy layout.
 - maieutic: A low branch-state percentage today can become relevant after verifier/draft body speedups; this is a deferral, not permanent deletion.
 - adversary: The long08 alias should stay a research baseline with explicit caveats because high router score can still select bad code chunks.
+
+**decision_update_190:** Added a local raw-Q8 proposal-quality measurement scaffold to the CUDA mixed-stack probe. `--margin-bucket-report` is only valid with `--read-logits`; it compares the current GPU route's top1 against the exact CPU target top1 and buckets agreement by the exact CPU top1/top2 margin. This is the right first gate for `QWEN_CUDA_Q4_RAW_Q8_FFN=1` because the raw-Q8 logits themselves are approximate and must not define their own confidence threshold.
+
+**evidence_update_190:**
+- claim: "The margin-bucket scaffold type-checks locally and leaves default probe behavior unchanged unless the new flag is used."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_raw_q8_margin_local crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` -> exit 0
+  verified_at: 2026-05-14
+  decay_trigger: CUDA probe option parsing, top2/read-logits plumbing, raw-Q8 runner wiring, or Crystal compiler changes
+- claim: "The remote raw-Q8 bucket measurement is pending external SSH host-key verification, not a local code blocker."
+  source: local `ssh -o BatchMode=yes -o ConnectTimeout=10 app-dev-ubuntu@gputer--ssh--6be20df04dd5.reefy.ai ...` -> host key changed warning, offending known_hosts ECDSA entry line 10; no remote command executed
+  verified_at: 2026-05-14
+  decay_trigger: user verifies the new host key/fingerprint, known_hosts is repaired, or the remote endpoint changes again
+
+**quadrumvirate_update_190:**
+- cassandra: Raw-Q8 has real speed signal but known near-tie divergence, so margin-bucket acceptance is a necessary gate before proposal-body promotion.
+- daedalus: The useful frame is not "make raw-Q8 exact"; it is "use raw-Q8 where exact target margins say approximate proposals are likely safe, then verify."
+- maieutic: Proposal acceptance must be measured against exact target top1 and exact target margin; approximate raw-Q8 margin is a suspect feature until calibrated.
+- adversary: This local scaffold is not speed evidence. Promotion still requires a remote mixed-prompt CUDA run with raw-Q8 on, exact target verification, parity, wall timing, and bucketed acceptance.

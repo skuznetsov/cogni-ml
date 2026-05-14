@@ -19,6 +19,10 @@ def parse_layers(value : String) : Array(Int32)
   value.split(",").map(&.strip).reject(&.empty?).map(&.to_i)
 end
 
+def parse_f32_list(value : String) : Array(Float32)
+  value.split(",").map(&.strip).reject(&.empty?).map(&.to_f32)
+end
+
 def max_abs_diff(a : Array(Float32), b : Array(Float32)) : Float32
   raise ArgumentError.new("size mismatch") unless a.size == b.size
   max = 0.0_f32
@@ -74,6 +78,53 @@ def top2_from_logits(logits : Array(Float32), tok : Int32, vocab : Int32)
   end
 
   {best_id, best, second_id, second, best - second}
+end
+
+def append_margin_bucket_report(lines : Array(String),
+                                exact_top1_ids : Array(Int32),
+                                proposal_top1_ids : Array(Int32),
+                                exact_margins : Array(Float32),
+                                edges : Array(Float32)) : Nil
+  raise ArgumentError.new("top1 size mismatch") unless exact_top1_ids.size == proposal_top1_ids.size
+  raise ArgumentError.new("margin size mismatch") unless exact_top1_ids.size == exact_margins.size
+
+  sorted_edges = edges.sort
+  bucket_count = sorted_edges.size + 1
+  counts = Array(Int32).new(bucket_count, 0)
+  accepts = Array(Int32).new(bucket_count, 0)
+
+  exact_top1_ids.each_with_index do |target_id, i|
+    margin = exact_margins[i]
+    bucket = sorted_edges.index { |edge| margin < edge } || sorted_edges.size
+    counts[bucket] += 1
+    accepts[bucket] += 1 if proposal_top1_ids[i] == target_id
+  end
+
+  total = counts.sum
+  total_accepts = accepts.sum
+  total_rejects = total - total_accepts
+  accept_rate = total > 0 ? (100.0 * total_accepts / total) : 0.0
+  lines << "proposal_accept_tokens=#{total_accepts}"
+  lines << "proposal_reject_tokens=#{total_rejects}"
+  lines << "proposal_accept_rate=#{accept_rate.round(2)}"
+  lines << "margin_bucket_edges=#{sorted_edges.join(",")}"
+
+  bucket_count.times do |bucket|
+    lower = bucket == 0 ? nil : sorted_edges[bucket - 1]?
+    upper = sorted_edges[bucket]?
+    label = if lower.nil?
+              "lt_#{upper}"
+            elsif upper.nil?
+              "ge_#{lower}"
+            else
+              "#{lower}_to_#{upper}"
+            end
+    count = counts[bucket]
+    accepted = accepts[bucket]
+    rejected = count - accepted
+    bucket_rate = count > 0 ? (100.0 * accepted / count) : 0.0
+    lines << "margin_bucket_#{bucket}_#{label} count=#{count} accept=#{accepted} reject=#{rejected} accept_rate=#{bucket_rate.round(2)}"
+  end
 end
 
 def rope_tables(tokens : Int32, start_pos : Int32, rope_dim : Int32, freq_base : Float32) : {Array(Float32), Array(Float32)}
@@ -184,6 +235,8 @@ warmup = 0
 steady_reps = 0
 steady_graph_reps = 0
 read_logits = false
+margin_bucket_report = false
+margin_bucket_edges = [0.05_f32, 0.1_f32, 0.25_f32, 0.5_f32, 1.0_f32, 2.0_f32, 5.0_f32]
 profile_phases = false
 debug_readback = true
 perf_only = false
@@ -210,6 +263,8 @@ OptionParser.parse do |p|
   p.on("--steady-reps N", "After one reset priming run, time N runs without sequence/state reset; requires --perf-only") { |v| steady_reps = v.to_i }
   p.on("--steady-graph-reps N", "Capture one reset-free steady wave as a CUDA graph and replay it N times; requires --perf-only") { |v| steady_graph_reps = v.to_i }
   p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
+  p.on("--margin-bucket-report", "In --read-logits oracle mode, bucket proposal top1 acceptance by exact top1/top2 margin") { margin_bucket_report = true }
+  p.on("--margin-buckets LIST", "Comma-separated exact-margin bucket upper bounds for --margin-bucket-report") { |v| margin_bucket_edges = parse_f32_list(v) }
   p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
   p.on("--skip-debug-readback", "Read only output-head results; skip final hidden/state/KV debug buffers for perf attribution") { debug_readback = false }
   p.on("--perf-only", "Skip CPU reference and hidden/state checks; reports CUDA timing/top1 only") { perf_only = true }
@@ -258,6 +313,9 @@ raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop
 raise "use either --greedy-loop-gpu-embedding or --greedy-loop-cpu-embedding, not both" if greedy_loop_gpu_embedding && greedy_loop_cpu_embedding
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
+raise "--margin-bucket-report requires --read-logits" if margin_bucket_report && !read_logits
+raise "--margin-bucket-report is incompatible with --perf-only" if margin_bucket_report && perf_only
+raise "--margin-buckets must not be empty" if margin_bucket_report && margin_bucket_edges.empty?
 raise "--input-token requires --tokens=1" if input_token >= 0 && tokens != 1
 if greedy_loop_tokens > 0
   raise "--skip-output-head is incompatible with --greedy-loop-tokens" if skip_output_head
@@ -637,6 +695,7 @@ begin
     lines << "top_margin_max_diff=#{margin_max_diff}"
     lines << "top_margin_ok=#{margin_ok}"
     lines << "top2_cuda_ok=#{cuda_top2_ok}"
+    append_margin_bucket_report(lines, cpu_top1_ids, gpu_top1_ids, cpu_top_margins, margin_bucket_edges) if margin_bucket_report
     ok = ok && margin_ok && cuda_top2_ok
   else
     lines << "logits_readback=false"
@@ -683,6 +742,7 @@ begin
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "read_logits=#{read_logits}"
+  puts "margin_bucket_report=#{margin_bucket_report}"
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"
   puts "perf_only=#{perf_only}"
