@@ -11403,3 +11403,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This is a feature-level gate, not another global threshold: use continuation structure (`lag8`) plus suffix evidence (`match_len`) to choose bulk verify vs exact target fallback.
 - maieutic: The rule assumes useful medium chunks have strong lag-8 continuation; larger prompt gates should search for false negatives.
 - adversary: Keep `QWEN35_NGRAM_RISK_GATE` as the product safety switch; do not remove the ability to disable or retune this heuristic.
+
+**decision_update_182:** The larger prompt gate validates the medium lag-8 rule as a useful partial fix, but refutes a pure shape-only solution for all n-gram chunks. The remaining bad cases are size-8 high-diversity chunks: `chat_recipe`/`chat_review` reject early, while `templ_benchmark_metal_gemv` accepts a superficially similar size-8 chunk. The next gate needs prompt/category/semantic context or learned expected-gain scoring; adding another shape-only rule would likely remove real wins.
+
+**evidence_update_182:**
+- claim: "The larger category gate keeps the main medium-rule benefit but still has size-8 false positives."
+  source: local `/tmp/qwen35_medium_risk_large_gate/all.log`, runner `/tmp/qwen35_spec_accept_medium_risk`, categories repeat/fact/code/math/chat/template, policies `target_only,ngram_target_only_risk_min8,ngram_target_only_risk_min16`, `tokens=16` -> repeat min8/min16 both around `13.8ms/tok` vs target `19.38`; fact min8 `18.02ms/tok` vs target `19.22` while min16 `19.44`; code min8 `20.73` vs target `20.03`; math min8 `21.22` due `math_derivative`; chat min8 `21.24` due `chat_recipe`/`chat_review`; template min8 `19.21` vs target `19.44` with one useful `8/8` chunk
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite size, category mix, risk rule, verifier timing, or target model changes
+- claim: "Current simple shape features do not separate bad and good size-8 high-diversity chunks."
+  source: local `/tmp/qwen35_size8_feature_probe2/all.log` plus JSONL feature parse -> `chat_recipe` chunk `0/8`, `match_len=2`, `unique=1.0`, ids `[10793, 364, 264, 9038, 16976, 271, 8160, 369]`; `templ_benchmark_metal_gemv` chunk `8/8`, `match_len=2`, `unique=1.0`, ids `[27502, 364, 18626, 469, 2629, 53, 61369, 13]`
+  verified_at: 2026-05-14
+  decay_trigger: candidate feature set, prompt suite, tokenization, or output distribution changes
+
+**quadrumvirate_update_182:**
+- cassandra: Size-8 chunks are a mixed class; shape-only gating will oscillate between false positives and false negatives.
+- daedalus: Shift the remaining size-8 problem to router context: prompt category, local generated context, or a learned expected-gain score.
+- maieutic: A chunk can be high-diversity and still correct; uniqueness alone is not a risk signal.
+- adversary: Do not over-promote the medium lag-8 rule as complete. It is a partial product improvement plus a clearer boundary for the next router.
