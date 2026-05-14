@@ -11327,3 +11327,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The policy-router frame should optimize action selection among exact target, neural draft, and copy-proposal chunks rather than assuming every cycle needs a proposal.
 - maieutic: The critical distinction is "faster than default neural speculation" versus "faster than exact target decode"; both must be visible in the same harness.
 - adversary: The target-only smoke is short (`tokens=4`) and not a performance claim. Use it as instrumentation proof until larger prompt-suite gates are run.
+
+**decision_update_178:** The first clean target/neural/n-gram control gate supports a three-action router. Clean repeats should use n-gram bulk verification. Broad non-repeat prompts should usually skip speculative proposals and use exact target fallback unless a neural/self-draft route has evidence of beating target. `ngram_target_only_risk_min16` remains useful as a fail-closed route because it becomes target-like when no chunk is safe, but its non-repeat wins are not n-gram acceleration.
+
+**evidence_update_178:**
+- claim: "On clean repeats, risk/min16 n-gram chunks are materially faster than exact target and neural default."
+  source: local `/tmp/qwen35_target_control_category_t16_gate/all.log`, category `repeat`, `tokens=16`, policies `default,target_only,ngram_target_only_risk_min16` -> averages: default `20.79ms/tok`, target_only `19.06ms/tok`, ngram risk/min16 `8.30ms/tok`; n-gram accepted/proposed `32/32`, paired ratio vs default `0.399x`
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, n-gram risk thresholds, verifier route, target model, or Metal timing changes
+- claim: "On broad non-repeat prompts, target-only is the required control: neural default often loses, while risk/min16 mostly fail-closes to target-like behavior."
+  source: same gate for fact/code/math/chat/template plus rerun `/tmp/qwen35_target_control_chatfox_rerun/all.log`; non-repeat risk/min16 rows proposed no n-gram chunks (`0/0`), and `chat_fox` rerun averaged default `24.16ms/tok`, target_only `19.99ms/tok`, risk/min16 `19.56ms/tok`
+  verified_at: 2026-05-14
+  decay_trigger: prompt distribution, target-only route, neural default acceptance, or system thermal/noise profile changes
+
+**quadrumvirate_update_178:**
+- cassandra: The expected pattern is bimodal: copy-proposal chunks win on true repeats; neural speculation can be negative on broad prompts due verifier/draft overhead and partial rejects.
+- daedalus: Shift from "make one speculative route faster" to "route each cycle to the cheapest exact action": target-only, n-gram bulk, or neural/self-draft.
+- maieutic: A route that is slower than exact target must be skipped even if it is faster than another bad speculative route.
+- adversary: The suite is still tiny (`2` prompts per category plus one rerun); promote the routing principle, not fixed thresholds, until a larger prompt distribution confirms it.
