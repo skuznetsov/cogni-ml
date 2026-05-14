@@ -11705,3 +11705,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The failure boundary is likely token/content/context-specific, not a simple period/token-class predicate.
 - maieutic: The fact that `x/y/z/w` fails does not justify the abstraction "single-letter cycles fail"; tested counterexamples disprove it.
 - adversary: Do not patch the product router from this anecdote. Use the feature in a held-out learned-router gate.
+
+**decision_update_197:** Reopened the reefy.ai CUDA host after SSH host-key reset and ran the first remote raw-Q8 margin-bucket proposal gate. The evidence supports exact target margin as a risk gate for raw-Q8 proposal use: high-margin five-layer points accepted, while the known all-layer near-tie point rejected. This remains proposal-only; raw-Q8 is still not exact target decode.
+
+**evidence_update_197:**
+- claim: "The remote CUDA host is reachable again and can build the current margin-bucket probe."
+  source: local SSH to `app-dev-ubuntu@gputer--ssh--6be20df04dd5.reefy.ai` after `ssh-keygen -R` and `StrictHostKeyChecking=accept-new`; remote copied `bin/cuda_mixed_stack_probe_margin.cr` built under `/build/persisten/cogni-ml/work/cogni-ml` with `-Dcpu_only -Duse_pcre2` and Linux link flags; `--help` prints `--margin-bucket-report`
+  verified_at: 2026-05-14
+  decay_trigger: remote host rebuild, SSH host key change, Crystal/toolchain image change, or probe source change
+- claim: "Raw-Q8 preserves top1 on the tested high-margin five-layer semantic points."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_margin_points_20260514201459`, `QWEN_CUDA_Q4_RAW_Q8_FFN=1`, layers `0,1,2,3,4`, `--read-logits --margin-bucket-report`, input tokens `0,1,2,16,198,220` -> proposal accept `6/6`, exact margins `1.501704..3.58495`, `cuda_ms_per_token≈7.26-7.35`; strict `ok=false` because logits parity is approximate, while top1 matches
+  verified_at: 2026-05-14
+  decay_trigger: raw-Q8 kernel, recurrent runner, input-token path, margin-bucket code, or model file changes
+- claim: "Raw-Q8 rejects the known all-layer near-tie semantic point."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_margin_alllayer_20260514202011/rawq8_input0.log`, all layers, `input-token=0`, exact margin `0.01845` -> bucket `<0.05`, proposal accept `0/1`, raw-Q8 top1 `271` vs exact top1 `198`, `cuda_ms_per_token=33.131`
+  verified_at: 2026-05-14
+  decay_trigger: raw-Q8 kernel, full-model CUDA runner, output head, exact CPU oracle, or model file changes
+- claim: "All-layer batched CPU-oracle bucket runs are currently too slow for this interactive gate."
+  source: remote all-layer `tokens=4 --read-logits --margin-bucket-report` produced no output after more than five minutes and was terminated; five-layer `tokens=32` also remained CPU-bound and was terminated after several minutes
+  verified_at: 2026-05-14
+  decay_trigger: faster CPU oracle, cached oracle states, smaller model slice, or GPU-side exact margin oracle changes
+
+**quadrumvirate_update_197:**
+- cassandra: The raw-Q8 branch has the expected shape: useful on high-margin proposal states, unsafe near ties.
+- daedalus: The next useful pivot is not making raw-Q8 exact; it is using exact/margin hints to choose when approximate proposal work is worth verifying.
+- maieutic: Five-layer high-margin acceptance does not generalize to full-model prompt distributions; only the all-layer near-tie falsifier is strong for the risk-gate premise.
+- adversary: Do not promote raw-Q8 to default decode or report a mixed-prompt speedup. Need a faster dataset path or cached oracle to bucket many all-layer states.
