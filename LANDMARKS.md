@@ -11753,3 +11753,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This shifts routing from local candidate-shape rules toward prompt/prefill priors plus exact cycle outcomes.
 - maieutic: A "topic" hint is only a prior. It must be judged against actual accepted/proposed/wall rows before becoming a switch.
 - adversary: The current marker heuristic is intentionally shallow and may misclassify code-like math/text. Promotion requires held-out sweep evidence and fail-closed behavior.
+
+**decision_update_199:** Threaded prefill policy hints into the learned-router feature path without changing default decode. Dataset extraction now flattens safe `policy_hint_*` and `prefill_*` features, router train/eval include them by default with an ablation flag, and runtime `SpecRouterModel` scoring receives the same hint-derived features for n-gram decisions.
+
+**evidence_update_199:**
+- claim: "Prefill hint router plumbing builds across runtime, dataset, train, and eval tools."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_policy_router_build crystal build bin/qwen35_speculative_accept.cr --no-codegen --error-trace`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_policy_router_dataset_build crystal build bin/qwen35_spec_router_dataset.cr --no-codegen --error-trace`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_policy_router_train_build crystal build bin/qwen35_spec_router_train.cr --no-codegen --error-trace`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_policy_router_eval_build crystal build bin/qwen35_spec_router_eval.cr --no-codegen --error-trace`; `crystal spec spec/ngram_draft_spec.cr` -> `21 examples, 0 failures`
+  verified_at: 2026-05-14
+  decay_trigger: router feature schema, policy hint schema, training model JSON, or n-gram runtime scoring changes
+- claim: "Offline router rows/models now carry policy hint feature names."
+  source: local `crystal run bin/qwen35_spec_router_dataset.cr -- --input /tmp/qwen35_prefill_hint_repeat.jsonl --input /tmp/qwen35_prefill_hint_code.jsonl --out /tmp/qwen35_policy_hint_rows.jsonl`; `crystal run bin/qwen35_spec_router_train.cr -- --input /tmp/qwen35_policy_hint_rows.jsonl --out /tmp/qwen35_policy_hint_model.json --include-kind ngram --holdout-every 0 --epochs 20` -> `features=49`, `policy_hint_features=true`, model feature list includes `policy_hint_score`, `policy_hint_is_ngram`, and `prefill_ngram_match_ratio`; eval selects the positive n-gram row
+  verified_at: 2026-05-14
+  decay_trigger: router dataset rows, train/eval feature names, or label/filter semantics change
+- claim: "Runtime router scoring can consume a policy-hint-aware model without changing exact acceptance."
+  source: local release Metal build `/tmp/qwen35_spec_accept_policy_router`; repeat prompt with `--router-model /tmp/qwen35_policy_hint_model.json --ngram --ngram-risk-gate --ngram-target-only --ngram-min-candidates 8` -> `policy_hint=ngram`, `ngram_router_stats checks=1 skips=0 threshold=0.5 avg_score=0.9828`, `accept_rate=100.0% accepted=8/8`, JSONL row has `router_score=0.982782642280716`
+  verified_at: 2026-05-14
+  decay_trigger: model feature schema, runtime score feature construction, verifier mode, or n-gram acceptance path changes
+
+**quadrumvirate_update_199:**
+- cassandra: The useful next slice is feature parity between offline and runtime; otherwise the prefill hint cannot influence a learned router.
+- daedalus: This avoids adding another hand-coded rule and instead makes the hint measurable inside the existing exact-verified router loop.
+- maieutic: A one-row smoke only proves plumbing, not policy quality. Larger held-out rows are still the required falsifier.
+- adversary: Keep `--no-policy-hint-features` for ablation and do not promote hint-aware models without mixed prompt gains and adversarial fail-closed checks.

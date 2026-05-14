@@ -98,6 +98,44 @@ def feature_f(features : Hash(String, JSON::Any), key : String) : Float64
   value ? value.as_f : 0.0
 end
 
+POLICY_HINT_FEATURE_NAMES = [
+  "prefill_prompt_tokens_over_128",
+  "prefill_prompt_bytes_over_1024",
+  "prefill_target_draft_top1_agree",
+  "prefill_prompt_newline_token_ratio",
+  "prefill_prompt_single_letter_ratio",
+  "prefill_prompt_word_like_ratio",
+  "prefill_prompt_numeric_ratio",
+  "prefill_prompt_punct_like_ratio",
+  "prefill_prompt_non_ascii_ratio",
+  "prefill_marker_code_like",
+  "prefill_marker_math_like",
+  "prefill_marker_structured_like",
+  "prefill_marker_newline_count_over_16",
+  "prefill_ngram_candidates_over_32",
+  "prefill_ngram_match_ratio",
+  "prefill_ngram_risky",
+]
+
+def policy_hint_features(rec : JSON::Any) : Hash(String, Float64)
+  out = Hash(String, Float64).new(0.0)
+  hint = json_s(rec, "policy_hint")
+  out["policy_hint_score"] = json_f(rec, "policy_hint_score")
+  out["policy_hint_is_ngram"] = hint == "ngram" ? 1.0 : 0.0
+  out["policy_hint_is_neural"] = hint == "neural" ? 1.0 : 0.0
+  out["policy_hint_is_target_only"] = hint == "target_only" ? 1.0 : 0.0
+  if raw = rec["policy_hint_features"]?
+    features = raw.as_h
+    out["policy_hint_features_present"] = 1.0
+    POLICY_HINT_FEATURE_NAMES.each do |name|
+      out[name] = feature_f(features, name)
+    end
+  else
+    out["policy_hint_features_present"] = 0.0
+  end
+  out
+end
+
 def lag_ratio(ids : Array(Int32), lag : Int32) : Float64
   return 0.0 if ids.size <= lag
   matches = 0
@@ -299,11 +337,12 @@ begin
       positive_gain = gain > 0.0
       kind = json_s(rec, "kind")
       candidates = candidate_stats(rec)
+      hint_features = policy_hint_features(rec)
 
       summary[SummaryKey.new(sweep_policy, kind)].add(generated, proposed, accepted, full_accept, positive_gain, wall, gain)
 
       unless summary_only
-        out_io.puts({
+        row = {
           "source_file"                   => File.basename(path),
           "rep"                           => rep,
           "prompt_index"                  => prompt_index,
@@ -317,6 +356,10 @@ begin
           "policy_hint"                   => json_s(rec, "policy_hint"),
           "policy_hint_score"             => json_f(rec, "policy_hint_score"),
           "policy_hint_reason"            => json_s(rec, "policy_hint_reason"),
+          "policy_hint_features_present"  => hint_features["policy_hint_features_present"] > 0.0,
+          "policy_hint_is_ngram"          => hint_features["policy_hint_is_ngram"],
+          "policy_hint_is_neural"         => hint_features["policy_hint_is_neural"],
+          "policy_hint_is_target_only"    => hint_features["policy_hint_is_target_only"],
           "target_model"                  => json_s(rec, "target_model"),
           "draft_model"                   => json_s(rec, "draft_model"),
           "position"                      => json_i(rec, "position"),
@@ -360,7 +403,11 @@ begin
           "draft_resync_ms"               => json_f(rec, "draft_resync_ms"),
           "wall_ms"                       => wall,
           "candidate_hash"                => json_s(rec, "candidate_hash"),
-        }.to_json)
+        }
+        POLICY_HINT_FEATURE_NAMES.each do |name|
+          row[name] = hint_features[name]
+        end
+        out_io.puts(row.to_json)
       end
       rows += 1
     end

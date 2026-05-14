@@ -129,6 +129,48 @@ def feature_value(name : String, rec : JSON::Any) : Float64
     f(rec, "candidate_punct_like_ratio").clamp(0.0, 1.0)
   when "candidate_non_ascii_ratio"
     f(rec, "candidate_non_ascii_ratio").clamp(0.0, 1.0)
+  when "policy_hint_score"
+    f(rec, "policy_hint_score").clamp(0.0, 1.0)
+  when "policy_hint_features_present"
+    b(rec, "policy_hint_features_present") ? 1.0 : 0.0
+  when "policy_hint_is_ngram"
+    f(rec, "policy_hint_is_ngram").clamp(0.0, 1.0)
+  when "policy_hint_is_neural"
+    f(rec, "policy_hint_is_neural").clamp(0.0, 1.0)
+  when "policy_hint_is_target_only"
+    f(rec, "policy_hint_is_target_only").clamp(0.0, 1.0)
+  when "prefill_prompt_tokens_over_128"
+    f(rec, "prefill_prompt_tokens_over_128").clamp(0.0, 4.0)
+  when "prefill_prompt_bytes_over_1024"
+    f(rec, "prefill_prompt_bytes_over_1024").clamp(0.0, 4.0)
+  when "prefill_target_draft_top1_agree"
+    f(rec, "prefill_target_draft_top1_agree").clamp(0.0, 1.0)
+  when "prefill_prompt_newline_token_ratio"
+    f(rec, "prefill_prompt_newline_token_ratio").clamp(0.0, 1.0)
+  when "prefill_prompt_single_letter_ratio"
+    f(rec, "prefill_prompt_single_letter_ratio").clamp(0.0, 1.0)
+  when "prefill_prompt_word_like_ratio"
+    f(rec, "prefill_prompt_word_like_ratio").clamp(0.0, 1.0)
+  when "prefill_prompt_numeric_ratio"
+    f(rec, "prefill_prompt_numeric_ratio").clamp(0.0, 1.0)
+  when "prefill_prompt_punct_like_ratio"
+    f(rec, "prefill_prompt_punct_like_ratio").clamp(0.0, 1.0)
+  when "prefill_prompt_non_ascii_ratio"
+    f(rec, "prefill_prompt_non_ascii_ratio").clamp(0.0, 1.0)
+  when "prefill_marker_code_like"
+    f(rec, "prefill_marker_code_like").clamp(0.0, 1.0)
+  when "prefill_marker_math_like"
+    f(rec, "prefill_marker_math_like").clamp(0.0, 1.0)
+  when "prefill_marker_structured_like"
+    f(rec, "prefill_marker_structured_like").clamp(0.0, 1.0)
+  when "prefill_marker_newline_count_over_16"
+    f(rec, "prefill_marker_newline_count_over_16").clamp(0.0, 1.0)
+  when "prefill_ngram_candidates_over_32"
+    f(rec, "prefill_ngram_candidates_over_32").clamp(0.0, 1.0)
+  when "prefill_ngram_match_ratio"
+    f(rec, "prefill_ngram_match_ratio").clamp(0.0, 1.0)
+  when "prefill_ngram_risky"
+    f(rec, "prefill_ngram_risky").clamp(0.0, 1.0)
   else
     if name.starts_with?("category=")
       s(rec, "prompt_category") == name["category=".size..] ? 1.0 : 0.0

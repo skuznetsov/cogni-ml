@@ -414,6 +414,23 @@ def add_candidate_token_class_features(features : Hash(String, Float64),
   features["candidate_non_ascii_ratio"] = non_ascii.to_f / denom
 end
 
+private record PrefillPolicyHint,
+  policy : String,
+  score : Float64,
+  reason : String,
+  features : Hash(String, Float64)
+
+def add_policy_hint_features(features : Hash(String, Float64), hint : PrefillPolicyHint) : Nil
+  features["policy_hint_score"] = hint.score
+  features["policy_hint_is_ngram"] = hint.policy == "ngram" ? 1.0 : 0.0
+  features["policy_hint_is_neural"] = hint.policy == "neural" ? 1.0 : 0.0
+  features["policy_hint_is_target_only"] = hint.policy == "target_only" ? 1.0 : 0.0
+  features["policy_hint_features_present"] = hint.features.empty? ? 0.0 : 1.0
+  hint.features.each do |name, value|
+    features[name] = value if name.starts_with?("prefill_")
+  end
+end
+
 def ngram_router_features(candidates : Array(Int32),
                           generated_before : Int32,
                           match_len : Int32,
@@ -422,7 +439,8 @@ def ngram_router_features(candidates : Array(Int32),
                           verify_mode : String,
                           draft_model_id : String,
                           prompt_category : String,
-                          tokenizer : ML::GGUF::Qwen35Tokenizer) : Hash(String, Float64)
+                          tokenizer : ML::GGUF::Qwen35Tokenizer,
+                          policy_hint : PrefillPolicyHint? = nil) : Hash(String, Float64)
   proposed = candidates.size
   features = Hash(String, Float64).new(0.0)
   features["bias"] = 1.0
@@ -438,6 +456,7 @@ def ngram_router_features(candidates : Array(Int32),
   features["verify=#{verify_mode}"] = 1.0
   features["draft=#{draft_model_id}"] = 1.0
   features["category=#{prompt_category}"] = 1.0 unless prompt_category.empty?
+  add_policy_hint_features(features, policy_hint) if policy_hint
   features
 end
 
@@ -451,12 +470,6 @@ def ngram_candidate_feature_dump(candidates : Array(Int32),
   add_candidate_token_class_features(features, candidates, tokenizer)
   features
 end
-
-private record PrefillPolicyHint,
-  policy : String,
-  score : Float64,
-  reason : String,
-  features : Hash(String, Float64)
 
 def prompt_marker_features(prompt : String) : Hash(String, Float64)
   lower = prompt.downcase
@@ -763,7 +776,7 @@ while generated_ids.size < n_gen
     if router_model && !ngram_candidates.empty?
       cycle_router_candidate_count = ngram_candidates.size
       score = router_model.not_nil!.score(ngram_router_features(
-        ngram_candidates, generated_ids.size, match_len, ngram_max, ngram_disabled, verify_mode, draft_model_id, prompt_category, tok))
+        ngram_candidates, generated_ids.size, match_len, ngram_max, ngram_disabled, verify_mode, draft_model_id, prompt_category, tok, policy_hint))
       cycle_router_score = score
       ngram_router_checks += 1
       ngram_router_score_sum += score

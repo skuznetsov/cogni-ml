@@ -22,6 +22,7 @@ exclude_kinds = Set(String).new
 use_sweep_feature = true
 use_category_feature = true
 use_candidate_features = true
+use_policy_hint_features = true
 
 def parse_csv_set(value : String) : Set(String)
   value.split(',').map(&.strip).reject(&.empty?).to_set
@@ -44,6 +45,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--no-sweep-feature", "Do not include sweep_policy as a categorical feature") { use_sweep_feature = false }
   p.on("--no-category-feature", "Do not include prompt_category as a categorical feature") { use_category_feature = false }
   p.on("--no-candidate-features", "Do not include opt-in candidate-token aggregate features") { use_candidate_features = false }
+  p.on("--no-policy-hint-features", "Do not include opt-in prefill policy hint aggregate features") { use_policy_hint_features = false }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -156,10 +158,40 @@ candidate_feature_names = [
   "candidate_non_ascii_ratio",
 ]
 
+policy_hint_feature_names = [
+  "policy_hint_score",
+  "policy_hint_features_present",
+  "policy_hint_is_ngram",
+  "policy_hint_is_neural",
+  "policy_hint_is_target_only",
+  "prefill_prompt_tokens_over_128",
+  "prefill_prompt_bytes_over_1024",
+  "prefill_target_draft_top1_agree",
+  "prefill_prompt_newline_token_ratio",
+  "prefill_prompt_single_letter_ratio",
+  "prefill_prompt_word_like_ratio",
+  "prefill_prompt_numeric_ratio",
+  "prefill_prompt_punct_like_ratio",
+  "prefill_prompt_non_ascii_ratio",
+  "prefill_marker_code_like",
+  "prefill_marker_math_like",
+  "prefill_marker_structured_like",
+  "prefill_marker_newline_count_over_16",
+  "prefill_ngram_candidates_over_32",
+  "prefill_ngram_match_ratio",
+  "prefill_ngram_risky",
+]
+
 candidate_offset = -1
 if use_candidate_features
   candidate_offset = feature_names.size
   feature_names.concat(candidate_feature_names)
+end
+
+policy_hint_offset = -1
+if use_policy_hint_features
+  policy_hint_offset = feature_names.size
+  feature_names.concat(policy_hint_feature_names)
 end
 
 base_feature_count = feature_names.size
@@ -189,6 +221,7 @@ def feature_vector(row : Row,
                    sweep_offset : Int32,
                    draft_offset : Int32,
                    candidate_offset : Int32,
+                   policy_hint_offset : Int32,
                    category_index : Hash(String, Int32),
                    kind_index : Hash(String, Int32),
                    verify_index : Hash(String, Int32),
@@ -223,6 +256,29 @@ def feature_vector(row : Row,
     x[candidate_offset + 14] = row.f("candidate_punct_like_ratio").clamp(0.0, 1.0)
     x[candidate_offset + 15] = row.f("candidate_non_ascii_ratio").clamp(0.0, 1.0)
   end
+  if policy_hint_offset >= 0
+    x[policy_hint_offset] = row.f("policy_hint_score").clamp(0.0, 1.0)
+    x[policy_hint_offset + 1] = row.b("policy_hint_features_present") ? 1.0 : 0.0
+    x[policy_hint_offset + 2] = row.f("policy_hint_is_ngram").clamp(0.0, 1.0)
+    x[policy_hint_offset + 3] = row.f("policy_hint_is_neural").clamp(0.0, 1.0)
+    x[policy_hint_offset + 4] = row.f("policy_hint_is_target_only").clamp(0.0, 1.0)
+    x[policy_hint_offset + 5] = row.f("prefill_prompt_tokens_over_128").clamp(0.0, 4.0)
+    x[policy_hint_offset + 6] = row.f("prefill_prompt_bytes_over_1024").clamp(0.0, 4.0)
+    x[policy_hint_offset + 7] = row.f("prefill_target_draft_top1_agree").clamp(0.0, 1.0)
+    x[policy_hint_offset + 8] = row.f("prefill_prompt_newline_token_ratio").clamp(0.0, 1.0)
+    x[policy_hint_offset + 9] = row.f("prefill_prompt_single_letter_ratio").clamp(0.0, 1.0)
+    x[policy_hint_offset + 10] = row.f("prefill_prompt_word_like_ratio").clamp(0.0, 1.0)
+    x[policy_hint_offset + 11] = row.f("prefill_prompt_numeric_ratio").clamp(0.0, 1.0)
+    x[policy_hint_offset + 12] = row.f("prefill_prompt_punct_like_ratio").clamp(0.0, 1.0)
+    x[policy_hint_offset + 13] = row.f("prefill_prompt_non_ascii_ratio").clamp(0.0, 1.0)
+    x[policy_hint_offset + 14] = row.f("prefill_marker_code_like").clamp(0.0, 1.0)
+    x[policy_hint_offset + 15] = row.f("prefill_marker_math_like").clamp(0.0, 1.0)
+    x[policy_hint_offset + 16] = row.f("prefill_marker_structured_like").clamp(0.0, 1.0)
+    x[policy_hint_offset + 17] = row.f("prefill_marker_newline_count_over_16").clamp(0.0, 1.0)
+    x[policy_hint_offset + 18] = row.f("prefill_ngram_candidates_over_32").clamp(0.0, 1.0)
+    x[policy_hint_offset + 19] = row.f("prefill_ngram_match_ratio").clamp(0.0, 1.0)
+    x[policy_hint_offset + 20] = row.f("prefill_ngram_risky").clamp(0.0, 1.0)
+  end
 
   if category_offset >= 0 && (idx = category_index[row.s("prompt_category")]?)
     x[category_offset + idx] = 1.0
@@ -243,7 +299,7 @@ def feature_vector(row : Row,
 end
 
 xs = rows.map do |row|
-  feature_vector(row, feature_names.size, category_offset, kind_offset, verify_offset, sweep_offset, draft_offset, candidate_offset,
+  feature_vector(row, feature_names.size, category_offset, kind_offset, verify_offset, sweep_offset, draft_offset, candidate_offset, policy_hint_offset,
     category_index, kind_index, verify_index, sweep_index, draft_index)
 end
 
@@ -362,7 +418,7 @@ def metrics_json(metrics : Metrics)
 end
 
 STDERR.puts "Router logistic train rows=#{train_idx.size} holdout=#{holdout_idx.size} features=#{feature_names.size} label=#{label_name}"
-STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature} candidate_features=#{use_candidate_features} holdout_by=#{holdout_by} min_gain_ms=#{min_gain_ms}"
+STDERR.puts "filters include_kind=#{include_kinds.to_a.sort.join(",")} exclude_kind=#{exclude_kinds.to_a.sort.join(",")} sweep_feature=#{use_sweep_feature} category_feature=#{use_category_feature} candidate_features=#{use_candidate_features} policy_hint_features=#{use_policy_hint_features} holdout_by=#{holdout_by} min_gain_ms=#{min_gain_ms}"
 STDERR.printf "train   acc=%.3f precision=%.3f recall=%.3f logloss=%.4f positives=%d/%d predicted=%d\n",
   train_metrics.accuracy, train_metrics.precision, train_metrics.recall, train_metrics.logloss,
   train_metrics.positives, train_metrics.count, train_metrics.predicted_positive
@@ -384,9 +440,10 @@ model = {
   },
   "holdout_by"      => holdout_by,
   "feature_options" => {
-    "sweep_feature"      => use_sweep_feature,
-    "category_feature"   => use_category_feature,
-    "candidate_features" => use_candidate_features,
+    "sweep_feature"        => use_sweep_feature,
+    "category_feature"     => use_category_feature,
+    "candidate_features"   => use_candidate_features,
+    "policy_hint_features" => use_policy_hint_features,
   },
   "train"   => metrics_json(train_metrics),
   "holdout" => metrics_json(holdout_metrics),
