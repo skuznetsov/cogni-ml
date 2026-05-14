@@ -19,9 +19,10 @@ wait_quiet_ms = 0
 quiet_poll_ms = 1000
 require_quiet = false
 prepare_state = false
+breakdown_state_overhead = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_prefill_attribution [--model PATH] [--prompt N] [--warmup N] [--reps N] [--compare-env NAME] [--prepare-state]"
+  p.banner = "Usage: qwen35_prefill_attribution [--model PATH] [--prompt N] [--warmup N] [--reps N] [--compare-env NAME] [--prepare-state] [--breakdown-state-overhead]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--prompt=N", "Prompt tokens for prefill attribution (default: 64)") { |v| prompt_len = v.to_i }
   p.on("--warmup=N", "Warmup runs before profiling (default: 1)") { |v| warmup = v.to_i }
@@ -34,6 +35,7 @@ OptionParser.parse do |p|
   p.on("--quiet-poll-ms=N", "Polling interval for --wait-quiet-ms (default: 1000)") { |v| quiet_poll_ms = v.to_i }
   p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
   p.on("--prepare-state", "Prepare fresh Metal state buffers before each timed prefill") { prepare_state = true }
+  p.on("--breakdown-state-overhead", "Measure State.new, optional prepare_state_metal!, and prefill timing separately") { breakdown_state_overhead = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -79,6 +81,36 @@ def run_prefill_once(w : ML::GGUF::Qwen35Weights,
   wall_ms
 end
 
+record LifecycleTiming,
+  state_ms : Float64,
+  prepare_ms : Float64,
+  prefill_ms : Float64,
+  total_ms : Float64
+
+def run_prefill_lifecycle_once(w : ML::GGUF::Qwen35Weights,
+                               prompt : Array(Int32),
+                               prepare_state : Bool) : LifecycleTiming
+  hp = w.hparams
+  t0 = Time.instant
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: prompt.size + 4)
+  t1 = Time.instant
+
+  if prepare_state
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+  end
+  t2 = Time.instant
+
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+  t3 = Time.instant
+
+  LifecycleTiming.new(
+    state_ms: (t1 - t0).total_milliseconds,
+    prepare_ms: (t2 - t1).total_milliseconds,
+    prefill_ms: (t3 - t2).total_milliseconds,
+    total_ms: (t3 - t0).total_milliseconds,
+  )
+end
+
 def percentile(xs : Array(Float64), pct : Int32) : Float64
   sorted = xs.sort
   sorted[(sorted.size * pct // 100).clamp(0, sorted.size - 1)]
@@ -86,6 +118,23 @@ end
 
 def mean(xs : Array(Float64)) : Float64
   xs.sum / xs.size
+end
+
+def print_lifecycle(label : String, timings : Array(LifecycleTiming), prompt_len : Int32) : Nil
+  state = timings.map(&.state_ms)
+  prepare = timings.map(&.prepare_ms)
+  prefill = timings.map(&.prefill_ms)
+  total = timings.map(&.total_ms)
+  p50_total = percentile(total, 50)
+
+  puts
+  puts "State lifecycle breakdown (#{label})"
+  printf "  State.new: avg=%.2f ms p50=%.2f ms\n", mean(state), percentile(state, 50)
+  printf "  prepare:   avg=%.2f ms p50=%.2f ms\n", mean(prepare), percentile(prepare, 50)
+  printf "  prefill:   avg=%.2f ms p50=%.2f ms %.2f tok/s\n",
+    mean(prefill), percentile(prefill, 50), prompt_len * 1000.0 / percentile(prefill, 50)
+  printf "  total:     avg=%.2f ms p50=%.2f ms %.2f tok/s\n",
+    mean(total), p50_total, prompt_len * 1000.0 / p50_total
 end
 
 def set_env(name : String, value : String?) : Nil
@@ -144,7 +193,7 @@ prompt = prompt_tokens(prompt_len)
 
 puts "Qwen35 prefill attribution"
 puts "model=#{model}"
-puts "prompt=#{prompt_len} warmup=#{warmup} reps=#{reps} prepare_state=#{prepare_state}"
+puts "prompt=#{prompt_len} warmup=#{warmup} reps=#{reps} prepare_state=#{prepare_state} breakdown_state_overhead=#{breakdown_state_overhead}"
 
 warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
 profile_ms = run_prefill_once(w, prompt, profile: true, prepare_state: prepare_state)
@@ -156,6 +205,12 @@ times = Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, p
 printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
   mean(times), percentile(times, 50), percentile(times, 90),
   prompt_len * 1000.0 / percentile(times, 50)
+
+if breakdown_state_overhead
+  warmup.times { run_prefill_lifecycle_once(w, prompt, prepare_state) }
+  lifecycle = Array(LifecycleTiming).new(reps) { run_prefill_lifecycle_once(w, prompt, prepare_state) }
+  print_lifecycle(prepare_state ? "prepared fresh state" : "lazy fresh state", lifecycle, prompt_len)
+end
 
 if env = compare_env
   old = ENV[env]?

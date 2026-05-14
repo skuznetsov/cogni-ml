@@ -292,6 +292,18 @@ module ML
             @@gemm_wait_ns += wait_ns
           end
 
+          def self.gemv_wait_ms : Float64
+            @@gemv_wait_ns / 1_000_000.0
+          end
+
+          def self.gemm_wait_ms : Float64
+            @@gemm_wait_ns / 1_000_000.0
+          end
+
+          def self.matmul_wait_ms : Float64
+            gemv_wait_ms + gemm_wait_ms
+          end
+
           def self.bump_dn(encode_ns : Int64, wait_ns : Int64, read_ns : Int64)
             return unless @@enabled
             @@dn_count += 1

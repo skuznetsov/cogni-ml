@@ -11775,3 +11775,47 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This avoids adding another hand-coded rule and instead makes the hint measurable inside the existing exact-verified router loop.
 - maieutic: A one-row smoke only proves plumbing, not policy quality. Larger held-out rows are still the required falsifier.
 - adversary: Keep `--no-policy-hint-features` for ablation and do not promote hint-aware models without mixed prompt gains and adversarial fail-closed checks.
+
+**decision_update_200:** Saved the current Qwen3.5 9B benchmark frontier and added prefill lifecycle attribution. The current source-backed state is mixed rather than a broad win: native decode has repeatedly matched or beaten llama.cpp on the same local Q4_K_M model, while first-run prefill still depends on whether state preparation/allocation is included. The new `qwen35_prefill_attribution --breakdown-state-overhead` mode separates `State.new`, optional `prepare_state_metal!`, and prompt-ingest wall time so the next optimization can target measured lifecycle/scheduler cost versus the quantized kernel body.
+
+**evidence_update_200:**
+- claim: "The benchmark frontier was persisted outside chat context."
+  source: local memory note `/Users/sergey/.codex/memories/extensions/ad_hoc/notes/20260514T230443Z-cogni-ml-qwen-benchmark-frontier.md` records the fresh noisy pp64/gen64 comparison, older quiet-ish README snapshot, and next frontier: first-run prefill attribution versus llama.cpp Metal.
+  verified_at: 2026-05-14
+  decay_trigger: benchmark harness, model file, llama.cpp HEAD, host load, or Qwen35 prefill/decode route changes
+- claim: "Prefill lifecycle attribution builds."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prefill_breakdown_nocodegen crystal build bin/qwen35_prefill_attribution.cr --no-codegen --error-trace` -> exit 0; local release Metal build `/tmp/qwen35_prefill_attribution_breakdown` -> exit 0.
+  verified_at: 2026-05-14
+  decay_trigger: harness CLI, Qwen35 state preparation, Crystal compiler, or Metal link flags change
+- claim: "The new breakdown output is visible in both lazy and prepared-state modes."
+  source: local `/tmp/qwen35_prefill_attribution_breakdown --prompt=64 --warmup=1 --reps=2 --breakdown-state-overhead` and same with `--prepare-state` both printed `State lifecycle breakdown`. The host was heavily loaded by unrelated processes, so those timing values are not accepted as benchmark evidence.
+  verified_at: 2026-05-14
+  decay_trigger: host load controls, benchmark timing code, or state preparation semantics change
+
+**quadrumvirate_update_200:**
+- cassandra: Blind retuning is likely to repeat prior refutations; the useful discriminator is whether the remaining gap is state lifecycle/scheduling or hot quantized GEMM body.
+- daedalus: Reframe the prefill comparison from "our pp64 is slower/faster" to "what is inside the timed region for each harness".
+- maieutic: If llama.cpp preallocates context/state before timing while native first-run includes first-touch buffers, then a first-run gap is not purely a kernel gap.
+- adversary: Do not report the new pp64 smoke timings as speed evidence because the host was contaminated by other CPU-heavy processes.
+
+**decision_update_201:** Added wait-only Qwen35 op attribution and confirmed a local llama.cpp graph-op timing path. The previous standalone `qwen35_op_attribution` p50 included host input upload and output readback, while llama.cpp `test-backend-ops perf` reports backend op timing. `--profile-wait` now reports the Metal command wait component separately, making hot-shape comparisons less misleading.
+
+**evidence_update_201:**
+- claim: "Qwen35 op attribution can now report Metal command wait time separately from full host-call latency."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_op_wait_nocodegen crystal build bin/qwen35_op_attribution.cr --no-codegen --error-trace` -> exit 0; release Metal build `/tmp/qwen35_op_attribution_wait` -> exit 0; `/tmp/qwen35_op_attribution_wait --batch=64 --warmup=3 --runs=9 --limit=8 --profile-wait` printed `wait_ms` and `weighted_wait` columns.
+  verified_at: 2026-05-14
+  decay_trigger: Qwen35Metal profile counters, op attribution harness, Metal command-buffer semantics, or matmul route changes
+- claim: "llama.cpp can export a Qwen3.5 graph-op file with pp64 shapes for local backend timing."
+  source: local `~/SrcArchives/AI/llama.cpp/build/bin/export-graph-ops -m ~/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf -p \"hello world\" -n 1 -ngl 99 -fa 0 -b 64 -ub 64 --output /tmp/qwen35_llama_graph_ops_b64.txt` -> exit 0, `98 unique ops total`.
+  verified_at: 2026-05-14
+  decay_trigger: llama.cpp build, graph export format, model file, or batch/ubatch settings change
+- claim: "The hot Q4_K prefill shape remains the first kernel-gap candidate, but current timings are noisy."
+  source: local llama.cpp `test-backend-ops perf --test-file /tmp/qwen35_llama_graph_ops_b64.txt` showed `MUL_MAT ... ffn_gate-0 ... q4_K[4096,12288] ... f32[4096,64]` around `1250 us/run` before the long run was stopped; local `/tmp/qwen35_op_attribution_wait --batch=64 --warmup=3 --runs=9 --limit=8 --profile-wait` showed Q4_K `4096x12288 b64` wait `2.825 ms` under noisy host load. This is directional only and requires quiet paired repetition.
+  verified_at: 2026-05-14
+  decay_trigger: host load, llama.cpp kernel dispatch, Qwen35 Q4 H16 kernel, op harness, or Metal driver changes
+
+**quadrumvirate_update_201:**
+- cassandra: Comparing full call latency to backend op timing can create a false kernel-gap diagnosis.
+- daedalus: Shift the next measurement from end-to-end wall to aligned operator timing: same shape, same batch, backend wait only, then return to full pp64 A/B before promotion.
+- maieutic: A standalone faster op is not sufficient; previous Q4 branches improved microbench but regressed full pp64 wall.
+- adversary: Keep the wait-only result as a locator, not a speed claim, until a quiet paired run and full prompt-ingest A/B agree.
