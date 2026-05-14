@@ -11363,3 +11363,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The missing piece is not a single global minimum; it is a chunk-shape/economics classifier that can allow medium high-confidence chunks and reject medium bad tails.
 - maieutic: `min16 improved repeat-suite risk` and `min16 should be default` are different claims; the latter is falsified by a product prompt.
 - adversary: Keep this as a small counterexample, not a final defense of `min8`; larger product prompts can still justify a richer policy.
+
+**decision_update_180:** Added explicit sweep aliases for threshold economics: `ngram_target_only_min8`, `ngram_target_only_risk_min8`, and `ngram_target_only_risk_min12`. The 6-category gate confirms that the next n-gram policy must be feature/economics based rather than a single global `min_candidates` value. Min8 captures useful medium chunks, min16 avoids bad tails, and min12 is not a reliable middle ground.
+
+**evidence_update_180:**
+- claim: "Min8 preserves useful fact/repeat chunks that min16 would skip."
+  source: local `/tmp/qwen35_ngram_threshold_shape_gate/all.log`, `tokens=16`, categories `repeat/fact/code/math/chat/template`, policies `target_only,ngram_target_only_min8,ngram_target_only_risk_min8,ngram_target_only_risk_min12,ngram_target_only_risk_min16` -> repeat min8/risk/min12/min16 all accepted clean `16/16` chunks around `8.3ms/tok`; fact min8 accepted `11/11` on France/Japan and averaged `15.69ms/tok` vs target-only `19.23ms/tok`, while min12/min16 skipped those chunks and averaged about target-only
+  verified_at: 2026-05-14
+  decay_trigger: prompt suite, min-candidate thresholds, risk gate, or target verifier timing changes
+- claim: "Min8 and min12 are unsafe on several non-fact categories; min16 is safer but overly conservative."
+  source: same gate -> code min8/risk_min8 averaged `~24ms/tok` with bad `2/14` and `0/11` chunks, math min8 averaged `~26.6ms/tok` with `~5.8%` acceptance, template min8/min12 averaged `~26.4-26.7ms/tok` with `1-3/12` accepted chunks; min16 fail-closed near target on code/math/template but lost fact medium chunks
+  verified_at: 2026-05-14
+  decay_trigger: prompt mix, candidate features, risk thresholds, or output distribution changes
+
+**quadrumvirate_update_180:**
+- cassandra: A global threshold will either keep useful medium chunks and admit bad medium tails, or skip both.
+- daedalus: Move to chunk-shape/category/economics classification: allow medium fact-like periodic chunks, reject code/math/template low-accept tails, keep high-confidence repeats.
+- maieutic: The relevant target is expected wall versus exact target-only, not acceptance rate alone; a `100%` fail-closed row can still be slower through proposal overhead/noise.
+- adversary: This is still a small handpicked gate. The conclusion is strong only for rejecting global-threshold promotion, not for locking final classifier rules.
