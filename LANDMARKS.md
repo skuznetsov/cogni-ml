@@ -12395,3 +12395,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next runner pivot should batch pre-core projections together, not just QKV. Because current runner uses a Q4 dual alpha/beta kernel, the integration must A/B against that baseline rather than assume separate batched alpha/beta wins.
 - maieutic: This probe uses independent rows and separate alpha/beta Q4 kernels. It does not yet prove a full recurrent runner win because serial DeltaNet state, conv state mutation, and dual alpha/beta packing alter economics.
 - adversary: Require full-stack timing and baseline top1/parity before promoting. The projection bundle is a candidate, not a verified product route.
+
+**decision_update_236:** Wired guarded CUDA recurrent projection+FFN WBA into `QwenRecurrentLayerRunner` behind `QWEN_CUDA_BATCHED_FFN=1 QWEN_CUDA_BATCHED_PROJECTIONS=1`. The route preserves the serial DeltaNet/conv state dependency, but moves independent pre-core projections (`attn_norm -> QKV/gate/alpha/beta`) into token-major buffers, batches Q5/Q4 projection GEMVs over known rows, resumes serial recurrent core from those buffers, then uses the existing batched FFN tail. It is default-off and requires the FFN batching flag so a projection-only alpha/beta-dual regression is not accidentally promoted.
+
+**evidence_update_236:**
+- claim: "The opt-in projection+FFN WBA runner route improves all-layer known-span verifier-shaped timing while preserving baseline GPU top1 in the measured gate."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_batched_proj_runner_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_batched_proj` -> exit 0. Remote Qwen3.5-9B all-layer semantic `--perf-only --input-tokens` gate on RTX 5060 Ti: tokens2 baseline `28.803ms/token`, FFN-only `28.670`, projection+FFN `27.808`, top1 `2,2`; tokens4 `25.550 -> 24.955 -> 24.363`, top1 `2,2,2,2`; tokens8 `23.990 -> 23.126 -> 22.238`, top1 `2` repeated. Remote default token1 exact CPU oracle stayed `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=220`.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent runner scheduling, Q4/Q5 batched GEMV ABI, alpha/beta dual route changes, DeltaNet/conv state layout, CUDA driver/JIT, or model projection shapes
+
+**quadrumvirate_update_236:**
+- cassandra: The projection-bundle probe translated into a full-runner win when combined with batched FFN, improving the tokens8 gate by about `7.3%` versus baseline and `3.8%` versus FFN-only.
+- daedalus: The productive pattern is now clear: place WBA around serial state cuts, not through them. Next candidates are post-core `ssm_out` batching or a more structural DeltaNet block-scan; avoid single-kernel retunes without attribution.
+- maieutic: The route uses separate batched alpha/beta instead of the default dual alpha/beta kernel, but the full route still wins because it amortizes more launch/scheduling work. This does not prove projection-only would win.
+- adversary: Keep default-off until a stronger multi-token parity harness or prompt-level exact verifier gate covers more states. Current evidence is baseline GPU top1 parity plus token1 CPU oracle, not broad hidden-state equivalence.
