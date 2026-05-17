@@ -42,6 +42,7 @@ lib LibCUDADriver
   fun cuMemFree_v2(dptr : CUdeviceptr) : Int32
   fun cuMemcpyHtoD_v2(dst : CUdeviceptr, src : Void*, bytesize : LibC::SizeT) : Int32
   fun cuMemcpyDtoH_v2(dst : Void*, src : CUdeviceptr, bytesize : LibC::SizeT) : Int32
+  fun cuMemcpyDtoD_v2(dst : CUdeviceptr, src : CUdeviceptr, bytesize : LibC::SizeT) : Int32
   fun cuLaunchKernel(fn : CUfunction, grid_x : UInt32, grid_y : UInt32, grid_z : UInt32,
                      block_x : UInt32, block_y : UInt32, block_z : UInt32,
                      shared_mem_bytes : UInt32, stream : Void*,
@@ -264,6 +265,10 @@ module ML::CUDA
 
   def self.copy_dtoh!(dst : Void*, src : DevicePtr, bytesize : LibC::SizeT, what : String) : Nil
     check! LibCUDADriver.cuMemcpyDtoH_v2(dst, src, bytesize), "cuMemcpyDtoH(#{what})"
+  end
+
+  def self.copy_dtod!(dst : DevicePtr, src : DevicePtr, bytesize : LibC::SizeT, what : String) : Nil
+    check! LibCUDADriver.cuMemcpyDtoD_v2(dst, src, bytesize), "cuMemcpyDtoD(#{what})"
   end
 
   def self.synchronize!(what : String = "cuCtxSynchronize") : Nil

@@ -157,6 +157,8 @@ module ML::CUDA
     getter attn_out_gpu : Array(Float32)
     getter final_gpu_all : Array(Float32)
     getter output_device_ptr : DevicePtr
+    getter conv_state_device_ptr : DevicePtr
+    getter ssm_state_device_ptr : DevicePtr
 
     def self.from_weights(weights : Weights,
                           tokens : Int32,
@@ -213,6 +215,8 @@ module ML::CUDA
       @input_device_base = nil.as(DevicePtr?)
       @owned_input_device_ptr = nil.as(DevicePtr?)
       @output_device_ptr = 0_u64
+      @conv_state_device_ptr = 0_u64
+      @ssm_state_device_ptr = 0_u64
       @profile_attn_norm_ms = 0.0
       @profile_projection_ms = 0.0
       @profile_recurrent_core_ms = 0.0
@@ -271,6 +275,14 @@ module ML::CUDA
 
     def ffn_raw_q8_enabled : Bool
       @ffn_raw_q8_enabled
+    end
+
+    def conv_state_bytesize : LibC::SizeT
+      bytesize_f32(@conv_state_init.size)
+    end
+
+    def ssm_state_bytesize : LibC::SizeT
+      bytesize_f32(@ssm_state_init.size)
     end
 
     def run_sequence_profiled(phase_lines : Array(String), prefix : String) : Nil
@@ -366,6 +378,8 @@ module ML::CUDA
       @owned_input_device_ptr = d_xs
       @input_device_base = d_xs
       @output_device_ptr = d_final_all
+      @conv_state_device_ptr = d_conv_state
+      @ssm_state_device_ptr = d_ssm_state
 
       upload_weights = -> {
         ML::CUDA.copy_htod!(d_attn_norm_w, @attn_norm.to_unsafe.as(Void*), bytesize_f32(@hidden), "attn_norm")

@@ -11983,3 +11983,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next useful implementation is a guarded proposal/verifier controller with threshold sweep `0.25..0.40`, not another raw-only sequence run.
 - maieutic: The speed claim remains proposal-lane scoped. Exact verifier parity and wall timing decide whether this matters end-to-end.
 - adversary: The stress sample is seed-token based and still not a prompt suite; use `0.300` as a conservative starting point, not a universal threshold.
+
+**decision_update_212:** Added runtime recurrent FFN raw-Q8 switching and recurrent-state snapshot/restore for discardable proposal probes. `QWEN_CUDA_Q4_RAW_Q8_FFN` is no longer only a construction-time closure decision; recurrent layers expose `ffn_raw_q8_enabled`, mixed stacks can flip all recurrent layers, and mixed stacks can snapshot/restore recurrent conv/SSM state via CUDA device-to-device copies. Full-attention KV is not snapshotted in this first slice because an exact verifier pass overwrites the current position and prior positions are not mutated by a proposal pass.
+
+**evidence_update_212:**
+- claim: "Runtime raw-Q8 switching reproduces the previous env raw-Q8 path without stack rebuild."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_runtime_switch_20260517.log`: seed `0` exact default emitted `198,2,220,16,...`; `QWEN_CUDA_Q4_RAW_Q8_FFN=1` emitted `271,2,220,16,...`; `--runtime-raw-q8` with env unset emitted the same raw sequence and timing class (`21.371ms/tok` vs env raw `21.377ms/tok`).
+  verified_at: 2026-05-17
+  decay_trigger: recurrent runner raw-Q8 switch, mixed-stack routing, or CUDA runner construction changes
+- claim: "Recurrent snapshot/restore allows discardable raw-Q8 proposals while preserving exact greedy output."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_probe_restore_smoke2_20260517.log`: normal exact seed `0` gen16 emitted `198,2,220,16,13,27416,...`; `--greedy-loop-probe-restore` emitted the same exact `top1_gpu` after raw proposals, while raw proposals exposed `271,2,220,16,...` and raw margins.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent state layout, snapshot/restore copy path, full-attention KV overwrite assumptions, or greedy-loop scheduler changes
+- claim: "Raw-Q8 proposals from exact decode state are strong enough for a low threshold guarded-controller experiment."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_probe_restore_27seed_20260517.log`: 27 seeds at `gen=32`, raw proposals from exact decode state matched exact verifier tokens `859/864` (`99.42%`); `raw_margin>=0.030` kept `839/864` with `839/839` agreement and `25/864` fallback, while `0.020` still had one miss. Diagnostic route timing split: total `50.491ms/tok`, raw proposal `21.533ms/tok`, exact verifier `23.865ms/tok`.
+  verified_at: 2026-05-17
+  decay_trigger: seed/prompt suite, margin threshold, raw-Q8 implementation, recurrent snapshot/restore, verifier path, or CUDA timing mode changes
+
+**quadrumvirate_update_212:**
+- cassandra: Layer-major `--input-tokens` was not a faithful controller proxy. Decode-state probe/restore is a better falsifier for raw proposal quality.
+- daedalus: With rollback now available, the next pivot is from diagnostics to a guarded controller that skips raw below threshold and records accept/fallback/wall.
+- maieutic: Exact output preservation after raw proposals verifies recurrent rollback for this smoke, but full controller promotion still needs prompt-suite parity and timing.
+- adversary: Full-attention KV is not snapshotted; this relies on exact verifier overwriting the current position before attention uses it. If future controller proposes multiple tokens ahead without immediate exact overwrite, KV snapshot/restore must be added.

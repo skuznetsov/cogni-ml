@@ -12,6 +12,21 @@ module ML::CUDA
   class QwenMixedStackRunner
     alias LayerRunner = QwenRecurrentLayerRunner | QwenFullAttnLayerRunner
 
+    class RecurrentStateSnapshot
+      getter buffers : Array(DeviceBuffer)
+
+      def initialize(@buffers : Array(DeviceBuffer))
+        @closed = false
+      end
+
+      def close : Nil
+        return if @closed
+
+        @buffers.each(&.close)
+        @closed = true
+      end
+    end
+
     getter layer_ids : Array(Int32)
     getter runners : Array(LayerRunner)
     getter head : QwenOutputHeadRunner
@@ -110,6 +125,43 @@ module ML::CUDA
           # Full-attention layers do not use the recurrent FFN raw-Q8 path.
         end
       end
+    end
+
+    def snapshot_recurrent_states : RecurrentStateSnapshot
+      buffers = [] of DeviceBuffer
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          conv = DeviceBuffer.new(runner.conv_state_bytesize)
+          ssm = DeviceBuffer.new(runner.ssm_state_bytesize)
+          ML::CUDA.copy_dtod!(conv.ptr, runner.conv_state_device_ptr, conv.bytesize, "snapshot conv_state")
+          ML::CUDA.copy_dtod!(ssm.ptr, runner.ssm_state_device_ptr, ssm.bytesize, "snapshot ssm_state")
+          buffers << conv
+          buffers << ssm
+        in QwenFullAttnLayerRunner
+          # Full-attention KV for the current position is overwritten by the
+          # verifier pass; prior positions are not mutated by a proposal pass.
+        end
+      end
+      RecurrentStateSnapshot.new(buffers)
+    end
+
+    def restore_recurrent_states(snapshot : RecurrentStateSnapshot) : Nil
+      idx = 0
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          conv = snapshot.buffers[idx]
+          ssm = snapshot.buffers[idx + 1]
+          raise "snapshot conv_state size mismatch" unless conv.bytesize == runner.conv_state_bytesize
+          raise "snapshot ssm_state size mismatch" unless ssm.bytesize == runner.ssm_state_bytesize
+          ML::CUDA.copy_dtod!(runner.conv_state_device_ptr, conv.ptr, conv.bytesize, "restore conv_state")
+          ML::CUDA.copy_dtod!(runner.ssm_state_device_ptr, ssm.ptr, ssm.bytesize, "restore ssm_state")
+          idx += 2
+        in QwenFullAttnLayerRunner
+        end
+      end
+      raise "unused recurrent snapshot buffers" unless idx == snapshot.buffers.size
     end
 
     def run_sequence(profile_phases : Bool = false,
