@@ -469,9 +469,10 @@ module ML::CUDA
                           tokens : Int32,
                           xs : Array(Float32),
                           eps : Float32,
-                          read_logits : Bool = false) : self
+                          read_logits : Bool = false,
+                          read_top2 : Bool = false) : self
       new(tokens, weights.hidden, weights.vocab, xs, weights.norm,
-        weights.output_raw, weights.output_type, eps, read_logits)
+        weights.output_raw, weights.output_type, eps, read_logits, read_top2)
     end
 
     private def initialize(@tokens : Int32,
@@ -482,7 +483,8 @@ module ML::CUDA
                            @output_raw : Bytes,
                            @output_type : ML::GGUF::TensorType,
                            @eps : Float32,
-                           @read_logits : Bool)
+                           @read_logits : Bool,
+                           @read_top2 : Bool)
       raise ArgumentError.new("tokens must be positive") unless @tokens > 0
       raise ArgumentError.new("xs size mismatch") unless @xs.size == @tokens * @hidden
       raise ArgumentError.new("norm size mismatch") unless @norm.size == @hidden
@@ -575,7 +577,7 @@ module ML::CUDA
       top2_reduce_fn = top1_mod.function("output_top2_partial_reduce_probe")
       top1_values_reduce_fn = top1_mod.function("output_top1_values_reduce_probe")
       output_fn = @output_type.q4_k? ? q4_fn : q6_fn
-      fused_q6_top1 = @output_type.q6_k? && !@read_logits
+      fused_q6_top1 = @output_type.q6_k? && !@read_logits && !@read_top2
       vocab_grid = ((@vocab + 3) // 4).to_u32
       top1_width = fused_q6_top1 ? vocab_grid : 256_u32
 
@@ -742,7 +744,7 @@ module ML::CUDA
         end
         ML::CUDA.copy_dtoh!(@top1_ids_gpu.to_unsafe.as(Void*), d_top1_ids, bytesize_i32(@top1_ids_gpu.size), "output_top1_ids")
         ML::CUDA.copy_dtoh!(@top1_values_gpu.to_unsafe.as(Void*), d_top1_values, bytesize_f32(@top1_values_gpu.size), "output_top1_values")
-        if @read_logits
+        if @read_logits || @read_top2
           ML::CUDA.copy_dtoh!(@top2_ids_gpu.to_unsafe.as(Void*), d_top2_ids, bytesize_i32(@top2_ids_gpu.size), "output_top2_ids")
           ML::CUDA.copy_dtoh!(@top2_values_gpu.to_unsafe.as(Void*), d_top2_values, bytesize_f32(@top2_values_gpu.size), "output_top2_values")
         end

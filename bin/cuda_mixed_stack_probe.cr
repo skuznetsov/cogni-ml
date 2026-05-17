@@ -285,6 +285,7 @@ warmup = 0
 steady_reps = 0
 steady_graph_reps = 0
 read_logits = false
+read_top2 = false
 gpu_logits_only = false
 margin_bucket_report = false
 margin_bucket_edges = [0.05_f32, 0.1_f32, 0.25_f32, 0.5_f32, 1.0_f32, 2.0_f32, 5.0_f32]
@@ -352,7 +353,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-restore-kv", "Also snapshot/restore full-attention KV caches in --greedy-loop-probe-restore") { greedy_loop_probe_restore_kv = true }
   p.on("--greedy-loop-probe-pca-updown", "Use loaded PCA-updown adapters as the discardable proposal route in --greedy-loop-probe-restore") { greedy_loop_probe_pca_updown = true }
   p.on("--greedy-loop-probe-pca-updown-raw-q8-rest", "With --greedy-loop-probe-pca-updown, use raw-Q8 recurrent FFN for non-PCA proposal layers") { greedy_loop_probe_pca_updown_raw_q8_rest = true }
-  p.on("--greedy-loop-probe-chunk-gamma N", "Diagnostic: raw-Q8 guarded chunk proposals with sequential exact verification; forces CPU feedback and no graph") { |v| greedy_loop_probe_chunk_gamma = v.to_i; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
+  p.on("--greedy-loop-probe-chunk-gamma N", "Diagnostic: raw-Q8 guarded chunk proposals with sequential exact verification; forces CPU feedback and no graph") { |v| greedy_loop_probe_chunk_gamma = v.to_i; perf_only = true; read_top2 = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-chunk-margin F", "Raw-Q8 top1/top2 margin threshold for --greedy-loop-probe-chunk-gamma") { |v| greedy_loop_probe_chunk_margin = v.to_f32 }
   p.on("--greedy-loop-probe-chunk-batched-verify", "Use a second tokens=gamma stack to verify full raw-Q8 chunks and copy back only on full accept") { greedy_loop_probe_chunk_batched_verify = true }
   p.on("--greedy-loop-probe-chunk-fast-verify-top1", "Diagnostic: in batched chunk verification, trust resident CUDA top1 ids instead of copying/scanning full logits") { greedy_loop_probe_chunk_fast_verify_top1 = true }
@@ -607,7 +608,7 @@ begin
     end
   end
   head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, tokens,
-    Array(Float32).new(tokens * hidden, 0.0_f32), hparams.rms_eps, read_logits: read_logits)
+    Array(Float32).new(tokens * hidden, 0.0_f32), hparams.rms_eps, read_logits: read_logits, read_top2: read_top2)
   output_head = head.not_nil!
   stack = ML::CUDA::QwenMixedStackRunner.new(layers, runners, output_head, tokens, hidden, xs)
   mixed_stack = stack.not_nil!
@@ -657,7 +658,7 @@ begin
     end
     verifier_head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, verifier_tokens,
       Array(Float32).new(verifier_tokens * hidden, 0.0_f32), hparams.rms_eps,
-      read_logits: read_logits && !greedy_loop_probe_chunk_fast_verify_top1)
+      read_logits: !greedy_loop_probe_chunk_fast_verify_top1)
     verifier_stack = ML::CUDA::QwenMixedStackRunner.new(layers, verifier_runners, verifier_head, verifier_tokens, hidden, verifier_xs)
     verifier_weight_upload_ms = verifier_stack.not_nil!.upload_weights(profile: false)
   end
@@ -740,7 +741,9 @@ begin
             mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
               reset_sequence: generated == 0 && j == 0, sync_end: true, read_head_outputs: true)
             chunk_raw_ms += (Time.instant - t_raw).total_milliseconds
-            raw_best_id, _, raw_second_id, _, raw_margin = top2_from_logits(output_head.logits_gpu_all, 0, head_weights.vocab)
+            raw_best_id = output_head.top1_ids[0]
+            raw_second_id = output_head.top2_ids_gpu[0]
+            raw_margin = output_head.top1_values_gpu[0] - output_head.top2_values_gpu[0]
             proposal_ids << raw_best_id
             proposal_top2 << raw_second_id
             proposal_margins << raw_margin
@@ -1284,6 +1287,7 @@ begin
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"
   puts "read_logits=#{read_logits}"
+  puts "read_top2=#{read_top2}"
   puts "gpu_logits_only=#{gpu_logits_only}"
   puts "margin_bucket_report=#{margin_bucket_report}"
   puts "profile_phases=#{profile_phases}"

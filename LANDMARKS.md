@@ -12557,3 +12557,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful pivot was invariant repair at the output-head boundary, not more speculative-controller tuning.
 - maieutic: This still does not make current raw-Q8 chunk speculation faster than plain greedy; it only removes one verifier-side waste and restores a safe primitive for future verifier work.
 - adversary: Keep `--greedy-loop-probe-chunk-fast-verify-top1` diagnostic until a broader multi-seed/prompt gate runs without CUDA memory exhaustion.
+
+**decision_update_247:** Split CUDA output-head "read full logits" from "read resident top2" for diagnostic controllers. `QwenOutputHeadRunner` now has `read_top2` so a caller can materialize logits on device, run CUDA top2, and copy only top1/top2 ids/values instead of copying the full vocab logits to host. The raw-Q8 chunk proposal path now uses resident CUDA top1/top2 margin with `read_logits=false, read_top2=true`; verifier truth is unchanged and still uses either logits-scan or the guarded fast-top1 verifier flag.
+
+**evidence_update_247:**
+- claim: "The `read_top2` chunk proposal path works on a five-layer CUDA smoke and avoids full logits readback for proposal margin."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_read_top2_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_read_top2` -> exit 0. Remote five-layer Qwen3.5-9B smoke with `--greedy-loop-probe-chunk-gamma 4 --greedy-loop-probe-chunk-batched-verify --greedy-loop-probe-chunk-fast-verify-top1` printed `read_logits=false`, `read_top2=true`, exact raw/exact/top1 sequence `220,695,12,50,1458,1449,17961,17961`, `chunk_probe_batched_verify_ms=42.154`, and `ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: output-head readback mode, chunk proposal margin wiring, top2 kernels, verifier controller, or model layer selection changes
+- claim: "Full 9B `read_top2` chunk timing is currently blocked by remote CUDA memory state, not by a code error observed in this branch."
+  source: remote full 9B run failed before execution with `cuMemAlloc failed with CUDA error 2` in `QwenFullAttnKVRunner#build_runner`; `nvidia-smi` showed `9648MiB` used with no listed running processes after repeated prior full-model runs. No GPU reset was attempted.
+  verified_at: 2026-05-17
+  decay_trigger: remote host reboot/GPU reset, memory allocator changes, verifier stack memory reduction, or running on a clean CUDA device
+
+**quadrumvirate_update_247:**
+- cassandra: Removing CPU logits copies should help proposal accounting, but it cannot be claimed as a full-model speedup until the full 9B gate runs on a clean GPU.
+- daedalus: This is a boundary cleanup that enables future controller tests; it is not the main breakthrough by itself.
+- maieutic: The smoke proves wiring and semantics on a layer slice, not broad prompt/model behavior.
+- adversary: Do not promote `read_top2` timing claims beyond five-layer diagnostics until the OOM condition is cleared and full all-layer A/B is repeated.
