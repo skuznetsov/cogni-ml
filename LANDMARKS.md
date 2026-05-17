@@ -11951,3 +11951,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next implementation should be a guarded controller, not more raw-only free-run: use raw when margin is high, exact fallback when margin is low, then measure parity and wall.
 - maieutic: Margin is a local confidence signal, not a semantic quality proof. Promotion still requires exact verifier parity on real prompts.
 - adversary: The diagnostic uses CPU feedback/full-logit readback, so its absolute wall is not the production path. Use it for drift/margin evidence only.
+
+**decision_update_210:** Refuted `raw_margin>=0.030` as a standalone safe gate for raw-Q8 free-run. The wider stress suite found a high-raw-margin miss where raw selected exact/base top2 confidently. This changes the controller premise: raw-Q8 remains useful as a proposal accelerator, but the first guarded controller should either use a conservative threshold around `0.300` or add another risk signal; the earlier `0.030` threshold is only valid on the smaller 8-seed gate.
+
+**evidence_update_210:**
+- claim: "The wider raw-Q8 free-run stress suite contains an adversarial high-raw-margin first divergence."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_free_run_greedy_logits_stress_20260517.log` over 27 seeds at `gen=32`: ungated raw-Q8 matched base `724/864` (`83.80%`), with 7 first divergences. Threshold `raw_margin>=0.030` caught `6/7`; the miss was seed `1919` pos `16`, exact/base top1 `5435`, raw top1 `7225`, exact/base top2 `7225`, exact/base margin `0.037300`, raw margin `0.239071`.
+  verified_at: 2026-05-17
+  decay_trigger: seed/prompt suite, raw-Q8 route, margin threshold, verifier policy, or CUDA output-head diagnostics change
+- claim: "A conservative threshold around `0.300` caught all observed first divergences in the stress suite, at lower coverage."
+  source: same remote stress suite: threshold `0.300` caught `7/7` first divergences, kept `579/706` pre-divergence positions, and all kept positions matched (`579/579`); threshold `0.030` kept `689/706` but missed one first divergence.
+  verified_at: 2026-05-17
+  decay_trigger: seed/prompt distribution, threshold policy, raw-Q8 route, or drift pattern changes
+
+**quadrumvirate_update_210:**
+- cassandra: A raw-confidence-only shortcut can be fooled when the approximate route confidently flips a low-margin exact decision.
+- daedalus: Move from optimistic low-threshold gating to conservative controller experiments plus a search for a second risk feature.
+- maieutic: The controller needs exact parity first; the useful speed metric is accepted proposal work after fallback/reject overhead, not raw-only free-run speed.
+- adversary: The stress suite is still token-seed based, not a real prompt distribution. Treat `0.300` as a starting threshold, not a universal constant.
