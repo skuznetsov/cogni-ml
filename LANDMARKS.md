@@ -12787,3 +12787,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The earlier "do not reuse for output-head/top1" caution was correct for blind promotion. The safe pivot was to materialize logits and reuse the existing ranking oracle instead of inventing a new fused multi-row top1 reducer.
 - maieutic: Top1 equality versus the old route is strong for the tested spans, but not a formal proof for all distributions. Keep the env opt-out and require prompt/verifier gates before production promotion.
 - adversary: This route trades fewer Q6 weight reads for materialized logits plus top2 scans. It wins at tokens4/16 on RTX 5060 Ti, but may regress on memory-constrained devices or when full logits are already required differently.
+
+**decision_update_260:** Extended LTP/WBA weight-stationary token batching to recurrent Q5_K `attn_qkv`. `q5_k_gemv_warp4_f32_tbatch4` reads/dequantizes one Q5 weight row once and accumulates four normalized token rows in registers. The recurrent runner uses it for known-span projection WBA when `tokens >= 4` and divisible by 4; `QWEN_CUDA_Q5_TBATCH4_OFF=1` restores the previous batched grid route.
+
+**evidence_update_260:**
+- claim: "The Q5_K tbatch4 microkernel is exact and materially faster on recurrent `attn_qkv`."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q5_tbatch_nocodegen crystal build bin/cuda_q5k_gemv_probe.cr -Dcpu_only --no-codegen` and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q5_tbatch_mixed_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` -> exit 0. Remote RTX 5060 Ti `cuda_q5k_gemv_probe` on Qwen3.5-9B `blk.0.attn_qkv.weight`: tokens4 loop/batched/tbatch4 `0.312/0.312/0.151ms`, tokens8 `0.627/0.623/0.302`, tokens16 `1.263/1.252/0.604`, all `ok=true`, `cos=1.0`, max diff <= `1.91e-6`.
+  verified_at: 2026-05-17
+  decay_trigger: Q5_K PTX rewrite, CUDA driver/JIT, token-major layout, recurrent `attn_qkv` quant type/shape, or runner projection routing changes
+- claim: "Q5 tbatch4 composes exactly with the all-layer Qwen3.5-9B CUDA stack and gives another known-span speedup."
+  source: remote RTX 5060 Ti all-layer tokens8 A/B with `QWEN_CUDA_Q5_TBATCH4_OFF=1` vs default printed matching top1 and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`. All-layer tokens16 perf on top of Q4/Q6/head tbatch improved `238.251 -> 222.240ms` total (`14.891 -> 13.890ms/tok`) with identical top1 ids. Profile after promotion shows `sum_qkv_ms=15.626` and `sum_projection_ms=45.067`, down from the prior head-tbatch profile `sum_qkv_ms=30.971`, `sum_projection_ms=60.673`.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent projection buffer layout, pointer-box ownership, Q5 tbatch runner WBA routing, CUDA driver/JIT, or broader semantic/verifier benchmark changes
+
+**quadrumvirate_update_260:**
+- cassandra: The old Q5 batched-grid refutation did not apply because it lacked weight-stationary reuse. The tbatch4 premise predicted roughly half QKV weight traffic per token over a 4-token band; microbench and profile matched that direction.
+- daedalus: Projection WBA now moved from launch batching to arithmetic/dataflow batching. Remaining exact projection cost is mostly Q4 `attn_gate`; QKV is no longer the dominant projection subphase.
+- maieutic: This is still a known-span/verifier optimization, not a single-token greedy route. The condition `tokens % 4 == 0` is part of the verified claim.
+- adversary: Keep the opt-out. Do not infer that all Q5 uses should switch blindly; current proof covers recurrent `attn_qkv` token-major output consumed by the existing serial recurrent core.

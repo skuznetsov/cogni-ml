@@ -75,9 +75,10 @@ reps = 1
 warmup = 0
 tokens = 1
 batched = false
+tbatch4 = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_q5k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched]"
+  p.banner = "Usage: cuda_q5k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched] [--tbatch4]"
   p.on("--model PATH", "Q5_K GGUF model path") { |v| model = v }
   p.on("--tensor NAME", "Q5_K tensor name") { |v| tensor_name = v }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
@@ -85,6 +86,7 @@ OptionParser.parse do |p|
   p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
   p.on("--tokens N", "Number of independent input rows to run") { |v| tokens = v.to_i }
   p.on("--batched", "Use the batched Q5_K GEMV kernel over all rows") { batched = true }
+  p.on("--tbatch4", "Use the weight-stationary four-token Q5_K GEMV kernel") { tbatch4 = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -92,6 +94,7 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
 raise "tokens must be positive" unless tokens > 0
+raise "--tbatch4 requires tokens multiple of 4" if tbatch4 && tokens % 4 != 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 info = gguf.tensor(tensor_name) || raise "missing tensor #{tensor_name.inspect}"
@@ -130,12 +133,14 @@ cuda! LibCUDAQ5K.cuCtxCreate_v2(pointerof(ctx), 0_u32, dev), "cuCtxCreate"
 mod = Pointer(Void).null
 fn = Pointer(Void).null
 batched_fn = Pointer(Void).null
+tbatch4_fn = Pointer(Void).null
 d_w = d_x = d_out = 0_u64
 
 begin
   cuda! LibCUDAQ5K.cuModuleLoadData(pointerof(mod), PTX.to_unsafe.as(Void*)), "cuModuleLoadData"
   cuda! LibCUDAQ5K.cuModuleGetFunction(pointerof(fn), mod, "q5_k_gemv_warp4_f32"), "cuModuleGetFunction"
   cuda! LibCUDAQ5K.cuModuleGetFunction(pointerof(batched_fn), mod, "q5_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(batched)"
+  cuda! LibCUDAQ5K.cuModuleGetFunction(pointerof(tbatch4_fn), mod, "q5_k_gemv_warp4_f32_tbatch4"), "cuModuleGetFunction(tbatch4)"
   gpu_out = Array(Float32).new(tokens * out_dim, 0.0_f32)
   cuda! LibCUDAQ5K.cuMemAlloc_v2(pointerof(d_w), w_raw.size.to_u64), "cuMemAlloc(w)"
   cuda! LibCUDAQ5K.cuMemAlloc_v2(pointerof(d_x), bytesize_f32(tokens * in_dim)), "cuMemAlloc(x)"
@@ -157,7 +162,15 @@ begin
   tokens_u32 = tokens.to_u32
 
   run_once = -> {
-    if batched
+    if tbatch4
+      (tokens // 4).times do |group|
+        tok = group * 4
+        d_x_cur = d_x + bytesize_f32(tok * in_dim)
+        d_out_cur = d_out + bytesize_f32(tok * out_dim)
+        cuda! LibCUDAQ5K.cuLaunchKernel(tbatch4_fn, grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel(tbatch4)"
+      end
+    elsif batched
       d_x_cur = d_x
       d_out_cur = d_out
       cuda! LibCUDAQ5K.cuLaunchKernel(batched_fn, grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
@@ -193,6 +206,7 @@ begin
   puts "shape=#{in_dim}x#{out_dim}"
   puts "tokens=#{tokens}"
   puts "batched=#{batched}"
+  puts "tbatch4=#{tbatch4}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
