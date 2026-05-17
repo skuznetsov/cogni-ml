@@ -230,6 +230,7 @@ module ML::CUDA
       @profile_ffn_down_ms = 0.0
       @profile_final_add_ms = 0.0
       @ffn_raw_q8_enabled = ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"
+      @ffn_skip_enabled = false
       @closed = false
 
       build_runner
@@ -275,6 +276,13 @@ module ML::CUDA
 
     def ffn_raw_q8_enabled : Bool
       @ffn_raw_q8_enabled
+    end
+
+    def ffn_skip_enabled=(@ffn_skip_enabled : Bool)
+    end
+
+    def ffn_skip_enabled : Bool
+      @ffn_skip_enabled
     end
 
     def conv_state_bytesize : LibC::SizeT
@@ -343,6 +351,7 @@ module ML::CUDA
       attn_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
       swiglu_fn = dn_mod.function("swiglu_probe")
+      add_vec_fn = dn_mod.function("add_vec_probe")
       conv_fn = dn_mod.function("recurrent_conv1d_silu_step_probe")
       norm_fn = dn_mod.function("l2_norm_128_probe")
       ab_fn = dn_mod.function("alpha_beta_transform_probe")
@@ -367,14 +376,14 @@ module ML::CUDA
                bytesize_f32(@hidden), bytesize_f32(@hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
                @ffn_gate_raw.size.to_u64, @ffn_up_raw.size.to_u64, @ffn_down_raw.size.to_u64,
                bytesize_f32(@ffn_dim), bytesize_f32(@ffn_dim), bytesize_f32(@ffn_dim), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
-               q8_pack_bytes(@hidden), bytesize_f32(@hidden // 32)]
+               q8_pack_bytes(@hidden), bytesize_f32(@hidden // 32), bytesize_f32(@hidden)]
       ptrs = sizes.map do |size_bytes|
         buffer = DeviceBuffer.new(size_bytes)
         @buffers << buffer
         buffer.ptr
       end
 
-      d_xs, d_attn_norm_w, d_cur, d_qkv_w, d_gate_w, d_alpha_w, d_beta_w, d_conv_state, d_ssm_state, d_qkv, d_conv_w, d_conv_out, d_alpha, d_beta_raw, d_dt, d_a, d_g, d_b, d_z, d_norm, d_out_w, d_attn_out, d_post_norm_w, d_residual, d_cur2, d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w, d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all, d_ffn_q8_packs, d_ffn_q8_scales = ptrs
+      d_xs, d_attn_norm_w, d_cur, d_qkv_w, d_gate_w, d_alpha_w, d_beta_w, d_conv_state, d_ssm_state, d_qkv, d_conv_w, d_conv_out, d_alpha, d_beta_raw, d_dt, d_a, d_g, d_b, d_z, d_norm, d_out_w, d_attn_out, d_post_norm_w, d_residual, d_cur2, d_ffn_gate_w, d_ffn_up_w, d_ffn_down_w, d_ffn_gate, d_ffn_up, d_ffn_comb, d_ffn_out, d_final_all, d_ffn_q8_packs, d_ffn_q8_scales, d_zero_hidden = ptrs
       @owned_input_device_ptr = d_xs
       @input_device_base = d_xs
       @output_device_ptr = d_final_all
@@ -396,6 +405,8 @@ module ML::CUDA
         ML::CUDA.copy_htod!(d_ffn_gate_w, @ffn_gate_raw.to_unsafe.as(Void*), @ffn_gate_raw.size.to_u64, "ffn_gate_w")
         ML::CUDA.copy_htod!(d_ffn_up_w, @ffn_up_raw.to_unsafe.as(Void*), @ffn_up_raw.size.to_u64, "ffn_up_w")
         ML::CUDA.copy_htod!(d_ffn_down_w, @ffn_down_raw.to_unsafe.as(Void*), @ffn_down_raw.size.to_u64, "ffn_down_w")
+        zero_hidden = Array(Float32).new(@hidden, 0.0_f32)
+        ML::CUDA.copy_htod!(d_zero_hidden, zero_hidden.to_unsafe.as(Void*), bytesize_f32(@hidden), "zero_hidden")
       }
 
       reset_sequence = -> {
@@ -580,6 +591,12 @@ module ML::CUDA
       ffn_down_params[4] = box_u32(ffn_dim_u32).as(Void*)
       ffn_down_params[5] = box_u32(hidden_u32).as(Void*)
 
+      ffn_skip_copy_params = Pointer(Void*).malloc(4)
+      ffn_skip_copy_params[0] = box_ptr(d_residual).as(Void*)
+      ffn_skip_copy_params[1] = box_ptr(d_zero_hidden).as(Void*)
+      ffn_skip_copy_params[2] = d_final_cur_ptr.as(Void*)
+      ffn_skip_copy_params[3] = box_u32(hidden_u32).as(Void*)
+
       run_token = ->(tok : Int32) {
         offset = bytesize_f32(tok * @hidden)
         d_x_cur_ptr.value = @input_device_base.not_nil! + offset
@@ -601,7 +618,9 @@ module ML::CUDA
         ML::CUDA.launch!(post_fn, @h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, post_params, "post gate")
         ML::CUDA.launch!(q4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out")
         ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
-        if @ffn_raw_q8_enabled
+        if @ffn_skip_enabled
+          ML::CUDA.launch!(add_vec_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_skip_copy_params, "ffn skip copy")
+        elsif @ffn_raw_q8_enabled
           ML::CUDA.launch!(q8_quant_fn, (@hidden // 32).to_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ffn_q8_quant_params, "ffn q8 quant")
           ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_raw_q8_params, "ffn gate raw q8")
           ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_raw_q8_params, "ffn up raw q8")
@@ -609,8 +628,10 @@ module ML::CUDA
           ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
           ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
         end
-        ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
-        ML::CUDA.launch!(ffn_down_add_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add")
+        unless @ffn_skip_enabled
+          ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
+          ML::CUDA.launch!(ffn_down_add_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add")
+        end
       }
 
       profile_run_token = ->(tok : Int32) {
@@ -658,34 +679,41 @@ module ML::CUDA
         @profile_recurrent_core_ms += (Time.instant - t_core).total_milliseconds
 
         t_ffn = Time.instant
-        t_ffn_gate = Time.instant
-        if @ffn_raw_q8_enabled
-          ML::CUDA.launch!(q8_quant_fn, (@hidden // 32).to_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ffn_q8_quant_params, "ffn q8 quant")
-          ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_raw_q8_params, "ffn gate raw q8")
+        if @ffn_skip_enabled
+          t_skip = Time.instant
+          ML::CUDA.launch!(add_vec_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_skip_copy_params, "ffn skip copy")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn skip)")
+          @profile_final_add_ms += (Time.instant - t_skip).total_milliseconds
         else
-          ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
+          t_ffn_gate = Time.instant
+          if @ffn_raw_q8_enabled
+            ML::CUDA.launch!(q8_quant_fn, (@hidden // 32).to_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ffn_q8_quant_params, "ffn q8 quant")
+            ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_raw_q8_params, "ffn gate raw q8")
+          else
+            ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
+          end
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn gate)")
+          @profile_ffn_gate_ms += (Time.instant - t_ffn_gate).total_milliseconds
+
+          t_ffn_up = Time.instant
+          if @ffn_raw_q8_enabled
+            ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_raw_q8_params, "ffn up raw q8")
+          else
+            ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
+          end
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn up)")
+          @profile_ffn_up_ms += (Time.instant - t_ffn_up).total_milliseconds
+
+          t_swiglu = Time.instant
+          ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent swiglu)")
+          @profile_swiglu_ms += (Time.instant - t_swiglu).total_milliseconds
+
+          t_ffn_down = Time.instant
+          ML::CUDA.launch!(ffn_down_add_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn down)")
+          @profile_ffn_down_ms += (Time.instant - t_ffn_down).total_milliseconds
         end
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn gate)")
-        @profile_ffn_gate_ms += (Time.instant - t_ffn_gate).total_milliseconds
-
-        t_ffn_up = Time.instant
-        if @ffn_raw_q8_enabled
-          ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_raw_q8_params, "ffn up raw q8")
-        else
-          ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
-        end
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn up)")
-        @profile_ffn_up_ms += (Time.instant - t_ffn_up).total_milliseconds
-
-        t_swiglu = Time.instant
-        ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent swiglu)")
-        @profile_swiglu_ms += (Time.instant - t_swiglu).total_milliseconds
-
-        t_ffn_down = Time.instant
-        ML::CUDA.launch!(ffn_down_add_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add")
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn down)")
-        @profile_ffn_down_ms += (Time.instant - t_ffn_down).total_milliseconds
 
         @profile_ffn_ms += (Time.instant - t_ffn).total_milliseconds
       }

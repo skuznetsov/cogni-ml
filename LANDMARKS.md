@@ -12127,3 +12127,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next breakthrough candidate must reduce body work, not merely schedule two full bodies more cleverly.
 - maieutic: This process-level test is a coarse falsifier. It cannot prove all stream overlap is useless, but it is enough to deprioritize full-lane overlap until the proposal lane becomes much cheaper.
 - adversary: Process concurrency adds context/memory pressure, so the exact numbers are not an in-process bound. The direction is still clear because both lanes slow by about `2x`.
+
+**decision_update_220:** Added a default-off CUDA recurrent-FFN skip proposal diagnostic and refuted naive FFN removal as a quality/speed tradeoff. The diagnostic uses the existing `add_vec_probe` kernel with a resident zero vector to forward the post-attention residual instead of running `ffn_gate`, `ffn_up`, `SwiGLU`, and `ffn_down_add` for selected recurrent layers. All-recurrent skip gives a real body lower bound (`23.616 -> 14.435ms/token`) but collapses top1 agreement (`1/16`). Late masks are less destructive but too small to matter: layer `30` gives `13/16` at `23.232ms/token`, and the `24,25,26,28,29,30` band gives `11/16` at `21.325ms/token`.
+
+**evidence_update_220:**
+- claim: "The CUDA recurrent-FFN skip diagnostic builds and runs without changing default exact behavior."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_skipffn_nocodegen3 crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_skipffn` -> exit 0; remote all-layer base teacher-forced control matched `16/16` at `23.595ms/token`.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA recurrent runner FFN path, mixed-stack diagnostic flags, or Qwen3.5 CUDA probe timing changes
+- claim: "Naive recurrent FFN skipping is not a viable standalone proposal body."
+  source: remote reefy.ai logs `/build/persisten/cogni-ml/tmp/skipffn_teacher_forced_20260517.log`, `/build/persisten/cogni-ml/tmp/skipffn_layer_masks_20260517.log`, and `/build/persisten/cogni-ml/tmp/skipffn_single_layers_tail_20260517.log`: all recurrent skip `1/16` at `14.435ms/token`; late band `24,25,26,28,29,30` `11/16` at `21.325ms/token`; best single late layers in the tested set reached `14/16` but stayed near baseline speed (`~23.12ms/token`).
+  verified_at: 2026-05-17
+  decay_trigger: prompt suite, layer masks, risk gate, combination with raw-Q8/PCA-updown, or verifier acceptance controller changes
+
+**quadrumvirate_update_220:**
+- cassandra: Removing FFN work has the right cost shape, but the hidden perturbation is too large without a replacement adapter.
+- daedalus: The next cheap-body path should be FFN replacement, not FFN deletion: PCA/updown, blockpred sparse FFN, or another learned residual adapter that keeps decision boundaries.
+- maieutic: Single-token teacher-forced agreement is not final acceptance, but the bad quality/small speed frontier is enough to avoid a full controller around pure skip.
+- adversary: Keep the diagnostic because it is a useful lower-bound and mask probe; do not promote it as a speedup feature.

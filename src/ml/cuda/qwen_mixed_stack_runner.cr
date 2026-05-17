@@ -143,6 +143,29 @@ module ML::CUDA
       end
     end
 
+    def set_recurrent_ffn_skip(enabled : Bool) : Nil
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          runner.ffn_skip_enabled = enabled
+        in QwenFullAttnLayerRunner
+          # Full-attention layers keep their exact FFN path in this probe.
+        end
+      end
+    end
+
+    def set_recurrent_ffn_skip_layers(skip_layers : Array(Int32)) : Nil
+      skip_set = skip_layers.to_set
+      @layer_ids.zip(@runners).each do |layer_id, runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          runner.ffn_skip_enabled = skip_set.includes?(layer_id)
+        in QwenFullAttnLayerRunner
+          # Full-attention layers keep their exact FFN path in this probe.
+        end
+      end
+    end
+
     def snapshot_recurrent_states : RecurrentStateSnapshot
       buffers = [] of DeviceBuffer
       @runners.each do |runner|
