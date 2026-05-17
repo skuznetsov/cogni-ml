@@ -12055,3 +12055,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The speed-bearing route should avoid duplicate weight-owning verifier stacks and use same-stack rollback plus exact overwrite/replay semantics.
 - maieutic: Snapshot correctness is not chunk-verifier speed. The next falsifier must measure gamma=2/4 guarded chunk acceptance and wall time.
 - adversary: Do not extrapolate the tiny `max_seq=64` KV-copy overhead to long contexts; long-context controllers need live-prefix copy accounting or no-KV rollback by construction.
+
+**decision_update_216:** Added a guarded raw-Q8 chunk-proposal diagnostic for CUDA greedy loops. `--greedy-loop-probe-chunk-gamma=N` now generates raw-Q8 proposal chunks from a same-stack snapshot, restores exact state, then sequentially verifies the proposed tokens with the exact path. `--greedy-loop-probe-chunk-margin=F` defaults to `0.03` and falls back to one exact token when any raw proposal margin drops below threshold. This is controller-accounting infrastructure, not a speed-bearing verifier yet, because the exact verifier is still sequential.
+
+**evidence_update_216:**
+- claim: "The chunk diagnostic builds locally and on the remote RTX 5060 Ti host."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_chunkprobe_nocodegen2 crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_chunkprobe2` -> exit 0.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA probe option handling, output-head logits readback, raw-Q8 runtime switch, snapshot/restore semantics, or Crystal compiler changes
+- claim: "The first remote chunk gate preserves exact greedy output and shows high full-chunk acceptance for gamma 2/4 on the tested seeds."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_chunkprobe_multiseed_20260517.log` over seeds `0,198,760,1919`, all-layer Qwen3.5-9B, gen16, margin `0.03`: every row printed `ok=true`; gamma2 full accepts were `8/9`, `8/8`, `8/8`, `8/8`; gamma4 full accepts were `4/5`, `4/4`, `4/4`, `4/4`; seed0 had one margin fallback at the known first-token near-tie. Exact control `/build/persisten/cogni-ml/tmp/raw_q8_chunkprobe_exact_control_seed0_20260517.log` emitted the same seed0 exact sequence as chunk mode.
+  verified_at: 2026-05-17
+  decay_trigger: seed/prompt suite, margin threshold, raw-Q8 proposal route, exact verifier controller, or output-head diagnostics change
+- claim: "The first broken chunk run exposed and fixed a readback-normalization bug."
+  source: initial remote `raw_q8_chunkprobe_g{2,4}_seed0_20260517.log` showed raw top1 all zeros because perf-only normalization disabled `read_logits`; the fix keeps logits readback when `greedy_loop_probe_chunk_gamma > 0`, and reruns produced meaningful raw IDs/margins.
+  verified_at: 2026-05-17
+  decay_trigger: perf-only/read-logits option normalization or chunk diagnostic option semantics change
+
+**quadrumvirate_update_216:**
+- cassandra: The acceptance signal is promising but over a seed-token micro-suite; prompt-distribution and longer-gen gates are required before promoting controller policy.
+- daedalus: The next speed-bearing pivot is replacing the sequential verifier in this diagnostic with a true chunk verifier or an exact accepted-chunk fast path, not more raw-only proposal sweeps.
+- maieutic: `ok=true` here means exact output preservation under the diagnostic controller, not speedup. The wall is expected to be around raw-plus-exact cost.
+- adversary: Margin fallback prevented the known seed0 near-tie from becoming a reject. Need adversarial seeds/prompts where raw high-margin flips exact top2 before trusting threshold `0.03` broadly.
