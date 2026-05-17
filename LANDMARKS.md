@@ -12099,3 +12099,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed path is not another duplicate verifier stack. It must either make raw proposal materially cheaper, overlap raw proposal with exact verification, or implement a true known-span/chunk verifier kernel path with sublinear per-token cost.
 - maieutic: High acceptance is necessary but not sufficient. The verifier body must be faster per verified token than plain decode, otherwise exactness bookkeeping only adds cost.
 - adversary: Do not report this as speculative speedup. It is a useful negative measurement and a diagnostic option only.
+
+**decision_update_218:** Refuted plain late-layer truncation as a standalone CUDA self-draft proposal body. The hypothesis was that later layers might mostly refine nuance, so running only an early prefix of Qwen3.5-9B could be a cheap proposal generator and let the exact verifier correct misses. Teacher-forced agreement was too low for the saved cost: skipping only two layers (`0..29`) saved about `5.4%` but matched only `8/16`; skipping eight layers (`0..23`) saved about `22.4%` but matched only `6/16`. This does not rule out learned block surrogates, low-rank/DN summaries, or prompt-conditioned late-band routes, but it rules out naive layer-prefix truncation as the next speed path.
+
+**evidence_update_218:**
+- claim: "Plain layer-prefix truncation is not a good proposal-quality/cost tradeoff on the tested all-layer Qwen3.5-9B CUDA prompt."
+  source: remote reefy.ai `/build/persisten/cogni-ml/tmp/layer_trunc_teacher_forced_20260517_rerun.log` and `/build/persisten/cogni-ml/tmp/layer_trunc_speed_20260517.log`: all layers matched `16/16` at `23.337ms/token`; layers `0..23` matched `6/16` at `18.119ms/token`; layers `0..27` matched `7/16` at `20.755ms/token`; layers `0..29` matched `8/16` at `22.080ms/token`.
+  verified_at: 2026-05-17
+  decay_trigger: prompt suite, layer set, proposal acceptance controller, CUDA layer timing, or surrogate route changes
+
+**quadrumvirate_update_218:**
+- cassandra: The intuition "late layers only refine nuance" is too weak for raw truncation; even skipping two layers changes many top1 decisions.
+- daedalus: The viable frame is not "run fewer original layers" but "replace expensive layer bands with a learned/mathematical surrogate that preserves decision boundaries enough for verifier acceptance."
+- maieutic: Teacher-forced top1 is only a proxy, but the cost savings are too small at the first plausible quality point to justify building a controller around this branch.
+- adversary: This is a narrow 16-token probe. It should be treated as a refutation of naive truncation priority, not as a broad refutation of block surrogates or prompt-conditioned adaptive depth.
