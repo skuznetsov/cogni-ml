@@ -12325,3 +12325,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Keep graph replay as a stability-improved opt-in, but do not spend more speed work here until kernels are fused enough that launch overhead becomes material.
 - maieutic: This recheck only covers exact greedy `gen=32`, not chunk verifier or proposal paths. The conclusion is narrow: graph replay is safe in this smoke and too small to prioritize.
 - adversary: The measured delta is close to normal timing noise, so do not report it as a product speedup.
+
+**decision_update_231:** Added a standalone CUDA FFN WBA microprobe for known-span rows. `q4_k_gemv_warp4_f32_batched` and `q6_k_gemv_warp4_f32_batched` are appended PTX entries that map a linear grid over `(token, output-row-block)` and reuse the same Q4/Q6 weights across multiple independent input rows. `cuda_ffn_sequence_probe --tokens N --batched` compares this path against the old host-looped per-row FFN sequence. This is a microprobe only; it is not yet wired into the recurrent verifier runner.
+
+**evidence_update_231:**
+- claim: "The batched Q4/Q6 FFN microprobe is numerically correct and faster for known-span rows."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_ffn_batched_probe_nocodegen4 crystal build bin/cuda_ffn_sequence_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote `/build/persisten/cogni-ml/tmp/cuda_ffn_sequence_probe_batched4`, Qwen3.5-9B layer 0 on RTX 5060 Ti: tokens2 loop `0.741ms`, batched `0.714ms`; tokens4 `1.486 -> 1.391ms`; tokens8 `2.987 -> 2.757ms`; all `ok=true`, `cos=1.0`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4/Q6 PTX layout, FFN probe wiring, CUDA driver/JIT, tensor shape, or integration into recurrent verifier runner
+
+**quadrumvirate_update_231:**
+- cassandra: WBA over same-weight known-span rows gives a real but modest FFN-slice win. It is not enough by itself to fix the `2x` speculative gap, but it validates the correct integration direction.
+- daedalus: The next useful step is not more standalone timing. Integrate the batched kernels into a verifier-only recurrent/full-attn FFN path or add batched projection kernels, then remeasure full `tokens=gamma` verifier cost.
+- maieutic: This probe batches independent FFN rows only. It does not solve DeltaNet recurrence or full recurrent-layer scheduling, so end-to-end verifier speedup will be smaller than the FFN microprobe delta unless more GEMV groups are batched.
+- adversary: The batched entries duplicate existing PTX logic. Keep them default-unused until runner integration has parity and full-stack timing evidence.

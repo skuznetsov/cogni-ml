@@ -133,14 +133,18 @@ layer = 0
 seed = 23_u64
 reps = 1
 warmup = 0
+tokens = 1
+batched = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_ffn_sequence_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N]"
+  p.banner = "Usage: cuda_ffn_sequence_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched]"
   p.on("--model PATH", "Qwen Q4_K_M GGUF model path") { |v| model = v }
   p.on("--layer N", "Layer index") { |v| layer = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed FFN sequence launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup FFN sequence launches") { |v| warmup = v.to_i }
+  p.on("--tokens N", "Number of independent FFN rows to run") { |v| tokens = v.to_i }
+  p.on("--batched", "Use grid.y batched Q4/Q6 GEMV kernels for all rows") { batched = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -148,6 +152,7 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "layer must be non-negative" unless layer >= 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
+raise "tokens must be positive" unless tokens > 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 prefix = "blk.#{layer}"
@@ -166,15 +171,20 @@ gate_raw = gguf.read_tensor_raw(gate_info)
 up_raw = gguf.read_tensor_raw(up_info)
 down_raw = gguf.read_tensor_raw(down_info)
 rng = Random.new(seed)
-x = Array(Float32).new(hidden) { rng.rand(-1.0_f32..1.0_f32) }
+x = Array(Float32).new(tokens * hidden) { rng.rand(-1.0_f32..1.0_f32) }
 zero_ffn = Array(Float32).new(ffn_dim, 0.0_f32)
 zero_hidden = Array(Float32).new(hidden, 0.0_f32)
 
 cpu_t0 = Time.instant
-gate_cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, zero_ffn)
-up_cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, up_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, zero_ffn)
-combined_cpu = Array(Float32).new(ffn_dim) { |i| silu(gate_cpu[i]) * up_cpu[i] }
-out_cpu = ML::GGUF::QuantMatmul.matmul_add(combined_cpu, 1, ffn_dim, down_raw, ML::GGUF::TensorType::Q6_K, hidden, zero_hidden)
+out_cpu = Array(Float32).new(tokens * hidden, 0.0_f32)
+tokens.times do |tok|
+  x_row = x[tok * hidden, hidden]
+  gate_cpu = ML::GGUF::QuantMatmul.matmul_add(x_row, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, zero_ffn)
+  up_cpu = ML::GGUF::QuantMatmul.matmul_add(x_row, 1, hidden, up_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, zero_ffn)
+  combined_cpu = Array(Float32).new(ffn_dim) { |i| silu(gate_cpu[i]) * up_cpu[i] }
+  out_row = ML::GGUF::QuantMatmul.matmul_add(combined_cpu, 1, ffn_dim, down_raw, ML::GGUF::TensorType::Q6_K, hidden, zero_hidden)
+  hidden.times { |i| out_cpu[tok * hidden + i] = out_row[i] }
+end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds
 
 cuda! LibCUDAFFN.cuInit(0_u32), "cuInit"
@@ -194,7 +204,9 @@ q4_mod = Pointer(Void).null
 q6_mod = Pointer(Void).null
 act_mod = Pointer(Void).null
 q4_fn = Pointer(Void).null
+q4_batched_fn = Pointer(Void).null
 q6_fn = Pointer(Void).null
+q6_batched_fn = Pointer(Void).null
 act_fn = Pointer(Void).null
 
 ptrs = [] of UInt64
@@ -204,66 +216,102 @@ begin
   cuda! LibCUDAFFN.cuModuleLoadData(pointerof(q6_mod), Q6K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q6)"
   cuda! LibCUDAFFN.cuModuleLoadData(pointerof(act_mod), SWIGLU_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(swiglu)"
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q4_fn), q4_mod, "q4_k_gemv_warp4_f32"), "cuModuleGetFunction(q4)"
+  cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q4_batched_fn), q4_mod, "q4_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(q4 batched)"
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_fn), q6_mod, "q6_k_gemv_warp4_f32"), "cuModuleGetFunction(q6)"
+  cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_batched_fn), q6_mod, "q6_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(q6 batched)"
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(act_fn), act_mod, "swiglu_f32"), "cuModuleGetFunction(swiglu)"
 
   d_x = d_gate_w = d_up_w = d_down_w = d_gate = d_up = d_combined = d_out = 0_u64
-  {bytesize_f32(hidden), gate_raw.size.to_u64, up_raw.size.to_u64, down_raw.size.to_u64,
-   bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(ffn_dim), bytesize_f32(hidden)}.each_with_index do |size, i|
+  {bytesize_f32(tokens * hidden), gate_raw.size.to_u64, up_raw.size.to_u64, down_raw.size.to_u64,
+   bytesize_f32(tokens * ffn_dim), bytesize_f32(tokens * ffn_dim), bytesize_f32(tokens * ffn_dim), bytesize_f32(tokens * hidden)}.each_with_index do |size, i|
     pdev = 0_u64
     cuda! LibCUDAFFN.cuMemAlloc_v2(pointerof(pdev), size), "cuMemAlloc(#{i})"
     ptrs << pdev
   end
   d_x, d_gate_w, d_up_w, d_down_w, d_gate, d_up, d_combined, d_out = ptrs
 
-  cuda! LibCUDAFFN.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(x)"
+  cuda! LibCUDAFFN.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(tokens * hidden)), "cuMemcpyHtoD(x)"
   cuda! LibCUDAFFN.cuMemcpyHtoD_v2(d_gate_w, gate_raw.to_unsafe.as(Void*), gate_raw.size.to_u64), "cuMemcpyHtoD(gate_w)"
   cuda! LibCUDAFFN.cuMemcpyHtoD_v2(d_up_w, up_raw.to_unsafe.as(Void*), up_raw.size.to_u64), "cuMemcpyHtoD(up_w)"
   cuda! LibCUDAFFN.cuMemcpyHtoD_v2(d_down_w, down_raw.to_unsafe.as(Void*), down_raw.size.to_u64), "cuMemcpyHtoD(down_w)"
 
   hidden_u32 = hidden.to_u32
   ffn_u32 = ffn_dim.to_u32
+  ffn_all_u32 = (tokens * ffn_dim).to_u32
   q4_grid = ((ffn_dim + 3) // 4).to_u32
   q6_grid = ((hidden + 3) // 4).to_u32
   act_block = 256_u32
   act_grid = ((ffn_dim + act_block.to_i - 1) // act_block.to_i).to_u32
+  act_grid_all = (((tokens * ffn_dim) + act_block.to_i - 1) // act_block.to_i).to_u32
+  tokens_u32 = tokens.to_u32
+  d_x_cur = d_x
+  d_gate_cur = d_gate
+  d_up_cur = d_up
+  d_combined_cur = d_combined
+  d_out_cur = d_out
+  act_n_cur = ffn_u32
 
   q4_gate_params = Pointer(Void*).malloc(5)
   q4_gate_params[0] = pointerof(d_gate_w).as(Void*)
-  q4_gate_params[1] = pointerof(d_x).as(Void*)
-  q4_gate_params[2] = pointerof(d_gate).as(Void*)
+  q4_gate_params[1] = pointerof(d_x_cur).as(Void*)
+  q4_gate_params[2] = pointerof(d_gate_cur).as(Void*)
   q4_gate_params[3] = pointerof(hidden_u32).as(Void*)
   q4_gate_params[4] = pointerof(ffn_u32).as(Void*)
 
   q4_up_params = Pointer(Void*).malloc(5)
   q4_up_params[0] = pointerof(d_up_w).as(Void*)
-  q4_up_params[1] = pointerof(d_x).as(Void*)
-  q4_up_params[2] = pointerof(d_up).as(Void*)
+  q4_up_params[1] = pointerof(d_x_cur).as(Void*)
+  q4_up_params[2] = pointerof(d_up_cur).as(Void*)
   q4_up_params[3] = pointerof(hidden_u32).as(Void*)
   q4_up_params[4] = pointerof(ffn_u32).as(Void*)
 
   act_params = Pointer(Void*).malloc(4)
-  act_params[0] = pointerof(d_gate).as(Void*)
-  act_params[1] = pointerof(d_up).as(Void*)
-  act_params[2] = pointerof(d_combined).as(Void*)
-  act_params[3] = pointerof(ffn_u32).as(Void*)
+  act_params[0] = pointerof(d_gate_cur).as(Void*)
+  act_params[1] = pointerof(d_up_cur).as(Void*)
+  act_params[2] = pointerof(d_combined_cur).as(Void*)
+  act_params[3] = pointerof(act_n_cur).as(Void*)
 
   q6_params = Pointer(Void*).malloc(5)
   q6_params[0] = pointerof(d_down_w).as(Void*)
-  q6_params[1] = pointerof(d_combined).as(Void*)
-  q6_params[2] = pointerof(d_out).as(Void*)
+  q6_params[1] = pointerof(d_combined_cur).as(Void*)
+  q6_params[2] = pointerof(d_out_cur).as(Void*)
   q6_params[3] = pointerof(ffn_u32).as(Void*)
   q6_params[4] = pointerof(hidden_u32).as(Void*)
 
   run_sequence = -> {
-    cuda! LibCUDAFFN.cuLaunchKernel(q4_fn, q4_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, q4_gate_params, Pointer(Void*).null), "q4 gate"
-    cuda! LibCUDAFFN.cuLaunchKernel(q4_fn, q4_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, q4_up_params, Pointer(Void*).null), "q4 up"
-    cuda! LibCUDAFFN.cuLaunchKernel(act_fn, act_grid, 1_u32, 1_u32, act_block, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), "swiglu"
-    cuda! LibCUDAFFN.cuLaunchKernel(q6_fn, q6_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, q6_params, Pointer(Void*).null), "q6 down"
+    if batched
+      d_x_cur = d_x
+      d_gate_cur = d_gate
+      d_up_cur = d_up
+      d_combined_cur = d_combined
+      d_out_cur = d_out
+      act_n_cur = ffn_all_u32
+      cuda! LibCUDAFFN.cuLaunchKernel(q4_batched_fn, q4_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, q4_gate_params, Pointer(Void*).null), "q4 gate batched"
+      cuda! LibCUDAFFN.cuLaunchKernel(q4_batched_fn, q4_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, q4_up_params, Pointer(Void*).null), "q4 up batched"
+      cuda! LibCUDAFFN.cuLaunchKernel(act_fn, act_grid_all, 1_u32, 1_u32, act_block, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), "swiglu batched"
+      cuda! LibCUDAFFN.cuLaunchKernel(q6_batched_fn, q6_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, q6_params, Pointer(Void*).null), "q6 down batched"
+    else
+      tokens.times do |tok|
+        d_x_cur = d_x + bytesize_f32(tok * hidden)
+        d_gate_cur = d_gate + bytesize_f32(tok * ffn_dim)
+        d_up_cur = d_up + bytesize_f32(tok * ffn_dim)
+        d_combined_cur = d_combined + bytesize_f32(tok * ffn_dim)
+        d_out_cur = d_out + bytesize_f32(tok * hidden)
+        act_n_cur = ffn_u32
+        cuda! LibCUDAFFN.cuLaunchKernel(q4_fn, q4_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, q4_gate_params, Pointer(Void*).null), "q4 gate"
+        cuda! LibCUDAFFN.cuLaunchKernel(q4_fn, q4_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, q4_up_params, Pointer(Void*).null), "q4 up"
+        cuda! LibCUDAFFN.cuLaunchKernel(act_fn, act_grid, 1_u32, 1_u32, act_block, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), "swiglu"
+        cuda! LibCUDAFFN.cuLaunchKernel(q6_fn, q6_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, q6_params, Pointer(Void*).null), "q6 down"
+      end
+    end
   }
 
   warmup.times { run_sequence.call }
@@ -274,8 +322,8 @@ begin
   cuda! LibCUDAFFN.cuCtxSynchronize, "cuCtxSynchronize"
   gpu_ms = (Time.instant - gpu_t0).total_milliseconds / reps
 
-  out_gpu = Array(Float32).new(hidden, 0.0_f32)
-  cuda! LibCUDAFFN.cuMemcpyDtoH_v2(out_gpu.to_unsafe.as(Void*), d_out, bytesize_f32(hidden)), "cuMemcpyDtoH(out)"
+  out_gpu = Array(Float32).new(tokens * hidden, 0.0_f32)
+  cuda! LibCUDAFFN.cuMemcpyDtoH_v2(out_gpu.to_unsafe.as(Void*), d_out, bytesize_f32(tokens * hidden)), "cuMemcpyDtoH(out)"
   max_diff = max_abs_diff(out_gpu, out_cpu)
   cos = cosine(out_gpu, out_cpu)
 
@@ -285,6 +333,8 @@ begin
   puts "layer=#{layer}"
   puts "hidden=#{hidden}"
   puts "ffn_dim=#{ffn_dim}"
+  puts "tokens=#{tokens}"
+  puts "batched=#{batched}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
