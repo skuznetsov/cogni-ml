@@ -12437,3 +12437,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next frame is not just "batch another GEMV"; it is "make the post-core tail token-major." That requires storing post-gate `V` rows and output rows across tokens, then deciding whether the added buffers and pointer churn beat the isolated `ssm_out` win.
 - maieutic: The probe uses independent random rows and skips conv/DeltaNet/post-gate serial dependencies. It proves the projection math is batchable, not that runner integration is automatically profitable.
 - adversary: Avoid runner surgery until a phase profile shows `ssm_out` plus add-rmsnorm is still material after projection+FFN WBA. The isolated win is exact but small.
+
+**decision_update_239:** Do not use current `cuda_mixed_stack_probe --profile-phases` output as attribution evidence for `QWEN_CUDA_BATCHED_FFN=1 QWEN_CUDA_BATCHED_PROJECTIONS=1`. The mixed-stack profile path calls the separate profiled recurrent runner, which is still per-token and does not exercise the opt-in WBA `run_sequence_override`.
+
+**evidence_update_239:**
+- claim: "`--profile-phases` is stale for batched WBA attribution."
+  source: code inspection of `QwenMixedStackRunner#run_sequence` and `QwenRecurrentLayerRunner` profiler wiring; remote read-only profile `/build/persisten/cogni-ml/tmp/wba_profile_20260517/{base,wba}.log` showed baseline and WBA phase sums nearly identical despite non-profiled final-hidden gates showing a clear WBA speed win.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent profile runner wiring, mixed-stack profile implementation, or WBA override integration changes
+
+**quadrumvirate_update_239:**
+- cassandra: The profile mismatch is a tooling blind spot, not a kernel refutation.
+- daedalus: Next attribution needs either WBA-aware phase timing inside `run_sequence_override` or external route-level timing slices, not the current per-token profile runner.
+- maieutic: The stale profile only invalidates WBA phase attribution. It does not invalidate the route-level timing or final-hidden equality gates.
+- adversary: Treat any future WBA phase table as suspect unless the output explicitly states it is profiling the override path.
