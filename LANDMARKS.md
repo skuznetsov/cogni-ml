@@ -12521,3 +12521,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Default performance should use the verified multi-token known-span path; keeping it opt-in hid a real speedup in verifier/prefill-shaped workloads.
 - maieutic: This does not accelerate single-token greedy decode, because `tokens=1` still runs the old per-token path. The win applies to known spans: prefill-like slices, chunk verifiers, and multi-row diagnostics.
 - adversary: The default remains exact only for the standard dense FFN route. Approximate raw-Q8/PCA/skip diagnostics still bypass WBA by construction and need separate gates.
+
+**decision_update_245:** Re-ran the CUDA raw-Q8 chunk-speculative diagnostic after default-on WBA. The batched verifier stack now inherits WBA and is modestly faster, but the end-to-end branch is still not a speed path because it pays near-full raw-Q8 proposal cost plus a near-linear exact verifier. A tempting shortcut, trusting `verify_stack.head.top1_ids` instead of row-wise logits scanning, was explicitly refuted and removed: resident multi-row top1 is not currently a safe verifier truth source for these chunk stacks.
+
+**evidence_update_245:**
+- claim: "Default-on WBA improves duplicate-stack chunk verifier timing, but not enough to make current CUDA raw-Q8 chunk speculation faster than plain greedy."
+  source: remote reefy.ai `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_wba_default`, Qwen3.5-9B-Q4_K_M, seed token `0`, gen16, margin `0.03`, batched verifier. Gamma2 WBA-off/default: total `51.394 -> 50.656 ms/tok`, verifier chunk `46.382 -> 44.700 ms/chunk`; gamma4 WBA-off/default: total `50.104 -> 48.959 ms/tok`, verifier chunk `91.993 -> 85.983 ms/chunk`; all runs preserved the exact output sequence. Plain greedy on the same binary measured `23.475 ms/tok` default and `23.505 ms/tok` WBA-off for `tokens=1`, confirming WBA does not move single-token decode.
+  verified_at: 2026-05-17
+  decay_trigger: chunk verifier stack, WBA default policy, raw-Q8 proposal route, output-head verifier implementation, CUDA driver/JIT, or prompt/seed suite changes
+- claim: "Resident `verify_stack.head.top1_ids` is unsafe as a replacement for row-wise materialized-logits scanning in the current duplicate-stack chunk verifier."
+  source: temporary diagnostic flag `--greedy-loop-probe-chunk-fast-verify-top1`, tested remotely on the same Qwen3.5-9B seed/gamma gate, changed gamma2 exact sequence from logits-scan `198,2,220,16,...` to resident-top1 `198,2,2,198,198,...`, converted accepted chunks into rejects, and produced misleading perf-only `ok=true`; the flag was removed after the falsifier.
+  verified_at: 2026-05-17
+  decay_trigger: output-head top1 partial/reduce rewrite, verifier stack row handling, logits buffer layout, or a new explicit multi-row top1-vs-logits regression gate
+
+**quadrumvirate_update_245:**
+- cassandra: WBA helps the verifier exactly where expected, but the current architecture still composes two mostly full passes.
+- daedalus: The next speed-bearing frame remains "make verification sublinear or proposal materially cheaper," not "avoid logits scan by trusting a stale/incorrect multi-row top1 buffer."
+- maieutic: The fast-top1 shortcut failed because the verifier truth source was assumed equivalent without a row-wise adversary gate. The logits-scan path remains the correctness anchor.
+- adversary: Keep duplicate-stack speculation classified as diagnostic. A future fast verifier must include a direct multi-row top1-vs-logits regression before it can affect controller decisions.
