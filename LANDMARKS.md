@@ -12221,3 +12221,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next frame is not "make PCA-updown exact"; it is "use PCA-updown only inside exact verification where calibrated prompt-prefix states predict acceptance."
 - maieutic: The matching prompt-prefix gate is encouraging but narrow. It proves the bridge and a same-distribution top1 case, not broad reliability.
 - adversary: Free-run divergence means this route must be guarded by exact verifier acceptance, prompt/state features, or same-boundary agreement. Do not enable it for plain CUDA decode.
+
+**decision_update_225:** The first CUDA PCA-updown mask sweep supports a prompt-calibrated, exact-verified proposal route rather than a global approximation. On the same prompt prefix used to train adapters, every tested mask over layers `0,2,4` preserved all-layer top1 for `16/16` teacher-forced positions, and speed scaled approximately with the number of replaced recurrent FFNs. On an off-distribution sequence, the same `0,2,4` mask still saved about `0.5ms/token` but matched only `3/16`, including a miss at position 0.
+
+**evidence_update_225:**
+- claim: "Prompt-prefix mask sweep preserves all-layer top1 for tested masks and shows additive-ish speed savings."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_updown_mask_promptseq16_summary_20260517.txt`: baseline `23.482ms/token`; mask `0` `23.324` (`+0.158ms`, `16/16`), `2` `23.327` (`+0.155ms`, `16/16`), `4` `23.332` (`+0.150ms`, `16/16`), `0,2` `23.170` (`+0.312ms`, `16/16`), `0,4` `23.180` (`+0.302ms`, `16/16`), `2,4` `23.182` (`+0.300ms`, `16/16`), `0,2,4` `23.017` (`+0.465ms`, `16/16`).
+  verified_at: 2026-05-17
+  decay_trigger: adapter calibration prompt, rank/layers, CUDA timing stability, model weights, or prompt-token sequence changes
+- claim: "The same prompt-calibrated adapter is unsafe on off-distribution sequence states."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_updown_offseq16_summary_20260517.txt`: baseline `23.527ms/token`, adapter `23.020ms/token`, but all-layer top1 matched only `3/16` with first miss at position `0`.
+  verified_at: 2026-05-17
+  decay_trigger: route gate, adapter training corpus, rank/layers, or verifier/controller policy changes
+
+**quadrumvirate_update_225:**
+- cassandra: The route has a real speed slope but a narrow state-distribution validity region.
+- daedalus: Use the adapter only as a speculative proposal inside a verifier or after a cheap same-distribution gate; do not spend effort making it a global approximate decoder.
+- maieutic: Matching prompt-prefix top1 is not acceptance over generated tokens. The next falsifier is a guarded self-spec loop that falls back immediately on mismatch.
+- adversary: The off-sequence miss at position 0 rules out naive confidence from layer-local reconstruction metrics alone.
