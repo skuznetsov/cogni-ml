@@ -225,6 +225,7 @@ module ML::CUDA
       @profile_swiglu_ms = 0.0
       @profile_ffn_down_ms = 0.0
       @profile_final_add_ms = 0.0
+      @ffn_raw_q8_enabled = ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"
       @closed = false
 
       build_runner
@@ -263,6 +264,13 @@ module ML::CUDA
 
     def run_sequence : Nil
       runner.run_sequence
+    end
+
+    def ffn_raw_q8_enabled=(@ffn_raw_q8_enabled : Bool)
+    end
+
+    def ffn_raw_q8_enabled : Bool
+      @ffn_raw_q8_enabled
     end
 
     def run_sequence_profiled(phase_lines : Array(String), prefix : String) : Nil
@@ -338,7 +346,6 @@ module ML::CUDA
       q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
       ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
       use_alpha_beta_dual = ENV["QWEN_CUDA_Q4_ALPHA_BETA_DUAL_OFF"]? != "1"
-      use_ffn_raw_q8 = ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
                @qkv_raw.size.to_u64, @gate_raw.size.to_u64, @alpha_raw.size.to_u64, @beta_raw_w.size.to_u64,
@@ -580,7 +587,7 @@ module ML::CUDA
         ML::CUDA.launch!(post_fn, @h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, post_params, "post gate")
         ML::CUDA.launch!(q4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out")
         ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
-        if use_ffn_raw_q8
+        if @ffn_raw_q8_enabled
           ML::CUDA.launch!(q8_quant_fn, (@hidden // 32).to_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ffn_q8_quant_params, "ffn q8 quant")
           ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_raw_q8_params, "ffn gate raw q8")
           ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_raw_q8_params, "ffn up raw q8")
@@ -638,7 +645,7 @@ module ML::CUDA
 
         t_ffn = Time.instant
         t_ffn_gate = Time.instant
-        if use_ffn_raw_q8
+        if @ffn_raw_q8_enabled
           ML::CUDA.launch!(q8_quant_fn, (@hidden // 32).to_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ffn_q8_quant_params, "ffn q8 quant")
           ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_raw_q8_params, "ffn gate raw q8")
         else
@@ -648,7 +655,7 @@ module ML::CUDA
         @profile_ffn_gate_ms += (Time.instant - t_ffn_gate).total_milliseconds
 
         t_ffn_up = Time.instant
-        if use_ffn_raw_q8
+        if @ffn_raw_q8_enabled
           ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_raw_q8_params, "ffn up raw q8")
         else
           ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")

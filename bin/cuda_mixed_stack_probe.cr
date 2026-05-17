@@ -254,6 +254,7 @@ greedy_loop_graph_device_ready = false
 greedy_loop_gpu_embedding = false
 greedy_loop_cpu_embedding = false
 greedy_loop_read_logits = false
+runtime_raw_q8 = false
 seed_token = 0
 input_token = -1
 input_tokens = [] of Int32
@@ -286,6 +287,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-gpu-embedding", "Feed greedy-loop top1 ids back through a CUDA Q4_K token-embedding kernel instead of per-token CPU readback/embedding upload") { greedy_loop_gpu_embedding = true }
   p.on("--greedy-loop-cpu-embedding", "Force per-token CPU top1 readback and embedding upload in --greedy-loop-tokens mode") { greedy_loop_cpu_embedding = true }
   p.on("--greedy-loop-read-logits", "Diagnostic: read CUDA logits/top2 margins after each greedy-loop token; forces CPU feedback and no graph") { greedy_loop_read_logits = true; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
+  p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
   p.on("--input-tokens LIST", "Use comma-separated token_embd IDs as the non-greedy semantic input sequence") { |v| input_tokens_provided = true; input_tokens = parse_i32_list(v) }
@@ -501,6 +503,7 @@ begin
   output_head = head.not_nil!
   stack = ML::CUDA::QwenMixedStackRunner.new(layers, runners, output_head, tokens, hidden, xs)
   mixed_stack = stack.not_nil!
+  mixed_stack.set_recurrent_ffn_raw_q8(true) if runtime_raw_q8
 
   weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
 
@@ -816,6 +819,7 @@ begin
   puts "debug_readback=#{debug_readback}"
   puts "perf_only=#{perf_only}"
   puts "skip_output_head=#{skip_output_head}"
+  puts "runtime_raw_q8=#{runtime_raw_q8}"
   puts "q4_raw_q8_ffn=#{ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"

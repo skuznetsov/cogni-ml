@@ -101,6 +101,17 @@ module ML::CUDA
       @head.top1_ids_device_ptr
     end
 
+    def set_recurrent_ffn_raw_q8(enabled : Bool) : Nil
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          runner.ffn_raw_q8_enabled = enabled
+        in QwenFullAttnLayerRunner
+          # Full-attention layers do not use the recurrent FFN raw-Q8 path.
+        end
+      end
+    end
+
     def run_sequence(profile_phases : Bool = false,
                      debug_readback : Bool = true,
                      reset_sequence : Bool = true,
