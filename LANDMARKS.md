@@ -12339,3 +12339,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next useful step is not more standalone timing. Integrate the batched kernels into a verifier-only recurrent/full-attn FFN path or add batched projection kernels, then remeasure full `tokens=gamma` verifier cost.
 - maieutic: This probe batches independent FFN rows only. It does not solve DeltaNet recurrence or full recurrent-layer scheduling, so end-to-end verifier speedup will be smaller than the FFN microprobe delta unless more GEMV groups are batched.
 - adversary: The batched entries duplicate existing PTX logic. Keep them default-unused until runner integration has parity and full-stack timing evidence.
+
+**decision_update_232:** Closed the exactness gap between the standalone CUDA FFN WBA microprobe and the recurrent runner FFN tail. The previous batched FFN probe covered gate/up/SwiGLU/down GEMV, but the real recurrent runner uses `ffn_down_add_fn` to add the residual into the down projection output. New appended PTX entries `q4_k_gemv_add_warp4_f32_batched` and `q6_k_gemv_add_warp4_f32_batched` batch the down+residual-add shape over known-span rows, and `cuda_ffn_sequence_probe --residual-add` validates looped versus batched behavior.
+
+**evidence_update_232:**
+- claim: "The batched down+residual add FFN microprobe is numerically correct and modestly faster for known-span rows."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_ffn_batched_add_nocodegen crystal build bin/cuda_ffn_sequence_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_ffn_sequence_probe_batched_add` -> exit 0; remote Qwen3.5-9B layer0 with `--residual-add`: tokens2 loop `0.741ms`, batched `0.739ms`; tokens4 `1.482 -> 1.422ms`; tokens8 `2.972 -> 2.805ms`; all `ok=true`, `cos=1.0`, `max_diff<=4.7683716e-7`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4/Q6 PTX layout, residual-add kernel ABI, CUDA driver/JIT, FFN probe wiring, or recurrent runner integration changes
+
+**quadrumvirate_update_232:**
+- cassandra: The WBA speed signal survives the runner-equivalent residual-add tail, but the tokens2 gain is near noise; expect only a partial verifier win until gate/up/down/projection groups are all batched in the full runner.
+- daedalus: This slice changes the frame from standalone GEMV batching to exact known-span FFN batching. The next pivot is full recurrent verifier integration behind an opt-in flag, not more microprobe variants.
+- maieutic: The proof is still limited to independent FFN rows. It does not prove recurrent-layer sublinearity because DeltaNet state progression remains serial.
+- adversary: Keep the new kernels default-unused until the recurrent runner has token parity and full-stack timing evidence; duplicated PTX logic is a maintenance risk.
