@@ -8134,6 +8134,57 @@ module ML
         # whole-mmap buffer when available (zero-copy) or falling back to
         # a per-weight upload held by the QuantWeight itself. Returns nil
         # when the type is not GPU-supported (caller falls back to CPU).
+        def self.bench_q4_h16_pair_wait_ms(gate_qw : QuantWeight,
+                                           up_qw : QuantWeight,
+                                           x : Array(Float32),
+                                           batch : Int32,
+                                           validate : Bool = false) : Float64
+          raise ArgumentError.new("Q4 H16 pair bench requires Q4_K weights") unless gate_qw.type.q4_k? && up_qw.type.q4_k?
+          raise ArgumentError.new("Q4 H16 pair bench requires matching dimensions") unless gate_qw.in_dim == up_qw.in_dim && gate_qw.out_dim == up_qw.out_dim
+          raise ArgumentError.new("Q4 H16 pair bench x size mismatch") unless x.size == gate_qw.in_dim * batch
+
+          ML::Metal::Device.init!
+          gate_buf, gate_off = if slot = mmap_slot_for(gate_qw.raw)
+                                 slot
+                               else
+                                 {gate_qw.fallback_metal_buffer, 0_i64}
+                               end
+          up_buf, up_off = if slot = mmap_slot_for(up_qw.raw)
+                             slot
+                           else
+                             {up_qw.fallback_metal_buffer, 0_i64}
+                           end
+
+          x_buf = Scratch.get(:bench_q4_pair_x, x.size.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+          gate_out = Scratch.get(:bench_q4_pair_gate, (batch * gate_qw.out_dim).to_i64 * sizeof(Float32))
+          up_out = Scratch.get(:bench_q4_pair_up, (batch * up_qw.out_dim).to_i64 * sizeof(Float32))
+          if validate
+            gate_out.contents.as(Pointer(Float32))[0] = Float32::NAN
+            up_out.contents.as(Pointer(Float32))[0] = Float32::NAN
+          end
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_q4k_gemm_h16_pair(enc, x_buf, gate_out, up_out,
+            gate_buf, gate_off, up_buf, up_off,
+            gate_qw.in_dim, gate_qw.out_dim, batch)
+          enc.end_encoding
+
+          t0 = Time.instant
+          cmd.commit
+          cmd.wait
+          elapsed = (Time.instant - t0).total_milliseconds
+          if validate
+            gate0 = gate_out.contents.as(Pointer(Float32))[0]
+            up0 = up_out.contents.as(Pointer(Float32))[0]
+            unless gate0.finite? && up0.finite?
+              raise "Q4_H16 pair bench validation failed: non-finite sample gate0=#{gate0} up0=#{up0}"
+            end
+          end
+          elapsed
+        end
+
         def self.matmul(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)?
           ML::Metal::Device.init!
 

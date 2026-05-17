@@ -11819,3 +11819,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Shift the next measurement from end-to-end wall to aligned operator timing: same shape, same batch, backend wait only, then return to full pp64 A/B before promotion.
 - maieutic: A standalone faster op is not sufficient; previous Q4 branches improved microbench but regressed full pp64 wall.
 - adversary: Keep the wait-only result as a locator, not a speed claim, until a quiet paired run and full prompt-ingest A/B agree.
+
+**decision_update_202:** Fixed route-aligned prefill Q4_H16 FFN gate+up attribution. The generic `qwen35_op_attribution --profile-wait` path is still useful as a locator, but it does not exercise the actual prefill paired-H16 route and can contaminate later pair probes when unrelated synthetic shapes run first. The pair route now has a dedicated `--prefill-q4-pair-only` mode and a finite-output validation guard.
+
+**evidence_update_202:**
+- claim: "The Q4_H16 FFN gate+up pair attribution builds and measures the actual paired prefill route before generic synthetic shapes."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_op_pair_nocodegen2 crystal build bin/qwen35_op_attribution.cr --no-codegen --error-trace` -> exit 0; local release Metal build `/tmp/qwen35_op_attribution_pair_final` -> exit 0; `/tmp/qwen35_op_attribution_pair_final --batch=64 --warmup=3 --runs=9 --prefill-q4-pair-only` -> pair `4096x12288` p50 `1.930 ms`, weighted pair `0.965 ms`.
+  verified_at: 2026-05-16
+  decay_trigger: Q4_H16 pair route, op attribution harness, Metal command-buffer behavior, model quantization, or synthetic input distribution changes
+- claim: "The earlier `0.014 ms` pair wait was invalid because the paired-output validation exposed a no-output/non-finite sample path when pair probing was run after unrelated generic synthetic shapes."
+  source: local `/tmp/qwen35_op_attribution_pair_debug2 --batch=64 --warmup=3 --runs=9 --limit=6 --profile-wait --prefill-q4-pair-wait` raised `Q4_H16 pair bench validation failed: non-finite sample gate0=NaN up0=NaN`; reordering/isolating pair attribution removed this failure and restored the expected `~1.9 ms` scale.
+  verified_at: 2026-05-16
+  decay_trigger: validation code, scratch buffer lifecycle, generic attribution ordering, or Metal driver changes
+
+**quadrumvirate_update_202:**
+- cassandra: Treat standalone generic op timings as potentially route-mismatched unless the harness proves it is exercising the production prefill/decode route.
+- daedalus: The useful pivot was not retuning kernels from a bogus 14us lower bound, but adding a production-route attribution mode with output validation.
+- maieutic: A command-buffer wait with no consumed/read output is not sufficient evidence for a kernel timing claim; at minimum the measured route must prove finite writes.
+- adversary: The pair-only number is a microbench locator, not a full prefill speed claim. Promotion still requires full pp64/pp256 prompt-ingest A/B against llama.cpp on a quiet host.
