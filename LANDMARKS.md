@@ -12293,3 +12293,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: PCA-updown layer-local reconstruction is not the next body breakthrough in this calibration. Raw-Q8 remains the better proposal baseline; future adapter work needs a free-run/proposal objective, not teacher-forced prompt-prefix reconstruction.
 - maieutic: The exact last-reject commit is mathematically valid only when all verifier inputs are accepted and the mismatch is at the final row. Earlier mismatches still require sequential replay or an intermediate-state export.
 - adversary: Do not promote the last-reject path as a speedup from this gate. It is a correct edge-case optimization with zero hits on the measured gamma4 suite.
+
+**decision_update_229:** Refuted CUDA raw-Q8 chunk speculation as a speed path until the exact verifier becomes structurally sublinear. The current `tokens=gamma` verifier still runs recurrent layers through `ResidentSequenceRunner#run_sequence`, which calls the recurrent layer token pipeline once per token from the host. Full-attention has some token-grid kernels, but recurrent layers dominate Qwen3.5/3.6, so chunk verification cost scales almost exactly linearly with `gamma`.
+
+**evidence_update_229:**
+- claim: "Current CUDA chunk verification is structurally serial for recurrent layers."
+  source: code audit on 2026-05-17: `src/ml/cuda/driver.cr` `ResidentSequenceRunner#run_sequence` executes `@tokens.times { |tok| @run_token.call(tok) }`; `src/ml/cuda/qwen_recurrent_layer_runner.cr` recurrent `run_token` launches the full single-token recurrent pipeline including projections, DeltaNet step, FFN, and final add.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA runner batching rewrite, recurrent block-scan implementation, q4/q5/q6 batched GEMV kernels, or verifier stack construction changes
+- claim: "Raw-Q8 speculative chunk probes are much slower than exact greedy on the current CUDA verifier stack."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_chunk_gamma_scaling_20260517/aggregate.txt`, 8 seeds, `gen=32`, Qwen3.5-9B-Q4_K_M on RTX 5060 Ti: exact `23.397ms/token`; gamma2 `51.058ms/token` with batched verify chunk `46.333ms`; gamma4 `51.860ms/token` with chunk `91.827ms`; gamma8 `54.181ms/token` with chunk `182.923ms`.
+  verified_at: 2026-05-17
+  decay_trigger: verifier implementation, chunk controller, raw-Q8 proposal route, GPU/driver load, or model/layer set changes
+
+**quadrumvirate_update_229:**
+- cassandra: More gamma/controller tuning cannot overcome a verifier that costs about one exact decode per verified token plus proposal overhead.
+- daedalus: The next speed-bearing frame is either a true known-span recurrent verifier (associative/block-scan or batched recurrent kernels), or exact target fallback with raw-Q8 used only for cheap confidence/routing diagnostics.
+- maieutic: High proposal acceptance is insufficient when the verifier is linear. The necessary condition for speculative speed is `verify_ms_per_token + proposal_ms_per_token/gamma < exact_ms_per_token`; current measurements violate it by about `2x`.
+- adversary: This is a current-stack refutation, not a theorem about CUDA speculation. It should be revisited only after the verifier runner is no longer a host token loop over recurrent layers.
