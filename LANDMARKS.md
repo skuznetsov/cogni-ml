@@ -12629,3 +12629,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Stop optimizing chunk size and margin thresholds for this route. The next speed-bearing frames are a materially cheaper proposal body, or a sublinear recurrent verifier/scan, or a shared-weight verifier view for memory hygiene only.
 - maieutic: "Verifier is faster than serial" is true only narrowly. It is not fast enough relative to proposal overhead to make speculative decoding profitable.
 - adversary: Keep raw-Q8 as a proposal-quality diagnostic and possible ingredient for a future cheaper body. Do not present it as a speedup path in its current full-body form.
+
+**decision_update_251:** Added a paired approximate low-rank DeltaNet eval-suite harness before any reduced-state Metal/CUDA kernel work. `qwen35_deltanet_fixed_basis_probe` can now run `--simulate-lowrank-eval-suite` over the main prompt plus named suite prompts/files, rebuild prompt-local bases, and emit paired logit drift, teacher-forced greedy drift, and exact self-spec acceptance rows. This turns the approximate projected-K branch into a prompt/rank/layer sweep gate instead of a one-prompt intuition.
+
+**evidence_update_251:**
+- claim: "The low-rank eval suite wiring compiles and exposes the intended CLI surface."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_lowrank_eval_suite_nocodegen crystal build bin/qwen35_deltanet_fixed_basis_probe.cr --no-codegen` -> exit 0; local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_lowrank_eval_suite_help crystal run bin/qwen35_deltanet_fixed_basis_probe.cr --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++" -- --help | rg 'simulate-lowrank-eval-suite'` -> lists `--simulate-lowrank-eval-suite`, `--simulate-lowrank-eval-suite-prompt`, and `--simulate-lowrank-eval-suite-prompts-file`.
+  verified_at: 2026-05-17
+  decay_trigger: fixed-basis probe option parsing, low-rank policy metric functions, tokenizer prompt handling, or suite output schema changes
+- claim: "Full-model quality/performance conclusions from the new suite are still pending."
+  source: local 9B and 0.8B CPU smoke attempts were stopped after proving they were too slow for an interactive compile-level check; no quality/speed claim was promoted from those partial runs.
+  verified_at: 2026-05-17
+  decay_trigger: running the suite on local Metal, remote CUDA, or a smaller deterministic fixture
+
+**quadrumvirate_update_251:**
+- cassandra: The useful next evidence is not another single prompt; it is a prompt/rank/layer matrix with one command shape and consistent row labels.
+- daedalus: This is an evaluation harness, not a speed feature. The reduced-state kernel remains blocked until this suite shows robust acceptance/parity across prompt classes.
+- maieutic: Compile/help evidence proves the route is wired, not that projected-K is safe. The suite must be run on 9B/27B before kernel promotion.
+- adversary: Avoid CPU-only smoke runs as a verification proxy for this model path; they are too slow and can be mistaken for hangs. Use no-codegen/help for wiring and run actual quality gates on the intended accelerated path.

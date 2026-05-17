@@ -2958,6 +2958,94 @@ private def token_ids_for_prompt(tok, prompt : String, tokens_limit : Int32) : A
   token_ids[0, tokens_limit]
 end
 
+private def lowrank_eval_layer_bases(weights : ML::GGUF::Qwen35Weights,
+                                     token_ids : Array(Int32),
+                                     layer_ids : Array(Int32),
+                                     calib_count : Int32,
+                                     max_rank : Int32,
+                                     basis_mode : String,
+                                     pca_iters : Int32) : NamedTuple(vectors: LayerVectorMap, bases: LayerBasisMap)
+  vectors = {} of Int32 => BasisSet
+  bases = {} of Int32 => BasisSet
+  layer_ids.each do |il|
+    layer_vectors = recurrent_k_vectors_for_prompt(weights, token_ids, il)
+    vectors[il] = layer_vectors
+    bases[il] = layer_vectors.map do |head_vectors|
+      build_basis(head_vectors[0, calib_count], max_rank, basis_mode, pca_iters)
+    end
+  end
+  {vectors: vectors, bases: bases}
+end
+
+private def lowrank_eval_fallback_note(fallback_threshold : Float64?,
+                                       approx_steps : Int32,
+                                       fallback_steps : Int32) : String
+  total_steps = approx_steps + fallback_steps
+  approx_rate = total_steps > 0 ? (100.0 * approx_steps / total_steps) : 0.0
+  fallback_score_note = ProbeRuntime.fallback_score_mode == "raw" ? "" : " fallback_score=#{ProbeRuntime.fallback_score_mode}"
+  return fallback_score_note unless fallback_threshold
+
+  " fallback_threshold=#{fallback_threshold}#{fallback_score_note} approx_rate=#{approx_rate.round(2)}%"
+end
+
+private def run_lowrank_eval_suite(weights : ML::GGUF::Qwen35Weights,
+                                   token_sets : Array(PromptTokenSet),
+                                   layer_ids : Array(Int32),
+                                   rank : Int32,
+                                   max_rank : Int32,
+                                   basis_mode : String,
+                                   pca_iters : Int32,
+                                   calib_tokens : Int32,
+                                   generate_tokens : Int32,
+                                   fallback_thresholds : Array(Float64?),
+                                   refresh_interval : Int32?,
+                                   oracle_refresh_interval : Int32?,
+                                   output_margin_threshold : Float64?,
+                                   self_spec_gammas : Array(Int32),
+                                   self_spec_draft_margin : Float64?,
+                                   self_spec_draft_stop_margin : Float64?,
+                                   self_spec_topk_rescue : Int32?) : Nil
+  token_sets.each do |token_set|
+    prompt_name = token_set[:name]
+    ids = token_set[:token_ids]
+    prompt_calib_count = Math.min(calib_tokens, ids.size - 1)
+    raise "lowrank eval suite prompt #{prompt_name.inspect} needs at least one held-out token" unless prompt_calib_count > 0 && prompt_calib_count < ids.size
+
+    built = lowrank_eval_layer_bases(weights, ids, layer_ids, prompt_calib_count, max_rank, basis_mode, pca_iters)
+    layer_bases = built[:bases]
+    rank_notes = layer_ids.map { |il| "#{il}:#{basis_rank_note(layer_bases[il], rank)}" }
+    puts "lowrank_eval_suite name=#{prompt_name} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} layers=#{layer_ids.join(',')} rank=#{rank} layer_basis_effective_ranks=#{rank_notes.join(' ')}"
+
+    fallback_thresholds.each do |fallback_threshold|
+      logit = simulate_logits_policy(weights, ids, layer_bases, rank, prompt_calib_count,
+        fallback_threshold, refresh_interval, oracle_refresh_interval, output_margin_threshold)
+      logit_fallback_note = lowrank_eval_fallback_note(fallback_threshold, logit[:approx_steps], logit[:fallback_steps])
+      output_note = output_margin_threshold ? " output_margin_threshold=#{output_margin_threshold} output_fallbacks=#{logit[:output_fallbacks]}" : ""
+      refresh_note = refresh_interval ? " refresh_interval=#{refresh_interval}" : ""
+      oracle_refresh_note = oracle_refresh_interval ? " oracle_refresh_interval=#{oracle_refresh_interval}" : ""
+      puts "lowrank_eval_logit name=#{prompt_name} layers=#{layer_ids.join(',')} rank=#{rank} mean_cos=#{logit[:mean_cos].round(8)} min_cos=#{logit[:min_cos].round(8)} max_delta=#{logit[:max_delta].round(6)} top1_match=#{logit[:top1_match].round(2)}% top5_hit=#{logit[:top5_hit].round(2)}% mean_kl=#{logit[:mean_kl].round(8)} max_kl=#{logit[:max_kl].round(8)} min_margin=#{logit[:min_margin].round(6)} confident_mismatches=#{logit[:confident_mismatches]} approx_steps=#{logit[:approx_steps]} fallback_steps=#{logit[:fallback_steps]}#{logit_fallback_note}#{refresh_note}#{oracle_refresh_note}#{output_note}"
+
+      next unless generate_tokens > 0
+
+      gen = simulate_greedy_policy(weights, ids, generate_tokens, layer_bases, rank, prompt_calib_count,
+        fallback_threshold, refresh_interval, oracle_refresh_interval, output_margin_threshold)
+      gen_fallback_note = lowrank_eval_fallback_note(fallback_threshold, gen[:approx_steps], gen[:fallback_steps])
+      gen_output_note = output_margin_threshold ? " output_margin_threshold=#{output_margin_threshold} output_fallbacks=#{gen[:output_fallbacks]}" : ""
+      puts "lowrank_eval_greedy name=#{prompt_name} layers=#{layer_ids.join(',')} rank=#{rank} gen_tokens=#{generate_tokens} mean_cos=#{gen[:mean_cos].round(8)} min_cos=#{gen[:min_cos].round(8)} max_delta=#{gen[:max_delta].round(6)} top1_match=#{gen[:top1_match].round(2)}% top5_hit=#{gen[:top5_hit].round(2)}% mean_kl=#{gen[:mean_kl].round(8)} max_kl=#{gen[:max_kl].round(8)} min_margin=#{gen[:min_margin].round(6)} confident_mismatches=#{gen[:confident_mismatches]} approx_steps=#{gen[:approx_steps]} fallback_steps=#{gen[:fallback_steps]}#{gen_fallback_note}#{refresh_note}#{oracle_refresh_note}#{gen_output_note} exact_ids=#{gen[:exact_ids].join(',')} approx_ids=#{gen[:approx_ids].join(',')}"
+
+      self_spec_gammas.each do |gamma|
+        spec = simulate_self_spec_policy(weights, ids, generate_tokens, gamma, layer_bases, rank, prompt_calib_count,
+          fallback_threshold, refresh_interval, nil, nil, nil, self_spec_draft_margin, self_spec_draft_stop_margin, self_spec_topk_rescue)
+        spec_total_steps = spec[:approx_steps] + spec[:fallback_steps]
+        spec_approx_rate = spec_total_steps > 0 ? (100.0 * spec[:approx_steps] / spec_total_steps) : 0.0
+        rescue_note = self_spec_topk_rescue ? " topk_rescue=#{self_spec_topk_rescue} topk_rescues=#{spec[:topk_rescues]}" : ""
+        fallback_score_note = ProbeRuntime.fallback_score_mode == "raw" ? "" : " fallback_score=#{ProbeRuntime.fallback_score_mode}"
+        puts "lowrank_eval_self_spec name=#{prompt_name} layers=#{layer_ids.join(',')} rank=#{rank} gamma=#{gamma} gen_tokens=#{generate_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]}#{rescue_note} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} approx_steps=#{spec[:approx_steps]} fallback_steps=#{spec[:fallback_steps]} approx_rate=#{spec_approx_rate.round(2)}%#{fallback_score_note} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% reject_top2_hits=#{spec[:reject_top2_hits]} reject_top5_hits=#{spec[:reject_top5_hits]} break_even_draft_verify_per_proposed=#{spec[:break_even_draft_verify_per_proposed].round(4)} gamma_history=#{spec[:gamma_history].join(',')} draft_min_margin_history=#{spec[:draft_min_margin_history].map { |v| v.round(4) }.join(',')} draft_low_margin_history=#{spec[:draft_low_margin_history].join(',')} exact_ids=#{spec[:exact_ids].join(',')} emitted_ids=#{spec[:emitted_ids].join(',')}"
+      end
+    end
+  end
+end
+
 private def exact_greedy_generated_ids(weights : ML::GGUF::Qwen35Weights,
                                        prompt_ids : Array(Int32),
                                        gen_tokens : Int32) : Array(Int32)
@@ -10502,6 +10590,8 @@ simulate_lowrank_metal_chunk_thread_overlap = false
 simulate_multilayer_overlap_n = 0
 simulate_logit_rank : Int32? = nil
 simulate_logit_layers = [] of Int32
+simulate_lowrank_eval_suite = false
+simulate_lowrank_eval_suite_prompts = [] of NamedPrompt
 simulate_fallback_threshold : Float64? = nil
 simulate_fallback_thresholds = [] of Float64
 simulate_generate_tokens = 0
@@ -10634,6 +10724,19 @@ add_block_surrogate_suite_prompt = ->(raw : String) {
   simulate_block_surrogate_suite_prompts << {name: safe_name, text: text}
 }
 
+add_lowrank_eval_suite_prompt = ->(raw : String) {
+  if sep = raw.index("::")
+    name = raw[0, sep]
+    text = raw[(sep + 2)..]
+  else
+    name = "suite#{simulate_lowrank_eval_suite_prompts.size + 1}"
+    text = raw
+  end
+  safe_name = name.empty? ? "suite#{simulate_lowrank_eval_suite_prompts.size + 1}" : name.gsub(/[^A-Za-z0-9_.-]/, "_")
+  simulate_lowrank_eval_suite_prompts << {name: safe_name, text: text}
+  simulate_lowrank_eval_suite = true
+}
+
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_deltanet_fixed_basis_probe [--model PATH] [--tokenizer PATH] [--prompt TEXT] [--tokens N] [--calib-tokens N] [--layer N] [--ranks LIST] [--basis greedy|pca]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
@@ -10700,6 +10803,17 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-lowrank-multilayer-chunk-thread-overlap=N", "Overlap N chained async low-rank layer chunks on one lane queue with chunk-major verifier in a worker thread") { |v| simulate_multilayer_overlap_n = v.to_i }
   p.on("--simulate-logits-rank=N", "Run full-model logit drift gate for one rank") { |v| simulate_logit_rank = v.to_i }
   p.on("--simulate-logits-layers=LIST", "Comma-separated recurrent layers to approximate together during the logit drift gate") { |v| simulate_logit_layers = parse_int_list(v) }
+  p.on("--simulate-lowrank-eval-suite", "Run paired low-rank DeltaNet logit/greedy/self-spec eval for main plus suite prompts") { simulate_lowrank_eval_suite = true }
+  p.on("--simulate-lowrank-eval-suite-prompt=NAME::TEXT", "Additional prompt for --simulate-lowrank-eval-suite; main --prompt is always included") do |v|
+    add_lowrank_eval_suite_prompt.call(v)
+  end
+  p.on("--simulate-lowrank-eval-suite-prompts-file=PATH", "Read low-rank eval suite prompts from UTF-8 lines: NAME::TEXT or TEXT") do |path|
+    File.each_line(path) do |line|
+      raw = line.strip
+      next if raw.empty? || raw.starts_with?("#")
+      add_lowrank_eval_suite_prompt.call(raw)
+    end
+  end
   p.on("--simulate-fallback-threshold=F", "Fallback to exact DeltaNet step when max per-head K residual exceeds F") { |v| simulate_fallback_threshold = v.to_f64 }
   p.on("--simulate-fallback-thresholds=LIST", "Run multiple fallback thresholds in one process") { |v| simulate_fallback_thresholds = v.split(',').map(&.strip).reject(&.empty?).map(&.to_f64) }
   p.on("--simulate-fallback-score=MODE", "Fallback score for threshold routing: raw, decayed (g*residual), or update (beta*residual)") { |v| ProbeRuntime.fallback_score_mode = v }
@@ -10865,6 +10979,11 @@ end
 if !simulate_cost_truth_chunks.empty?
   raise "--simulate-cost-truth-table requires --simulate-logits-rank" if simulate_logit_rank.nil?
   raise "--simulate-cost-truth-table requires --simulate-logits-layers" if simulate_logit_layers.empty?
+end
+if simulate_lowrank_eval_suite
+  raise "--simulate-lowrank-eval-suite requires --simulate-logits-rank" if simulate_logit_rank.nil?
+  raise "--simulate-lowrank-eval-suite requires --simulate-logits-layers" if simulate_logit_layers.empty?
+  raise "--simulate-lowrank-eval-suite self-spec gammas must be positive" if simulate_self_spec_gammas.any? { |v| v <= 0 }
 end
 if simulate_block_surrogate_start || simulate_block_surrogate_end
   raise "--simulate-block-residual-surrogate must set both start and end" unless simulate_block_surrogate_start && simulate_block_surrogate_end
@@ -11369,6 +11488,25 @@ if rank = simulate_logit_rank
           puts "cheap_self_draft_variant=#{variant} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{simulate_self_spec_wall_progressive.join(',')}#{metal_note} gen_tokens=#{simulate_generate_tokens} chunks=#{wall[:chunks]} rejections=#{wall[:rejections]} accepted_draft_tokens=#{wall[:accepted_draft_tokens]} proposed_tokens=#{wall[:proposed_tokens]} accept_rate=#{wall[:accept_rate].round(2)}% parity=#{parity} verifier_tokens=#{wall[:verifier_tokens]} correction_steps=#{wall[:correction_steps]} draft_ms=#{wall[:draft_ms].round(3)} verifier_ms=#{wall[:verifier_ms].round(3)} replay_ms=#{wall[:replay_ms].round(3)} serial_ms=#{wall[:serial_ms].round(3)} overlap_est_ms=#{wall[:overlap_est_ms].round(3)} speedup_est=#{wall[:speedup_est].round(4)}x exact_ids=#{wall[:exact_ids].join(',')} emitted_ids=#{wall[:emitted_ids].join(',')}"
         end
       end
+    end
+    if simulate_lowrank_eval_suite
+      suite_token_sets = [{name: "main", token_ids: token_ids}] of PromptTokenSet
+      simulate_lowrank_eval_suite_prompts.each do |suite_prompt|
+        suite_token_sets << {
+          name:      suite_prompt[:name],
+          token_ids: token_ids_for_prompt(tok, suite_prompt[:text], tokens_limit),
+        }
+      end
+      suite_thresholds = if simulate_fallback_thresholds.empty?
+                           [simulate_fallback_threshold]
+                         else
+                           simulate_fallback_thresholds.map { |v| v.as(Float64?) }
+                         end
+      run_lowrank_eval_suite(weights, suite_token_sets, sorted_simulate_logit_layers, rank, max_rank,
+        basis_mode, pca_iters, calib_tokens, simulate_generate_tokens, suite_thresholds,
+        simulate_refresh_interval, simulate_oracle_refresh_interval, simulate_output_margin_threshold,
+        simulate_self_spec_gammas, simulate_self_spec_draft_margin, simulate_self_spec_draft_stop_margin,
+        simulate_self_spec_topk_rescue)
     end
     if simulate_self_draft_metal_baseline > 0
       sd = simulate_self_draft_metal_baseline_run(weights, token_ids, calib_count, simulate_self_draft_metal_baseline, layer_bases, rank)
