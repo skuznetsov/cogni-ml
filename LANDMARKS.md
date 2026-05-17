@@ -12909,3 +12909,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful pivot was away from ranking micro-optimizations and back to shape attribution; the `projection_ms` suffix mixed recurrent and full-attention projections, hiding this gap until the runner audit.
 - maieutic: The branch only applies to known-span token counts divisible by four. It does not improve single-token greedy decode.
 - adversary: Keep the opt-out because full-attention projection feeds KV/cache state; final-hidden equality is the required guard after any future pointer/layout rewrite.
+
+**decision_update_267:** Closed the missed CUDA Q4_K FFN-down+residual WBA corridor. `q4_k_gemv_add_warp4_f32_tbatch4` mirrors the existing Q4 gate/up token-band kernel but folds the residual add into the four-token output stores. Recurrent and full-attention runners now use it for Q4 `ffn_down.weight` when `tokens >= 4` and divisible by four; `QWEN_CUDA_Q4_DOWN_ADD_TBATCH4_OFF=1` restores the previous row-batched add route. Full-attention KV profiling was also hardened so batched tails emit component timings instead of opaque route-only `kv_tail_ms`.
+
+**evidence_update_267:**
+- claim: "Batched full-attention tail attribution shows attention is not the remaining CUDA wall."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_full_tail_profile crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` and `git diff --check -- src/ml/cuda/qwen_full_attn_kv_runner.cr` -> exit 0; remote RTX 5060 Ti profile `/build/persisten/cogni-ml/tmp/profile_fulltail_detail_tokens16.txt` reported full-attn KV-only tokens16 totals: `kv_qk_rope_ms=0.557`, `kv_attn_decode_ms=0.286`, `kv_out_proj_ms=2.647`, `kv_ffn_gate_ms=7.244`, `kv_ffn_up_ms=7.256`, `kv_ffn_down_ms=11.519`, `kv_profiled_ms=29.872`.
+  verified_at: 2026-05-17
+  decay_trigger: full-attention runner profiling, token-band route changes, CUDA driver/JIT, or attention/FFN kernel rewrites
+- claim: "Q4 FFN-down+residual tbatch4 composes exactly with the all-layer Qwen3.5-9B CUDA stack."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4_down_add_tbatch crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` and `git diff --check -- src/ml/cuda/kernels/q4k_gemv_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr src/ml/cuda/qwen_full_attn_kv_runner.cr bin/cuda_mixed_stack_probe.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with and without `QWEN_CUDA_Q4_DOWN_ADD_TBATCH4_OFF=1` printed matching top1 ids and final-hidden comparison `max_abs=0`, `rms=0`, `cos=0.99999999999999989`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4_K PTX ABI, FFN-down quant type mix, recurrent/full-attention tail layout, pointer-box ownership, CUDA driver/JIT, or verifier chunk shape changes
+- claim: "Q4 FFN-down+residual tbatch4 is a material exact known-span speedup."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B tokens16 three-pass A/B improved default-on vs opt-out from `193.723/193.844/193.987ms` to `180.684/180.657/180.938ms` total, with identical top1 ids. Profile after promotion shows `sum_ffn_down_ms=33.389` down from the prior detailed profile `46.038`, and full-attn KV-only `ffn_down_ms=8.371` down from `11.519`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, Q4/Q6 layer quant mix, or future FFN-down fusion route changes
+
+**quadrumvirate_update_267:**
+- cassandra: The opaque `kv_tail_ms` profile hid the split; component attribution predicted FFN-down would dominate over attention and identified the asymmetric Q6-only add-tbatch route.
+- daedalus: The useful frame was not another attention/ranking micro-optimization, but symmetry of the existing LTP/WBA token band: Q4 gate/up had WBA, Q6 down had WBA, Q4 down did not.
+- maieutic: Exactness depends on the same token-major residual/output layout used by the row-batched add kernels. The route is only claimed for known-span token counts divisible by four, not single-token greedy decode.
+- adversary: Keep the dedicated opt-out because PTX was derived from the no-add Q4 tbatch kernel and should be rechecked after any Q4 PTX, FFN tail, or pointer-layout rewrite.

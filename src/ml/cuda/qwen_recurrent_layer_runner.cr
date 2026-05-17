@@ -504,6 +504,7 @@ module ML::CUDA
       q4_batched_fn = q4_mod.function("q4_k_gemv_warp4_f32_batched")
       q4_tbatch4_fn = q4_mod.function("q4_k_gemv_warp4_f32_tbatch4")
       q4_add_batched_fn = q4_mod.function("q4_k_gemv_add_warp4_f32_batched")
+      q4_add_tbatch4_fn = q4_mod.function("q4_k_gemv_add_warp4_f32_tbatch4")
       q4_dual_fn = q4_dual_mod.function("q4_k_dual_gemv_warp4_f32")
       q4_dual_batched_fn = q4_dual_mod.function("q4_k_dual_gemv_warp4_f32_batched")
       q4_raw_q8_fn = q4_raw_q8_mod.function("q4_k_raw_q8_dp4a_gemv_warp4_f32")
@@ -530,6 +531,7 @@ module ML::CUDA
       use_q4_tbatch4 = ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
       use_q4_gate_tbatch4 = ENV["QWEN_CUDA_Q4_GATE_TBATCH4_OFF"]? != "1" && use_q4_tbatch4
       use_q4_ssm_out_tbatch4 = ENV["QWEN_CUDA_Q4_SSM_OUT_TBATCH4_OFF"]? != "1" && use_batched_ssm_out && use_q4_tbatch4
+      use_q4_down_add_tbatch4 = ENV["QWEN_CUDA_Q4_DOWN_ADD_TBATCH4_OFF"]? != "1" && @ffn_down_type.q4_k? && use_q4_tbatch4
       use_q6_tbatch4 = ENV["QWEN_CUDA_Q6_TBATCH4_OFF"]? != "1" && @ffn_down_type.q6_k? && @tokens >= 4 && (@tokens % 4 == 0)
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
@@ -837,6 +839,14 @@ module ML::CUDA
             d_residual_cur_ptr.value = d_residual + bytesize_f32(group * 4 * @hidden)
             d_final_cur_ptr.value = d_final_all + bytesize_f32(group * 4 * @hidden)
             ML::CUDA.launch!(q6_add_tbatch4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add tbatch4")
+          end
+        elsif use_q4_down_add_tbatch4
+          groups = @tokens // 4
+          groups.times do |group|
+            d_ffn_comb_cur_ptr.value = d_ffn_comb + bytesize_f32(group * 4 * @ffn_dim)
+            d_residual_cur_ptr.value = d_residual + bytesize_f32(group * 4 * @hidden)
+            d_final_cur_ptr.value = d_final_all + bytesize_f32(group * 4 * @hidden)
+            ML::CUDA.launch!(q4_add_tbatch4_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add q4 tbatch4")
           end
         else
           d_ffn_comb_cur_ptr.value = d_ffn_comb
