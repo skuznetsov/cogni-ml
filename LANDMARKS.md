@@ -12769,3 +12769,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This is a larger legal LTP/WBA move than launch batching: it lowers repeated weight-read/dequant area along the token band while preserving the FFN diamond boundary.
 - maieutic: The proof is current-runner equality, not a formal guarantee for every Q6 use. It is promoted only for FFN down+add where residual/output strides are explicit.
 - adversary: Keep the opt-out and do not reuse this blindly for output-head/top1 Q6 paths; those have different output semantics and reduction/ranking invariants.
+
+**decision_update_259:** Extended LTP/WBA weight-stationary token batching to CUDA Q6_K output-head logits for known-span verifier-style runs. `q6_k_gemv_warp4_f32_tbatch4` computes four token rows for `output.weight` after output RMSNorm, materializes logits, and reuses the existing CUDA top2 scan/reduce. `QWEN_CUDA_HEAD_Q6_TBATCH4_OFF=1` restores the previous fused per-token Q6 top1 route.
+
+**evidence_update_259:**
+- claim: "The Q6 output-head tbatch4 route preserves resident top1 results and improves known-span all-layer timing."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_head_tbatch crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` -> exit 0; remote RTX 5060 Ti build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_head_tbatch` -> exit 0. Five-layer GPU-logits A/B with and without `QWEN_CUDA_HEAD_Q6_TBATCH4_OFF=1` matched top1 ids/values exactly (`258,92564,46,61394`, values `7.266463,8.315939,7.691272,8.275434`). All-layer Qwen3.5-9B tokens16 perf A/B improved `255.327 -> 239.642ms` total (`15.958 -> 14.978ms/tok`) with identical top1 ids; all-layer GPU-logits A/B also matched top1 ids/values and improved `261.830 -> 241.463ms`.
+  verified_at: 2026-05-17
+  decay_trigger: output-head runner scheduling, Q6_K PTX, top2 scan/reduce ABI, CUDA driver/JIT, output.weight quant type, or verifier/generation controller changes
+- claim: "Head tbatch4 is a verifier/known-span win, not a plain greedy-token decode win."
+  source: remote RTX 5060 Ti semantic greedy loop `--all-layers --tokens 1 --greedy-loop-tokens 16 --greedy-loop-gpu-embedding` measured `23.692ms/tok`; known-span `--tokens 16` measured `15.727ms/tok` before head tbatch and `14.978ms/tok` after. The tbatch route requires `tokens >= 4` and divisible by 4, so it is inactive for single-token greedy decode.
+  verified_at: 2026-05-17
+  decay_trigger: greedy controller batching changes, speculative verifier chunk shape, or output-head token-batch gate changes
+
+**quadrumvirate_update_259:**
+- cassandra: Output-head logits were the next large repeated Q6 weight-read after FFN down; phase attribution predicted a bounded but real win.
+- daedalus: The earlier "do not reuse for output-head/top1" caution was correct for blind promotion. The safe pivot was to materialize logits and reuse the existing ranking oracle instead of inventing a new fused multi-row top1 reducer.
+- maieutic: Top1 equality versus the old route is strong for the tested spans, but not a formal proof for all distributions. Keep the env opt-out and require prompt/verifier gates before production promotion.
+- adversary: This route trades fewer Q6 weight reads for materialized logits plus top2 scans. It wins at tokens4/16 on RTX 5060 Ti, but may regress on memory-constrained devices or when full logits are already required differently.

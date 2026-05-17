@@ -572,12 +572,15 @@ module ML::CUDA
       norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
+      q6_tbatch4_fn = q6_mod.function("q6_k_gemv_warp4_f32_tbatch4")
       q6_top1_partial_fn = q6_mod.function("q6_k_gemv_top1_partial_f32")
       top2_scan_fn = top1_mod.function("output_top2_partial_scan_probe")
       top2_reduce_fn = top1_mod.function("output_top2_partial_reduce_probe")
       top1_values_reduce_fn = top1_mod.function("output_top1_values_reduce_probe")
       output_fn = @output_type.q4_k? ? q4_fn : q6_fn
-      fused_q6_top1 = @output_type.q6_k? && !@read_logits && !@read_top2
+      head_q6_tbatch4 = ENV["QWEN_CUDA_HEAD_Q6_TBATCH4_OFF"]? != "1" &&
+                        @output_type.q6_k? && @tokens >= 4 && (@tokens % 4 == 0)
+      fused_q6_top1 = @output_type.q6_k? && !@read_logits && !@read_top2 && !head_q6_tbatch4
       vocab_grid = ((@vocab + 3) // 4).to_u32
       top1_width = fused_q6_top1 ? vocab_grid : 256_u32
       logits_elements = fused_q6_top1 ? 1 : @tokens * @vocab
@@ -674,69 +677,136 @@ module ML::CUDA
       top2_reduce_params[8] = box_u32(top1_width).as(Void*)
 
       run_token = ->(tok : Int32) {
-        d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
-        d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
-        d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
-        d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
-        d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
-        d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(tok * top1_width.to_i32)
-        d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(tok * top1_width.to_i32)
-        d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
-        d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
-        d_top2_id_cur_ptr.value = d_top2_ids + bytesize_i32(tok)
-        d_top2_value_cur_ptr.value = d_top2_values + bytesize_f32(tok)
-        ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm")
-        if fused_q6_top1
-          ML::CUDA.launch!(q6_top1_partial_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, q6_top1_partial_params, "output q6 top1 partial")
-          ML::CUDA.launch!(top1_values_reduce_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 values reduce")
+        if head_q6_tbatch4
+          if tok % 4 == 0
+            4.times do |lane|
+              row = tok + lane
+              d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(row * @hidden)
+              d_normed_cur_ptr.value = d_normed_all + bytesize_f32(row * @hidden)
+              ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm tbatch4")
+            end
+            d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
+            d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+            ML::CUDA.launch!(q6_tbatch4_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits tbatch4")
+            4.times do |lane|
+              row = tok + lane
+              d_logits_cur_ptr.value = d_logits_all + bytesize_f32(row * @vocab)
+              d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(row * top1_width.to_i32)
+              d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(row * top1_width.to_i32)
+              d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(row * top1_width.to_i32)
+              d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(row * top1_width.to_i32)
+              d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(row)
+              d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(row)
+              d_top2_id_cur_ptr.value = d_top2_ids + bytesize_i32(row)
+              d_top2_value_cur_ptr.value = d_top2_values + bytesize_f32(row)
+              ML::CUDA.launch!(top2_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top2_scan_params, "output top2 scan tbatch4")
+              ML::CUDA.launch!(top2_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top2_reduce_params, "output top2 reduce tbatch4")
+            end
+          end
         else
-          ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
-          ML::CUDA.launch!(top2_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top2_scan_params, "output top2 scan")
-          ML::CUDA.launch!(top2_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top2_reduce_params, "output top2 reduce")
+          d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
+          d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
+          d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+          d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
+          d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
+          d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(tok * top1_width.to_i32)
+          d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(tok * top1_width.to_i32)
+          d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
+          d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
+          d_top2_id_cur_ptr.value = d_top2_ids + bytesize_i32(tok)
+          d_top2_value_cur_ptr.value = d_top2_values + bytesize_f32(tok)
+          ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm")
+          if fused_q6_top1
+            ML::CUDA.launch!(q6_top1_partial_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, q6_top1_partial_params, "output q6 top1 partial")
+            ML::CUDA.launch!(top1_values_reduce_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 values reduce")
+          else
+            ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
+            ML::CUDA.launch!(top2_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top2_scan_params, "output top2 scan")
+            ML::CUDA.launch!(top2_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top2_reduce_params, "output top2 reduce")
+          end
         end
       }
 
       profile_run_token = ->(tok : Int32) {
-        t_norm = Time.instant
-        d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
-        d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
-        ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm")
-        ML::CUDA.synchronize!("cuCtxSynchronize(output head norm)")
-        @profile_head_norm_ms += (Time.instant - t_norm).total_milliseconds
+        if head_q6_tbatch4
+          if tok % 4 == 0
+            t_norm = Time.instant
+            4.times do |lane|
+              row = tok + lane
+              d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(row * @hidden)
+              d_normed_cur_ptr.value = d_normed_all + bytesize_f32(row * @hidden)
+              ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm tbatch4")
+            end
+            ML::CUDA.synchronize!("cuCtxSynchronize(output head norm tbatch4)")
+            @profile_head_norm_ms += (Time.instant - t_norm).total_milliseconds
 
-        t_logits = Time.instant
-        d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
-        d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
-        d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
-        d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
-        d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(tok * top1_width.to_i32)
-        d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(tok * top1_width.to_i32)
-        if fused_q6_top1
-          ML::CUDA.launch!(q6_top1_partial_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, q6_top1_partial_params, "output q6 top1 partial")
-        else
-          ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
-        end
-        ML::CUDA.synchronize!("cuCtxSynchronize(output head logits)")
-        @profile_head_logits_ms += (Time.instant - t_logits).total_milliseconds
+            t_logits = Time.instant
+            d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
+            d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+            ML::CUDA.launch!(q6_tbatch4_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits tbatch4")
+            ML::CUDA.synchronize!("cuCtxSynchronize(output head logits tbatch4)")
+            @profile_head_logits_ms += (Time.instant - t_logits).total_milliseconds
 
-        t_top1 = Time.instant
-        d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
-        d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
-        d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
-        d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(tok * top1_width.to_i32)
-        d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(tok * top1_width.to_i32)
-        d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
-        d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
-        d_top2_id_cur_ptr.value = d_top2_ids + bytesize_i32(tok)
-        d_top2_value_cur_ptr.value = d_top2_values + bytesize_f32(tok)
-        if fused_q6_top1
-          ML::CUDA.launch!(top1_values_reduce_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 values reduce")
+            t_top1 = Time.instant
+            4.times do |lane|
+              row = tok + lane
+              d_logits_cur_ptr.value = d_logits_all + bytesize_f32(row * @vocab)
+              d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(row * top1_width.to_i32)
+              d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(row * top1_width.to_i32)
+              d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(row * top1_width.to_i32)
+              d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(row * top1_width.to_i32)
+              d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(row)
+              d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(row)
+              d_top2_id_cur_ptr.value = d_top2_ids + bytesize_i32(row)
+              d_top2_value_cur_ptr.value = d_top2_values + bytesize_f32(row)
+              ML::CUDA.launch!(top2_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top2_scan_params, "output top2 scan tbatch4")
+              ML::CUDA.launch!(top2_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top2_reduce_params, "output top2 reduce tbatch4")
+            end
+            ML::CUDA.synchronize!("cuCtxSynchronize(output head top1 tbatch4)")
+            @profile_head_top1_ms += (Time.instant - t_top1).total_milliseconds
+          end
         else
-          ML::CUDA.launch!(top2_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top2_scan_params, "output top2 scan")
-          ML::CUDA.launch!(top2_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top2_reduce_params, "output top2 reduce")
+          t_norm = Time.instant
+          d_x_cur_ptr.value = @input_device_base.not_nil! + bytesize_f32(tok * @hidden)
+          d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
+          ML::CUDA.launch!(norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, norm_params, "output norm")
+          ML::CUDA.synchronize!("cuCtxSynchronize(output head norm)")
+          @profile_head_norm_ms += (Time.instant - t_norm).total_milliseconds
+
+          t_logits = Time.instant
+          d_normed_cur_ptr.value = d_normed_all + bytesize_f32(tok * @hidden)
+          d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+          d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
+          d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
+          d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(tok * top1_width.to_i32)
+          d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(tok * top1_width.to_i32)
+          if fused_q6_top1
+            ML::CUDA.launch!(q6_top1_partial_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, q6_top1_partial_params, "output q6 top1 partial")
+          else
+            ML::CUDA.launch!(output_fn, vocab_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, output_params, "output logits")
+          end
+          ML::CUDA.synchronize!("cuCtxSynchronize(output head logits)")
+          @profile_head_logits_ms += (Time.instant - t_logits).total_milliseconds
+
+          t_top1 = Time.instant
+          d_logits_cur_ptr.value = d_logits_all + bytesize_f32(tok * @vocab)
+          d_partial_ids_cur_ptr.value = d_partial_ids + bytesize_i32(tok * top1_width.to_i32)
+          d_partial_values_cur_ptr.value = d_partial_values + bytesize_f32(tok * top1_width.to_i32)
+          d_partial2_ids_cur_ptr.value = d_partial2_ids + bytesize_i32(tok * top1_width.to_i32)
+          d_partial2_values_cur_ptr.value = d_partial2_values + bytesize_f32(tok * top1_width.to_i32)
+          d_top1_id_cur_ptr.value = d_top1_ids + bytesize_i32(tok)
+          d_top1_value_cur_ptr.value = d_top1_values + bytesize_f32(tok)
+          d_top2_id_cur_ptr.value = d_top2_ids + bytesize_i32(tok)
+          d_top2_value_cur_ptr.value = d_top2_values + bytesize_f32(tok)
+          if fused_q6_top1
+            ML::CUDA.launch!(top1_values_reduce_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, top1_reduce_params, "output top1 values reduce")
+          else
+            ML::CUDA.launch!(top2_scan_fn, 1_u32, 1_u32, 1_u32, top1_width, 1_u32, 1_u32, top2_scan_params, "output top2 scan")
+            ML::CUDA.launch!(top2_reduce_fn, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, top2_reduce_params, "output top2 reduce")
+          end
+          ML::CUDA.synchronize!("cuCtxSynchronize(output head top1)")
+          @profile_head_top1_ms += (Time.instant - t_top1).total_milliseconds
         end
-        ML::CUDA.synchronize!("cuCtxSynchronize(output head top1)")
-        @profile_head_top1_ms += (Time.instant - t_top1).total_milliseconds
       }
 
       read_outputs = -> {
