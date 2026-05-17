@@ -12423,3 +12423,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This does not require a CPU oracle for every known-span A/B. Use GPU route-vs-route hidden dumps as the cheap equality gate, and reserve CPU oracle checks for narrow token1 or small slices.
 - maieutic: Bit-identical final hidden rows on these spans do not prove all prompts or all future route rewrites. It proves the current projection+FFN WBA schedule preserves the default GPU result under semantic and seeded random-state gates.
 - adversary: Keep the route guarded for now because product decode still needs policy/controller integration and prompt-level exact verifier gates; however, the previous "top1 only" objection is resolved for this route.
+
+**decision_update_238:** Extended the standalone Q4_K GEMV probe with known-span `--tokens/--batched` support and switched it from an old inline PTX snapshot to the shared `src/ml/cuda/kernels/q4k_gemv_probe.ptx`. This prevents probe/kernel symbol drift and lets exact WBA candidates such as recurrent `ssm_out` be sized before runner state-layout changes.
+
+**evidence_update_238:**
+- claim: "Batched Q4_K WBA over recurrent `ssm_out.weight` is exact but only a modest isolated speed lever."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4_tokens_nocodegen2 crystal build bin/cuda_q4k_gemv_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_q4k_gemv_probe_tokens` -> exit 0 after syncing shared Q4 PTX. Remote Qwen3.5-9B `blk.0.ssm_out.weight` on RTX 5060 Ti: tokens2 loop/batched `0.078 -> 0.075ms`, tokens4 `0.155 -> 0.146`, tokens8 `0.311 -> 0.289`, tokens16 `0.621 -> 0.574`; all `ok=true`, `cos=1.0`, `max_diff<=2.861023e-6`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4 PTX layout, `cuda_q4k_gemv_probe` wiring, recurrent `ssm_out` tensor shape, CUDA driver/JIT, or future runner integration changes
+
+**quadrumvirate_update_238:**
+- cassandra: `ssm_out` WBA has a real signal, but not enough to explain the remaining CUDA verifier gap by itself. Expect a small full-runner gain unless post-gate storage, `ssm_out`, and add-rmsnorm are reorganized together.
+- daedalus: The next frame is not just "batch another GEMV"; it is "make the post-core tail token-major." That requires storing post-gate `V` rows and output rows across tokens, then deciding whether the added buffers and pointer churn beat the isolated `ssm_out` win.
+- maieutic: The probe uses independent random rows and skips conv/DeltaNet/post-gate serial dependencies. It proves the projection math is batchable, not that runner integration is automatically profitable.
+- adversary: Avoid runner surgery until a phase profile shows `ssm_out` plus add-rmsnorm is still material after projection+FFN WBA. The isolated win is exact but small.
