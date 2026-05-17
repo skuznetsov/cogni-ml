@@ -11915,3 +11915,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next useful frame is not more CPU-oracle all-layer sweeps, which are too slow, but a fast base-CUDA oracle plus risk-gated proposal policy followed by mixed-prompt self-spec verification.
 - maieutic: Raw-Q8 margin is only a feature, not proof. It must be calibrated against exact/base top1 acceptance and then tested under autoregressive proposal states, where drift can differ from exact-state points.
 - adversary: Do not promote raw-Q8 as exact decode. The current evidence supports implementing a guarded proposal experiment; it does not yet prove end-to-end speedup or parity on a prompt suite.
+
+**decision_update_208:** Added `--input-tokens LIST` to the CUDA mixed-stack probe and used it to test raw-Q8 proposal quality under state progression rather than isolated zero-state single-token points. For GPU-only diagnostic runs, the probe now reports `top1_logits_gpu` from the materialized logits scan and uses that as the reported `top1_gpu`; this avoids the multi-row resident top1/top2 buffer pitfall exposed by `top2_cuda_ok=false` on sequence inputs.
+
+**evidence_update_208:**
+- claim: "The CUDA probe can now run explicit semantic token sequences through recurrent/full-attention state progression and report per-position GPU logits top1/top2/margins."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_probe_inputtokens2 crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_inputtokens2` -> exit 0; remote `--input-tokens 0,198,... --gpu-logits-only` printed 32-position `top1_logits_gpu`, `top2_gpu`, and `top_margin_gpu` arrays.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA probe input handling, output-head logits readback, mixed-stack state progression, or multi-token output-head buffer semantics change
+- claim: "Raw-Q8 FFN has a strong teacher-forced proposal signal when gated by its own margin, but still needs autoregressive verifier integration before promotion."
+  source: remote suite `/build/persisten/cogni-ml/tmp/raw_q8_inputtokens_suite_20260517.log` over 8 exact-generated seed sequences (`32` positions each): raw-Q8 matched base CUDA top1 `254/256` (`99.22%`), mean wall improved `23.190ms -> 20.817ms` (`+10.24%`), and raw-margin threshold `>=0.030` kept `249/256` with `249/249` agreement. Mismatches were seed `0` pos `0` (`198` vs `271`, raw margin `0.027511`) and seed `760` pos `23` (`13838` vs `28810`, raw margin `0.001863`).
+  verified_at: 2026-05-17
+  decay_trigger: prompt suite, raw-Q8 FFN route, autoregressive proposal states, CUDA timing stability, margin threshold policy, or verifier controller integration changes
+
+**quadrumvirate_update_208:**
+- cassandra: The prior single-token gate risked overestimating safety because it did not advance recurrent state. The state-progressing suite still supports the same margin-gate pattern, which raises confidence but does not close the autoregressive gap.
+- daedalus: The next pivot is controller integration, not more standalone point sweeps: run raw-Q8 as an approximate proposal lane, fall back below threshold, and verify exact outputs.
+- maieutic: Teacher-forced agreement is not acceptance under free-running draft states. Exact verifier parity and wall-clock are still the promotion criteria.
+- adversary: `top2_cuda_ok=false` on multi-row sequence inputs shows why diagnostics must use materialized logits scan for per-row truth; do not reuse resident top1/top2 buffers as sequence-wide evidence until that path is fixed separately.

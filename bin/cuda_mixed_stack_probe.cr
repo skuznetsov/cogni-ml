@@ -19,6 +19,10 @@ def parse_layers(value : String) : Array(Int32)
   value.split(",").map(&.strip).reject(&.empty?).map(&.to_i)
 end
 
+def parse_i32_list(value : String) : Array(Int32)
+  value.split(",").map(&.strip).reject(&.empty?).map(&.to_i)
+end
+
 def parse_f32_list(value : String) : Array(Float32)
   value.split(",").map(&.strip).reject(&.empty?).map(&.to_f32)
 end
@@ -251,6 +255,8 @@ greedy_loop_gpu_embedding = false
 greedy_loop_cpu_embedding = false
 seed_token = 0
 input_token = -1
+input_tokens = [] of Int32
+input_tokens_provided = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -280,9 +286,11 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-cpu-embedding", "Force per-token CPU top1 readback and embedding upload in --greedy-loop-tokens mode") { greedy_loop_cpu_embedding = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
+  p.on("--input-tokens LIST", "Use comma-separated token_embd IDs as the non-greedy semantic input sequence") { |v| input_tokens_provided = true; input_tokens = parse_i32_list(v) }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
+tokens = input_tokens.size unless input_tokens.empty?
 raise "model not found: #{model}" unless File.exists?(model)
 raise "layers must not be empty" if layers.empty?
 raise "layers must be non-negative" unless layers.all? { |layer| layer >= 0 }
@@ -316,6 +324,9 @@ raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop
 raise "use either --greedy-loop-gpu-embedding or --greedy-loop-cpu-embedding, not both" if greedy_loop_gpu_embedding && greedy_loop_cpu_embedding
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
+raise "--input-tokens must not be empty when provided" if input_tokens_provided && input_tokens.empty?
+raise "--input-tokens is incompatible with --input-token" if !input_tokens.empty? && input_token >= 0
+raise "--input-tokens is incompatible with --greedy-loop-tokens" if !input_tokens.empty? && greedy_loop_tokens > 0
 raise "--gpu-logits-only is incompatible with --greedy-loop-tokens" if gpu_logits_only && greedy_loop_tokens > 0
 raise "--margin-bucket-report requires --read-logits" if margin_bucket_report && !read_logits
 raise "--margin-bucket-report is incompatible with --perf-only/--gpu-logits-only" if margin_bucket_report && perf_only
@@ -343,14 +354,22 @@ rng = Random.new(seed)
 token_embd = load_quant_weight(gguf, "token_embd.weight")
 raise "seed-token #{seed_token} out of range" if seed_token < 0 || seed_token >= token_embd.out_dim
 raise "input-token #{input_token} out of range" if input_token >= token_embd.out_dim
+input_tokens.each { |tok| raise "input-tokens contains out-of-range token #{tok}" if tok < 0 || tok >= token_embd.out_dim }
 if greedy_loop_tokens > 0 && !greedy_loop_cpu_embedding && token_embd.type.q4_k?
   greedy_loop_gpu_embedding = true
 end
-semantic_input = greedy_loop_tokens > 0 || input_token >= 0
+semantic_input = greedy_loop_tokens > 0 || input_token >= 0 || !input_tokens.empty?
 xs = if greedy_loop_tokens > 0
        ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, seed_token)
      elsif input_token >= 0
        ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, input_token)
+     elsif !input_tokens.empty?
+       seq = Array(Float32).new(input_tokens.size * hidden, 0.0_f32)
+       input_tokens.each_with_index do |tok, i|
+         emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, tok)
+         hidden.times { |j| seq[i * hidden + j] = emb[j] }
+       end
+       seq
      else
        Array(Float32).new(tokens * hidden) { ((rng.next_float - 0.5) * 0.2).to_f32 }
      end
@@ -663,6 +682,7 @@ begin
       logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
       ok = ok && logits_ok
     end
+    gpu_logits_top1_ids = [] of Int32
     gpu_top2_ids = [] of Int32
     gpu_top1_values = [] of Float32
     gpu_top2_values = [] of Float32
@@ -670,6 +690,7 @@ begin
     tokens.times do |tok|
       gpu_best_id, gpu_best, gpu_second_id, gpu_second, gpu_margin =
         top2_from_logits(output_head.logits_gpu_all, tok, head_weights.vocab)
+      gpu_logits_top1_ids << gpu_best_id
       gpu_top2_ids << gpu_second_id
       gpu_top1_values << gpu_best
       gpu_top2_values << gpu_second
@@ -685,6 +706,14 @@ begin
     cuda_top2_ok = output_head.top1_ids == gpu_top1_ids &&
                    output_head.top2_ids_gpu == gpu_top2_ids &&
                    max_abs_diff(cuda_top_margins, gpu_top_margins) <= 5.0e-3_f32
+    if gpu_logits_only
+      gpu_top1_ids = gpu_logits_top1_ids
+      top1_ok = true
+    else
+      top1_ok = gpu_logits_top1_ids == cpu_top1_ids
+    end
+    lines << "top1_logits_gpu=#{gpu_logits_top1_ids.join(",")}"
+    lines << "top1_cuda_gpu=#{output_head.top1_ids.join(",")}"
     lines << "top2_gpu=#{gpu_top2_ids.join(",")}"
     lines << "top2_cpu=#{gpu_logits_only ? "skipped" : cpu_top2_ids.join(",")}"
     lines << "top2_cuda_gpu=#{output_head.top2_ids_gpu.join(",")}"
@@ -705,7 +734,7 @@ begin
     end
     lines << "top2_cuda_ok=#{cuda_top2_ok}"
     append_margin_bucket_report(lines, cpu_top1_ids, gpu_top1_ids, cpu_top_margins, margin_bucket_edges) if margin_bucket_report
-    ok = ok && cuda_top2_ok
+    ok = ok && cuda_top2_ok unless gpu_logits_only
   else
     lines << "logits_readback=false"
   end
@@ -750,6 +779,7 @@ begin
   puts "greedy_loop_cpu_embedding=#{greedy_loop_cpu_embedding}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
+  puts "input_tokens=#{input_tokens.join(",")}"
   puts "read_logits=#{read_logits}"
   puts "gpu_logits_only=#{gpu_logits_only}"
   puts "margin_bucket_report=#{margin_bucket_report}"
