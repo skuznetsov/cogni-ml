@@ -12479,3 +12479,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next exact CUDA frame should be "make the hot Q4/Q6 GEMV kernels faster or reduce their bytes," not "add another small batched wrapper." Candidate: revisit llama-style raw-layout/DP4A only for verifier if exactness can be recovered, or optimize current exact Q4/Q6 kernels against llama.cpp's MMVQ gap.
 - maieutic: Component profiling adds synchronizations, so absolute wall differs from production timing. Use the component shares and ordering, not the profiled wall as a product speed number.
 - adversary: `alpha_beta` looks small because the current split launches alpha/beta together before one sync; do not over-interpret sub-millisecond precision without a repeated profile gate.
+
+**decision_update_242:** Source-checked the llama.cpp CUDA MMVQ path before copying its strategy into the exact verifier. llama.cpp's fast `mul_mat_vec_q` route operates on quantized `Q8_1` activations and calls `vec_dot_q*_K_q8_1` DP4A kernels for Q4_K/Q6_K. This is the same approximation class as our raw-Q8 activation route, not strict f32-dequant GEMV equivalence.
+
+**evidence_update_242:**
+- claim: "llama.cpp's CUDA Q4_K/Q6_K MMVQ speed advantage comes from Q8_1 activation quantization plus DP4A vec-dot kernels, so it is not an apples-to-apples strict f32-dequant verifier target."
+  source: local source inspection of `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/mmvq.cu` (`mul_mat_vec_q`, `get_vec_dot_q_cuda`, `MMVQ_MAX_BATCH_SIZE`) and `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/vecdotq.cuh` (`vec_dot_q4_K_q8_1`, `vec_dot_q6_K_q8_1`, DP4A implementations). Cross-check: prior raw-Q8 route in this repo improved wall but failed strict logits/top1 parity on full 9B, matching the expected approximation risk.
+  verified_at: 2026-05-17
+  decay_trigger: llama.cpp CUDA MMVQ rewrite, local raw-Q8 route rewrite, exactness policy changes, or model quantization changes
+
+**quadrumvirate_update_242:**
+- cassandra: Copying llama.cpp MMVQ into the exact verifier would likely reproduce its speed and our raw-Q8 quality risk, not give strict parity for free.
+- daedalus: Split the roadmap into two lanes: strict verifier speedups must optimize f32-dequant/current exact kernels or reduce exact work; llama-style Q8 activation belongs in approximate proposal/fast-mode lanes.
+- maieutic: "Faster than llama.cpp" must specify the semantic contract. Exact greedy parity against our f32 route and llama-compatible quantized activation are different targets.
+- adversary: Do not report llama comparisons without stating whether activation quantization is allowed. Otherwise benchmark claims conflate exact verifier speed with approximate decode speed.
