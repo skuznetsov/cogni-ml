@@ -1306,6 +1306,7 @@ begin
   puts "batched_projections=#{ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1"}"
   puts "batched_ssm_out=#{ENV["QWEN_CUDA_BATCHED_SSM_OUT_OFF"]? != "1"}"
   puts "batched_norms=#{ENV["QWEN_CUDA_BATCHED_NORMS_OFF"]? != "1"}"
+  puts "full_attn_batched_norms=#{ENV["QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF"]? != "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"

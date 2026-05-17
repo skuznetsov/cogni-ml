@@ -12701,3 +12701,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The remaining exact WBA gaps are now narrower; next candidates should be full-attention add-rmsnorm batching, larger GEMV arithmetic changes, or proposal-body math, not more single-slice wrapper tuning.
 - maieutic: The batched kernels preserve reduction order per row, so equality is expected; the important falsifier was pointer/stride layout, which the final-hidden dump passed.
 - adversary: The route assumes `dim` rows are contiguous and all rows share the same norm vector. That matches current Qwen recurrent spans; keep the opt-out for shape/layout refactors.
+
+**decision_update_255:** Reused the verified batched add-RMSNorm kernel in the CUDA full-attention batched tail. Full-attention KV already batched Q/K/cache/attention, output projection, and FFN tail; the remaining per-row add-rmsnorm loop is now replaced by one `add_rmsnorm_vec_parallel_batched_probe` launch when `tokens > 1`. `QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF=1` restores the previous per-row full-attention norm loop.
+
+**evidence_update_255:**
+- claim: "Batched full-attention add-rmsnorm preserves exact known-span final hidden rows on Qwen3.5-9B CUDA."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_fullattn_batched_norms_nocodegen crystal build bin/cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/qwen_full_attn_kv_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with `QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF=1` vs default printed identical top1 and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`.
+  verified_at: 2026-05-17
+  decay_trigger: full-attention tail layout, add-rmsnorm batched PTX, CUDA driver/JIT, hidden dimension/block size, or residual-device aliasing changes
+- claim: "Full-attention norm batching is exact but has only a small wall-clock impact."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B timing sweep: tokens2 `26.677 -> 26.611ms/tok`, tokens4 `22.892 -> 22.866`, tokens8 `21.095 -> 21.051`, tokens16 `20.257 -> 20.195`, all `ok=true` with matching top1 hashes. Layer3 slice profile printed `phase_layer3_kv_profile_route=batched_tail_norm`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, or full-attention tail refactor
+
+**quadrumvirate_update_255:**
+- cassandra: Expected gain is small because only 8 full-attention layers use this tail, and the full-attention tail was already mostly batched.
+- daedalus: This likely closes the obvious exact wrapper-batching lane for current CUDA known-span verification. Next high-ROI work should shift back to GEMV arithmetic economics or cheaper proposal-body math.
+- maieutic: The proof is equality for current all-layer spans, not a formal shape proof. The opt-out remains for future residual aliasing or layout changes.
+- adversary: Do not stack these small WBA deltas into a claimed breakthrough without a clean end-to-end baseline rerun against llama.cpp/MLX/vLLM on identical prompts.
