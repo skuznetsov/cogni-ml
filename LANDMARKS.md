@@ -12859,3 +12859,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The earlier broad Q4 projection failure did not refute `ssm_out`; it refuted unchecked reuse without pointer-state isolation. The safe frame is one post-core projection plus explicit pointer reset.
 - maieutic: The branch does not parallelize DeltaNet recurrence. It only reduces the projection after the serial post-gate rows already exist.
 - adversary: Keep the dedicated opt-out because diagnostics that read intermediate `d_attn_out`/`d_z` around the post-core tail must preserve the token-major layout assumptions.
+
+**decision_update_264:** Batched the CUDA output-head resident top2 scan/reduce over the same 4-token LTP/WBA band used by Q6 logits. The new `output_top2_partial_scan_batched_probe` and `output_top2_partial_reduce_batched_probe` keep the same per-row ranking math but use `ctaid.x` as the row inside a 4-row band, reducing per-group top2 launches from eight to two. `QWEN_CUDA_HEAD_TOP2_BATCHED_OFF=1` restores the previous per-row scan/reduce route.
+
+**evidence_update_264:**
+- claim: "Batched output-head top2 preserves resident top1/top2 results on Qwen3.5-9B CUDA."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_head_top2_batched_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` and `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/qwen_output_head_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 `--gpu-logits-only` A/B with `QWEN_CUDA_HEAD_TOP2_BATCHED_OFF=1` vs default printed identical `top1_logits_gpu`, identical resident `top1_gpu`, identical `top2_cuda_gpu`, and `top2_cuda_ok=true` in both routes.
+  verified_at: 2026-05-17
+  decay_trigger: output-head TOP1_PTX, top2 pointer-box layout, Q6 logits materialization layout, CUDA driver/JIT, or verifier/controller top2 semantics changes
+- claim: "Batched output-head top2 is a real exact launch-count win in the known-span path."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B tokens16 three-pass A/B improved default-on vs opt-out from `207.695/207.634/208.197ms` to `203.736/203.670/204.040ms` total, with identical top1 ids. Profile after promotion shows `phase_head_top1_ms=1.496`, down from the prior current profile `phase_head_top1_ms=5.779`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, or future fused output-head route changes
+
+**quadrumvirate_update_264:**
+- cassandra: This was a launch/control bottleneck, not a memory-bandwidth bottleneck; the measured win follows from collapsing 32 scan/reduce launches to 8 for 16 rows.
+- daedalus: The safe pivot was to batch the existing materialized-logits ranking path rather than reviving the previously risky fused multi-row Q6 top1 reducer.
+- maieutic: Top2 equality is verified against logits-scan and resident output on current spans. It does not prove a future no-logits fused ranking path.
+- adversary: Keep the opt-out because ranking code is correctness-sensitive; any future sampler/margin controller change should re-run `--gpu-logits-only` before trusting this route.
