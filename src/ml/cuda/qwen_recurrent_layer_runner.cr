@@ -529,6 +529,7 @@ module ML::CUDA
       use_q5_tbatch4 = ENV["QWEN_CUDA_Q5_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
       use_q4_tbatch4 = ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
       use_q4_gate_tbatch4 = ENV["QWEN_CUDA_Q4_GATE_TBATCH4_OFF"]? != "1" && use_q4_tbatch4
+      use_q4_ssm_out_tbatch4 = ENV["QWEN_CUDA_Q4_SSM_OUT_TBATCH4_OFF"]? != "1" && use_batched_ssm_out && use_q4_tbatch4
       use_q6_tbatch4 = ENV["QWEN_CUDA_Q6_TBATCH4_OFF"]? != "1" && @ffn_down_type.q6_k? && @tokens >= 4 && (@tokens % 4 == 0)
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
@@ -1049,9 +1050,16 @@ module ML::CUDA
       }
 
       run_batched_ssm_out_and_add = -> {
-        d_out_proj_input_ptr.value = d_z
-        d_attn_out_cur_ptr.value = d_attn_out
-        ML::CUDA.launch!(q4_batched_fn, hidden_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out batched")
+        if use_q4_ssm_out_tbatch4
+          run_q4_weight_stationary.call(out_proj_params, d_out_proj_input_ptr, d_attn_out_cur_ptr,
+            d_z, d_attn_out, hidden_grid, @inner_dim, @hidden, "ssm_out batched")
+          d_out_proj_input_ptr.value = d_z
+          d_attn_out_cur_ptr.value = d_attn_out
+        else
+          d_out_proj_input_ptr.value = d_z
+          d_attn_out_cur_ptr.value = d_attn_out
+          ML::CUDA.launch!(q4_batched_fn, hidden_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out batched")
+        end
 
         if use_batched_norms
           d_x_cur_ptr.value = @input_device_base.not_nil!

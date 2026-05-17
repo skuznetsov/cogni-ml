@@ -12841,3 +12841,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This is the same useful frame as the recurrent gate fix: promote one safe projection corridor with pointer reset and hidden-output equality, not a broad Q4/Q6 routing rewrite.
 - maieutic: The verified claim is exactness and speed for current known-span token bands divisible by four. It does not apply to single-token greedy decode.
 - adversary: Keep the dedicated opt-out because material benefit is small and future KV-tail fusions may make this route redundant or negative.
+
+**decision_update_263:** Extended LTP/WBA weight-stationary token batching to recurrent Q4_K `ssm_out`. The recurrent runner now stores post-gated DeltaNet rows token-major as before, then routes only the following `ssm_out.weight` projection through Q4 tbatch4 before the existing batched add-RMSNorm tail. `QWEN_CUDA_Q4_SSM_OUT_TBATCH4_OFF=1` restores the previous row-batched `ssm_out` route.
+
+**evidence_update_263:**
+- claim: "Q4 recurrent `ssm_out` tbatch4 composes exactly with the all-layer Qwen3.5-9B CUDA stack."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4_ssm_out_tbatch_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` and `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/qwen_recurrent_layer_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with `QWEN_CUDA_Q4_SSM_OUT_TBATCH4_OFF=1` vs default printed matching top1 and final-hidden comparison `max_abs=0`, `rms=0`, `cos=0.99999999999999989`.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent post-gate store layout, Q4_K tbatch PTX ABI, pointer-box ownership, CUDA driver/JIT, or DeltaNet post-core tail refactor
+- claim: "Q4 recurrent `ssm_out` tbatch4 is the largest post-Q5/Q4-gate known-span win in the current CUDA WBA pass."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B tokens16 three-pass A/B improved default-on vs opt-out from `214.037/214.147/214.045ms` to `207.518/207.174/207.288ms` total, with identical top1 ids. Profile after promotion shows `sum_recurrent_core_ms=28.253`, down from the prior full-attention-output profile `sum_recurrent_core_ms=34.821`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, or future recurrent-core/WBA fusion route changes
+
+**quadrumvirate_update_263:**
+- cassandra: This was the best remaining exact Q4 corridor because standalone `ssm_out` tbatch already showed nearly 2x kernel improvement and the runner had a clean token-major post-gate buffer.
+- daedalus: The earlier broad Q4 projection failure did not refute `ssm_out`; it refuted unchecked reuse without pointer-state isolation. The safe frame is one post-core projection plus explicit pointer reset.
+- maieutic: The branch does not parallelize DeltaNet recurrence. It only reduces the projection after the serial post-gate rows already exist.
+- adversary: Keep the dedicated opt-out because diagnostics that read intermediate `d_attn_out`/`d_z` around the post-core tail must preserve the token-major layout assumptions.
