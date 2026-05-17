@@ -27,6 +27,22 @@ module ML::CUDA
       end
     end
 
+    class DecodeStateSnapshot
+      getter buffers : Array(DeviceBuffer)
+      getter include_kv : Bool
+
+      def initialize(@buffers : Array(DeviceBuffer), @include_kv : Bool)
+        @closed = false
+      end
+
+      def close : Nil
+        return if @closed
+
+        @buffers.each(&.close)
+        @closed = true
+      end
+    end
+
     getter layer_ids : Array(Int32)
     getter runners : Array(LayerRunner)
     getter head : QwenOutputHeadRunner
@@ -164,6 +180,50 @@ module ML::CUDA
       raise "unused recurrent snapshot buffers" unless idx == snapshot.buffers.size
     end
 
+    def snapshot_decode_state(include_kv : Bool = true) : DecodeStateSnapshot
+      buffers = [] of DeviceBuffer
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          snapshot_device_buffer!(buffers, runner.conv_state_device_ptr, runner.conv_state_bytesize, "snapshot conv_state")
+          snapshot_device_buffer!(buffers, runner.ssm_state_device_ptr, runner.ssm_state_bytesize, "snapshot ssm_state")
+        in QwenFullAttnLayerRunner
+          if include_kv
+            snapshot_device_buffer!(buffers, runner.k_cache_device_ptr, runner.kv_cache_bytesize, "snapshot k_cache")
+            snapshot_device_buffer!(buffers, runner.v_cache_device_ptr, runner.kv_cache_bytesize, "snapshot v_cache")
+          end
+        end
+      end
+      DecodeStateSnapshot.new(buffers, include_kv)
+    end
+
+    def restore_decode_state(snapshot : DecodeStateSnapshot) : Nil
+      idx = 0
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          conv = snapshot.buffers[idx]
+          ssm = snapshot.buffers[idx + 1]
+          raise "snapshot conv_state size mismatch" unless conv.bytesize == runner.conv_state_bytesize
+          raise "snapshot ssm_state size mismatch" unless ssm.bytesize == runner.ssm_state_bytesize
+          ML::CUDA.copy_dtod!(runner.conv_state_device_ptr, conv.ptr, conv.bytesize, "restore conv_state")
+          ML::CUDA.copy_dtod!(runner.ssm_state_device_ptr, ssm.ptr, ssm.bytesize, "restore ssm_state")
+          idx += 2
+        in QwenFullAttnLayerRunner
+          if snapshot.include_kv
+            k_cache = snapshot.buffers[idx]
+            v_cache = snapshot.buffers[idx + 1]
+            raise "snapshot k_cache size mismatch" unless k_cache.bytesize == runner.kv_cache_bytesize
+            raise "snapshot v_cache size mismatch" unless v_cache.bytesize == runner.kv_cache_bytesize
+            ML::CUDA.copy_dtod!(runner.k_cache_device_ptr, k_cache.ptr, k_cache.bytesize, "restore k_cache")
+            ML::CUDA.copy_dtod!(runner.v_cache_device_ptr, v_cache.ptr, v_cache.bytesize, "restore v_cache")
+            idx += 2
+          end
+        end
+      end
+      raise "unused decode snapshot buffers" unless idx == snapshot.buffers.size
+    end
+
     def copy_decode_state_to!(target : QwenMixedStackRunner, include_kv : Bool = true) : Nil
       raise ArgumentError.new("layer ids mismatch") unless @layer_ids == target.layer_ids
       raise ArgumentError.new("runner count mismatch") unless @runners.size == target.runners.size
@@ -178,6 +238,12 @@ module ML::CUDA
           copy_kv_state_to!(source, dest) if include_kv
         end
       end
+    end
+
+    private def snapshot_device_buffer!(buffers : Array(DeviceBuffer), source : DevicePtr, bytesize : LibC::SizeT, label : String) : Nil
+      buffer = DeviceBuffer.new(bytesize)
+      ML::CUDA.copy_dtod!(buffer.ptr, source, bytesize, label)
+      buffers << buffer
     end
 
     private def copy_recurrent_state_to!(source : QwenRecurrentLayerRunner, dest : QwenRecurrentLayerRunner) : Nil

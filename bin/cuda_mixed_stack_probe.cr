@@ -255,6 +255,7 @@ greedy_loop_gpu_embedding = false
 greedy_loop_cpu_embedding = false
 greedy_loop_read_logits = false
 greedy_loop_probe_restore = false
+greedy_loop_probe_restore_kv = false
 runtime_raw_q8 = false
 seed_token = 0
 input_token = -1
@@ -289,6 +290,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-cpu-embedding", "Force per-token CPU top1 readback and embedding upload in --greedy-loop-tokens mode") { greedy_loop_cpu_embedding = true }
   p.on("--greedy-loop-read-logits", "Diagnostic: read CUDA logits/top2 margins after each greedy-loop token; forces CPU feedback and no graph") { greedy_loop_read_logits = true; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-restore", "Diagnostic: run raw-Q8 proposal, restore recurrent state, then run exact verifier each token") { greedy_loop_probe_restore = true; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
+  p.on("--greedy-loop-probe-restore-kv", "Also snapshot/restore full-attention KV caches in --greedy-loop-probe-restore") { greedy_loop_probe_restore_kv = true }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
@@ -334,6 +336,7 @@ raise "--greedy-loop-read-logits is incompatible with --greedy-loop-graph" if gr
 raise "--greedy-loop-probe-restore requires --greedy-loop-tokens" if greedy_loop_probe_restore && greedy_loop_tokens == 0
 raise "--greedy-loop-probe-restore is incompatible with --skip-output-head" if greedy_loop_probe_restore && skip_output_head
 raise "--greedy-loop-probe-restore is incompatible with --greedy-loop-graph" if greedy_loop_probe_restore && greedy_loop_graph
+raise "--greedy-loop-probe-restore-kv requires --greedy-loop-probe-restore" if greedy_loop_probe_restore_kv && !greedy_loop_probe_restore
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
 raise "--input-tokens must not be empty when provided" if input_tokens_provided && input_tokens.empty?
@@ -555,7 +558,7 @@ begin
         mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
         greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
 
-        snapshot = mixed_stack.snapshot_recurrent_states
+        snapshot = mixed_stack.snapshot_decode_state(include_kv: greedy_loop_probe_restore_kv)
         begin
           mixed_stack.set_recurrent_ffn_raw_q8(true)
           t_raw = Time.instant
@@ -567,7 +570,7 @@ begin
           probe_raw_top2_ids << raw_second_id
           probe_raw_margins << raw_margin
 
-          mixed_stack.restore_recurrent_states(snapshot)
+          mixed_stack.restore_decode_state(snapshot)
         ensure
           snapshot.close
         end
@@ -871,6 +874,7 @@ begin
   puts "greedy_loop_cpu_embedding=#{greedy_loop_cpu_embedding}"
   puts "greedy_loop_read_logits=#{greedy_loop_read_logits}"
   puts "greedy_loop_probe_restore=#{greedy_loop_probe_restore}"
+  puts "greedy_loop_probe_restore_kv=#{greedy_loop_probe_restore_kv}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"

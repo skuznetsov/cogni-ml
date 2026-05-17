@@ -12037,3 +12037,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Prefer same-stack full-state snapshot/restore or shared-weight verifier runners before building a production chunk scheduler around duplicate stacks.
 - maieutic: The API verifies copy plumbing, not verifier economics. The next speed claim still requires exact parity and wall timing with a guarded chunk controller.
 - adversary: Do not promote duplicate-stack chunk verification as the final architecture until memory pressure is measured and a no-duplicate alternative is evaluated.
+
+**decision_update_215:** Added same-stack CUDA decode-state snapshot/restore with optional full-attention KV coverage and switched the raw-Q8 probe-restore diagnostic onto that API. The diagnostic defaults to recurrent conv/SSM snapshot only and adds `--greedy-loop-probe-restore-kv` as an adversary flag. This preserves the production assumption that proposal-written KV rows at and after the current position are overwritten by exact verification before use, while still making full-KV rollback testable when that assumption changes.
+
+**evidence_update_215:**
+- claim: "Same-stack decode snapshots build locally and on the remote RTX 5060 Ti host."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_fullsnapshot_nocodegen2 crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_fullsnapshot2` -> exit 0.
+  verified_at: 2026-05-17
+  decay_trigger: mixed-stack state layout, probe-restore scheduler, full-attention KV overwrite ordering, Crystal compiler, or CUDA driver/runtime changes
+- claim: "Both recurrent-only and full-KV probe-restore preserve exact greedy output on an all-layer Qwen3.5-9B CUDA smoke."
+  source: remote all-layer `--greedy-loop-tokens 8 --greedy-loop-probe-restore` printed `top1_gpu=198,2,220,16,13,27416,198,760`, raw proposals `271,2,220,16,13,27416,198,760`, and `ok=true`; adding `--greedy-loop-probe-restore-kv` printed the same exact and raw sequences with `ok=true`. Timing was diagnostic-only: recurrent-only `55.117 ms/tok`, full-KV `55.322 ms/tok` on max_seq 64.
+  verified_at: 2026-05-17
+  decay_trigger: model prompt/seed, raw-Q8 route, snapshot include_kv default, full-attention KV cache layout, or max_seq/controller policy changes
+
+**quadrumvirate_update_215:**
+- cassandra: Full-KV rollback is not currently required for immediate exact overwrite, but keeping it as a flag prevents hidden correctness debt when future controllers stop overwriting proposal rows before use.
+- daedalus: The speed-bearing route should avoid duplicate weight-owning verifier stacks and use same-stack rollback plus exact overwrite/replay semantics.
+- maieutic: Snapshot correctness is not chunk-verifier speed. The next falsifier must measure gamma=2/4 guarded chunk acceptance and wall time.
+- adversary: Do not extrapolate the tiny `max_seq=64` KV-copy overhead to long contexts; long-context controllers need live-prefix copy accounting or no-KV rollback by construction.
