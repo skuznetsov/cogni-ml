@@ -11969,3 +11969,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Move from optimistic low-threshold gating to conservative controller experiments plus a search for a second risk feature.
 - maieutic: The controller needs exact parity first; the useful speed metric is accepted proposal work after fallback/reject overhead, not raw-only free-run speed.
 - adversary: The stress suite is still token-seed based, not a real prompt distribution. Treat `0.300` as a starting threshold, not a universal constant.
+
+**decision_update_211:** Reframed the raw-Q8 controller estimate around resynced exact states instead of raw-only free-run tails. After a verifier reject or fallback, a real controller feeds the exact token back into the proposal lane, so raw-only post-divergence tails overstate continuing mismatch. The correct planning gate is teacher-forced over exact-generated token sequences plus a separate free-run drift diagnostic.
+
+**evidence_update_211:**
+- claim: "With exact/resynced state inputs, a conservative raw-Q8 margin threshold can be exact on the current 27-seed stress sample."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_teacher_forced_27seed_20260517.log`: using base-generated sequences as `--input-tokens`, raw-Q8 matched exact/base `854/864` (`98.84%`); threshold `raw_margin>=0.300` kept `708/864` positions and all kept positions matched (`708/708`), while threshold `0.200` still had one miss (`759/760`). Raw teacher-forced mean wall was `20.915ms/tok` in this diagnostic route.
+  verified_at: 2026-05-17
+  decay_trigger: exact-generated sequence suite, raw-Q8 route, margin threshold, controller resync policy, or CUDA timing path changes
+
+**quadrumvirate_update_211:**
+- cassandra: Raw-only free-run is the right drift detector but the wrong post-reject controller simulator; it overcounts cascade after a verifier would resync.
+- daedalus: The next useful implementation is a guarded proposal/verifier controller with threshold sweep `0.25..0.40`, not another raw-only sequence run.
+- maieutic: The speed claim remains proposal-lane scoped. Exact verifier parity and wall timing decide whether this matters end-to-end.
+- adversary: The stress sample is seed-token based and still not a prompt suite; use `0.300` as a conservative starting point, not a universal threshold.
