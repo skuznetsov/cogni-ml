@@ -12077,3 +12077,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed-bearing pivot is replacing the sequential verifier in this diagnostic with a true chunk verifier or an exact accepted-chunk fast path, not more raw-only proposal sweeps.
 - maieutic: `ok=true` here means exact output preservation under the diagnostic controller, not speedup. The wall is expected to be around raw-plus-exact cost.
 - adversary: Margin fallback prevented the known seed0 near-tie from becoming a reject. Need adversarial seeds/prompts where raw high-margin flips exact top2 before trusting threshold `0.03` broadly.
+
+**decision_update_217:** Added and tested a default-off duplicate-stack batched verifier probe for raw-Q8 chunks, then refuted it as a speed path in its current form. `--greedy-loop-probe-chunk-batched-verify` builds a second `tokens=gamma` exact stack, copies full decode state including KV into it, verifies candidate chunks, and copies state back only on full accept. A first implementation incorrectly read resident multi-row top1 buffers; the fix scans materialized logits row-by-row, matching the known CUDA multi-row diagnostic invariant.
+
+**evidence_update_217:**
+- claim: "The batched verifier probe preserves exact output after the logits-scan fix."
+  source: remote `/build/persisten/cogni-ml/tmp/raw_q8_batched_chunk_multiseed_20260517.log` over seeds `0,198,760,1919`, all-layer Qwen3.5-9B, gen16, margin `0.03`, gamma `2/4`: every row printed `ok=true` and exact top1 sequences matched the non-batched chunk probe.
+  verified_at: 2026-05-17
+  decay_trigger: output-head logits readback, multi-row top1 buffer semantics, state-copy implementation, or verifier-stack construction changes
+- claim: "The duplicate-stack batched verifier is not faster than sequential exact verification in the current CUDA runner."
+  source: same remote log: gamma2 batched verifier chunks cost about `46.2-46.4 ms/chunk` for 2 tokens, gamma4 cost about `91.9-92.0 ms/chunk` for 4 tokens, i.e. still about `23 ms/token`; total diagnostic wall stayed around `49.7-51.6 ms/tok` because raw proposal cost remained about `21.8 ms/raw-token` and verifier work was not sublinear.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA runner token loop, true chunk/prefill kernels, output-head batching, state-copy overhead, or raw-Q8 proposal route changes
+- claim: "Resident multi-row top1 buffers must not be used as verifier truth."
+  source: first batched verifier run falsely rejected accepted chunks; switching from `verify_stack.head.top1_ids` to row-wise `top2_from_logits(verify_stack.head.logits_gpu_all, row, vocab)` restored expected full-accept counts (`gamma2` seed0 `8/9`, gamma4 seed0 `4/5`, other tested seeds all full-accept).
+  verified_at: 2026-05-17
+  decay_trigger: output-head top1/top2 kernel semantics or multi-row readback implementation changes
+
+**quadrumvirate_update_217:**
+- cassandra: Packing decode tokens into a `tokens=gamma` stack does not imply chunk speed; existing CUDA recurrent/full-attention runners still do mostly serial per-token work.
+- daedalus: The next speed path is not another duplicate verifier stack. It must either make raw proposal materially cheaper, overlap raw proposal with exact verification, or implement a true known-span/chunk verifier kernel path with sublinear per-token cost.
+- maieutic: High acceptance is necessary but not sufficient. The verifier body must be faster per verified token than plain decode, otherwise exactness bookkeeping only adds cost.
+- adversary: Do not report this as speculative speedup. It is a useful negative measurement and a diagnostic option only.

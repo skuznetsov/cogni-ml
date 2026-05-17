@@ -258,6 +258,7 @@ greedy_loop_probe_restore = false
 greedy_loop_probe_restore_kv = false
 greedy_loop_probe_chunk_gamma = 0
 greedy_loop_probe_chunk_margin = 0.03_f32
+greedy_loop_probe_chunk_batched_verify = false
 runtime_raw_q8 = false
 seed_token = 0
 input_token = -1
@@ -295,6 +296,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-restore-kv", "Also snapshot/restore full-attention KV caches in --greedy-loop-probe-restore") { greedy_loop_probe_restore_kv = true }
   p.on("--greedy-loop-probe-chunk-gamma N", "Diagnostic: raw-Q8 guarded chunk proposals with sequential exact verification; forces CPU feedback and no graph") { |v| greedy_loop_probe_chunk_gamma = v.to_i; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-chunk-margin F", "Raw-Q8 top1/top2 margin threshold for --greedy-loop-probe-chunk-gamma") { |v| greedy_loop_probe_chunk_margin = v.to_f32 }
+  p.on("--greedy-loop-probe-chunk-batched-verify", "Use a second tokens=gamma stack to verify full raw-Q8 chunks and copy back only on full accept") { greedy_loop_probe_chunk_batched_verify = true }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
@@ -347,6 +349,7 @@ raise "--greedy-loop-probe-chunk-gamma is incompatible with --skip-output-head" 
 raise "--greedy-loop-probe-chunk-gamma is incompatible with --greedy-loop-graph" if greedy_loop_probe_chunk_gamma > 0 && greedy_loop_graph
 raise "--greedy-loop-probe-chunk-gamma is incompatible with --greedy-loop-probe-restore" if greedy_loop_probe_chunk_gamma > 0 && greedy_loop_probe_restore
 raise "--greedy-loop-probe-chunk-margin must be non-negative" unless greedy_loop_probe_chunk_margin >= 0.0_f32
+raise "--greedy-loop-probe-chunk-batched-verify requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_chunk_batched_verify && greedy_loop_probe_chunk_gamma == 0
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
 raise "--input-tokens must not be empty when provided" if input_tokens_provided && input_tokens.empty?
@@ -496,6 +499,7 @@ cuda_ctx = nil.as(ML::CUDA::Context?)
 runners = [] of ML::CUDA::QwenMixedStackRunner::LayerRunner
 head = nil.as(ML::CUDA::QwenOutputHeadRunner?)
 stack = nil.as(ML::CUDA::QwenMixedStackRunner?)
+verifier_stack = nil.as(ML::CUDA::QwenMixedStackRunner?)
 final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
 
 begin
@@ -524,6 +528,28 @@ begin
   mixed_stack.set_recurrent_ffn_raw_q8(true) if runtime_raw_q8
 
   weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
+
+  verifier_weight_upload_ms = 0.0
+  if greedy_loop_probe_chunk_batched_verify
+    verifier_tokens = greedy_loop_probe_chunk_gamma
+    verifier_xs = Array(Float32).new(verifier_tokens * hidden, 0.0_f32)
+    verifier_runners = [] of ML::CUDA::QwenMixedStackRunner::LayerRunner
+    layers.each_with_index do |layer, idx|
+      layer_input = idx == 0 ? verifier_xs : Array(Float32).new(verifier_tokens * hidden, 0.0_f32)
+      if hparams.full_attention?(layer)
+        verifier_runners << ML::CUDA::QwenFullAttnLayerRunner.from_weights(full_weights[layer], verifier_tokens, max_seq, start_pos,
+          hparams.n_head, hparams.n_head_kv, hparams.head_dim, hparams.rope_dim_count, hparams.rms_eps,
+          layer_input, cos_table, sin_table)
+      else
+        verifier_runners << ML::CUDA::QwenRecurrentLayerRunner.from_weights(recurrent_weights[layer], verifier_tokens, layer_input,
+          conv_state_inits[layer], ssm_state_inits[layer])
+      end
+    end
+    verifier_head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, verifier_tokens,
+      Array(Float32).new(verifier_tokens * hidden, 0.0_f32), hparams.rms_eps, read_logits: read_logits)
+    verifier_stack = ML::CUDA::QwenMixedStackRunner.new(layers, verifier_runners, verifier_head, verifier_tokens, hidden, verifier_xs)
+    verifier_weight_upload_ms = verifier_stack.not_nil!.upload_weights(profile: false)
+  end
 
   measured_tokens = tokens
   greedy_gpu_ids = [] of Int32
@@ -555,6 +581,10 @@ begin
   chunk_accepted_tokens = 0
   chunk_raw_ms = 0.0
   chunk_verify_ms = 0.0
+  chunk_batched_verify_ms = 0.0
+  chunk_batched_verify_chunks = 0
+  chunk_batched_verify_accepts = 0
+  chunk_batched_verify_rejects = 0
   if greedy_loop_tokens > 0
     warmup.times do
       warm_token = seed_token
@@ -642,33 +672,87 @@ begin
 
         accepted_this_chunk = 0
         rejected = false
-        proposal_ids.each_with_index do |proposal_id, j|
-          pos = start_pos + generated
-          t_position = Time.instant
-          mixed_stack.update_decode_position(pos)
-          greedy_position_ms += (Time.instant - t_position).total_milliseconds
-          t_embedding = Time.instant
-          mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
-          greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
-          t_exact = Time.instant
-          mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback,
-            reset_sequence: generated == 0 && j == 0 && chunk_start == 0, sync_end: true, read_head_outputs: true)
-          chunk_verify_ms += (Time.instant - t_exact).total_milliseconds
-          exact_id = output_head.top1_ids[0]
-          chunk_exact_ids << exact_id
-          greedy_gpu_ids << exact_id
-          generated += 1
-          chunk_verify_tokens += 1
-          gpu_token = exact_id
-          if exact_id == proposal_id
-            accepted_this_chunk += 1
-            chunk_accepted_tokens += 1
-          else
-            rejected = true
-            break
+        used_batched_verify = false
+
+        if greedy_loop_probe_chunk_batched_verify && proposal_ids.size == greedy_loop_probe_chunk_gamma && generated + proposal_ids.size <= greedy_loop_tokens
+          verify_stack = verifier_stack.not_nil!
+          verify_xs = Array(Float32).new(greedy_loop_probe_chunk_gamma * hidden, 0.0_f32)
+          verify_inputs = [gpu_token] + proposal_ids[0, proposal_ids.size - 1]
+          verify_inputs.each_with_index do |tok, row|
+            emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, tok)
+            hidden.times { |h| verify_xs[row * hidden + h] = emb[h] }
           end
-          break if generated >= greedy_loop_tokens
+          mixed_stack.copy_decode_state_to!(verify_stack, include_kv: true)
+          verify_stack.update_decode_position(start_pos + generated)
+          verify_stack.upload_first_sequence_input(verify_xs)
+          t_batched = Time.instant
+          verify_stack.run_sequence(profile_phases: false, debug_readback: false,
+            reset_sequence: false, sync_end: true, read_head_outputs: true)
+          chunk_batched_verify_ms += (Time.instant - t_batched).total_milliseconds
+          chunk_batched_verify_chunks += 1
+          exact_ids = Array(Int32).new(proposal_ids.size) do |j|
+            best_id, _, _, _, _ = top2_from_logits(verify_stack.head.logits_gpu_all, j, head_weights.vocab)
+            best_id
+          end
+          chunk_verify_tokens += proposal_ids.size
+          proposal_ids.each_with_index do |proposal_id, j|
+            exact_id = exact_ids[j]
+            chunk_exact_ids << exact_id
+            greedy_gpu_ids << exact_id
+            if exact_id == proposal_id
+              accepted_this_chunk += 1
+              chunk_accepted_tokens += 1
+            else
+              rejected = true
+              break
+            end
+          end
+          if rejected
+            chunk_batched_verify_rejects += 1
+            greedy_gpu_ids = greedy_gpu_ids[0, greedy_gpu_ids.size - accepted_this_chunk - 1]
+            chunk_exact_ids = chunk_exact_ids[0, chunk_exact_ids.size - accepted_this_chunk - 1]
+            chunk_verify_tokens -= proposal_ids.size
+            chunk_accepted_tokens -= accepted_this_chunk
+            accepted_this_chunk = 0
+          else
+            chunk_batched_verify_accepts += 1
+            verify_stack.copy_decode_state_to!(mixed_stack, include_kv: true)
+            generated += proposal_ids.size
+            gpu_token = proposal_ids.last
+            used_batched_verify = true
+          end
         end
+
+        unless used_batched_verify
+          proposal_ids.each_with_index do |proposal_id, j|
+            pos = start_pos + generated
+            t_position = Time.instant
+            mixed_stack.update_decode_position(pos)
+            greedy_position_ms += (Time.instant - t_position).total_milliseconds
+            t_embedding = Time.instant
+            mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+            greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
+            t_exact = Time.instant
+            mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback,
+              reset_sequence: generated == 0 && j == 0 && chunk_start == 0, sync_end: true, read_head_outputs: true)
+            chunk_verify_ms += (Time.instant - t_exact).total_milliseconds
+            exact_id = output_head.top1_ids[0]
+            chunk_exact_ids << exact_id
+            greedy_gpu_ids << exact_id
+            generated += 1
+            chunk_verify_tokens += 1
+            gpu_token = exact_id
+            if exact_id == proposal_id
+              accepted_this_chunk += 1
+              chunk_accepted_tokens += 1
+            else
+              rejected = true
+              break
+            end
+            break if generated >= greedy_loop_tokens
+          end
+        end
+
         if rejected
           chunk_rejects += 1
         elsif accepted_this_chunk == proposal_ids.size
@@ -917,6 +1001,12 @@ begin
       lines << "chunk_probe_raw_ms_per_raw_token=#{(chunk_raw_ms / Math.max(chunk_raw_tokens, 1)).round(3)}"
       lines << "chunk_probe_verify_ms=#{chunk_verify_ms.round(3)}"
       lines << "chunk_probe_verify_ms_per_verify_token=#{(chunk_verify_ms / Math.max(chunk_verify_tokens, 1)).round(3)}"
+      lines << "chunk_probe_batched_verify=#{greedy_loop_probe_chunk_batched_verify}"
+      lines << "chunk_probe_batched_verify_chunks=#{chunk_batched_verify_chunks}"
+      lines << "chunk_probe_batched_verify_accepts=#{chunk_batched_verify_accepts}"
+      lines << "chunk_probe_batched_verify_rejects=#{chunk_batched_verify_rejects}"
+      lines << "chunk_probe_batched_verify_ms=#{chunk_batched_verify_ms.round(3)}"
+      lines << "chunk_probe_batched_verify_ms_per_chunk=#{(chunk_batched_verify_ms / Math.max(chunk_batched_verify_chunks, 1)).round(3)}"
     end
   elsif perf_only
     lines << "perf_only=true"
@@ -1032,6 +1122,7 @@ begin
   puts "greedy_loop_probe_restore_kv=#{greedy_loop_probe_restore_kv}"
   puts "greedy_loop_probe_chunk_gamma=#{greedy_loop_probe_chunk_gamma}"
   puts "greedy_loop_probe_chunk_margin=#{greedy_loop_probe_chunk_margin}"
+  puts "greedy_loop_probe_chunk_batched_verify=#{greedy_loop_probe_chunk_batched_verify}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"
@@ -1047,6 +1138,7 @@ begin
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
+  puts "verifier_weight_upload_ms=#{verifier_weight_upload_ms.round(3)}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
   puts "cuda_ms_per_token=#{(gpu_ms / measured_tokens).round(3)}"
   puts "cpu_ms=#{cpu_ms.round(3)}"
