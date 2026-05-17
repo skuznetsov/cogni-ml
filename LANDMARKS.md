@@ -12877,3 +12877,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The safe pivot was to batch the existing materialized-logits ranking path rather than reviving the previously risky fused multi-row Q6 top1 reducer.
 - maieutic: Top2 equality is verified against logits-scan and resident output on current spans. It does not prove a future no-logits fused ranking path.
 - adversary: Keep the opt-out because ranking code is correctness-sensitive; any future sampler/margin controller change should re-run `--gpu-logits-only` before trusting this route.
+
+**decision_update_265:** Refuted promotion of a resident top1-only batched output-head scan as a meaningful CUDA speed path. The branch kept exact top1 ids/values versus the current batched-top2 route, but wall time was neutral and the saved profile slice was too small to justify extra ranking PTX. The uncommitted code was reverted.
+
+**evidence_update_265:**
+- claim: "Top1-only batched output-head scan is exact but not a worthwhile default."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_head_top1_batched_nocodegen_fix crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` and `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/qwen_output_head_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer Qwen3.5-9B tokens16 A/B matched resident top1 ids and values exactly, but wall was neutral: first A/B `202.053ms` top1-only vs `202.199ms` top2 route, repeated passes `202.168/202.127/202.096ms` vs `202.183/202.097/202.193ms`. Profile only reduced `phase_head_top1_ms` from about `1.496ms` to `1.338ms`.
+  verified_at: 2026-05-17
+  decay_trigger: output-head ranking PTX rewrite, top2 scan route changes, CUDA driver/JIT, or if full logits materialization is removed
+
+**quadrumvirate_update_265:**
+- cassandra: The branch targeted a small launch/ranking slice after the larger top2 batching win; neutral wall was plausible.
+- daedalus: The correct next frame is not another ranking micro-route. Either remove logits materialization with a fused Q6 partial-topK design, or return to FFN/projection arithmetic.
+- maieutic: Exactness alone is insufficient; this adds ranking code surface without material speed.
+- adversary: Do not resurrect top1-only scan unless it comes bundled with a no-logits fused output-head route or a broader controller path that proves it matters.
