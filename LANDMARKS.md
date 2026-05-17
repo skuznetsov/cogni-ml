@@ -11879,3 +11879,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The local Q4 search has now refuted staging, branch shaving, and F32-vs-H16 routing. Next exact attempt should either change the dequant/MMA data path materially or move to full-prefill scheduler/fusion evidence.
 - maieutic: The pair microbench is only a locator; it does not prove full prefill cannot improve from scheduler changes.
 - adversary: Do not retain the F32 pair env knob; it adds another unpromoted route with no measured win.
+
+**decision_update_206:** Refuted promoting single-token late-band `pca-updown` as the current same-weight self-draft speed path. The branch still has a real known-span integrated-kernel win, but in the autoregressive self-draft lane the controlling costs are route reliability, resync/replay, and per-token orchestration. A narrow prompt-local ABBA had a weak positive, but broader prompt-local, external-adapter, agreement-gate, and hybrid-route gates all failed to beat pure lowrank reliably.
+
+**evidence_update_206:**
+- claim: "The current single-token self-draft path should not use full late-band `pca-updown32` as a default proposal body."
+  source: local `/tmp/qwen35_selfspec_updown_abba_9b_20260516212235.log` showed one-prompt weak positive (`+3.24%` median overlap delta, parity/accept clean), but `/tmp/qwen35_selfspec_updown_suite_9b_20260516212345.log` with external FFN adapters dropped `pca-updown32` to `77.81%` mean acceptance and `-80.19%` mean overlap delta versus pure lowrank; `/tmp/qwen35_prompt_local_updown_9b_20260516213630.log` showed prompt-local full-band `pca-updown32` rejected on code/json and was slower on reason despite `100%` accept; `/tmp/qwen35_hybrid_routes_code_9b_20260516213910.log` ranked pure lowrank first while tail-only updown/no-FFN hybrids were `~39-59%` slower than pure.
+  verified_at: 2026-05-16
+  decay_trigger: self-spec scheduler, pca-updown route implementation, draft lane residency, route predictor, Metal timing semantics, or benchmark prompt policy changes
+- claim: "The currently available cheap risk signals do not rescue this `pca-updown` route."
+  source: `/tmp/qwen35_ffn_updown_features_9b_20260516212610.log` showed FFN reconstruction rel-RMSE did not order failures (`json` had lower rel-RMSE than `main` but worse acceptance), and `/tmp/qwen35_updown_agreement_suite_9b_20260516212840.log` showed the lowrank-vs-updown agreement gate passed bad routes while adding hundreds of ms of probe cost.
+  verified_at: 2026-05-16
+  decay_trigger: route feature set, agreement-gate implementation, calibration source, prompt suite, or pca-updown adapter training changes
+
+**quadrumvirate_update_206:**
+- cassandra: A local weak positive from prompt-local PCA can be overfit/noise; the likely failure mode is free-run drift amplified by replay/resync.
+- daedalus: The pivot is from "fuse the current pca-updown dispatch harder" to "eliminate duplicate proposal work or make the proposal body multi-token/layer-resident enough to amortize risk".
+- maieutic: The self-draft proposal does not need hidden-path fidelity, but it does need accepted chunks; cosine/reconstruction signals are insufficient unless they predict accept/reject before spending the approximate body.
+- adversary: Do not promote a route that is only faster on one prompt and slower on mixed prompts. Future work must compare against pure lowrank and plain exact on the same prompt set.
