@@ -281,6 +281,7 @@ module ML::CUDA
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q4_add_fn = q4_mod.function("q4_k_gemv_add_warp4_f32")
       q4_batched_fn = q4_mod.function("q4_k_gemv_warp4_f32_batched")
+      q4_tbatch4_fn = q4_mod.function("q4_k_gemv_warp4_f32_tbatch4")
       q4_add_batched_fn = q4_mod.function("q4_k_gemv_add_warp4_f32_batched")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
@@ -295,6 +296,7 @@ module ML::CUDA
       attn_decode_block = use_parallel_attn ? 256_u32 : 1_u32
       use_batched_tail = ENV["QWEN_CUDA_FULL_ATTN_BATCHED_FFN_OFF"]? != "1" && @tokens > 1
       use_batched_norms = ENV["QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF"]? != "1" && use_batched_tail
+      use_q4_tbatch4 = ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
       tail_rows = use_batched_tail ? @tokens : 1
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
@@ -474,6 +476,23 @@ module ML::CUDA
       ffn_down_params[4] = box_u32(ffn_dim_u32).as(Void*)
       ffn_down_params[5] = box_u32(output_out_dim_u32).as(Void*)
 
+      run_q4_weight_stationary = ->(params : Pointer(Void*), x_ptr : Pointer(DevicePtr), out_ptr : Pointer(DevicePtr),
+                                    x_base : DevicePtr, out_base : DevicePtr, grid : UInt32,
+                                    in_dim : Int32, out_dim : Int32, label : String) {
+        if use_q4_tbatch4
+          groups = @tokens // 4
+          groups.times do |group|
+            x_ptr.value = x_base + bytesize_f32(group * 4 * in_dim)
+            out_ptr.value = out_base + bytesize_f32(group * 4 * out_dim)
+            ML::CUDA.launch!(q4_tbatch4_fn, grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, params, "#{label} tbatch4")
+          end
+        else
+          x_ptr.value = x_base
+          out_ptr.value = out_base
+          ML::CUDA.launch!(q4_batched_fn, grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, params, label)
+        end
+      }
+
       run_token = ->(tok : Int32) {
         # Kernels index token by block id; launch all token blocks once.
         if tok == 0
@@ -506,8 +525,13 @@ module ML::CUDA
             d_ffn_residual_cur_ptr.value = d_residual
             d_final_cur_ptr.value = d_final_all
             swiglu_n_param.value = ffn_dim_all_u32
-            ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "full ffn gate batched")
-            ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "full ffn up batched")
+            run_q4_weight_stationary.call(ffn_gate_params, d_ffn_input_cur_ptr, d_ffn_gate_cur_ptr,
+              d_cur2, d_ffn_gate, ffn_grid, @output_out_dim, @ffn_dim, "full ffn gate batched")
+            run_q4_weight_stationary.call(ffn_up_params, d_ffn_input_cur_ptr, d_ffn_up_cur_ptr,
+              d_cur2, d_ffn_up, ffn_grid, @output_out_dim, @ffn_dim, "full ffn up batched")
+            d_ffn_gate_cur_ptr.value = d_ffn_gate
+            d_ffn_up_cur_ptr.value = d_ffn_up
+            d_ffn_comb_cur_ptr.value = d_ffn_comb
             ML::CUDA.launch!(swiglu_fn, swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu batched")
             ML::CUDA.launch!(ffn_down_add_batched_fn, output_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add batched")
             swiglu_n_param.value = ffn_dim_u32

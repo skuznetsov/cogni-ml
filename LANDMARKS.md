@@ -12733,3 +12733,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Do not keep chasing single tiny independent transforms as defaults. The next frame should be fusion across serial-core kernels or GEMV arithmetic, not another isolated launch removal.
 - maieutic: Exactness alone is not sufficient for promotion. The accepted outcome is diagnostic availability plus a default-off refutation.
 - adversary: If future code enables this knob, require a fresh paired all-layer sweep because current evidence is mixed and slightly negative for spans >=4.
+
+**decision_update_257:** Promoted the first LTP/WBA weight-stationary CUDA Q4_K kernel for known-span FFN gate/up. `q4_k_gemv_warp4_f32_tbatch4` treats four token rows as the WBA band for one weight row-block: each warp reads/dequantizes the Q4 row once, accumulates four token dots in registers, reduces four accumulators, and stores four token-major outputs. The runner uses it only for recurrent and full-attention FFN gate/up when `tokens >= 4` and divisible by 4; `QWEN_CUDA_Q4_TBATCH4_OFF=1` restores the previous row-batched route.
+
+**evidence_update_257:**
+- claim: "The Q4_K tbatch4 microkernel is exact and materially faster on hot Q4 shapes."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_tbatch4_runner_nocodegen crystal build bin/cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `git diff --check -- bin/cuda_q4k_gemv_probe.cr src/ml/cuda/kernels/q4k_gemv_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr src/ml/cuda/qwen_full_attn_kv_runner.cr` -> exit 0; remote RTX 5060 Ti `cuda_q4k_gemv_probe` microbench: `blk.0.ffn_gate.weight` tokens4/8/16 `0.431/0.859/1.713ms -> 0.220/0.437/0.871`, `blk.0.ffn_up.weight` `0.432/0.859/1.719 -> 0.218/0.437/0.872`, `blk.0.ssm_out.weight` `0.147/0.289/0.574 -> 0.077/0.152/0.304`, all `ok=true`, `cos=1.0`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4_K PTX rewrite, CUDA driver/JIT, token-major layout, hidden/FFN dims, or if Q4 row-batched route changes
+- claim: "The default runner integration is exact and a large known-span speed win when limited to FFN gate/up."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B `--tokens 8 --perf-only --skip-debug-readback --gpu-final-dump` A/B with `QWEN_CUDA_Q4_TBATCH4_OFF=1` vs default printed matching top1 and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`. Timing sweep: tokens2 `27.056 -> 27.215ms/tok` because tbatch4 is inactive/fallback/noise, tokens4 `23.225 -> 19.516`, tokens8 `21.201 -> 17.651`, tokens16 `20.322 -> 16.829`, all `ok=true` with matching top1 hashes.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent/full-attention FFN buffer layout, pointer-box ownership, runner WBA routing, CUDA driver/JIT, or broader semantic greedy-loop benchmark
+
+**quadrumvirate_update_257:**
+- cassandra: The correct LTP/WBA trigger was repeated Q4 weight reads across a known token band, not another launch-count wrapper. Microbench confirmed the potential drop in weight bytes/token.
+- daedalus: The first integration attempt over projection/SSM paths produced invalid all-layer final hidden because downstream pointer boxes were left at the last 4-token group. The pivot was to restrict the legal move to the FFN gate/up corridor where downstream pointers can be reset safely before SwiGLU.
+- maieutic: This is not a universal greedy-token speedup; it needs a known-span band of at least four rows. It is directly valuable for prefill/verifier chunks and indirectly for speculative decode only if the verifier path uses known spans.
+- adversary: Do not extend tbatch4 to `attn_gate`, `ssm_out`, or full-attention output projection without a fresh final-hidden gate and pointer-state audit. The microkernel itself is exact, but runner aliasing/pointer state can break composition.

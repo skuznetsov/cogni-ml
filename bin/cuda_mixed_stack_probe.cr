@@ -1307,6 +1307,7 @@ begin
   puts "batched_ssm_out=#{ENV["QWEN_CUDA_BATCHED_SSM_OUT_OFF"]? != "1"}"
   puts "batched_norms=#{ENV["QWEN_CUDA_BATCHED_NORMS_OFF"]? != "1"}"
   puts "batched_alpha_beta_transform=#{ENV["QWEN_CUDA_BATCHED_ALPHA_BETA_TRANSFORM"]? == "1"}"
+  puts "q4_tbatch4=#{ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1"}"
   puts "full_attn_batched_norms=#{ENV["QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF"]? != "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"

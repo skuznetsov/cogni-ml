@@ -82,10 +82,11 @@ warmup = 0
 kernel = "warp4"
 tokens = 1
 batched = false
+tbatch4 = false
 xsum = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_q4k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--kernel scalar|warp4] [--reps N] [--warmup N] [--block N] [--tokens N] [--batched] [--xsum]"
+  p.banner = "Usage: cuda_q4k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--kernel scalar|warp4] [--reps N] [--warmup N] [--block N] [--tokens N] [--batched] [--tbatch4] [--xsum]"
   p.on("--model PATH", "Q4_K GGUF model path") { |v| model = v }
   p.on("--tensor NAME", "Q4_K tensor name") { |v| tensor_name = v }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
@@ -95,6 +96,7 @@ OptionParser.parse do |p|
   p.on("--block N", "CUDA block size") { |v| block = v.to_u32 }
   p.on("--tokens N", "Number of independent input rows to run") { |v| tokens = v.to_i }
   p.on("--batched", "Use the batched Q4_K warp4 GEMV kernel over all rows") { batched = true }
+  p.on("--tbatch4", "Use the experimental weight-stationary 4-token Q4_K GEMV kernel") { tbatch4 = true }
   p.on("--xsum", "Use probe-only warp4 kernel with precomputed 32-float activation sums") { xsum = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -106,8 +108,12 @@ raise "warmup must be non-negative" unless warmup >= 0
 raise "kernel must be scalar or warp4, got #{kernel.inspect}" unless {"scalar", "warp4"}.includes?(kernel)
 raise "tokens must be positive" unless tokens > 0
 raise "--batched requires --kernel warp4" if batched && kernel != "warp4"
+raise "--tbatch4 requires --kernel warp4" if tbatch4 && kernel != "warp4"
+raise "--batched and --tbatch4 are mutually exclusive" if batched && tbatch4
 raise "--xsum requires --kernel warp4" if xsum && kernel != "warp4"
 raise "--xsum is not yet wired for --batched" if xsum && batched
+raise "--xsum is not wired for --tbatch4" if xsum && tbatch4
+raise "--tbatch4 requires --tokens to be a multiple of 4" if tbatch4 && tokens % 4 != 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 info = gguf.tensor(tensor_name) || raise "missing tensor #{tensor_name.inspect}"
@@ -166,6 +172,7 @@ cuda! LibCUDAQ4K.cuCtxCreate_v2(pointerof(ctx), 0_u32, dev), "cuCtxCreate"
 mod = Pointer(Void).null
 fn = Pointer(Void).null
 batched_fn = Pointer(Void).null
+tbatch4_fn = Pointer(Void).null
 d_w = 0_u64
 d_x = 0_u64
 d_xsum = 0_u64
@@ -182,6 +189,7 @@ begin
               end
   cuda! LibCUDAQ4K.cuModuleGetFunction(pointerof(fn), mod, kernel_fn), "cuModuleGetFunction"
   cuda! LibCUDAQ4K.cuModuleGetFunction(pointerof(batched_fn), mod, "q4_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(batched)" if batched
+  cuda! LibCUDAQ4K.cuModuleGetFunction(pointerof(tbatch4_fn), mod, "q4_k_gemv_warp4_f32_tbatch4"), "cuModuleGetFunction(tbatch4)" if tbatch4
 
   gpu_out = Array(Float32).new(tokens * out_dim, 0.0_f32)
   raw_size = w_raw.size.to_u64
@@ -227,6 +235,14 @@ begin
       d_out_cur = d_out
       cuda! LibCUDAQ4K.cuLaunchKernel(batched_fn, grid * tokens_u32, 1_u32, 1_u32, launch_block, 1_u32, 1_u32,
         0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel(batched)"
+    elsif tbatch4
+      groups = tokens // 4
+      groups.times do |group|
+        d_x_cur = d_x + bytesize_f32(group * 4 * in_dim)
+        d_out_cur = d_out + bytesize_f32(group * 4 * out_dim)
+        cuda! LibCUDAQ4K.cuLaunchKernel(tbatch4_fn, grid, 1_u32, 1_u32, launch_block, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel(tbatch4)"
+      end
     else
       tokens.times do |tok|
         d_x_cur = d_x + bytesize_f32(tok * in_dim)
@@ -261,6 +277,7 @@ begin
   puts "kernel=#{kernel}"
   puts "tokens=#{tokens}"
   puts "batched=#{batched}"
+  puts "tbatch4=#{tbatch4}"
   puts "xsum=#{xsum}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
