@@ -12615,3 +12615,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This closes one exact known-span wrapper gap. The remaining large CUDA gap is still verifier architecture and hot Q4/Q6 kernel economics, not another small tail wrapper.
 - maieutic: `max_abs=0` on these spans does not prove every prompt or future refactor, but it is strong evidence for the current all-layer known-span route because the final hidden rows match exactly.
 - adversary: Do not use the route-only profile as component attribution. It only confirms the active full-attention WBA route and wall timing; deeper component timing would need separate instrumentation.
+
+**decision_update_250:** Refuted further gamma/margin tuning for the current CUDA raw-Q8 chunk-speculation architecture after the latest WBA and memory fixes. The duplicate verifier stack now fits on the refreshed host, but end-to-end chunk speculation still costs about two near-full passes: raw-Q8 proposal remains close to exact decode cost, and known-span verification is only modestly faster than plain greedy.
+
+**evidence_update_250:**
+- claim: "Current CUDA raw-Q8 chunk speculation is still slower than plain exact greedy after output-head allocation and full-attention tail WBA fixes."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_fullattn_tail_default`, Qwen3.5-9B-Q4_K_M on RTX 5060 Ti, seed0 gen16. Plain exact greedy `cuda_ms_per_token=23.559`. Raw-Q8 free-run `cuda_ms_per_token=21.261` but divergent sequence. Chunk gamma2 with duplicate-stack fast verifier: `cuda_ms_per_token=46.634`, `chunk_probe_raw_ms_per_raw_token=21.622`, `chunk_probe_batched_verify_ms_per_chunk=43.583`, `ok=true`. Chunk gamma4: `cuda_ms_per_token=45.191`, raw `21.623ms/token`, verifier chunk `83.279ms`, `ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: raw-Q8 proposal body rewrite, recurrent known-span verifier rewrite, full-attention WBA changes, CUDA driver/JIT, or broader prompt/seed suite changes
+
+**quadrumvirate_update_250:**
+- cassandra: The architecture-level failure pattern is stable: a near-full approximate proposal plus near-full exact verification cannot beat one exact pass.
+- daedalus: Stop optimizing chunk size and margin thresholds for this route. The next speed-bearing frames are a materially cheaper proposal body, or a sublinear recurrent verifier/scan, or a shared-weight verifier view for memory hygiene only.
+- maieutic: "Verifier is faster than serial" is true only narrowly. It is not fast enough relative to proposal overhead to make speculative decoding profitable.
+- adversary: Keep raw-Q8 as a proposal-quality diagnostic and possible ingredient for a future cheaper body. Do not present it as a speedup path in its current full-body form.
