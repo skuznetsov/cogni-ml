@@ -76,6 +76,8 @@ module ML::CUDA
     getter proj_gpu_all : Array(Float32)
     getter final_gpu_all : Array(Float32)
     getter output_device_ptr : DevicePtr
+    getter k_cache_device_ptr : DevicePtr
+    getter v_cache_device_ptr : DevicePtr
     getter k_cache_gpu : Array(Float32)
     getter v_cache_gpu : Array(Float32)
 
@@ -137,6 +139,8 @@ module ML::CUDA
       @residual_device_base = nil.as(DevicePtr?)
       @owned_residual_device_ptr = nil.as(DevicePtr?)
       @output_device_ptr = 0_u64
+      @k_cache_device_ptr = 0_u64
+      @v_cache_device_ptr = 0_u64
       @cos_device_ptr = 0_u64
       @sin_device_ptr = 0_u64
       @start_pos_device_ptr = 0_u64
@@ -204,6 +208,10 @@ module ML::CUDA
       raise ArgumentError.new("device residual pointer must be non-zero") if ptr == 0_u64
 
       @residual_device_base = ptr
+    end
+
+    def kv_cache_bytesize : LibC::SizeT
+      bytesize_f32(@max_seq * @kv_dim)
     end
 
     def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
@@ -289,6 +297,8 @@ module ML::CUDA
       @owned_residual_device_ptr = d_residual_input
       @residual_device_base = d_residual_input
       @output_device_ptr = d_final_all
+      @k_cache_device_ptr = d_k_cache
+      @v_cache_device_ptr = d_v_cache
       @cos_device_ptr = d_cos
       @sin_device_ptr = d_sin
       @start_pos_device_ptr = d_start_pos

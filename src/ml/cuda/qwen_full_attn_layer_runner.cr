@@ -123,6 +123,18 @@ module ML::CUDA
       @kv.output_device_ptr
     end
 
+    def k_cache_device_ptr : DevicePtr
+      @kv.k_cache_device_ptr
+    end
+
+    def v_cache_device_ptr : DevicePtr
+      @kv.v_cache_device_ptr
+    end
+
+    def kv_cache_bytesize : LibC::SizeT
+      @kv.kv_cache_bytesize
+    end
+
     def final_gpu_all : Array(Float32)
       @kv.final_gpu_all
     end

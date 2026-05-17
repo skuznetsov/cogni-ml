@@ -164,6 +164,41 @@ module ML::CUDA
       raise "unused recurrent snapshot buffers" unless idx == snapshot.buffers.size
     end
 
+    def copy_decode_state_to!(target : QwenMixedStackRunner, include_kv : Bool = true) : Nil
+      raise ArgumentError.new("layer ids mismatch") unless @layer_ids == target.layer_ids
+      raise ArgumentError.new("runner count mismatch") unless @runners.size == target.runners.size
+
+      @runners.zip(target.runners).each_with_index do |(source, dest), idx|
+        case source
+        in QwenRecurrentLayerRunner
+          raise "runner #{idx} type mismatch" unless dest.is_a?(QwenRecurrentLayerRunner)
+          copy_recurrent_state_to!(source, dest)
+        in QwenFullAttnLayerRunner
+          raise "runner #{idx} type mismatch" unless dest.is_a?(QwenFullAttnLayerRunner)
+          copy_kv_state_to!(source, dest) if include_kv
+        end
+      end
+    end
+
+    private def copy_recurrent_state_to!(source : QwenRecurrentLayerRunner, dest : QwenRecurrentLayerRunner) : Nil
+      raise "conv_state size mismatch" unless source.conv_state_bytesize == dest.conv_state_bytesize
+      raise "ssm_state size mismatch" unless source.ssm_state_bytesize == dest.ssm_state_bytesize
+
+      ML::CUDA.copy_dtod!(dest.conv_state_device_ptr, source.conv_state_device_ptr,
+        source.conv_state_bytesize, "copy conv_state")
+      ML::CUDA.copy_dtod!(dest.ssm_state_device_ptr, source.ssm_state_device_ptr,
+        source.ssm_state_bytesize, "copy ssm_state")
+    end
+
+    private def copy_kv_state_to!(source : QwenFullAttnLayerRunner, dest : QwenFullAttnLayerRunner) : Nil
+      raise "kv cache size mismatch" unless source.kv_cache_bytesize == dest.kv_cache_bytesize
+
+      ML::CUDA.copy_dtod!(dest.k_cache_device_ptr, source.k_cache_device_ptr,
+        source.kv_cache_bytesize, "copy k_cache")
+      ML::CUDA.copy_dtod!(dest.v_cache_device_ptr, source.v_cache_device_ptr,
+        source.kv_cache_bytesize, "copy v_cache")
+    end
+
     def run_sequence(profile_phases : Bool = false,
                      debug_readback : Bool = true,
                      reset_sequence : Bool = true,

@@ -12019,3 +12019,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Build the first exact speed experiment around small chunks and state-copy infrastructure, not long speculative tails.
 - maieutic: Token-level acceptance is not enough; full-chunk acceptance determines whether verifier batching pays.
 - adversary: This is still a simulation from proposal logs, not measured controller wall. It selects the next experiment; it is not a speed claim.
+
+**decision_update_214:** Added CUDA decode-state copy plumbing as a prerequisite for chunk verifier experiments. Full-attention KV runners now expose device pointers and byte sizes, full-attention layer runners delegate those accessors, and `QwenMixedStackRunner#copy_decode_state_to!` can copy recurrent conv/SSM state plus full-attention K/V caches between same-layer mixed stacks via device-to-device CUDA copies. This is infrastructure only; it does not yet prove a speed-bearing chunk verifier, and a duplicate verifier stack may be memory-inefficient on 16GB cards unless weights are shared or the controller uses same-stack snapshot/restore.
+
+**evidence_update_214:**
+- claim: "The CUDA state-copy API compiles locally and on the remote RTX 5060 Ti host."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_statecopy_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_statecopy` -> exit 0.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA mixed-stack runner layout, full-attention KV cache ownership, Crystal type checking, NVIDIA driver/runtime, or chunk verifier controller changes
+- claim: "The updated remote probe still runs a CUDA Qwen3.5 slice after the accessor/copy changes."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_statecopy --layers 0,1,2,3,4 --tokens 1 --gpu-logits-only --runtime-raw-q8` on Qwen3.5-9B Q4_K_M printed `top2_cuda_ok=true`, `top1_gpu=96939`, and `ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA output-head diagnostics, runtime raw-Q8 route, mixed-stack state-copy API, or model file changes
+
+**quadrumvirate_update_214:**
+- cassandra: State-copy between duplicate stacks is useful for measurement but may lose the production memory budget on 16GB CUDA cards if weights stay runner-owned.
+- daedalus: Prefer same-stack full-state snapshot/restore or shared-weight verifier runners before building a production chunk scheduler around duplicate stacks.
+- maieutic: The API verifies copy plumbing, not verifier economics. The next speed claim still requires exact parity and wall timing with a guarded chunk controller.
+- adversary: Do not promote duplicate-stack chunk verification as the final architecture until memory pressure is measured and a no-duplicate alternative is evaluated.
