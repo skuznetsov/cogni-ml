@@ -240,6 +240,7 @@ module ML::CUDA
       @ffn_pca_updown_coeff_w_param = Pointer(DevicePtr).null
       @ffn_pca_updown_down_param = Pointer(DevicePtr).null
       @ffn_pca_updown_rank_param = Pointer(UInt32).null
+      @profile_override_detail = false
       @closed = false
 
       build_runner
@@ -399,10 +400,28 @@ module ML::CUDA
                             !@ffn_skip_enabled && !@ffn_pca_updown_enabled && !@ffn_raw_q8_enabled
       if batched_ffn_profile
         batched_projection_profile = ENV["QWEN_CUDA_BATCHED_PROJECTIONS"]? == "1"
-        runner.run_sequence
-        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched WBA profile)")
+        @profile_override_detail = batched_projection_profile
+        begin
+          runner.run_sequence
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched WBA profile)")
+        ensure
+          @profile_override_detail = false
+        end
         phase_lines << "#{prefix}_profile_route=#{batched_projection_profile ? "batched_projection_ffn" : "batched_ffn"}"
-        phase_lines << "#{prefix}_profile_detail=route_only"
+        phase_lines << "#{prefix}_profile_detail=#{batched_projection_profile ? "override_components" : "route_only"}"
+        if batched_projection_profile
+          phase_lines << "#{prefix}_attn_norm_ms=#{@profile_attn_norm_ms.round(3)}"
+          phase_lines << "#{prefix}_projection_ms=#{@profile_projection_ms.round(3)}"
+          phase_lines << "#{prefix}_qkv_ms=#{@profile_qkv_ms.round(3)}"
+          phase_lines << "#{prefix}_gate_ms=#{@profile_gate_ms.round(3)}"
+          phase_lines << "#{prefix}_alpha_beta_proj_ms=#{@profile_alpha_beta_ms.round(3)}"
+          phase_lines << "#{prefix}_recurrent_core_ms=#{@profile_recurrent_core_ms.round(3)}"
+          phase_lines << "#{prefix}_ffn_ms=#{@profile_ffn_ms.round(3)}"
+          phase_lines << "#{prefix}_ffn_gate_ms=#{@profile_ffn_gate_ms.round(3)}"
+          phase_lines << "#{prefix}_ffn_up_ms=#{@profile_ffn_up_ms.round(3)}"
+          phase_lines << "#{prefix}_swiglu_ms=#{@profile_swiglu_ms.round(3)}"
+          phase_lines << "#{prefix}_ffn_down_ms=#{@profile_ffn_down_ms.round(3)}"
+        end
         phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
         return
       end
@@ -879,19 +898,53 @@ module ML::CUDA
         d_final_cur_ptr.value = d_final_all
         swiglu_n_param.value = ffn_dim_all_u32
 
-        ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate batched")
-        ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up batched")
-        ML::CUDA.launch!(swiglu_fn, swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu batched")
-        ML::CUDA.launch!(ffn_down_add_batched_fn, hidden_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add batched")
+        if @profile_override_detail
+          t_ffn_gate = Time.instant
+          ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate batched")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched ffn gate)")
+          @profile_ffn_gate_ms += (Time.instant - t_ffn_gate).total_milliseconds
+
+          t_ffn_up = Time.instant
+          ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up batched")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched ffn up)")
+          @profile_ffn_up_ms += (Time.instant - t_ffn_up).total_milliseconds
+
+          t_swiglu = Time.instant
+          ML::CUDA.launch!(swiglu_fn, swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu batched")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched swiglu)")
+          @profile_swiglu_ms += (Time.instant - t_swiglu).total_milliseconds
+
+          t_ffn_down = Time.instant
+          ML::CUDA.launch!(ffn_down_add_batched_fn, hidden_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add batched")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched ffn down)")
+          @profile_ffn_down_ms += (Time.instant - t_ffn_down).total_milliseconds
+        else
+          ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate batched")
+          ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up batched")
+          ML::CUDA.launch!(swiglu_fn, swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu batched")
+          ML::CUDA.launch!(ffn_down_add_batched_fn, hidden_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add batched")
+        end
       }
 
       run_sequence_override = -> {
         if use_batched_projections && !@ffn_skip_enabled && !@ffn_pca_updown_enabled && !@ffn_raw_q8_enabled
-          @tokens.times do |tok|
-            offset = bytesize_f32(tok * @hidden)
-            d_x_cur_ptr.value = @input_device_base.not_nil! + offset
-            d_cur_cur_ptr.value = d_cur + offset
-            ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+          if @profile_override_detail
+            t_norm = Time.instant
+            @tokens.times do |tok|
+              offset = bytesize_f32(tok * @hidden)
+              d_x_cur_ptr.value = @input_device_base.not_nil! + offset
+              d_cur_cur_ptr.value = d_cur + offset
+              ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+            end
+            ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched attn norm)")
+            @profile_attn_norm_ms += (Time.instant - t_norm).total_milliseconds
+          else
+            @tokens.times do |tok|
+              offset = bytesize_f32(tok * @hidden)
+              d_x_cur_ptr.value = @input_device_base.not_nil! + offset
+              d_cur_cur_ptr.value = d_cur + offset
+              ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+            end
           end
 
           d_cur_cur_ptr.value = d_cur
@@ -899,13 +952,42 @@ module ML::CUDA
           d_z_cur_ptr.value = d_z
           d_alpha_cur_ptr.value = d_alpha
           d_beta_raw_cur_ptr.value = d_beta_raw
-          ML::CUDA.launch!(q5_batched_fn, qkv_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj batched")
-          ML::CUDA.launch!(q4_batched_fn, inner_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj batched")
-          ML::CUDA.launch!(q4_batched_fn, h_v_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj batched")
-          ML::CUDA.launch!(q4_batched_fn, h_v_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj batched")
+          if @profile_override_detail
+            t_proj = Time.instant
+            t_qkv = Time.instant
+            ML::CUDA.launch!(q5_batched_fn, qkv_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj batched")
+            ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched qkv)")
+            @profile_qkv_ms += (Time.instant - t_qkv).total_milliseconds
 
-          @tokens.times { |tok| run_post_projection_core_token.call(tok) }
-          run_batched_ffn.call
+            t_gate = Time.instant
+            ML::CUDA.launch!(q4_batched_fn, inner_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj batched")
+            ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched gate)")
+            @profile_gate_ms += (Time.instant - t_gate).total_milliseconds
+
+            t_alpha_beta = Time.instant
+            ML::CUDA.launch!(q4_batched_fn, h_v_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj batched")
+            ML::CUDA.launch!(q4_batched_fn, h_v_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj batched")
+            ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched alpha/beta)")
+            @profile_alpha_beta_ms += (Time.instant - t_alpha_beta).total_milliseconds
+            @profile_projection_ms += (Time.instant - t_proj).total_milliseconds
+
+            t_core = Time.instant
+            @tokens.times { |tok| run_post_projection_core_token.call(tok) }
+            ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched serial core)")
+            @profile_recurrent_core_ms += (Time.instant - t_core).total_milliseconds
+
+            t_ffn = Time.instant
+            run_batched_ffn.call
+            @profile_ffn_ms += (Time.instant - t_ffn).total_milliseconds
+          else
+            ML::CUDA.launch!(q5_batched_fn, qkv_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj batched")
+            ML::CUDA.launch!(q4_batched_fn, inner_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj batched")
+            ML::CUDA.launch!(q4_batched_fn, h_v_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_proj_params, "alpha proj batched")
+            ML::CUDA.launch!(q4_batched_fn, h_v_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj batched")
+
+            @tokens.times { |tok| run_post_projection_core_token.call(tok) }
+            run_batched_ffn.call
+          end
         elsif use_batched_ffn && !@ffn_skip_enabled && !@ffn_pca_updown_enabled && !@ffn_raw_q8_enabled
           @tokens.times { |tok| run_core_token.call(tok) }
           run_batched_ffn.call

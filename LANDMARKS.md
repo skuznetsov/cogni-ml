@@ -12465,3 +12465,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: We still lack component-level attribution inside the WBA override. The next profiler step should split `attn_norm batch`, `batched projections`, `serial core`, and `batched FFN` inside the override only if that split will drive a concrete next optimization.
 - maieutic: `profile_detail=route_only` is intentional. It avoids fake detailed attribution; component labels should not be inferred from this output.
 - adversary: Full-attention layers still provide their own detailed profile lines, so aggregate scripts must distinguish recurrent `profile_route` lines from full-attention projection lines.
+
+**decision_update_241:** Added profiling-only component timers inside the CUDA projection+FFN WBA override. When `--profile-phases` runs with `QWEN_CUDA_BATCHED_FFN=1 QWEN_CUDA_BATCHED_PROJECTIONS=1`, the override now sets `profile_detail=override_components` and reports batched attn norm, QKV/gate/alpha-beta projections, serial recurrent core, and batched FFN gate/up/SwigLU/down. Normal non-profile execution keeps the no-sync launch sequence.
+
+**evidence_update_241:**
+- claim: "The current projection+FFN WBA bottleneck remains dominated by FFN and large projection GEMVs; isolated `ssm_out` post-core batching is not the next largest exact lever."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_wba_detail_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_wba_detail` -> exit 0. Remote Qwen3.5-9B all-layer tokens8 WBA profile on RTX 5060 Ti: `cuda_ms_per_token=23.635`, `routes=batched_projection_ffn:24`, `projection=31.716ms` with `qkv=15.930`, `gate=7.525`, `alpha_beta=0.951`, `recurrent_core=19.911`, `ffn=67.192` with `ffn_gate=21.704`, `ffn_up=21.590`, `swiglu=0.293`, `ffn_down=23.584`, `attn_norm=1.953`, matching top1.
+  verified_at: 2026-05-17
+  decay_trigger: WBA override instrumentation, kernel timings, model/layer shapes, CUDA driver/JIT, or route scheduling changes
+
+**quadrumvirate_update_241:**
+- cassandra: The profile supports the earlier `ssm_out` microprobe conclusion: post-core WBA is exact but too small to prioritize over FFN/projection kernel economics.
+- daedalus: The next exact CUDA frame should be "make the hot Q4/Q6 GEMV kernels faster or reduce their bytes," not "add another small batched wrapper." Candidate: revisit llama-style raw-layout/DP4A only for verifier if exactness can be recovered, or optimize current exact Q4/Q6 kernels against llama.cpp's MMVQ gap.
+- maieutic: Component profiling adds synchronizations, so absolute wall differs from production timing. Use the component shares and ordering, not the profiled wall as a product speed number.
+- adversary: `alpha_beta` looks small because the current split launches alpha/beta together before one sync; do not over-interpret sub-millisecond precision without a repeated profile gate.
