@@ -528,6 +528,7 @@ module ML::CUDA
       use_batched_alpha_beta_transform = ENV["QWEN_CUDA_BATCHED_ALPHA_BETA_TRANSFORM"]? == "1" && use_batched_projections
       use_q5_tbatch4 = ENV["QWEN_CUDA_Q5_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
       use_q4_tbatch4 = ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
+      use_q4_gate_tbatch4 = ENV["QWEN_CUDA_Q4_GATE_TBATCH4_OFF"]? != "1" && use_q4_tbatch4
       use_q6_tbatch4 = ENV["QWEN_CUDA_Q6_TBATCH4_OFF"]? != "1" && @ffn_down_type.q6_k? && @tokens >= 4 && (@tokens % 4 == 0)
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
@@ -712,6 +713,17 @@ module ML::CUDA
         end
         d_cur_cur_ptr.value = d_cur
         d_qkv_cur_ptr.value = d_qkv
+      }
+
+      run_gate_projection = -> {
+        if use_q4_gate_tbatch4
+          run_q4_weight_stationary.call(gate_proj_params, d_cur_cur_ptr, d_z_cur_ptr,
+            d_cur, d_z, inner_grid, @hidden, @inner_dim, "gate proj batched")
+          d_cur_cur_ptr.value = d_cur
+          d_z_cur_ptr.value = d_z
+        else
+          ML::CUDA.launch!(q4_batched_fn, inner_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj batched")
+        end
       }
 
       run_batched_alpha_beta_transform = -> {
@@ -1156,7 +1168,7 @@ module ML::CUDA
             @profile_qkv_ms += (Time.instant - t_qkv).total_milliseconds
 
             t_gate = Time.instant
-            ML::CUDA.launch!(q4_batched_fn, inner_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj batched")
+            run_gate_projection.call
             ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched gate)")
             @profile_gate_ms += (Time.instant - t_gate).total_milliseconds
 
@@ -1191,7 +1203,7 @@ module ML::CUDA
             else
               ML::CUDA.launch!(q5_batched_fn, qkv_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, qkv_proj_params, "qkv proj batched")
             end
-            ML::CUDA.launch!(q4_batched_fn, inner_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, gate_proj_params, "gate proj batched")
+            run_gate_projection.call
             if use_alpha_beta_dual_batched
               ML::CUDA.launch!(q4_dual_batched_fn, alpha_beta_dual_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, alpha_beta_dual_proj_params, "alpha beta dual proj batched")
             else

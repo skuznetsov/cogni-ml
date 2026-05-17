@@ -1308,6 +1308,7 @@ begin
   puts "batched_norms=#{ENV["QWEN_CUDA_BATCHED_NORMS_OFF"]? != "1"}"
   puts "batched_alpha_beta_transform=#{ENV["QWEN_CUDA_BATCHED_ALPHA_BETA_TRANSFORM"]? == "1"}"
   puts "q5_tbatch4=#{ENV["QWEN_CUDA_Q5_TBATCH4_OFF"]? != "1"}"
+  puts "q4_gate_tbatch4=#{ENV["QWEN_CUDA_Q4_GATE_TBATCH4_OFF"]? != "1"}"
   puts "q4_tbatch4=#{ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1"}"
   puts "q6_tbatch4=#{ENV["QWEN_CUDA_Q6_TBATCH4_OFF"]? != "1"}"
   puts "head_q6_tbatch4=#{ENV["QWEN_CUDA_HEAD_Q6_TBATCH4_OFF"]? != "1"}"

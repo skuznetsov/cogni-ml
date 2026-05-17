@@ -12805,3 +12805,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Projection WBA now moved from launch batching to arithmetic/dataflow batching. Remaining exact projection cost is mostly Q4 `attn_gate`; QKV is no longer the dominant projection subphase.
 - maieutic: This is still a known-span/verifier optimization, not a single-token greedy route. The condition `tokens % 4 == 0` is part of the verified claim.
 - adversary: Keep the opt-out. Do not infer that all Q5 uses should switch blindly; current proof covers recurrent `attn_qkv` token-major output consumed by the existing serial recurrent core.
+
+**decision_update_261:** Narrowly extended Q4_K tbatch4 to recurrent `attn_gate` projection. Earlier broad projection/SSM use was unsafe because pointer state broke composition; this branch only routes `attn_gate`, resets the relevant pointer boxes to token-major bases afterward, and keeps a separate opt-out `QWEN_CUDA_Q4_GATE_TBATCH4_OFF=1`.
+
+**evidence_update_261:**
+- claim: "Q4 recurrent gate tbatch4 composes exactly with the all-layer Qwen3.5-9B CUDA stack."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4_gate_tbatch_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with `QWEN_CUDA_Q4_GATE_TBATCH4_OFF=1` vs default printed matching top1 and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent projection buffer layout, Q4_K tbatch PTX, pointer-box ownership, CUDA driver/JIT, or post-projection core consumption changes
+- claim: "Q4 recurrent gate tbatch4 is a smaller but real known-span speedup after Q5/Q6/head tbatch."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B tokens16 perf improved `221.213 -> 214.215ms` total (`13.826 -> 13.388ms/tok`) with identical top1 ids. Profile after promotion shows `sum_gate_ms=29.519` and `sum_projection_ms=38.407`, down from prior Q5-tbatch profile `sum_gate_ms=36.163`, `sum_projection_ms=45.067`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, or future Q4 projection route changes
+
+**quadrumvirate_update_261:**
+- cassandra: The expected gain was lower than Q5 because `attn_gate` is smaller, but the same weight-stationary token-band premise still applies.
+- daedalus: The safe frame was not "batch all Q4 projections"; it was "promote one projection corridor with explicit pointer reset and a final-hidden oracle." This avoids the previous broad-route failure mode.
+- maieutic: Exactness is established for current all-layer spans, not every future diagnostic that might read intermediate `d_z` before the serial core.
+- adversary: Keep this gate separate from `QWEN_CUDA_Q4_TBATCH4_OFF` so future regressions can disable recurrent gate batching without sacrificing the larger FFN Q4 tbatch win.
