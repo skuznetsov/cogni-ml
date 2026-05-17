@@ -12575,3 +12575,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This is a boundary cleanup that enables future controller tests; it is not the main breakthrough by itself.
 - maieutic: The smoke proves wiring and semantics on a layer slice, not broad prompt/model behavior.
 - adversary: Do not promote `read_top2` timing claims beyond five-layer diagnostics until the OOM condition is cleared and full all-layer A/B is repeated.
+
+**decision_update_248:** Removed unused CUDA output-head logits allocation for the Q6 fused top1 path. When `read_logits=false` and `read_top2=false`, `QwenOutputHeadRunner` does not consume the full `tokens*vocab` logits buffer, so the device layout now reserves a one-float placeholder instead of allocating the unused full logits slab. This is a memory-footprint fix, not a decoder speed claim.
+
+**evidence_update_248:**
+- claim: "The fused-head no-logits path compiles and full all-layer Qwen3.5-9B single-token CUDA decode fits despite the current ghost-memory remote state."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_logits_alloc_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_logits_alloc` -> exit 0. Remote five-layer smoke printed `read_logits=false`, `read_top2=false`, `cuda_ms_per_token=6.443`, `top1_gpu=97865,96506`, `ok=true`. Remote all-layer Qwen3.5-9B token1 printed `read_logits=false`, `read_top2=false`, `cuda_ms_per_token=34.51`, `top1_gpu=198`, `ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: output-head device layout, Q6 fused top1 path, logits/top2 readback policy, CUDA allocator behavior, or model vocab shape changes
+- claim: "The remaining full 9B duplicate-stack chunk OOM is dominated by duplicate stack weights/KV, not by the fused-head logits buffer."
+  source: remote all-layer duplicate-stack chunk fast-verifier run with gamma4 still failed before execution with `cuMemAlloc failed with CUDA error 2` in `QwenFullAttnKVRunner#build_runner` after the output-head logits allocation was reduced.
+  verified_at: 2026-05-17
+  decay_trigger: verifier stack construction, KV-cache allocation policy, CUDA memory state, or shared-weight verifier-view implementation
+- claim: "Same-stack sequential chunk verification fits with `read_top2=true`, but composes a near-full raw proposal plus near-full exact verify and remains slower than plain greedy."
+  source: remote all-layer Qwen3.5-9B same-stack sequential chunk probe, seed0 gen16 margin0.03. Gamma2: `read_logits=false`, `read_top2=true`, `cuda_ms_per_token=48.626`, `chunk_probe_full_accepts=8`, `chunk_probe_rejects=0`, `chunk_probe_raw_ms_per_raw_token=21.681`, `chunk_probe_verify_ms_per_verify_token=24.108`, `chunk_probe_batched_verify=false`, `ok=true`. Gamma4: `cuda_ms_per_token=47.724`, `full_accepts=4`, `rejects=0`, raw `21.748ms/token`, verify `24.121ms/token`, `ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: same-stack verifier scheduling, raw-Q8 proposal route, known-span verifier route, output-head readback mode, CUDA driver/JIT, or model prompt/seed suite changes
+
+**quadrumvirate_update_248:**
+- cassandra: The memory fix should unblock ordinary no-logits full-stack probes, but duplicate-stack speculation can still OOM because it duplicates much larger layer/KV allocations.
+- daedalus: The useful frame is now verifier architecture: build a shared-weight verifier view or same-stack snapshot/rollback verifier with sublinear known-span execution, not another output-head allocation tweak.
+- maieutic: A fitting full token1 probe only proves allocation correctness for the no-logits path. It does not prove faster decode, nor does it solve duplicate verifier stack memory.
+- adversary: Do not report chunk speculation as improved from this patch. The measured same-stack sequential path is still about two full passes and remains a diagnostic/refutation anchor.

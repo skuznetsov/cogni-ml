@@ -580,9 +580,10 @@ module ML::CUDA
       fused_q6_top1 = @output_type.q6_k? && !@read_logits && !@read_top2
       vocab_grid = ((@vocab + 3) // 4).to_u32
       top1_width = fused_q6_top1 ? vocab_grid : 256_u32
+      logits_elements = fused_q6_top1 ? 1 : @tokens * @vocab
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@hidden),
-               @output_raw.size.to_u64, bytesize_f32(@tokens * @hidden), bytesize_f32(@tokens * @vocab),
+               @output_raw.size.to_u64, bytesize_f32(@tokens * @hidden), bytesize_f32(logits_elements),
                bytesize_i32(@tokens * top1_width.to_i32), bytesize_f32(@tokens * top1_width.to_i32),
                bytesize_i32(@tokens * top1_width.to_i32), bytesize_f32(@tokens * top1_width.to_i32),
                bytesize_i32(@tokens), bytesize_f32(@tokens),
