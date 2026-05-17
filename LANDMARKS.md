@@ -12239,3 +12239,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Use the adapter only as a speculative proposal inside a verifier or after a cheap same-distribution gate; do not spend effort making it a global approximate decoder.
 - maieutic: Matching prompt-prefix top1 is not acceptance over generated tokens. The next falsifier is a guarded self-spec loop that falls back immediately on mismatch.
 - adversary: The off-sequence miss at position 0 rules out naive confidence from layer-local reconstruction metrics alone.
+
+**decision_update_226:** Added a guarded CUDA PCA-updown proposal diagnostic that uses exact-state snapshot/restore instead of enabling PCA-updown as the canonical decode body. `cuda_mixed_stack_probe --greedy-loop-probe-restore --greedy-loop-probe-pca-updown --runtime-pca-updown-adapters PATH` now snapshots recurrent state, runs a discardable PCA-updown proposal, restores state, then runs the exact verifier path for the emitted token. This preserves exact output while measuring whether prompt-calibrated PCA-updown is useful as a proposal source.
+
+**evidence_update_226:**
+- claim: "The PCA-updown proposal route compiles locally and remotely without changing the default exact path."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_pca_probe_restore_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_pca_guard` -> exit 0.
+  verified_at: 2026-05-17
+  decay_trigger: PCA-updown runner switch, greedy-loop probe restore path, adapter JSON schema, or CUDA runner state snapshot/restore changes
+- claim: "On the first seed-760 guarded probe, PCA-updown proposals from exact decode states matched exact output for 16/16 tokens, but the current serialized diagnostic is not a speedup."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_pca_updown_probe_restore_seed760_summary_20260517.txt`: `route=pca_updown`, `total_ms_per_token=53.132`, `proposal_ms_per_token=23.689`, `exact_ms_per_token=24.187`, `match=16/16`, `first_miss=None`.
+  verified_at: 2026-05-17
+  decay_trigger: prompt/seed suite, adapter calibration, layer mask/rank, controller scheduling, or chunk verifier implementation changes
+
+**quadrumvirate_update_226:**
+- cassandra: Exact-state snapshot/restore is the right safety frame for distribution-sensitive PCA-updown. The single-seed match is encouraging, but serialized proposal+verify doubles wall until a chunk/overlap controller amortizes it.
+- daedalus: The next pivot is not more ungated PCA free-run. It is a multi-seed guarded probe plus a controller that either overlaps proposal with verifier work or avoids launching the proposal when the expected acceptance/cost is unfavorable.
+- maieutic: The current evidence proves safety plumbing and one matched sequence, not broad acceptance or speed. The required falsifier is a seed/prompt suite with chunk acceptance and wall economics.
+- adversary: Because proposal and verifier are serialized in this diagnostic, `53.132ms/token` should be treated as observability cost, not as a product-route benchmark.

@@ -361,6 +361,17 @@ module ML::CUDA
       @ffn_pca_updown_enabled
     end
 
+    def ffn_pca_updown_enabled=(enabled : Bool) : Nil
+      if enabled && @ffn_pca_updown_buffers.empty?
+        raise "PCA-updown adapter buffers are not installed"
+      end
+      @ffn_pca_updown_enabled = enabled
+      if enabled
+        @ffn_raw_q8_enabled = false
+        @ffn_skip_enabled = false
+      end
+    end
+
     def conv_state_bytesize : LibC::SizeT
       bytesize_f32(@conv_state_init.size)
     end
