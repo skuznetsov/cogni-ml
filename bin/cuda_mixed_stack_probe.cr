@@ -1312,6 +1312,7 @@ begin
   puts "q4_tbatch4=#{ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1"}"
   puts "q6_tbatch4=#{ENV["QWEN_CUDA_Q6_TBATCH4_OFF"]? != "1"}"
   puts "head_q6_tbatch4=#{ENV["QWEN_CUDA_HEAD_Q6_TBATCH4_OFF"]? != "1"}"
+  puts "full_attn_output_tbatch4=#{ENV["QWEN_CUDA_FULL_ATTN_OUTPUT_TBATCH4_OFF"]? != "1"}"
   puts "full_attn_batched_norms=#{ENV["QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF"]? != "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"

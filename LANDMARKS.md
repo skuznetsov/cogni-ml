@@ -12823,3 +12823,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The safe frame was not "batch all Q4 projections"; it was "promote one projection corridor with explicit pointer reset and a final-hidden oracle." This avoids the previous broad-route failure mode.
 - maieutic: Exactness is established for current all-layer spans, not every future diagnostic that might read intermediate `d_z` before the serial core.
 - adversary: Keep this gate separate from `QWEN_CUDA_Q4_TBATCH4_OFF` so future regressions can disable recurrent gate batching without sacrificing the larger FFN Q4 tbatch win.
+
+**decision_update_262:** Extended LTP/WBA weight-stationary token batching to the full-attention `attn_output` projection. The full-attention runner now uses Q4/Q6 tbatch4 for `attn_output.weight` when `tokens >= 4` and divisible by 4, before the existing batched norm/FFN tail. `QWEN_CUDA_FULL_ATTN_OUTPUT_TBATCH4_OFF=1` restores the previous row-batched output projection route.
+
+**evidence_update_262:**
+- claim: "Full-attention output tbatch4 composes exactly with the all-layer Qwen3.5-9B CUDA stack."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_fullattn_out_tbatch_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` and `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/qwen_full_attn_kv_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with `QWEN_CUDA_FULL_ATTN_OUTPUT_TBATCH4_OFF=1` vs default printed matching top1 and final-hidden comparison `max_abs=0`, `rms=0`, `cos=0.99999999999999989`.
+  verified_at: 2026-05-17
+  decay_trigger: full-attention tail layout, Q4/Q6 tbatch PTX ABI, pointer-box ownership, CUDA driver/JIT, output projection quant type, or KV runner refactor
+- claim: "Full-attention output tbatch4 is a small exact known-span speedup after the larger recurrent/head tbatch wins."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B tokens16 three-pass A/B improved default-on vs opt-out from `214.458/214.477/214.569ms` to `212.121/212.347/212.242ms` total, with identical top1 ids. Profile after promotion shows `sum_kv_tail_ms=29.136`, down from the prior Q4-gate profile `sum_kv_tail_ms=31.277`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, or future full-attention WBA/fusion route changes
+
+**quadrumvirate_update_262:**
+- cassandra: Expected gain was bounded because only eight full-attention layers use this projection and their tail was already mostly batched.
+- daedalus: This is the same useful frame as the recurrent gate fix: promote one safe projection corridor with pointer reset and hidden-output equality, not a broad Q4/Q6 routing rewrite.
+- maieutic: The verified claim is exactness and speed for current known-span token bands divisible by four. It does not apply to single-token greedy decode.
+- adversary: Keep the dedicated opt-out because material benefit is small and future KV-tail fusions may make this route redundant or negative.

@@ -286,10 +286,12 @@ module ML::CUDA
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
       q6_batched_fn = q6_mod.function("q6_k_gemv_warp4_f32_batched")
+      q6_tbatch4_fn = q6_mod.function("q6_k_gemv_warp4_f32_tbatch4")
       q6_add_batched_fn = q6_mod.function("q6_k_gemv_add_warp4_f32_batched")
       q6_add_tbatch4_fn = q6_mod.function("q6_k_gemv_add_warp4_f32_tbatch4")
       out_proj_fn = @output_type.q4_k? ? q4_fn : q6_fn
       out_proj_batched_fn = @output_type.q4_k? ? q4_batched_fn : q6_batched_fn
+      out_proj_tbatch4_fn = @output_type.q4_k? ? q4_tbatch4_fn : q6_tbatch4_fn
       ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
       ffn_down_add_batched_fn = @ffn_down_type.q4_k? ? q4_add_batched_fn : q6_add_batched_fn
       use_parallel_attn = ENV["QWEN_CUDA_FULL_ATTN_PARALLEL_OFF"]? != "1"
@@ -299,6 +301,7 @@ module ML::CUDA
       use_batched_norms = ENV["QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF"]? != "1" && use_batched_tail
       use_q4_tbatch4 = ENV["QWEN_CUDA_Q4_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
       use_q6_tbatch4 = ENV["QWEN_CUDA_Q6_TBATCH4_OFF"]? != "1" && @ffn_down_type.q6_k? && @tokens >= 4 && (@tokens % 4 == 0)
+      use_attn_output_tbatch4 = ENV["QWEN_CUDA_FULL_ATTN_OUTPUT_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
       tail_rows = use_batched_tail ? @tokens : 1
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
@@ -512,6 +515,29 @@ module ML::CUDA
         end
       }
 
+      run_attn_output_projection = -> {
+        if use_attn_output_tbatch4
+          groups = @tokens // 4
+          groups.times do |group|
+            d_attn_cur_ptr.value = d_attn_out + bytesize_f32(group * 4 * @output_in_dim)
+            d_proj_cur_ptr.value = d_proj_out + bytesize_f32(group * 4 * @output_out_dim)
+            ML::CUDA.launch!(out_proj_tbatch4_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output tbatch4")
+          end
+          d_attn_cur_ptr.value = d_attn_out
+          d_proj_cur_ptr.value = d_proj_out
+        elsif use_batched_tail
+          d_attn_cur_ptr.value = d_attn_out
+          d_proj_cur_ptr.value = d_proj_out
+          ML::CUDA.launch!(out_proj_batched_fn, output_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output batched")
+        else
+          @tokens.times do |t|
+            d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
+            d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
+            ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
+          end
+        end
+      }
+
       run_token = ->(tok : Int32) {
         # Kernels index token by block id; launch all token blocks once.
         if tok == 0
@@ -519,9 +545,7 @@ module ML::CUDA
           ML::CUDA.launch!(k_fn, @tokens.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
           ML::CUDA.launch!(attn_decode_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
           if use_batched_tail
-            d_attn_cur_ptr.value = d_attn_out
-            d_proj_cur_ptr.value = d_proj_out
-            ML::CUDA.launch!(out_proj_batched_fn, output_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output batched")
+            run_attn_output_projection.call
             if use_batched_norms
               d_residual_cur_ptr.value = @residual_device_base.not_nil!
               d_proj_cur_ptr_for_add.value = d_proj_out
@@ -557,10 +581,8 @@ module ML::CUDA
             d_residual_out_cur_ptr.value = d_residual
             d_cur2_cur_ptr.value = d_cur2
           else
+            run_attn_output_projection.call
             @tokens.times do |t|
-              d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
-              d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
-              ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
               d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
               d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
               d_residual_out_cur_ptr.value = d_residual
@@ -595,14 +617,12 @@ module ML::CUDA
           ML::CUDA.synchronize!("cuCtxSynchronize(full attn decode)")
           @profile_attn_decode_ms += (Time.instant - t_attn).total_milliseconds
 
-          @tokens.times do |t|
-            d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
-            d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
-            t_out = Time.instant
-            ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
-            ML::CUDA.synchronize!("cuCtxSynchronize(full attn output)")
-            @profile_out_proj_ms += (Time.instant - t_out).total_milliseconds
+          t_out = Time.instant
+          run_attn_output_projection.call
+          ML::CUDA.synchronize!("cuCtxSynchronize(full attn output)")
+          @profile_out_proj_ms += (Time.instant - t_out).total_milliseconds
 
+          @tokens.times do |t|
             d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
             d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
             d_final_cur_ptr.value = d_final_all + bytesize_f32(t * @output_out_dim)
