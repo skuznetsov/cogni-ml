@@ -402,6 +402,7 @@ module ML::CUDA
         batched_projection_profile = ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1"
         batched_ssm_out_profile = batched_projection_profile && ENV["QWEN_CUDA_BATCHED_SSM_OUT_OFF"]? != "1"
         batched_norms_profile = batched_projection_profile && ENV["QWEN_CUDA_BATCHED_NORMS_OFF"]? != "1"
+        batched_ab_profile = batched_projection_profile && ENV["QWEN_CUDA_BATCHED_ALPHA_BETA_TRANSFORM"]? == "1"
         @profile_override_detail = batched_projection_profile
         begin
           runner.run_sequence
@@ -409,7 +410,9 @@ module ML::CUDA
         ensure
           @profile_override_detail = false
         end
-        route = if batched_ssm_out_profile && batched_norms_profile
+        route = if batched_ssm_out_profile && batched_norms_profile && batched_ab_profile
+                  "batched_projection_ab_norm_ssm_ffn"
+                elsif batched_ssm_out_profile && batched_norms_profile
                   "batched_projection_norm_ssm_ffn"
                 elsif batched_ssm_out_profile
                   "batched_projection_ssm_ffn"
@@ -492,6 +495,7 @@ module ML::CUDA
       conv_fn = dn_mod.function("recurrent_conv1d_silu_step_probe")
       norm_fn = dn_mod.function("l2_norm_128_probe")
       ab_fn = dn_mod.function("alpha_beta_transform_probe")
+      ab_batched_fn = dn_mod.function("alpha_beta_transform_batched_probe")
       dn_fn = dn_mod.function("deltanet_step_128_probe")
       post_fn = dn_mod.function("deltanet_post_norm_gate_128_probe")
       post_store_fn = dn_mod.function("deltanet_post_norm_gate_128_store_probe")
@@ -518,12 +522,13 @@ module ML::CUDA
       use_batched_projections = ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1" && use_batched_ffn
       use_batched_ssm_out = ENV["QWEN_CUDA_BATCHED_SSM_OUT_OFF"]? != "1" && use_batched_projections
       use_batched_norms = ENV["QWEN_CUDA_BATCHED_NORMS_OFF"]? != "1" && use_batched_projections
+      use_batched_alpha_beta_transform = ENV["QWEN_CUDA_BATCHED_ALPHA_BETA_TRANSFORM"]? == "1" && use_batched_projections
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
                @qkv_raw.size.to_u64, @gate_raw.size.to_u64, @alpha_raw.size.to_u64, @beta_raw_w.size.to_u64,
                bytesize_f32(@conv_state_init.size), bytesize_f32(@ssm_state_init.size), bytesize_f32(@tokens * @qkv_dim), bytesize_f32(@conv1d.size),
                bytesize_f32(@qkv_dim), bytesize_f32(@tokens * @h_v), bytesize_f32(@tokens * @h_v), bytesize_f32(@dt_bias.size), bytesize_f32(@ssm_a.size),
-               bytesize_f32(@h_v), bytesize_f32(@h_v), bytesize_f32(@tokens * @inner_dim), bytesize_f32(@ssm_norm.size), @out_raw.size.to_u64,
+               bytesize_f32(@tokens * @h_v), bytesize_f32(@tokens * @h_v), bytesize_f32(@tokens * @inner_dim), bytesize_f32(@ssm_norm.size), @out_raw.size.to_u64,
                bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden), bytesize_f32(@tokens * @hidden),
                @ffn_gate_raw.size.to_u64, @ffn_up_raw.size.to_u64, @ffn_down_raw.size.to_u64,
                bytesize_f32(@tokens * @ffn_dim), bytesize_f32(@tokens * @ffn_dim), bytesize_f32(@tokens * @ffn_dim), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
@@ -578,6 +583,7 @@ module ML::CUDA
       qkv_grid = ((@qkv_dim + 3) // 4).to_u32
       inner_grid = ((@inner_dim + 3) // 4).to_u32
       h_v_grid = ((@h_v + 3) // 4).to_u32
+      ab_transform_grid_y = ((@h_v + 31) // 32).to_u32
       alpha_beta_dual_grid = (((@h_v * 2) + 3) // 4).to_u32
       ffn_grid = ((@ffn_dim + 3) // 4).to_u32
       hidden_grid = ((@hidden + 3) // 4).to_u32
@@ -592,6 +598,8 @@ module ML::CUDA
       d_qkv_cur_ptr = box_ptr(d_qkv)
       d_alpha_cur_ptr = box_ptr(d_alpha)
       d_beta_raw_cur_ptr = box_ptr(d_beta_raw)
+      d_g_cur_ptr = box_ptr(d_g)
+      d_b_cur_ptr = box_ptr(d_b)
       d_z_cur_ptr = box_ptr(d_z)
       d_post_cur_ptr = box_ptr(d_z)
       d_attn_out_cur_ptr = box_ptr(d_attn_out)
@@ -668,17 +676,25 @@ module ML::CUDA
       ab_params[1] = d_beta_raw_cur_ptr.as(Void*)
       ab_params[2] = box_ptr(d_dt).as(Void*)
       ab_params[3] = box_ptr(d_a).as(Void*)
-      ab_params[4] = box_ptr(d_g).as(Void*)
-      ab_params[5] = box_ptr(d_b).as(Void*)
+      ab_params[4] = d_g_cur_ptr.as(Void*)
+      ab_params[5] = d_b_cur_ptr.as(Void*)
       ab_params[6] = box_u32(h_v_u32).as(Void*)
+
+      run_batched_alpha_beta_transform = -> {
+        d_alpha_cur_ptr.value = d_alpha
+        d_beta_raw_cur_ptr.value = d_beta_raw
+        d_g_cur_ptr.value = d_g
+        d_b_cur_ptr.value = d_b
+        ML::CUDA.launch!(ab_batched_fn, @tokens.to_u32, ab_transform_grid_y, 1_u32, 32_u32, 1_u32, 1_u32, ab_params, "alpha beta batched")
+      }
 
       dn_params = Pointer(Void*).malloc(10)
       dn_params[0] = box_ptr(d_ssm_state).as(Void*)
       dn_params[1] = box_ptr(d_q).as(Void*)
       dn_params[2] = box_ptr(d_k).as(Void*)
       dn_params[3] = box_ptr(d_v).as(Void*)
-      dn_params[4] = box_ptr(d_g).as(Void*)
-      dn_params[5] = box_ptr(d_b).as(Void*)
+      dn_params[4] = d_g_cur_ptr.as(Void*)
+      dn_params[5] = d_b_cur_ptr.as(Void*)
       dn_params[6] = box_ptr(d_v).as(Void*)
       dn_params[7] = box_u32(h_k_u32).as(Void*)
       dn_params[8] = box_u32(h_v_u32).as(Void*)
@@ -805,6 +821,8 @@ module ML::CUDA
         d_qkv_cur_ptr.value = d_qkv + qkv_offset
         d_alpha_cur_ptr.value = d_alpha + h_v_offset
         d_beta_raw_cur_ptr.value = d_beta_raw + h_v_offset
+        d_g_cur_ptr.value = d_g
+        d_b_cur_ptr.value = d_b
         d_z_cur_ptr.value = d_z + inner_offset
         d_attn_out_cur_ptr.value = d_attn_out
         d_out_proj_input_ptr.value = d_v
@@ -862,6 +880,8 @@ module ML::CUDA
         d_qkv_cur_ptr.value = d_qkv + qkv_offset
         d_alpha_cur_ptr.value = d_alpha + h_v_offset
         d_beta_raw_cur_ptr.value = d_beta_raw + h_v_offset
+        d_g_cur_ptr.value = d_g
+        d_b_cur_ptr.value = d_b
         d_z_cur_ptr.value = d_z + inner_offset
         d_attn_out_cur_ptr.value = d_attn_out
         d_out_proj_input_ptr.value = d_v
@@ -903,6 +923,8 @@ module ML::CUDA
         d_qkv_cur_ptr.value = d_qkv + qkv_offset
         d_alpha_cur_ptr.value = d_alpha + h_v_offset
         d_beta_raw_cur_ptr.value = d_beta_raw + h_v_offset
+        d_g_cur_ptr.value = d_g
+        d_b_cur_ptr.value = d_b
         d_z_cur_ptr.value = d_z + inner_offset
         d_attn_out_cur_ptr.value = d_attn_out
         d_out_proj_input_ptr.value = d_v
@@ -935,6 +957,13 @@ module ML::CUDA
         d_qkv_cur_ptr.value = d_qkv + qkv_offset
         d_alpha_cur_ptr.value = d_alpha + h_v_offset
         d_beta_raw_cur_ptr.value = d_beta_raw + h_v_offset
+        if use_batched_alpha_beta_transform
+          d_g_cur_ptr.value = d_g + h_v_offset
+          d_b_cur_ptr.value = d_b + h_v_offset
+        else
+          d_g_cur_ptr.value = d_g
+          d_b_cur_ptr.value = d_b
+        end
         d_z_cur_ptr.value = d_z + inner_offset
         d_post_cur_ptr.value = d_z + inner_offset
         d_attn_out_cur_ptr.value = d_attn_out + offset
@@ -949,7 +978,9 @@ module ML::CUDA
         ML::CUDA.launch!(conv_fn, conv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, conv_params, "conv prep")
         ML::CUDA.launch!(norm_fn, @h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_norm_params, "q norm")
         ML::CUDA.launch!(norm_fn, @h_k.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_norm_params, "k norm")
-        ML::CUDA.launch!(ab_fn, 1_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ab_params, "alpha beta")
+        unless use_batched_alpha_beta_transform
+          ML::CUDA.launch!(ab_fn, 1_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ab_params, "alpha beta")
+        end
         ML::CUDA.launch!(dn_fn, @h_v.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, dn_params, "delta step")
         ML::CUDA.launch!(post_store_fn, @h_v.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, 1_u32, post_store_params, "post gate store")
       }
@@ -1076,6 +1107,7 @@ module ML::CUDA
             @profile_projection_ms += (Time.instant - t_proj).total_milliseconds
 
             t_core = Time.instant
+            run_batched_alpha_beta_transform.call if use_batched_alpha_beta_transform
             if use_batched_ssm_out
               @tokens.times { |tok| run_post_projection_store_token.call(tok) }
               run_batched_ssm_out_and_add.call
@@ -1098,6 +1130,7 @@ module ML::CUDA
               ML::CUDA.launch!(q4_batched_fn, h_v_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, beta_proj_params, "beta proj batched")
             end
 
+            run_batched_alpha_beta_transform.call if use_batched_alpha_beta_transform
             if use_batched_ssm_out
               @tokens.times { |tok| run_post_projection_store_token.call(tok) }
               run_batched_ssm_out_and_add.call
@@ -1125,6 +1158,8 @@ module ML::CUDA
         d_qkv_cur_ptr.value = d_qkv + qkv_offset
         d_alpha_cur_ptr.value = d_alpha + h_v_offset
         d_beta_raw_cur_ptr.value = d_beta_raw + h_v_offset
+        d_g_cur_ptr.value = d_g
+        d_b_cur_ptr.value = d_b
         d_z_cur_ptr.value = d_z + inner_offset
         d_attn_out_cur_ptr.value = d_attn_out
         d_out_proj_input_ptr.value = d_v

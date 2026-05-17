@@ -12719,3 +12719,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This likely closes the obvious exact wrapper-batching lane for current CUDA known-span verification. Next high-ROI work should shift back to GEMV arithmetic economics or cheaper proposal-body math.
 - maieutic: The proof is equality for current all-layer spans, not a formal shape proof. The opt-out remains for future residual aliasing or layout changes.
 - adversary: Do not stack these small WBA deltas into a claimed breakthrough without a clean end-to-end baseline rerun against llama.cpp/MLX/vLLM on identical prompts.
+
+**decision_update_256:** Added but default-disabled a batched CUDA alpha/beta transform diagnostic for recurrent known-span WBA. The transform is mathematically independent across tokens after alpha/beta projection, but moving it out of the per-token recurrent core did not improve the all-layer wall consistently. It is available only with `QWEN_CUDA_BATCHED_ALPHA_BETA_TRANSFORM=1`.
+
+**evidence_update_256:**
+- claim: "Batched alpha/beta transform is exact but not worth promoting as default on the current RTX 5060 Ti path."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_batched_ab_final_nocodegen crystal build bin/cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/kernels/deltanet_step_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr LANDMARKS.md TODO.md` -> exit 0; remote RTX 5060 Ti default-off profile printed `batched_alpha_beta_transform=false`, `phase_layer0_profile_route=batched_projection_norm_ssm_ffn`, `ok=true`, while opt-in printed `batched_alpha_beta_transform=true`, `phase_layer0_profile_route=batched_projection_ab_norm_ssm_ffn`, `ok=true`. Earlier all-layer tokens8 A/B with transform off/on printed identical top1 and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`, but wall regressed in that paired run `23.010 -> 23.126ms/tok`. A sweep was mixed: tokens2 `27.677 -> 27.262`, tokens4 `23.332 -> 23.390`, tokens8 `21.337 -> 21.375`, tokens16 `20.412 -> 20.433`, all `ok=true` with matching top1 hashes.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent core scheduling, CUDA driver/JIT, larger repeated timing suite, or if alpha/beta transform is fused into another recurrent-core kernel
+
+**quadrumvirate_update_256:**
+- cassandra: Removing one tiny per-token transform launch looked plausible but was vulnerable to launch geometry and scheduling overhead; the measured result confirms it is too small/mixed.
+- daedalus: Do not keep chasing single tiny independent transforms as defaults. The next frame should be fusion across serial-core kernels or GEMV arithmetic, not another isolated launch removal.
+- maieutic: Exactness alone is not sufficient for promotion. The accepted outcome is diagnostic availability plus a default-off refutation.
+- adversary: If future code enables this knob, require a fresh paired all-layer sweep because current evidence is mixed and slightly negative for spans >=4.

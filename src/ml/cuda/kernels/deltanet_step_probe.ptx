@@ -528,6 +528,82 @@ AB_DONE:
     ret;
 }
 
+// Batched token-major variant of alpha_beta_transform_probe.
+// Launch: grid=(tokens, ceil(h_v / block.x)), block=(32).
+.visible .entry alpha_beta_transform_batched_probe(
+    .param .u64 alpha,
+    .param .u64 beta_raw,
+    .param .u64 dt_bias,
+    .param .u64 ssm_a,
+    .param .u64 g_out,
+    .param .u64 beta_out,
+    .param .u32 h_v
+)
+{
+    .reg .pred %p<3>;
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<24>;
+    .reg .f32 %f<30>;
+
+    ld.param.u64 %rd1, [alpha];
+    ld.param.u64 %rd2, [beta_raw];
+    ld.param.u64 %rd3, [dt_bias];
+    ld.param.u64 %rd4, [ssm_a];
+    ld.param.u64 %rd5, [g_out];
+    ld.param.u64 %rd6, [beta_out];
+    ld.param.u32 %r1, [h_v];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;       // token
+    mov.u32 %r4, %ctaid.y;       // head block
+    mov.u32 %r5, %ntid.x;
+    mad.lo.s32 %r6, %r4, %r5, %r2; // head
+    setp.ge.u32 %p1, %r6, %r1;
+    @%p1 bra ABB_DONE;
+
+    mul.lo.u32 %r7, %r3, %r1;
+    add.u32 %r8, %r7, %r6;       // token-major index
+
+    mul.wide.u32 %rd7, %r8, 4;
+    add.s64 %rd8, %rd1, %rd7;
+    add.s64 %rd9, %rd2, %rd7;
+    add.s64 %rd12, %rd5, %rd7;
+    add.s64 %rd13, %rd6, %rd7;
+
+    mul.wide.u32 %rd10, %r6, 4;
+    add.s64 %rd11, %rd3, %rd10;
+    add.s64 %rd14, %rd4, %rd10;
+
+    ld.global.f32 %f1, [%rd8];     // alpha
+    ld.global.f32 %f2, [%rd9];     // beta raw
+    ld.global.f32 %f3, [%rd11];    // dt bias
+    ld.global.f32 %f4, [%rd14];    // ssm_a
+
+    mov.f32 %f5, 0fBFB8AA3B;       // -log2(e)
+    mul.rn.f32 %f6, %f2, %f5;
+    ex2.approx.ftz.f32 %f7, %f6;
+    mov.f32 %f8, 0f3F800000;
+    add.rn.f32 %f9, %f8, %f7;
+    rcp.approx.ftz.f32 %f10, %f9;
+    st.global.f32 [%rd13], %f10;
+
+    add.rn.f32 %f11, %f1, %f3;     // xi
+    mov.f32 %f12, 0f3FB8AA3B;      // log2(e)
+    mul.rn.f32 %f13, %f11, %f12;
+    ex2.approx.ftz.f32 %f14, %f13; // exp(xi)
+    add.rn.f32 %f15, %f8, %f14;
+    lg2.approx.ftz.f32 %f16, %f15;
+    mov.f32 %f17, 0f3F317218;      // ln(2)
+    mul.rn.f32 %f18, %f16, %f17;   // softplus approx
+    mul.rn.f32 %f19, %f18, %f4;
+    mul.rn.f32 %f20, %f19, %f12;
+    ex2.approx.ftz.f32 %f21, %f20;
+    st.global.f32 [%rd12], %f21;
+
+ABB_DONE:
+    ret;
+}
+
 // Serial correctness-first RMSNorm over one vector:
 //   out[i] = x[i] * rsqrt(mean(x^2) + eps) * norm[i]
 .visible .entry rmsnorm_vec_probe(
