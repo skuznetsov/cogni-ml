@@ -12113,3 +12113,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The viable frame is not "run fewer original layers" but "replace expensive layer bands with a learned/mathematical surrogate that preserves decision boundaries enough for verifier acceptance."
 - maieutic: Teacher-forced top1 is only a proxy, but the cost savings are too small at the first plausible quality point to justify building a controller around this branch.
 - adversary: This is a narrow 16-token probe. It should be treated as a refutation of naive truncation priority, not as a broad refutation of block surrogates or prompt-conditioned adaptive depth.
+
+**decision_update_219:** Refuted full-body exact/raw-Q8 overlap as the next CUDA speed lever on the RTX 5060 Ti host. Running exact decode and raw-Q8 proposal decode concurrently in separate processes roughly doubled each lane's `cuda_ms_per_token`, which indicates the workload is already saturating the GPU compute/memory path. This does not rule out overlapping tiny non-body work or a future genuinely cheaper proposal body, but it makes an in-process stream scheduler for two full-body lanes low priority.
+
+**evidence_update_219:**
+- claim: "Two full-body CUDA decode lanes do not materially overlap on the current RTX 5060 Ti setup."
+  source: remote reefy.ai `/build/persisten/cogni-ml/tmp/process_overlap_20260517`: single exact `23.434ms/token`, single raw-Q8 `21.106ms/token`; concurrent exact `48.243ms/token`, concurrent raw-Q8 `46.694ms/token`, with `weight_upload_ms=0.0` in all logs.
+  verified_at: 2026-05-17
+  decay_trigger: GPU model/driver, CUDA stream/context scheduling, kernel occupancy, raw proposal body cost, or verifier body implementation changes
+
+**quadrumvirate_update_219:**
+- cassandra: If separate CUDA contexts cannot overlap full model bodies, internal streams are unlikely to create a large overlap win for the same kernels.
+- daedalus: The next breakthrough candidate must reduce body work, not merely schedule two full bodies more cleverly.
+- maieutic: This process-level test is a coarse falsifier. It cannot prove all stream overlap is useless, but it is enough to deprioritize full-lane overlap until the proposal lane becomes much cheaper.
+- adversary: Process concurrency adds context/memory pressure, so the exact numbers are not an in-process bound. The direction is still clear because both lanes slow by about `2x`.
