@@ -262,6 +262,9 @@ greedy_loop_probe_chunk_batched_verify = false
 runtime_raw_q8 = false
 runtime_skip_recurrent_ffn = false
 runtime_skip_recurrent_ffn_layers = nil.as(Array(Int32)?)
+runtime_pca_updown_zero = false
+runtime_pca_updown_rank = 32
+runtime_pca_updown_layers = nil.as(Array(Int32)?)
 seed_token = 0
 input_token = -1
 input_tokens = [] of Int32
@@ -302,6 +305,9 @@ OptionParser.parse do |p|
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--runtime-skip-recurrent-ffn", "Diagnostic proposal route: skip recurrent-layer FFNs and forward the post-attention residual") { runtime_skip_recurrent_ffn = true }
   p.on("--runtime-skip-recurrent-ffn-layers LIST", "Diagnostic proposal route: skip recurrent-layer FFNs only for comma-separated layer ids") { |v| runtime_skip_recurrent_ffn_layers = parse_layers(v) }
+  p.on("--runtime-pca-updown-zero", "Diagnostic plumbing route: replace recurrent FFNs with zero PCA-updown adapters plus residual add") { runtime_pca_updown_zero = true; perf_only = true }
+  p.on("--runtime-pca-updown-rank N", "Rank for --runtime-pca-updown-zero, default 32") { |v| runtime_pca_updown_rank = v.to_i }
+  p.on("--runtime-pca-updown-layers LIST", "Apply --runtime-pca-updown-zero only to comma-separated recurrent layer ids") { |v| runtime_pca_updown_layers = parse_layers(v) }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
   p.on("--input-tokens LIST", "Use comma-separated token_embd IDs as the non-greedy semantic input sequence") { |v| input_tokens_provided = true; input_tokens = parse_i32_list(v) }
@@ -357,6 +363,11 @@ raise "--greedy-loop-probe-chunk-batched-verify requires --greedy-loop-probe-chu
 raise "--runtime-skip-recurrent-ffn is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn && runtime_raw_q8
 raise "use either --runtime-skip-recurrent-ffn or --runtime-skip-recurrent-ffn-layers, not both" if runtime_skip_recurrent_ffn && runtime_skip_recurrent_ffn_layers
 raise "--runtime-skip-recurrent-ffn-layers is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn_layers && runtime_raw_q8
+raise "--runtime-pca-updown-rank must be in 1..64" unless runtime_pca_updown_rank > 0 && runtime_pca_updown_rank <= 64
+raise "--runtime-pca-updown-layers requires --runtime-pca-updown-zero" if runtime_pca_updown_layers && !runtime_pca_updown_zero
+raise "--runtime-pca-updown-zero is incompatible with --runtime-raw-q8" if runtime_pca_updown_zero && runtime_raw_q8
+raise "--runtime-pca-updown-zero is incompatible with --runtime-skip-recurrent-ffn" if runtime_pca_updown_zero && runtime_skip_recurrent_ffn
+raise "--runtime-pca-updown-zero is incompatible with --runtime-skip-recurrent-ffn-layers" if runtime_pca_updown_zero && runtime_skip_recurrent_ffn_layers
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
 raise "--input-tokens must not be empty when provided" if input_tokens_provided && input_tokens.empty?
@@ -536,6 +547,9 @@ begin
   mixed_stack.set_recurrent_ffn_skip(true) if runtime_skip_recurrent_ffn
   if skip_layers = runtime_skip_recurrent_ffn_layers
     mixed_stack.set_recurrent_ffn_skip_layers(skip_layers)
+  end
+  if runtime_pca_updown_zero
+    mixed_stack.set_recurrent_ffn_pca_updown_zero(runtime_pca_updown_rank, runtime_pca_updown_layers)
   end
 
   weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
@@ -1147,6 +1161,9 @@ begin
   puts "runtime_raw_q8=#{runtime_raw_q8}"
   puts "runtime_skip_recurrent_ffn=#{runtime_skip_recurrent_ffn}"
   puts "runtime_skip_recurrent_ffn_layers=#{runtime_skip_recurrent_ffn_layers.try(&.join(",")) || ""}"
+  puts "runtime_pca_updown_zero=#{runtime_pca_updown_zero}"
+  puts "runtime_pca_updown_rank=#{runtime_pca_updown_rank}"
+  puts "runtime_pca_updown_layers=#{runtime_pca_updown_layers.try(&.join(",")) || ""}"
   puts "q4_raw_q8_ffn=#{ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"

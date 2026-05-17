@@ -12181,3 +12181,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next useful pivot is runner integration with real adapter buffers and layer masks; more synthetic schedule tuning has diminishing returns until acceptance is measured.
 - maieutic: This is still a lower-bound microprobe. It does not prove end-to-end self-draft speedup, because real inference adds adapter loading, layer scheduling, state effects, and exact verifier economics.
 - adversary: The parallel kernel uses shared memory and assumes rank <=64. It is appropriate for the current probe shape, but runner promotion needs guards around rank/layout and a parity/acceptance fallback.
+
+**decision_update_223:** Wired CUDA PCA-updown FFN replacement into the recurrent runner as explicit diagnostic plumbing. `QwenRecurrentLayerRunner#set_ffn_pca_updown_adapter` uploads adapter arrays to resident CUDA buffers and the recurrent FFN path can now run `ffn_pca_updown_fused_parallel_probe` followed by residual add instead of dense gate/up/SwiGLU/down. The mixed-stack probe exposes only a zero-adapter route for plumbing (`--runtime-pca-updown-zero`) so this cannot be mistaken for a real quality-preserving model route.
+
+**evidence_update_223:**
+- claim: "The recurrent runner can launch the PCA-updown FFN replacement path without changing default exact behavior."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_pca_runner_nocodegen2 crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0 and `git diff --check` -> exit 0. Remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_pca_runner` with `-Dcpu_only -Duse_pcre2` -> exit 0.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA recurrent runner FFN path, PCA-updown PTX signature, mixed-stack diagnostic flags, or Crystal compiler changes
+- claim: "The diagnostic zero-adapter route exercises the integrated PCA-updown kernel and reports its phase separately."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_pca_updown_runner_zero_smoke_20260517.log`, Qwen3.5-9B layers `0,1,2,3,4`, `--perf-only --skip-output-head --profile-phases --runtime-pca-updown-zero --runtime-pca-updown-rank 32`: `ok=true`, `runtime_pca_updown_zero=true`, `cuda_ms_per_token=5.246`, `phase_layer0_ffn_gate_ms=0.0`, `phase_layer0_ffn_pca_updown_ms=0.238`.
+  verified_at: 2026-05-17
+  decay_trigger: PCA-updown runner integration, profiler labels, CUDA driver/runtime, or selected layer set changes
+
+**quadrumvirate_update_223:**
+- cassandra: Plumbing risk is now lower; the remaining high-risk claim is quality and acceptance with real adapters.
+- daedalus: The next pivot should not be zero-adapter timing. It should train/load real CUDA adapters for a small layer mask and measure teacher-forced top1 plus guarded self-spec acceptance.
+- maieutic: The integrated phase is slower than the standalone microprobe because runner profiling includes launch/sync and residual add context. This is still below dense FFN profile cost, but end-to-end speed requires replacing enough FFNs without acceptance collapse.
+- adversary: The zero route behaves like a costly FFN skip, not a model approximation. Do not use it for quality claims; use it only as a launch/phase-attribution guard.

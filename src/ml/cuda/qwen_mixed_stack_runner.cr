@@ -166,6 +166,22 @@ module ML::CUDA
       end
     end
 
+    def set_recurrent_ffn_pca_updown_zero(rank : Int32, layer_ids : Array(Int32)? = nil) : Nil
+      selected = layer_ids.try(&.to_set)
+      @layer_ids.zip(@runners).each do |layer_id, runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          if selected.nil? || selected.not_nil!.includes?(layer_id)
+            runner.set_zero_ffn_pca_updown_adapter(rank)
+          else
+            runner.clear_ffn_pca_updown_adapter
+          end
+        in QwenFullAttnLayerRunner
+          # Full-attention layers keep their exact FFN path in this probe.
+        end
+      end
+    end
+
     def snapshot_recurrent_states : RecurrentStateSnapshot
       buffers = [] of DeviceBuffer
       @runners.each do |runner|

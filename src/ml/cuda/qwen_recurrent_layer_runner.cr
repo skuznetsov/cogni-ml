@@ -14,6 +14,7 @@ module ML::CUDA
     Q4K_PTX = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
     Q4K_DUAL_PTX = {{ read_file("src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx") }}
     Q4K_RAW_Q8_PTX = {{ read_file("src/ml/cuda/kernels/q4k_raw_q8_dp4a_probe.ptx") }}
+    PCA_UPDOWN_PTX = {{ read_file("src/ml/cuda/kernels/pca_updown_probe.ptx") }}
     Q5K_PTX = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
     Q6K_PTX = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
 
@@ -228,9 +229,17 @@ module ML::CUDA
       @profile_ffn_up_ms = 0.0
       @profile_swiglu_ms = 0.0
       @profile_ffn_down_ms = 0.0
+      @profile_ffn_pca_updown_ms = 0.0
       @profile_final_add_ms = 0.0
       @ffn_raw_q8_enabled = ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"
       @ffn_skip_enabled = false
+      @ffn_pca_updown_enabled = false
+      @ffn_pca_updown_buffers = [] of DeviceBuffer
+      @ffn_pca_updown_x_mean_param = Pointer(DevicePtr).null
+      @ffn_pca_updown_c_mean_param = Pointer(DevicePtr).null
+      @ffn_pca_updown_coeff_w_param = Pointer(DevicePtr).null
+      @ffn_pca_updown_down_param = Pointer(DevicePtr).null
+      @ffn_pca_updown_rank_param = Pointer(UInt32).null
       @closed = false
 
       build_runner
@@ -285,6 +294,73 @@ module ML::CUDA
       @ffn_skip_enabled
     end
 
+    def set_ffn_pca_updown_adapter(x_mean : Array(Float32),
+                                   c_mean : Array(Float32),
+                                   coeff_w : Array(Float32),
+                                   down : Array(Float32),
+                                   rank : Int32) : Nil
+      raise ArgumentError.new("PCA-updown rank must be in 1..64") unless rank > 0 && rank <= 64
+      raise ArgumentError.new("PCA-updown x_mean size mismatch") unless x_mean.size == @hidden
+      raise ArgumentError.new("PCA-updown c_mean size mismatch") unless c_mean.size >= rank
+      raise ArgumentError.new("PCA-updown coeff_w size mismatch") unless coeff_w.size >= rank * @hidden
+      raise ArgumentError.new("PCA-updown down size mismatch") unless down.size >= rank * @hidden
+      raise "PCA-updown runner parameters are not initialized" if @ffn_pca_updown_x_mean_param.null? ||
+                                                                 @ffn_pca_updown_c_mean_param.null? ||
+                                                                 @ffn_pca_updown_coeff_w_param.null? ||
+                                                                 @ffn_pca_updown_down_param.null? ||
+                                                                 @ffn_pca_updown_rank_param.null?
+
+      clear_ffn_pca_updown_adapter(close_buffers: true)
+      x_buf = DeviceBuffer.new(bytesize_f32(@hidden))
+      c_buf = DeviceBuffer.new(bytesize_f32(rank))
+      coeff_buf = DeviceBuffer.new(bytesize_f32(rank * @hidden))
+      down_buf = DeviceBuffer.new(bytesize_f32(rank * @hidden))
+      @ffn_pca_updown_buffers = [x_buf, c_buf, coeff_buf, down_buf]
+
+      ML::CUDA.copy_htod!(x_buf.ptr, x_mean.to_unsafe.as(Void*), bytesize_f32(@hidden), "ffn_pca_x_mean")
+      ML::CUDA.copy_htod!(c_buf.ptr, c_mean.to_unsafe.as(Void*), bytesize_f32(rank), "ffn_pca_c_mean")
+      ML::CUDA.copy_htod!(coeff_buf.ptr, coeff_w.to_unsafe.as(Void*), bytesize_f32(rank * @hidden), "ffn_pca_coeff_w")
+      ML::CUDA.copy_htod!(down_buf.ptr, down.to_unsafe.as(Void*), bytesize_f32(rank * @hidden), "ffn_pca_down")
+
+      @ffn_pca_updown_x_mean_param.value = x_buf.ptr
+      @ffn_pca_updown_c_mean_param.value = c_buf.ptr
+      @ffn_pca_updown_coeff_w_param.value = coeff_buf.ptr
+      @ffn_pca_updown_down_param.value = down_buf.ptr
+      @ffn_pca_updown_rank_param.value = rank.to_u32
+      @ffn_pca_updown_enabled = true
+      @ffn_raw_q8_enabled = false
+      @ffn_skip_enabled = false
+    end
+
+    def set_zero_ffn_pca_updown_adapter(rank : Int32) : Nil
+      raise ArgumentError.new("PCA-updown rank must be in 1..64") unless rank > 0 && rank <= 64
+
+      x_mean = Array(Float32).new(@hidden, 0.0_f32)
+      c_mean = Array(Float32).new(rank, 0.0_f32)
+      coeff_w = Array(Float32).new(rank * @hidden, 0.0_f32)
+      down = Array(Float32).new(rank * @hidden, 0.0_f32)
+      set_ffn_pca_updown_adapter(x_mean, c_mean, coeff_w, down, rank)
+    end
+
+    def clear_ffn_pca_updown_adapter(close_buffers : Bool = true) : Nil
+      @ffn_pca_updown_enabled = false
+      unless @ffn_pca_updown_x_mean_param.null?
+        @ffn_pca_updown_x_mean_param.value = 0_u64
+        @ffn_pca_updown_c_mean_param.value = 0_u64
+        @ffn_pca_updown_coeff_w_param.value = 0_u64
+        @ffn_pca_updown_down_param.value = 0_u64
+        @ffn_pca_updown_rank_param.value = 0_u32
+      end
+      if close_buffers
+        @ffn_pca_updown_buffers.each(&.close)
+        @ffn_pca_updown_buffers.clear
+      end
+    end
+
+    def ffn_pca_updown_enabled : Bool
+      @ffn_pca_updown_enabled
+    end
+
     def conv_state_bytesize : LibC::SizeT
       bytesize_f32(@conv_state_init.size)
     end
@@ -305,6 +381,7 @@ module ML::CUDA
       @profile_ffn_up_ms = 0.0
       @profile_swiglu_ms = 0.0
       @profile_ffn_down_ms = 0.0
+      @profile_ffn_pca_updown_ms = 0.0
       @profile_final_add_ms = 0.0
       t_total = Time.instant
       profile_runner.run_sequence
@@ -319,6 +396,7 @@ module ML::CUDA
       phase_lines << "#{prefix}_ffn_up_ms=#{@profile_ffn_up_ms.round(3)}"
       phase_lines << "#{prefix}_swiglu_ms=#{@profile_swiglu_ms.round(3)}"
       phase_lines << "#{prefix}_ffn_down_ms=#{@profile_ffn_down_ms.round(3)}"
+      phase_lines << "#{prefix}_ffn_pca_updown_ms=#{@profile_ffn_pca_updown_ms.round(3)}"
       phase_lines << "#{prefix}_final_add_ms=#{@profile_final_add_ms.round(3)}"
       phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
     end
@@ -335,6 +413,7 @@ module ML::CUDA
       return if @closed
 
       @buffers.each(&.close)
+      @ffn_pca_updown_buffers.each(&.close)
       @modules.each(&.close)
       @closed = true
     end
@@ -344,9 +423,10 @@ module ML::CUDA
       q4_mod = CUDAModule.load(Q4K_PTX, "q4")
       q4_dual_mod = CUDAModule.load(Q4K_DUAL_PTX, "q4_dual")
       q4_raw_q8_mod = CUDAModule.load(Q4K_RAW_Q8_PTX, "q4_raw_q8")
+      pca_updown_mod = CUDAModule.load(PCA_UPDOWN_PTX, "pca_updown")
       q5_mod = CUDAModule.load(Q5K_PTX, "q5")
       q6_mod = CUDAModule.load(Q6K_PTX, "q6")
-      @modules.concat([dn_mod, q4_mod, q4_dual_mod, q4_raw_q8_mod, q5_mod, q6_mod])
+      @modules.concat([dn_mod, q4_mod, q4_dual_mod, q4_raw_q8_mod, pca_updown_mod, q5_mod, q6_mod])
 
       attn_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
@@ -362,6 +442,7 @@ module ML::CUDA
       q4_dual_fn = q4_dual_mod.function("q4_k_dual_gemv_warp4_f32")
       q4_raw_q8_fn = q4_raw_q8_mod.function("q4_k_raw_q8_dp4a_gemv_warp4_f32")
       q8_quant_fn = q4_raw_q8_mod.function("quantize_q8_1_f32")
+      pca_updown_fn = pca_updown_mod.function("ffn_pca_updown_fused_parallel_probe")
       q5_fn = q5_mod.function("q5_k_gemv_warp4_f32")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
@@ -597,6 +678,28 @@ module ML::CUDA
       ffn_skip_copy_params[2] = d_final_cur_ptr.as(Void*)
       ffn_skip_copy_params[3] = box_u32(hidden_u32).as(Void*)
 
+      @ffn_pca_updown_x_mean_param = box_ptr(0_u64)
+      @ffn_pca_updown_c_mean_param = box_ptr(0_u64)
+      @ffn_pca_updown_coeff_w_param = box_ptr(0_u64)
+      @ffn_pca_updown_down_param = box_ptr(0_u64)
+      @ffn_pca_updown_rank_param = box_u32(0_u32)
+
+      ffn_pca_updown_params = Pointer(Void*).malloc(8)
+      ffn_pca_updown_params[0] = box_ptr(d_cur2).as(Void*)
+      ffn_pca_updown_params[1] = @ffn_pca_updown_x_mean_param.as(Void*)
+      ffn_pca_updown_params[2] = @ffn_pca_updown_c_mean_param.as(Void*)
+      ffn_pca_updown_params[3] = @ffn_pca_updown_coeff_w_param.as(Void*)
+      ffn_pca_updown_params[4] = @ffn_pca_updown_down_param.as(Void*)
+      ffn_pca_updown_params[5] = box_ptr(d_ffn_out).as(Void*)
+      ffn_pca_updown_params[6] = box_u32(hidden_u32).as(Void*)
+      ffn_pca_updown_params[7] = @ffn_pca_updown_rank_param.as(Void*)
+
+      ffn_pca_add_params = Pointer(Void*).malloc(4)
+      ffn_pca_add_params[0] = box_ptr(d_residual).as(Void*)
+      ffn_pca_add_params[1] = box_ptr(d_ffn_out).as(Void*)
+      ffn_pca_add_params[2] = d_final_cur_ptr.as(Void*)
+      ffn_pca_add_params[3] = box_u32(hidden_u32).as(Void*)
+
       run_token = ->(tok : Int32) {
         offset = bytesize_f32(tok * @hidden)
         d_x_cur_ptr.value = @input_device_base.not_nil! + offset
@@ -620,6 +723,9 @@ module ML::CUDA
         ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
         if @ffn_skip_enabled
           ML::CUDA.launch!(add_vec_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_skip_copy_params, "ffn skip copy")
+        elsif @ffn_pca_updown_enabled
+          ML::CUDA.launch!(pca_updown_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, ffn_pca_updown_params, "ffn pca updown")
+          ML::CUDA.launch!(add_vec_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_pca_add_params, "ffn pca add")
         elsif @ffn_raw_q8_enabled
           ML::CUDA.launch!(q8_quant_fn, (@hidden // 32).to_u32, 1_u32, 1_u32, 32_u32, 1_u32, 1_u32, ffn_q8_quant_params, "ffn q8 quant")
           ML::CUDA.launch!(q4_raw_q8_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_raw_q8_params, "ffn gate raw q8")
@@ -628,7 +734,7 @@ module ML::CUDA
           ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "ffn gate")
           ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "ffn up")
         end
-        unless @ffn_skip_enabled
+        unless @ffn_skip_enabled || @ffn_pca_updown_enabled
           ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "swiglu")
           ML::CUDA.launch!(ffn_down_add_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "ffn down add")
         end
@@ -684,6 +790,16 @@ module ML::CUDA
           ML::CUDA.launch!(add_vec_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_skip_copy_params, "ffn skip copy")
           ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn skip)")
           @profile_final_add_ms += (Time.instant - t_skip).total_milliseconds
+        elsif @ffn_pca_updown_enabled
+          t_pca = Time.instant
+          ML::CUDA.launch!(pca_updown_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, ffn_pca_updown_params, "ffn pca updown")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn pca updown)")
+          @profile_ffn_pca_updown_ms += (Time.instant - t_pca).total_milliseconds
+
+          t_pca_add = Time.instant
+          ML::CUDA.launch!(add_vec_fn, hidden_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_pca_add_params, "ffn pca add")
+          ML::CUDA.synchronize!("cuCtxSynchronize(recurrent ffn pca add)")
+          @profile_final_add_ms += (Time.instant - t_pca_add).total_milliseconds
         else
           t_ffn_gate = Time.instant
           if @ffn_raw_q8_enabled
