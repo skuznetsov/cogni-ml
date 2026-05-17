@@ -12665,3 +12665,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This validates the "clean up exact WBA gaps" lane, but the next material speedup still needs cheaper proposal-body math or kernel economics for large Q4/Q6 FFN/projection rows.
 - maieutic: Launch-count reduction is not enough evidence for global speedup. The accepted claim is equivalence plus a small projection-slice improvement.
 - adversary: Keep the opt-out env var because whole-layer timing is noise-level and future GPUs/JITs may schedule the two separate batched kernels equally well.
+
+**decision_update_253:** Extended exact CUDA recurrent known-span WBA one step deeper into the post-core tail. The DeltaNet/conv recurrence remains serial, but `deltanet_post_norm_gate_128_store_probe` now stores each post-gated row into the existing token-major `d_z` buffer, then the runner batches the following Q4_K `ssm_out` projection over all known rows and applies per-row add-rmsnorm. `QWEN_CUDA_BATCHED_SSM_OUT_OFF=1` restores the previous per-token `ssm_out` path.
+
+**evidence_update_253:**
+- claim: "Batched recurrent `ssm_out` preserves exact known-span final hidden rows on Qwen3.5-9B CUDA."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_batched_ssm_nocodegen2 crystal build bin/cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/kernels/deltanet_step_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with `--gpu-final-dump` printed identical top1 sequences and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`.
+  verified_at: 2026-05-17
+  decay_trigger: DeltaNet post-gate PTX, recurrent buffer layout, Q4_K batched GEMV ABI, add-rmsnorm layout, CUDA driver/JIT, or Qwen recurrent layer shape changes
+- claim: "The speed gain is real but small because only one modest Q4 projection launch per recurrent layer was batched."
+  source: remote RTX 5060 Ti all-layer A/B, Qwen3.5-9B-Q4_K_M: tokens2 `26.898 -> 26.864ms/tok`, tokens4 `23.300 -> 23.268`, tokens8 `21.577 -> 21.544`, tokens16 `20.759 -> 20.698`, all `ok=true` with matching top1 hashes. Layer0 profile prints `phase_layer0_profile_route=batched_projection_ssm_ffn` and recurrent core `~0.827 -> ~0.796ms` in single-run profile.
+  verified_at: 2026-05-17
+  decay_trigger: larger repeated timing gates, profile instrumentation changes, CUDA clock/thermal state, or future FFN/projection kernel changes
+
+**quadrumvirate_update_253:**
+- cassandra: This exact WBA extension should only shave launch/row scheduling around `ssm_out`; observed gains match that bounded prediction.
+- daedalus: The no-loss exact path is now close to fully row-batched around the serial recurrent core. Further large wins probably require changing GEMV arithmetic economics or replacing proposal body work, not more wrapper batching.
+- maieutic: `max_abs=0` on tokens8 proves the current row layout and store kernel for that span, not every prompt/hardware. Keep the env opt-out until broader gates repeat.
+- adversary: The new route overwrites gate rows in `d_z` after post-gate consumption; this is safe only because no later exact operation consumes the original gate rows before FFN. Recheck if future diagnostics read recurrent gate buffers after post-core.

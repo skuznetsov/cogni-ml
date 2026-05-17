@@ -1304,6 +1304,7 @@ begin
   puts "q4_raw_q8_ffn=#{ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"}"
   puts "batched_ffn=#{ENV["QWEN_CUDA_BATCHED_FFN_OFF"]? != "1"}"
   puts "batched_projections=#{ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1"}"
+  puts "batched_ssm_out=#{ENV["QWEN_CUDA_BATCHED_SSM_OUT_OFF"]? != "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"
