@@ -31,6 +31,7 @@ raise "unsupported format #{format}" unless {"table", "csv"}.includes?(format)
 specs = [
   KernelSpec.new("q4", Q4K_PTX, [
     "q4_k_gemv_warp4_f32",
+    "q4_k_gemv_warp4_f32_xsum",
     "q4_k_gemv_add_warp4_f32",
     "q4_k_gemv_warp4_f32_batched",
     "q4_k_gemv_add_warp4_f32_batched",
