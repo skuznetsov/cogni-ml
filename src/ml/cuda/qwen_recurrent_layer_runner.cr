@@ -401,6 +401,7 @@ module ML::CUDA
       if batched_ffn_profile
         batched_projection_profile = ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1"
         batched_ssm_out_profile = batched_projection_profile && ENV["QWEN_CUDA_BATCHED_SSM_OUT_OFF"]? != "1"
+        batched_norms_profile = batched_projection_profile && ENV["QWEN_CUDA_BATCHED_NORMS_OFF"]? != "1"
         @profile_override_detail = batched_projection_profile
         begin
           runner.run_sequence
@@ -408,7 +409,9 @@ module ML::CUDA
         ensure
           @profile_override_detail = false
         end
-        route = if batched_ssm_out_profile
+        route = if batched_ssm_out_profile && batched_norms_profile
+                  "batched_projection_norm_ssm_ffn"
+                elsif batched_ssm_out_profile
                   "batched_projection_ssm_ffn"
                 elsif batched_projection_profile
                   "batched_projection_ffn"
@@ -482,6 +485,8 @@ module ML::CUDA
 
       attn_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
       add_rmsnorm_fn = dn_mod.function("add_rmsnorm_vec_parallel_probe")
+      attn_norm_batched_fn = dn_mod.function("rmsnorm_vec_parallel_batched_probe")
+      add_rmsnorm_batched_fn = dn_mod.function("add_rmsnorm_vec_parallel_batched_probe")
       swiglu_fn = dn_mod.function("swiglu_probe")
       add_vec_fn = dn_mod.function("add_vec_probe")
       conv_fn = dn_mod.function("recurrent_conv1d_silu_step_probe")
@@ -512,6 +517,7 @@ module ML::CUDA
       use_batched_ffn = ENV["QWEN_CUDA_BATCHED_FFN_OFF"]? != "1" && @tokens > 1
       use_batched_projections = ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1" && use_batched_ffn
       use_batched_ssm_out = ENV["QWEN_CUDA_BATCHED_SSM_OUT_OFF"]? != "1" && use_batched_projections
+      use_batched_norms = ENV["QWEN_CUDA_BATCHED_NORMS_OFF"]? != "1" && use_batched_projections
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
                @qkv_raw.size.to_u64, @gate_raw.size.to_u64, @alpha_raw.size.to_u64, @beta_raw_w.size.to_u64,
@@ -953,13 +959,21 @@ module ML::CUDA
         d_attn_out_cur_ptr.value = d_attn_out
         ML::CUDA.launch!(q4_batched_fn, hidden_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "ssm_out batched")
 
-        @tokens.times do |tok|
-          offset = bytesize_f32(tok * @hidden)
-          d_x_cur_ptr.value = @input_device_base.not_nil! + offset
-          d_attn_out_cur_ptr.value = d_attn_out + offset
-          d_residual_cur_ptr.value = d_residual + offset
-          d_cur2_cur_ptr.value = d_cur2 + offset
-          ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
+        if use_batched_norms
+          d_x_cur_ptr.value = @input_device_base.not_nil!
+          d_attn_out_cur_ptr.value = d_attn_out
+          d_residual_cur_ptr.value = d_residual
+          d_cur2_cur_ptr.value = d_cur2
+          ML::CUDA.launch!(add_rmsnorm_batched_fn, @tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm batched")
+        else
+          @tokens.times do |tok|
+            offset = bytesize_f32(tok * @hidden)
+            d_x_cur_ptr.value = @input_device_base.not_nil! + offset
+            d_attn_out_cur_ptr.value = d_attn_out + offset
+            d_residual_cur_ptr.value = d_residual + offset
+            d_cur2_cur_ptr.value = d_cur2 + offset
+            ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "add rmsnorm")
+          end
         end
       }
 
@@ -1004,20 +1018,32 @@ module ML::CUDA
         if use_batched_projections && !@ffn_skip_enabled && !@ffn_pca_updown_enabled && !@ffn_raw_q8_enabled
           if @profile_override_detail
             t_norm = Time.instant
-            @tokens.times do |tok|
-              offset = bytesize_f32(tok * @hidden)
-              d_x_cur_ptr.value = @input_device_base.not_nil! + offset
-              d_cur_cur_ptr.value = d_cur + offset
-              ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+            if use_batched_norms
+              d_x_cur_ptr.value = @input_device_base.not_nil!
+              d_cur_cur_ptr.value = d_cur
+              ML::CUDA.launch!(attn_norm_batched_fn, @tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm batched")
+            else
+              @tokens.times do |tok|
+                offset = bytesize_f32(tok * @hidden)
+                d_x_cur_ptr.value = @input_device_base.not_nil! + offset
+                d_cur_cur_ptr.value = d_cur + offset
+                ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+              end
             end
             ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched attn norm)")
             @profile_attn_norm_ms += (Time.instant - t_norm).total_milliseconds
           else
-            @tokens.times do |tok|
-              offset = bytesize_f32(tok * @hidden)
-              d_x_cur_ptr.value = @input_device_base.not_nil! + offset
-              d_cur_cur_ptr.value = d_cur + offset
-              ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+            if use_batched_norms
+              d_x_cur_ptr.value = @input_device_base.not_nil!
+              d_cur_cur_ptr.value = d_cur
+              ML::CUDA.launch!(attn_norm_batched_fn, @tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm batched")
+            else
+              @tokens.times do |tok|
+                offset = bytesize_f32(tok * @hidden)
+                d_x_cur_ptr.value = @input_device_base.not_nil! + offset
+                d_cur_cur_ptr.value = d_cur + offset
+                ML::CUDA.launch!(attn_norm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, attn_norm_params, "attn norm")
+              end
             end
           end
 

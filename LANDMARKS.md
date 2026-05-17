@@ -12683,3 +12683,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The no-loss exact path is now close to fully row-batched around the serial recurrent core. Further large wins probably require changing GEMV arithmetic economics or replacing proposal body work, not more wrapper batching.
 - maieutic: `max_abs=0` on tokens8 proves the current row layout and store kernel for that span, not every prompt/hardware. Keep the env opt-out until broader gates repeat.
 - adversary: The new route overwrites gate rows in `d_z` after post-gate consumption; this is safe only because no later exact operation consumes the original gate rows before FFN. Recheck if future diagnostics read recurrent gate buffers after post-core.
+
+**decision_update_254:** Added exact CUDA batched recurrent RMSNorm/add-RMSNorm kernels for known-span WBA. The new PTX entries keep the same one-row reduction order inside each block and use `grid.x` as the token row, replacing the recurrent WBA per-token attn_norm and post-`ssm_out` add-rmsnorm launch loops. `QWEN_CUDA_BATCHED_NORMS_OFF=1` restores the previous per-row norm launches.
+
+**evidence_update_254:**
+- claim: "Batched recurrent norm kernels preserve exact known-span final hidden rows on Qwen3.5-9B CUDA."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_batched_norms_nocodegen crystal build bin/cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/kernels/deltanet_step_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with `QWEN_CUDA_BATCHED_NORMS_OFF=1` vs default printed identical top1 and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`.
+  verified_at: 2026-05-17
+  decay_trigger: RMSNorm/add-RMSNorm PTX, recurrent WBA pointer layout, CUDA driver/JIT, hidden dimension/block size, or Qwen recurrent layer shape changes
+- claim: "Batched recurrent norms are a meaningful exact wrapper cleanup but still not an architecture-level speedup."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B timing sweep: tokens2 `26.894 -> 26.678ms/tok`, tokens4 `23.292 -> 22.973`, tokens8 `21.536 -> 21.190`, tokens16 `20.695 -> 20.365`, all `ok=true` with matching top1 hashes. Layer0 profile prints `phase_layer0_profile_route=batched_projection_norm_ssm_ffn`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, or full-attention norm batching changes
+
+**quadrumvirate_update_254:**
+- cassandra: This had higher ROI than batched `ssm_out` because it removes two per-token launch loops in each recurrent known-span layer.
+- daedalus: The remaining exact WBA gaps are now narrower; next candidates should be full-attention add-rmsnorm batching, larger GEMV arithmetic changes, or proposal-body math, not more single-slice wrapper tuning.
+- maieutic: The batched kernels preserve reduction order per row, so equality is expected; the important falsifier was pointer/stride layout, which the final-hidden dump passed.
+- adversary: The route assumes `dim` rows are contiguous and all rows share the same norm vector. That matches current Qwen recurrent spans; keep the opt-out for shape/layout refactors.
