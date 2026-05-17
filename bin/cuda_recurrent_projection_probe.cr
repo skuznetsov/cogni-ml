@@ -86,14 +86,18 @@ layer = 0
 seed = 23_u64
 reps = 1
 warmup = 0
+tokens = 1
+batched = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_recurrent_projection_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N]"
+  p.banner = "Usage: cuda_recurrent_projection_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched]"
   p.on("--model PATH", "Qwen Q4_K_M GGUF model path") { |v| model = v }
   p.on("--layer N", "Recurrent layer index") { |v| layer = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed projection-bundle launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup projection-bundle launches") { |v| warmup = v.to_i }
+  p.on("--tokens N", "Number of independent projection rows to run") { |v| tokens = v.to_i }
+  p.on("--batched", "Use known-span batched Q4/Q5 projection kernels") { batched = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -101,6 +105,7 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "layer must be non-negative" unless layer >= 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
+raise "tokens must be positive" unless tokens > 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 prefix = "blk.#{layer}"
@@ -123,13 +128,28 @@ gate_raw = gguf.read_tensor_raw(gate_info)
 alpha_raw = gguf.read_tensor_raw(alpha_info)
 beta_raw = gguf.read_tensor_raw(beta_info)
 rng = Random.new(seed)
-x = Array(Float32).new(hidden) { rng.rand(-1.0_f32..1.0_f32) }
+x = Array(Float32).new(tokens * hidden) { rng.rand(-1.0_f32..1.0_f32) }
 
 cpu_t0 = Time.instant
-qkv_cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, qkv_raw, ML::GGUF::TensorType::Q5_K, qkv_dim, Array(Float32).new(qkv_dim, 0.0_f32))
-gate_cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, gate_dim, Array(Float32).new(gate_dim, 0.0_f32))
-alpha_cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, alpha_raw, ML::GGUF::TensorType::Q4_K, alpha_dim, Array(Float32).new(alpha_dim, 0.0_f32))
-beta_cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, hidden, beta_raw, ML::GGUF::TensorType::Q4_K, beta_dim, Array(Float32).new(beta_dim, 0.0_f32))
+qkv_cpu = Array(Float32).new(tokens * qkv_dim, 0.0_f32)
+gate_cpu = Array(Float32).new(tokens * gate_dim, 0.0_f32)
+alpha_cpu = Array(Float32).new(tokens * alpha_dim, 0.0_f32)
+beta_cpu = Array(Float32).new(tokens * beta_dim, 0.0_f32)
+qkv_zero = Array(Float32).new(qkv_dim, 0.0_f32)
+gate_zero = Array(Float32).new(gate_dim, 0.0_f32)
+alpha_zero = Array(Float32).new(alpha_dim, 0.0_f32)
+beta_zero = Array(Float32).new(beta_dim, 0.0_f32)
+tokens.times do |tok|
+  row = x[tok * hidden, hidden]
+  qkv_row = ML::GGUF::QuantMatmul.matmul_add(row, 1, hidden, qkv_raw, ML::GGUF::TensorType::Q5_K, qkv_dim, qkv_zero)
+  gate_row = ML::GGUF::QuantMatmul.matmul_add(row, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, gate_dim, gate_zero)
+  alpha_row = ML::GGUF::QuantMatmul.matmul_add(row, 1, hidden, alpha_raw, ML::GGUF::TensorType::Q4_K, alpha_dim, alpha_zero)
+  beta_row = ML::GGUF::QuantMatmul.matmul_add(row, 1, hidden, beta_raw, ML::GGUF::TensorType::Q4_K, beta_dim, beta_zero)
+  qkv_dim.times { |i| qkv_cpu[tok * qkv_dim + i] = qkv_row[i] }
+  gate_dim.times { |i| gate_cpu[tok * gate_dim + i] = gate_row[i] }
+  alpha_dim.times { |i| alpha_cpu[tok * alpha_dim + i] = alpha_row[i] }
+  beta_dim.times { |i| beta_cpu[tok * beta_dim + i] = beta_row[i] }
+end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds
 
 cuda! LibCUDARecProj.cuInit(0_u32), "cuInit"
@@ -148,6 +168,8 @@ q4_mod = Pointer(Void).null
 q5_mod = Pointer(Void).null
 q4_fn = Pointer(Void).null
 q5_fn = Pointer(Void).null
+q4_batched_fn = Pointer(Void).null
+q5_batched_fn = Pointer(Void).null
 ptrs = [] of UInt64
 
 begin
@@ -155,9 +177,11 @@ begin
   cuda! LibCUDARecProj.cuModuleLoadData(pointerof(q5_mod), Q5K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q5)"
   cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q4_fn), q4_mod, "q4_k_gemv_warp4_f32"), "cuModuleGetFunction(q4)"
   cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q5_fn), q5_mod, "q5_k_gemv_warp4_f32"), "cuModuleGetFunction(q5)"
+  cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q4_batched_fn), q4_mod, "q4_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(q4 batched)"
+  cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q5_batched_fn), q5_mod, "q5_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(q5 batched)"
 
-  sizes = [bytesize_f32(hidden), qkv_raw.size.to_u64, gate_raw.size.to_u64, alpha_raw.size.to_u64, beta_raw.size.to_u64,
-           bytesize_f32(qkv_dim), bytesize_f32(gate_dim), bytesize_f32(alpha_dim), bytesize_f32(beta_dim)]
+  sizes = [bytesize_f32(tokens * hidden), qkv_raw.size.to_u64, gate_raw.size.to_u64, alpha_raw.size.to_u64, beta_raw.size.to_u64,
+           bytesize_f32(tokens * qkv_dim), bytesize_f32(tokens * gate_dim), bytesize_f32(tokens * alpha_dim), bytesize_f32(tokens * beta_dim)]
   sizes.each_with_index do |size, i|
     pdev = 0_u64
     cuda! LibCUDARecProj.cuMemAlloc_v2(pointerof(pdev), size), "cuMemAlloc(#{i})"
@@ -165,7 +189,7 @@ begin
   end
   d_x, d_qkv_w, d_gate_w, d_alpha_w, d_beta_w, d_qkv, d_gate, d_alpha, d_beta = ptrs
 
-  cuda! LibCUDARecProj.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(hidden)), "cuMemcpyHtoD(x)"
+  cuda! LibCUDARecProj.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(tokens * hidden)), "cuMemcpyHtoD(x)"
   cuda! LibCUDARecProj.cuMemcpyHtoD_v2(d_qkv_w, qkv_raw.to_unsafe.as(Void*), qkv_raw.size.to_u64), "cuMemcpyHtoD(qkv_w)"
   cuda! LibCUDARecProj.cuMemcpyHtoD_v2(d_gate_w, gate_raw.to_unsafe.as(Void*), gate_raw.size.to_u64), "cuMemcpyHtoD(gate_w)"
   cuda! LibCUDARecProj.cuMemcpyHtoD_v2(d_alpha_w, alpha_raw.to_unsafe.as(Void*), alpha_raw.size.to_u64), "cuMemcpyHtoD(alpha_w)"
@@ -180,44 +204,73 @@ begin
   gate_grid = ((gate_dim + 3) // 4).to_u32
   alpha_grid = ((alpha_dim + 3) // 4).to_u32
   beta_grid = ((beta_dim + 3) // 4).to_u32
+  tokens_u32 = tokens.to_u32
+  d_x_cur = d_x
+  d_qkv_cur = d_qkv
+  d_gate_cur = d_gate
+  d_alpha_cur = d_alpha
+  d_beta_cur = d_beta
 
   qkv_params = Pointer(Void*).malloc(5)
   qkv_params[0] = pointerof(d_qkv_w).as(Void*)
-  qkv_params[1] = pointerof(d_x).as(Void*)
-  qkv_params[2] = pointerof(d_qkv).as(Void*)
+  qkv_params[1] = pointerof(d_x_cur).as(Void*)
+  qkv_params[2] = pointerof(d_qkv_cur).as(Void*)
   qkv_params[3] = pointerof(hidden_u32).as(Void*)
   qkv_params[4] = pointerof(qkv_dim_u32).as(Void*)
 
   gate_params = Pointer(Void*).malloc(5)
   gate_params[0] = pointerof(d_gate_w).as(Void*)
-  gate_params[1] = pointerof(d_x).as(Void*)
-  gate_params[2] = pointerof(d_gate).as(Void*)
+  gate_params[1] = pointerof(d_x_cur).as(Void*)
+  gate_params[2] = pointerof(d_gate_cur).as(Void*)
   gate_params[3] = pointerof(hidden_u32).as(Void*)
   gate_params[4] = pointerof(gate_dim_u32).as(Void*)
 
   alpha_params = Pointer(Void*).malloc(5)
   alpha_params[0] = pointerof(d_alpha_w).as(Void*)
-  alpha_params[1] = pointerof(d_x).as(Void*)
-  alpha_params[2] = pointerof(d_alpha).as(Void*)
+  alpha_params[1] = pointerof(d_x_cur).as(Void*)
+  alpha_params[2] = pointerof(d_alpha_cur).as(Void*)
   alpha_params[3] = pointerof(hidden_u32).as(Void*)
   alpha_params[4] = pointerof(alpha_dim_u32).as(Void*)
 
   beta_params = Pointer(Void*).malloc(5)
   beta_params[0] = pointerof(d_beta_w).as(Void*)
-  beta_params[1] = pointerof(d_x).as(Void*)
-  beta_params[2] = pointerof(d_beta).as(Void*)
+  beta_params[1] = pointerof(d_x_cur).as(Void*)
+  beta_params[2] = pointerof(d_beta_cur).as(Void*)
   beta_params[3] = pointerof(hidden_u32).as(Void*)
   beta_params[4] = pointerof(beta_dim_u32).as(Void*)
 
   run_bundle = -> {
-    cuda! LibCUDARecProj.cuLaunchKernel(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, qkv_params, Pointer(Void*).null), "qkv proj"
-    cuda! LibCUDARecProj.cuLaunchKernel(q4_fn, gate_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, gate_params, Pointer(Void*).null), "gate proj"
-    cuda! LibCUDARecProj.cuLaunchKernel(q4_fn, alpha_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, alpha_params, Pointer(Void*).null), "alpha proj"
-    cuda! LibCUDARecProj.cuLaunchKernel(q4_fn, beta_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, beta_params, Pointer(Void*).null), "beta proj"
+    if batched
+      d_x_cur = d_x
+      d_qkv_cur = d_qkv
+      d_gate_cur = d_gate
+      d_alpha_cur = d_alpha
+      d_beta_cur = d_beta
+      cuda! LibCUDARecProj.cuLaunchKernel(q5_batched_fn, qkv_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, qkv_params, Pointer(Void*).null), "qkv proj batched"
+      cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, gate_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, gate_params, Pointer(Void*).null), "gate proj batched"
+      cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, alpha_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, alpha_params, Pointer(Void*).null), "alpha proj batched"
+      cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, beta_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, beta_params, Pointer(Void*).null), "beta proj batched"
+    else
+      tokens.times do |tok|
+        d_x_cur = d_x + bytesize_f32(tok * hidden)
+        d_qkv_cur = d_qkv + bytesize_f32(tok * qkv_dim)
+        d_gate_cur = d_gate + bytesize_f32(tok * gate_dim)
+        d_alpha_cur = d_alpha + bytesize_f32(tok * alpha_dim)
+        d_beta_cur = d_beta + bytesize_f32(tok * beta_dim)
+        cuda! LibCUDARecProj.cuLaunchKernel(q5_fn, qkv_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, qkv_params, Pointer(Void*).null), "qkv proj"
+        cuda! LibCUDARecProj.cuLaunchKernel(q4_fn, gate_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, gate_params, Pointer(Void*).null), "gate proj"
+        cuda! LibCUDARecProj.cuLaunchKernel(q4_fn, alpha_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, alpha_params, Pointer(Void*).null), "alpha proj"
+        cuda! LibCUDARecProj.cuLaunchKernel(q4_fn, beta_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, beta_params, Pointer(Void*).null), "beta proj"
+      end
+    end
   }
 
   warmup.times { run_bundle.call }
@@ -227,14 +280,14 @@ begin
   cuda! LibCUDARecProj.cuCtxSynchronize, "cuCtxSynchronize"
   gpu_ms = (Time.instant - gpu_t0).total_milliseconds / reps
 
-  qkv_gpu = Array(Float32).new(qkv_dim, 0.0_f32)
-  gate_gpu = Array(Float32).new(gate_dim, 0.0_f32)
-  alpha_gpu = Array(Float32).new(alpha_dim, 0.0_f32)
-  beta_gpu = Array(Float32).new(beta_dim, 0.0_f32)
-  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(qkv_gpu.to_unsafe.as(Void*), d_qkv, bytesize_f32(qkv_dim)), "cuMemcpyDtoH(qkv)"
-  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(gate_gpu.to_unsafe.as(Void*), d_gate, bytesize_f32(gate_dim)), "cuMemcpyDtoH(gate)"
-  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(alpha_gpu.to_unsafe.as(Void*), d_alpha, bytesize_f32(alpha_dim)), "cuMemcpyDtoH(alpha)"
-  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(beta_gpu.to_unsafe.as(Void*), d_beta, bytesize_f32(beta_dim)), "cuMemcpyDtoH(beta)"
+  qkv_gpu = Array(Float32).new(tokens * qkv_dim, 0.0_f32)
+  gate_gpu = Array(Float32).new(tokens * gate_dim, 0.0_f32)
+  alpha_gpu = Array(Float32).new(tokens * alpha_dim, 0.0_f32)
+  beta_gpu = Array(Float32).new(tokens * beta_dim, 0.0_f32)
+  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(qkv_gpu.to_unsafe.as(Void*), d_qkv, bytesize_f32(tokens * qkv_dim)), "cuMemcpyDtoH(qkv)"
+  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(gate_gpu.to_unsafe.as(Void*), d_gate, bytesize_f32(tokens * gate_dim)), "cuMemcpyDtoH(gate)"
+  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(alpha_gpu.to_unsafe.as(Void*), d_alpha, bytesize_f32(tokens * alpha_dim)), "cuMemcpyDtoH(alpha)"
+  cuda! LibCUDARecProj.cuMemcpyDtoH_v2(beta_gpu.to_unsafe.as(Void*), d_beta, bytesize_f32(tokens * beta_dim)), "cuMemcpyDtoH(beta)"
 
   lines = [] of String
   ok = true
@@ -252,6 +305,8 @@ begin
   puts "gate_dim=#{gate_dim}"
   puts "alpha_dim=#{alpha_dim}"
   puts "beta_dim=#{beta_dim}"
+  puts "tokens=#{tokens}"
+  puts "batched=#{batched}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "cuda_ms=#{gpu_ms.round(3)}"

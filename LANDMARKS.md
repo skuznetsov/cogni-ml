@@ -12381,3 +12381,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Do not wire Q5 batching alone and expect a speedup. Projection WBA must include larger Q4 projection groups, post-core `ssm_out`, or a more structural pre-core projection schedule.
 - maieutic: Exactness of a primitive is not evidence of end-to-end usefulness. The measurable benefit is the gate; here the gate says neutral.
 - adversary: The primitive remains default-unused. If integrated, require an A/B because it may regress small token counts.
+
+**decision_update_235:** Added a recurrent projection-bundle WBA probe over Q5 QKV plus Q4 gate/alpha/beta. `cuda_recurrent_projection_probe --tokens N --batched` runs the same four projection matrices over multiple independent known-span rows using the batched Q5/Q4 primitives, then compares every output against the CPU quantized reference. Unlike Q5 QKV alone, the Q4-heavy bundle shows enough speed signal to justify a guarded runner experiment.
+
+**evidence_update_235:**
+- claim: "The recurrent projection bundle is exact under known-span batching and shows a meaningful isolated speed signal."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_recproj_batched_nocodegen crystal build bin/cuda_recurrent_projection_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_recurrent_projection_probe_batched` -> exit 0. Remote Qwen3.5-9B layer0 on RTX 5060 Ti: tokens2 loop `0.269ms`, batched `0.252ms`; tokens4 `0.533 -> 0.477ms`; tokens8 `1.059 -> 0.930ms`; all `qkv_ok=true`, `gate_ok=true`, `alpha_ok=true`, `beta_ok=true`, `ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4/Q5 PTX layout, recurrent projection runner schedule, alpha/beta dual-kernel choice, CUDA driver/JIT, or model projection shapes
+
+**quadrumvirate_update_235:**
+- cassandra: Projection WBA works when the Q4-heavy bundle is included. The isolated Q5 neutral result warned against QKV-only wiring; the bundle data points to gate/alpha/beta as the useful batching surface.
+- daedalus: The next runner pivot should batch pre-core projections together, not just QKV. Because current runner uses a Q4 dual alpha/beta kernel, the integration must A/B against that baseline rather than assume separate batched alpha/beta wins.
+- maieutic: This probe uses independent rows and separate alpha/beta Q4 kernels. It does not yet prove a full recurrent runner win because serial DeltaNet state, conv state mutation, and dual alpha/beta packing alter economics.
+- adversary: Require full-stack timing and baseline top1/parity before promoting. The projection bundle is a candidate, not a verified product route.
