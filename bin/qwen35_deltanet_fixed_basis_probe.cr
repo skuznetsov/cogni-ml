@@ -4312,6 +4312,59 @@ private def ffn_out_from_updown_adapter(ffn_in : Array(Float32), adapter : FFNUp
   out
 end
 
+private def dump_ffn_updown_adapters(path : String,
+                                     adapters : FFNUpDownAdapterMap,
+                                     rank : Int32,
+                                     hidden_dim : Int32,
+                                     source : String) : Nil
+  raise "FFN up/down adapter dump rank must be positive" unless rank > 0
+  json = JSON.build do |j|
+    j.object do
+      j.field "format", "qwen35_ffn_updown_adapter_v1"
+      j.field "source", source
+      j.field "hidden_dim", hidden_dim
+      j.field "rank", rank
+      j.field "layers" do
+        j.array do
+          adapters.keys.sort.each do |layer_id|
+            adapter = adapters[layer_id]
+            limit = Math.min(rank, adapter.coeff_weights.size)
+            raise "adapter #{layer_id} has no coefficient weights" unless limit > 0
+            raise "adapter #{layer_id} x_mean size mismatch" unless adapter.x_mean.size == hidden_dim
+            raise "adapter #{layer_id} down_basis size mismatch" unless adapter.down_basis[0].size == hidden_dim
+
+            j.object do
+              j.field "layer", layer_id
+              j.field "rank", limit
+              j.field "x_mean" do
+                j.array { adapter.x_mean.each { |v| j.number v } }
+              end
+              j.field "c_mean" do
+                j.array { adapter.c_mean[0, limit].each { |v| j.number v } }
+              end
+              j.field "coeff_w" do
+                j.array do
+                  limit.times do |r|
+                    hidden_dim.times { |d| j.number adapter.coeff_weights[r][d] }
+                  end
+                end
+              end
+              j.field "down" do
+                j.array do
+                  limit.times do |r|
+                    hidden_dim.times { |d| j.number adapter.down_basis[r][d] }
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  File.write(path, json)
+end
+
 private struct TopKOracleSample
   getter ids : Array(Int32)
   getter logits : Array(Float32)
@@ -10528,6 +10581,7 @@ simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = false
 simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = false
 simulate_self_spec_gpu_pipeline_route_features = false
 simulate_self_spec_gpu_pipeline_ffn_updown_route_features = false
+dump_ffn_updown_adapters_path : String? = nil
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 simulate_self_spec_gpu_pipeline_router_trace_path : String? = nil
 simulate_self_spec_gpu_pipeline_residual_router_mean_max : Float64? = nil
@@ -10759,6 +10813,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-suite-hybrid-sweep", "Apply the hybrid route sweep to suite prompts and print aggregate prompt-stability ranking") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-route-features", "Print held-out PCA residual features that can predict risky self-spec draft routes") { simulate_self_spec_gpu_pipeline_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-ffn-updown-route-features", "Print held-out FFN pca-updown reconstruction residual features for prompt-level pca-updown route risk") { simulate_self_spec_gpu_pipeline_ffn_updown_route_features = true }
+  p.on("--dump-ffn-updown-adapters=PATH", "Write trained FFN pca-updown adapters as JSON for CUDA runner probes") { |v| dump_ffn_updown_adapters_path = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-router-trace=PATH", "Write JSONL self-spec router/reject-risk rows without raw token ids") { |v| simulate_self_spec_gpu_pipeline_router_trace_path = v }
   p.on("--simulate-self-spec-gpu-pipeline-suite-prompt=NAME::TEXT", "Additional eval prompt for GPU self-spec pipeline suite; main --prompt still runs first") do |v|
@@ -11141,6 +11196,10 @@ if rank = simulate_logit_rank
         end
         ffn_updown_adapters = updown
         puts "ffn_updown_pca_adapter layers=#{updown.keys.sort.join(',')} max_rank=#{max_updown_rank} samples=#{updown_samples.map { |il, s| "#{il}:#{s.size}" }.join(',')}"
+        if dump_path = dump_ffn_updown_adapters_path
+          dump_ffn_updown_adapters(dump_path, updown, max_updown_rank, weights.hparams.n_embd, ffn_pca_calib_token_sets.empty? ? "eval_prompt_prefix" : "external_prompts:#{ffn_pca_calib_token_sets.size}")
+          puts "ffn_updown_pca_adapter_dump path=#{dump_path} layers=#{updown.keys.sort.join(',')} rank=#{max_updown_rank} hidden=#{weights.hparams.n_embd}"
+        end
         if simulate_self_spec_gpu_pipeline_ffn_updown_route_features
           puts ffn_updown_route_feature_note("main", weights, token_ids, calib_count, sorted_simulate_logit_layers, updown, max_updown_rank)
         end

@@ -4,6 +4,7 @@
 # recurrent-layer and full-attention-layer CUDA runners in model layer order
 # with device-resident hidden handoff between layers.
 
+require "json"
 require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
@@ -25,6 +26,51 @@ end
 
 def parse_f32_list(value : String) : Array(Float32)
   value.split(",").map(&.strip).reject(&.empty?).map(&.to_f32)
+end
+
+alias FfnPcaUpdownAdapter = NamedTuple(
+  rank: Int32,
+  x_mean: Array(Float32),
+  c_mean: Array(Float32),
+  coeff_w: Array(Float32),
+  down: Array(Float32)
+)
+
+def json_f32_array(value : JSON::Any, label : String) : Array(Float32)
+  value.as_a.map { |item| item.as_f.to_f32 }
+rescue ex
+  raise ArgumentError.new("invalid #{label}: #{ex.message}")
+end
+
+def load_ffn_pca_updown_adapters(path : String, hidden : Int32) : Hash(Int32, FfnPcaUpdownAdapter)
+  root = JSON.parse(File.read(path))
+  format = root["format"]?.try(&.as_s?) || ""
+  raise "unsupported adapter format: #{format}" unless format == "qwen35_ffn_updown_adapter_v1"
+  file_hidden = root["hidden_dim"]?.try(&.as_i?) || hidden
+  raise "adapter hidden #{file_hidden} does not match model hidden #{hidden}" unless file_hidden == hidden
+
+  adapters = {} of Int32 => FfnPcaUpdownAdapter
+  root["layers"].as_a.each do |entry|
+    layer_id = entry["layer"].as_i
+    rank = entry["rank"].as_i
+    raise "adapter layer #{layer_id} rank must be in 1..64" unless rank > 0 && rank <= 64
+    x_mean = json_f32_array(entry["x_mean"], "layer #{layer_id} x_mean")
+    c_mean = json_f32_array(entry["c_mean"], "layer #{layer_id} c_mean")
+    coeff_w = json_f32_array(entry["coeff_w"], "layer #{layer_id} coeff_w")
+    down = json_f32_array(entry["down"], "layer #{layer_id} down")
+    raise "adapter layer #{layer_id} x_mean size mismatch" unless x_mean.size == hidden
+    raise "adapter layer #{layer_id} c_mean size mismatch" unless c_mean.size >= rank
+    raise "adapter layer #{layer_id} coeff_w size mismatch" unless coeff_w.size >= rank * hidden
+    raise "adapter layer #{layer_id} down size mismatch" unless down.size >= rank * hidden
+    adapters[layer_id] = {
+      rank:    rank,
+      x_mean:  x_mean,
+      c_mean:  c_mean,
+      coeff_w: coeff_w,
+      down:    down,
+    }
+  end
+  adapters
 end
 
 def max_abs_diff(a : Array(Float32), b : Array(Float32)) : Float32
@@ -265,6 +311,7 @@ runtime_skip_recurrent_ffn_layers = nil.as(Array(Int32)?)
 runtime_pca_updown_zero = false
 runtime_pca_updown_rank = 32
 runtime_pca_updown_layers = nil.as(Array(Int32)?)
+runtime_pca_updown_adapters_path : String? = nil
 seed_token = 0
 input_token = -1
 input_tokens = [] of Int32
@@ -308,6 +355,7 @@ OptionParser.parse do |p|
   p.on("--runtime-pca-updown-zero", "Diagnostic plumbing route: replace recurrent FFNs with zero PCA-updown adapters plus residual add") { runtime_pca_updown_zero = true; perf_only = true }
   p.on("--runtime-pca-updown-rank N", "Rank for --runtime-pca-updown-zero, default 32") { |v| runtime_pca_updown_rank = v.to_i }
   p.on("--runtime-pca-updown-layers LIST", "Apply --runtime-pca-updown-zero only to comma-separated recurrent layer ids") { |v| runtime_pca_updown_layers = parse_layers(v) }
+  p.on("--runtime-pca-updown-adapters PATH", "Diagnostic proposal route: load real FFN PCA-updown adapters exported by qwen35_deltanet_fixed_basis_probe") { |v| runtime_pca_updown_adapters_path = v; perf_only = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
   p.on("--input-tokens LIST", "Use comma-separated token_embd IDs as the non-greedy semantic input sequence") { |v| input_tokens_provided = true; input_tokens = parse_i32_list(v) }
@@ -364,10 +412,15 @@ raise "--runtime-skip-recurrent-ffn is incompatible with --runtime-raw-q8" if ru
 raise "use either --runtime-skip-recurrent-ffn or --runtime-skip-recurrent-ffn-layers, not both" if runtime_skip_recurrent_ffn && runtime_skip_recurrent_ffn_layers
 raise "--runtime-skip-recurrent-ffn-layers is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn_layers && runtime_raw_q8
 raise "--runtime-pca-updown-rank must be in 1..64" unless runtime_pca_updown_rank > 0 && runtime_pca_updown_rank <= 64
-raise "--runtime-pca-updown-layers requires --runtime-pca-updown-zero" if runtime_pca_updown_layers && !runtime_pca_updown_zero
+raise "--runtime-pca-updown-layers requires --runtime-pca-updown-zero or --runtime-pca-updown-adapters" if runtime_pca_updown_layers && !runtime_pca_updown_zero && !runtime_pca_updown_adapters_path
+raise "use either --runtime-pca-updown-zero or --runtime-pca-updown-adapters, not both" if runtime_pca_updown_zero && runtime_pca_updown_adapters_path
 raise "--runtime-pca-updown-zero is incompatible with --runtime-raw-q8" if runtime_pca_updown_zero && runtime_raw_q8
 raise "--runtime-pca-updown-zero is incompatible with --runtime-skip-recurrent-ffn" if runtime_pca_updown_zero && runtime_skip_recurrent_ffn
 raise "--runtime-pca-updown-zero is incompatible with --runtime-skip-recurrent-ffn-layers" if runtime_pca_updown_zero && runtime_skip_recurrent_ffn_layers
+raise "--runtime-pca-updown-adapters is incompatible with --runtime-raw-q8" if runtime_pca_updown_adapters_path && runtime_raw_q8
+raise "--runtime-pca-updown-adapters is incompatible with --runtime-skip-recurrent-ffn" if runtime_pca_updown_adapters_path && runtime_skip_recurrent_ffn
+raise "--runtime-pca-updown-adapters is incompatible with --runtime-skip-recurrent-ffn-layers" if runtime_pca_updown_adapters_path && runtime_skip_recurrent_ffn_layers
+raise "adapter file not found: #{runtime_pca_updown_adapters_path}" if runtime_pca_updown_adapters_path && !File.file?(runtime_pca_updown_adapters_path.not_nil!)
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
 raise "--input-tokens must not be empty when provided" if input_tokens_provided && input_tokens.empty?
@@ -550,6 +603,20 @@ begin
   end
   if runtime_pca_updown_zero
     mixed_stack.set_recurrent_ffn_pca_updown_zero(runtime_pca_updown_rank, runtime_pca_updown_layers)
+  end
+  if adapter_path = runtime_pca_updown_adapters_path
+    adapters = load_ffn_pca_updown_adapters(adapter_path, hidden)
+    selected = runtime_pca_updown_layers.try(&.to_set)
+    layers.zip(runners).each do |layer_id, runner|
+      next if selected && !selected.not_nil!.includes?(layer_id)
+      case runner
+      in ML::CUDA::QwenRecurrentLayerRunner
+        adapter = adapters[layer_id]? || raise "missing PCA-updown adapter for recurrent layer #{layer_id}"
+        runner.set_ffn_pca_updown_adapter(adapter[:x_mean], adapter[:c_mean], adapter[:coeff_w], adapter[:down], adapter[:rank])
+      in ML::CUDA::QwenFullAttnLayerRunner
+        # Full-attention layers keep their exact FFN path in this probe.
+      end
+    end
   end
 
   weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
@@ -1164,6 +1231,7 @@ begin
   puts "runtime_pca_updown_zero=#{runtime_pca_updown_zero}"
   puts "runtime_pca_updown_rank=#{runtime_pca_updown_rank}"
   puts "runtime_pca_updown_layers=#{runtime_pca_updown_layers.try(&.join(",")) || ""}"
+  puts "runtime_pca_updown_adapters=#{runtime_pca_updown_adapters_path || ""}"
   puts "q4_raw_q8_ffn=#{ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"

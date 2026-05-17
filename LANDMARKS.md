@@ -12199,3 +12199,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next pivot should not be zero-adapter timing. It should train/load real CUDA adapters for a small layer mask and measure teacher-forced top1 plus guarded self-spec acceptance.
 - maieutic: The integrated phase is slower than the standalone microprobe because runner profiling includes launch/sync and residual add context. This is still below dense FFN profile cost, but end-to-end speed requires replacing enough FFNs without acceptance collapse.
 - adversary: The zero route behaves like a costly FFN skip, not a model approximation. Do not use it for quality claims; use it only as a launch/phase-attribution guard.
+
+**decision_update_224:** Added a real FFN PCA-updown adapter bridge from the Metal-side trainer to the CUDA mixed-stack probe. `qwen35_deltanet_fixed_basis_probe --dump-ffn-updown-adapters=PATH` writes trained adapters as JSON (`qwen35_ffn_updown_adapter_v1`), and `cuda_mixed_stack_probe --runtime-pca-updown-adapters PATH` loads those arrays into selected recurrent layers. This enables CUDA top1/latency experiments with real adapters instead of synthetic zero adapters.
+
+**evidence_update_224:**
+- claim: "The FFN PCA-updown JSON export/load bridge compiles and can load real adapters on CUDA."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_updown_export_nocodegen2 crystal build bin/qwen35_deltanet_fixed_basis_probe.cr --no-codegen` -> exit 0; local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_updown_load_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_updown_load` -> exit 0.
+  verified_at: 2026-05-17
+  decay_trigger: adapter JSON schema, CUDA recurrent runner adapter API, Crystal compiler, or GGUF weight layout changes
+- claim: "Prompt-calibrated rank32 adapters for layers 0,2,4 preserve all-layer top1 on the matching prompt-prefix teacher-forced gate and reduce measured wall modestly."
+  source: local `/tmp/qwen35_cuda_updown_export_20260517.log` exported layers `0,2,4`, rank32, samples `0:24,2:24,4:24` to `/tmp/qwen35_cuda_updown_l024_r32.json`. Remote all-layer prompt-prefix seq16 gate: `/build/persisten/cogni-ml/tmp/cuda_updown_all_base_promptseq16_20260517.log` vs `/build/persisten/cogni-ml/tmp/cuda_updown_all_l024_promptseq16_20260517.log` matched `16/16` top1, `cuda_ms_per_token 23.483 -> 22.980`.
+  verified_at: 2026-05-17
+  decay_trigger: calibration prompt, adapter rank/layers, CUDA timing stability, model weights, or input-token state progression changes
+- claim: "The same adapters are not safe as an ungated free-run decode body."
+  source: remote arbitrary seq16 teacher-forced gate diverged badly (`0,2,4` only `3/16` top1 matches versus baseline), and greedy free-run from seed token `760` diverged after token `2`: `/build/persisten/cogni-ml/tmp/cuda_updown_all_base_greedy16_seed760_20260517.log` emitted `2614,513,5081,...`, while `/build/persisten/cogni-ml/tmp/cuda_updown_all_l024_greedy16_seed760_20260517.log` emitted `2614,513,279,...`.
+  verified_at: 2026-05-17
+  decay_trigger: calibration source, prompt suite, layer mask, rank, risk gate, or verifier controller changes
+
+**quadrumvirate_update_224:**
+- cassandra: PCA-updown can be a calibrated proposal-body speed ingredient, but it is distribution-sensitive. Expect prompt-local or route-gated use, not a global default.
+- daedalus: The next frame is not "make PCA-updown exact"; it is "use PCA-updown only inside exact verification where calibrated prompt-prefix states predict acceptance."
+- maieutic: The matching prompt-prefix gate is encouraging but narrow. It proves the bridge and a same-distribution top1 case, not broad reliability.
+- adversary: Free-run divergence means this route must be guarded by exact verifier acceptance, prompt/state features, or same-boundary agreement. Do not enable it for plain CUDA decode.
