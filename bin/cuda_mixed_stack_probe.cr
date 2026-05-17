@@ -687,6 +687,7 @@ begin
   chunk_batched_verify_chunks = 0
   chunk_batched_verify_accepts = 0
   chunk_batched_verify_rejects = 0
+  chunk_batched_verify_last_reject_commits = 0
   if greedy_loop_tokens > 0
     warmup.times do
       warm_token = seed_token
@@ -811,11 +812,21 @@ begin
           end
           if rejected
             chunk_batched_verify_rejects += 1
-            greedy_gpu_ids = greedy_gpu_ids[0, greedy_gpu_ids.size - accepted_this_chunk - 1]
-            chunk_exact_ids = chunk_exact_ids[0, chunk_exact_ids.size - accepted_this_chunk - 1]
-            chunk_verify_tokens -= proposal_ids.size
-            chunk_accepted_tokens -= accepted_this_chunk
-            accepted_this_chunk = 0
+            if accepted_this_chunk == proposal_ids.size - 1
+              # If only the final proposed token rejected, the batched verifier
+              # state is still canonical: all verifier inputs were accepted.
+              verify_stack.copy_decode_state_to!(mixed_stack, include_kv: true)
+              generated += proposal_ids.size
+              gpu_token = exact_ids[accepted_this_chunk]
+              used_batched_verify = true
+              chunk_batched_verify_last_reject_commits += 1
+            else
+              greedy_gpu_ids = greedy_gpu_ids[0, greedy_gpu_ids.size - accepted_this_chunk - 1]
+              chunk_exact_ids = chunk_exact_ids[0, chunk_exact_ids.size - accepted_this_chunk - 1]
+              chunk_verify_tokens -= proposal_ids.size
+              chunk_accepted_tokens -= accepted_this_chunk
+              accepted_this_chunk = 0
+            end
           else
             chunk_batched_verify_accepts += 1
             verify_stack.copy_decode_state_to!(mixed_stack, include_kv: true)
@@ -1088,6 +1099,7 @@ begin
                       "raw_q8"
                     end
       lines << "probe_route=#{probe_route}"
+      lines << "probe_exact_top1_gpu=#{greedy_gpu_ids.join(",")}"
       lines << "probe_raw_top1_gpu=#{probe_raw_ids.join(",")}"
       lines << "probe_raw_top2_gpu=#{probe_raw_top2_ids.join(",")}"
       lines << "probe_raw_margin_gpu=#{probe_raw_margins.map { |v| v.round(6) }.join(",")}"
@@ -1122,6 +1134,7 @@ begin
       lines << "chunk_probe_batched_verify_chunks=#{chunk_batched_verify_chunks}"
       lines << "chunk_probe_batched_verify_accepts=#{chunk_batched_verify_accepts}"
       lines << "chunk_probe_batched_verify_rejects=#{chunk_batched_verify_rejects}"
+      lines << "chunk_probe_batched_verify_last_reject_commits=#{chunk_batched_verify_last_reject_commits}"
       lines << "chunk_probe_batched_verify_ms=#{chunk_batched_verify_ms.round(3)}"
       lines << "chunk_probe_batched_verify_ms_per_chunk=#{(chunk_batched_verify_ms / Math.max(chunk_batched_verify_chunks, 1)).round(3)}"
     end

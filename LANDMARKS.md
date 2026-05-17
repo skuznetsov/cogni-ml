@@ -12247,31 +12247,49 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_pca_probe_restore_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_pca_guard` -> exit 0.
   verified_at: 2026-05-17
   decay_trigger: PCA-updown runner switch, greedy-loop probe restore path, adapter JSON schema, or CUDA runner state snapshot/restore changes
-- claim: "On the first seed-760 guarded probe, PCA-updown proposals from exact decode states matched exact output for 16/16 tokens, but the current serialized diagnostic is not a speedup."
-  source: remote `/build/persisten/cogni-ml/tmp/cuda_pca_updown_probe_restore_seed760_summary_20260517.txt`: `route=pca_updown`, `total_ms_per_token=53.132`, `proposal_ms_per_token=23.689`, `exact_ms_per_token=24.187`, `match=16/16`, `first_miss=None`.
+- claim: "A corrected anchored-log parse refutes the seed-760 PCA-updown guarded proposal as an exact proposal source."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_pca_updown_probe_restore_seed760_20260517.log`, reparsed with `^top1_gpu=` rather than substring `top1_gpu=`: `match=13/16`, `first_miss=2`, `proposal_ms_per_token=23.689`, `exact_ms_per_token=24.187`, `total_ms_per_token=53.132`.
   verified_at: 2026-05-17
   decay_trigger: prompt/seed suite, adapter calibration, layer mask/rank, controller scheduling, or chunk verifier implementation changes
 
 **quadrumvirate_update_226:**
-- cassandra: Exact-state snapshot/restore is the right safety frame for distribution-sensitive PCA-updown. The single-seed match is encouraging, but serialized proposal+verify doubles wall until a chunk/overlap controller amortizes it.
+- cassandra: Exact-state snapshot/restore is the right safety frame for distribution-sensitive PCA-updown. The corrected single-seed parse is already divergent, and serialized proposal+verify doubles wall even before considering quality.
 - daedalus: The next pivot is not more ungated PCA free-run. It is a multi-seed guarded probe plus a controller that either overlaps proposal with verifier work or avoids launching the proposal when the expected acceptance/cost is unfavorable.
-- maieutic: The current evidence proves safety plumbing and one matched sequence, not broad acceptance or speed. The required falsifier is a seed/prompt suite with chunk acceptance and wall economics.
+- maieutic: The current evidence proves safety plumbing, but not acceptance or speed. The required falsifier is a seed/prompt suite with chunk acceptance and wall economics.
 - adversary: Because proposal and verifier are serialized in this diagnostic, `53.132ms/token` should be treated as observability cost, not as a product-route benchmark.
 
-**decision_update_227:** Added a hybrid guarded proposal diagnostic that combines two exact-verified approximation ingredients: PCA-updown on selected recurrent FFNs and raw-Q8 recurrent FFN for the remaining recurrent layers. `--greedy-loop-probe-pca-updown-raw-q8-rest` is only valid with `--greedy-loop-probe-pca-updown`, and it leaves the canonical exact verifier path unchanged by restoring state before exact decode. On the current 27-seed gate it preserved `864/864` proposal matches, but its proposal cost is effectively raw-Q8-class rather than a new speed tier.
+**decision_update_227:** Added a hybrid guarded proposal diagnostic that combines two exact-verified approximation ingredients: PCA-updown on selected recurrent FFNs and raw-Q8 recurrent FFN for the remaining recurrent layers. `--greedy-loop-probe-pca-updown-raw-q8-rest` is only valid with `--greedy-loop-probe-pca-updown`, and it leaves the canonical exact verifier path unchanged by restoring state before exact decode. A corrected anchored-log parse shows the current 27-seed gate preserves only `712/864` proposal matches, so this is refuted as a safe raw-Q8 replacement despite raw-Q8-class proposal cost.
 
 **evidence_update_227:**
 - claim: "The hybrid PCA-updown/raw-Q8 guarded proposal route compiles and runs as default-off diagnostic plumbing."
   source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_pca_hybrid_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_pca_hybrid` -> exit 0.
   verified_at: 2026-05-17
   decay_trigger: raw-Q8 recurrent FFN switch, PCA-updown switch ordering, guarded probe restore path, or CUDA recurrent runner changes
-- claim: "Across the 27-seed guarded probe, the hybrid route matched exact proposals for all tested positions but did not materially beat raw-Q8 proposal cost."
-  source: remote `/build/persisten/cogni-ml/tmp/cuda_pca_hybrid_probe_restore_27seed_20260517/aggregate.txt`: `aggregate_match=864/864`, `miss_seeds=`, `mean_proposal_ms=21.519`, `mean_exact_ms=24.037`, `mean_total_ms=54.250`. Same-seed raw-Q8 comparison from `/build/persisten/cogni-ml/tmp/raw_q8_probe_restore_27seed_20260517.log`: `aggregate_match=864/864`, `mean_proposal_ms=21.533`, `mean_exact_ms=23.865`.
+- claim: "A corrected anchored-log parse refutes the hybrid PCA-updown/raw-Q8 route as a safe proposal body on the 27-seed gate."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_pca_hybrid_probe_restore_27seed_20260517/*.log`, reparsed with `^top1_gpu=`: hybrid `aggregate_match=712/864`, misses on almost every seed, `mean_proposal_ms=21.519`, `mean_exact_ms=24.037`, `mean_total_ms=54.250`. Same anchored parse for raw-Q8 `/build/persisten/cogni-ml/tmp/raw_q8_probe_restore_27seed_20260517.log`: `aggregate_match=859/864`, `mean_proposal_ms=21.533`, `mean_exact_ms=23.865`.
   verified_at: 2026-05-17
   decay_trigger: seed/prompt suite, adapter rank/layers, raw-Q8 kernel changes, controller scheduling, or exact verifier implementation changes
 
 **quadrumvirate_update_227:**
-- cassandra: Hybridizing PCA with raw-Q8 does not create a multiplicative speedup because PCA only replaces three recurrent FFNs while raw-Q8 dominates the remaining proposal-body savings.
-- daedalus: The next speed-bearing pivot should be controller economics around raw-Q8-class proposal bodies or a broader cheap-body replacement, not more layer-0/2/4 PCA composition.
-- maieutic: The `864/864` result is still seed-token synthetic coverage, not a real prompt suite. It is enough to keep the hybrid knob for experiments, not enough to promote it.
+- cassandra: Hybridizing PCA with raw-Q8 degrades proposal quality substantially while failing to improve proposal cost over raw-Q8.
+- daedalus: The next speed-bearing pivot should be controller economics around raw-Q8 proposal bodies or a broader adapter trained for free-run proposal quality, not more layer-0/2/4 PCA composition.
+- maieutic: The earlier `864/864` was an aggregation bug caused by matching `top1_gpu=` inside `probe_raw_top1_gpu=`. Correct anchored parsing makes this a refutation, not a promotion signal.
 - adversary: The serialized total wall remains slower than exact decode; only a chunk verifier/overlap route can turn the proposal quality into product speed.
+
+**decision_update_228:** Corrected the CUDA proposal-match aggregation and added an exact last-token-reject commit path for batched chunk verification. The prior PCA-updown/hybrid guarded summaries used an unanchored regex (`top1_gpu=`), which matched `probe_raw_top1_gpu=` and compared the proposal sequence to itself. Anchored parsing (`^top1_gpu=`) refutes PCA-updown and the PCA+raw-Q8 hybrid as safe proposal bodies on the tested seeds. The batched verifier now has an exact edge-case optimization: if a chunk rejects only on the final proposed token, the verifier stack's final state is canonical and can be copied back with the correction token instead of rerunning the chunk sequentially.
+
+**evidence_update_228:**
+- claim: "The anchored reparse changes the PCA-updown/hybrid quality conclusion."
+  source: remote reparsing on 2026-05-17: PCA seed-760 `/build/persisten/cogni-ml/tmp/cuda_pca_updown_probe_restore_seed760_20260517.log` is `13/16`, first miss `2`; PCA 8-seed suite is `95/128`; hybrid 8-seed suite is `96/128`; hybrid 27-seed suite is `712/864`; raw-Q8 27-seed comparison is `859/864`.
+  verified_at: 2026-05-17
+  decay_trigger: log format, parser, proposal route, seed/prompt suite, or adapter training changes
+- claim: "The last-token-reject batched verifier optimization compiles, but the current gamma4/margin0.03 27-seed gate does not exercise it."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_chunk_last_reject_nocodegen2 crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_chunk_last_reject2` -> exit 0; remote A/B `/build/persisten/cogni-ml/tmp/cuda_chunk_last_reject_27seed_20260517/aggregate.txt`: old `mean_ms_per_token=52.328`, new `52.025`, `last_reject_commits=0`, so the delta is noise/not attributed to the new path. Remote alias smoke `/build/persisten/cogni-ml/tmp/cuda_probe_exact_alias_smoke_20260517.log` emits both `probe_exact_top1_gpu` and `probe_raw_top1_gpu` to prevent future substring-parser mistakes.
+  verified_at: 2026-05-17
+  decay_trigger: chunk gamma/margin, proposal route, rejection position distribution, verifier stack state semantics, or CUDA timing conditions
+
+**quadrumvirate_update_228:**
+- cassandra: The first failure was measurement, not model behavior. Any future proposal-match parser must anchor keys or parse line-by-line into exact field names.
+- daedalus: PCA-updown layer-local reconstruction is not the next body breakthrough in this calibration. Raw-Q8 remains the better proposal baseline; future adapter work needs a free-run/proposal objective, not teacher-forced prompt-prefix reconstruction.
+- maieutic: The exact last-reject commit is mathematically valid only when all verifier inputs are accepted and the mismatch is at the final row. Earlier mismatches still require sequential replay or an intermediate-state export.
+- adversary: Do not promote the last-reject path as a speedup from this gate. It is a correct edge-case optimization with zero hits on the measured gamma4 suite.
