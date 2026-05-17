@@ -11851,3 +11851,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next Q4 prefill lever should not be shmem-size reduction alone; it needs either a larger fusion boundary or a different arithmetic/data-layout transformation.
 - maieutic: The benchmark is narrow but directly route-aligned; it is sufficient to stop the single-buffer branch, not sufficient to claim all llama.cpp differences are exhausted.
 - adversary: Do not retain default-off dead code for a losing probe. If revisited, require a new premise and a full prefill A/B gate, not just a rerun of the same staging variant.
+
+**decision_update_204:** Refuted a full-tile-specialized Q4_H16 GEMM variant for the local prefill pair route. The temporary kernel removed edge-tile `min()` and fallback write logic for shapes where `out_dim % 64 == 0` and `batch % 32 == 0`, but the route-aligned pp64 pair ABBA was noise/slightly negative. The probe code was removed.
+
+**evidence_update_204:**
+- claim: "Full-tile-specialized Q4_H16 does not provide a reliable speedup on the actual `4096x12288` pp64 gate+up pair shape."
+  source: local temporary `/tmp/qwen35_op_attr_q4fulltile` ABBA with `--batch=64 --warmup=3 --runs=9 --prefill-q4-pair-only`; base pair p50s `2.016/2.431/1.885/2.007 ms`, `QWEN35_Q4K_H16_FULLTILE=1` pair p50s `2.486/2.145/1.949/1.869 ms`; log `/tmp/qwen35_q4_h16_fulltile_pair_abba_20260516211023.log`.
+  verified_at: 2026-05-16
+  decay_trigger: Q4_H16 kernel branch structure, pair-route attribution harness, Metal compiler/driver, model quantization, or pp64 batch policy changes
+
+**quadrumvirate_update_204:**
+- cassandra: Hot-path branch shaving is too small/noisy relative to the memory/dequant/MMA work in this GEMM.
+- daedalus: Stop local micro-shaving of the existing Q4 tile; seek a larger boundary such as FFN diamond/proposal-only approximations or a fundamentally different Q4 data path.
+- maieutic: Exact-tile assumptions are true for FFN pp64/pp128/pp256, but removing checks alone does not reduce the dominant cost.
+- adversary: Do not keep the branch as an env knob. It adds maintenance risk without a measured full-prefill win.
