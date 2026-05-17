@@ -12647,3 +12647,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This is an evaluation harness, not a speed feature. The reduced-state kernel remains blocked until this suite shows robust acceptance/parity across prompt classes.
 - maieutic: Compile/help evidence proves the route is wired, not that projected-K is safe. The suite must be run on 9B/27B before kernel promotion.
 - adversary: Avoid CPU-only smoke runs as a verification proxy for this model path; they are too slow and can be mistaken for hangs. Use no-codegen/help for wiring and run actual quality gates on the intended accelerated path.
+
+**decision_update_252:** Added an exact CUDA batched dual Q4_K alpha/beta projection kernel and wired it into the recurrent projection+FFN WBA route. The scalar decode path already used one dual alpha/beta launch; the multi-token WBA path had regressed to two separate batched Q4 launches. `QWEN_CUDA_Q4_ALPHA_BETA_DUAL_BATCHED_OFF=1` restores the prior separate-kernel WBA behavior.
+
+**evidence_update_252:**
+- claim: "The batched dual alpha/beta kernel is numerically equivalent on Qwen3.5-9B recurrent projection rows."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_batched_dual_nocodegen crystal build bin/cuda_recurrent_projection_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_runner_batched_dual_nocodegen crystal build bin/cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `git diff --check -- src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr bin/cuda_recurrent_projection_probe.cr` -> exit 0; remote RTX 5060 Ti `cuda_recurrent_projection_probe --tokens 2/4/8/16 --batched-dual-alpha-beta` all printed `qkv_ok=true`, `gate_ok=true`, `alpha_ok=true`, `beta_ok=true`, `ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4_K dual PTX ABI, recurrent projection WBA parameter layout, CUDA driver/JIT, or Qwen alpha/beta tensor shapes
+- claim: "This is a small exact cleanup, not a new full-decoder breakthrough."
+  source: remote projection bundle A/B on RTX 5060 Ti showed only a small isolated change: tokens2 `0.252 -> 0.245ms`, tokens4 `0.477 -> 0.470ms`, tokens8 `0.927 -> 0.919ms`, tokens16 `1.836 -> 1.834ms`. Layer0 profile showed alpha/beta slice improvement within tiny absolute budget (`~0.037-0.049ms`), while layer wall stayed noise-level around `24.6-24.7ms` for tokens8.
+  verified_at: 2026-05-17
+  decay_trigger: larger prompt/span timing gates, all-layer repeated benchmark, or future projection/FFN WBA rewrite
+
+**quadrumvirate_update_252:**
+- cassandra: Reducing two alpha/beta launches to one is correct but bounded because alpha/beta was already a sub-millisecond slice in the WBA profile.
+- daedalus: This validates the "clean up exact WBA gaps" lane, but the next material speedup still needs cheaper proposal-body math or kernel economics for large Q4/Q6 FFN/projection rows.
+- maieutic: Launch-count reduction is not enough evidence for global speedup. The accepted claim is equivalence plus a small projection-slice improvement.
+- adversary: Keep the opt-out env var because whole-layer timing is noise-level and future GPUs/JITs may schedule the two separate batched kernels equally well.

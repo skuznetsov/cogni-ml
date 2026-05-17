@@ -36,6 +36,7 @@ lib LibCUDARecProj
 end
 
 Q4K_PTX       = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+Q4K_DUAL_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx") }}
 Q5K_PTX       = {{ read_file("src/ml/cuda/kernels/q5k_gemv_probe.ptx") }}
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
@@ -88,9 +89,10 @@ reps = 1
 warmup = 0
 tokens = 1
 batched = false
+batched_dual_alpha_beta = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_recurrent_projection_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched]"
+  p.banner = "Usage: cuda_recurrent_projection_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched] [--batched-dual-alpha-beta]"
   p.on("--model PATH", "Qwen Q4_K_M GGUF model path") { |v| model = v }
   p.on("--layer N", "Recurrent layer index") { |v| layer = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
@@ -98,6 +100,7 @@ OptionParser.parse do |p|
   p.on("--warmup N", "Untimed warmup projection-bundle launches") { |v| warmup = v.to_i }
   p.on("--tokens N", "Number of independent projection rows to run") { |v| tokens = v.to_i }
   p.on("--batched", "Use known-span batched Q4/Q5 projection kernels") { batched = true }
+  p.on("--batched-dual-alpha-beta", "Use one batched Q4 dual kernel for ssm_alpha and ssm_beta projections") { batched_dual_alpha_beta = true; batched = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -122,6 +125,7 @@ gate_dim = gate_info.dims[1].to_i32
 alpha_dim = alpha_info.dims[1].to_i32
 beta_dim = beta_info.dims[1].to_i32
 raise "input shape mismatch" unless [gate_info, alpha_info, beta_info].all? { |i| i.dims[0].to_i32 == hidden }
+raise "--batched-dual-alpha-beta requires equal alpha/beta output dims" if batched_dual_alpha_beta && alpha_info.dims[1] != beta_info.dims[1]
 
 qkv_raw = gguf.read_tensor_raw(qkv_info)
 gate_raw = gguf.read_tensor_raw(gate_info)
@@ -165,8 +169,10 @@ ctx = Pointer(Void).null
 cuda! LibCUDARecProj.cuCtxCreate_v2(pointerof(ctx), 0_u32, dev), "cuCtxCreate"
 
 q4_mod = Pointer(Void).null
+q4_dual_mod = Pointer(Void).null
 q5_mod = Pointer(Void).null
 q4_fn = Pointer(Void).null
+q4_dual_batched_fn = Pointer(Void).null
 q5_fn = Pointer(Void).null
 q4_batched_fn = Pointer(Void).null
 q5_batched_fn = Pointer(Void).null
@@ -174,8 +180,10 @@ ptrs = [] of UInt64
 
 begin
   cuda! LibCUDARecProj.cuModuleLoadData(pointerof(q4_mod), Q4K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q4)"
+  cuda! LibCUDARecProj.cuModuleLoadData(pointerof(q4_dual_mod), Q4K_DUAL_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q4 dual)"
   cuda! LibCUDARecProj.cuModuleLoadData(pointerof(q5_mod), Q5K_PTX.to_unsafe.as(Void*)), "cuModuleLoadData(q5)"
   cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q4_fn), q4_mod, "q4_k_gemv_warp4_f32"), "cuModuleGetFunction(q4)"
+  cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q4_dual_batched_fn), q4_dual_mod, "q4_k_dual_gemv_warp4_f32_batched"), "cuModuleGetFunction(q4 dual batched)"
   cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q5_fn), q5_mod, "q5_k_gemv_warp4_f32"), "cuModuleGetFunction(q5)"
   cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q4_batched_fn), q4_mod, "q4_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(q4 batched)"
   cuda! LibCUDARecProj.cuModuleGetFunction(pointerof(q5_batched_fn), q5_mod, "q5_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(q5 batched)"
@@ -204,6 +212,7 @@ begin
   gate_grid = ((gate_dim + 3) // 4).to_u32
   alpha_grid = ((alpha_dim + 3) // 4).to_u32
   beta_grid = ((beta_dim + 3) // 4).to_u32
+  alpha_beta_dual_grid = (((alpha_dim * 2) + 3) // 4).to_u32
   tokens_u32 = tokens.to_u32
   d_x_cur = d_x
   d_qkv_cur = d_qkv
@@ -239,6 +248,15 @@ begin
   beta_params[3] = pointerof(hidden_u32).as(Void*)
   beta_params[4] = pointerof(beta_dim_u32).as(Void*)
 
+  alpha_beta_dual_params = Pointer(Void*).malloc(7)
+  alpha_beta_dual_params[0] = pointerof(d_alpha_w).as(Void*)
+  alpha_beta_dual_params[1] = pointerof(d_beta_w).as(Void*)
+  alpha_beta_dual_params[2] = pointerof(d_x_cur).as(Void*)
+  alpha_beta_dual_params[3] = pointerof(d_alpha_cur).as(Void*)
+  alpha_beta_dual_params[4] = pointerof(d_beta_cur).as(Void*)
+  alpha_beta_dual_params[5] = pointerof(hidden_u32).as(Void*)
+  alpha_beta_dual_params[6] = pointerof(alpha_dim_u32).as(Void*)
+
   run_bundle = -> {
     if batched
       d_x_cur = d_x
@@ -250,10 +268,15 @@ begin
         0_u32, Pointer(Void).null, qkv_params, Pointer(Void*).null), "qkv proj batched"
       cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, gate_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
         0_u32, Pointer(Void).null, gate_params, Pointer(Void*).null), "gate proj batched"
-      cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, alpha_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-        0_u32, Pointer(Void).null, alpha_params, Pointer(Void*).null), "alpha proj batched"
-      cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, beta_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-        0_u32, Pointer(Void).null, beta_params, Pointer(Void*).null), "beta proj batched"
+      if batched_dual_alpha_beta
+        cuda! LibCUDARecProj.cuLaunchKernel(q4_dual_batched_fn, alpha_beta_dual_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, alpha_beta_dual_params, Pointer(Void*).null), "alpha beta dual proj batched"
+      else
+        cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, alpha_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, alpha_params, Pointer(Void*).null), "alpha proj batched"
+        cuda! LibCUDARecProj.cuLaunchKernel(q4_batched_fn, beta_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, beta_params, Pointer(Void*).null), "beta proj batched"
+      end
     else
       tokens.times do |tok|
         d_x_cur = d_x + bytesize_f32(tok * hidden)
@@ -307,6 +330,7 @@ begin
   puts "beta_dim=#{beta_dim}"
   puts "tokens=#{tokens}"
   puts "batched=#{batched}"
+  puts "batched_dual_alpha_beta=#{batched_dual_alpha_beta}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
@@ -316,6 +340,7 @@ begin
 ensure
   ptrs.each { |ptr| LibCUDARecProj.cuMemFree_v2(ptr) unless ptr == 0_u64 }
   LibCUDARecProj.cuModuleUnload(q4_mod) unless q4_mod.null?
+  LibCUDARecProj.cuModuleUnload(q4_dual_mod) unless q4_dual_mod.null?
   LibCUDARecProj.cuModuleUnload(q5_mod) unless q5_mod.null?
   LibCUDARecProj.cuCtxDestroy_v2(ctx) unless ctx.null?
   gguf.close
