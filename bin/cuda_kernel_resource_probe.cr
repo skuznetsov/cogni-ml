@@ -32,13 +32,18 @@ specs = [
   KernelSpec.new("q4", Q4K_PTX, [
     "q4_k_gemv_warp4_f32",
     "q4_k_gemv_add_warp4_f32",
+    "q4_k_gemv_warp4_f32_batched",
+    "q4_k_gemv_add_warp4_f32_batched",
   ]),
   KernelSpec.new("q5", Q5K_PTX, [
     "q5_k_gemv_warp4_f32",
+    "q5_k_gemv_warp4_f32_batched",
   ]),
   KernelSpec.new("q6", Q6K_PTX, [
     "q6_k_gemv_warp4_f32",
     "q6_k_gemv_add_warp4_f32",
+    "q6_k_gemv_warp4_f32_batched",
+    "q6_k_gemv_add_warp4_f32_batched",
     "q6_k_gemv_top1_partial_f32",
   ]),
   KernelSpec.new("delta", DN_PTX, [

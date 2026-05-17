@@ -12367,3 +12367,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful frame is confirmed: keep DeltaNet serial where mathematically necessary, but batch same-weight algebraic diamonds after the serial cutline. Apply the same cutline to QKV/projection groups next.
 - maieutic: The measured top1 parity is not a full hidden/logit equality proof for tokens>1. The standalone residual-add microprobe gives exact kernel-level evidence; the runner gate gives baseline-output agreement and timing evidence.
 - adversary: The exact CPU oracle for multi-token all-layer output is too slow for the current gate. Keep `QWEN_CUDA_BATCHED_FFN` default-off until a stronger hidden/logit equality harness or broader prompt verifier confirms the route.
+
+**decision_update_234:** Added a standalone Q5_K known-span batched GEMV primitive and falsified it as a major isolated speed lever. `q5_k_gemv_warp4_f32_batched` maps linear grid.x over `(token, output-row-block)`, and `cuda_q5k_gemv_probe --tokens N --batched` compares it against a host-looped per-row Q5_K launch. The primitive is exact and useful as runner plumbing, but Qwen recurrent `attn_qkv` timing is neutral in isolation.
+
+**evidence_update_234:**
+- claim: "The Q5_K batched GEMV primitive is exact but essentially neutral for the hot QKV projection shape."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q5_batched_nocodegen2 crystal build bin/cuda_q5k_gemv_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q5_batched_resource_nocodegen crystal build bin/cuda_kernel_resource_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_q5k_gemv_probe_batched` -> exit 0. Remote Qwen3.5-9B `blk.0.attn_qkv.weight` on RTX 5060 Ti: tokens2 loop `0.156ms`, batched `0.158ms`; tokens4 `0.312 -> 0.313ms`; tokens8 `0.623 -> 0.620ms`; all `ok=true`, `cos=1.0`, `max_diff=1.4305115e-6`.
+  verified_at: 2026-05-17
+  decay_trigger: Q5 PTX layout, CUDA driver/JIT, QKV tensor shape, runner projection scheduling, or resource/occupancy changes
+
+**quadrumvirate_update_234:**
+- cassandra: Q5 batching does not reproduce the FFN WBA win; this suggests the QKV kernel is already launch/occupancy balanced or memory-bound at this shape.
+- daedalus: Do not wire Q5 batching alone and expect a speedup. Projection WBA must include larger Q4 projection groups, post-core `ssm_out`, or a more structural pre-core projection schedule.
+- maieutic: Exactness of a primitive is not evidence of end-to-end usefulness. The measurable benefit is the gate; here the gate says neutral.
+- adversary: The primitive remains default-unused. If integrated, require an A/B because it may regress small token counts.

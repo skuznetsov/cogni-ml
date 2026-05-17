@@ -73,20 +73,25 @@ tensor_name = DEFAULT_TENSOR
 seed = 23_u64
 reps = 1
 warmup = 0
+tokens = 1
+batched = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_q5k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--reps N] [--warmup N]"
+  p.banner = "Usage: cuda_q5k_gemv_probe [--model PATH] [--tensor NAME] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched]"
   p.on("--model PATH", "Q5_K GGUF model path") { |v| model = v }
   p.on("--tensor NAME", "Q5_K tensor name") { |v| tensor_name = v }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed kernel launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
+  p.on("--tokens N", "Number of independent input rows to run") { |v| tokens = v.to_i }
+  p.on("--batched", "Use the batched Q5_K GEMV kernel over all rows") { batched = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
 raise "model not found: #{model}" unless File.exists?(model)
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
+raise "tokens must be positive" unless tokens > 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 info = gguf.tensor(tensor_name) || raise "missing tensor #{tensor_name.inspect}"
@@ -98,11 +103,16 @@ raise "Q5_K GEMV requires in_dim multiple of 256, got #{in_dim}" unless in_dim %
 
 w_raw = gguf.read_tensor_raw(info)
 rng = Random.new(seed)
-x = Array(Float32).new(in_dim) { rng.rand(-1.0_f32..1.0_f32) }
+x = Array(Float32).new(tokens * in_dim) { rng.rand(-1.0_f32..1.0_f32) }
 zero_bias = Array(Float32).new(out_dim, 0.0_f32)
 
 cpu_t0 = Time.instant
-cpu = ML::GGUF::QuantMatmul.matmul_add(x, 1, in_dim, w_raw, ML::GGUF::TensorType::Q5_K, out_dim, zero_bias)
+cpu = Array(Float32).new(tokens * out_dim, 0.0_f32)
+tokens.times do |tok|
+  row = x[tok * in_dim, in_dim]
+  out = ML::GGUF::QuantMatmul.matmul_add(row, 1, in_dim, w_raw, ML::GGUF::TensorType::Q5_K, out_dim, zero_bias)
+  out_dim.times { |i| cpu[tok * out_dim + i] = out[i] }
+end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds
 
 cuda! LibCUDAQ5K.cuInit(0_u32), "cuInit"
@@ -119,41 +129,60 @@ cuda! LibCUDAQ5K.cuCtxCreate_v2(pointerof(ctx), 0_u32, dev), "cuCtxCreate"
 
 mod = Pointer(Void).null
 fn = Pointer(Void).null
+batched_fn = Pointer(Void).null
 d_w = d_x = d_out = 0_u64
 
 begin
   cuda! LibCUDAQ5K.cuModuleLoadData(pointerof(mod), PTX.to_unsafe.as(Void*)), "cuModuleLoadData"
   cuda! LibCUDAQ5K.cuModuleGetFunction(pointerof(fn), mod, "q5_k_gemv_warp4_f32"), "cuModuleGetFunction"
-  gpu_out = Array(Float32).new(out_dim, 0.0_f32)
+  cuda! LibCUDAQ5K.cuModuleGetFunction(pointerof(batched_fn), mod, "q5_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(batched)"
+  gpu_out = Array(Float32).new(tokens * out_dim, 0.0_f32)
   cuda! LibCUDAQ5K.cuMemAlloc_v2(pointerof(d_w), w_raw.size.to_u64), "cuMemAlloc(w)"
-  cuda! LibCUDAQ5K.cuMemAlloc_v2(pointerof(d_x), bytesize_f32(in_dim)), "cuMemAlloc(x)"
-  cuda! LibCUDAQ5K.cuMemAlloc_v2(pointerof(d_out), bytesize_f32(out_dim)), "cuMemAlloc(out)"
+  cuda! LibCUDAQ5K.cuMemAlloc_v2(pointerof(d_x), bytesize_f32(tokens * in_dim)), "cuMemAlloc(x)"
+  cuda! LibCUDAQ5K.cuMemAlloc_v2(pointerof(d_out), bytesize_f32(tokens * out_dim)), "cuMemAlloc(out)"
   cuda! LibCUDAQ5K.cuMemcpyHtoD_v2(d_w, w_raw.to_unsafe.as(Void*), w_raw.size.to_u64), "cuMemcpyHtoD(w)"
-  cuda! LibCUDAQ5K.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(in_dim)), "cuMemcpyHtoD(x)"
+  cuda! LibCUDAQ5K.cuMemcpyHtoD_v2(d_x, x.to_unsafe.as(Void*), bytesize_f32(tokens * in_dim)), "cuMemcpyHtoD(x)"
 
   in_dim_u32 = in_dim.to_u32
   out_dim_u32 = out_dim.to_u32
+  d_x_cur = d_x
+  d_out_cur = d_out
   params = Pointer(Void*).malloc(5)
   params[0] = pointerof(d_w).as(Void*)
-  params[1] = pointerof(d_x).as(Void*)
-  params[2] = pointerof(d_out).as(Void*)
+  params[1] = pointerof(d_x_cur).as(Void*)
+  params[2] = pointerof(d_out_cur).as(Void*)
   params[3] = pointerof(in_dim_u32).as(Void*)
   params[4] = pointerof(out_dim_u32).as(Void*)
   grid = ((out_dim + 3) // 4).to_u32
+  tokens_u32 = tokens.to_u32
+
+  run_once = -> {
+    if batched
+      d_x_cur = d_x
+      d_out_cur = d_out
+      cuda! LibCUDAQ5K.cuLaunchKernel(batched_fn, grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+        0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel(batched)"
+    else
+      tokens.times do |tok|
+        d_x_cur = d_x + bytesize_f32(tok * in_dim)
+        d_out_cur = d_out + bytesize_f32(tok * out_dim)
+        cuda! LibCUDAQ5K.cuLaunchKernel(fn, grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+          0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel"
+      end
+    end
+  }
 
   warmup.times do
-    cuda! LibCUDAQ5K.cuLaunchKernel(fn, grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel(warmup)"
+    run_once.call
   end
   cuda! LibCUDAQ5K.cuCtxSynchronize, "cuCtxSynchronize(warmup)" if warmup > 0
   gpu_t0 = Time.instant
   reps.times do
-    cuda! LibCUDAQ5K.cuLaunchKernel(fn, grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-      0_u32, Pointer(Void).null, params, Pointer(Void*).null), "cuLaunchKernel"
+    run_once.call
   end
   cuda! LibCUDAQ5K.cuCtxSynchronize, "cuCtxSynchronize"
   gpu_ms = (Time.instant - gpu_t0).total_milliseconds / reps
-  cuda! LibCUDAQ5K.cuMemcpyDtoH_v2(gpu_out.to_unsafe.as(Void*), d_out, bytesize_f32(out_dim)), "cuMemcpyDtoH(out)"
+  cuda! LibCUDAQ5K.cuMemcpyDtoH_v2(gpu_out.to_unsafe.as(Void*), d_out, bytesize_f32(tokens * out_dim)), "cuMemcpyDtoH(out)"
 
   cos = cosine(gpu_out, cpu)
   max_diff = max_abs_diff(gpu_out, cpu)
@@ -162,6 +191,8 @@ begin
   puts "model=#{model}"
   puts "tensor=#{tensor_name}"
   puts "shape=#{in_dim}x#{out_dim}"
+  puts "tokens=#{tokens}"
+  puts "batched=#{batched}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "cuda_ms=#{gpu_ms.round(3)}"
