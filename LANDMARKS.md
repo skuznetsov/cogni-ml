@@ -11897,3 +11897,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The pivot is from "fuse the current pca-updown dispatch harder" to "eliminate duplicate proposal work or make the proposal body multi-token/layer-resident enough to amortize risk".
 - maieutic: The self-draft proposal does not need hidden-path fidelity, but it does need accepted chunks; cosine/reconstruction signals are insufficient unless they predict accept/reject before spending the approximate body.
 - adversary: Do not promote a route that is only faster on one prompt and slower on mixed prompts. Future work must compare against pure lowrank and plain exact on the same prompt set.
+
+**decision_update_207:** Added a fast CUDA GPU-only top2/margin diagnostic for raw-Q8 proposal-body gating. `--gpu-logits-only` keeps `--perf-only` but preserves CUDA logits readback, skips the CPU logits oracle, scans materialized GPU logits for top1/top2/margin, and verifies that the fused CUDA top2 path agrees with the logits scan. This makes full 9B margin sweeps practical on the remote CUDA host while keeping the claim explicitly scoped to base-CUDA-vs-raw-CUDA proposal agreement, not CPU-oracle exactness.
+
+**evidence_update_207:**
+- claim: "`--gpu-logits-only` builds and reports full 9B CUDA top2/margins without invoking the slow CPU oracle."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_probe_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_gpulogits_9a375de` -> exit 0; remote run `/build/persisten/cogni-ml/tmp/raw_q8_gpu_margin_points_20260517.log` printed `gpu_logits_only=true`, `top2_gpu`, `top_margin_gpu`, and `top2_cuda_ok=true` for base and raw-Q8 modes.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA output-head logits/top2 route, `cuda_mixed_stack_probe.cr` option semantics, NVIDIA driver/runtime, Qwen3.5 GGUF, or raw-Q8 runner route changes
+- claim: "Raw-Q8 FFN is a plausible proposal-body ingredient only behind a confidence/risk gate."
+  source: remote 20-point base-CUDA-vs-raw-Q8-CUDA semantic exact-state gate: agreement `18/20`, mean wall `34.115ms -> 31.845ms` (`+6.66%`), mismatches token `0` (`198/271` swapped, base margin `0.018449`) and token `2972` (`16/27` swapped, base margin `0.014557`); raw-margin threshold `>=0.030` kept `17/20` points with `17/17` agreement and `3/20` fallback.
+  verified_at: 2026-05-17
+  decay_trigger: prompt/token distribution, raw-Q8 quantization implementation, proposal state source, verifier route, CUDA timing stability, or self-spec controller policy changes
+
+**quadrumvirate_update_207:**
+- cassandra: Ungated raw-Q8 will fail exactly on low-margin near-ties; the failure mode is top1/top2 swapping, not broad random corruption.
+- daedalus: The next useful frame is not more CPU-oracle all-layer sweeps, which are too slow, but a fast base-CUDA oracle plus risk-gated proposal policy followed by mixed-prompt self-spec verification.
+- maieutic: Raw-Q8 margin is only a feature, not proof. It must be calibrated against exact/base top1 acceptance and then tested under autoregressive proposal states, where drift can differ from exact-state points.
+- adversary: Do not promote raw-Q8 as exact decode. The current evidence supports implementing a guarded proposal experiment; it does not yet prove end-to-end speedup or parity on a prompt suite.

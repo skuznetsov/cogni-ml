@@ -235,6 +235,7 @@ warmup = 0
 steady_reps = 0
 steady_graph_reps = 0
 read_logits = false
+gpu_logits_only = false
 margin_bucket_report = false
 margin_bucket_edges = [0.05_f32, 0.1_f32, 0.25_f32, 0.5_f32, 1.0_f32, 2.0_f32, 5.0_f32]
 profile_phases = false
@@ -263,6 +264,7 @@ OptionParser.parse do |p|
   p.on("--steady-reps N", "After one reset priming run, time N runs without sequence/state reset; requires --perf-only") { |v| steady_reps = v.to_i }
   p.on("--steady-graph-reps N", "Capture one reset-free steady wave as a CUDA graph and replay it N times; requires --perf-only") { |v| steady_graph_reps = v.to_i }
   p.on("--read-logits", "Read full logits back for attribution; default reads resident CUDA top1 only") { read_logits = true }
+  p.on("--gpu-logits-only", "Perf-only diagnostic: read CUDA logits/top2 margins without the CPU oracle") { gpu_logits_only = true; perf_only = true; read_logits = true }
   p.on("--margin-bucket-report", "In --read-logits oracle mode, bucket proposal top1 acceptance by exact top1/top2 margin") { margin_bucket_report = true }
   p.on("--margin-buckets LIST", "Comma-separated exact-margin bucket upper bounds for --margin-bucket-report") { |v| margin_bucket_edges = parse_f32_list(v) }
   p.on("--profile-phases", "Synchronize after each runner and print attribution timings; slower than default") { profile_phases = true }
@@ -298,6 +300,7 @@ raise "--steady-graph-reps does not support --profile-phases" if steady_graph_re
 raise "use either --steady-reps or --steady-graph-reps, not both" if steady_reps > 0 && steady_graph_reps > 0
 raise "--skip-output-head requires --perf-only" if skip_output_head && !perf_only
 raise "--skip-output-head is incompatible with --read-logits" if skip_output_head && read_logits
+raise "--gpu-logits-only is incompatible with --skip-output-head" if gpu_logits_only && skip_output_head
 raise "--greedy-loop-tokens must be non-negative" unless greedy_loop_tokens >= 0
 # CUDA graph replay is intentionally opt-in. On the RTX 5060 Ti / driver 595
 # test node the current captured greedy body can segfault inside
@@ -313,8 +316,9 @@ raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop
 raise "use either --greedy-loop-gpu-embedding or --greedy-loop-cpu-embedding, not both" if greedy_loop_gpu_embedding && greedy_loop_cpu_embedding
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
+raise "--gpu-logits-only is incompatible with --greedy-loop-tokens" if gpu_logits_only && greedy_loop_tokens > 0
 raise "--margin-bucket-report requires --read-logits" if margin_bucket_report && !read_logits
-raise "--margin-bucket-report is incompatible with --perf-only" if margin_bucket_report && perf_only
+raise "--margin-bucket-report is incompatible with --perf-only/--gpu-logits-only" if margin_bucket_report && perf_only
 raise "--margin-buckets must not be empty" if margin_bucket_report && margin_bucket_edges.empty?
 raise "--input-token requires --tokens=1" if input_token >= 0 && tokens != 1
 if greedy_loop_tokens > 0
@@ -333,7 +337,7 @@ layers = (0...hparams.n_layer).map(&.to_i32) if all_layers
 layers.each { |layer| raise "layer #{layer} out of range" unless layer < hparams.n_layer }
 hidden = hparams.n_embd
 debug_readback = false if perf_only
-read_logits = false if perf_only
+read_logits = false if perf_only && !gpu_logits_only
 
 rng = Random.new(seed)
 token_embd = load_quant_weight(gguf, "token_embd.weight")
@@ -655,8 +659,10 @@ begin
   gpu_top1_ids = skip_output_head ? [] of Int32 : (greedy_loop_tokens > 0 ? greedy_gpu_ids : output_head.top1_ids)
   top1_ok = skip_output_head || perf_only || gpu_top1_ids == cpu_top1_ids
   if read_logits && greedy_loop_tokens == 0
-    logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
-    ok = ok && logits_ok
+    unless gpu_logits_only
+      logits_ok = report_pair("logits", output_head.logits_gpu_all, cpu_logits_all, lines, 5.0e-3_f32)
+      ok = ok && logits_ok
+    end
     gpu_top2_ids = [] of Int32
     gpu_top1_values = [] of Float32
     gpu_top2_values = [] of Float32
@@ -673,8 +679,6 @@ begin
         ok = false
       end
     end
-    margin_max_diff = max_abs_diff(gpu_top_margins, cpu_top_margins)
-    margin_ok = margin_max_diff <= 5.0e-3_f32
     cuda_top_margins = Array(Float32).new(tokens) do |tok|
       output_head.top1_values_gpu[tok] - output_head.top2_values_gpu[tok]
     end
@@ -682,21 +686,26 @@ begin
                    output_head.top2_ids_gpu == gpu_top2_ids &&
                    max_abs_diff(cuda_top_margins, gpu_top_margins) <= 5.0e-3_f32
     lines << "top2_gpu=#{gpu_top2_ids.join(",")}"
-    lines << "top2_cpu=#{cpu_top2_ids.join(",")}"
+    lines << "top2_cpu=#{gpu_logits_only ? "skipped" : cpu_top2_ids.join(",")}"
     lines << "top2_cuda_gpu=#{output_head.top2_ids_gpu.join(",")}"
     lines << "top1_values_logits_gpu=#{gpu_top1_values.map { |v| v.round(6) }.join(",")}"
-    lines << "top1_values_cpu=#{cpu_top1_values.map { |v| v.round(6) }.join(",")}"
+    lines << "top1_values_cpu=#{gpu_logits_only ? "skipped" : cpu_top1_values.map { |v| v.round(6) }.join(",")}"
     lines << "top2_values_gpu=#{gpu_top2_values.map { |v| v.round(6) }.join(",")}"
-    lines << "top2_values_cpu=#{cpu_top2_values.map { |v| v.round(6) }.join(",")}"
+    lines << "top2_values_cpu=#{gpu_logits_only ? "skipped" : cpu_top2_values.map { |v| v.round(6) }.join(",")}"
     lines << "top2_values_cuda_gpu=#{output_head.top2_values_gpu.map { |v| v.round(6) }.join(",")}"
     lines << "top_margin_gpu=#{gpu_top_margins.map { |v| v.round(6) }.join(",")}"
-    lines << "top_margin_cpu=#{cpu_top_margins.map { |v| v.round(6) }.join(",")}"
+    lines << "top_margin_cpu=#{gpu_logits_only ? "skipped" : cpu_top_margins.map { |v| v.round(6) }.join(",")}"
     lines << "top_margin_cuda_gpu=#{cuda_top_margins.map { |v| v.round(6) }.join(",")}"
-    lines << "top_margin_max_diff=#{margin_max_diff}"
-    lines << "top_margin_ok=#{margin_ok}"
+    unless gpu_logits_only
+      margin_max_diff = max_abs_diff(gpu_top_margins, cpu_top_margins)
+      margin_ok = margin_max_diff <= 5.0e-3_f32
+      lines << "top_margin_max_diff=#{margin_max_diff}"
+      lines << "top_margin_ok=#{margin_ok}"
+      ok = ok && margin_ok
+    end
     lines << "top2_cuda_ok=#{cuda_top2_ok}"
     append_margin_bucket_report(lines, cpu_top1_ids, gpu_top1_ids, cpu_top_margins, margin_bucket_edges) if margin_bucket_report
-    ok = ok && margin_ok && cuda_top2_ok
+    ok = ok && cuda_top2_ok
   else
     lines << "logits_readback=false"
   end
@@ -742,6 +751,7 @@ begin
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "read_logits=#{read_logits}"
+  puts "gpu_logits_only=#{gpu_logits_only}"
   puts "margin_bucket_report=#{margin_bucket_report}"
   puts "profile_phases=#{profile_phases}"
   puts "debug_readback=#{debug_readback}"
