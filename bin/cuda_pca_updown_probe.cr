@@ -8,6 +8,7 @@ rank = 32
 warmup = 5
 reps = 50
 seed = 1234_u64
+parallel = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_pca_updown_probe [--hidden N] [--rank N] [--warmup N] [--reps N] [--seed N]"
@@ -16,6 +17,7 @@ OptionParser.parse do |p|
   p.on("--warmup N", "Warmup iterations, default 5") { |v| warmup = v.to_i }
   p.on("--reps N", "Timed repetitions, default 50") { |v| reps = v.to_i }
   p.on("--seed N", "Deterministic data seed") { |v| seed = v.to_u64 }
+  p.on("--parallel", "Use lane-parallel coefficient projection kernel") { parallel = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -76,7 +78,8 @@ buffers = [] of ML::CUDA::DeviceBuffer
 begin
   ctx = ML::CUDA::Context.create
   mod = ML::CUDA::CUDAModule.load(PCA_UPDOWN_PTX, "pca_updown")
-  fn = mod.not_nil!.function("ffn_pca_updown_fused_probe")
+  kernel_name = parallel ? "ffn_pca_updown_fused_parallel_probe" : "ffn_pca_updown_fused_probe"
+  fn = mod.not_nil!.function(kernel_name)
 
   sizes = [
     bytesize_f32(hidden),
@@ -149,6 +152,7 @@ begin
   puts "cuda_device=#{ctx.not_nil!.device_name}"
   puts "hidden=#{hidden}"
   puts "rank=#{rank}"
+  puts "kernel=#{kernel_name}"
   puts "warmup=#{warmup}"
   puts "reps=#{reps}"
   puts "cuda_ms_total=#{elapsed_ms.round(6)}"

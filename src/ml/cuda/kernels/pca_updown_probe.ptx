@@ -119,3 +119,155 @@ OUT_STORE:
 DONE:
     ret;
 }
+
+// Same operation as ffn_pca_updown_fused_probe, but split each coefficient dot
+// product across 4-8 lanes before reducing in shared memory. This mirrors the
+// Metal row kernel's useful shape and avoids serial hidden-size scans per rank.
+.visible .entry ffn_pca_updown_fused_parallel_probe(
+    .param .u64 x,
+    .param .u64 x_mean,
+    .param .u64 c_mean,
+    .param .u64 coeff_w,
+    .param .u64 down,
+    .param .u64 out,
+    .param .u32 hidden_dim,
+    .param .u32 rank
+)
+{
+    .reg .pred %p<16>;
+    .reg .b32 %r<56>;
+    .reg .b64 %rd<64>;
+    .reg .f32 %f<20>;
+    .shared .align 4 .b8 partials[2048];
+    .shared .align 4 .b8 coeffs_p[256];
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [x_mean];
+    ld.param.u64 %rd3, [c_mean];
+    ld.param.u64 %rd4, [coeff_w];
+    ld.param.u64 %rd5, [down];
+    ld.param.u64 %rd6, [out];
+    ld.param.u32 %r1, [hidden_dim];
+    ld.param.u32 %r2, [rank];
+
+    mov.u32 %r3, %tid.x;
+    mov.u32 %r4, %ntid.x;
+    setp.gt.u32 %p1, %r2, 64;
+    @%p1 mov.u32 %r2, 64;
+
+    setp.le.u32 %p2, %r2, 32;
+    @%p2 bra LANES_EIGHT;
+    mov.u32 %r5, 4;
+    bra LANES_DONE;
+LANES_EIGHT:
+    mov.u32 %r5, 8;
+LANES_DONE:
+
+    div.u32 %r6, %r3, %r5;  // coeff
+    rem.u32 %r7, %r3, %r5;  // lane
+    setp.ge.u32 %p3, %r6, %r2;
+    @%p3 bra PAR_COEFF_DONE;
+
+    mov.f32 %f1, 0f00000000;
+    mov.u32 %r8, %r7;
+
+PAR_COEFF_LOOP:
+    setp.ge.u32 %p4, %r8, %r1;
+    @%p4 bra PAR_PARTIAL_STORE;
+
+    mul.wide.u32 %rd7, %r8, 4;
+    add.s64 %rd8, %rd1, %rd7;
+    add.s64 %rd9, %rd2, %rd7;
+    ld.global.f32 %f2, [%rd8];
+    ld.global.f32 %f3, [%rd9];
+    sub.rn.f32 %f4, %f2, %f3;
+
+    mul.lo.u32 %r9, %r6, %r1;
+    add.u32 %r10, %r9, %r8;
+    mul.wide.u32 %rd10, %r10, 4;
+    add.s64 %rd11, %rd4, %rd10;
+    ld.global.f32 %f5, [%rd11];
+    fma.rn.f32 %f1, %f4, %f5, %f1;
+
+    add.u32 %r8, %r8, %r5;
+    bra PAR_COEFF_LOOP;
+
+PAR_PARTIAL_STORE:
+    mad.lo.u32 %r11, %r6, 8, %r7;
+    mul.wide.u32 %rd12, %r11, 4;
+    mov.u64 %rd13, partials;
+    add.s64 %rd14, %rd13, %rd12;
+    st.shared.f32 [%rd14], %f1;
+
+PAR_COEFF_DONE:
+    bar.sync 0;
+
+    // Lane 0 for each coefficient reduces its 4/8 partials and adds c_mean.
+    setp.ge.u32 %p5, %r6, %r2;
+    @%p5 bra PAR_REDUCE_DONE;
+    setp.ne.u32 %p6, %r7, 0;
+    @%p6 bra PAR_REDUCE_DONE;
+
+    mul.wide.u32 %rd15, %r6, 4;
+    add.s64 %rd16, %rd3, %rd15;
+    ld.global.f32 %f6, [%rd16];
+    mov.u32 %r12, 0;
+
+PAR_REDUCE_LOOP:
+    setp.ge.u32 %p7, %r12, %r5;
+    @%p7 bra PAR_COEFF_STORE;
+    mad.lo.u32 %r13, %r6, 8, %r12;
+    mul.wide.u32 %rd17, %r13, 4;
+    mov.u64 %rd18, partials;
+    add.s64 %rd19, %rd18, %rd17;
+    ld.shared.f32 %f7, [%rd19];
+    add.rn.f32 %f6, %f6, %f7;
+    add.u32 %r12, %r12, 1;
+    bra PAR_REDUCE_LOOP;
+
+PAR_COEFF_STORE:
+    mov.u64 %rd20, coeffs_p;
+    add.s64 %rd21, %rd20, %rd15;
+    st.shared.f32 [%rd21], %f6;
+
+PAR_REDUCE_DONE:
+    bar.sync 0;
+
+    mov.u32 %r14, %r3;
+
+PAR_OUT_LOOP:
+    setp.ge.u32 %p8, %r14, %r1;
+    @%p8 bra PAR_DONE;
+
+    mov.f32 %f8, 0f00000000;
+    mov.u32 %r15, 0;
+
+PAR_RANK_LOOP:
+    setp.ge.u32 %p9, %r15, %r2;
+    @%p9 bra PAR_OUT_STORE;
+
+    mov.u64 %rd22, coeffs_p;
+    mul.wide.u32 %rd23, %r15, 4;
+    add.s64 %rd24, %rd22, %rd23;
+    ld.shared.f32 %f9, [%rd24];
+
+    mul.lo.u32 %r16, %r15, %r1;
+    add.u32 %r17, %r16, %r14;
+    mul.wide.u32 %rd25, %r17, 4;
+    add.s64 %rd26, %rd5, %rd25;
+    ld.global.f32 %f10, [%rd26];
+    fma.rn.f32 %f8, %f9, %f10, %f8;
+
+    add.u32 %r15, %r15, 1;
+    bra PAR_RANK_LOOP;
+
+PAR_OUT_STORE:
+    mul.wide.u32 %rd27, %r14, 4;
+    add.s64 %rd28, %rd6, %rd27;
+    st.global.f32 [%rd28], %f8;
+    add.u32 %r14, %r14, %r4;
+    bra PAR_OUT_LOOP;
+
+PAR_DONE:
+    ret;
+}

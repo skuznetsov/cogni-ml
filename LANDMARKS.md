@@ -12163,3 +12163,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next pivot should wire this into `QwenRecurrentLayerRunner` as an opt-in replacement for selected recurrent layers, not spend more time on synthetic kernels.
 - maieutic: This probe does not prove model speedup. It only proves the replacement operation is cheap enough to justify integration.
 - adversary: The kernel uses synthetic adapter data and serial per-coeff dot products; real integrated timing may shift, but the lower-bound is already below dense FFN cost.
+
+**decision_update_222:** Added a lane-parallel CUDA PCA-updown microprobe variant and verified it improves the synthetic FFN-replacement lower bound. `bin/cuda_pca_updown_probe.cr --parallel` now selects `ffn_pca_updown_fused_parallel_probe`, which splits each coefficient dot product across 4-8 lanes and reduces the partials in shared memory before the down-basis expansion. This keeps the same adapter math as `decision_update_221`; only the coefficient projection schedule changes.
+
+**evidence_update_222:**
+- claim: "The lane-parallel CUDA PCA-updown probe is numerically correct for hidden 4096 and ranks 16/32/64."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_pca_updown_parallel_nocodegen crystal build bin/cuda_pca_updown_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_pca_updown_probe_parallel` -> exit 0; remote `/build/persisten/cogni-ml/tmp/cuda_pca_updown_parallel_ab_20260517.log` reported `ok=true` for serial and parallel ranks `16`, `32`, and `64`, with parallel max abs deltas below `2.9e-8`.
+  verified_at: 2026-05-17
+  decay_trigger: PCA-updown PTX, CUDA driver/runtime, hidden/rank dimensions, or adapter layout changes
+- claim: "Lane-parallel coefficient projection materially lowers the standalone PCA-updown cost."
+  source: same remote log: rank16 `0.151776 -> 0.082853ms/call`, rank32 `0.200613 -> 0.092375ms/call`, rank64 `0.231723 -> 0.130817ms/call`. Compared with fresh dense recurrent FFN profile `/build/persisten/cogni-ml/tmp/cuda_5layer_ffn_profile_20260517.log` at `~0.425-0.429ms/layer`, the parallel rank32/rank64 probe is about `4.6x/3.25x` cheaper than dense FFN in isolation.
+  verified_at: 2026-05-17
+  decay_trigger: dense FFN kernel changes, PCA-updown kernel integration, real adapter buffers, launch fusion, or prompt/layer selection changes
+
+**quadrumvirate_update_222:**
+- cassandra: The performance question has shifted from "is PCA-updown cheap enough?" to "can real adapters preserve proposal acceptance when replacing selected recurrent FFNs?"
+- daedalus: The next useful pivot is runner integration with real adapter buffers and layer masks; more synthetic schedule tuning has diminishing returns until acceptance is measured.
+- maieutic: This is still a lower-bound microprobe. It does not prove end-to-end self-draft speedup, because real inference adds adapter loading, layer scheduling, state effects, and exact verifier economics.
+- adversary: The parallel kernel uses shared memory and assumes rank <=64. It is appropriate for the current probe shape, but runner promotion needs guards around rank/layout and a parity/acceptance fallback.
