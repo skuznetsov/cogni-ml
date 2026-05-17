@@ -184,6 +184,17 @@ module ML::CUDA
       @profile_ffn_down_ms = 0.0
       @profile_final_add_ms = 0.0
       t_total = Time.instant
+      if ENV["QWEN_CUDA_FULL_ATTN_BATCHED_FFN_OFF"]? != "1" && @tokens > 1
+        runner.run_sequence
+        ML::CUDA.synchronize!("cuCtxSynchronize(full attention batched tail profile)")
+        phase_lines << "#{prefix}_profile_route=batched_tail"
+        phase_lines << "#{prefix}_profile_detail=route_only"
+        phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
+        return
+      end
+
+      phase_lines << "#{prefix}_profile_route=per_token"
+      phase_lines << "#{prefix}_profile_detail=detailed"
       profile_runner.run_sequence
       phase_lines << "#{prefix}_qk_rope_ms=#{@profile_qk_rope_ms.round(3)}"
       phase_lines << "#{prefix}_attn_decode_ms=#{@profile_attn_decode_ms.round(3)}"
@@ -267,13 +278,21 @@ module ML::CUDA
       swiglu_fn = dn_mod.function("swiglu_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
       q4_add_fn = q4_mod.function("q4_k_gemv_add_warp4_f32")
+      q4_batched_fn = q4_mod.function("q4_k_gemv_warp4_f32_batched")
+      q4_add_batched_fn = q4_mod.function("q4_k_gemv_add_warp4_f32_batched")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
       q6_add_fn = q6_mod.function("q6_k_gemv_add_warp4_f32")
+      q6_batched_fn = q6_mod.function("q6_k_gemv_warp4_f32_batched")
+      q6_add_batched_fn = q6_mod.function("q6_k_gemv_add_warp4_f32_batched")
       out_proj_fn = @output_type.q4_k? ? q4_fn : q6_fn
+      out_proj_batched_fn = @output_type.q4_k? ? q4_batched_fn : q6_batched_fn
       ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
+      ffn_down_add_batched_fn = @ffn_down_type.q4_k? ? q4_add_batched_fn : q6_add_batched_fn
       use_parallel_attn = ENV["QWEN_CUDA_FULL_ATTN_PARALLEL_OFF"]? != "1"
       attn_decode_fn = use_parallel_attn ? attn_parallel_fn : attn_fn
       attn_decode_block = use_parallel_attn ? 256_u32 : 1_u32
+      use_batched_tail = ENV["QWEN_CUDA_FULL_ATTN_BATCHED_FFN_OFF"]? != "1" && @tokens > 1
+      tail_rows = use_batched_tail ? @tokens : 1
 
       sizes = [bytesize_f32(@q_norm.size), bytesize_f32(@k_norm.size),
                bytesize_f32(@cos_table.size), bytesize_f32(@sin_table.size),
@@ -284,9 +303,9 @@ module ML::CUDA
                bytesize_f32(@tokens * @q_dim), @output_raw.size.to_u64,
                bytesize_f32(@tokens * @output_out_dim),
                bytesize_f32(@tokens * @output_out_dim), bytesize_f32(@post_norm.size),
-               bytesize_f32(@output_out_dim), bytesize_f32(@output_out_dim),
+               bytesize_f32(tail_rows * @output_out_dim), bytesize_f32(tail_rows * @output_out_dim),
                @ffn_gate_raw.size.to_u64, @ffn_up_raw.size.to_u64, @ffn_down_raw.size.to_u64,
-               bytesize_f32(@ffn_dim), bytesize_f32(@ffn_dim), bytesize_f32(@ffn_dim),
+               bytesize_f32(tail_rows * @ffn_dim), bytesize_f32(tail_rows * @ffn_dim), bytesize_f32(tail_rows * @ffn_dim),
                bytesize_f32(@output_out_dim), bytesize_f32(@tokens * @output_out_dim)]
       ptrs = sizes.map do |size_bytes|
         buffer = DeviceBuffer.new(size_bytes)
@@ -336,9 +355,11 @@ module ML::CUDA
       output_in_dim_u32 = @output_in_dim.to_u32
       output_out_dim_u32 = @output_out_dim.to_u32
       ffn_dim_u32 = @ffn_dim.to_u32
+      ffn_dim_all_u32 = (@tokens * @ffn_dim).to_u32
       output_grid = ((@output_out_dim + 3) // 4).to_u32
       ffn_grid = ((@ffn_dim + 3) // 4).to_u32
       swiglu_grid = ((@ffn_dim + 127) // 128).to_u32
+      swiglu_grid_all = (((@tokens * @ffn_dim) + 127) // 128).to_u32
 
       q_params = Pointer(Void*).malloc(11)
       q_params[0] = box_ptr(@q_full_device_ptr).as(Void*)
@@ -402,41 +423,50 @@ module ML::CUDA
 
       d_residual_cur_ptr = box_ptr(d_residual_input)
       d_proj_cur_ptr_for_add = box_ptr(d_proj_out)
+      d_residual_out_cur_ptr = box_ptr(d_residual)
+      d_cur2_cur_ptr = box_ptr(d_cur2)
       d_final_cur_ptr = box_ptr(d_final_all)
 
       add_rms_params = Pointer(Void*).malloc(7)
       add_rms_params[0] = d_residual_cur_ptr.as(Void*)
       add_rms_params[1] = d_proj_cur_ptr_for_add.as(Void*)
       add_rms_params[2] = box_ptr(d_post_norm).as(Void*)
-      add_rms_params[3] = box_ptr(d_residual).as(Void*)
-      add_rms_params[4] = box_ptr(d_cur2).as(Void*)
+      add_rms_params[3] = d_residual_out_cur_ptr.as(Void*)
+      add_rms_params[4] = d_cur2_cur_ptr.as(Void*)
       add_rms_params[5] = box_u32(output_out_dim_u32).as(Void*)
       add_rms_params[6] = box_f32(@eps).as(Void*)
 
+      d_ffn_input_cur_ptr = box_ptr(d_cur2)
+      d_ffn_gate_cur_ptr = box_ptr(d_ffn_gate)
+      d_ffn_up_cur_ptr = box_ptr(d_ffn_up)
+      d_ffn_comb_cur_ptr = box_ptr(d_ffn_comb)
+      d_ffn_residual_cur_ptr = box_ptr(d_residual)
+      swiglu_n_param = box_u32(ffn_dim_u32)
+
       ffn_gate_params = Pointer(Void*).malloc(5)
       ffn_gate_params[0] = box_ptr(d_ffn_gate_w).as(Void*)
-      ffn_gate_params[1] = box_ptr(d_cur2).as(Void*)
-      ffn_gate_params[2] = box_ptr(d_ffn_gate).as(Void*)
+      ffn_gate_params[1] = d_ffn_input_cur_ptr.as(Void*)
+      ffn_gate_params[2] = d_ffn_gate_cur_ptr.as(Void*)
       ffn_gate_params[3] = box_u32(output_out_dim_u32).as(Void*)
       ffn_gate_params[4] = box_u32(ffn_dim_u32).as(Void*)
 
       ffn_up_params = Pointer(Void*).malloc(5)
       ffn_up_params[0] = box_ptr(d_ffn_up_w).as(Void*)
-      ffn_up_params[1] = box_ptr(d_cur2).as(Void*)
-      ffn_up_params[2] = box_ptr(d_ffn_up).as(Void*)
+      ffn_up_params[1] = d_ffn_input_cur_ptr.as(Void*)
+      ffn_up_params[2] = d_ffn_up_cur_ptr.as(Void*)
       ffn_up_params[3] = box_u32(output_out_dim_u32).as(Void*)
       ffn_up_params[4] = box_u32(ffn_dim_u32).as(Void*)
 
       swiglu_params = Pointer(Void*).malloc(4)
-      swiglu_params[0] = box_ptr(d_ffn_gate).as(Void*)
-      swiglu_params[1] = box_ptr(d_ffn_up).as(Void*)
-      swiglu_params[2] = box_ptr(d_ffn_comb).as(Void*)
-      swiglu_params[3] = box_u32(ffn_dim_u32).as(Void*)
+      swiglu_params[0] = d_ffn_gate_cur_ptr.as(Void*)
+      swiglu_params[1] = d_ffn_up_cur_ptr.as(Void*)
+      swiglu_params[2] = d_ffn_comb_cur_ptr.as(Void*)
+      swiglu_params[3] = swiglu_n_param.as(Void*)
 
       ffn_down_params = Pointer(Void*).malloc(6)
       ffn_down_params[0] = box_ptr(d_ffn_down_w).as(Void*)
-      ffn_down_params[1] = box_ptr(d_ffn_comb).as(Void*)
-      ffn_down_params[2] = box_ptr(d_residual).as(Void*)
+      ffn_down_params[1] = d_ffn_comb_cur_ptr.as(Void*)
+      ffn_down_params[2] = d_ffn_residual_cur_ptr.as(Void*)
       ffn_down_params[3] = d_final_cur_ptr.as(Void*)
       ffn_down_params[4] = box_u32(ffn_dim_u32).as(Void*)
       ffn_down_params[5] = box_u32(output_out_dim_u32).as(Void*)
@@ -447,18 +477,53 @@ module ML::CUDA
           ML::CUDA.launch!(q_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
           ML::CUDA.launch!(k_fn, @tokens.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
           ML::CUDA.launch!(attn_decode_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
-          @tokens.times do |t|
-            d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
-            d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
-            ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
-            d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
-            d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
-            d_final_cur_ptr.value = d_final_all + bytesize_f32(t * @output_out_dim)
-            ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm")
-            ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "full ffn gate")
-            ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "full ffn up")
-            ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu")
-            ML::CUDA.launch!(ffn_down_add_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add")
+          if use_batched_tail
+            d_attn_cur_ptr.value = d_attn_out
+            d_proj_cur_ptr.value = d_proj_out
+            ML::CUDA.launch!(out_proj_batched_fn, output_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output batched")
+            @tokens.times do |t|
+              d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
+              d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
+              d_residual_out_cur_ptr.value = d_residual + bytesize_f32(t * @output_out_dim)
+              d_cur2_cur_ptr.value = d_cur2 + bytesize_f32(t * @output_out_dim)
+              ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm")
+            end
+            d_ffn_input_cur_ptr.value = d_cur2
+            d_ffn_gate_cur_ptr.value = d_ffn_gate
+            d_ffn_up_cur_ptr.value = d_ffn_up
+            d_ffn_comb_cur_ptr.value = d_ffn_comb
+            d_ffn_residual_cur_ptr.value = d_residual
+            d_final_cur_ptr.value = d_final_all
+            swiglu_n_param.value = ffn_dim_all_u32
+            ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "full ffn gate batched")
+            ML::CUDA.launch!(q4_batched_fn, ffn_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "full ffn up batched")
+            ML::CUDA.launch!(swiglu_fn, swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu batched")
+            ML::CUDA.launch!(ffn_down_add_batched_fn, output_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add batched")
+            swiglu_n_param.value = ffn_dim_u32
+            d_residual_out_cur_ptr.value = d_residual
+            d_cur2_cur_ptr.value = d_cur2
+          else
+            @tokens.times do |t|
+              d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
+              d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
+              ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
+              d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
+              d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
+              d_residual_out_cur_ptr.value = d_residual
+              d_cur2_cur_ptr.value = d_cur2
+              d_final_cur_ptr.value = d_final_all + bytesize_f32(t * @output_out_dim)
+              d_ffn_input_cur_ptr.value = d_cur2
+              d_ffn_gate_cur_ptr.value = d_ffn_gate
+              d_ffn_up_cur_ptr.value = d_ffn_up
+              d_ffn_comb_cur_ptr.value = d_ffn_comb
+              d_ffn_residual_cur_ptr.value = d_residual
+              swiglu_n_param.value = ffn_dim_u32
+              ML::CUDA.launch!(add_rmsnorm_fn, 1_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm")
+              ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_gate_params, "full ffn gate")
+              ML::CUDA.launch!(q4_fn, ffn_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_up_params, "full ffn up")
+              ML::CUDA.launch!(swiglu_fn, swiglu_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu")
+              ML::CUDA.launch!(ffn_down_add_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add")
+            end
           end
         end
       }

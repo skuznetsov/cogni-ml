@@ -12597,3 +12597,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful frame is now verifier architecture: build a shared-weight verifier view or same-stack snapshot/rollback verifier with sublinear known-span execution, not another output-head allocation tweak.
 - maieutic: A fitting full token1 probe only proves allocation correctness for the no-logits path. It does not prove faster decode, nor does it solve duplicate verifier stack memory.
 - adversary: Do not report chunk speculation as improved from this patch. The measured same-stack sequential path is still about two full passes and remains a diagnostic/refutation anchor.
+
+**decision_update_249:** Extended exact CUDA known-span WBA to full-attention layer tails and promoted it to the default `tokens > 1` route. Full-attention KV already runs Q/K/cache/attention over all rows together; the new route additionally batches attention output projection and the FFN gate/up/SwiGLU/down-add tail, with a per-row add-rmsnorm cut. `QWEN_CUDA_FULL_ATTN_BATCHED_FFN_OFF=1` restores the prior per-token tail.
+
+**evidence_update_249:**
+- claim: "Default full-attention tail WBA preserves measured all-layer final hidden rows and gives a small known-span speed win on RTX 5060 Ti."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_fullattn_batched_tail_default_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check -- src/ml/cuda/qwen_full_attn_kv_runner.cr` -> exit 0; remote build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_fullattn_tail_default` -> exit 0. Remote Qwen3.5-9B all-layer A/B on RTX 5060 Ti with final-hidden dumps: tokens2 off/default `33.069 -> 32.879 ms/tok`; tokens8 `23.596 -> 23.248`; tokens16 `22.057 -> 21.702`. Top1 sequences matched for all rows; final-hidden comparisons had `max_abs=0`, `rms=0`, `cos=1.0`.
+  verified_at: 2026-05-17
+  decay_trigger: full-attention KV runner tail scheduling, Q4/Q6 batched GEMV ABI, add-rmsnorm layout, CUDA driver/JIT, model layer shapes, or prompt/span suite changes
+- claim: "CUDA phase profiling now identifies the active full-attention WBA route instead of silently reporting stale per-token detail."
+  source: remote all-layer tokens8 profile on the same binary prints full-attention KV lines such as `phase_layer3_kv_profile_route=batched_tail`, `phase_layer3_kv_profile_detail=route_only`, while recurrent layers still print `batched_projection_ffn` with override components.
+  verified_at: 2026-05-17
+  decay_trigger: profile runner wiring, env gate policy, mixed-stack profile output format, or full-attention runner refactor
+
+**quadrumvirate_update_249:**
+- cassandra: The win is expectedly modest because only the full-attention tail is new; recurrent projection+FFN WBA was already default-on and full-attention attention itself was already row-batched.
+- daedalus: This closes one exact known-span wrapper gap. The remaining large CUDA gap is still verifier architecture and hot Q4/Q6 kernel economics, not another small tail wrapper.
+- maieutic: `max_abs=0` on these spans does not prove every prompt or future refactor, but it is strong evidence for the current all-layer known-span route because the final hidden rows match exactly.
+- adversary: Do not use the route-only profile as component attribution. It only confirms the active full-attention WBA route and wall timing; deeper component timing would need separate instrumentation.
