@@ -11933,3 +11933,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next pivot is controller integration, not more standalone point sweeps: run raw-Q8 as an approximate proposal lane, fall back below threshold, and verify exact outputs.
 - maieutic: Teacher-forced agreement is not acceptance under free-running draft states. Exact verifier parity and wall-clock are still the promotion criteria.
 - adversary: `top2_cuda_ok=false` on multi-row sequence inputs shows why diagnostics must use materialized logits scan for per-row truth; do not reuse resident top1/top2 buffers as sequence-wide evidence until that path is fixed separately.
+
+**decision_update_209:** Added `--greedy-loop-read-logits` to measure raw-Q8 free-run drift directly. The option is diagnostic-only: it forces CPU feedback and no graph, preserves CUDA logits readback in `--perf-only`, scans logits after each generated token, and reports per-token top1/top2/margins. This intentionally sacrifices speed to answer the self-spec question that teacher-forced sequence gates cannot answer: whether raw-Q8 diverges when it feeds its own proposals back.
+
+**evidence_update_209:**
+- claim: "The CUDA probe can now report per-token top2/margins during greedy-loop free-run generation."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_probe_greedy_logits crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_greedy_logits` -> exit 0; remote greedy-loop runs printed `greedy_top1_logits_gpu`, `greedy_top2_gpu`, `greedy_top_margin_gpu`, and empty `greedy_logits_top1_mismatches`.
+  verified_at: 2026-05-17
+  decay_trigger: greedy-loop scheduler, output-head logits readback, CUDA top1/logits path, or probe option semantics change
+- claim: "Ungated raw-Q8 free-run drifts, but a raw-margin threshold near `0.030` catches observed first divergences before cascade."
+  source: remote suite `/build/persisten/cogni-ml/tmp/raw_q8_free_run_greedy_logits_suite_20260517.log` over 8 seeds at `gen=32`: ungated raw-Q8 matched base `220/256` (`85.94%`) because seed `0` diverged at pos `0` and seed `760` at pos `23`; threshold `raw_margin>=0.030` caught `2/2` first divergences, kept `210/215` pre-divergence positions, and all kept positions matched (`210/210`). Diagnostic wall still favored raw-Q8, `26.440ms -> 24.065ms` (`+8.98%`).
+  verified_at: 2026-05-17
+  decay_trigger: seed/prompt distribution, margin threshold, raw-Q8 route, verifier/controller policy, or CUDA timing mode changes
+
+**quadrumvirate_update_209:**
+- cassandra: Raw-Q8 cannot be trusted as an ungated free-running draft; rare low-margin swaps cascade into long sequence mismatch.
+- daedalus: The next implementation should be a guarded controller, not more raw-only free-run: use raw when margin is high, exact fallback when margin is low, then measure parity and wall.
+- maieutic: Margin is a local confidence signal, not a semantic quality proof. Promotion still requires exact verifier parity on real prompts.
+- adversary: The diagnostic uses CPU feedback/full-logit readback, so its absolute wall is not the production path. Use it for drift/margin evidence only.

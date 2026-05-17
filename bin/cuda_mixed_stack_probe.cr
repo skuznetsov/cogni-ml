@@ -253,6 +253,7 @@ greedy_loop_no_graph = false
 greedy_loop_graph_device_ready = false
 greedy_loop_gpu_embedding = false
 greedy_loop_cpu_embedding = false
+greedy_loop_read_logits = false
 seed_token = 0
 input_token = -1
 input_tokens = [] of Int32
@@ -284,6 +285,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-graph-device-ready", "Instantiate the greedy-loop CUDA graph with DEVICE_LAUNCH constraints; still host-launched by this probe") { greedy_loop_graph_device_ready = true }
   p.on("--greedy-loop-gpu-embedding", "Feed greedy-loop top1 ids back through a CUDA Q4_K token-embedding kernel instead of per-token CPU readback/embedding upload") { greedy_loop_gpu_embedding = true }
   p.on("--greedy-loop-cpu-embedding", "Force per-token CPU top1 readback and embedding upload in --greedy-loop-tokens mode") { greedy_loop_cpu_embedding = true }
+  p.on("--greedy-loop-read-logits", "Diagnostic: read CUDA logits/top2 margins after each greedy-loop token; forces CPU feedback and no graph") { greedy_loop_read_logits = true; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
   p.on("--input-tokens LIST", "Use comma-separated token_embd IDs as the non-greedy semantic input sequence") { |v| input_tokens_provided = true; input_tokens = parse_i32_list(v) }
@@ -322,6 +324,9 @@ raise "--greedy-loop-graph requires --greedy-loop-tokens" if greedy_loop_graph &
 raise "--greedy-loop-graph-device-ready requires --greedy-loop-graph" if greedy_loop_graph_device_ready && !greedy_loop_graph
 raise "--greedy-loop-gpu-embedding requires --greedy-loop-tokens" if greedy_loop_gpu_embedding && greedy_loop_tokens == 0
 raise "use either --greedy-loop-gpu-embedding or --greedy-loop-cpu-embedding, not both" if greedy_loop_gpu_embedding && greedy_loop_cpu_embedding
+raise "--greedy-loop-read-logits requires --greedy-loop-tokens" if greedy_loop_read_logits && greedy_loop_tokens == 0
+raise "--greedy-loop-read-logits is incompatible with --skip-output-head" if greedy_loop_read_logits && skip_output_head
+raise "--greedy-loop-read-logits is incompatible with --greedy-loop-graph" if greedy_loop_read_logits && greedy_loop_graph
 raise "--input-token must be non-negative" if input_token < -1
 raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token there" if input_token >= 0 && greedy_loop_tokens > 0
 raise "--input-tokens must not be empty when provided" if input_tokens_provided && input_tokens.empty?
@@ -348,7 +353,7 @@ layers = (0...hparams.n_layer).map(&.to_i32) if all_layers
 layers.each { |layer| raise "layer #{layer} out of range" unless layer < hparams.n_layer }
 hidden = hparams.n_embd
 debug_readback = false if perf_only
-read_logits = false if perf_only && !gpu_logits_only
+read_logits = false if perf_only && !gpu_logits_only && !greedy_loop_read_logits
 
 rng = Random.new(seed)
 token_embd = load_quant_weight(gguf, "token_embd.weight")
@@ -505,6 +510,12 @@ begin
   greedy_embedding_ms = 0.0
   greedy_body_ms = 0.0
   greedy_read_ms = 0.0
+  greedy_logits_top1_ids = [] of Int32
+  greedy_top2_ids = [] of Int32
+  greedy_top1_values = [] of Float32
+  greedy_top2_values = [] of Float32
+  greedy_top_margins = [] of Float32
+  greedy_logits_mismatches = [] of String
   if greedy_loop_tokens > 0
     warmup.times do
       warm_token = seed_token
@@ -586,6 +597,15 @@ begin
           t_read = Time.instant
           mixed_stack.read_head_outputs
           greedy_read_ms += (Time.instant - t_read).total_milliseconds
+          if greedy_loop_read_logits
+            best_id, best, second_id, second, margin = top2_from_logits(output_head.logits_gpu_all, 0, head_weights.vocab)
+            greedy_logits_top1_ids << best_id
+            greedy_top2_ids << second_id
+            greedy_top1_values << best
+            greedy_top2_values << second
+            greedy_top_margins << margin
+            greedy_logits_mismatches << "#{i}:#{best_id}:#{output_head.top1_ids[0]}" if best_id != output_head.top1_ids[0]
+          end
           gpu_token = output_head.top1_ids[0]
           greedy_gpu_ids << gpu_token
         end
@@ -667,6 +687,14 @@ begin
       lines << "final_all_check=skipped_for_greedy_loop"
     else
       lines << "debug_readback=false"
+    end
+    if greedy_loop_read_logits
+      lines << "greedy_top1_logits_gpu=#{greedy_logits_top1_ids.join(",")}"
+      lines << "greedy_top2_gpu=#{greedy_top2_ids.join(",")}"
+      lines << "greedy_top1_values_gpu=#{greedy_top1_values.map { |v| v.round(6) }.join(",")}"
+      lines << "greedy_top2_values_gpu=#{greedy_top2_values.map { |v| v.round(6) }.join(",")}"
+      lines << "greedy_top_margin_gpu=#{greedy_top_margins.map { |v| v.round(6) }.join(",")}"
+      lines << "greedy_logits_top1_mismatches=#{greedy_logits_mismatches.join(",")}"
     end
   elsif perf_only
     lines << "perf_only=true"
@@ -777,6 +805,7 @@ begin
   puts "greedy_loop_no_graph=#{greedy_loop_no_graph}"
   puts "greedy_loop_gpu_embedding=#{greedy_loop_gpu_embedding}"
   puts "greedy_loop_cpu_embedding=#{greedy_loop_cpu_embedding}"
+  puts "greedy_loop_read_logits=#{greedy_loop_read_logits}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"
