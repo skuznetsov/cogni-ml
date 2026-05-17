@@ -12145,3 +12145,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next cheap-body path should be FFN replacement, not FFN deletion: PCA/updown, blockpred sparse FFN, or another learned residual adapter that keeps decision boundaries.
 - maieutic: Single-token teacher-forced agreement is not final acceptance, but the bad quality/small speed frontier is enough to avoid a full controller around pure skip.
 - adversary: Keep the diagnostic because it is a useful lower-bound and mask probe; do not promote it as a speedup feature.
+
+**decision_update_221:** Added a standalone CUDA PCA-updown FFN replacement microprobe and verified the math/cost lower bound. The new `ffn_pca_updown_fused_probe` kernel implements the same adapter contract as the Metal `ffn_pca_updown_fused_rows` path for a single token: `coeff = c_mean + (x - x_mean) * coeff_w^T`, then `out = coeff * down_basis`. It is intentionally standalone and synthetic, not wired into model inference yet, so the claim is limited to kernel feasibility and lower-bound cost.
+
+**evidence_update_221:**
+- claim: "The CUDA PCA-updown microprobe is numerically correct for hidden 4096 and ranks 16/32/64."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_pca_updown_nocodegen crystal build bin/cuda_pca_updown_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_pca_updown_probe` -> exit 0; remote `/build/persisten/cogni-ml/tmp/cuda_pca_updown_probe_20260517.log` reported `ok=true` for ranks `16`, `32`, and `64`, with max abs deltas `3.26e-9`, `4.66e-9`, and `8.38e-9`.
+  verified_at: 2026-05-17
+  decay_trigger: PCA-updown PTX, CUDA driver/runtime, hidden/rank dimensions, or adapter layout changes
+- claim: "Standalone CUDA PCA-updown has the right cost scale to replace dense FFN work if acceptance holds."
+  source: same remote log: rank16 `0.151765ms/call`, rank32 `0.200593ms/call`, rank64 `0.231159ms/call` for hidden 4096. A fresh 5-layer profile `/build/persisten/cogni-ml/tmp/cuda_5layer_ffn_profile_20260517.log` measured dense recurrent FFN around `0.425-0.429ms/layer`, so rank32/64 PCA-updown is roughly half the dense FFN layer cost in this standalone lower-bound probe.
+  verified_at: 2026-05-17
+  decay_trigger: dense FFN kernel changes, PCA-updown kernel integration, real adapter buffers, launch fusion, or prompt/layer selection changes
+
+**quadrumvirate_update_221:**
+- cassandra: PCA-updown has a plausible cost shape on CUDA; the risk is no longer kernel math but acceptance when wired into real recurrent layers.
+- daedalus: The next pivot should wire this into `QwenRecurrentLayerRunner` as an opt-in replacement for selected recurrent layers, not spend more time on synthetic kernels.
+- maieutic: This probe does not prove model speedup. It only proves the replacement operation is cheap enough to justify integration.
+- adversary: The kernel uses synthetic adapter data and serial per-coeff dot products; real integrated timing may shift, but the lower-bound is already below dense FFN cost.

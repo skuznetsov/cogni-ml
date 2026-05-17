@@ -1,0 +1,121 @@
+.version 8.0
+.target sm_80
+.address_size 64
+
+// Single-token PCA-updown FFN replacement probe.
+//
+// Computes:
+//   coeff[j] = c_mean[j] + dot(x - x_mean, coeff_w[j, :])
+//   out[d]   = sum_j coeff[j] * down[j, d]
+//
+// This correctness-first kernel intentionally keeps coefficient dot products
+// serial per coefficient. It is a lower-bound probe for replacing dense FFN
+// work with rank<=64 adapter math before wiring model-specific buffers.
+.visible .entry ffn_pca_updown_fused_probe(
+    .param .u64 x,
+    .param .u64 x_mean,
+    .param .u64 c_mean,
+    .param .u64 coeff_w,
+    .param .u64 down,
+    .param .u64 out,
+    .param .u32 hidden_dim,
+    .param .u32 rank
+)
+{
+    .reg .pred %p<12>;
+    .reg .b32 %r<40>;
+    .reg .b64 %rd<48>;
+    .reg .f32 %f<16>;
+    .shared .align 4 .b8 coeffs[256];
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [x_mean];
+    ld.param.u64 %rd3, [c_mean];
+    ld.param.u64 %rd4, [coeff_w];
+    ld.param.u64 %rd5, [down];
+    ld.param.u64 %rd6, [out];
+    ld.param.u32 %r1, [hidden_dim];
+    ld.param.u32 %r2, [rank];
+
+    mov.u32 %r3, %tid.x;
+    mov.u32 %r4, %ntid.x;
+    setp.gt.u32 %p1, %r2, 64;
+    @%p1 mov.u32 %r2, 64;
+
+    // One lane per coefficient computes a full hidden-dimensional dot product.
+    setp.ge.u32 %p2, %r3, %r2;
+    @%p2 bra COEFF_DONE;
+
+    mul.wide.u32 %rd7, %r3, 4;
+    add.s64 %rd8, %rd3, %rd7;
+    ld.global.f32 %f1, [%rd8];
+    mov.u32 %r5, 0;
+
+COEFF_LOOP:
+    setp.ge.u32 %p3, %r5, %r1;
+    @%p3 bra COEFF_STORE;
+
+    mul.wide.u32 %rd9, %r5, 4;
+    add.s64 %rd10, %rd1, %rd9;
+    add.s64 %rd11, %rd2, %rd9;
+    ld.global.f32 %f2, [%rd10];
+    ld.global.f32 %f3, [%rd11];
+    sub.rn.f32 %f4, %f2, %f3;
+
+    mul.lo.u32 %r6, %r3, %r1;
+    add.u32 %r7, %r6, %r5;
+    mul.wide.u32 %rd12, %r7, 4;
+    add.s64 %rd13, %rd4, %rd12;
+    ld.global.f32 %f5, [%rd13];
+    fma.rn.f32 %f1, %f4, %f5, %f1;
+
+    add.u32 %r5, %r5, 1;
+    bra COEFF_LOOP;
+
+COEFF_STORE:
+    mov.u64 %rd14, coeffs;
+    add.s64 %rd15, %rd14, %rd7;
+    st.shared.f32 [%rd15], %f1;
+
+COEFF_DONE:
+    bar.sync 0;
+
+    // All lanes stream output dimensions and sum over the small rank.
+    mov.u32 %r8, %r3;
+
+OUT_LOOP:
+    setp.ge.u32 %p4, %r8, %r1;
+    @%p4 bra DONE;
+
+    mov.f32 %f6, 0f00000000;
+    mov.u32 %r9, 0;
+
+RANK_LOOP:
+    setp.ge.u32 %p5, %r9, %r2;
+    @%p5 bra OUT_STORE;
+
+    mov.u64 %rd16, coeffs;
+    mul.wide.u32 %rd17, %r9, 4;
+    add.s64 %rd18, %rd16, %rd17;
+    ld.shared.f32 %f7, [%rd18];
+
+    mul.lo.u32 %r10, %r9, %r1;
+    add.u32 %r11, %r10, %r8;
+    mul.wide.u32 %rd19, %r11, 4;
+    add.s64 %rd20, %rd5, %rd19;
+    ld.global.f32 %f8, [%rd20];
+    fma.rn.f32 %f6, %f7, %f8, %f6;
+
+    add.u32 %r9, %r9, 1;
+    bra RANK_LOOP;
+
+OUT_STORE:
+    mul.wide.u32 %rd21, %r8, 4;
+    add.s64 %rd22, %rd6, %rd21;
+    st.global.f32 [%rd22], %f6;
+    add.u32 %r8, %r8, %r4;
+    bra OUT_LOOP;
+
+DONE:
+    ret;
+}
