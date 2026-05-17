@@ -12451,3 +12451,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Next attribution needs either WBA-aware phase timing inside `run_sequence_override` or external route-level timing slices, not the current per-token profile runner.
 - maieutic: The stale profile only invalidates WBA phase attribution. It does not invalidate the route-level timing or final-hidden equality gates.
 - adversary: Treat any future WBA phase table as suspect unless the output explicitly states it is profiling the override path.
+
+**decision_update_240:** Fixed CUDA recurrent phase profiling for active WBA routes. `QwenRecurrentLayerRunner#run_sequence_profiled` now detects `QWEN_CUDA_BATCHED_FFN=1` and optional `QWEN_CUDA_BATCHED_PROJECTIONS=1`, runs the real `ResidentSequenceRunner#run_sequence` override path, synchronizes, and emits explicit `profile_route` plus `profile_detail=route_only`. Non-WBA runs keep the detailed per-token phase breakdown.
+
+**evidence_update_240:**
+- claim: "CUDA `--profile-phases` now profiles the actual opt-in WBA route at route level instead of the stale per-token path."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_wba_profile_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_wba_profile` -> exit 0. Remote Qwen3.5-9B all-layer tokens8 profile on RTX 5060 Ti: baseline `routes=per_token:24`, `cuda_ms_per_token=27.655`, `sum_layer_ms=189.071`, `top1_gpu=2...`; WBA `routes=batched_projection_ffn:24`, `cuda_ms_per_token=23.116`, `sum_layer_ms=152.459`, matching top1.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent profile runner wiring, WBA env gates, mixed-stack profile implementation, or route override logic changes
+
+**quadrumvirate_update_240:**
+- cassandra: Route-level WBA profiling now agrees with the earlier non-profiled speed signal; the stale-profile blind spot is closed.
+- daedalus: We still lack component-level attribution inside the WBA override. The next profiler step should split `attn_norm batch`, `batched projections`, `serial core`, and `batched FFN` inside the override only if that split will drive a concrete next optimization.
+- maieutic: `profile_detail=route_only` is intentional. It avoids fake detailed attribution; component labels should not be inferred from this output.
+- adversary: Full-attention layers still provide their own detailed profile lines, so aggregate scripts must distinguish recurrent `profile_route` lines from full-attention projection lines.

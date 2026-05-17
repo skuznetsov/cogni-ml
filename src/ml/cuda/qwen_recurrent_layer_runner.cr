@@ -395,6 +395,20 @@ module ML::CUDA
       @profile_ffn_pca_updown_ms = 0.0
       @profile_final_add_ms = 0.0
       t_total = Time.instant
+      batched_ffn_profile = ENV["QWEN_CUDA_BATCHED_FFN"]? == "1" && @tokens > 1 &&
+                            !@ffn_skip_enabled && !@ffn_pca_updown_enabled && !@ffn_raw_q8_enabled
+      if batched_ffn_profile
+        batched_projection_profile = ENV["QWEN_CUDA_BATCHED_PROJECTIONS"]? == "1"
+        runner.run_sequence
+        ML::CUDA.synchronize!("cuCtxSynchronize(recurrent batched WBA profile)")
+        phase_lines << "#{prefix}_profile_route=#{batched_projection_profile ? "batched_projection_ffn" : "batched_ffn"}"
+        phase_lines << "#{prefix}_profile_detail=route_only"
+        phase_lines << "#{prefix}_profiled_ms=#{((Time.instant - t_total).total_milliseconds).round(3)}"
+        return
+      end
+
+      phase_lines << "#{prefix}_profile_route=per_token"
+      phase_lines << "#{prefix}_profile_detail=detailed"
       profile_runner.run_sequence
       phase_lines << "#{prefix}_attn_norm_ms=#{@profile_attn_norm_ms.round(3)}"
       phase_lines << "#{prefix}_projection_ms=#{@profile_projection_ms.round(3)}"
