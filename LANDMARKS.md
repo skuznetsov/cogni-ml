@@ -12891,3 +12891,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The correct next frame is not another ranking micro-route. Either remove logits materialization with a fused Q6 partial-topK design, or return to FFN/projection arithmetic.
 - maieutic: Exactness alone is insufficient; this adds ranking code surface without material speed.
 - adversary: Do not resurrect top1-only scan unless it comes bundled with a no-logits fused output-head route or a broader controller path that proves it matters.
+
+**decision_update_266:** Extended LTP/WBA weight-stationary token batching to the full-attention Q/K/V projection bundle. Full-attention `attn_q`/`attn_k` are Q4_K and `attn_v` is Q4_K/Q6_K; the projection runner now normalizes the whole known span once, then uses Q4/Q6 tbatch4 for Q/K/V over four-token bands. `QWEN_CUDA_FULL_ATTN_QKV_TBATCH4_OFF=1` restores the previous per-token projection route.
+
+**evidence_update_266:**
+- claim: "Full-attention Q/K/V tbatch4 composes exactly with the all-layer Qwen3.5-9B CUDA stack."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_fullattn_qkv_tbatch_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only --no-codegen` and `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/qwen_full_attn_projection_runner.cr` -> exit 0; remote RTX 5060 Ti all-layer tokens8 A/B with `QWEN_CUDA_FULL_ATTN_QKV_TBATCH4_OFF=1` vs default printed matching top1 and final-hidden comparison `max_abs=0`, `rms=0`, `cos=0.99999999999999989`.
+  verified_at: 2026-05-17
+  decay_trigger: full-attention projection layout, Q4/Q6 tbatch PTX ABI, input norm batched kernel, CUDA driver/JIT, or Qwen full-attention q/k/v tensor shapes
+- claim: "Full-attention Q/K/V tbatch4 is a material exact known-span speedup."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B tokens16 three-pass A/B improved default-on vs opt-out from `201.073/201.270/201.402ms` to `193.459/193.419/193.532ms` total, with identical top1 ids. Profile after promotion shows `sum_projection_ms=30.887`, down from the prior current profile `sum_projection_ms=38.650`.
+  verified_at: 2026-05-17
+  decay_trigger: repeated timing suite, CUDA clock/thermal state, profile instrumentation, or future full-attention projection fusion route changes
+
+**quadrumvirate_update_266:**
+- cassandra: This was the missed WBA corridor: full-attention projections were still per-token while recurrent projections had already moved to token-band reuse.
+- daedalus: The useful pivot was away from ranking micro-optimizations and back to shape attribution; the `projection_ms` suffix mixed recurrent and full-attention projections, hiding this gap until the runner audit.
+- maieutic: The branch only applies to known-span token counts divisible by four. It does not improve single-token greedy decode.
+- adversary: Keep the opt-out because full-attention projection feeds KV/cache state; final-hidden equality is the required guard after any future pointer/layout rewrite.

@@ -162,9 +162,14 @@ module ML::CUDA
       @modules.concat([dn_mod, q4_mod, q6_mod])
 
       input_norm_fn = dn_mod.function("rmsnorm_vec_parallel_probe")
+      input_norm_batched_fn = dn_mod.function("rmsnorm_vec_parallel_batched_probe")
       q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
+      q4_tbatch4_fn = q4_mod.function("q4_k_gemv_warp4_f32_tbatch4")
       q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
+      q6_tbatch4_fn = q6_mod.function("q6_k_gemv_warp4_f32_tbatch4")
       v_fn = @v_type.q4_k? ? q4_fn : q6_fn
+      v_tbatch4_fn = @v_type.q4_k? ? q4_tbatch4_fn : q6_tbatch4_fn
+      use_projection_tbatch4 = ENV["QWEN_CUDA_FULL_ATTN_QKV_TBATCH4_OFF"]? != "1" && @tokens >= 4 && (@tokens % 4 == 0)
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
                @q_raw.size.to_u64, @k_raw.size.to_u64, @v_raw.size.to_u64,
@@ -257,12 +262,44 @@ module ML::CUDA
         ML::CUDA.launch!(v_fn, v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, v_params, "attn v")
       }
 
+      run_sequence_override = -> {
+        if @input_norm
+          d_x_cur_ptr.value = @input_device_base.not_nil!
+          d_norm_cur_ptr.value = d_norm_all
+          d_proj_input_cur_ptr.value = d_norm_all
+          ML::CUDA.launch!(input_norm_batched_fn, @tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, input_norm_params, "attn input norm batched")
+        else
+          d_proj_input_cur_ptr.value = @input_device_base.not_nil!
+        end
+
+        groups = @tokens // 4
+        groups.times do |group|
+          tok = group * 4
+          d_proj_input_cur_ptr.value = (@input_norm ? d_norm_all : @input_device_base.not_nil!) + bytesize_f32(tok * @hidden)
+          d_q_cur_ptr.value = d_q_all + bytesize_f32(tok * @q_dim)
+          ML::CUDA.launch!(q4_tbatch4_fn, q_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, q_params, "attn q tbatch4")
+          d_k_cur_ptr.value = d_k_all + bytesize_f32(tok * @k_dim)
+          ML::CUDA.launch!(q4_tbatch4_fn, k_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, k_params, "attn k tbatch4")
+          d_v_cur_ptr.value = d_v_all + bytesize_f32(tok * @v_dim)
+          ML::CUDA.launch!(v_tbatch4_fn, v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, v_params, "attn v tbatch4")
+        end
+
+        d_proj_input_cur_ptr.value = @input_norm ? d_norm_all : @input_device_base.not_nil!
+        d_q_cur_ptr.value = d_q_all
+        d_k_cur_ptr.value = d_k_all
+        d_v_cur_ptr.value = d_v_all
+      }
+
       read_outputs = -> {
         ML::CUDA.copy_dtoh!(@q_gpu_all.to_unsafe.as(Void*), d_q_all, bytesize_f32(@q_gpu_all.size), "q_all")
         ML::CUDA.copy_dtoh!(@k_gpu_all.to_unsafe.as(Void*), d_k_all, bytesize_f32(@k_gpu_all.size), "k_all")
         ML::CUDA.copy_dtoh!(@v_gpu_all.to_unsafe.as(Void*), d_v_all, bytesize_f32(@v_gpu_all.size), "v_all")
       }
-      @runner = ResidentSequenceRunner.new(@tokens, upload_weights, reset_sequence, run_token, read_outputs)
+      @runner = if use_projection_tbatch4
+                  ResidentSequenceRunner.new(@tokens, upload_weights, reset_sequence, run_token, read_outputs, run_sequence_override)
+                else
+                  ResidentSequenceRunner.new(@tokens, upload_weights, reset_sequence, run_token, read_outputs)
+                end
     end
 
     private def runner : ResidentSequenceRunner
