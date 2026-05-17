@@ -136,9 +136,10 @@ warmup = 0
 tokens = 1
 batched = false
 residual_add = false
+q6_tbatch4 = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_ffn_sequence_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched] [--residual-add]"
+  p.banner = "Usage: cuda_ffn_sequence_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched] [--residual-add] [--q6-tbatch4]"
   p.on("--model PATH", "Qwen Q4_K_M GGUF model path") { |v| model = v }
   p.on("--layer N", "Layer index") { |v| layer = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
@@ -147,6 +148,7 @@ OptionParser.parse do |p|
   p.on("--tokens N", "Number of independent FFN rows to run") { |v| tokens = v.to_i }
   p.on("--batched", "Use batched Q4/Q6 GEMV kernels for all rows") { batched = true }
   p.on("--residual-add", "Use down+residual add kernels to mirror the recurrent runner FFN tail") { residual_add = true }
+  p.on("--q6-tbatch4", "Use the experimental weight-stationary 4-token Q6 down+add kernel") { q6_tbatch4 = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -155,6 +157,8 @@ raise "layer must be non-negative" unless layer >= 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
 raise "tokens must be positive" unless tokens > 0
+raise "--q6-tbatch4 requires --batched --residual-add" if q6_tbatch4 && !(batched && residual_add)
+raise "--q6-tbatch4 requires --tokens to be a multiple of 4" if q6_tbatch4 && tokens % 4 != 0
 
 gguf = ML::GGUF::GGUFFile.new(model)
 prefix = "blk.#{layer}"
@@ -214,6 +218,7 @@ q6_fn = Pointer(Void).null
 q6_batched_fn = Pointer(Void).null
 q6_add_fn = Pointer(Void).null
 q6_add_batched_fn = Pointer(Void).null
+q6_add_tbatch4_fn = Pointer(Void).null
 act_fn = Pointer(Void).null
 
 ptrs = [] of UInt64
@@ -229,6 +234,7 @@ begin
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_batched_fn), q6_mod, "q6_k_gemv_warp4_f32_batched"), "cuModuleGetFunction(q6 batched)"
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_add_fn), q6_mod, "q6_k_gemv_add_warp4_f32"), "cuModuleGetFunction(q6 add)"
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_add_batched_fn), q6_mod, "q6_k_gemv_add_warp4_f32_batched"), "cuModuleGetFunction(q6 add batched)"
+  cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_add_tbatch4_fn), q6_mod, "q6_k_gemv_add_warp4_f32_tbatch4"), "cuModuleGetFunction(q6 add tbatch4)" if q6_tbatch4
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(act_fn), act_mod, "swiglu_f32"), "cuModuleGetFunction(swiglu)"
 
   d_x = d_gate_w = d_up_w = d_down_w = d_gate = d_up = d_combined = d_residual = d_out = 0_u64
@@ -315,8 +321,19 @@ begin
       cuda! LibCUDAFFN.cuLaunchKernel(act_fn, act_grid_all, 1_u32, 1_u32, act_block, 1_u32, 1_u32,
         0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), "swiglu batched"
       if residual_add
-        cuda! LibCUDAFFN.cuLaunchKernel(q6_add_batched_fn, q6_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
-          0_u32, Pointer(Void).null, q6_add_params, Pointer(Void*).null), "q6 down add batched"
+        if q6_tbatch4
+          groups = tokens // 4
+          groups.times do |group|
+            d_combined_cur = d_combined + bytesize_f32(group * 4 * ffn_dim)
+            d_residual_cur = d_residual + bytesize_f32(group * 4 * hidden)
+            d_out_cur = d_out + bytesize_f32(group * 4 * hidden)
+            cuda! LibCUDAFFN.cuLaunchKernel(q6_add_tbatch4_fn, q6_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+              0_u32, Pointer(Void).null, q6_add_params, Pointer(Void*).null), "q6 down add tbatch4"
+          end
+        else
+          cuda! LibCUDAFFN.cuLaunchKernel(q6_add_batched_fn, q6_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
+            0_u32, Pointer(Void).null, q6_add_params, Pointer(Void*).null), "q6 down add batched"
+        end
       else
         cuda! LibCUDAFFN.cuLaunchKernel(q6_batched_fn, q6_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
           0_u32, Pointer(Void).null, q6_params, Pointer(Void*).null), "q6 down batched"
@@ -369,6 +386,7 @@ begin
   puts "tokens=#{tokens}"
   puts "batched=#{batched}"
   puts "residual_add=#{residual_add}"
+  puts "q6_tbatch4=#{q6_tbatch4}"
   puts "reps=#{reps}"
   puts "warmup=#{warmup}"
   puts "cuda_ms=#{gpu_ms.round(3)}"

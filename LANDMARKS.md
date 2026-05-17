@@ -12751,3 +12751,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The first integration attempt over projection/SSM paths produced invalid all-layer final hidden because downstream pointer boxes were left at the last 4-token group. The pivot was to restrict the legal move to the FFN gate/up corridor where downstream pointers can be reset safely before SwiGLU.
 - maieutic: This is not a universal greedy-token speedup; it needs a known-span band of at least four rows. It is directly valuable for prefill/verifier chunks and indirectly for speculative decode only if the verifier path uses known spans.
 - adversary: Do not extend tbatch4 to `attn_gate`, `ssm_out`, or full-attention output projection without a fresh final-hidden gate and pointer-state audit. The microkernel itself is exact, but runner aliasing/pointer state can break composition.
+
+**decision_update_258:** Extended the LTP/WBA weight-stationary token-band move to Q6_K FFN down+residual. `q6_k_gemv_add_warp4_f32_tbatch4` reads/dequantizes a Q6 row once, accumulates four token rows in registers, and folds residual add during the output store. The runner uses it for Q6 FFN down+add when `tokens >= 4` and divisible by 4; `QWEN_CUDA_Q6_TBATCH4_OFF=1` restores the previous row-batched Q6 route.
+
+**evidence_update_258:**
+- claim: "The Q6_K down+add tbatch4 kernel is exact and faster in the FFN sequence microprobe."
+  source: local `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_cuda_q6_tbatch4_runner_nocodegen crystal build bin/cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` and `crystal build bin/cuda_ffn_sequence_probe.cr --no-codegen -Dcpu_only -Duse_pcre2` -> exit 0; local `git diff --check -- bin/cuda_mixed_stack_probe.cr bin/cuda_ffn_sequence_probe.cr src/ml/cuda/kernels/q6k_gemv_probe.ptx src/ml/cuda/qwen_recurrent_layer_runner.cr src/ml/cuda/qwen_full_attn_kv_runner.cr` -> exit 0; remote RTX 5060 Ti `cuda_ffn_sequence_probe --batched --residual-add` vs `--q6-tbatch4`: tokens4 `1.423 -> 1.142ms`, tokens8 `2.799 -> 2.290`, tokens16 `5.583 -> 4.602`, all `ok=true`, `cos=1.0`.
+  verified_at: 2026-05-17
+  decay_trigger: Q6_K PTX rewrite, CUDA driver/JIT, token-major layout, FFN down type/layout, or runner FFN residual aliasing changes
+- claim: "Q6 tbatch4 composes exactly with the all-layer Q4 tbatch runner and gives another material known-span speedup."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B `--tokens 8 --perf-only --skip-debug-readback --gpu-final-dump` A/B with `QWEN_CUDA_Q6_TBATCH4_OFF=1` vs default printed matching top1 and final-hidden comparison `max_abs=0.0`, `rms=0.0`, `cos=0.9999999999999999`. Timing sweep on top of Q4 tbatch: tokens2 `26.583 -> 26.606ms/tok` because tbatch4 inactive/fallback/noise, tokens4 `19.280 -> 18.129`, tokens8 `17.552 -> 16.495`, tokens16 `16.716 -> 15.738`, all `ok=true` with matching top1 hashes. Layer0 profile shows `ffn_down_ms 1.086 -> 0.543`.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent/full-attention FFN buffer layout, pointer-box ownership, runner WBA routing, CUDA driver/JIT, or broader semantic greedy-loop benchmark
+
+**quadrumvirate_update_258:**
+- cassandra: After Q4 gate/up tbatch, Q6 down became the next FFN rung. The same token-band potential applies, but with lower expected speedup due Q6 format/register pressure.
+- daedalus: This is a larger legal LTP/WBA move than launch batching: it lowers repeated weight-read/dequant area along the token band while preserving the FFN diamond boundary.
+- maieutic: The proof is current-runner equality, not a formal guarantee for every Q6 use. It is promoted only for FFN down+add where residual/output strides are explicit.
+- adversary: Keep the opt-out and do not reuse this blindly for output-head/top1 Q6 paths; those have different output semantics and reduction/ranking invariants.
