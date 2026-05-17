@@ -12311,3 +12311,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed-bearing frame is either a true known-span recurrent verifier (associative/block-scan or batched recurrent kernels), or exact target fallback with raw-Q8 used only for cheap confidence/routing diagnostics.
 - maieutic: High proposal acceptance is insufficient when the verifier is linear. The necessary condition for speculative speed is `verify_ms_per_token + proposal_ms_per_token/gamma < exact_ms_per_token`; current measurements violate it by about `2x`.
 - adversary: This is a current-stack refutation, not a theorem about CUDA speculation. It should be revisited only after the verifier runner is no longer a host token loop over recurrent layers.
+
+**decision_update_230:** Rechecked CUDA graph replay after the reefy.ai host/driver refresh. The previous stability concern no longer reproduced in a small gate, and graph/device-ready graph modes preserved token parity. However, the speed effect is under `0.5%`, so CUDA graph replay is not the missing speculative/decoder lever and should remain opt-in rather than become the default.
+
+**evidence_update_230:**
+- claim: "CUDA graph replay is stable but only a tiny win on the current exact greedy path."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_graph_gate_20260517/aggregate.txt`, Qwen3.5-9B-Q4_K_M, 8 seeds, `gen=32`: direct `23.428ms/token`, graph `23.336ms/token`, graph-device-ready `23.316ms/token`, no token mismatches versus direct.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA driver/runtime, graph capture body, embedding path, model/layer set, or host scheduling changes
+
+**quadrumvirate_update_230:**
+- cassandra: Host launch overhead is not the dominant wall for this exact decode path; graph replay cannot compensate for memory-bound GEMV/recurrent work.
+- daedalus: Keep graph replay as a stability-improved opt-in, but do not spend more speed work here until kernels are fused enough that launch overhead becomes material.
+- maieutic: This recheck only covers exact greedy `gen=32`, not chunk verifier or proposal paths. The conclusion is narrow: graph replay is safe in this smoke and too small to prioritize.
+- adversary: The measured delta is close to normal timing noise, so do not report it as a product speedup.
