@@ -11837,3 +11837,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful pivot was not retuning kernels from a bogus 14us lower bound, but adding a production-route attribution mode with output validation.
 - maieutic: A command-buffer wait with no consumed/read output is not sufficient evidence for a kernel timing claim; at minimum the measured route must prove finite writes.
 - adversary: The pair-only number is a microbench locator, not a full prefill speed claim. Promotion still requires full pp64/pp256 prompt-ingest A/B against llama.cpp on a quiet host.
+
+**decision_update_203:** Refuted a llama.cpp-like single-buffer Q4_H16 GEMM staging variant for the local prefill pair route. The temporary probe reduced threadgroup memory from `12288` to `6144` bytes and used a simpler load/compute loop matching llama.cpp's staging shape, but the actual pp64 `4096x12288` FFN gate+up pair microbench favored the existing double-buffer H16 route. The probe code was removed rather than retained as a default-off path.
+
+**evidence_update_203:**
+- claim: "Single-buffer Q4_H16 staging does not beat the current double-buffer H16 route on the actual prefill gate+up pair shape."
+  source: local temporary `/tmp/qwen35_op_attr_q4sb` ABBA with `--batch=64 --warmup=3 --runs=9 --prefill-q4-pair-only`; base pair p50s `1.903/2.034/2.088/1.910 ms`, `QWEN35_Q4K_H16_SINGLEBUF=1` pair p50s `2.105/1.951/2.271/2.038 ms`; log `/tmp/qwen35_q4_h16_singlebuf_pair_abba_20260516210622.log`.
+  verified_at: 2026-05-16
+  decay_trigger: Q4_H16 kernel staging, pair-route attribution harness, Metal compiler/driver, model quantization, or pp64 batch policy changes
+
+**quadrumvirate_update_203:**
+- cassandra: Copying llama.cpp's staging shape is not automatically profitable because our H16 route already preconverts input and can benefit from double-buffered overlap.
+- daedalus: The next Q4 prefill lever should not be shmem-size reduction alone; it needs either a larger fusion boundary or a different arithmetic/data-layout transformation.
+- maieutic: The benchmark is narrow but directly route-aligned; it is sufficient to stop the single-buffer branch, not sufficient to claim all llama.cpp differences are exhausted.
+- adversary: Do not retain default-off dead code for a losing probe. If revisited, require a new premise and a full prefill A/B gate, not just a rerun of the same staging variant.
