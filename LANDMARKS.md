@@ -12353,3 +12353,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This slice changes the frame from standalone GEMV batching to exact known-span FFN batching. The next pivot is full recurrent verifier integration behind an opt-in flag, not more microprobe variants.
 - maieutic: The proof is still limited to independent FFN rows. It does not prove recurrent-layer sublinearity because DeltaNet state progression remains serial.
 - adversary: Keep the new kernels default-unused until the recurrent runner has token parity and full-stack timing evidence; duplicated PTX logic is a maintenance risk.
+
+**decision_update_233:** Wired the known-span CUDA recurrent FFN WBA route into `QwenRecurrentLayerRunner` behind `QWEN_CUDA_BATCHED_FFN=1`. The route preserves DeltaNet state order by running the recurrent core serially for each token, then sets FFN pointer boxes to the token-major buffers and batches exact gate/up/SwiGLU/down+residual over all known rows. It is default-off and falls back to the existing per-token path when skip/PCA-updown/raw-Q8 FFN modes are enabled.
+
+**evidence_update_233:**
+- claim: "The opt-in CUDA batched recurrent FFN route compiles and improves verifier-shaped all-layer known-span timing while preserving baseline GPU top1 in the measured semantic gate."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_batched_ffn_runner_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_batched_ffn` -> exit 0. Remote Qwen3.5-9B all-layer `--perf-only --input-tokens` gate: tokens2 default `27.897ms/token`, batched `27.453`, top1 `2,2`; tokens4 `25.083 -> 24.332`, top1 `2,2,2,2`; tokens8 `23.698 -> 22.836`, top1 `2` repeated. Remote token1 exact CPU oracle stayed `ok=true`, `logits_cos=1.0`, `top1_gpu=top1_cpu=220`.
+  verified_at: 2026-05-17
+  decay_trigger: recurrent runner batching rewrite, CUDA FFN PTX ABI, DeltaNet state scheduling, model/layer shapes, or CUDA driver/JIT changes
+
+**quadrumvirate_update_233:**
+- cassandra: This is a real but partial exact-speed lever. It improves known-span verifier-shaped runs by about `1.6-3.6%` in the first gate, not the missing `2x`; more recurrent projection batching or block-scan work is still required.
+- daedalus: The useful frame is confirmed: keep DeltaNet serial where mathematically necessary, but batch same-weight algebraic diamonds after the serial cutline. Apply the same cutline to QKV/projection groups next.
+- maieutic: The measured top1 parity is not a full hidden/logit equality proof for tokens>1. The standalone residual-add microprobe gives exact kernel-level evidence; the runner gate gives baseline-output agreement and timing evidence.
+- adversary: The exact CPU oracle for multi-token all-layer output is too slow for the current gate. Keep `QWEN_CUDA_BATCHED_FFN` default-off until a stronger hidden/logit equality harness or broader prompt verifier confirms the route.
