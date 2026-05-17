@@ -12493,3 +12493,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Split the roadmap into two lanes: strict verifier speedups must optimize f32-dequant/current exact kernels or reduce exact work; llama-style Q8 activation belongs in approximate proposal/fast-mode lanes.
 - maieutic: "Faster than llama.cpp" must specify the semantic contract. Exact greedy parity against our f32 route and llama-compatible quantized activation are different targets.
 - adversary: Do not report llama comparisons without stating whether activation quantization is allowed. Otherwise benchmark claims conflate exact verifier speed with approximate decode speed.
+
+**decision_update_243:** Refuted the exact Q4_K activation-sum algebraic shortcut as a speed path. The idea rewrites each 32-value Q4_K subblock contribution as `d * scale * sum(x*q) - dmin * min * sum(x)`, allowing `sum(x)` to be precomputed once per token/block/chunk instead of recomputed for every output row. A probe-only CUDA entry `q4_k_gemv_warp4_f32_xsum` validates the math against the CPU reference, but the extra xsum load/addressing and lane-0 correction make the kernel slower than the current f32-dequant warp4 path.
+
+**evidence_update_243:**
+- claim: "Precomputed activation sums preserve Q4_K probe accuracy but regress hot-kernel timing on RTX 5060 Ti."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_q4_xsum_nocodegen crystal build bin/cuda_q4k_gemv_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check -- bin/cuda_q4k_gemv_probe.cr src/ml/cuda/kernels/q4k_gemv_probe.ptx` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_q4k_gemv_probe_xsum` -> exit 0. Remote Qwen3.5-9B-Q4_K_M timings, reps100/warmup10: `blk.0.ffn_gate.weight` tokens1 baseline/xsum `0.110 -> 0.144ms`, tokens8 `0.891 -> 1.171ms`; `blk.0.ssm_out.weight` tokens1 `0.039 -> 0.051ms`, tokens8 `0.311 -> 0.408ms`. All xsum runs kept `ok=true`, `cos=1.0`, `max_diff<=1.86e-5`.
+  verified_at: 2026-05-17
+  decay_trigger: Q4_K warp kernel rewrite, SASS/resource retune, xsum precompute moved into a fused producer, CUDA driver/JIT change, or quantized activation semantics change
+
+**quadrumvirate_update_243:**
+- cassandra: Algebraic work reduction was plausible because it removes repeated min-term multiply-adds, but the current warp kernel is not dominated by that term.
+- daedalus: The useful frame is not "precompute scalar side terms" for strict f32 Q4_K; it remains "change dot representation" for approximate/proposal routes or make known-span verifier work structurally sublinear.
+- maieutic: The probe does not include production xsum precompute cost, so the measured regression is already a lower-bound failure.
+- adversary: Keep the symbol only as a diagnostic/refutation anchor. Do not promote it into the exact runner unless a future fused producer makes xsum free and a fresh timing gate reverses this result.
