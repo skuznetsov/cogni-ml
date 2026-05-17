@@ -12539,3 +12539,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed-bearing frame remains "make verification sublinear or proposal materially cheaper," not "avoid logits scan by trusting a stale/incorrect multi-row top1 buffer."
 - maieutic: The fast-top1 shortcut failed because the verifier truth source was assumed equivalent without a row-wise adversary gate. The logits-scan path remains the correctness anchor.
 - adversary: Keep duplicate-stack speculation classified as diagnostic. A future fast verifier must include a direct multi-row top1-vs-logits regression before it can affect controller decisions.
+
+**decision_update_246:** Root-caused and fixed the resident multi-row output-head top1/top2 mismatch. `QwenOutputHeadRunner` updated per-row partial pointer boxes before each token, but the top1/top2 reduce parameter blocks were wired to the base partial buffers. Multi-row runs could therefore reduce stale row-0 partials. The reduce kernels now consume the current partial pointer boxes. After that fix, a guarded `--greedy-loop-probe-chunk-fast-verify-top1` diagnostic can use verifier-stack resident top1 ids instead of copying/scanning full verifier logits.
+
+**evidence_update_246:**
+- claim: "CUDA resident multi-row top1/top2 now matches row-wise logits scanning on the tested all-layer gate."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_head_partial_offset_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_head_partial_offset` -> exit 0. Remote Qwen3.5-9B-Q4_K_M all-layer `--tokens 8 --input-tokens 2,3,4,5,6,7,8,9 --read-logits --gpu-logits-only`: `top1_logits_gpu=220,739,5,6,24218,198,198,10`, `top1_cuda_gpu` identical; `top2_gpu=13455,16,3,3,363,847,348,43181`, `top2_cuda_gpu` identical; `top2_cuda_ok=true`.
+  verified_at: 2026-05-17
+  decay_trigger: output-head partial/reduce kernels, partial buffer layout, readback wiring, Q6 fused top1 path, or multi-row runner scheduling changes
+- claim: "After the partial-pointer fix, fast resident-top1 chunk verification matches logits-scan chunk verification and modestly improves wall time on the measured gate."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_fast_verify_top1_fixed`, Qwen3.5-9B seed0 gen16: gamma2 logits-scan/fast total `50.629 -> 48.779 ms/tok`, gamma4 `48.951 -> 47.399 ms/tok`, exact top1 sequences identical. Additional gamma4 seeds `198` and `760` also matched exact sequences and improved wall (`48.118 -> 45.964`, `48.148 -> 46.160`). Seed `1919` logits-scan passed, but the fast rerun hit CUDA OOM before execution after repeated runs; `nvidia-smi` showed `9648MiB` used with no listed process, so this is recorded as an environment/resource blocker rather than a semantic failure.
+  verified_at: 2026-05-17
+  decay_trigger: CUDA memory state, verifier stack allocation policy, output-head top1 fix, chunk verifier controller, or broader seed/prompt suite changes
+
+**quadrumvirate_update_246:**
+- cassandra: The previous fast-top1 failure was a real bug, not a proof that resident top1 cannot be a verifier truth source.
+- daedalus: The useful pivot was invariant repair at the output-head boundary, not more speculative-controller tuning.
+- maieutic: This still does not make current raw-Q8 chunk speculation faster than plain greedy; it only removes one verifier-side waste and restores a safe primitive for future verifier work.
+- adversary: Keep `--greedy-loop-probe-chunk-fast-verify-top1` diagnostic until a broader multi-seed/prompt gate runs without CUDA memory exhaustion.

@@ -307,6 +307,7 @@ greedy_loop_probe_pca_updown_raw_q8_rest = false
 greedy_loop_probe_chunk_gamma = 0
 greedy_loop_probe_chunk_margin = 0.03_f32
 greedy_loop_probe_chunk_batched_verify = false
+greedy_loop_probe_chunk_fast_verify_top1 = false
 runtime_raw_q8 = false
 runtime_skip_recurrent_ffn = false
 runtime_skip_recurrent_ffn_layers = nil.as(Array(Int32)?)
@@ -354,6 +355,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-chunk-gamma N", "Diagnostic: raw-Q8 guarded chunk proposals with sequential exact verification; forces CPU feedback and no graph") { |v| greedy_loop_probe_chunk_gamma = v.to_i; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-chunk-margin F", "Raw-Q8 top1/top2 margin threshold for --greedy-loop-probe-chunk-gamma") { |v| greedy_loop_probe_chunk_margin = v.to_f32 }
   p.on("--greedy-loop-probe-chunk-batched-verify", "Use a second tokens=gamma stack to verify full raw-Q8 chunks and copy back only on full accept") { greedy_loop_probe_chunk_batched_verify = true }
+  p.on("--greedy-loop-probe-chunk-fast-verify-top1", "Diagnostic: in batched chunk verification, trust resident CUDA top1 ids instead of copying/scanning full logits") { greedy_loop_probe_chunk_fast_verify_top1 = true }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--runtime-skip-recurrent-ffn", "Diagnostic proposal route: skip recurrent-layer FFNs and forward the post-attention residual") { runtime_skip_recurrent_ffn = true }
   p.on("--runtime-skip-recurrent-ffn-layers LIST", "Diagnostic proposal route: skip recurrent-layer FFNs only for comma-separated layer ids") { |v| runtime_skip_recurrent_ffn_layers = parse_layers(v) }
@@ -417,6 +419,7 @@ raise "--greedy-loop-probe-chunk-gamma is incompatible with --greedy-loop-graph"
 raise "--greedy-loop-probe-chunk-gamma is incompatible with --greedy-loop-probe-restore" if greedy_loop_probe_chunk_gamma > 0 && greedy_loop_probe_restore
 raise "--greedy-loop-probe-chunk-margin must be non-negative" unless greedy_loop_probe_chunk_margin >= 0.0_f32
 raise "--greedy-loop-probe-chunk-batched-verify requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_chunk_batched_verify && greedy_loop_probe_chunk_gamma == 0
+raise "--greedy-loop-probe-chunk-fast-verify-top1 requires --greedy-loop-probe-chunk-batched-verify" if greedy_loop_probe_chunk_fast_verify_top1 && !greedy_loop_probe_chunk_batched_verify
 raise "--runtime-skip-recurrent-ffn is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn && runtime_raw_q8
 raise "use either --runtime-skip-recurrent-ffn or --runtime-skip-recurrent-ffn-layers, not both" if runtime_skip_recurrent_ffn && runtime_skip_recurrent_ffn_layers
 raise "--runtime-skip-recurrent-ffn-layers is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn_layers && runtime_raw_q8
@@ -653,7 +656,8 @@ begin
       end
     end
     verifier_head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, verifier_tokens,
-      Array(Float32).new(verifier_tokens * hidden, 0.0_f32), hparams.rms_eps, read_logits: read_logits)
+      Array(Float32).new(verifier_tokens * hidden, 0.0_f32), hparams.rms_eps,
+      read_logits: read_logits && !greedy_loop_probe_chunk_fast_verify_top1)
     verifier_stack = ML::CUDA::QwenMixedStackRunner.new(layers, verifier_runners, verifier_head, verifier_tokens, hidden, verifier_xs)
     verifier_weight_upload_ms = verifier_stack.not_nil!.upload_weights(profile: false)
   end
@@ -798,10 +802,14 @@ begin
             reset_sequence: false, sync_end: true, read_head_outputs: true)
           chunk_batched_verify_ms += (Time.instant - t_batched).total_milliseconds
           chunk_batched_verify_chunks += 1
-          exact_ids = Array(Int32).new(proposal_ids.size) do |j|
-            best_id, _, _, _, _ = top2_from_logits(verify_stack.head.logits_gpu_all, j, head_weights.vocab)
-            best_id
-          end
+          exact_ids = if greedy_loop_probe_chunk_fast_verify_top1
+                        verify_stack.head.top1_ids
+                      else
+                        Array(Int32).new(proposal_ids.size) do |j|
+                          best_id, _, _, _, _ = top2_from_logits(verify_stack.head.logits_gpu_all, j, head_weights.vocab)
+                          best_id
+                        end
+                      end
           chunk_verify_tokens += proposal_ids.size
           proposal_ids.each_with_index do |proposal_id, j|
             exact_id = exact_ids[j]
@@ -1271,6 +1279,7 @@ begin
   puts "greedy_loop_probe_chunk_gamma=#{greedy_loop_probe_chunk_gamma}"
   puts "greedy_loop_probe_chunk_margin=#{greedy_loop_probe_chunk_margin}"
   puts "greedy_loop_probe_chunk_batched_verify=#{greedy_loop_probe_chunk_batched_verify}"
+  puts "greedy_loop_probe_chunk_fast_verify_top1=#{greedy_loop_probe_chunk_fast_verify_top1}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"
