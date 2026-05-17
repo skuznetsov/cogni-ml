@@ -11865,3 +11865,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Stop local micro-shaving of the existing Q4 tile; seek a larger boundary such as FFN diamond/proposal-only approximations or a fundamentally different Q4 data path.
 - maieutic: Exact-tile assumptions are true for FFN pp64/pp128/pp256, but removing checks alone does not reduce the dominant cost.
 - adversary: Do not keep the branch as an env knob. It adds maintenance risk without a measured full-prefill win.
+
+**decision_update_205:** Refuted replacing the paired-H16 prefill route with two direct F32-input Q4 GEMMs in one encoder. The temporary branch tested whether F32->H16 preconversion and shared conversion were the remaining Q4 prefill bottleneck. It was not: direct F32 pair was neutral/slower on the route-aligned pp64 gate+up benchmark, so the remaining local-vs-llama gap is likely inside the core Q4 MMA/dequant tile or broader scheduling, not conversion sharing.
+
+**evidence_update_205:**
+- claim: "Two direct F32 Q4 GEMMs in one encoder do not beat the current paired-H16 gate+up route."
+  source: local temporary `/tmp/qwen35_op_attr_q4pairf32` ABBA with `--batch=64 --warmup=3 --runs=9 --prefill-q4-pair-only`; H16 pair p50s `2.030/1.987/2.016/1.923 ms`, `QWEN35_Q4K_PAIR_F32_GEMM=1` p50s `2.214/2.159/2.356/1.910 ms`; log `/tmp/qwen35_q4_pair_f32_abba_20260516211456.log`.
+  verified_at: 2026-05-16
+  decay_trigger: Q4 pair route, F32/H16 input conversion path, Metal compiler/driver, model quantization, or pp64 batch policy changes
+
+**quadrumvirate_update_205:**
+- cassandra: Removing the shared H16 conversion looked plausible because llama.cpp's direct F32 GEMM is fast, but local route evidence says conversion sharing is not the bottleneck.
+- daedalus: The local Q4 search has now refuted staging, branch shaving, and F32-vs-H16 routing. Next exact attempt should either change the dequant/MMA data path materially or move to full-prefill scheduler/fusion evidence.
+- maieutic: The pair microbench is only a locator; it does not prove full prefill cannot improve from scheduler changes.
+- adversary: Do not retain the F32 pair env knob; it adds another unpromoted route with no measured win.
