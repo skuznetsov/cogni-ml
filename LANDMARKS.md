@@ -12507,3 +12507,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful frame is not "precompute scalar side terms" for strict f32 Q4_K; it remains "change dot representation" for approximate/proposal routes or make known-span verifier work structurally sublinear.
 - maieutic: The probe does not include production xsum precompute cost, so the measured regression is already a lower-bound failure.
 - adversary: Keep the symbol only as a diagnostic/refutation anchor. Do not promote it into the exact runner unless a future fused producer makes xsum free and a fresh timing gate reverses this result.
+
+**decision_update_244:** Promoted the exact CUDA recurrent projection+FFN WBA route from opt-in to default for multi-token known-span sequences. The route still preserves the serial DeltaNet/conv core, but batches independent pre-core projections and the FFN tail when `tokens > 1`. It automatically falls back to the old per-token route for FFN skip, PCA-updown, or raw-Q8 diagnostic modes. New opt-out controls are `QWEN_CUDA_BATCHED_FFN_OFF=1` and `QWEN_CUDA_BATCHED_PROJECTIONS_OFF=1`.
+
+**evidence_update_244:**
+- claim: "Default-on CUDA WBA preserves measured final hidden outputs and improves all-layer known-span timing."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_wba_default_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/cuda/qwen_recurrent_layer_runner.cr` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_wba_default` -> exit 0. Remote Qwen3.5-9B-Q4_K_M all-layer `--input-tokens` A/B on RTX 5060 Ti: tokens2 WBA-off/default `27.934 -> 27.147 ms/tok`; tokens8 with final-hidden dumps `25.363 -> 23.538 ms/tok`, `max_abs=0`, `rms=0`, `cos=1.0`; tokens16 `23.054 -> 21.079 ms/tok`. Top1 sequences matched in all rows.
+  verified_at: 2026-05-17
+  decay_trigger: WBA route scheduling, recurrent runner fallback conditions, Q4/Q5/Q6 batched GEMV ABI, CUDA driver/JIT, or model layer shapes
+
+**quadrumvirate_update_244:**
+- cassandra: This is the safe promotion path because the route was already bit-identical under final-hidden gates and now has opt-out switches for regression isolation.
+- daedalus: Default performance should use the verified multi-token known-span path; keeping it opt-in hid a real speedup in verifier/prefill-shaped workloads.
+- maieutic: This does not accelerate single-token greedy decode, because `tokens=1` still runs the old per-token path. The win applies to known spans: prefill-like slices, chunk verifiers, and multi-row diagnostics.
+- adversary: The default remains exact only for the standard dense FFN route. Approximate raw-Q8/PCA/skip diagnostics still bypass WBA by construction and need separate gates.

@@ -1289,6 +1289,8 @@ begin
   puts "runtime_pca_updown_layers=#{runtime_pca_updown_layers.try(&.join(",")) || ""}"
   puts "runtime_pca_updown_adapters=#{runtime_pca_updown_adapters_path || ""}"
   puts "q4_raw_q8_ffn=#{ENV["QWEN_CUDA_Q4_RAW_Q8_FFN"]? == "1"}"
+  puts "batched_ffn=#{ENV["QWEN_CUDA_BATCHED_FFN_OFF"]? != "1"}"
+  puts "batched_projections=#{ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"
   puts "weight_upload_ms=#{weight_upload_ms.round(3)}"

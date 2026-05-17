@@ -396,10 +396,10 @@ module ML::CUDA
       @profile_ffn_pca_updown_ms = 0.0
       @profile_final_add_ms = 0.0
       t_total = Time.instant
-      batched_ffn_profile = ENV["QWEN_CUDA_BATCHED_FFN"]? == "1" && @tokens > 1 &&
+      batched_ffn_profile = ENV["QWEN_CUDA_BATCHED_FFN_OFF"]? != "1" && @tokens > 1 &&
                             !@ffn_skip_enabled && !@ffn_pca_updown_enabled && !@ffn_raw_q8_enabled
       if batched_ffn_profile
-        batched_projection_profile = ENV["QWEN_CUDA_BATCHED_PROJECTIONS"]? == "1"
+        batched_projection_profile = ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1"
         @profile_override_detail = batched_projection_profile
         begin
           runner.run_sequence
@@ -498,8 +498,8 @@ module ML::CUDA
       ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
       ffn_down_add_batched_fn = @ffn_down_type.q4_k? ? q4_add_batched_fn : q6_add_batched_fn
       use_alpha_beta_dual = ENV["QWEN_CUDA_Q4_ALPHA_BETA_DUAL_OFF"]? != "1"
-      use_batched_ffn = ENV["QWEN_CUDA_BATCHED_FFN"]? == "1" && @tokens > 1
-      use_batched_projections = ENV["QWEN_CUDA_BATCHED_PROJECTIONS"]? == "1" && use_batched_ffn
+      use_batched_ffn = ENV["QWEN_CUDA_BATCHED_FFN_OFF"]? != "1" && @tokens > 1
+      use_batched_projections = ENV["QWEN_CUDA_BATCHED_PROJECTIONS_OFF"]? != "1" && use_batched_ffn
 
       sizes = [bytesize_f32(@tokens * @hidden), bytesize_f32(@hidden), bytesize_f32(@tokens * @hidden),
                @qkv_raw.size.to_u64, @gate_raw.size.to_u64, @alpha_raw.size.to_u64, @beta_raw_w.size.to_u64,
