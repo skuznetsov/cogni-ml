@@ -12005,3 +12005,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: With rollback now available, the next pivot is from diagnostics to a guarded controller that skips raw below threshold and records accept/fallback/wall.
 - maieutic: Exact output preservation after raw proposals verifies recurrent rollback for this smoke, but full controller promotion still needs prompt-suite parity and timing.
 - adversary: Full-attention KV is not snapshotted; this relies on exact verifier overwriting the current position before attention uses it. If future controller proposes multiple tokens ahead without immediate exact overwrite, KV snapshot/restore must be added.
+
+**decision_update_213:** Simulated raw-Q8 guarded chunk acceptance from the probe-restore log and chose `gamma=2/4` as the next verifier target. The raw proposal lane is accurate enough at `raw_margin>=0.030`, but full-chunk acceptance falls with longer chunks, so jumping straight to `gamma=8+` would add reject/replay complexity before the small-chunk speed path is measured.
+
+**evidence_update_213:**
+- claim: "At `raw_margin>=0.030`, raw-Q8 proposal coverage and acceptance support `gamma=2/4` chunk verification first."
+  source: analysis of `/build/persisten/cogni-ml/tmp/raw_q8_probe_restore_27seed_20260517.log`: coverage `839/864` (`97.1%`) with `839/839` kept-token agreement; simulated full-chunk accept rates were `gamma=2` `409/430` (`95.1%`), `gamma=4` `192/228` (`84.2%`), `gamma=8` `86/124` (`69.4%`), and `gamma=16` `32/73` (`43.8%`).
+  verified_at: 2026-05-17
+  decay_trigger: prompt/seed suite, raw-Q8 threshold, proposal generation policy, or verifier chunk implementation changes
+
+**quadrumvirate_update_213:**
+- cassandra: Larger gamma looks attractive on paper but will likely lose to reject/replay overhead unless prompt-suite full-chunk acceptance is much higher than this seed stress suite.
+- daedalus: Build the first exact speed experiment around small chunks and state-copy infrastructure, not long speculative tails.
+- maieutic: Token-level acceptance is not enough; full-chunk acceptance determines whether verifier batching pays.
+- adversary: This is still a simulation from proposal logs, not measured controller wall. It selects the next experiment; it is not a speed claim.
