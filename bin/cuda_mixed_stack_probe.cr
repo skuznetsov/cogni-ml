@@ -318,6 +318,7 @@ seed_token = 0
 input_token = -1
 input_tokens = [] of Int32
 input_tokens_provided = false
+gpu_final_dump_path : String? = nil
 
 OptionParser.parse do |p|
   p.banner = "Usage: cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--start-pos N] [--max-seq N] [--seed N] [--warmup N]"
@@ -363,6 +364,7 @@ OptionParser.parse do |p|
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
   p.on("--input-tokens LIST", "Use comma-separated token_embd IDs as the non-greedy semantic input sequence") { |v| input_tokens_provided = true; input_tokens = parse_i32_list(v) }
+  p.on("--gpu-final-dump PATH", "Diagnostic: dump final hidden rows as raw little-endian f32 after a GPU run; works with --perf-only") { |v| gpu_final_dump_path = v }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
 
@@ -434,6 +436,8 @@ raise "--input-tokens must not be empty when provided" if input_tokens_provided 
 raise "--input-tokens is incompatible with --input-token" if !input_tokens.empty? && input_token >= 0
 raise "--input-tokens is incompatible with --greedy-loop-tokens" if !input_tokens.empty? && greedy_loop_tokens > 0
 raise "--gpu-logits-only is incompatible with --greedy-loop-tokens" if gpu_logits_only && greedy_loop_tokens > 0
+raise "--gpu-final-dump is incompatible with --greedy-loop-tokens" if gpu_final_dump_path && greedy_loop_tokens > 0
+raise "--gpu-final-dump is incompatible with --steady-reps/--steady-graph-reps" if gpu_final_dump_path && (steady_reps > 0 || steady_graph_reps > 0)
 raise "--margin-bucket-report requires --read-logits" if margin_bucket_report && !read_logits
 raise "--margin-bucket-report is incompatible with --perf-only/--gpu-logits-only" if margin_bucket_report && perf_only
 raise "--margin-buckets must not be empty" if margin_bucket_report && margin_bucket_edges.empty?
@@ -455,6 +459,7 @@ layers.each { |layer| raise "layer #{layer} out of range" unless layer < hparams
 hidden = hparams.n_embd
 debug_readback = false if perf_only
 read_logits = false if perf_only && !gpu_logits_only && !greedy_loop_read_logits && !greedy_loop_probe_restore && greedy_loop_probe_chunk_gamma == 0
+debug_readback = true if gpu_final_dump_path
 
 rng = Random.new(seed)
 token_embd = load_quant_weight(gguf, "token_embd.weight")
@@ -1071,6 +1076,13 @@ begin
     end
   end
   final_gpu_all = mixed_stack.final_gpu_all if debug_readback
+  if path = gpu_final_dump_path
+    File.open(path, "wb") do |io|
+      final_gpu_all.each do |value|
+        io.write_bytes(value, IO::ByteFormat::LittleEndian)
+      end
+    end
+  end
 
   lines = [] of String
   ok = true
@@ -1207,6 +1219,10 @@ begin
     ok = ok && cuda_top2_ok unless gpu_logits_only
   else
     lines << "logits_readback=false"
+  end
+  if path = gpu_final_dump_path
+    lines << "gpu_final_dump=#{path}"
+    lines << "gpu_final_count=#{final_gpu_all.size}"
   end
   lines << "top1_gpu=#{gpu_top1_ids.join(",")}"
   lines << "top1_cpu=#{perf_only ? "skipped" : cpu_top1_ids.join(",")}"

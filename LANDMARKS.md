@@ -12409,3 +12409,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The productive pattern is now clear: place WBA around serial state cuts, not through them. Next candidates are post-core `ssm_out` batching or a more structural DeltaNet block-scan; avoid single-kernel retunes without attribution.
 - maieutic: The route uses separate batched alpha/beta instead of the default dual alpha/beta kernel, but the full route still wins because it amortizes more launch/scheduling work. This does not prove projection-only would win.
 - adversary: Keep default-off until a stronger multi-token parity harness or prompt-level exact verifier gate covers more states. Current evidence is baseline GPU top1 parity plus token1 CPU oracle, not broad hidden-state equivalence.
+
+**decision_update_237:** Added a CUDA final-hidden dump harness to strengthen multi-token parity evidence for opt-in known-span WBA routes. `cuda_mixed_stack_probe --gpu-final-dump PATH` works with `--perf-only` and writes final hidden rows as raw little-endian f32 after a GPU run, allowing default and opt-in GPU routes to be compared directly without the slow full CPU oracle.
+
+**evidence_update_237:**
+- claim: "The opt-in projection+FFN WBA runner route is bit-identical to the default GPU route on the measured multi-token all-layer gates while retaining a verifier-shaped speed win."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_finaldump_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_finaldump` -> exit 0. Remote Qwen3.5-9B all-layer default vs `QWEN_CUDA_BATCHED_FFN=1 QWEN_CUDA_BATCHED_PROJECTIONS=1` final-hidden dumps on RTX 5060 Ti: semantic tokens2 `33.883 -> 33.086 ms/tok`, tokens4 `28.185 -> 26.675`, tokens8 `25.395 -> 23.596`, tokens16 `24.023 -> 22.049`, and random-state tokens8/start_pos63 `25.596 -> 23.815`; every comparison had `max_abs=0`, `rms=0`, `mean_abs=0`, `cos=1.0`, and matching top1.
+  verified_at: 2026-05-17
+  decay_trigger: mixed-stack final readback path, recurrent WBA route, Q4/Q5 batched GEMV ABI, model/layer shapes, CUDA driver/JIT, or token/state initialization changes
+
+**quadrumvirate_update_237:**
+- cassandra: The earlier weak point was semantic evidence, not speed evidence. The final-hidden dump closes that gap for measured multi-token GPU routes and raises confidence in using WBA as an exact verifier primitive.
+- daedalus: This does not require a CPU oracle for every known-span A/B. Use GPU route-vs-route hidden dumps as the cheap equality gate, and reserve CPU oracle checks for narrow token1 or small slices.
+- maieutic: Bit-identical final hidden rows on these spans do not prove all prompts or all future route rewrites. It proves the current projection+FFN WBA schedule preserves the default GPU result under semantic and seeded random-state gates.
+- adversary: Keep the route guarded for now because product decode still needs policy/controller integration and prompt-level exact verifier gates; however, the previous "top1 only" objection is resolved for this route.
