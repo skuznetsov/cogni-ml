@@ -303,6 +303,7 @@ greedy_loop_read_logits = false
 greedy_loop_probe_restore = false
 greedy_loop_probe_restore_kv = false
 greedy_loop_probe_pca_updown = false
+greedy_loop_probe_pca_updown_raw_q8_rest = false
 greedy_loop_probe_chunk_gamma = 0
 greedy_loop_probe_chunk_margin = 0.03_f32
 greedy_loop_probe_chunk_batched_verify = false
@@ -348,6 +349,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-restore", "Diagnostic: run raw-Q8 proposal, restore recurrent state, then run exact verifier each token") { greedy_loop_probe_restore = true; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-restore-kv", "Also snapshot/restore full-attention KV caches in --greedy-loop-probe-restore") { greedy_loop_probe_restore_kv = true }
   p.on("--greedy-loop-probe-pca-updown", "Use loaded PCA-updown adapters as the discardable proposal route in --greedy-loop-probe-restore") { greedy_loop_probe_pca_updown = true }
+  p.on("--greedy-loop-probe-pca-updown-raw-q8-rest", "With --greedy-loop-probe-pca-updown, use raw-Q8 recurrent FFN for non-PCA proposal layers") { greedy_loop_probe_pca_updown_raw_q8_rest = true }
   p.on("--greedy-loop-probe-chunk-gamma N", "Diagnostic: raw-Q8 guarded chunk proposals with sequential exact verification; forces CPU feedback and no graph") { |v| greedy_loop_probe_chunk_gamma = v.to_i; perf_only = true; read_logits = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-chunk-margin F", "Raw-Q8 top1/top2 margin threshold for --greedy-loop-probe-chunk-gamma") { |v| greedy_loop_probe_chunk_margin = v.to_f32 }
   p.on("--greedy-loop-probe-chunk-batched-verify", "Use a second tokens=gamma stack to verify full raw-Q8 chunks and copy back only on full accept") { greedy_loop_probe_chunk_batched_verify = true }
@@ -405,6 +407,7 @@ raise "--greedy-loop-probe-restore is incompatible with --greedy-loop-graph" if 
 raise "--greedy-loop-probe-restore-kv requires --greedy-loop-probe-restore" if greedy_loop_probe_restore_kv && !greedy_loop_probe_restore
 raise "--greedy-loop-probe-pca-updown requires --greedy-loop-probe-restore" if greedy_loop_probe_pca_updown && !greedy_loop_probe_restore
 raise "--greedy-loop-probe-pca-updown requires --runtime-pca-updown-adapters" if greedy_loop_probe_pca_updown && !runtime_pca_updown_adapters_path
+raise "--greedy-loop-probe-pca-updown-raw-q8-rest requires --greedy-loop-probe-pca-updown" if greedy_loop_probe_pca_updown_raw_q8_rest && !greedy_loop_probe_pca_updown
 raise "--greedy-loop-probe-chunk-gamma must be non-negative" unless greedy_loop_probe_chunk_gamma >= 0
 raise "--greedy-loop-probe-chunk-gamma requires --greedy-loop-tokens" if greedy_loop_probe_chunk_gamma > 0 && greedy_loop_tokens == 0
 raise "--greedy-loop-probe-chunk-gamma is incompatible with --skip-output-head" if greedy_loop_probe_chunk_gamma > 0 && skip_output_head
@@ -876,6 +879,7 @@ begin
         snapshot = mixed_stack.snapshot_decode_state(include_kv: greedy_loop_probe_restore_kv)
         begin
           if greedy_loop_probe_pca_updown
+            mixed_stack.set_recurrent_ffn_raw_q8(true) if greedy_loop_probe_pca_updown_raw_q8_rest
             mixed_stack.set_recurrent_ffn_pca_updown_enabled(true, runtime_pca_updown_layers)
           else
             mixed_stack.set_recurrent_ffn_raw_q8(true)
@@ -892,6 +896,7 @@ begin
           mixed_stack.restore_decode_state(snapshot)
         ensure
           mixed_stack.set_recurrent_ffn_pca_updown_enabled(false, runtime_pca_updown_layers) if greedy_loop_probe_pca_updown
+          mixed_stack.set_recurrent_ffn_raw_q8(false) if greedy_loop_probe_pca_updown_raw_q8_rest
           snapshot.close
         end
 
@@ -1075,7 +1080,14 @@ begin
       lines << "greedy_logits_top1_mismatches=#{greedy_logits_mismatches.join(",")}"
     end
     if greedy_loop_probe_restore
-      lines << "probe_route=#{greedy_loop_probe_pca_updown ? "pca_updown" : "raw_q8"}"
+      probe_route = if greedy_loop_probe_pca_updown_raw_q8_rest
+                      "pca_updown_raw_q8_rest"
+                    elsif greedy_loop_probe_pca_updown
+                      "pca_updown"
+                    else
+                      "raw_q8"
+                    end
+      lines << "probe_route=#{probe_route}"
       lines << "probe_raw_top1_gpu=#{probe_raw_ids.join(",")}"
       lines << "probe_raw_top2_gpu=#{probe_raw_top2_ids.join(",")}"
       lines << "probe_raw_margin_gpu=#{probe_raw_margins.map { |v| v.round(6) }.join(",")}"
@@ -1226,6 +1238,7 @@ begin
   puts "greedy_loop_probe_restore=#{greedy_loop_probe_restore}"
   puts "greedy_loop_probe_restore_kv=#{greedy_loop_probe_restore_kv}"
   puts "greedy_loop_probe_pca_updown=#{greedy_loop_probe_pca_updown}"
+  puts "greedy_loop_probe_pca_updown_raw_q8_rest=#{greedy_loop_probe_pca_updown_raw_q8_rest}"
   puts "greedy_loop_probe_chunk_gamma=#{greedy_loop_probe_chunk_gamma}"
   puts "greedy_loop_probe_chunk_margin=#{greedy_loop_probe_chunk_margin}"
   puts "greedy_loop_probe_chunk_batched_verify=#{greedy_loop_probe_chunk_batched_verify}"

@@ -12257,3 +12257,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next pivot is not more ungated PCA free-run. It is a multi-seed guarded probe plus a controller that either overlaps proposal with verifier work or avoids launching the proposal when the expected acceptance/cost is unfavorable.
 - maieutic: The current evidence proves safety plumbing and one matched sequence, not broad acceptance or speed. The required falsifier is a seed/prompt suite with chunk acceptance and wall economics.
 - adversary: Because proposal and verifier are serialized in this diagnostic, `53.132ms/token` should be treated as observability cost, not as a product-route benchmark.
+
+**decision_update_227:** Added a hybrid guarded proposal diagnostic that combines two exact-verified approximation ingredients: PCA-updown on selected recurrent FFNs and raw-Q8 recurrent FFN for the remaining recurrent layers. `--greedy-loop-probe-pca-updown-raw-q8-rest` is only valid with `--greedy-loop-probe-pca-updown`, and it leaves the canonical exact verifier path unchanged by restoring state before exact decode. On the current 27-seed gate it preserved `864/864` proposal matches, but its proposal cost is effectively raw-Q8-class rather than a new speed tier.
+
+**evidence_update_227:**
+- claim: "The hybrid PCA-updown/raw-Q8 guarded proposal route compiles and runs as default-off diagnostic plumbing."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_cuda_pca_hybrid_nocodegen crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; local `git diff --check` -> exit 0; remote reefy.ai build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_pca_hybrid` -> exit 0.
+  verified_at: 2026-05-17
+  decay_trigger: raw-Q8 recurrent FFN switch, PCA-updown switch ordering, guarded probe restore path, or CUDA recurrent runner changes
+- claim: "Across the 27-seed guarded probe, the hybrid route matched exact proposals for all tested positions but did not materially beat raw-Q8 proposal cost."
+  source: remote `/build/persisten/cogni-ml/tmp/cuda_pca_hybrid_probe_restore_27seed_20260517/aggregate.txt`: `aggregate_match=864/864`, `miss_seeds=`, `mean_proposal_ms=21.519`, `mean_exact_ms=24.037`, `mean_total_ms=54.250`. Same-seed raw-Q8 comparison from `/build/persisten/cogni-ml/tmp/raw_q8_probe_restore_27seed_20260517.log`: `aggregate_match=864/864`, `mean_proposal_ms=21.533`, `mean_exact_ms=23.865`.
+  verified_at: 2026-05-17
+  decay_trigger: seed/prompt suite, adapter rank/layers, raw-Q8 kernel changes, controller scheduling, or exact verifier implementation changes
+
+**quadrumvirate_update_227:**
+- cassandra: Hybridizing PCA with raw-Q8 does not create a multiplicative speedup because PCA only replaces three recurrent FFNs while raw-Q8 dominates the remaining proposal-body savings.
+- daedalus: The next speed-bearing pivot should be controller economics around raw-Q8-class proposal bodies or a broader cheap-body replacement, not more layer-0/2/4 PCA composition.
+- maieutic: The `864/864` result is still seed-token synthetic coverage, not a real prompt suite. It is enough to keep the hybrid knob for experiments, not enough to promote it.
+- adversary: The serialized total wall remains slower than exact decode; only a chunk verifier/overlap route can turn the proposal quality into product speed.
