@@ -282,6 +282,27 @@ reject economics matter; use bulk schedules such as `64` only for artifact-level
 trusted replay where the source history was produced by the same model/cache
 contract and every proposed token is still target-verified before commit.
 
+Trusted artifact restore lower-bound:
+
+```sh
+./build/cuda_mixed_stack_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --all-layers \
+  --max-seq 256 \
+  --known-replay-history "$SOURCE_TOKEN_IDS" \
+  --known-replay-start 1 \
+  --known-replay-tokens 64 \
+  --known-replay-trusted-artifact-restore \
+  --skip-debug-readback
+```
+
+This is a different contract from verified replay. It simulates a cache artifact
+that already contains the exact token span and the post-span decode state for
+the same model/config/source hash. The timed region restores that state and
+emits cached tokens; it does not recompute the verifier body. Use it only for
+session/cache artifacts whose model hash, tokenizer hash, prefix hash, token
+span, and state artifact hash have been validated.
+
 Build the Metal bridge once:
 
 ```sh
@@ -490,6 +511,7 @@ Same-host CUDA snapshot, RTX 5060 Ti, Qwen 3.5 9B Q4_K_M, `gen=64`:
 | cogni-ml CUDA source/cache cursor, risk-gated | 71.76 tok/s, 13.94 ms/tok | exact output; 62/62 active-verified tokens plus two serial cursor advances |
 | cogni-ml CUDA trusted source/cache cursor | 86.61 tok/s, 11.55 ms/tok | exact output; 64/64 active-verified tokens, chunks `4,4,8,16,16,16` |
 | cogni-ml CUDA trusted bulk replay | 91.69 tok/s, 10.91 ms/tok | exact output; 64/64 active-verified tokens, one `64`-token WBA chunk |
+| cogni-ml CUDA trusted artifact restore | restore-only lower bound: 0.189 ms / 64 cached tokens | no verifier recompute; requires validated post-span state artifact |
 | invalid trusted cursor | ~42.3 tok/s, ~23.64 ms/tok | fails closed: zero proposals, active verifier disabled, near plain fallback |
 
 CUDA cache-replay caveats:
@@ -498,6 +520,7 @@ CUDA cache-replay caveats:
 - Exact greedy parity is preserved by verifying every proposed token through the target stack before committing it.
 - Wrong cursors must fail closed. The trusted-source mode is only trusted after the source-prefix gate passes; otherwise it falls back near plain decode speed instead of accepting proposal tokens.
 - The numbers above exclude durable cache lookup, artifact IO, and host-to-device restore costs. Production integration still needs session/hash lookup, serialized state artifacts, and end-to-end timing around those boundaries.
+- Trusted artifact restore is a cache-hit fast-forward path, not speculative decoding. It is only exact if the restored state artifact and emitted token span are validated against the same model/tokenizer/config/source contract.
 
 ### Speculative Decode Harnesses
 

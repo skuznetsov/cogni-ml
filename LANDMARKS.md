@@ -13402,3 +13402,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: There are two non-overlapping frames now: optimize exact FFN/head kernels, or change the cache artifact contract so trusted replay can restore future state instead of recomputing verifier body.
 - maieutic: Exact verification currently recomputes logits for every proposed token. If we skip that, correctness must come from a stronger artifact integrity contract, not from the current verifier.
 - adversary: Do not use this profile to justify approximate candidate-only head checks. Exact greedy verification still requires proving no other vocab row beats the proposal unless the artifact itself is trusted as the source of truth.
+
+**decision_update_294:** Added a trusted cache-artifact restore lower-bound probe for CUDA known replay. `--known-replay-trusted-artifact-restore` models a stronger product contract than verified cursor replay: the cache artifact already contains the exact emitted token span and the post-span decode state for the same model/tokenizer/source hash. The probe builds and snapshots that future state outside the timed region, poisons/resets the runner, then times only the state restore and emits the cached tokens. This is not generation and not speculative verification; it is a cache fast-forward lower bound.
+
+**evidence_update_294:**
+- claim: "Trusted artifact restore can bypass the verifier body when the post-span state is already validated."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start1/gen64 with `--known-replay-trusted-artifact-restore` printed `known_replay_policy=trusted_artifact_restore`, `known_replay_accepted=64`, `known_replay_full_accept=true`, `known_replay_trusted_artifact_build_ms=614.443`, `known_replay_trusted_artifact_snapshot_ms=2.630`, `known_replay_trusted_artifact_poison_ms=32.988`, `known_replay_trusted_artifact_restore_ms=0.189`, `cuda_ms=0.189`, `cuda_ms_per_token=0.003`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA decode-state snapshot/restore layout, artifact validation contract, state serialization, or cache-hit IO path changes
+- claim: "The trusted artifact path also works for a non-zero replay cursor."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9/gen24 with `--known-replay-trusted-artifact-restore` printed `known_replay_accepted=24`, `known_replay_full_accept=true`, `known_replay_trusted_artifact_build_ms=413.245`, `known_replay_trusted_artifact_snapshot_ms=2.627`, `known_replay_trusted_artifact_restore_ms=0.198`, `cuda_ms=0.198`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: nonzero cursor handling, prefix-state build/restore, or source-history contract changes
+
+**quadrumvirate_update_294:**
+- cassandra: This is the first path that removes the `~690ms` verifier body wall entirely, but only by strengthening the cache artifact contract.
+- daedalus: The paradigm shift is from "verify known future tokens by recomputing" to "validate and restore a signed/hash-addressed future state." That makes pg/session/hash lookup and state serialization the next product bottleneck.
+- maieutic: The proof is a D2D snapshot/restore lower bound. It excludes disk IO, pg lookup, host-to-device transfer, and artifact hashing.
+- adversary: Do not compare this as arbitrary decode speed. It is exact only when model hash, tokenizer hash, prompt/source hash, token span, and state artifact hash all match.
