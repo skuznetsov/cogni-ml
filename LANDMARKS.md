@@ -12931,3 +12931,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful frame was not another attention/ranking micro-optimization, but symmetry of the existing LTP/WBA token band: Q4 gate/up had WBA, Q6 down had WBA, Q4 down did not.
 - maieutic: Exactness depends on the same token-major residual/output layout used by the row-batched add kernels. The route is only claimed for known-span token counts divisible by four, not single-token greedy decode.
 - adversary: Keep the dedicated opt-out because PTX was derived from the no-add Q4 tbatch kernel and should be rechecked after any Q4 PTX, FFN tail, or pointer-layout rewrite.
+**decision_update_268:** Refreshed same-host CUDA baseline after the Q4 FFN-down WBA pass. Current native CUDA is not faster than llama.cpp for plain greedy decode on RTX 5060 Ti. Native known-span/verifier chunks are much faster than native greedy and faster than llama.cpp tg64, but they are not an apples-to-apples replacement for llama.cpp prefill or single-token greedy decode.
+
+**evidence_update_268:**
+- claim: "llama.cpp CUDA remains faster than native CUDA for plain Qwen3.5-9B greedy decode on the current RTX 5060 Ti host."
+  source: remote `/build/persisten/cogni-ml/llama.cpp-build-cuda/bin/llama-bench -m /build/persisten/cogni-ml/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf -ngl 99 -fa 0 -p 64 -n 64 -r 5` with `LD_LIBRARY_PATH` including llama build libs, CUDA 12.9 cudart, and NVIDIA 595.45.04 driver reported `tg64=67.18 ± 0.27 tok/s` (`14.89 ms/tok`) and `pp64=1980.22 ± 295.03 tok/s`. Native semantic greedy gen64 on the same host/binary reported `23.48/23.497/23.517 ms/tok`; native steady tokens1 lower-bound reported `23.024/22.991/22.973 ms/tok`.
+  verified_at: 2026-05-18
+  decay_trigger: llama.cpp rebuild/commit change, CUDA driver/JIT change, native greedy controller rewrite, model quantization change, or benchmark harness semantic change
+- claim: "Native CUDA known-span/verifier-shaped chunks are faster than llama.cpp tg64, but not equivalent to llama.cpp pp64 or plain greedy."
+  source: remote native `cuda_mixed_stack_probe_q4_down_add_tbatch --all-layers --tokens 16 --max-seq 16 --perf-only --skip-debug-readback` measured `11.408/11.444/11.399 ms/tok`; `--tokens 64 --max-seq 64` measured `10.816/10.822/10.834 ms/tok`. These runs process known token bands and preserve internal top1 checks, but they are verifier-shaped lower-level throughput rather than autoregressive tg64.
+  verified_at: 2026-05-18
+  decay_trigger: verifier/controller route changes, token-band kernels, CUDA driver/JIT, or benchmark mode changes
+
+**quadrumvirate_update_268:**
+- cassandra: The likely overclaim risk was comparing native known-span WBA timing directly to llama.cpp greedy or prefill. Refreshed numbers show that would be wrong.
+- daedalus: The CUDA path to beating llama.cpp is not single-token greedy micro-tuning; it is increasing the fraction of real generation served by exact verifier-shaped chunks via self-spec, n-gram, MTP, or another proposal source.
+- maieutic: "Faster than llama.cpp" must name the mode. Metal has prior ahead/parity evidence; CUDA greedy does not. CUDA verifier chunks have strong local throughput but require a controller acceptance rate to become user-visible speed.
+- adversary: llama.cpp `pp64` is far faster than the native known-span probe because it is a different prompt-processing workload with different batching/attention semantics. Do not use native known-span as a prefill victory claim.
