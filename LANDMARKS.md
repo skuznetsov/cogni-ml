@@ -13586,3 +13586,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The winning frame is no longer maximum compression. Use block1024/block256 for trusted restore candidates, and reserve block4096 for proposal-only experiments with exact verification.
 - maieutic: Passing one or two cursors was insufficient because later recurrent states exposed the drift. The useful invariant is suite-level free-run parity, not single-cursor parity.
 - adversary: Do not average the block4096 result into a positive summary. A single deterministic free-run divergence is enough to block trusted exact restore promotion for that block size.
+
+**decision_update_304:** Added a CUDA GPU-decode restore path for recurrent block-INT8 trusted artifacts. `--known-replay-trusted-artifact-codec-gpu-decode-check` stores recurrent state as host INT8 blocks plus FP32 scales, copies compressed quant/scales to GPU, decodes directly into recurrent CUDA state buffers with `recurrent_block_i8_decode_f32`, restores live KV from host, and uses the GPU-decoded state for continuation/free-run parity checks.
+
+**evidence_update_304:**
+- claim: "GPU decode makes recurrent block-INT8 artifact restore materially faster than raw host recurrent restore on tested CUDA cache cursors."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start25/tokens16 live-KV block1024 run printed raw host restore `known_replay_trusted_artifact_restore_ms=11.079`, GPU codec restore `known_replay_trusted_artifact_codec_gpu_decode_restore_ms=3.065`, with split `h2d_ms=2.083`, `kernel_ms=0.230`, `kv_ms=0.751`, and `ok=true`. A late cursor start41/tokens8 block1024 printed `11.489ms -> 3.224ms`, and block256 start25/tokens16 printed `11.626ms -> 3.333ms`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA codec kernel, recurrent state layout, artifact layout, KV restore path, driver/device, or block-size policy changes
+- claim: "The GPU-decoded recurrent state preserves the current same-history free-run parity gates for block1024 and block256."
+  source: the same remote runs printed `known_replay_trusted_artifact_codec_gpu_decode_check_ok=true`, `known_replay_trusted_artifact_codec_next_parity_ok=true`, `known_replay_trusted_artifact_codec_free_run_parity_count=16`, `known_replay_trusted_artifact_codec_free_run_parity_ok=true`, and `ok=true` for start25/tokens16 block1024, start41/tokens8 block1024, and start25/tokens16 block256.
+  verified_at: 2026-05-18
+  decay_trigger: prompt/history suite expansion, free-run harness changes, codec quantization changes, CUDA restore semantics, or model weights change
+
+**quadrumvirate_update_304:**
+- cassandra: The byte win now converts into runtime win because compressed H2D plus GPU decode is about 3.1-3.3ms instead of 11-12ms raw H2D restore on these cursors.
+- daedalus: The frame shifts from scalar codec tuning to artifact service design: prefetch/resident compressed artifacts, GPU decode on restore, and fail-closed trust gates.
+- maieutic: This is still same-history evidence. It proves the mechanism and speed on selected deterministic cursors, not broad production safety across prompts/sampling/settings.
+- adversary: Do not promote compressed recurrent restore as universally exact yet. Block4096 is already refuted, and block1024/block256 still need broader prompt/history coverage before production trust.

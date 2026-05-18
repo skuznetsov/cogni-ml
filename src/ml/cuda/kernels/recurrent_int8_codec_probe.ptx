@@ -1,0 +1,49 @@
+.version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry recurrent_block_i8_decode_f32(
+    .param .u64 q_param,
+    .param .u64 scales_param,
+    .param .u64 out_param,
+    .param .u32 values_param,
+    .param .u32 block_size_param
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<4>;
+
+    ld.param.u64 %rd1, [q_param];
+    ld.param.u64 %rd2, [scales_param];
+    ld.param.u64 %rd3, [out_param];
+    ld.param.u32 %r1, [values_param];
+    ld.param.u32 %r2, [block_size_param];
+
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mov.u32 %r5, %tid.x;
+    mad.lo.u32 %r6, %r3, %r4, %r5;
+    setp.ge.u32 %p1, %r6, %r1;
+    @%p1 bra DONE;
+
+    div.u32 %r7, %r6, %r2;
+
+    cvt.u64.u32 %rd4, %r6;
+    add.u64 %rd5, %rd1, %rd4;
+    ld.global.s8 %r8, [%rd5];
+    cvt.rn.f32.s32 %f1, %r8;
+
+    mul.wide.u32 %rd6, %r7, 4;
+    add.u64 %rd7, %rd2, %rd6;
+    ld.global.f32 %f2, [%rd7];
+    mul.f32 %f3, %f1, %f2;
+
+    mul.wide.u32 %rd8, %r6, 4;
+    add.u64 %rd9, %rd3, %rd8;
+    st.global.f32 [%rd9], %f3;
+
+DONE:
+    ret;
+}
