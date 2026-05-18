@@ -13164,3 +13164,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This creates a safe seam for the real pivot: migrate one hot WBA override at a time to active-row launch counts and verify exactness after each migration.
 - maieutic: The fact that `ResidentSequenceRunner` can pass `active_tokens` does not mean full Qwen active-row execution is solved. Full-attention KV, recurrent WBA projections/core, and output-head tbatch4 still need active-count-aware launch logic.
 - adversary: Treat this as infrastructure only until an active-row verifier smoke runs a larger allocated stack with a smaller active band and matches a separately constructed same-size known replay.
+
+**decision_update_281:** Closed the first speed-bearing active-row WBA verifier primitive for CUDA known replay. The probe now supports `--known-replay-active-tokens N`, which allocates the full known-replay span but sets the mixed stack to execute and compare only the first active rows. Full-attention QKV projection, recurrent WBA override, and full-attention KV/tail execution now honor the active row count. This makes a larger resident verifier stack usable for smaller WBA-aligned bands, which is the missing substrate for `4,4,8,16` without rebuilding stacks.
+
+**evidence_update_281:**
+- claim: "Allocated 8 / active 4 known replay now runs at direct 4-row cost and preserves exact top1."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B after active-row migration: direct4 known replay printed `cuda_ms=54.84`, `cuda_ms_per_token=13.71`, top1 `198,2,220,16`, `known_replay_full_accept=true`, `ok=true`; alloc8/active4 printed `cuda_ms=54.813`, `cuda_ms_per_token=13.703`, top1 `198,2,220,16,0,0,0,0`, `known_replay_active_tokens=4`, `known_replay_allocated_tokens=8`, `known_replay_full_accept=true`, `ok=true`; direct8 remained exact at `cuda_ms=96.624`, `cuda_ms_per_token=12.078`.
+  verified_at: 2026-05-18
+  decay_trigger: active-token runner plumbing, recurrent/full-attention WBA override routing, known-replay active-token option, or CUDA WBA kernels
+- claim: "The active-row migration materially reduced the allocated-stack overwork."
+  source: remote active-row progression on the same alloc8/active4 known replay: before WBA override migration it was `94.148ms`; after full-attention projection active rows it was `92.566ms`; after recurrent active rows it was `61.917ms`; after full-attention KV/tail active rows it was `54.813ms`, matching direct4.
+  verified_at: 2026-05-18
+  decay_trigger: timing environment, WBA active-row implementation, or verifier stack allocation shape changes
+
+**quadrumvirate_update_281:**
+- cassandra: The dominant overwork was recurrent plus full-attention KV/tail, not the output head. The staged timings confirmed the predicted attribution.
+- daedalus: This changes the controller frame from "build the exact chunk size" to "allocate a max-band verifier once and execute active WBA bands inside it."
+- maieutic: This proves active prefixes from the initial state. It does not yet prove state handoff after accepted bands, fallback after reject, or a full online controller loop.
+- adversary: The next gate must run multiple active bands on the same resident verifier stack, updating active count and decode state between bands, before claiming the `4,4,8,16` schedule is operational.

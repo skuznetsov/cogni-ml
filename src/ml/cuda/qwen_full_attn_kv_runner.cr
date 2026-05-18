@@ -155,6 +155,7 @@ module ML::CUDA
       @profile_ffn_down_ms = 0.0
       @profile_final_add_ms = 0.0
       @profile_override_detail = false
+      @active_tokens = @tokens
       @closed = false
 
       build_runner
@@ -174,12 +175,14 @@ module ML::CUDA
     end
 
     def active_tokens=(count : Int32) : Int32
+      @active_tokens = count
       runner.active_tokens = count
       @profile_runner.try { |profile| profile.active_tokens = count }
       count
     end
 
     def reset_active_tokens : Nil
+      @active_tokens = @tokens
       runner.reset_active_tokens
       @profile_runner.try(&.reset_active_tokens)
     end
@@ -511,9 +514,9 @@ module ML::CUDA
 
       run_q4_weight_stationary = ->(params : Pointer(Void*), x_ptr : Pointer(DevicePtr), out_ptr : Pointer(DevicePtr),
                                     x_base : DevicePtr, out_base : DevicePtr, grid : UInt32,
-                                    in_dim : Int32, out_dim : Int32, label : String) {
-        if use_q4_tbatch4
-          groups = @tokens // 4
+                                    in_dim : Int32, out_dim : Int32, label : String, active_count : Int32) {
+        if use_q4_tbatch4 && active_count % 4 == 0
+          groups = active_count // 4
           groups.times do |group|
             x_ptr.value = x_base + bytesize_f32(group * 4 * in_dim)
             out_ptr.value = out_base + bytesize_f32(group * 4 * out_dim)
@@ -522,21 +525,21 @@ module ML::CUDA
         else
           x_ptr.value = x_base
           out_ptr.value = out_base
-          ML::CUDA.launch!(q4_batched_fn, grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, params, label)
+          ML::CUDA.launch!(q4_batched_fn, grid * active_count.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, params, label)
         end
       }
 
-      run_ffn_down_add = -> {
-        if use_q6_tbatch4
-          groups = @tokens // 4
+      run_ffn_down_add = ->(active_count : Int32) {
+        if use_q6_tbatch4 && active_count % 4 == 0
+          groups = active_count // 4
           groups.times do |group|
             d_ffn_comb_cur_ptr.value = d_ffn_comb + bytesize_f32(group * 4 * @ffn_dim)
             d_ffn_residual_cur_ptr.value = d_residual + bytesize_f32(group * 4 * @output_out_dim)
             d_final_cur_ptr.value = d_final_all + bytesize_f32(group * 4 * @output_out_dim)
             ML::CUDA.launch!(q6_add_tbatch4_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add tbatch4")
           end
-        elsif use_q4_down_add_tbatch4
-          groups = @tokens // 4
+        elsif use_q4_down_add_tbatch4 && active_count % 4 == 0
+          groups = active_count // 4
           groups.times do |group|
             d_ffn_comb_cur_ptr.value = d_ffn_comb + bytesize_f32(group * 4 * @ffn_dim)
             d_ffn_residual_cur_ptr.value = d_residual + bytesize_f32(group * 4 * @output_out_dim)
@@ -547,13 +550,13 @@ module ML::CUDA
           d_ffn_comb_cur_ptr.value = d_ffn_comb
           d_ffn_residual_cur_ptr.value = d_residual
           d_final_cur_ptr.value = d_final_all
-          ML::CUDA.launch!(ffn_down_add_batched_fn, output_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add batched")
+          ML::CUDA.launch!(ffn_down_add_batched_fn, output_grid * active_count.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, ffn_down_params, "full ffn down add batched")
         end
       }
 
-      run_attn_output_projection = -> {
-        if use_attn_output_tbatch4
-          groups = @tokens // 4
+      run_attn_output_projection = ->(active_count : Int32) {
+        if use_attn_output_tbatch4 && active_count % 4 == 0
+          groups = active_count // 4
           groups.times do |group|
             d_attn_cur_ptr.value = d_attn_out + bytesize_f32(group * 4 * @output_in_dim)
             d_proj_cur_ptr.value = d_proj_out + bytesize_f32(group * 4 * @output_out_dim)
@@ -564,9 +567,9 @@ module ML::CUDA
         elsif use_batched_tail
           d_attn_cur_ptr.value = d_attn_out
           d_proj_cur_ptr.value = d_proj_out
-          ML::CUDA.launch!(out_proj_batched_fn, output_grid * @tokens.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output batched")
+          ML::CUDA.launch!(out_proj_batched_fn, output_grid * active_count.to_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output batched")
         else
-          @tokens.times do |t|
+          active_count.times do |t|
             d_attn_cur_ptr.value = d_attn_out + bytesize_f32(t * @output_in_dim)
             d_proj_cur_ptr.value = d_proj_out + bytesize_f32(t * @output_out_dim)
             ML::CUDA.launch!(out_proj_fn, output_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, out_proj_params, "attn output")
@@ -577,30 +580,33 @@ module ML::CUDA
       run_token = ->(tok : Int32) {
         # Kernels index token by block id; launch all token blocks once.
         if tok == 0
+          active_count = @active_tokens
+          active_ffn_dim_all_u32 = (active_count * @ffn_dim).to_u32
+          active_swiglu_grid_all = (((active_count * @ffn_dim) + 127) // 128).to_u32
           if @profile_override_detail
             t_qk = Time.instant
-            ML::CUDA.launch!(q_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
-            ML::CUDA.launch!(k_fn, @tokens.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
+            ML::CUDA.launch!(q_fn, active_count.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
+            ML::CUDA.launch!(k_fn, active_count.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
             ML::CUDA.synchronize!("cuCtxSynchronize(full batched qk rope)")
             @profile_qk_rope_ms += (Time.instant - t_qk).total_milliseconds
 
             t_attn = Time.instant
-            ML::CUDA.launch!(attn_decode_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
+            ML::CUDA.launch!(attn_decode_fn, active_count.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
             ML::CUDA.synchronize!("cuCtxSynchronize(full batched attn decode)")
             @profile_attn_decode_ms += (Time.instant - t_attn).total_milliseconds
           else
-            ML::CUDA.launch!(q_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
-            ML::CUDA.launch!(k_fn, @tokens.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
-            ML::CUDA.launch!(attn_decode_fn, @tokens.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
+            ML::CUDA.launch!(q_fn, active_count.to_u32, @n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, q_params, "q norm rope")
+            ML::CUDA.launch!(k_fn, active_count.to_u32, @n_head_kv.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, k_params, "k norm rope cache")
+            ML::CUDA.launch!(attn_decode_fn, active_count.to_u32, @n_head.to_u32, 1_u32, attn_decode_block, 1_u32, 1_u32, attn_params, "attn decode cache")
           end
           if use_batched_tail
             if @profile_override_detail
               t_out = Time.instant
-              run_attn_output_projection.call
+              run_attn_output_projection.call(active_count)
               ML::CUDA.synchronize!("cuCtxSynchronize(full batched attn output)")
               @profile_out_proj_ms += (Time.instant - t_out).total_milliseconds
             else
-              run_attn_output_projection.call
+              run_attn_output_projection.call(active_count)
             end
             if use_batched_norms
               d_residual_cur_ptr.value = @residual_device_base.not_nil!
@@ -609,15 +615,15 @@ module ML::CUDA
               d_cur2_cur_ptr.value = d_cur2
               if @profile_override_detail
                 t_add_rms = Time.instant
-                ML::CUDA.launch!(add_rmsnorm_batched_fn, @tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm batched")
+                ML::CUDA.launch!(add_rmsnorm_batched_fn, active_count.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm batched")
                 ML::CUDA.synchronize!("cuCtxSynchronize(full batched add rmsnorm)")
                 @profile_add_rms_ms += (Time.instant - t_add_rms).total_milliseconds
               else
-                ML::CUDA.launch!(add_rmsnorm_batched_fn, @tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm batched")
+                ML::CUDA.launch!(add_rmsnorm_batched_fn, active_count.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, add_rms_params, "full add rmsnorm batched")
               end
             else
               t_add_rms = Time.instant if @profile_override_detail
-              @tokens.times do |t|
+              active_count.times do |t|
                 d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
                 d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
                 d_residual_out_cur_ptr.value = d_residual + bytesize_f32(t * @output_out_dim)
@@ -635,48 +641,48 @@ module ML::CUDA
             d_ffn_comb_cur_ptr.value = d_ffn_comb
             d_ffn_residual_cur_ptr.value = d_residual
             d_final_cur_ptr.value = d_final_all
-            swiglu_n_param.value = ffn_dim_all_u32
+            swiglu_n_param.value = active_ffn_dim_all_u32
             if @profile_override_detail
               t_gate = Time.instant
               run_q4_weight_stationary.call(ffn_gate_params, d_ffn_input_cur_ptr, d_ffn_gate_cur_ptr,
-                d_cur2, d_ffn_gate, ffn_grid, @output_out_dim, @ffn_dim, "full ffn gate batched")
+                d_cur2, d_ffn_gate, ffn_grid, @output_out_dim, @ffn_dim, "full ffn gate batched", active_count)
               ML::CUDA.synchronize!("cuCtxSynchronize(full batched ffn gate)")
               @profile_ffn_gate_ms += (Time.instant - t_gate).total_milliseconds
 
               t_up = Time.instant
               run_q4_weight_stationary.call(ffn_up_params, d_ffn_input_cur_ptr, d_ffn_up_cur_ptr,
-                d_cur2, d_ffn_up, ffn_grid, @output_out_dim, @ffn_dim, "full ffn up batched")
+                d_cur2, d_ffn_up, ffn_grid, @output_out_dim, @ffn_dim, "full ffn up batched", active_count)
               ML::CUDA.synchronize!("cuCtxSynchronize(full batched ffn up)")
               @profile_ffn_up_ms += (Time.instant - t_up).total_milliseconds
             else
               run_q4_weight_stationary.call(ffn_gate_params, d_ffn_input_cur_ptr, d_ffn_gate_cur_ptr,
-                d_cur2, d_ffn_gate, ffn_grid, @output_out_dim, @ffn_dim, "full ffn gate batched")
+                d_cur2, d_ffn_gate, ffn_grid, @output_out_dim, @ffn_dim, "full ffn gate batched", active_count)
               run_q4_weight_stationary.call(ffn_up_params, d_ffn_input_cur_ptr, d_ffn_up_cur_ptr,
-                d_cur2, d_ffn_up, ffn_grid, @output_out_dim, @ffn_dim, "full ffn up batched")
+                d_cur2, d_ffn_up, ffn_grid, @output_out_dim, @ffn_dim, "full ffn up batched", active_count)
             end
             d_ffn_gate_cur_ptr.value = d_ffn_gate
             d_ffn_up_cur_ptr.value = d_ffn_up
             d_ffn_comb_cur_ptr.value = d_ffn_comb
             if @profile_override_detail
               t_swiglu = Time.instant
-              ML::CUDA.launch!(swiglu_fn, swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu batched")
+              ML::CUDA.launch!(swiglu_fn, active_swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu batched")
               ML::CUDA.synchronize!("cuCtxSynchronize(full batched swiglu)")
               @profile_swiglu_ms += (Time.instant - t_swiglu).total_milliseconds
 
               t_down = Time.instant
-              run_ffn_down_add.call
+              run_ffn_down_add.call(active_count)
               ML::CUDA.synchronize!("cuCtxSynchronize(full batched ffn down)")
               @profile_ffn_down_ms += (Time.instant - t_down).total_milliseconds
             else
-              ML::CUDA.launch!(swiglu_fn, swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu batched")
-              run_ffn_down_add.call
+              ML::CUDA.launch!(swiglu_fn, active_swiglu_grid_all, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, swiglu_params, "full swiglu batched")
+              run_ffn_down_add.call(active_count)
             end
             swiglu_n_param.value = ffn_dim_u32
             d_residual_out_cur_ptr.value = d_residual
             d_cur2_cur_ptr.value = d_cur2
           else
-            run_attn_output_projection.call
-            @tokens.times do |t|
+            run_attn_output_projection.call(active_count)
+            active_count.times do |t|
               d_residual_cur_ptr.value = @residual_device_base.not_nil! + bytesize_f32(t * @output_out_dim)
               d_proj_cur_ptr_for_add.value = d_proj_out + bytesize_f32(t * @output_out_dim)
               d_residual_out_cur_ptr.value = d_residual
@@ -712,7 +718,7 @@ module ML::CUDA
           @profile_attn_decode_ms += (Time.instant - t_attn).total_milliseconds
 
           t_out = Time.instant
-          run_attn_output_projection.call
+          run_attn_output_projection.call(@active_tokens)
           ML::CUDA.synchronize!("cuCtxSynchronize(full attn output)")
           @profile_out_proj_ms += (Time.instant - t_out).total_milliseconds
 

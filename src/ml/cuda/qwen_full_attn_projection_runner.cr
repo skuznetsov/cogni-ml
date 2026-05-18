@@ -271,17 +271,17 @@ module ML::CUDA
         ML::CUDA.launch!(v_fn, v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, v_params, "attn v")
       }
 
-      run_sequence_override = ->(_active_tokens : Int32) {
+      run_sequence_override = ->(active_tokens : Int32) {
         if @input_norm
           d_x_cur_ptr.value = @input_device_base.not_nil!
           d_norm_cur_ptr.value = d_norm_all
           d_proj_input_cur_ptr.value = d_norm_all
-          ML::CUDA.launch!(input_norm_batched_fn, @tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, input_norm_params, "attn input norm batched")
+          ML::CUDA.launch!(input_norm_batched_fn, active_tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, input_norm_params, "attn input norm batched")
         else
           d_proj_input_cur_ptr.value = @input_device_base.not_nil!
         end
 
-        groups = @tokens // 4
+        groups = active_tokens // 4
         groups.times do |group|
           tok = group * 4
           d_proj_input_cur_ptr.value = (@input_norm ? d_norm_all : @input_device_base.not_nil!) + bytesize_f32(tok * @hidden)
@@ -292,6 +292,7 @@ module ML::CUDA
           d_v_cur_ptr.value = d_v_all + bytesize_f32(tok * @v_dim)
           ML::CUDA.launch!(v_tbatch4_fn, v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, v_params, "attn v tbatch4")
         end
+        (groups * 4).upto(active_tokens - 1) { |tok| run_token.call(tok) } if active_tokens > groups * 4
 
         d_proj_input_cur_ptr.value = @input_norm ? d_norm_all : @input_device_base.not_nil!
         d_q_cur_ptr.value = d_q_all

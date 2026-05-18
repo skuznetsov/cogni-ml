@@ -336,6 +336,7 @@ known_replay_candidates = [] of Int32
 known_replay_history = [] of Int32
 known_replay_start = -1
 known_replay_tokens = 0
+known_replay_active_tokens = 0
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -402,6 +403,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-history LIST", "Derive --input-tokens and --known-replay-candidates from a cached token history") { |v| known_replay_history = parse_i32_list(v); perf_only = true }
   p.on("--known-replay-start N", "Candidate start index inside --known-replay-history; inputs start at N-1") { |v| known_replay_start = v.to_i }
   p.on("--known-replay-tokens N", "Number of replay candidates to verify from --known-replay-history") { |v| known_replay_tokens = v.to_i }
+  p.on("--known-replay-active-tokens N", "Diagnostic: allocate the full known-replay span but run/compare only the first N active rows") { |v| known_replay_active_tokens = v.to_i }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -513,6 +515,9 @@ raise "--known-replay-candidates is incompatible with --greedy-loop-tokens" if !
 raise "--known-replay-candidates size must match --input-tokens size" if !known_replay_candidates.empty? && known_replay_candidates.size != input_tokens.size
 raise "--known-replay-start requires --known-replay-history" if known_replay_start >= 0 && known_replay_history.empty?
 raise "--known-replay-tokens requires --known-replay-history" if known_replay_tokens > 0 && known_replay_history.empty?
+raise "--known-replay-active-tokens requires --known-replay-candidates or --known-replay-history" if known_replay_active_tokens > 0 && known_replay_candidates.empty?
+raise "--known-replay-active-tokens must be non-negative" unless known_replay_active_tokens >= 0
+raise "--known-replay-active-tokens must be <= known replay span" if known_replay_active_tokens > known_replay_candidates.size
 raise "--known-replay-recover-on-reject requires --known-replay-candidates or --known-replay-history" if known_replay_recover_on_reject && known_replay_candidates.empty?
 if known_replay_recover_on_reject && (runtime_raw_q8 || runtime_skip_recurrent_ffn || runtime_pca_updown_zero || runtime_pca_updown_adapters_path)
   raise "--known-replay-recover-on-reject is only supported for the exact default runner route"
@@ -730,6 +735,10 @@ begin
   end
 
   weight_upload_ms = mixed_stack.upload_weights(profile: profile_phases)
+  if known_replay_active_tokens > 0
+    mixed_stack.active_tokens = known_replay_active_tokens
+    measured_tokens = known_replay_active_tokens
+  end
 
   verifier_weight_upload_ms = 0.0
   if greedy_loop_probe_chunk_batched_verify
@@ -1281,6 +1290,7 @@ begin
     else
       gpu_ms = mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: debug_readback,
         run_head: !skip_output_head)
+      measured_tokens = known_replay_active_tokens if known_replay_active_tokens > 0
     end
   end
   final_gpu_all = mixed_stack.final_gpu_all if debug_readback
@@ -1387,17 +1397,20 @@ begin
   end
   gpu_top1_ids = skip_output_head ? [] of Int32 : (greedy_loop_tokens > 0 ? greedy_gpu_ids : output_head.top1_ids)
   unless known_replay_candidates.empty?
+    known_replay_compare_tokens = known_replay_active_tokens > 0 ? known_replay_active_tokens : known_replay_candidates.size
+    known_replay_expected = known_replay_candidates[0, known_replay_compare_tokens]
+    known_replay_actual = gpu_top1_ids[0, known_replay_compare_tokens]
     accepted = 0
     reject_index = -1
-    known_replay_candidates.each_with_index do |expected, i|
-      if gpu_top1_ids[i]? == expected
+    known_replay_expected.each_with_index do |expected, i|
+      if known_replay_actual[i]? == expected
         accepted += 1
       else
         reject_index = i
         break
       end
     end
-    full_accept = accepted == known_replay_candidates.size
+    full_accept = accepted == known_replay_expected.size
     commit_tokens = full_accept ? accepted : 0
     discarded_accept_prefix = full_accept ? 0 : accepted
     reject_recovery_required = !full_accept && accepted > 0
@@ -1464,12 +1477,12 @@ begin
     unless known_replay_split_report.empty?
       lines << "known_replay_split_report=#{known_replay_split_report.join(",")}"
       known_replay_split_report.each do |split_size|
-        split = ML::GGUF::NgramDraft.fixed_split_acceptance(known_replay_candidates, gpu_top1_ids, split_size)
+        split = ML::GGUF::NgramDraft.fixed_split_acceptance(known_replay_expected, known_replay_actual, split_size)
         lines << "known_replay_split_size_#{split_size}=chunks:#{split.chunks.size},full_accept_chunks:#{split.full_accept_chunks},verified_tokens:#{split.verified_tokens},committed_tokens:#{split.committed_tokens},discarded_accept_prefix:#{split.discarded_accept_prefix},reject_index:#{split.reject_index},full_accept:#{split.full_accept}"
       end
     end
     unless known_replay_schedule_report.empty?
-      schedule = ML::GGUF::NgramDraft.schedule_acceptance(known_replay_candidates, gpu_top1_ids, known_replay_schedule_report)
+      schedule = ML::GGUF::NgramDraft.schedule_acceptance(known_replay_expected, known_replay_actual, known_replay_schedule_report)
       lines << "known_replay_schedule_report=#{known_replay_schedule_report.join(",")}"
       lines << "known_replay_schedule_chunks=#{schedule.chunks.join(",")}"
       lines << "known_replay_schedule_full_accept_chunks=#{schedule.full_accept_chunks}"
@@ -1480,10 +1493,12 @@ begin
       lines << "known_replay_schedule_full_accept=#{schedule.full_accept}"
     end
     lines << "known_replay_accepted=#{accepted}"
-    lines << "known_replay_total=#{known_replay_candidates.size}"
+    lines << "known_replay_total=#{known_replay_expected.size}"
     lines << "known_replay_reject_index=#{reject_index}"
     lines << "known_replay_full_accept=#{full_accept}"
-    lines << "known_replay_accept_rate_pct=#{(100.0 * accepted / Math.max(known_replay_candidates.size, 1)).round(2)}"
+    lines << "known_replay_accept_rate_pct=#{(100.0 * accepted / Math.max(known_replay_expected.size, 1)).round(2)}"
+    lines << "known_replay_active_tokens=#{known_replay_active_tokens}" if known_replay_active_tokens > 0
+    lines << "known_replay_allocated_tokens=#{known_replay_candidates.size}" if known_replay_active_tokens > 0
     unless known_replay_history.empty?
       lines << "known_replay_history_tokens=#{known_replay_history.size}"
       lines << "known_replay_start=#{known_replay_start}"
@@ -1622,6 +1637,7 @@ begin
   puts "known_replay_history_tokens=#{known_replay_history.size}"
   puts "known_replay_start_arg=#{known_replay_start}"
   puts "known_replay_tokens_arg=#{known_replay_tokens}"
+  puts "known_replay_active_tokens_arg=#{known_replay_active_tokens}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"
