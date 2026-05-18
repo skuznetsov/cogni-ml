@@ -334,6 +334,7 @@ greedy_loop_probe_chunk_margin = 0.03_f32
 greedy_loop_probe_chunk_batched_verify = false
 greedy_loop_probe_chunk_fast_verify_top1 = false
 greedy_loop_probe_chunk_active_verify = false
+greedy_loop_probe_chunk_active_verify_disabled_by_prefix_gate = false
 greedy_loop_probe_ngram = false
 greedy_loop_probe_ngram_min = 2
 greedy_loop_probe_ngram_max = 8
@@ -346,6 +347,7 @@ greedy_loop_probe_ngram_source_history = [] of Int32
 greedy_loop_probe_ngram_replay_start = -1
 greedy_loop_probe_ngram_cursor_only = false
 greedy_loop_probe_ngram_schedule = [] of Int32
+greedy_loop_probe_ngram_source_prefix_gate = true
 greedy_loop_prefix_tokens = [] of Int32
 greedy_loop_restore_prefix_state = false
 runtime_raw_q8 = false
@@ -420,6 +422,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-ngram-replay-start N", "Start n-gram proposals at an aligned history cursor instead of suffix search; use for prompt/session cache hits") { |v| greedy_loop_probe_ngram_replay_start = v.to_i }
   p.on("--greedy-loop-probe-ngram-cursor-only", "Only propose from an active replay cursor; fallback instead of suffix-searching") { greedy_loop_probe_ngram_cursor_only = true }
   p.on("--greedy-loop-probe-ngram-schedule LIST", "Progressive cursor/n-gram chunk sizes; grows after full accepts and resets on reject/fallback") { |v| greedy_loop_probe_ngram_schedule = parse_i32_list(v) }
+  p.on("--greedy-loop-probe-ngram-no-source-prefix-gate", "Disable source/prefix cursor validation before cursor replay") { greedy_loop_probe_ngram_source_prefix_gate = false }
   p.on("--greedy-loop-prefix-tokens LIST", "Comma-separated prompt/prefix token IDs to prefill before timed greedy-loop generation") { |v| greedy_loop_prefix_tokens = parse_i32_list(v) }
   p.on("--greedy-loop-restore-prefix-state", "Diagnostic: snapshot/poison/restore prefix state before timed greedy-loop generation") { greedy_loop_restore_prefix_state = true }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
@@ -532,6 +535,19 @@ raise "--greedy-loop-prefix-tokens is incompatible with --greedy-loop-graph" if 
 raise "--greedy-loop-restore-prefix-state requires at least two --greedy-loop-prefix-tokens" if greedy_loop_restore_prefix_state && greedy_loop_prefix_tokens.size <= 1
 if !greedy_loop_prefix_tokens.empty? && !greedy_loop_probe_ngram_history.empty?
   raise "--greedy-loop-probe-ngram-history must end with --greedy-loop-prefix-tokens last token" unless greedy_loop_probe_ngram_history.last == greedy_loop_prefix_tokens.last
+end
+if greedy_loop_probe_chunk_active_verify && greedy_loop_probe_ngram_source_prefix_gate &&
+   greedy_loop_probe_ngram_cursor_only && !greedy_loop_probe_ngram_source_history.empty? &&
+   greedy_loop_probe_ngram_replay_start >= 0
+  validation_prefix = greedy_loop_prefix_tokens.empty? ? [seed_token] : greedy_loop_prefix_tokens
+  source_prefix_start = greedy_loop_probe_ngram_replay_start - validation_prefix.size
+  source_prefix_match = source_prefix_start >= 0 &&
+                        source_prefix_start + validation_prefix.size <= greedy_loop_probe_ngram_source_history.size &&
+                        greedy_loop_probe_ngram_source_history[source_prefix_start, validation_prefix.size] == validation_prefix
+  unless source_prefix_match
+    greedy_loop_probe_chunk_active_verify = false
+    greedy_loop_probe_chunk_active_verify_disabled_by_prefix_gate = true
+  end
 end
 raise "--runtime-skip-recurrent-ffn is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn && runtime_raw_q8
 raise "use either --runtime-skip-recurrent-ffn or --runtime-skip-recurrent-ffn-layers, not both" if runtime_skip_recurrent_ffn && runtime_skip_recurrent_ffn_layers
@@ -884,6 +900,8 @@ begin
   chunk_ngram_schedule_chunks = [] of Int32
   chunk_ngram_schedule_full_accept_streak = 0
   chunk_ngram_schedule_resets = 0
+  ngram_source_prefix_checked = false
+  ngram_source_prefix_match = true
   if greedy_loop_tokens > 0
     warmup.times do
       warm_token = seed_token
@@ -952,6 +970,15 @@ begin
           raise "--greedy-loop-probe-ngram-replay-start out of history range" unless greedy_loop_probe_ngram_replay_start < ngram_replay_limit
 
           ngram_replay_cursor = greedy_loop_probe_ngram_replay_start
+          if greedy_loop_probe_ngram_source_prefix_gate
+            validation_prefix = greedy_loop_prefix_tokens.empty? ? [greedy_loop_start_token] : greedy_loop_prefix_tokens
+            source_prefix_start = greedy_loop_probe_ngram_replay_start - validation_prefix.size
+            ngram_source_prefix_checked = true
+            ngram_source_prefix_match = source_prefix_start >= 0 &&
+                                        source_prefix_start + validation_prefix.size <= ngram_source_history.size &&
+                                        ngram_source_history[source_prefix_start, validation_prefix.size] == validation_prefix
+            ngram_replay_cursor = nil unless ngram_source_prefix_match
+          end
         end
         gpu_token = initial_history.last
       end
@@ -1593,6 +1620,9 @@ begin
         lines << "chunk_probe_ngram_recursive=#{greedy_loop_probe_ngram_recursive}"
         lines << "chunk_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
         lines << "chunk_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
+        lines << "chunk_probe_ngram_source_prefix_gate=#{greedy_loop_probe_ngram_source_prefix_gate}"
+        lines << "chunk_probe_ngram_source_prefix_checked=#{ngram_source_prefix_checked}"
+        lines << "chunk_probe_ngram_source_prefix_match=#{ngram_source_prefix_match}"
         lines << "chunk_probe_ngram_replay_start=#{greedy_loop_probe_ngram_replay_start}"
         lines << "chunk_probe_ngram_cursor_only=#{greedy_loop_probe_ngram_cursor_only}"
         unless greedy_loop_probe_ngram_schedule.empty?
@@ -1619,6 +1649,7 @@ begin
       lines << "chunk_probe_batched_verify_ms=#{chunk_batched_verify_ms.round(3)}"
       lines << "chunk_probe_batched_verify_ms_per_chunk=#{(chunk_batched_verify_ms / Math.max(chunk_batched_verify_chunks, 1)).round(3)}"
       lines << "chunk_probe_active_verify=#{greedy_loop_probe_chunk_active_verify}"
+      lines << "chunk_probe_active_verify_disabled_by_prefix_gate=#{greedy_loop_probe_chunk_active_verify_disabled_by_prefix_gate}"
       lines << "chunk_probe_active_verify_chunks=#{chunk_active_verify_chunks}"
       lines << "chunk_probe_active_verify_accepts=#{chunk_active_verify_accepts}"
       lines << "chunk_probe_active_verify_rejects=#{chunk_active_verify_rejects}"
@@ -1880,6 +1911,7 @@ begin
   puts "greedy_loop_probe_chunk_batched_verify=#{greedy_loop_probe_chunk_batched_verify}"
   puts "greedy_loop_probe_chunk_fast_verify_top1=#{greedy_loop_probe_chunk_fast_verify_top1}"
   puts "greedy_loop_probe_chunk_active_verify=#{greedy_loop_probe_chunk_active_verify}"
+  puts "greedy_loop_probe_chunk_active_verify_disabled_by_prefix_gate=#{greedy_loop_probe_chunk_active_verify_disabled_by_prefix_gate}"
   puts "greedy_loop_probe_ngram=#{greedy_loop_probe_ngram}"
   puts "greedy_loop_probe_ngram_min=#{greedy_loop_probe_ngram_min}"
   puts "greedy_loop_probe_ngram_max=#{greedy_loop_probe_ngram_max}"
@@ -1888,6 +1920,7 @@ begin
   puts "greedy_loop_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
   puts "greedy_loop_probe_ngram_history=#{greedy_loop_probe_ngram_history.join(",")}"
   puts "greedy_loop_probe_ngram_source_history=#{greedy_loop_probe_ngram_source_history.join(",")}"
+  puts "greedy_loop_probe_ngram_source_prefix_gate=#{greedy_loop_probe_ngram_source_prefix_gate}"
   puts "greedy_loop_probe_ngram_replay_start=#{greedy_loop_probe_ngram_replay_start}"
   puts "greedy_loop_probe_ngram_cursor_only=#{greedy_loop_probe_ngram_cursor_only}"
   puts "greedy_loop_probe_ngram_schedule=#{greedy_loop_probe_ngram_schedule.join(",")}"

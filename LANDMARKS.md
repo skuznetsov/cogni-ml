@@ -13290,3 +13290,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next remaining production gap is durable cache records and cursor validation/gating, not core verifier mechanics.
 - maieutic: The restore cost is device-resident. Persisted cache loading from pg/filesystem/host memory still needs separate IO and H2D/D2D accounting.
 - adversary: The path is high-confidence only for validated cache hits. Wrong cursors still regress, so the controller must fail closed.
+
+**decision_update_288:** Added a fail-closed source/prefix cursor gate for active CUDA replay. Before allocating the gamma-band active verifier, the controller validates that the live prefix matches the source history immediately before the requested replay cursor. If the gate fails, active verification is disabled before token allocation, cursor replay is cleared, and the probe falls back to exact serial decode.
+
+**evidence_update_288:**
+- claim: "A valid source/prefix cursor keeps the active replay path enabled and exact."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B restored-prefix start9 gen12 with separate source history printed `chunk_probe_ngram_source_prefix_match=true`, `chunk_probe_active_verify=true`, `chunk_probe_active_verify_disabled_by_prefix_gate=false`, accepted `12/12`, used 3 active chunks, measured `cuda_ms=146.421`, `cuda_ms_per_token=12.202`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: cursor gate logic, source/live history API, active verifier allocation policy, or session-cache cursor semantics
+- claim: "An invalid source/prefix cursor fails closed before active verifier allocation."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B restored-prefix start8 gen12 printed `chunk_probe_ngram_source_prefix_match=false`, `chunk_probe_active_verify=false`, `chunk_probe_active_verify_disabled_by_prefix_gate=true`, `chunk_probe_raw_tokens=0`, `chunk_probe_active_verify_chunks=0`, measured `cuda_ms=282.213`, `cuda_ms_per_token=23.518`, and `ok=true`. Same prefix plain gen12 was `277.427ms`; before the preflight disable, the gated-out active path cost `323.267ms`.
+  verified_at: 2026-05-18
+  decay_trigger: fail-closed policy, active verifier allocation, fallback path, or benchmark timing environment
+
+**quadrumvirate_update_288:**
+- cassandra: The previous runtime-only gate avoided bad proposals but still paid active-stack overhead. Preflight gating removes that overhead for obviously invalid cursors.
+- daedalus: This is the first production-style risk gate: validate cheap metadata before entering the WBA fast lane.
+- maieutic: Prefix matching proves cursor alignment, not future-token correctness. Future divergence still requires exact verification and schedule/fallback economics.
+- adversary: Keep the gate default-on. Disabling it is diagnostic only because wrong cursors can erase the speedup.
