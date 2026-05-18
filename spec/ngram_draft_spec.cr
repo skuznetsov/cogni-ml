@@ -70,6 +70,47 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 1, min_ngram: 1, min_candidates: 2).should eq([2, 1])
   end
 
+  it "accounts full-accept-only fixed split replay economics" do
+    expected = [10, 11, 12, 13, 14, 15, 16, 17]
+    actual = [10, 11, 99, 13, 14, 15, 16, 17]
+
+    result = ML::GGUF::NgramDraft.fixed_split_acceptance(expected, actual, split_size: 4)
+    result.chunks.should eq([4])
+    result.full_accept_chunks.should eq(0)
+    result.verified_tokens.should eq(4)
+    result.committed_tokens.should eq(0)
+    result.discarded_accept_prefix.should eq(2)
+    result.reject_index.should eq(2)
+    result.full_accept.should be_false
+  end
+
+  it "accounts progressive replay schedules that grow after full accepts" do
+    expected = [10, 11, 12, 13, 14, 15, 16, 17]
+    actual = [10, 11, 12, 13, 14, 99, 16, 17]
+
+    result = ML::GGUF::NgramDraft.schedule_acceptance(expected, actual, [1, 1, 2, 2, 4])
+    result.chunks.should eq([1, 1, 2, 2])
+    result.full_accept_chunks.should eq(3)
+    result.verified_tokens.should eq(6)
+    result.committed_tokens.should eq(4)
+    result.discarded_accept_prefix.should eq(1)
+    result.reject_index.should eq(5)
+    result.full_accept.should be_false
+  end
+
+  it "accounts clean progressive replay schedules" do
+    expected = [10, 11, 12, 13, 14, 15, 16, 17]
+
+    result = ML::GGUF::NgramDraft.schedule_acceptance(expected, expected, [1, 1, 2, 2, 4])
+    result.chunks.should eq([1, 1, 2, 2, 2])
+    result.full_accept_chunks.should eq(5)
+    result.verified_tokens.should eq(8)
+    result.committed_tokens.should eq(8)
+    result.discarded_accept_prefix.should eq(0)
+    result.reject_index.should eq(-1)
+    result.full_accept.should be_true
+  end
+
   it "rejects invalid parameters" do
     expect_raises(ArgumentError, "gamma must be positive") do
       ML::GGUF::NgramDraft.candidates([1, 2, 1], gamma: 0, max_ngram: 2, min_ngram: 1)
@@ -81,6 +122,14 @@ describe ML::GGUF::NgramDraft do
 
     expect_raises(ArgumentError, "min_candidates must be non-negative") do
       ML::GGUF::NgramDraft.candidates([1, 2, 1], gamma: 1, max_ngram: 1, min_ngram: 1, min_candidates: -1)
+    end
+
+    expect_raises(ArgumentError, "schedule must not be empty") do
+      ML::GGUF::NgramDraft.schedule_acceptance([1], [1], [] of Int32)
+    end
+
+    expect_raises(ArgumentError, "schedule chunk sizes must be positive") do
+      ML::GGUF::NgramDraft.schedule_acceptance([1], [1], [1, 0])
     end
   end
 

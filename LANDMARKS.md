@@ -13110,3 +13110,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The controller frame is now "probation before WBA": earn larger bands with repeated full accepts rather than assuming every cursor hit deserves gamma8/16.
 - maieutic: This remains row-economics, not wall-clock promotion. The next proof must run the actual controller path or active-row WBA kernel path.
 - adversary: The synthetic reject positions are useful falsifiers but not a distribution. Do not make `1,1,2,2,4,8,16` default until real prompt/session traces show the launch overhead is worth the saved rejects.
+
+**decision_update_278:** Factored CUDA replay schedule policy into reusable `NgramDraft` helpers and wired the same conservative grow-after-full-accept policy into the default-off n-gram/cursor controller path. `NgramDraft.schedule_acceptance` and `fixed_split_acceptance` now own split/schedule economics, so diagnostics and controller probes share one accounting model. `--greedy-loop-probe-ngram-schedule LIST` caps proposal chunk size by the current progressive schedule slot, increments the streak on full accepts, and resets to the first chunk size on reject or fallback.
+
+**evidence_update_278:**
+- claim: "Replay split/schedule accounting is reusable and preserves prior known-replay outputs."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_schedule crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen`, `crystal spec spec/ngram_draft_spec.cr`, and `git diff --check -- bin/cuda_mixed_stack_probe.cr src/ml/gguf/ngram_draft.cr spec/ngram_draft_spec.cr` passed. Remote RTX 5060 Ti build/spec also passed. Remote positive derived 32-token replay with `--known-replay-schedule-report 1,1,2,2,4,8,16` reported `cuda_ms_per_token=10.919`, chunks `1,1,2,2,4,8,14`, committed `32`, discarded `0`, and full accept. Remote reject-at-6 reported `cuda_ms_per_token=12.056`, schedule chunks `1,1,2,2,2`, committed `6`, discarded `0`, reject index `6`.
+  verified_at: 2026-05-18
+  decay_trigger: NgramDraft schedule helpers, known-replay output contract, CUDA top1 row semantics, or controller policy changes
+- claim: "The default-off n-gram cursor controller can apply the conservative schedule without changing exact output."
+  source: remote all-layer Qwen3.5-9B cursor-only smoke with `--greedy-loop-probe-ngram-schedule 1,1,2,2,4,8,16`, prefix token `0`, and aligned replay history accepted `8/8`, printed exact/proposal/top1 `198,2,220,16,13,27416,198,760`, `chunk_probe_ngram_schedule_chunks=1,1,2,2,2`, `chunk_probe_ngram_schedule_resets=0`, `chunk_probe_ngram_cursor_hits=5`, and `ok=true`. The measured `24.595ms/tok` is intentionally not a speed claim because this controller smoke used serial per-token verification.
+  verified_at: 2026-05-18
+  decay_trigger: n-gram cursor controller, schedule reset policy, greedy-loop verification mode, or active-row/WBA verifier integration
+
+**quadrumvirate_update_278:**
+- cassandra: Policy drift was the likely next bug if diagnostics and controller scheduling used separate implementations; shared helpers remove that class.
+- daedalus: This still does not solve the speed path. The next frame is to execute scheduled accepted chunks through the fast known-span verifier or add active-row/prefix execution, not to keep tuning serial controller policy.
+- maieutic: `24.595ms/tok` in the controller smoke is not negative evidence against the schedule; it measures serial verification plumbing. The relevant speed lower bound remains the known-span rows around `10.9-12.1ms/tok`.
+- adversary: Do not promote the schedule as default. It is verified as exact policy plumbing, but real session/cache histories and wall timing are still required before claiming a production speedup.

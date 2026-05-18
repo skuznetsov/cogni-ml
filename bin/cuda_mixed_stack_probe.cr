@@ -319,6 +319,7 @@ greedy_loop_probe_ngram_risk_min_size = 16
 greedy_loop_probe_ngram_history = [] of Int32
 greedy_loop_probe_ngram_replay_start = -1
 greedy_loop_probe_ngram_cursor_only = false
+greedy_loop_probe_ngram_schedule = [] of Int32
 greedy_loop_prefix_tokens = [] of Int32
 runtime_raw_q8 = false
 runtime_skip_recurrent_ffn = false
@@ -385,6 +386,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-ngram-history LIST", "Comma-separated proposal history token IDs; default is --seed-token only") { |v| greedy_loop_probe_ngram_history = parse_i32_list(v) }
   p.on("--greedy-loop-probe-ngram-replay-start N", "Start n-gram proposals at an aligned history cursor instead of suffix search; use for prompt/session cache hits") { |v| greedy_loop_probe_ngram_replay_start = v.to_i }
   p.on("--greedy-loop-probe-ngram-cursor-only", "Only propose from an active replay cursor; fallback instead of suffix-searching") { greedy_loop_probe_ngram_cursor_only = true }
+  p.on("--greedy-loop-probe-ngram-schedule LIST", "Progressive cursor/n-gram chunk sizes; grows after full accepts and resets on reject/fallback") { |v| greedy_loop_probe_ngram_schedule = parse_i32_list(v) }
   p.on("--greedy-loop-prefix-tokens LIST", "Comma-separated prompt/prefix token IDs to prefill before timed greedy-loop generation") { |v| greedy_loop_prefix_tokens = parse_i32_list(v) }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--runtime-skip-recurrent-ffn", "Diagnostic proposal route: skip recurrent-layer FFNs and forward the post-attention residual") { runtime_skip_recurrent_ffn = true }
@@ -477,7 +479,11 @@ raise "--greedy-loop-probe-ngram-min-candidates must be non-negative" unless gre
 raise "--greedy-loop-probe-ngram-risk-min-size must be positive" unless greedy_loop_probe_ngram_risk_min_size > 0
 raise "--greedy-loop-probe-ngram-replay-start requires --greedy-loop-probe-ngram" if greedy_loop_probe_ngram_replay_start >= 0 && !greedy_loop_probe_ngram
 raise "--greedy-loop-probe-ngram-cursor-only requires --greedy-loop-probe-ngram" if greedy_loop_probe_ngram_cursor_only && !greedy_loop_probe_ngram
+raise "--greedy-loop-probe-ngram-schedule requires --greedy-loop-probe-ngram" if !greedy_loop_probe_ngram_schedule.empty? && !greedy_loop_probe_ngram
 raise "--greedy-loop-probe-ngram-replay-start must be >= -1" unless greedy_loop_probe_ngram_replay_start >= -1
+greedy_loop_probe_ngram_schedule.each do |size|
+  raise "--greedy-loop-probe-ngram-schedule sizes must be positive" unless size > 0
+end
 raise "--greedy-loop-prefix-tokens requires --greedy-loop-tokens" if !greedy_loop_prefix_tokens.empty? && greedy_loop_tokens == 0
 raise "--greedy-loop-prefix-tokens must contain at least one token when provided" if greedy_loop_prefix_tokens.empty? && ARGV.any? { |arg| arg.starts_with?("--greedy-loop-prefix-tokens") }
 raise "--greedy-loop-prefix-tokens is incompatible with --greedy-loop-graph" if !greedy_loop_prefix_tokens.empty? && greedy_loop_graph
@@ -788,6 +794,9 @@ begin
   chunk_ngram_risk_fallbacks = 0
   chunk_ngram_cursor_hits = 0
   chunk_ngram_match_lens = [] of Int32
+  chunk_ngram_schedule_chunks = [] of Int32
+  chunk_ngram_schedule_full_accept_streak = 0
+  chunk_ngram_schedule_resets = 0
   if greedy_loop_tokens > 0
     warmup.times do
       warm_token = seed_token
@@ -842,7 +851,13 @@ begin
       while generated < greedy_loop_tokens
         chunk_count += 1
         chunk_start = generated
-        chunk_limit = Math.min(greedy_loop_probe_chunk_gamma, greedy_loop_tokens - generated)
+        base_chunk_limit = greedy_loop_probe_chunk_gamma
+        if greedy_loop_probe_ngram && !greedy_loop_probe_ngram_schedule.empty?
+          schedule_idx = Math.min(chunk_ngram_schedule_full_accept_streak, greedy_loop_probe_ngram_schedule.size - 1)
+          base_chunk_limit = Math.min(base_chunk_limit, greedy_loop_probe_ngram_schedule[schedule_idx])
+        end
+        chunk_limit = Math.min(base_chunk_limit, greedy_loop_tokens - generated)
+        chunk_ngram_schedule_chunks << chunk_limit if greedy_loop_probe_ngram && !greedy_loop_probe_ngram_schedule.empty?
         proposal_ids = [] of Int32
         proposal_margins = [] of Float32
         proposal_top2 = [] of Int32
@@ -930,6 +945,10 @@ begin
 
         if fallback_due_margin || proposal_ids.empty?
           chunk_margin_fallbacks += 1
+          if greedy_loop_probe_ngram && !greedy_loop_probe_ngram_schedule.empty?
+            chunk_ngram_schedule_resets += 1 if chunk_ngram_schedule_full_accept_streak > 0
+            chunk_ngram_schedule_full_accept_streak = 0
+          end
           pos = greedy_loop_decode_base_pos + generated
           t_position = Time.instant
           mixed_stack.update_decode_position(pos)
@@ -1056,9 +1075,14 @@ begin
         if rejected
           chunk_rejects += 1
           ngram_replay_cursor = nil if greedy_loop_probe_ngram
+          if greedy_loop_probe_ngram && !greedy_loop_probe_ngram_schedule.empty?
+            chunk_ngram_schedule_resets += 1 if chunk_ngram_schedule_full_accept_streak > 0
+            chunk_ngram_schedule_full_accept_streak = 0
+          end
         elsif accepted_this_chunk == proposal_ids.size
           chunk_full_accepts += 1
           ngram_replay_cursor = ngram_pending_replay_cursor if greedy_loop_probe_ngram && !proposal_ids.empty?
+          chunk_ngram_schedule_full_accept_streak += 1 if greedy_loop_probe_ngram && !greedy_loop_probe_ngram_schedule.empty?
         end
       end
       gpu_ms = (Time.instant - gpu_t0).total_milliseconds
@@ -1331,6 +1355,11 @@ begin
         lines << "chunk_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
         lines << "chunk_probe_ngram_replay_start=#{greedy_loop_probe_ngram_replay_start}"
         lines << "chunk_probe_ngram_cursor_only=#{greedy_loop_probe_ngram_cursor_only}"
+        unless greedy_loop_probe_ngram_schedule.empty?
+          lines << "chunk_probe_ngram_schedule=#{greedy_loop_probe_ngram_schedule.join(",")}"
+          lines << "chunk_probe_ngram_schedule_chunks=#{chunk_ngram_schedule_chunks.join(",")}"
+          lines << "chunk_probe_ngram_schedule_resets=#{chunk_ngram_schedule_resets}"
+        end
         lines << "chunk_probe_ngram_history_tokens=#{(greedy_loop_probe_ngram_history.empty? ? 1 : greedy_loop_probe_ngram_history.size)}"
         lines << "chunk_probe_ngram_match_lens=#{chunk_ngram_match_lens.join(",")}"
         lines << "chunk_probe_ngram_empty_fallbacks=#{chunk_ngram_empty_fallbacks}"
@@ -1435,81 +1464,20 @@ begin
     unless known_replay_split_report.empty?
       lines << "known_replay_split_report=#{known_replay_split_report.join(",")}"
       known_replay_split_report.each do |split_size|
-        split_chunks = 0
-        split_full_accept_chunks = 0
-        split_verified_tokens = 0
-        split_committed_tokens = 0
-        split_discarded_accept_prefix = 0
-        split_reject_index = -1
-        split_pos = 0
-        while split_pos < known_replay_candidates.size
-          chunk_size = Math.min(split_size, known_replay_candidates.size - split_pos)
-          split_chunks += 1
-          split_verified_tokens += chunk_size
-          local_accept = 0
-          chunk_size.times do |j|
-            row = split_pos + j
-            if gpu_top1_ids[row]? == known_replay_candidates[row]
-              local_accept += 1
-            else
-              split_reject_index = row
-              break
-            end
-          end
-          if local_accept == chunk_size
-            split_full_accept_chunks += 1
-            split_committed_tokens += chunk_size
-            split_pos += chunk_size
-          else
-            split_discarded_accept_prefix = local_accept
-            break
-          end
-        end
-        split_full_accept = split_committed_tokens == known_replay_candidates.size
-        lines << "known_replay_split_size_#{split_size}=chunks:#{split_chunks},full_accept_chunks:#{split_full_accept_chunks},verified_tokens:#{split_verified_tokens},committed_tokens:#{split_committed_tokens},discarded_accept_prefix:#{split_discarded_accept_prefix},reject_index:#{split_reject_index},full_accept:#{split_full_accept}"
+        split = ML::GGUF::NgramDraft.fixed_split_acceptance(known_replay_candidates, gpu_top1_ids, split_size)
+        lines << "known_replay_split_size_#{split_size}=chunks:#{split.chunks.size},full_accept_chunks:#{split.full_accept_chunks},verified_tokens:#{split.verified_tokens},committed_tokens:#{split.committed_tokens},discarded_accept_prefix:#{split.discarded_accept_prefix},reject_index:#{split.reject_index},full_accept:#{split.full_accept}"
       end
     end
     unless known_replay_schedule_report.empty?
-      schedule_chunks = [] of Int32
-      schedule_full_accept_chunks = 0
-      schedule_verified_tokens = 0
-      schedule_committed_tokens = 0
-      schedule_discarded_accept_prefix = 0
-      schedule_reject_index = -1
-      schedule_pos = 0
-      while schedule_pos < known_replay_candidates.size
-        schedule_idx = Math.min(schedule_full_accept_chunks, known_replay_schedule_report.size - 1)
-        chunk_size = Math.min(known_replay_schedule_report[schedule_idx], known_replay_candidates.size - schedule_pos)
-        schedule_chunks << chunk_size
-        schedule_verified_tokens += chunk_size
-        local_accept = 0
-        chunk_size.times do |j|
-          row = schedule_pos + j
-          if gpu_top1_ids[row]? == known_replay_candidates[row]
-            local_accept += 1
-          else
-            schedule_reject_index = row
-            break
-          end
-        end
-        if local_accept == chunk_size
-          schedule_full_accept_chunks += 1
-          schedule_committed_tokens += chunk_size
-          schedule_pos += chunk_size
-        else
-          schedule_discarded_accept_prefix = local_accept
-          break
-        end
-      end
-      schedule_full_accept = schedule_committed_tokens == known_replay_candidates.size
+      schedule = ML::GGUF::NgramDraft.schedule_acceptance(known_replay_candidates, gpu_top1_ids, known_replay_schedule_report)
       lines << "known_replay_schedule_report=#{known_replay_schedule_report.join(",")}"
-      lines << "known_replay_schedule_chunks=#{schedule_chunks.join(",")}"
-      lines << "known_replay_schedule_full_accept_chunks=#{schedule_full_accept_chunks}"
-      lines << "known_replay_schedule_verified_tokens=#{schedule_verified_tokens}"
-      lines << "known_replay_schedule_committed_tokens=#{schedule_committed_tokens}"
-      lines << "known_replay_schedule_discarded_accept_prefix=#{schedule_discarded_accept_prefix}"
-      lines << "known_replay_schedule_reject_index=#{schedule_reject_index}"
-      lines << "known_replay_schedule_full_accept=#{schedule_full_accept}"
+      lines << "known_replay_schedule_chunks=#{schedule.chunks.join(",")}"
+      lines << "known_replay_schedule_full_accept_chunks=#{schedule.full_accept_chunks}"
+      lines << "known_replay_schedule_verified_tokens=#{schedule.verified_tokens}"
+      lines << "known_replay_schedule_committed_tokens=#{schedule.committed_tokens}"
+      lines << "known_replay_schedule_discarded_accept_prefix=#{schedule.discarded_accept_prefix}"
+      lines << "known_replay_schedule_reject_index=#{schedule.reject_index}"
+      lines << "known_replay_schedule_full_accept=#{schedule.full_accept}"
     end
     lines << "known_replay_accepted=#{accepted}"
     lines << "known_replay_total=#{known_replay_candidates.size}"
@@ -1645,6 +1613,7 @@ begin
   puts "greedy_loop_probe_ngram_history=#{greedy_loop_probe_ngram_history.join(",")}"
   puts "greedy_loop_probe_ngram_replay_start=#{greedy_loop_probe_ngram_replay_start}"
   puts "greedy_loop_probe_ngram_cursor_only=#{greedy_loop_probe_ngram_cursor_only}"
+  puts "greedy_loop_probe_ngram_schedule=#{greedy_loop_probe_ngram_schedule.join(",")}"
   puts "greedy_loop_prefix_tokens=#{greedy_loop_prefix_tokens.join(",")}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"

@@ -9,6 +9,15 @@ module ML::GGUF
       match_len : Int32,
       source_start : Int32
 
+    record ReplayScheduleResult,
+      chunks : Array(Int32),
+      full_accept_chunks : Int32,
+      verified_tokens : Int32,
+      committed_tokens : Int32,
+      discarded_accept_prefix : Int32,
+      reject_index : Int32,
+      full_accept : Bool
+
     class IndexedHistory
       getter history : Array(Int32)
       getter min_ngram : Int32
@@ -217,6 +226,65 @@ module ML::GGUF
       else
         result
       end
+    end
+
+    def fixed_split_acceptance(expected : Array(Int32),
+                               actual : Array(Int32),
+                               split_size : Int32) : ReplayScheduleResult
+      raise ArgumentError.new("split_size must be positive") unless split_size > 0
+
+      schedule_acceptance(expected, actual, [split_size])
+    end
+
+    def schedule_acceptance(expected : Array(Int32),
+                            actual : Array(Int32),
+                            schedule : Array(Int32)) : ReplayScheduleResult
+      raise ArgumentError.new("schedule must not be empty") if schedule.empty?
+      schedule.each { |size| raise ArgumentError.new("schedule chunk sizes must be positive") unless size > 0 }
+
+      chunks = [] of Int32
+      full_accept_chunks = 0
+      verified_tokens = 0
+      committed_tokens = 0
+      discarded_accept_prefix = 0
+      reject_index = -1
+      pos = 0
+
+      while pos < expected.size
+        schedule_idx = Math.min(full_accept_chunks, schedule.size - 1)
+        chunk_size = Math.min(schedule[schedule_idx], expected.size - pos)
+        chunks << chunk_size
+        verified_tokens += chunk_size
+
+        local_accept = 0
+        chunk_size.times do |j|
+          row = pos + j
+          if actual[row]? == expected[row]
+            local_accept += 1
+          else
+            reject_index = row
+            break
+          end
+        end
+
+        if local_accept == chunk_size
+          full_accept_chunks += 1
+          committed_tokens += chunk_size
+          pos += chunk_size
+        else
+          discarded_accept_prefix = local_accept
+          break
+        end
+      end
+
+      ReplayScheduleResult.new(
+        chunks: chunks,
+        full_accept_chunks: full_accept_chunks,
+        verified_tokens: verified_tokens,
+        committed_tokens: committed_tokens,
+        discarded_accept_prefix: discarded_accept_prefix,
+        reject_index: reject_index,
+        full_accept: committed_tokens == expected.size)
     end
 
     def risky_candidate_shape?(ids : Array(Int32), min_size : Int32 = 16, match_len : Int32 = 0) : Bool
