@@ -344,6 +344,7 @@ greedy_loop_probe_ngram_risk_gate = true
 greedy_loop_probe_ngram_risk_min_size = 16
 greedy_loop_probe_ngram_history = [] of Int32
 greedy_loop_probe_ngram_source_history = [] of Int32
+greedy_loop_probe_ngram_trusted_source = false
 greedy_loop_probe_ngram_replay_start = -1
 greedy_loop_probe_ngram_cursor_only = false
 greedy_loop_probe_ngram_schedule = [] of Int32
@@ -419,6 +420,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-ngram-risk-min-size N", "Minimum candidate size for the risky-shape gate, default 16") { |v| greedy_loop_probe_ngram_risk_min_size = v.to_i }
   p.on("--greedy-loop-probe-ngram-history LIST", "Comma-separated proposal history token IDs; default is --seed-token only") { |v| greedy_loop_probe_ngram_history = parse_i32_list(v) }
   p.on("--greedy-loop-probe-ngram-source-history LIST", "Comma-separated cache/source token IDs for cursor replay; live history still comes from prefix/ngram-history") { |v| greedy_loop_probe_ngram_source_history = parse_i32_list(v) }
+  p.on("--greedy-loop-probe-ngram-trusted-source", "For validated source-history cursor replay, bypass risky-shape gate only after source/prefix validation passes") { greedy_loop_probe_ngram_trusted_source = true }
   p.on("--greedy-loop-probe-ngram-replay-start N", "Start n-gram proposals at an aligned history cursor instead of suffix search; use for prompt/session cache hits") { |v| greedy_loop_probe_ngram_replay_start = v.to_i }
   p.on("--greedy-loop-probe-ngram-cursor-only", "Only propose from an active replay cursor; fallback instead of suffix-searching") { greedy_loop_probe_ngram_cursor_only = true }
   p.on("--greedy-loop-probe-ngram-schedule LIST", "Progressive cursor/n-gram chunk sizes; grows after full accepts and resets on reject/fallback") { |v| greedy_loop_probe_ngram_schedule = parse_i32_list(v) }
@@ -518,6 +520,10 @@ raise "--greedy-loop-probe-chunk-active-verify requires --greedy-loop-probe-ngra
 raise "use either --greedy-loop-probe-chunk-active-verify or --greedy-loop-probe-chunk-batched-verify, not both" if greedy_loop_probe_chunk_active_verify && greedy_loop_probe_chunk_batched_verify
 raise "--greedy-loop-probe-ngram requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_ngram && greedy_loop_probe_chunk_gamma == 0
 raise "--greedy-loop-probe-ngram-source-history requires --greedy-loop-probe-ngram" if !greedy_loop_probe_ngram_source_history.empty? && !greedy_loop_probe_ngram
+raise "--greedy-loop-probe-ngram-trusted-source requires --greedy-loop-probe-ngram-source-history" if greedy_loop_probe_ngram_trusted_source && greedy_loop_probe_ngram_source_history.empty?
+raise "--greedy-loop-probe-ngram-trusted-source requires --greedy-loop-probe-ngram-cursor-only" if greedy_loop_probe_ngram_trusted_source && !greedy_loop_probe_ngram_cursor_only
+raise "--greedy-loop-probe-ngram-trusted-source requires --greedy-loop-probe-ngram-replay-start" if greedy_loop_probe_ngram_trusted_source && greedy_loop_probe_ngram_replay_start < 0
+raise "--greedy-loop-probe-ngram-trusted-source requires source prefix gate" if greedy_loop_probe_ngram_trusted_source && !greedy_loop_probe_ngram_source_prefix_gate
 raise "--greedy-loop-probe-ngram-min must be positive" unless greedy_loop_probe_ngram_min > 0
 raise "--greedy-loop-probe-ngram-max must be >= min" unless greedy_loop_probe_ngram_max >= greedy_loop_probe_ngram_min
 raise "--greedy-loop-probe-ngram-min-candidates must be non-negative" unless greedy_loop_probe_ngram_min_candidates >= 0
@@ -904,6 +910,7 @@ begin
   chunk_ngram_cursor_serial_drops = 0
   ngram_source_prefix_checked = false
   ngram_source_prefix_match = true
+  ngram_trusted_source_active = false
   if greedy_loop_tokens > 0
     warmup.times do
       warm_token = seed_token
@@ -980,6 +987,7 @@ begin
                                         source_prefix_start + validation_prefix.size <= ngram_source_history.size &&
                                         ngram_source_history[source_prefix_start, validation_prefix.size] == validation_prefix
             ngram_replay_cursor = nil unless ngram_source_prefix_match
+            ngram_trusted_source_active = greedy_loop_probe_ngram_trusted_source && ngram_source_prefix_match
           end
         end
         gpu_token = initial_history.last
@@ -1027,7 +1035,7 @@ begin
               chunk_ngram_match_lens << 0
             end
           end
-          if greedy_loop_probe_ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(proposal_ids, greedy_loop_probe_ngram_risk_min_size, ngram_match_len_for_gate)
+          if greedy_loop_probe_ngram_risk_gate && !ngram_trusted_source_active && ML::GGUF::NgramDraft.risky_candidate_shape?(proposal_ids, greedy_loop_probe_ngram_risk_min_size, ngram_match_len_for_gate)
             chunk_ngram_risk_fallbacks += 1
             proposal_ids = [] of Int32
           end
@@ -1633,6 +1641,8 @@ begin
         lines << "chunk_probe_ngram_recursive=#{greedy_loop_probe_ngram_recursive}"
         lines << "chunk_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
         lines << "chunk_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
+        lines << "chunk_probe_ngram_trusted_source=#{greedy_loop_probe_ngram_trusted_source}"
+        lines << "chunk_probe_ngram_trusted_source_active=#{ngram_trusted_source_active}"
         lines << "chunk_probe_ngram_source_prefix_gate=#{greedy_loop_probe_ngram_source_prefix_gate}"
         lines << "chunk_probe_ngram_source_prefix_checked=#{ngram_source_prefix_checked}"
         lines << "chunk_probe_ngram_source_prefix_match=#{ngram_source_prefix_match}"
@@ -1933,6 +1943,7 @@ begin
   puts "greedy_loop_probe_ngram_recursive=#{greedy_loop_probe_ngram_recursive}"
   puts "greedy_loop_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
   puts "greedy_loop_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
+  puts "greedy_loop_probe_ngram_trusted_source=#{greedy_loop_probe_ngram_trusted_source}"
   puts "greedy_loop_probe_ngram_history=#{greedy_loop_probe_ngram_history.join(",")}"
   puts "greedy_loop_probe_ngram_source_history=#{greedy_loop_probe_ngram_source_history.join(",")}"
   puts "greedy_loop_probe_ngram_source_prefix_gate=#{greedy_loop_probe_ngram_source_prefix_gate}"

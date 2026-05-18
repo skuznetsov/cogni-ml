@@ -13326,3 +13326,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: For validated cache cursors, the risk gate can be counterproductive because exact verification already protects correctness. The trusted-cache fast lane should prioritize large WBA chunks and rely on verifier rejects.
 - maieutic: This speedup is conditional on a validated source cursor and cached-state economics. It is not a claim about arbitrary free-form generation.
 - adversary: Keep risk-gated mode for weaker n-gram/suffix proposals. Disable the risk gate only for trusted cache/session replay where prefix/source validation passed.
+
+**decision_update_290:** Made the trusted-cache fast lane explicit and fail-closed. `--greedy-loop-probe-ngram-trusted-source` bypasses the risky-shape gate only after source/prefix cursor validation succeeds. If validation fails, `trusted_source_active=false`, active verification is disabled before allocation, and exact fallback remains the only path.
+
+**evidence_update_290:**
+- claim: "Trusted-source mode keeps risk-gate policy enabled while allowing validated cache cursors to use large WBA chunks."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B gen64 with `--greedy-loop-probe-ngram-trusted-source` printed `chunk_probe_ngram_risk_gate=true`, `chunk_probe_ngram_trusted_source=true`, `chunk_probe_ngram_trusted_source_active=true`, `chunk_probe_ngram_source_prefix_match=true`, accepted `64/64`, used chunks `4,4,8,16,16,16`, measured `cuda_ms=738.944`, `cuda_ms_per_token=11.546`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: trusted-source gate logic, cursor validation, active verifier scheduling, or CUDA WBA performance
+- claim: "Trusted-source mode fails closed on invalid cursors."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B invalid start8 trusted-source replay printed `chunk_probe_ngram_trusted_source_active=false`, `chunk_probe_ngram_source_prefix_match=false`, `chunk_probe_raw_tokens=0`, `chunk_probe_active_verify=false`, `chunk_probe_active_verify_disabled_by_prefix_gate=true`, measured `cuda_ms=283.719`, `cuda_ms_per_token=23.643`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: fail-closed cursor policy, active verifier preflight allocation, or fallback decode path
+
+**quadrumvirate_update_290:**
+- cassandra: A global no-risk-gate flag was too broad; trusted-source mode narrows the bypass to verified cache cursors only.
+- daedalus: The cache-hit path now has a clear policy boundary: validated cursor -> large WBA chunks; invalid/weak source -> exact fallback or risk-gated proposals.
+- maieutic: Trusted-source validation proves prefix alignment, not future correctness. Exact verification still remains mandatory for every proposed token.
+- adversary: Keep `--greedy-loop-probe-ngram-no-risk-gate` diagnostic-only. Production should prefer trusted-source mode because it fails closed.
