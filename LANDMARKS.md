@@ -12988,3 +12988,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The important shift is from "n-gram by text repetition" to "cache-aligned replay cursor." Repetition alone changes model state and often rejects; a cache hit can know the source cursor and avoid suffix-search guesses.
 - maieutic: Timed generation excludes prefix preload by design. This models prompt-cache/session-cache reuse; for cold prompts, prefix cost must be charged separately.
 - adversary: Do not enable suffix-search as a default speed path. Cursor-only should be the production-safe mode until router evidence shows which prompt classes can tolerate speculative suffix-search.
+
+**decision_update_271:** Added a memory-light single-stack known replay verifier path for CUDA. `--known-replay-candidates` works with non-greedy `--input-tokens` and reports accepted prefix length, reject index, full-accept flag, and acceptance rate from the resident top1 rows. This measures the exact verifier-shaped workload directly without allocating a duplicate tokens=1 controller stack plus a tokens=gamma verifier stack.
+
+**evidence_update_271:**
+- claim: "Single-stack known replay avoids the duplicate-stack OOM path and still verifies exact candidate acceptance."
+  source: remote RTX 5060 Ti with current ghost memory (`9648 MiB` used, no listed process) successfully ran all-layer Qwen3.5-9B known replay checks that duplicate-stack gamma8/gamma16 had OOMed. Gen8 replay used `--input-tokens 0,198,2,220,16,13,27416,198` and candidates `198,2,220,16,13,27416,198,760`, accepted `8/8`, and measured `98.430ms` total (`12.304ms/tok`). Gen32 replay accepted `32/32` and measured `351.472ms` total (`10.984ms/tok`).
+  verified_at: 2026-05-18
+  decay_trigger: known-span stack construction, output-head resident top1 changes, CUDA memory state, or verifier controller integration
+- claim: "Known replay reports the first reject deterministically."
+  source: remote negative gen8 replay with candidates `198,2,999,16,13,27416,198,760` produced resident top1 `198,2,220,16,13,27416,198,760`, `known_replay_accepted=2`, `known_replay_reject_index=2`, and `known_replay_full_accept=false`.
+  verified_at: 2026-05-18
+  decay_trigger: acceptance accounting changes or output-head top1 semantics changes
+
+**quadrumvirate_update_271:**
+- cassandra: The OOM was a duplicate-allocation artifact, not a fundamental verifier limit. A single known-span stack fits and gives the relevant lower bound.
+- daedalus: Instead of optimizing the duplicate controller, use the lower-level WBA verifier directly for trusted replay and later wrap it with state-copy/prompt-cache mechanics.
+- maieutic: This does not yet implement production fallback after a reject; it measures and exposes the verifier primitive needed by a production cache-aligned controller.
+- adversary: The single-stack route assumes all input tokens are known before launch. A production autoregressive loop still needs a fallback path and state handoff after partial acceptance.

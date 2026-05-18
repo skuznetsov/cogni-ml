@@ -331,6 +331,7 @@ seed_token = 0
 input_token = -1
 input_tokens = [] of Int32
 input_tokens_provided = false
+known_replay_candidates = [] of Int32
 gpu_final_dump_path : String? = nil
 
 OptionParser.parse do |p|
@@ -389,6 +390,7 @@ OptionParser.parse do |p|
   p.on("--seed-token ID", "Seed token id for --greedy-loop-tokens") { |v| seed_token = v.to_i }
   p.on("--input-token ID", "Use token_embd[ID] as the single non-greedy oracle input and zero recurrent states") { |v| input_token = v.to_i }
   p.on("--input-tokens LIST", "Use comma-separated token_embd IDs as the non-greedy semantic input sequence") { |v| input_tokens_provided = true; input_tokens = parse_i32_list(v) }
+  p.on("--known-replay-candidates LIST", "For non-greedy --input-tokens, compare resident top1 rows against expected next-token candidates") { |v| known_replay_candidates = parse_i32_list(v); perf_only = true }
   p.on("--gpu-final-dump PATH", "Diagnostic: dump final hidden rows as raw little-endian f32 after a GPU run; works with --perf-only") { |v| gpu_final_dump_path = v }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -475,6 +477,9 @@ raise "--input-token is incompatible with --greedy-loop-tokens; use --seed-token
 raise "--input-tokens must not be empty when provided" if input_tokens_provided && input_tokens.empty?
 raise "--input-tokens is incompatible with --input-token" if !input_tokens.empty? && input_token >= 0
 raise "--input-tokens is incompatible with --greedy-loop-tokens" if !input_tokens.empty? && greedy_loop_tokens > 0
+raise "--known-replay-candidates requires --input-tokens" if !known_replay_candidates.empty? && input_tokens.empty?
+raise "--known-replay-candidates is incompatible with --greedy-loop-tokens" if !known_replay_candidates.empty? && greedy_loop_tokens > 0
+raise "--known-replay-candidates size must match --input-tokens size" if !known_replay_candidates.empty? && known_replay_candidates.size != input_tokens.size
 raise "--gpu-logits-only is incompatible with --greedy-loop-tokens" if gpu_logits_only && greedy_loop_tokens > 0
 raise "--gpu-final-dump is incompatible with --greedy-loop-tokens" if gpu_final_dump_path && greedy_loop_tokens > 0
 raise "--gpu-final-dump is incompatible with --steady-reps/--steady-graph-reps" if gpu_final_dump_path && (steady_reps > 0 || steady_graph_reps > 0)
@@ -507,6 +512,7 @@ token_embd = load_quant_weight(gguf, "token_embd.weight")
 raise "seed-token #{seed_token} out of range" if seed_token < 0 || seed_token >= token_embd.out_dim
 raise "input-token #{input_token} out of range" if input_token >= token_embd.out_dim
 input_tokens.each { |tok| raise "input-tokens contains out-of-range token #{tok}" if tok < 0 || tok >= token_embd.out_dim }
+known_replay_candidates.each { |tok| raise "known-replay-candidates contains out-of-range token #{tok}" if tok < 0 || tok >= token_embd.out_dim }
 greedy_loop_prefix_tokens.each { |tok| raise "greedy-loop-prefix-tokens contains out-of-range token #{tok}" if tok < 0 || tok >= token_embd.out_dim }
 if greedy_loop_tokens > 0 && !greedy_loop_cpu_embedding && token_embd.type.q4_k?
   greedy_loop_gpu_embedding = true
@@ -1310,6 +1316,25 @@ begin
     lines << "debug_readback=false"
   end
   gpu_top1_ids = skip_output_head ? [] of Int32 : (greedy_loop_tokens > 0 ? greedy_gpu_ids : output_head.top1_ids)
+  unless known_replay_candidates.empty?
+    accepted = 0
+    reject_index = -1
+    known_replay_candidates.each_with_index do |expected, i|
+      if gpu_top1_ids[i]? == expected
+        accepted += 1
+      else
+        reject_index = i
+        break
+      end
+    end
+    full_accept = accepted == known_replay_candidates.size
+    lines << "known_replay_candidates=#{known_replay_candidates.join(",")}"
+    lines << "known_replay_accepted=#{accepted}"
+    lines << "known_replay_total=#{known_replay_candidates.size}"
+    lines << "known_replay_reject_index=#{reject_index}"
+    lines << "known_replay_full_accept=#{full_accept}"
+    lines << "known_replay_accept_rate_pct=#{(100.0 * accepted / Math.max(known_replay_candidates.size, 1)).round(2)}"
+  end
   top1_ok = skip_output_head || perf_only || gpu_top1_ids == cpu_top1_ids
   if read_logits && greedy_loop_tokens == 0
     unless gpu_logits_only
@@ -1437,6 +1462,7 @@ begin
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"
+  puts "known_replay_candidates_arg=#{known_replay_candidates.join(",")}"
   puts "read_logits=#{read_logits}"
   puts "read_top2=#{read_top2}"
   puts "gpu_logits_only=#{gpu_logits_only}"
