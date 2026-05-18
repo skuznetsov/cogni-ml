@@ -75,6 +75,17 @@ module ML::CUDA
       @kv.run_sequence
     end
 
+    def active_tokens=(count : Int32) : Int32
+      @projection.active_tokens = count
+      @kv.active_tokens = count
+      count
+    end
+
+    def reset_active_tokens : Nil
+      @projection.reset_active_tokens
+      @kv.reset_active_tokens
+    end
+
     def run_sequence_profiled(phase_lines : Array(String), prefix : String) : Nil
       t_total = Time.instant
 

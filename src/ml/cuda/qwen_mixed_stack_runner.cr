@@ -132,6 +132,34 @@ module ML::CUDA
       @head.top1_ids_device_ptr
     end
 
+    def active_tokens=(count : Int32) : Int32
+      raise ArgumentError.new("active tokens must be positive") unless count > 0
+      raise ArgumentError.new("active tokens must be <= stack tokens") unless count <= @tokens
+
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          runner.active_tokens = count
+        in QwenFullAttnLayerRunner
+          runner.active_tokens = count
+        end
+      end
+      @head.active_tokens = count
+      count
+    end
+
+    def reset_active_tokens : Nil
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          runner.reset_active_tokens
+        in QwenFullAttnLayerRunner
+          runner.reset_active_tokens
+        end
+      end
+      @head.reset_active_tokens
+    end
+
     def set_recurrent_ffn_raw_q8(enabled : Bool) : Nil
       @runners.each do |runner|
         case runner

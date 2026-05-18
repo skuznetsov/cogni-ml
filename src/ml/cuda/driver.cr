@@ -293,8 +293,24 @@ module ML::CUDA
                    @reset_sequence : Proc(Nil),
                    @run_token : Proc(Int32, Nil),
                    @read_outputs : Proc(Nil)? = nil,
-                   @run_sequence_override : Proc(Nil)? = nil)
+                   @run_sequence_override : Proc(Int32, Nil)? = nil)
       raise ArgumentError.new("tokens must be positive") unless @tokens > 0
+      @active_tokens = @tokens
+    end
+
+    def active_tokens : Int32
+      @active_tokens
+    end
+
+    def active_tokens=(@active_tokens : Int32) : Int32
+      raise ArgumentError.new("active_tokens must be positive") unless @active_tokens > 0
+      raise ArgumentError.new("active_tokens must be <= tokens") unless @active_tokens <= @tokens
+
+      @active_tokens
+    end
+
+    def reset_active_tokens : Nil
+      @active_tokens = @tokens
     end
 
     def upload_weights : Nil
@@ -307,9 +323,9 @@ module ML::CUDA
 
     def run_sequence : Nil
       if override = @run_sequence_override
-        override.call
+        override.call(@active_tokens)
       else
-        @tokens.times { |tok| @run_token.call(tok) }
+        @active_tokens.times { |tok| @run_token.call(tok) }
       end
     end
 
@@ -317,7 +333,7 @@ module ML::CUDA
       raise ArgumentError.new("reps must be positive") unless reps > 0
 
       reps.times { run_sequence }
-      reps * @tokens
+      reps * @active_tokens
     end
 
     def read_outputs : Nil

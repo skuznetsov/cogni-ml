@@ -13146,3 +13146,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The frame shifts from "small probation rows" to "WBA-aligned probation bands." Correctness safety must be balanced against the cost of leaving the weight-stationary corridor.
 - maieutic: This does not make `4,4,8,16` a production default. It is a better candidate under the current no-recovery and known-span cost model; real traces can still overturn it if early rejects dominate.
 - adversary: The `4,4,8,16` schedule discards accepted prefixes on reject-at-2/6. That is acceptable only while active-row recovery is unavailable and only if its wall-cost model beats the slower small chunks.
+
+**decision_update_280:** Added active-token plumbing to the CUDA resident runner stack as the first bounded substrate for active-row/prefix WBA work. `ResidentSequenceRunner` now owns an `active_tokens` count, validates it against allocated `tokens`, uses it in token-local loops, and passes it into sequence overrides. Recurrent/full-attention/output-head wrappers plus `QwenMixedStackRunner` expose set/reset plumbing. This intentionally does not claim active-row WBA support yet: the hot override closures still need to replace allocated `@tokens` launch sizes with active-row counts where kernels are safe.
+
+**evidence_update_280:**
+- claim: "Resident runner active-token plumbing is implemented and default behavior remains source-compatible."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_active_tokens crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` passed. Focused local spec `spec/cuda_resident_sequence_runner_spec.cr` passed `3 examples, 0 failures`, covering token-local active prefix, override active count handoff, and invalid active-token rejection. Remote RTX 5060 Ti build and the same focused spec also passed.
+  verified_at: 2026-05-18
+  decay_trigger: ResidentSequenceRunner API, CUDA runner wrapper scheduling, or active-row override migration
+- claim: "The active-token infrastructure did not regress the existing known-replay verifier smoke."
+  source: remote all-layer Qwen3.5-9B known replay with the active-token build, `--known-replay-tokens 4`, accepted `4/4`, printed `known_replay_full_accept=true`, `ok=true`, and measured `14.133ms/tok`, consistent with the previous chunk4 cost band.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA runner construction, known-replay verifier path, or WBA/tbatch4 routing changes
+
+**quadrumvirate_update_280:**
+- cassandra: The main risk was silently pretending active-row support exists while override kernels still launch allocated rows. The implementation avoids that by plumbing the active count without promoting it as speed.
+- daedalus: This creates a safe seam for the real pivot: migrate one hot WBA override at a time to active-row launch counts and verify exactness after each migration.
+- maieutic: The fact that `ResidentSequenceRunner` can pass `active_tokens` does not mean full Qwen active-row execution is solved. Full-attention KV, recurrent WBA projections/core, and output-head tbatch4 still need active-count-aware launch logic.
+- adversary: Treat this as infrastructure only until an active-row verifier smoke runs a larger allocated stack with a smaller active band and matches a separately constructed same-size known replay.

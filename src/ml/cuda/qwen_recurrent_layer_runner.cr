@@ -281,6 +281,17 @@ module ML::CUDA
       runner.run_sequence
     end
 
+    def active_tokens=(count : Int32) : Int32
+      runner.active_tokens = count
+      @profile_runner.try { |profile| profile.active_tokens = count }
+      count
+    end
+
+    def reset_active_tokens : Nil
+      runner.reset_active_tokens
+      @profile_runner.try(&.reset_active_tokens)
+    end
+
     def ffn_raw_q8_enabled=(@ffn_raw_q8_enabled : Bool)
     end
 
@@ -1136,7 +1147,7 @@ module ML::CUDA
         end
       }
 
-      run_sequence_override = -> {
+      run_sequence_override = ->(_active_tokens : Int32) {
         if use_batched_projections && !@ffn_skip_enabled && !@ffn_pca_updown_enabled && !@ffn_raw_q8_enabled
           if @profile_override_detail
             t_norm = Time.instant

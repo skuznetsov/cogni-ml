@@ -173,6 +173,17 @@ module ML::CUDA
       runner.run_sequence
     end
 
+    def active_tokens=(count : Int32) : Int32
+      runner.active_tokens = count
+      @profile_runner.try { |profile| profile.active_tokens = count }
+      count
+    end
+
+    def reset_active_tokens : Nil
+      runner.reset_active_tokens
+      @profile_runner.try(&.reset_active_tokens)
+    end
+
     def run_sequence_profiled(phase_lines : Array(String), prefix : String) : Nil
       runner.reset_sequence
       @profile_qk_rope_ms = 0.0

@@ -143,6 +143,15 @@ module ML::CUDA
       runner.run_sequence
     end
 
+    def active_tokens=(count : Int32) : Int32
+      runner.active_tokens = count
+      count
+    end
+
+    def reset_active_tokens : Nil
+      runner.reset_active_tokens
+    end
+
     def read_outputs : Nil
       runner.read_outputs
     end
@@ -262,7 +271,7 @@ module ML::CUDA
         ML::CUDA.launch!(v_fn, v_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, v_params, "attn v")
       }
 
-      run_sequence_override = -> {
+      run_sequence_override = ->(_active_tokens : Int32) {
         if @input_norm
           d_x_cur_ptr.value = @input_device_base.not_nil!
           d_norm_cur_ptr.value = d_norm_all
