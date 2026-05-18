@@ -13694,3 +13694,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The adaptive artifact layout should become multi-tier: BF16 for early/high-risk regions, block256 INT8 for later/stable regions, raw FP32 only as the fail-closed fallback.
 - maieutic: Scalar host BF16 encode/decode is not a critical-path solution; the useful product path is offline/prefetched encode plus GPU decode on restore.
 - adversary: Do not overclaim global safety from one matrix. BF16 passed the current deterministic gates, but still needs broader prompt/history and longer-context coverage before production trust.
+
+**decision_update_310:** Added a mixed adaptive recurrent artifact codec policy. `--known-replay-trusted-artifact-codec-late-format=FORMAT` uses `--known-replay-trusted-artifact-codec-format` before `--known-replay-trusted-artifact-codec-min-start`, and the late format at/after the threshold. When `late-format` is omitted, the previous raw-host-before-threshold behavior is preserved.
+
+**evidence_update_310:**
+- claim: "The BF16-early / INT8-late policy preserves exact free-run parity on the current CUDA deterministic matrix while avoiding raw early restores."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B mixed run over generated histories from seeds `0,198,760,1919` and cursors `1/16`, `9/16`, `17/16`, `25/16`, `33/8`, `41/8` passed `24/24` gates with `known_replay_trusted_artifact_codec_free_run_parity_count=16` and `ok=true` for every case. The four `start=1` cases selected `known_replay_trusted_artifact_codec_selected_format=bf16` and policy `gpu_bf16_before_min_start`; the twenty later cursors selected `selected_format=int8` and policy `gpu_block_i8_after_min_start`.
+  verified_at: 2026-05-18
+  decay_trigger: codec selection policy, BF16/INT8 codec implementation, prompt/history suite, cursor threshold, CUDA device/driver, or artifact contract changes
+- claim: "The mixed policy keeps the intended restore-time tiers on the tested matrix."
+  source: the same mixed run reported early BF16 GPU restore `~4.756-5.436ms` at ratio `0.5`, later block256 INT8 GPU restore `~2.972-3.857ms` at ratio `0.2539`, and raw host restore around `11.862-13.367ms`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA transfer path, live-KV restore policy, codec kernel, artifact layout, or device/driver changes
+- claim: "The previous cursor-age raw-host policy remains available when `late-format` is omitted."
+  source: backward-compatibility smoke on `seed=1919` without `late-format` selected `selected_format=raw_host` / `raw_host_before_min_start` at `start=1` and `selected_format=int8` / `gpu_block_i8` at `start=9`, both with `free_run_parity_count=16` and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: CLI option parsing, codec selection policy, or restore harness changes
+
+**quadrumvirate_update_310:**
+- cassandra: The policy is better than raw-before-threshold for tested early cursors, but threshold `9` is still a risk feature, not a proof of global safety.
+- daedalus: Product shape is now tiered artifact selection: BF16 for early/high-risk, INT8 for later/stable, raw only as fail-closed fallback or when stronger evidence is missing.
+- maieutic: This does not prove compressed artifacts are universally exact; it proves the harness can express and verify a safer mixed policy with route visibility.
+- adversary: Route reporting is part of the trust contract. Keep `selected_format` and `restore_policy` in output so raw fallbacks or tier changes cannot silently inflate correctness claims.

@@ -922,6 +922,8 @@ known_replay_trusted_artifact_io_path = ""
 known_replay_trusted_artifact_contiguous_read = false
 known_replay_trusted_artifact_codec_bench = false
 known_replay_trusted_artifact_codec_format = "int8"
+known_replay_trusted_artifact_codec_late_format = ""
+known_replay_trusted_artifact_codec_selected_format = "int8"
 known_replay_trusted_artifact_codec_block = 256
 known_replay_trusted_artifact_codec_restore_check = false
 known_replay_trusted_artifact_codec_restore_steps = 1
@@ -1012,6 +1014,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-trusted-artifact-contiguous-read", "With artifact IO probe, read the artifact into one host allocation and restore from slices") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; known_replay_trusted_artifact_contiguous_read = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-bench", "With host artifact restore, benchmark block-INT8 compression on recurrent-state buffers") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-format FORMAT", "Recurrent codec format for codec bench/restore checks: int8 or bf16; default int8") { |v| known_replay_trusted_artifact_codec_format = v; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-codec-late-format FORMAT", "With --known-replay-trusted-artifact-codec-min-start, use this recurrent codec format at/after the threshold; before it uses --codec-format") { |v| known_replay_trusted_artifact_codec_late_format = v; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; known_replay_trusted_artifact_codec_gpu_decode_check = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-block N", "Block size for recurrent block-INT8 codec bench, default 256") { |v| known_replay_trusted_artifact_codec_block = v.to_i }
   p.on("--known-replay-trusted-artifact-codec-restore-check", "With codec bench, restore decoded block-INT8 recurrent state and compare one continuation top1 against exact restored state") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-restore-steps N", "Source-aligned continuation steps for --known-replay-trusted-artifact-codec-restore-check, default 1") { |v| known_replay_trusted_artifact_codec_restore_steps = v.to_i; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; perf_only = true }
@@ -1170,11 +1173,15 @@ raise "--known-replay-trusted-artifact-restore is incompatible with --known-repl
 raise "--known-replay-trusted-artifact-restore is incompatible with --known-replay-active-tokens" if known_replay_trusted_artifact_restore && known_replay_active_tokens > 0
 raise "--known-replay-trusted-artifact-codec-restore-check requires --known-replay-trusted-artifact-codec-bench" if known_replay_trusted_artifact_codec_restore_check && !known_replay_trusted_artifact_codec_bench
 raise "--known-replay-trusted-artifact-codec-format must be int8 or bf16" unless {"int8", "bf16"}.includes?(known_replay_trusted_artifact_codec_format)
+raise "--known-replay-trusted-artifact-codec-late-format must be int8, bf16, or omitted" unless known_replay_trusted_artifact_codec_late_format.empty? || {"int8", "bf16"}.includes?(known_replay_trusted_artifact_codec_late_format)
 raise "--known-replay-trusted-artifact-codec-block must be positive" unless known_replay_trusted_artifact_codec_block > 0
 raise "--known-replay-trusted-artifact-codec-restore-steps must be positive" unless known_replay_trusted_artifact_codec_restore_steps > 0
 raise "--known-replay-trusted-artifact-codec-free-run-steps must be non-negative" unless known_replay_trusted_artifact_codec_free_run_steps >= 0
 raise "--known-replay-trusted-artifact-codec-gpu-decode-check requires --known-replay-trusted-artifact-codec-restore-check" if known_replay_trusted_artifact_codec_gpu_decode_check && !known_replay_trusted_artifact_codec_restore_check
 raise "--known-replay-trusted-artifact-codec-min-start must be positive or omitted" if known_replay_trusted_artifact_codec_min_start == 0 || known_replay_trusted_artifact_codec_min_start < -1
+raise "--known-replay-trusted-artifact-codec-late-format requires --known-replay-trusted-artifact-codec-min-start" if !known_replay_trusted_artifact_codec_late_format.empty? && known_replay_trusted_artifact_codec_min_start <= 0
+raise "--known-replay-trusted-artifact-codec-late-format requires GPU decode restore checks" if !known_replay_trusted_artifact_codec_late_format.empty? && !known_replay_trusted_artifact_codec_gpu_decode_check
+raise "--known-replay-trusted-artifact-codec-raw-recurrent-layers is not supported with --known-replay-trusted-artifact-codec-late-format" if !known_replay_trusted_artifact_codec_raw_recurrent_layers.empty? && !known_replay_trusted_artifact_codec_late_format.empty?
 raise "--known-replay-trusted-artifact-codec-raw-recurrent-layers currently requires --known-replay-trusted-artifact-codec-format=int8" if !known_replay_trusted_artifact_codec_raw_recurrent_layers.empty? && known_replay_trusted_artifact_codec_format != "int8"
 known_replay_active_schedule_run.each do |size|
   raise "--known-replay-active-schedule-run sizes must be positive" unless size > 0
@@ -2124,18 +2131,34 @@ begin
         codec_decoded_snapshot = nil.as(ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot?)
         codec_gpu_restorer = nil.as(CudaRecurrentInt8CodecRestorer?)
         codec_gpu_bf16_restorer = nil.as(CudaRecurrentBf16CodecRestorer?)
+        codec_mixed_late_policy = !known_replay_trusted_artifact_codec_late_format.empty?
+        codec_policy_format =
+          if codec_mixed_late_policy &&
+             known_replay_start >= known_replay_trusted_artifact_codec_min_start
+            known_replay_trusted_artifact_codec_late_format
+          else
+            known_replay_trusted_artifact_codec_format
+          end
         codec_policy_raw_host =
-          known_replay_trusted_artifact_codec_gpu_decode_check &&
+          !codec_mixed_late_policy &&
+            known_replay_trusted_artifact_codec_gpu_decode_check &&
             known_replay_trusted_artifact_codec_min_start > 0 &&
             known_replay_start < known_replay_trusted_artifact_codec_min_start
         codec_policy_gpu_decode = known_replay_trusted_artifact_codec_gpu_decode_check && !codec_policy_raw_host
+        known_replay_trusted_artifact_codec_selected_format = codec_policy_raw_host ? "raw_host" : codec_policy_format
         known_replay_trusted_artifact_codec_restore_policy =
           if codec_policy_raw_host
             "raw_host_before_min_start"
           elsif codec_policy_gpu_decode
-            known_replay_trusted_artifact_codec_format == "bf16" ? "gpu_bf16" : "gpu_block_i8"
+            codec_policy_suffix =
+              if codec_mixed_late_policy
+                known_replay_start >= known_replay_trusted_artifact_codec_min_start ? "_after_min_start" : "_before_min_start"
+              else
+                ""
+              end
+            codec_policy_format == "bf16" ? "gpu_bf16#{codec_policy_suffix}" : "gpu_block_i8#{codec_policy_suffix}"
           elsif known_replay_trusted_artifact_codec_restore_check
-            known_replay_trusted_artifact_codec_format == "bf16" ? "host_decoded_bf16" : "host_decoded_block_i8"
+            codec_policy_format == "bf16" ? "host_decoded_bf16" : "host_decoded_block_i8"
           else
             "none"
           end
@@ -2144,7 +2167,7 @@ begin
         known_replay_trusted_artifact_recurrent_bytes = artifact_snapshot.recurrent_bytes_total
         known_replay_trusted_artifact_kv_bytes = artifact_snapshot.kv_bytes_total
         if known_replay_trusted_artifact_codec_bench
-          if known_replay_trusted_artifact_codec_format == "bf16"
+          if codec_policy_format == "bf16"
             codec = recurrent_bf16_codec_bench(artifact_snapshot,
               build_decoded_snapshot: known_replay_trusted_artifact_codec_restore_check && !codec_policy_gpu_decode && !codec_policy_raw_host,
               build_encoded_snapshot: codec_policy_gpu_decode)
@@ -2219,7 +2242,7 @@ begin
           gpu_restorer = codec_gpu_restorer
           gpu_bf16_restorer = codec_gpu_bf16_restorer
           if codec_policy_gpu_decode
-            if known_replay_trusted_artifact_codec_format == "bf16"
+            if codec_policy_format == "bf16"
               raise "GPU BF16 codec restore check requested but GPU restorer was not built" unless gpu_bf16_restorer
             else
               raise "GPU codec restore check requested but GPU restorer was not built" unless gpu_restorer
@@ -2251,7 +2274,7 @@ begin
           if codec_policy_raw_host
             mixed_stack.restore_decode_state(restore_snapshot)
           elsif codec_policy_gpu_decode
-            if known_replay_trusted_artifact_codec_format == "bf16"
+            if codec_policy_format == "bf16"
               gpu_bf16_restorer.not_nil!.restore(mixed_stack, restore_snapshot)
               known_replay_trusted_artifact_codec_gpu_decode_h2d_ms = gpu_bf16_restorer.not_nil!.h2d_ms
               known_replay_trusted_artifact_codec_gpu_decode_kernel_ms = gpu_bf16_restorer.not_nil!.kernel_ms
@@ -2315,7 +2338,7 @@ begin
             if codec_policy_raw_host
               mixed_stack.restore_decode_state(restore_snapshot)
             elsif codec_policy_gpu_decode
-              if known_replay_trusted_artifact_codec_format == "bf16"
+              if codec_policy_format == "bf16"
                 gpu_bf16_restorer.not_nil!.restore(mixed_stack, restore_snapshot)
                 known_replay_trusted_artifact_codec_gpu_decode_h2d_ms = gpu_bf16_restorer.not_nil!.h2d_ms
                 known_replay_trusted_artifact_codec_gpu_decode_kernel_ms = gpu_bf16_restorer.not_nil!.kernel_ms
@@ -2790,6 +2813,8 @@ begin
       lines << "known_replay_trusted_artifact_restore_ms=#{known_replay_trusted_artifact_restore_ms.round(3)}"
       lines << "known_replay_trusted_artifact_codec_bench=#{known_replay_trusted_artifact_codec_bench}"
       lines << "known_replay_trusted_artifact_codec_format=#{known_replay_trusted_artifact_codec_format}"
+      lines << "known_replay_trusted_artifact_codec_late_format=#{known_replay_trusted_artifact_codec_late_format}"
+      lines << "known_replay_trusted_artifact_codec_selected_format=#{known_replay_trusted_artifact_codec_selected_format}"
       lines << "known_replay_trusted_artifact_codec_block=#{known_replay_trusted_artifact_codec_block}"
       lines << "known_replay_trusted_artifact_codec_raw_bytes=#{known_replay_trusted_artifact_codec_raw_bytes}"
       lines << "known_replay_trusted_artifact_codec_encoded_bytes=#{known_replay_trusted_artifact_codec_encoded_bytes}"
@@ -2992,6 +3017,7 @@ begin
   puts "known_replay_trusted_artifact_contiguous_read_arg=#{known_replay_trusted_artifact_contiguous_read}"
   puts "known_replay_trusted_artifact_codec_bench_arg=#{known_replay_trusted_artifact_codec_bench}"
   puts "known_replay_trusted_artifact_codec_format_arg=#{known_replay_trusted_artifact_codec_format}"
+  puts "known_replay_trusted_artifact_codec_late_format_arg=#{known_replay_trusted_artifact_codec_late_format}"
   puts "known_replay_trusted_artifact_codec_block_arg=#{known_replay_trusted_artifact_codec_block}"
   puts "known_replay_trusted_artifact_codec_restore_check_arg=#{known_replay_trusted_artifact_codec_restore_check}"
   puts "known_replay_trusted_artifact_codec_restore_steps_arg=#{known_replay_trusted_artifact_codec_restore_steps}"
