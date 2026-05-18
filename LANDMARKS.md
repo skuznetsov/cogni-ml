@@ -13742,3 +13742,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The mixed policy should not be only cursor-age based. It needs precision tier plus block-size tier, and eventually prompt/cache-local validation before using INT8 as trusted state.
 - maieutic: Passing block32 on this matrix still does not prove arbitrary prompts or sampling modes. It only raises the current trusted-candidate default above the known block256 refutation.
 - adversary: Keep block256 available for explicit experiments, but do not let it be the implicit trusted mixed policy after a 32-step deterministic refutation.
+
+**decision_update_312:** Superseded the synthetic-only block32 late INT8 default after a prompt-shaped codec falsifier. `--known-replay-trusted-artifact-codec-late-format=int8` now defaults to block8 unless `--known-replay-trusted-artifact-codec-block` is explicit; non-mixed INT8 checks still default to block256.
+
+**evidence_update_312:**
+- claim: "Prompt-shaped histories refute block32 as a broadly safe implicit late INT8 trusted tier."
+  source: prompt-shaped matrix used local `llama-tokenize` for four prompts (`db`, `code`, `json`, `reason`), generated 128 continuation tokens on CUDA, then tested cursors at prompt boundary plus offsets `8/32/64` with 32 free-run steps. BF16-early/block32-late passed `15/16`, but the reasoning prompt at `start=78` failed with `known_replay_trusted_artifact_codec_free_run_parity_count=15` and `ok=false`.
+  verified_at: 2026-05-18
+  decay_trigger: prompt suite, generation length, free-run length, tokenizer path, codec block policy, or model weights change
+- claim: "BF16 and sufficiently small INT8 blocks fix the observed prompt-shaped failure."
+  source: targeted reruns for the reasoning `start=78` failure showed BF16 passed `32/32` at `gpu_ms=6.007`, INT8 block16 still failed at `15/32`, INT8 block8 passed `32/32` at `gpu_ms=5.453` and ratio `0.375`, and INT8 block4 passed `32/32` at `gpu_ms=6.183` and ratio `0.5`.
+  verified_at: 2026-05-18
+  decay_trigger: prompt suite expansion, INT8 codec implementation, block policy, or trust threshold changes
+- claim: "Block8 is the current safer mixed late INT8 default on the tested prompt-shaped matrix."
+  source: full rerun of the four-prompt prompt-shaped matrix with explicit INT8 block8 passed `16/16` with `free_run_parity_count=32` and `ok=true` for every cursor. Late INT8 block8 restore ranged about `4.097-6.305ms`, with ratio `0.375`.
+  verified_at: 2026-05-18
+  decay_trigger: broader prompts, longer contexts, sampling mode, CUDA kernel changes, or artifact trust criteria changes
+- claim: "The CLI now applies the safer block8 default only to mixed late INT8 policy."
+  source: remote smoke with no explicit block and `late-format=int8` on the reasoning `start=78` cursor printed `known_replay_trusted_artifact_codec_block=8`, `selected_format=int8`, `free_run_parity_count=32`, `gpu_decode_restore_ms=5.077`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: option parsing or mixed codec selection changes
+
+**quadrumvirate_update_312:**
+- cassandra: Synthetic greedy seed histories were too narrow; prompt-shaped histories expose different decision-boundary sensitivity.
+- daedalus: The next trust frame should be cache-local validation metadata, not a single global INT8 block default. Block8 is a better default candidate, not a proof.
+- maieutic: A prompt-shaped matrix is still generated continuation, not real multi-session production traffic. Treat it as stronger falsifier coverage, not final certification.
+- adversary: Do not hide the cost tradeoff. Block8 restores slower and stores more than block32, but it is still smaller than BF16 and passed the current prompt-shaped failure.
