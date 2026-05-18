@@ -13006,3 +13006,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Instead of optimizing the duplicate controller, use the lower-level WBA verifier directly for trusted replay and later wrap it with state-copy/prompt-cache mechanics.
 - maieutic: This does not yet implement production fallback after a reject; it measures and exposes the verifier primitive needed by a production cache-aligned controller.
 - adversary: The single-stack route assumes all input tokens are known before launch. A production autoregressive loop still needs a fallback path and state handoff after partial acceptance.
+
+**decision_update_272:** Added derived known-replay slicing for prompt/session-cache controller work. `--known-replay-history`, `--known-replay-start`, and `--known-replay-tokens` now derive verifier inputs as `history[start-1, n]` and expected candidates as `history[start, n]`, eliminating manual off-by-one-prone input/candidate construction.
+
+**evidence_update_272:**
+- claim: "Derived known replay is equivalent to the manual single-stack verifier setup."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_known_history_cuda crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` and `crystal spec spec/ngram_draft_spec.cr` passed. Remote RTX 5060 Ti all-layer Qwen3.5-9B derived replay from history `0,<seed0 exact32>` with `start=1,tokens=32` printed derived inputs `0,198,2,...,539`, candidates `198,2,...,2832`, accepted `32/32`, and measured `351.197ms` total (`10.975ms/tok`), matching the manual known-replay behavior.
+  verified_at: 2026-05-18
+  decay_trigger: known-replay CLI derivation, token history indexing, verifier stack construction, or output-head top1 changes
+- claim: "Derived known replay preserves reject-index diagnostics."
+  source: remote negative derived history `0,198,2,999,16,13,27416,198,760` with `start=1,tokens=8` reported `known_replay_accepted=2`, `known_replay_reject_index=2`, `known_replay_full_accept=false`.
+  verified_at: 2026-05-18
+  decay_trigger: acceptance accounting or history slicing changes
+
+**quadrumvirate_update_272:**
+- cassandra: The most likely controller bug here is a one-token alignment mistake between previous-token inputs and next-token candidates; derived slicing makes that invariant explicit.
+- daedalus: This moves the interface closer to prompt-cache records: a cache hit should provide history plus cursor, not two manually maintained token arrays.
+- maieutic: This is still a verifier primitive. It does not restore decode state after partial reject or choose replay spans automatically.
+- adversary: Reject-index diagnostics must stay visible; hiding rejects behind full-accept-only reporting would reintroduce verification theater.
