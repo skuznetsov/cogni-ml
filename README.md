@@ -346,6 +346,12 @@ artifact is `52,690,944` recurrent bytes plus `2,097,152` KV bytes; write/read/
 hash/restore measured `18.249/42.994/53.814/12.825ms`. The SHA-256 timing uses
 the host `sha256sum`/`shasum` tool to avoid adding OpenSSL linkage to the CUDA
 probe, so treat it as a product-boundary diagnostic rather than a kernel metric.
+An experimental contiguous-read reconstruction reduced start1/gen64 read time
+from `42.046ms` to `36.310ms` while preserving `64/64` exact output, but start9/
+gen24 remained noisy (`43.618ms` read). This points to some avoidable allocation/
+fragmentation cost, but not enough to change the main conclusion: cache artifacts
+need async prefetch or a resident artifact service to stay off the decode
+critical path.
 
 Build the Metal bridge once:
 

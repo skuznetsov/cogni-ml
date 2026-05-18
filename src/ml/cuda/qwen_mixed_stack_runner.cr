@@ -50,12 +50,14 @@ module ML::CUDA
       getter recurrent_bytes_total : UInt64
       getter kv_bytes_total : UInt64
       getter bytesize_total : UInt64
+      getter backing_stores : Array(Bytes)
 
       def initialize(@buffers : Array(Bytes),
                      @include_kv : Bool,
                      @kv_tokens : Int32? = nil,
                      @recurrent_bytes_total : UInt64 = 0_u64,
-                     @kv_bytes_total : UInt64 = 0_u64)
+                     @kv_bytes_total : UInt64 = 0_u64,
+                     @backing_stores : Array(Bytes) = [] of Bytes)
         @bytesize_total = @buffers.sum(0_u64) { |buffer| buffer.size.to_u64 }
       end
     end

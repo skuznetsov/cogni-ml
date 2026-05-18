@@ -13482,3 +13482,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next frame is artifact service design: memory-mapped or pinned host artifacts, async prefetch before decode needs them, hash-at-write plus manifest validation, and recurrent-state compression/tiling.
 - maieutic: The hash timing uses an external host tool, so it includes process/tool overhead and is not a pure library SHA-256 benchmark. It is still a useful upper-ish product-boundary signal.
 - adversary: Do not weaken artifact integrity silently. Any faster hash/manifest design must preserve model/tokenizer/config/source/state binding, or it stops being exact cache replay.
+
+**decision_update_298:** Added a contiguous host artifact read diagnostic. `--known-replay-trusted-artifact-contiguous-read` keeps the same artifact bytes and trusted replay contract, but reads the file into one host allocation and reconstructs snapshot buffers as slices before H2D restore. This tests whether the earlier `~42ms` read was mostly storage bandwidth or fragmented buffer allocation/read overhead.
+
+**evidence_update_298:**
+- claim: "Contiguous read can reduce start1/gen64 artifact read cost while preserving exact cached output."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start1/gen64 with live-KV IO probe plus `--known-replay-trusted-artifact-contiguous-read` printed `known_replay_trusted_artifact_bytes=56885248`, `known_replay_trusted_artifact_write_ms=16.901`, `known_replay_trusted_artifact_read_ms=36.31`, `known_replay_trusted_artifact_hash_ms=59.584`, `known_replay_trusted_artifact_restore_ms=13.027`, `known_replay_accepted=64`, `known_replay_full_accept=true`, and `ok=true`. The previous fragmented read for the same shape was `42.046ms`.
+  verified_at: 2026-05-18
+  decay_trigger: artifact read implementation, host allocator behavior, persistent storage path, or snapshot buffer layout changes
+- claim: "The contiguous read benefit is not stable enough to be the main cache-replay lever."
+  source: remote start9/gen24 with the same contiguous-read probe printed `known_replay_trusted_artifact_bytes=54788096`, `known_replay_trusted_artifact_read_ms=43.618`, `known_replay_trusted_artifact_restore_ms=12.482`, `known_replay_accepted=24`, `known_replay_full_accept=true`, and `ok=true`; the prior fragmented read for this shape was `42.994ms`.
+  verified_at: 2026-05-18
+  decay_trigger: artifact read implementation, OS cache state, persistent storage path, or benchmark noise profile changes
+
+**quadrumvirate_update_298:**
+- cassandra: Fragmentation/allocation accounts for some read cost, but synchronous artifact IO/hash is still the product bottleneck.
+- daedalus: The frame should move from "make one read call faster" to "avoid critical-path read/hash entirely" via async prefetch, resident mmap/pinned cache, or session-local artifact warmup.
+- maieutic: These runs are not a clean storage benchmark because OS page cache and previous writes can affect read timings. The correctness signal is strong; the timing signal is directional.
+- adversary: Do not overfit to contiguous read. It preserves exact output, but it does not solve hash cost or recurrent-state artifact size.
