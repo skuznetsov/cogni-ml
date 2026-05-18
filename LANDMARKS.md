@@ -13384,3 +13384,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The remaining speed wall is the exact active verifier body. LTP/WBA should now target body fusion/band execution, not state-copy elimination.
 - maieutic: The attribution is for one 9B CUDA host and one replay shape. It should not be generalized to long-context KV restore or persisted cache IO.
 - adversary: Keep rollback in normal exact fallback paths. A no-backup/abort-on-reject variant would be a separate artifact-validation probe, not a generation path.
+
+**decision_update_293:** `--profile-phases` now applies to `--known-replay-active-schedule-run`, making CUDA known-span verifier attribution real instead of a no-op for that path. The first trusted bulk replay profile shows the exact WBA verifier wall is dominated by recurrent layer FFN work plus the output head, not rollback/cursor mechanics.
+
+**evidence_update_293:**
+- claim: "CUDA known replay profile phases now emit per-layer/head timings for active schedule runs."
+  source: remote release build `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_known_profile`, Qwen3.5-9B known replay schedule `64`, `--profile-phases`, printed `phase_layer0_ms` through `phase_layer31_ms`, `phase_head_ms=76.479`, `phase_total_ms=694.519`, `cuda_ms=696.057`, `known_replay_accepted=64`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: known replay active schedule code path, profile instrumentation, or runner phase-line behavior changes
+- claim: "The exact active verifier body is dominated by recurrent FFN/head, not rollback."
+  source: same profile: recurrent layers measured around `19.3-20.4ms` each for the 64-token band, full-attention layers around `15.8-16.8ms`, and head `76.479ms` (`head_logits=69.882ms`, `head_top1=5.850ms`). Representative recurrent layer0: projection `3.787ms`, recurrent core `4.539ms`, FFN `11.666ms` (`gate=3.499`, `up=3.529`, `down=4.609`).
+  verified_at: 2026-05-18
+  decay_trigger: CUDA FFN/head kernels, quantization route switches, active token band size, or model architecture changes
+
+**quadrumvirate_update_293:**
+- cassandra: The next local-kernel attempts should be judged against FFN/head attribution, not total wall alone. Small rollback/controller changes are likely below noise.
+- daedalus: There are two non-overlapping frames now: optimize exact FFN/head kernels, or change the cache artifact contract so trusted replay can restore future state instead of recomputing verifier body.
+- maieutic: Exact verification currently recomputes logits for every proposed token. If we skip that, correctness must come from a stronger artifact integrity contract, not from the current verifier.
+- adversary: Do not use this profile to justify approximate candidate-only head checks. Exact greedy verification still requires proving no other vocab row beats the proposal unless the artifact itself is trusted as the source of truth.

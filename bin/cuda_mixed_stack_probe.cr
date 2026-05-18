@@ -1506,7 +1506,7 @@ begin
         mixed_stack.upload_first_sequence_input(chunk_xs)
         mixed_stack.active_tokens = chunk_size
         mixed_stack.update_decode_position(replay_base_pos + schedule_pos)
-        mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+        mixed_stack.run_sequence(profile_phases: profile_phases, debug_readback: false,
           reset_sequence: schedule_pos == 0 && !known_replay_prefix_state_built, sync_end: true, read_head_outputs: true)
 
         exact_ids = output_head.top1_ids[0, chunk_size]
