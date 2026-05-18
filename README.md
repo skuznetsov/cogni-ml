@@ -248,6 +248,36 @@ crystal build -Dcpu_only bin/cuda_mixed_stack_probe.cr -o build/cuda_mixed_stack
 
 `cuda_mixed_stack_probe` composes `QwenRecurrentLayerRunner` and `QwenFullAttnLayerRunner` in model layer order with device-resident hidden handoff across recurrent/full-attention boundaries, then runs `QwenOutputHeadRunner` for output RMSNorm, quantized lm-head projection, and resident top1. The layer/head loop is now owned by `ML::CUDA::QwenMixedStackRunner`, which is the first model-slice decode-state object for CUDA. By default the probe copies back only the CUDA top1 id/value plus hidden/state debug outputs; pass `--read-logits` to also copy full logits for attribution, and `--profile-phases` to insert per-layer/head synchronizations and print attribution lines. It compares the final hidden sequence, top1, recurrent conv/SSM states, and full-attention KV cache rows against the CPU reference. This is the first mixed-stack CUDA correctness scaffold through resident top1; it still stops before tokenizer/sampling, repeated full-model decode ownership, and an optimized topK/sampling kernel. The current resident top1 is a simple two-phase partial-scan/reduce kernel: correct, but not yet promoted as a speed-optimized head.
 
+Experimental CUDA exact cache-replay fast lane:
+
+```sh
+crystal build --release --no-debug -Dcpu_only \
+  bin/cuda_mixed_stack_probe.cr \
+  -o build/cuda_mixed_stack_probe
+
+./build/cuda_mixed_stack_probe \
+  --model /path/to/Qwen3.5-9B-Q4_K_M.gguf \
+  --all-layers \
+  --max-seq 256 \
+  --greedy-loop-tokens 64 \
+  --greedy-loop-probe-chunk-gamma 16 \
+  --greedy-loop-probe-chunk-active-verify \
+  --greedy-loop-probe-ngram \
+  --greedy-loop-probe-ngram-source-history "$SOURCE_TOKEN_IDS" \
+  --greedy-loop-probe-ngram-replay-start 1 \
+  --greedy-loop-probe-ngram-cursor-only \
+  --greedy-loop-probe-ngram-trusted-source \
+  --greedy-loop-probe-ngram-schedule 4,4,8,16 \
+  --skip-debug-readback
+```
+
+This path is exact verification of a validated source/cache cursor, not a
+general-purpose sampler. It first checks that the live prefix matches the source
+history at the replay cursor. If the prefix gate fails, the active verifier path
+is disabled before any proposals are trusted and the probe falls back to plain
+greedy target decode. If the gate passes, proposal chunks are verified through
+the same resident CUDA stack and rejected chunks restore the exact target state.
+
 Build the Metal bridge once:
 
 ```sh
@@ -446,6 +476,23 @@ Notes:
 - `--native-prefill-prepare-state` uses a fresh `State` per repetition but calls `Qwen35CPU.prepare_state_metal!` before timing. This is useful for server-style latency where a session object can be prepared before the prompt arrives.
 - `--native-prefill-cache` measures exact restore of a previously computed prompt state; it is not a first-run prefill replacement.
 - Short decode runs are noisy on a desktop system. The two plain decode rows above are intentionally both shown: treat plain decode as parity-to-faster, not as a stable public margin without a quiet rerun.
+
+Same-host CUDA snapshot, RTX 5060 Ti, Qwen 3.5 9B Q4_K_M, `gen=64`:
+
+| Mode | Speed | Notes |
+|---|---:|---|
+| llama.cpp CUDA plain decode | 67.18 tok/s, 14.89 ms/tok | `llama-bench` `tg64` on the same host/model |
+| cogni-ml CUDA plain greedy probe | ~42.6-42.9 tok/s, ~23.3-23.5 ms/tok | full resident CUDA target path, no proposal reuse |
+| cogni-ml CUDA source/cache cursor, risk-gated | 71.76 tok/s, 13.94 ms/tok | exact output; 62/62 active-verified tokens plus two serial cursor advances |
+| cogni-ml CUDA trusted source/cache cursor | 86.61 tok/s, 11.55 ms/tok | exact output; 64/64 active-verified tokens, chunks `4,4,8,16,16,16` |
+| invalid trusted cursor | ~42.3 tok/s, ~23.64 ms/tok | fails closed: zero proposals, active verifier disabled, near plain fallback |
+
+CUDA cache-replay caveats:
+
+- The fast rows are not arbitrary generation. They measure exact replay from a validated session/source cursor, which is the intended primitive for prompt/session cache hits and repeated known spans.
+- Exact greedy parity is preserved by verifying every proposed token through the target stack before committing it.
+- Wrong cursors must fail closed. The trusted-source mode is only trusted after the source-prefix gate passes; otherwise it falls back near plain decode speed instead of accepting proposal tokens.
+- The numbers above exclude durable cache lookup, artifact IO, and host-to-device restore costs. Production integration still needs session/hash lookup, serialized state artifacts, and end-to-end timing around those boundaries.
 
 ### Speculative Decode Harnesses
 
