@@ -13092,3 +13092,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The near-term exact controller should be staged bands, not partial recovery: probe with size 1-2, then grow to size 4/8/16 after full-accept evidence.
 - maieutic: Split reporting counts verified token rows, not wall time. Real speed still depends on active-row WBA efficiency and launch overhead per split.
 - adversary: Do not overfit to the synthetic reject-at-2 case. The diagnostic should be run over real cache/session histories before promoting a global split schedule.
+
+**decision_update_277:** Added progressive CUDA known-replay schedule reporting and identified a conservative no-recovery controller candidate. `--known-replay-schedule-report LIST` simulates chunk sizes that grow only after full-accept chunks, reporting attempted chunk sizes, verified rows, committed rows, discarded accepted-prefix rows, reject index, and full-accept status. This complements fixed split reporting by modeling the actual controller shape we can use before active-row recovery exists.
+
+**evidence_update_277:**
+- claim: "The progressive schedule diagnostic is implemented and preserves clean replay accounting."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_known_schedule_cuda crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen`, `crystal spec spec/ngram_draft_spec.cr`, and `git diff --check -- bin/cuda_mixed_stack_probe.cr` passed. Remote RTX 5060 Ti positive 32-token derived replay with `--known-replay-schedule-report 1,1,2,2,4,8,16` reported chunks `1,1,2,2,4,8,14`, `verified_tokens=32`, `committed_tokens=32`, `discarded_accept_prefix=0`, and `full_accept=true`.
+  verified_at: 2026-05-18
+  decay_trigger: known-replay schedule output contract, controller schedule semantics, or top1 acceptance accounting changes
+- claim: "`1,1,2,2,4,8,16` is the conservative current no-recovery schedule candidate."
+  source: remote RTX 5060 Ti synthetic reject gates. Reject-at-2 with schedule `1,1,2,4,8,16` already commits `2` and discards `0`; reject-at-6 distinguishes schedules: `1,1,2,4,8,16` verified `8`, committed `4`, discarded `2`; `2,2,4,8,16` verified `8`, committed `4`, discarded `2`; `1,2,2,4,8,16` verified `9`, committed `5`, discarded `1`; `1,1,2,2,4,8,16` verified `10`, committed `6`, discarded `0`. Clean 32-token replay remains full-accept for all tested schedules, with one extra clean-path chunk for the conservative schedule.
+  verified_at: 2026-05-18
+  decay_trigger: real session/cache-history distribution, active-row recovery support, launch-overhead model, or verifier chunk wall-time measurements
+
+**quadrumvirate_update_277:**
+- cassandra: The conservative schedule trades one extra clean chunk for fewer lost accepted-prefix tokens on medium-late rejects; this is reasonable while recovery is unavailable.
+- daedalus: The controller frame is now "probation before WBA": earn larger bands with repeated full accepts rather than assuming every cursor hit deserves gamma8/16.
+- maieutic: This remains row-economics, not wall-clock promotion. The next proof must run the actual controller path or active-row WBA kernel path.
+- adversary: The synthetic reject positions are useful falsifiers but not a distribution. Do not make `1,1,2,2,4,8,16` default until real prompt/session traces show the launch overhead is worth the saved rejects.
