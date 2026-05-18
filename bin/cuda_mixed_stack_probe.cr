@@ -553,6 +553,10 @@ if greedy_loop_probe_chunk_active_verify && greedy_loop_probe_ngram_source_prefi
   unless source_prefix_match
     greedy_loop_probe_chunk_active_verify = false
     greedy_loop_probe_chunk_active_verify_disabled_by_prefix_gate = true
+    # Once the prefix gate disables active chunk verification, the greedy-loop
+    # path falls back to one-token serial target steps. Keep option validation
+    # aligned with that fail-closed execution mode.
+    tokens = 1 if greedy_loop_tokens > 0
   end
 end
 raise "--runtime-skip-recurrent-ffn is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn && runtime_raw_q8

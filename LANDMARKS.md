@@ -13344,3 +13344,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The cache-hit path now has a clear policy boundary: validated cursor -> large WBA chunks; invalid/weak source -> exact fallback or risk-gated proposals.
 - maieutic: Trusted-source validation proves prefix alignment, not future correctness. Exact verification still remains mandatory for every proposed token.
 - adversary: Keep `--greedy-loop-probe-ngram-no-risk-gate` diagnostic-only. Production should prefer trusted-source mode because it fails closed.
+
+**decision_update_291:** Trusted cache replay benefits from larger WBA bands once the source cursor is artifact-level trusted. The controller can verify a whole 64-token replay span in one active CUDA chunk while preserving exact output, but this should be reserved for validated cache/session artifacts. Weaker n-gram or approximate proposal sources should keep smaller schedules because active verifier rejects discard accepted prefixes for that chunk.
+
+**evidence_update_291:**
+- claim: "Bulk WBA chunks improve trusted-cache replay speed on the same CUDA host."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B gen64 with `--greedy-loop-probe-ngram-trusted-source`, validated replay cursor, and exact active verification accepted `64/64`. Schedule `32,32` measured `cuda_ms=704.280`, `cuda_ms_per_token=11.004`, and schedule `64` measured `cuda_ms=698.010`, `cuda_ms_per_token=10.906`, compared with the prior trusted `4,4,8,16,16,16` run at `738.944ms` / `11.546ms/tok`.
+  verified_at: 2026-05-18
+  decay_trigger: active verifier chunk economics, trusted-source schedule policy, CUDA kernel performance, or replay-source artifact contract changes
+- claim: "Invalid trusted cursors now fail closed even when the caller omits `--tokens 1`."
+  source: before the fix, invalid start8 with gamma64 disabled active verification during prefix-gate preflight and then failed option validation (`--greedy-loop-tokens requires --tokens=1 unless --greedy-loop-probe-chunk-active-verify is enabled`). After forcing `tokens=1` in that fail-closed path, the same remote invalid start8/gamma64 run printed `tokens=1`, `chunk_probe_ngram_trusted_source_active=false`, `chunk_probe_ngram_source_prefix_match=false`, `chunk_probe_raw_tokens=0`, `chunk_probe_active_verify=false`, `chunk_probe_active_verify_disabled_by_prefix_gate=true`, `cuda_ms=292.482`, `cuda_ms_per_token=24.373`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: prefix-gate preflight logic, greedy-loop option validation, or fallback decode path changes
+
+**quadrumvirate_update_291:**
+- cassandra: Larger bands are only safe economically when full acceptance is highly likely. Correctness is still protected by verification, but reject waste grows with chunk size.
+- daedalus: The LTP/WBA lever here is not another kernel; it is matching band size to source trust. Artifact-level cache replay can use bulk WBA, while weak proposal streams need smaller recovery-friendly bands.
+- maieutic: Prefix validation alone does not prove future correctness. The stronger premise for schedule `64` is same-model/source-artifact replay, not generic n-gram suffix matching.
+- adversary: Keep schedule `64` opt-in/recommended only for durable trusted replay. Do not promote it as a universal decode policy until rejected-prefix recovery or stronger future-token validation exists.

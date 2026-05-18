@@ -267,7 +267,7 @@ crystal build --release --no-debug -Dcpu_only \
   --greedy-loop-probe-ngram-replay-start 1 \
   --greedy-loop-probe-ngram-cursor-only \
   --greedy-loop-probe-ngram-trusted-source \
-  --greedy-loop-probe-ngram-schedule 4,4,8,16 \
+  --greedy-loop-probe-ngram-schedule 64 \
   --skip-debug-readback
 ```
 
@@ -277,6 +277,10 @@ history at the replay cursor. If the prefix gate fails, the active verifier path
 is disabled before any proposals are trusted and the probe falls back to plain
 greedy target decode. If the gate passes, proposal chunks are verified through
 the same resident CUDA stack and rejected chunks restore the exact target state.
+Use smaller schedules such as `4,4,8,16` for weaker proposal sources where early
+reject economics matter; use bulk schedules such as `64` only for artifact-level
+trusted replay where the source history was produced by the same model/cache
+contract and every proposed token is still target-verified before commit.
 
 Build the Metal bridge once:
 
@@ -485,6 +489,7 @@ Same-host CUDA snapshot, RTX 5060 Ti, Qwen 3.5 9B Q4_K_M, `gen=64`:
 | cogni-ml CUDA plain greedy probe | ~42.6-42.9 tok/s, ~23.3-23.5 ms/tok | full resident CUDA target path, no proposal reuse |
 | cogni-ml CUDA source/cache cursor, risk-gated | 71.76 tok/s, 13.94 ms/tok | exact output; 62/62 active-verified tokens plus two serial cursor advances |
 | cogni-ml CUDA trusted source/cache cursor | 86.61 tok/s, 11.55 ms/tok | exact output; 64/64 active-verified tokens, chunks `4,4,8,16,16,16` |
+| cogni-ml CUDA trusted bulk replay | 91.69 tok/s, 10.91 ms/tok | exact output; 64/64 active-verified tokens, one `64`-token WBA chunk |
 | invalid trusted cursor | ~42.3 tok/s, ~23.64 ms/tok | fails closed: zero proposals, active verifier disabled, near plain fallback |
 
 CUDA cache-replay caveats:
