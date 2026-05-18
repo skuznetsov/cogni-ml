@@ -13128,3 +13128,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This still does not solve the speed path. The next frame is to execute scheduled accepted chunks through the fast known-span verifier or add active-row/prefix execution, not to keep tuning serial controller policy.
 - maieutic: `24.595ms/tok` in the controller smoke is not negative evidence against the schedule; it measures serial verification plumbing. The relevant speed lower bound remains the known-span rows around `10.9-12.1ms/tok`.
 - adversary: Do not promote the schedule as default. It is verified as exact policy plumbing, but real session/cache histories and wall timing are still required before claiming a production speedup.
+
+**decision_update_279:** Refuted `1,1,2,2,4,8,16` as the current CUDA speed schedule candidate after measuring actual known-span chunk costs. It remains a correctness-conservative no-recovery policy, but chunk sizes `1/2/3` are too slow because they miss the WBA/tbatch4 corridor. The current speed-oriented candidate is `4,4,8,16`: start at a 4-row verifier band, require one more 4-row full accept before growing, then move to 8/16-row bands.
+
+**evidence_update_279:**
+- claim: "Small known-span verifier chunks are economically poor on the RTX 5060 Ti CUDA path."
+  source: remote all-layer Qwen3.5-9B positive known replay over the same history measured chunk-size lower bounds: `1=35.537ms/tok`, `2=27.171ms/tok`, `3=24.638ms/tok`, `4=14.190ms/tok`, `5=22.558ms/tok`, `6=22.035ms/tok`, `8=12.377ms/tok`, `12=11.763ms/tok`, `16=11.441ms/tok`, `24=11.151ms/tok`, `32=11.027ms/tok`, all full accept.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA WBA/tbatch4 routing, known-span verifier construction, driver/GPU change, or active-row kernel support
+- claim: "`4,4,8,16` is the better current no-recovery schedule candidate for CUDA speed."
+  source: remote all-layer Qwen3.5-9B schedule report with `--known-replay-schedule-report 4,4,8,16`: clean 32-token replay committed `32/32` with chunks `4,4,8,16`; reject-at-2 verified `4`, committed `0`, discarded accepted prefix `2`; reject-at-6 verified `8`, committed `4`, discarded accepted prefix `2`. This is worse than `1,1,2,2,4,8,16` on accepted-prefix salvage but avoids very slow chunk1/2 verifier rows.
+  verified_at: 2026-05-18
+  decay_trigger: real session reject distribution, fallback cost model, active-row recovery support, or WBA chunk-size performance changes
+
+**quadrumvirate_update_279:**
+- cassandra: The previous candidate optimized row salvage, not wall time. CUDA has a clear chunk-size phase transition at 4 rows, so row-economics alone was incomplete.
+- daedalus: The frame shifts from "small probation rows" to "WBA-aligned probation bands." Correctness safety must be balanced against the cost of leaving the weight-stationary corridor.
+- maieutic: This does not make `4,4,8,16` a production default. It is a better candidate under the current no-recovery and known-span cost model; real traces can still overturn it if early rejects dominate.
+- adversary: The `4,4,8,16` schedule discards accepted prefixes on reject-at-2/6. That is acceptable only while active-row recovery is unavailable and only if its wall-cost model beats the slower small chunks.
