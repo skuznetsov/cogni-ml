@@ -30,6 +30,11 @@ module ML::GGUF
       property artifact_sha256 : String
       property artifact_byte_size : Int64
       property state_byte_size : Int64
+      property artifact_codec : String? = nil
+      property artifact_codec_block : Int32? = nil
+      property artifact_validation_kind : String? = nil
+      property artifact_validation_steps : Int32? = nil
+      property artifact_validation_hash : String? = nil
       property created_at_unix : Int64
       property prompt_preview : String?
 
@@ -48,7 +53,12 @@ module ML::GGUF
                      @state_byte_size : Int64,
                      @created_at_unix : Int64,
                      @prompt_preview : String?,
-                     @token_hash : String? = nil)
+                     @token_hash : String? = nil,
+                     @artifact_codec : String? = nil,
+                     @artifact_codec_block : Int32? = nil,
+                     @artifact_validation_kind : String? = nil,
+                     @artifact_validation_steps : Int32? = nil,
+                     @artifact_validation_hash : String? = nil)
       end
     end
 
@@ -75,7 +85,12 @@ module ML::GGUF
                token_ids : Array(Int32),
                state : Qwen35CPU::State,
                turn_id : String? = nil,
-               prompt_preview : String? = nil) : Entry
+               prompt_preview : String? = nil,
+               artifact_codec : String? = nil,
+               artifact_codec_block : Int32? = nil,
+               artifact_validation_kind : String? = nil,
+               artifact_validation_steps : Int32? = nil,
+               artifact_validation_hash : String? = nil) : Entry
         snapshot = Qwen35StateSnapshot.capture(state)
         prompt_hash = Qwen35PromptCache.prompt_hash(token_ids, prompt_text)
         token_hash = Qwen35PromptCache.token_hash(token_ids)
@@ -99,6 +114,11 @@ module ML::GGUF
           created_at_unix: Time.utc.to_unix,
           prompt_preview: prompt_preview,
           token_hash: token_hash,
+          artifact_codec: artifact_codec,
+          artifact_codec_block: artifact_codec_block,
+          artifact_validation_kind: artifact_validation_kind,
+          artifact_validation_steps: artifact_validation_steps,
+          artifact_validation_hash: artifact_validation_hash,
         )
         append_manifest(entry)
         entry
@@ -304,6 +324,11 @@ module ML::GGUF
           artifact_sha256    text NOT NULL CHECK (length(artifact_sha256) = 64),
           artifact_byte_size bigint NOT NULL CHECK (artifact_byte_size >= 0),
           state_byte_size    bigint NOT NULL CHECK (state_byte_size >= 0),
+          artifact_codec     text,
+          artifact_codec_block integer CHECK (artifact_codec_block IS NULL OR artifact_codec_block > 0),
+          artifact_validation_kind text,
+          artifact_validation_steps integer CHECK (artifact_validation_steps IS NULL OR artifact_validation_steps >= 0),
+          artifact_validation_hash text,
           created_at_unix    bigint NOT NULL,
           prompt_preview     text
       ) USING #{am};
@@ -326,12 +351,16 @@ module ML::GGUF
           runtime_id, session_id, turn_id, model_id, tokenizer_id,
           prompt_hash, token_hash, prefix_len, max_seq, layer_count,
           artifact_path, artifact_sha256, artifact_byte_size, state_byte_size,
+          artifact_codec, artifact_codec_block, artifact_validation_kind,
+          artifact_validation_steps, artifact_validation_hash,
           created_at_unix, prompt_preview
       ) VALUES (
           $1, $2, $3, $4, $5,
           $6, $7, $8, $9, $10,
           $11, $12, $13, $14,
-          $15, $16
+          $15, $16, $17,
+          $18, $19,
+          $20, $21
       )
       ON CONFLICT (model_id, tokenizer_id, prompt_hash, prefix_len)
       DO UPDATE SET
@@ -345,6 +374,11 @@ module ML::GGUF
           artifact_sha256 = EXCLUDED.artifact_sha256,
           artifact_byte_size = EXCLUDED.artifact_byte_size,
           state_byte_size = EXCLUDED.state_byte_size,
+          artifact_codec = EXCLUDED.artifact_codec,
+          artifact_codec_block = EXCLUDED.artifact_codec_block,
+          artifact_validation_kind = EXCLUDED.artifact_validation_kind,
+          artifact_validation_steps = EXCLUDED.artifact_validation_steps,
+          artifact_validation_hash = EXCLUDED.artifact_validation_hash,
           created_at_unix = EXCLUDED.created_at_unix,
           prompt_preview = EXCLUDED.prompt_preview;
       SQL
@@ -366,6 +400,11 @@ module ML::GGUF
         entry.artifact_sha256,
         entry.artifact_byte_size,
         entry.state_byte_size,
+        entry.artifact_codec,
+        entry.artifact_codec_block,
+        entry.artifact_validation_kind,
+        entry.artifact_validation_steps,
+        entry.artifact_validation_hash,
         entry.created_at_unix,
         entry.prompt_preview,
       ] of String | Int32 | Int64 | Nil

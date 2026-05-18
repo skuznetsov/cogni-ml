@@ -13768,3 +13768,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next trust frame should be cache-local validation metadata, not a single global INT8 block default. Block8 is a better default candidate, not a proof.
 - maieutic: A prompt-shaped matrix is still generated continuation, not real multi-session production traffic. Treat it as stronger falsifier coverage, not final certification.
 - adversary: Do not hide the cost tradeoff. Block8 restores slower and stores more than block32, but it is still smaller than BF16 and passed the current prompt-shaped failure.
+
+**decision_update_313:** Added prompt-cache metadata fields for future compressed artifact trust decisions without changing the raw `.qkv` artifact format. `Qwen35PromptCache::Entry` and pg_sorted_heap SQL now include optional `artifact_codec`, `artifact_codec_block`, `artifact_validation_kind`, `artifact_validation_steps`, and `artifact_validation_hash`.
+
+**evidence_update_313:**
+- claim: "Prompt-cache entries can carry codec validation metadata while remaining backward-compatible with legacy manifests."
+  source: focused spec `spec/qwen35_prompt_cache_spec.cr:121` passed; it round-tripped metadata through JSON and parsed a legacy JSON entry with the new fields absent as nil.
+  verified_at: 2026-05-18
+  decay_trigger: prompt-cache Entry schema, JSON serialization, or manifest parsing changes
+- claim: "The pg_sorted_heap metadata surface now exposes codec and validation fields for compressed artifact routing."
+  source: focused spec `spec/qwen35_prompt_cache_spec.cr:76` passed; it checks generated SQL for `artifact_codec` and `artifact_validation_hash`, and `pg_insert_values` now emits 21 values including codec metadata.
+  verified_at: 2026-05-18
+  decay_trigger: pg schema generation, prompt-cache insert contract, or metadata field changes
+
+**quadrumvirate_update_313:**
+- cassandra: Adding metadata is safe but does not itself prove compressed restore correctness; it only prevents future compressed routes from hiding their trust basis.
+- daedalus: Keep raw `.qkv` unchanged until compressed artifact read/write is backed by validated restore gates. Metadata first reduces migration risk.
+- maieutic: The missing hard piece remains artifact codec production: write/read compressed buffers and enforce metadata trust at restore time.
+- adversary: Existing DB deployments need schema migration outside `CREATE TABLE IF NOT EXISTS`; do not assume the new columns appear in already-created tables.
