@@ -13240,3 +13240,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed path is now an online controller that restores cached state and calls the resident active verifier, not more offline known-replay diagnostics.
 - maieutic: The fast `~0.4ms` restore cost is a device-resident snapshot proxy, not a disk/database load number. A real persisted cache needs its own IO and host/device transfer accounting.
 - adversary: This still does not solve rejected-prefix recovery or proposal-source quality. It only proves that the verifier can start from cached decode state cheaply once that state is resident.
+
+**decision_update_285:** Wired cursor/n-gram proposals into the same resident active-row CUDA verifier. `--greedy-loop-probe-chunk-active-verify` allocates the greedy controller stack at the proposal gamma band, uploads only the active proposal rows, verifies them through the exact active WBA path, commits full accepts in-place, and restores the pre-chunk snapshot on reject before falling back to exact serial decode. This removes the old duplicate-verifier memory problem and the serial per-token verifier bottleneck for high-confidence cursor replay.
+
+**evidence_update_285:**
+- claim: "Online active cursor replay gives a real controller speedup when proposal acceptance is high."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B gen24 with prefix token `0`, cursor-only source history, `--greedy-loop-probe-chunk-active-verify`, gamma16, and schedule `4,4,8,16` accepted `24/24`, used chunks `4,4,8,8`, printed `chunk_probe_active_verify_chunks=4`, `chunk_probe_active_verify_accepts=4`, `cuda_ms=296.607`, `cuda_ms_per_token=12.359`, and `ok=true`. Same-host plain greedy gen24 was `cuda_ms=567.464`, `cuda_ms_per_token=23.644`.
+  verified_at: 2026-05-18
+  decay_trigger: greedy-loop active verifier path, n-gram cursor policy, CUDA WBA active-row kernels, or benchmark prompt/history distribution
+- claim: "Rejects are exact but can lose versus plain decode without a confidence gate."
+  source: remote reject-adversary gen12 with a bad cursor token after the first accepted 4-row chunk printed `chunk_probe_active_verify_accepts=1`, `chunk_probe_active_verify_rejects=1`, `chunk_probe_rejects=1`, `chunk_probe_margin_fallbacks=8`, `cuda_ms=329.983`, `cuda_ms_per_token=27.499`, and `ok=true`; same-host plain gen12 was `cuda_ms=289.287`, `cuda_ms_per_token=24.107`.
+  verified_at: 2026-05-18
+  decay_trigger: rejection distribution, schedule policy, accepted-prefix recovery, or controller risk gate changes
+
+**quadrumvirate_update_285:**
+- cassandra: The speed path works under full acceptance, but reject cost is now the dominant production risk. The adversary reject case confirms this directly.
+- daedalus: The next frame is not more verifier mechanics; it is gating and source separation. The controller needs a trusted source cursor/cache hit before enabling active replay, and should fall back early when confidence is weak.
+- maieutic: This is exact greedy parity through verification, not approximate generation. The speedup depends on proposal acceptance; proposal quality remains an external condition.
+- adversary: Do not claim global CUDA victory from the full-accept case. The safe claim is conditional: high-confidence cache/cursor replay can run near the known-span verifier speed; bad cursors regress.

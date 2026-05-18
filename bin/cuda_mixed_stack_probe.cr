@@ -201,6 +201,30 @@ def load_quant_weight(gguf : ML::GGUF::GGUFFile, name : String) : ML::GGUF::Quan
   ML::GGUF::QuantWeight.new(raw, info.type, out_dim, in_dim)
 end
 
+def embedding_rows(token_embd : ML::GGUF::QuantWeight,
+                   ids : Array(Int32),
+                   allocated_tokens : Int32,
+                   hidden : Int32) : Array(Float32)
+  raise ArgumentError.new("ids must not be empty") if ids.empty?
+  raise ArgumentError.new("too many active ids") if ids.size > allocated_tokens
+
+  rows = Array(Float32).new(allocated_tokens * hidden, 0.0_f32)
+  ids.each_with_index do |id, row|
+    emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, id)
+    hidden.times { |h| rows[row * hidden + h] = emb[h] }
+  end
+  rows
+end
+
+def upload_active_embeddings(stack : ML::CUDA::QwenMixedStackRunner,
+                             token_embd : ML::GGUF::QuantWeight,
+                             ids : Array(Int32),
+                             allocated_tokens : Int32,
+                             hidden : Int32) : Nil
+  stack.active_tokens = ids.size
+  stack.upload_first_sequence_input(embedding_rows(token_embd, ids, allocated_tokens, hidden))
+end
+
 class CudaQ4KTokenEmbedder
   EMBED_Q4K_PTX = {{ read_file("src/ml/cuda/kernels/embed_q4k_probe.ptx") }}
 
@@ -309,6 +333,7 @@ greedy_loop_probe_chunk_gamma = 0
 greedy_loop_probe_chunk_margin = 0.03_f32
 greedy_loop_probe_chunk_batched_verify = false
 greedy_loop_probe_chunk_fast_verify_top1 = false
+greedy_loop_probe_chunk_active_verify = false
 greedy_loop_probe_ngram = false
 greedy_loop_probe_ngram_min = 2
 greedy_loop_probe_ngram_max = 8
@@ -380,6 +405,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-chunk-margin F", "Raw-Q8 top1/top2 margin threshold for --greedy-loop-probe-chunk-gamma") { |v| greedy_loop_probe_chunk_margin = v.to_f32 }
   p.on("--greedy-loop-probe-chunk-batched-verify", "Use a second tokens=gamma stack to verify full raw-Q8 chunks and copy back only on full accept") { greedy_loop_probe_chunk_batched_verify = true }
   p.on("--greedy-loop-probe-chunk-fast-verify-top1", "Diagnostic: in batched chunk verification, trust resident CUDA top1 ids instead of copying/scanning full logits") { greedy_loop_probe_chunk_fast_verify_top1 = true }
+  p.on("--greedy-loop-probe-chunk-active-verify", "Use the main resident stack with active rows for n-gram chunk verification; restores state on reject") { greedy_loop_probe_chunk_active_verify = true }
   p.on("--greedy-loop-probe-ngram", "Use history n-gram candidates as the guarded chunk proposal source instead of raw-Q8 proposal") { greedy_loop_probe_ngram = true; perf_only = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-ngram-min N", "Minimum n-gram length for --greedy-loop-probe-ngram, default 2") { |v| greedy_loop_probe_ngram_min = v.to_i }
   p.on("--greedy-loop-probe-ngram-max N", "Maximum n-gram length for --greedy-loop-probe-ngram, default 8") { |v| greedy_loop_probe_ngram_max = v.to_i }
@@ -480,6 +506,9 @@ raise "--greedy-loop-probe-chunk-gamma is incompatible with --greedy-loop-probe-
 raise "--greedy-loop-probe-chunk-margin must be non-negative" unless greedy_loop_probe_chunk_margin >= 0.0_f32
 raise "--greedy-loop-probe-chunk-batched-verify requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_chunk_batched_verify && greedy_loop_probe_chunk_gamma == 0
 raise "--greedy-loop-probe-chunk-fast-verify-top1 requires --greedy-loop-probe-chunk-batched-verify" if greedy_loop_probe_chunk_fast_verify_top1 && !greedy_loop_probe_chunk_batched_verify
+raise "--greedy-loop-probe-chunk-active-verify requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_chunk_active_verify && greedy_loop_probe_chunk_gamma == 0
+raise "--greedy-loop-probe-chunk-active-verify requires --greedy-loop-probe-ngram" if greedy_loop_probe_chunk_active_verify && !greedy_loop_probe_ngram
+raise "use either --greedy-loop-probe-chunk-active-verify or --greedy-loop-probe-chunk-batched-verify, not both" if greedy_loop_probe_chunk_active_verify && greedy_loop_probe_chunk_batched_verify
 raise "--greedy-loop-probe-ngram requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_ngram && greedy_loop_probe_chunk_gamma == 0
 raise "--greedy-loop-probe-ngram-min must be positive" unless greedy_loop_probe_ngram_min > 0
 raise "--greedy-loop-probe-ngram-max must be >= min" unless greedy_loop_probe_ngram_max >= greedy_loop_probe_ngram_min
@@ -550,13 +579,16 @@ raise "--gpu-final-dump is incompatible with --steady-reps/--steady-graph-reps" 
 raise "--margin-bucket-report requires --read-logits" if margin_bucket_report && !read_logits
 raise "--margin-bucket-report is incompatible with --perf-only/--gpu-logits-only" if margin_bucket_report && perf_only
 raise "--margin-buckets must not be empty" if margin_bucket_report && margin_bucket_edges.empty?
+if greedy_loop_probe_chunk_active_verify && tokens < greedy_loop_probe_chunk_gamma
+  tokens = greedy_loop_probe_chunk_gamma
+end
 raise "--input-token requires --tokens=1" if input_token >= 0 && tokens != 1
 if greedy_loop_tokens > 0
   raise "--skip-output-head is incompatible with --greedy-loop-tokens" if skip_output_head
   raise "--greedy-loop-tokens currently requires --perf-only; it is a semantic timing harness, not a CPU oracle" unless perf_only
   raise "--greedy-loop-tokens is incompatible with --steady-reps/--steady-graph-reps" if steady_reps > 0 || steady_graph_reps > 0
   raise "--greedy-loop-tokens is incompatible with --profile-phases" if profile_phases
-  raise "--greedy-loop-tokens requires --tokens=1" unless tokens == 1
+  raise "--greedy-loop-tokens requires --tokens=1 unless --greedy-loop-probe-chunk-active-verify is enabled" unless tokens == 1 || greedy_loop_probe_chunk_active_verify
   greedy_loop_input_positions = greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0)
   raise "max-seq must cover start-pos + prefix + greedy-loop-tokens" unless max_seq >= start_pos + greedy_loop_input_positions
 end
@@ -584,7 +616,7 @@ if greedy_loop_tokens > 0 && !greedy_loop_cpu_embedding && token_embd.type.q4_k?
 end
 semantic_input = greedy_loop_tokens > 0 || input_token >= 0 || !input_tokens.empty?
 xs = if greedy_loop_tokens > 0
-       ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, seed_token)
+       embedding_rows(token_embd, [seed_token], tokens, hidden)
      elsif input_token >= 0
        ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, input_token)
      elsif !input_tokens.empty?
@@ -704,7 +736,7 @@ begin
   # Full-attention CUDA kernels index RoPE tables by absolute decode position,
   # so upload a resident table once and update only start_pos in token loops.
   decode_position_span = if greedy_loop_tokens > 0
-                           greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0)
+                           Math.max(tokens, greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0))
                          elsif !known_replay_history.empty?
                            (known_replay_start - 1) + tokens
                          else
@@ -831,6 +863,10 @@ begin
   chunk_batched_verify_accepts = 0
   chunk_batched_verify_rejects = 0
   chunk_batched_verify_last_reject_commits = 0
+  chunk_active_verify_ms = 0.0
+  chunk_active_verify_chunks = 0
+  chunk_active_verify_accepts = 0
+  chunk_active_verify_rejects = 0
   chunk_ngram_empty_fallbacks = 0
   chunk_ngram_risk_fallbacks = 0
   chunk_ngram_cursor_hits = 0
@@ -844,7 +880,7 @@ begin
       Math.min(greedy_loop_tokens, 2).times do |i|
         pos = start_pos + i
         mixed_stack.update_decode_position(pos)
-        mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, warm_token))
+        upload_active_embeddings(mixed_stack, token_embd, [warm_token], tokens, hidden)
         mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: i == 0)
         mixed_stack.read_head_outputs
         warm_token = output_head.top1_ids[0]
@@ -858,7 +894,7 @@ begin
       prefix_t0 = Time.instant
       greedy_loop_prefix_tokens[0, greedy_loop_prefix_tokens.size - 1].each_with_index do |tok, i|
         mixed_stack.update_decode_position(start_pos + i)
-        mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, tok))
+        upload_active_embeddings(mixed_stack, token_embd, [tok], tokens, hidden)
         mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
           reset_sequence: i == 0, sync_end: true, read_head_outputs: false, run_head: false)
       end
@@ -954,7 +990,7 @@ begin
               greedy_position_ms += (Time.instant - t_position).total_milliseconds
 
               t_embedding = Time.instant
-              mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, proposal_token))
+              upload_active_embeddings(mixed_stack, token_embd, [proposal_token], tokens, hidden)
               greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
 
               t_raw = Time.instant
@@ -995,7 +1031,7 @@ begin
           mixed_stack.update_decode_position(pos)
           greedy_position_ms += (Time.instant - t_position).total_milliseconds
           t_embedding = Time.instant
-          mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+          upload_active_embeddings(mixed_stack, token_embd, [gpu_token], tokens, hidden)
           greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
           t_exact = Time.instant
           mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback,
@@ -1015,7 +1051,49 @@ begin
         rejected = false
         used_batched_verify = false
 
-        if greedy_loop_probe_chunk_batched_verify && proposal_ids.size == greedy_loop_probe_chunk_gamma && generated + proposal_ids.size <= greedy_loop_tokens
+        if greedy_loop_probe_chunk_active_verify && generated + proposal_ids.size <= greedy_loop_tokens
+          snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
+          begin
+            verify_inputs = [gpu_token] + proposal_ids[0, proposal_ids.size - 1]
+            upload_active_embeddings(mixed_stack, token_embd, verify_inputs, tokens, hidden)
+            mixed_stack.update_decode_position(greedy_loop_decode_base_pos + generated)
+            t_active = Time.instant
+            mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+              reset_sequence: greedy_loop_reset_on_first_generated && generated == 0 && chunk_start == 0,
+              sync_end: true, read_head_outputs: true)
+            chunk_active_verify_ms += (Time.instant - t_active).total_milliseconds
+            chunk_active_verify_chunks += 1
+
+            exact_ids = output_head.top1_ids[0, proposal_ids.size]
+            chunk_verify_tokens += proposal_ids.size
+            proposal_ids.each_with_index do |proposal_id, j|
+              exact_id = exact_ids[j]
+              if exact_id == proposal_id
+                accepted_this_chunk += 1
+              else
+                rejected = true
+                break
+              end
+            end
+
+            if rejected
+              chunk_active_verify_rejects += 1
+              mixed_stack.restore_decode_state(snapshot)
+            else
+              chunk_active_verify_accepts += 1
+              chunk_accepted_tokens += proposal_ids.size
+              chunk_exact_ids.concat(exact_ids)
+              greedy_gpu_ids.concat(exact_ids)
+              generated += proposal_ids.size
+              gpu_token = proposal_ids.last
+              ngram_index.try(&.append(proposal_ids))
+              ngram_replay_cursor = ngram_pending_replay_cursor
+            end
+            used_batched_verify = true
+          ensure
+            snapshot.close
+          end
+        elsif greedy_loop_probe_chunk_batched_verify && proposal_ids.size == greedy_loop_probe_chunk_gamma && generated + proposal_ids.size <= greedy_loop_tokens
           verify_stack = verifier_stack.not_nil!
           verify_xs = Array(Float32).new(greedy_loop_probe_chunk_gamma * hidden, 0.0_f32)
           verify_inputs = [gpu_token] + proposal_ids[0, proposal_ids.size - 1]
@@ -1025,6 +1103,7 @@ begin
           end
           mixed_stack.copy_decode_state_to!(verify_stack, include_kv: true)
           verify_stack.update_decode_position(greedy_loop_decode_base_pos + generated)
+          verify_stack.active_tokens = proposal_ids.size
           verify_stack.upload_first_sequence_input(verify_xs)
           t_batched = Time.instant
           verify_stack.run_sequence(profile_phases: false, debug_readback: false,
@@ -1089,7 +1168,7 @@ begin
             mixed_stack.update_decode_position(pos)
             greedy_position_ms += (Time.instant - t_position).total_milliseconds
             t_embedding = Time.instant
-            mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+            upload_active_embeddings(mixed_stack, token_embd, [gpu_token], tokens, hidden)
             greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
             t_exact = Time.instant
             mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback,
@@ -1138,7 +1217,7 @@ begin
         greedy_position_ms += (Time.instant - t_position).total_milliseconds
 
         t_embedding = Time.instant
-        mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+        upload_active_embeddings(mixed_stack, token_embd, [gpu_token], tokens, hidden)
         greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
 
         snapshot = mixed_stack.snapshot_decode_state(include_kv: greedy_loop_probe_restore_kv)
@@ -1218,7 +1297,7 @@ begin
 
           t_embedding = Time.instant
           unless greedy_loop_gpu_embedding && i > 0
-            mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+            upload_active_embeddings(mixed_stack, token_embd, [gpu_token], tokens, hidden)
           end
           greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
 
@@ -1506,6 +1585,12 @@ begin
       lines << "chunk_probe_batched_verify_last_reject_commits=#{chunk_batched_verify_last_reject_commits}"
       lines << "chunk_probe_batched_verify_ms=#{chunk_batched_verify_ms.round(3)}"
       lines << "chunk_probe_batched_verify_ms_per_chunk=#{(chunk_batched_verify_ms / Math.max(chunk_batched_verify_chunks, 1)).round(3)}"
+      lines << "chunk_probe_active_verify=#{greedy_loop_probe_chunk_active_verify}"
+      lines << "chunk_probe_active_verify_chunks=#{chunk_active_verify_chunks}"
+      lines << "chunk_probe_active_verify_accepts=#{chunk_active_verify_accepts}"
+      lines << "chunk_probe_active_verify_rejects=#{chunk_active_verify_rejects}"
+      lines << "chunk_probe_active_verify_ms=#{chunk_active_verify_ms.round(3)}"
+      lines << "chunk_probe_active_verify_ms_per_chunk=#{(chunk_active_verify_ms / Math.max(chunk_active_verify_chunks, 1)).round(3)}"
     end
   elsif perf_only
     lines << "perf_only=true"
@@ -1761,6 +1846,7 @@ begin
   puts "greedy_loop_probe_chunk_margin=#{greedy_loop_probe_chunk_margin}"
   puts "greedy_loop_probe_chunk_batched_verify=#{greedy_loop_probe_chunk_batched_verify}"
   puts "greedy_loop_probe_chunk_fast_verify_top1=#{greedy_loop_probe_chunk_fast_verify_top1}"
+  puts "greedy_loop_probe_chunk_active_verify=#{greedy_loop_probe_chunk_active_verify}"
   puts "greedy_loop_probe_ngram=#{greedy_loop_probe_ngram}"
   puts "greedy_loop_probe_ngram_min=#{greedy_loop_probe_ngram_min}"
   puts "greedy_loop_probe_ngram_max=#{greedy_loop_probe_ngram_max}"
