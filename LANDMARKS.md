@@ -13640,3 +13640,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next frame is risk-gated artifact layout: raw recurrent state for early/high-risk cursors, compressed recurrent state for proven stable cursors, and proposal-only use when exact trust is not proven.
 - maieutic: Compression speed is not the bottleneck anymore; trust classification is. The question becomes "when may this artifact be trusted?", not "how fast can we decode it?"
 - adversary: Do not publish a blanket compressed-cache claim. Current evidence supports a fail-closed adaptive cache policy, not universal lossy recurrent restore.
+
+**decision_update_307:** Added a cursor-age adaptive recurrent artifact restore policy. `--known-replay-trusted-artifact-codec-min-start=N` keeps early cursors on exact raw host recurrent restore and uses GPU block-INT8 recurrent decode only at cursor `N` and later. The probe now reports the selected `known_replay_trusted_artifact_codec_restore_policy` so raw fallbacks cannot silently mask codec failures.
+
+**evidence_update_307:**
+- claim: "A simple cursor-age gate converts the early-cursor block256 refutation into a fail-closed adaptive restore policy on the tested CUDA matrix."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B with `min_start=9`, block256, four generated 65-token histories (`seed=0,198,760,1919`), six cursors each (`1/16`, `9/16`, `17/16`, `25/16`, `33/8`, `41/8`), and 16 free-run steps passed `24/24` gates. The summary was `raw=4 gpu=20 fail=0`: all four `start=1` cases selected `raw_host_before_min_start`; all twenty later cursors selected `gpu_block_i8` and reported `free_run_parity_count=16`, `free_run_parity_ok=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: cursor-age threshold, prompt/history suite, codec implementation, restore policy selection, model weights, or sampling mode changes
+- claim: "When the adaptive policy selects compressed restore, the restore-time win remains in the same regime."
+  source: the same `min_start=9` matrix reported raw host restore around `11.764-13.349ms` and GPU block-INT8 restore around `2.947-3.805ms` for the twenty compressed cases.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA driver/device, KV live-length policy, codec kernel, artifact layout, or host/device transfer path changes
+
+**quadrumvirate_update_307:**
+- cassandra: Cursor age is a crude but useful first risk feature; it caught the known early failure while preserving the compressed restore speed path later.
+- daedalus: The product frame is now adaptive artifact layout, not universal compression: raw for early/high-risk state, compressed GPU decode for stable cache regions.
+- maieutic: Passing this matrix does not prove `min_start=9` is globally optimal. It proves the harness can express and validate fail-closed policy boundaries.
+- adversary: The policy must keep reporting selected route. If future code hides raw fallback under a generic `codec ok`, the evidence becomes misleading.
