@@ -317,6 +317,9 @@ greedy_loop_probe_ngram_min_candidates = 0
 greedy_loop_probe_ngram_risk_gate = true
 greedy_loop_probe_ngram_risk_min_size = 16
 greedy_loop_probe_ngram_history = [] of Int32
+greedy_loop_probe_ngram_replay_start = -1
+greedy_loop_probe_ngram_cursor_only = false
+greedy_loop_prefix_tokens = [] of Int32
 runtime_raw_q8 = false
 runtime_skip_recurrent_ffn = false
 runtime_skip_recurrent_ffn_layers = nil.as(Array(Int32)?)
@@ -373,6 +376,9 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-ngram-no-risk-gate", "Disable n-gram risky-shape fallback gate") { greedy_loop_probe_ngram_risk_gate = false }
   p.on("--greedy-loop-probe-ngram-risk-min-size N", "Minimum candidate size for the risky-shape gate, default 16") { |v| greedy_loop_probe_ngram_risk_min_size = v.to_i }
   p.on("--greedy-loop-probe-ngram-history LIST", "Comma-separated proposal history token IDs; default is --seed-token only") { |v| greedy_loop_probe_ngram_history = parse_i32_list(v) }
+  p.on("--greedy-loop-probe-ngram-replay-start N", "Start n-gram proposals at an aligned history cursor instead of suffix search; use for prompt/session cache hits") { |v| greedy_loop_probe_ngram_replay_start = v.to_i }
+  p.on("--greedy-loop-probe-ngram-cursor-only", "Only propose from an active replay cursor; fallback instead of suffix-searching") { greedy_loop_probe_ngram_cursor_only = true }
+  p.on("--greedy-loop-prefix-tokens LIST", "Comma-separated prompt/prefix token IDs to prefill before timed greedy-loop generation") { |v| greedy_loop_prefix_tokens = parse_i32_list(v) }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--runtime-skip-recurrent-ffn", "Diagnostic proposal route: skip recurrent-layer FFNs and forward the post-attention residual") { runtime_skip_recurrent_ffn = true }
   p.on("--runtime-skip-recurrent-ffn-layers LIST", "Diagnostic proposal route: skip recurrent-layer FFNs only for comma-separated layer ids") { |v| runtime_skip_recurrent_ffn_layers = parse_layers(v) }
@@ -442,6 +448,15 @@ raise "--greedy-loop-probe-ngram-min must be positive" unless greedy_loop_probe_
 raise "--greedy-loop-probe-ngram-max must be >= min" unless greedy_loop_probe_ngram_max >= greedy_loop_probe_ngram_min
 raise "--greedy-loop-probe-ngram-min-candidates must be non-negative" unless greedy_loop_probe_ngram_min_candidates >= 0
 raise "--greedy-loop-probe-ngram-risk-min-size must be positive" unless greedy_loop_probe_ngram_risk_min_size > 0
+raise "--greedy-loop-probe-ngram-replay-start requires --greedy-loop-probe-ngram" if greedy_loop_probe_ngram_replay_start >= 0 && !greedy_loop_probe_ngram
+raise "--greedy-loop-probe-ngram-cursor-only requires --greedy-loop-probe-ngram" if greedy_loop_probe_ngram_cursor_only && !greedy_loop_probe_ngram
+raise "--greedy-loop-probe-ngram-replay-start must be >= -1" unless greedy_loop_probe_ngram_replay_start >= -1
+raise "--greedy-loop-prefix-tokens requires --greedy-loop-tokens" if !greedy_loop_prefix_tokens.empty? && greedy_loop_tokens == 0
+raise "--greedy-loop-prefix-tokens must contain at least one token when provided" if greedy_loop_prefix_tokens.empty? && ARGV.any? { |arg| arg.starts_with?("--greedy-loop-prefix-tokens") }
+raise "--greedy-loop-prefix-tokens is incompatible with --greedy-loop-graph" if !greedy_loop_prefix_tokens.empty? && greedy_loop_graph
+if !greedy_loop_prefix_tokens.empty? && !greedy_loop_probe_ngram_history.empty?
+  raise "--greedy-loop-probe-ngram-history must end with --greedy-loop-prefix-tokens last token" unless greedy_loop_probe_ngram_history.last == greedy_loop_prefix_tokens.last
+end
 raise "--runtime-skip-recurrent-ffn is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn && runtime_raw_q8
 raise "use either --runtime-skip-recurrent-ffn or --runtime-skip-recurrent-ffn-layers, not both" if runtime_skip_recurrent_ffn && runtime_skip_recurrent_ffn_layers
 raise "--runtime-skip-recurrent-ffn-layers is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn_layers && runtime_raw_q8
@@ -473,7 +488,8 @@ if greedy_loop_tokens > 0
   raise "--greedy-loop-tokens is incompatible with --steady-reps/--steady-graph-reps" if steady_reps > 0 || steady_graph_reps > 0
   raise "--greedy-loop-tokens is incompatible with --profile-phases" if profile_phases
   raise "--greedy-loop-tokens requires --tokens=1" unless tokens == 1
-  raise "max-seq must cover start-pos + greedy-loop-tokens" unless max_seq >= start_pos + greedy_loop_tokens
+  greedy_loop_input_positions = greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0)
+  raise "max-seq must cover start-pos + prefix + greedy-loop-tokens" unless max_seq >= start_pos + greedy_loop_input_positions
 end
 
 eps = 1.0e-6_f32
@@ -491,6 +507,7 @@ token_embd = load_quant_weight(gguf, "token_embd.weight")
 raise "seed-token #{seed_token} out of range" if seed_token < 0 || seed_token >= token_embd.out_dim
 raise "input-token #{input_token} out of range" if input_token >= token_embd.out_dim
 input_tokens.each { |tok| raise "input-tokens contains out-of-range token #{tok}" if tok < 0 || tok >= token_embd.out_dim }
+greedy_loop_prefix_tokens.each { |tok| raise "greedy-loop-prefix-tokens contains out-of-range token #{tok}" if tok < 0 || tok >= token_embd.out_dim }
 if greedy_loop_tokens > 0 && !greedy_loop_cpu_embedding && token_embd.type.q4_k?
   greedy_loop_gpu_embedding = true
 end
@@ -614,7 +631,7 @@ begin
   cuda_ctx = ML::CUDA::Context.create
   # Full-attention CUDA kernels index RoPE tables by absolute decode position,
   # so upload a resident table once and update only start_pos in token loops.
-  rope_table_tokens = start_pos + (greedy_loop_tokens > 0 ? greedy_loop_tokens : tokens)
+  rope_table_tokens = start_pos + (greedy_loop_tokens > 0 ? greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0) : tokens)
   cos_table, sin_table = rope_tables(rope_table_tokens, 0, hparams.rope_dim_count, hparams.rope_freq_base)
 
   layers.each_with_index do |layer, idx|
@@ -690,6 +707,7 @@ begin
   greedy_embedding_ms = 0.0
   greedy_body_ms = 0.0
   greedy_read_ms = 0.0
+  greedy_prefix_ms = 0.0
   greedy_logits_top1_ids = [] of Int32
   greedy_top2_ids = [] of Int32
   greedy_top1_values = [] of Float32
@@ -736,15 +754,40 @@ begin
       end
     end
 
+    greedy_loop_start_token = greedy_loop_prefix_tokens.empty? ? seed_token : greedy_loop_prefix_tokens.last
+    greedy_loop_decode_base_pos = start_pos + Math.max(greedy_loop_prefix_tokens.size - 1, 0)
+    greedy_loop_reset_on_first_generated = greedy_loop_prefix_tokens.size <= 1
+    if greedy_loop_prefix_tokens.size > 1
+      prefix_t0 = Time.instant
+      greedy_loop_prefix_tokens[0, greedy_loop_prefix_tokens.size - 1].each_with_index do |tok, i|
+        mixed_stack.update_decode_position(start_pos + i)
+        mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, tok))
+        mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+          reset_sequence: i == 0, sync_end: true, read_head_outputs: false, run_head: false)
+      end
+      greedy_prefix_ms = (Time.instant - prefix_t0).total_milliseconds
+    end
+
     if greedy_loop_probe_chunk_gamma > 0
       ngram_index = nil.as(ML::GGUF::NgramDraft::IndexedHistory?)
       ngram_replay_cursor = nil.as(Int32?)
       ngram_replay_limit = 0
-      gpu_token = seed_token
+      gpu_token = greedy_loop_start_token
       if greedy_loop_probe_ngram
-        initial_history = greedy_loop_probe_ngram_history.empty? ? [seed_token] : greedy_loop_probe_ngram_history
+        initial_history = if !greedy_loop_probe_ngram_history.empty?
+                            greedy_loop_probe_ngram_history
+                          elsif !greedy_loop_prefix_tokens.empty?
+                            greedy_loop_prefix_tokens
+                          else
+                            [greedy_loop_start_token]
+                          end
         ngram_index = ML::GGUF::NgramDraft::IndexedHistory.new(initial_history, greedy_loop_probe_ngram_max, greedy_loop_probe_ngram_min)
         ngram_replay_limit = initial_history.size
+        if greedy_loop_probe_ngram_replay_start >= 0
+          raise "--greedy-loop-probe-ngram-replay-start out of history range" unless greedy_loop_probe_ngram_replay_start < ngram_replay_limit
+
+          ngram_replay_cursor = greedy_loop_probe_ngram_replay_start
+        end
         gpu_token = initial_history.last
       end
       generated = 0
@@ -771,7 +814,7 @@ begin
               ngram_match_len_for_gate = greedy_loop_probe_ngram_max
             end
           end
-          if proposal_ids.empty?
+          if proposal_ids.empty? && !greedy_loop_probe_ngram_cursor_only
             span = index.candidate_span(chunk_limit,
               recursive: greedy_loop_probe_ngram_recursive,
               min_candidates: greedy_loop_probe_ngram_min_candidates)
@@ -802,7 +845,7 @@ begin
             mixed_stack.set_recurrent_ffn_raw_q8(true)
             proposal_token = gpu_token
             chunk_limit.times do |j|
-              pos = start_pos + generated + j
+              pos = greedy_loop_decode_base_pos + generated + j
               t_position = Time.instant
               mixed_stack.update_decode_position(pos)
               greedy_position_ms += (Time.instant - t_position).total_milliseconds
@@ -813,7 +856,7 @@ begin
 
               t_raw = Time.instant
               mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
-                reset_sequence: generated == 0 && j == 0, sync_end: true, read_head_outputs: true)
+                reset_sequence: greedy_loop_reset_on_first_generated && generated == 0 && j == 0, sync_end: true, read_head_outputs: true)
               chunk_raw_ms += (Time.instant - t_raw).total_milliseconds
               raw_best_id = output_head.top1_ids[0]
               raw_second_id = output_head.top2_ids_gpu[0]
@@ -840,7 +883,7 @@ begin
 
         if fallback_due_margin || proposal_ids.empty?
           chunk_margin_fallbacks += 1
-          pos = start_pos + generated
+          pos = greedy_loop_decode_base_pos + generated
           t_position = Time.instant
           mixed_stack.update_decode_position(pos)
           greedy_position_ms += (Time.instant - t_position).total_milliseconds
@@ -849,7 +892,7 @@ begin
           greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
           t_exact = Time.instant
           mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback,
-            reset_sequence: generated == 0, sync_end: true, read_head_outputs: true)
+            reset_sequence: greedy_loop_reset_on_first_generated && generated == 0, sync_end: true, read_head_outputs: true)
           chunk_verify_ms += (Time.instant - t_exact).total_milliseconds
           exact_id = output_head.top1_ids[0]
           chunk_exact_ids << exact_id
@@ -874,7 +917,7 @@ begin
             hidden.times { |h| verify_xs[row * hidden + h] = emb[h] }
           end
           mixed_stack.copy_decode_state_to!(verify_stack, include_kv: true)
-          verify_stack.update_decode_position(start_pos + generated)
+          verify_stack.update_decode_position(greedy_loop_decode_base_pos + generated)
           verify_stack.upload_first_sequence_input(verify_xs)
           t_batched = Time.instant
           verify_stack.run_sequence(profile_phases: false, debug_readback: false,
@@ -934,7 +977,7 @@ begin
 
         unless used_batched_verify
           proposal_ids.each_with_index do |proposal_id, j|
-            pos = start_pos + generated
+            pos = greedy_loop_decode_base_pos + generated
             t_position = Time.instant
             mixed_stack.update_decode_position(pos)
             greedy_position_ms += (Time.instant - t_position).total_milliseconds
@@ -943,7 +986,7 @@ begin
             greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
             t_exact = Time.instant
             mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback,
-              reset_sequence: generated == 0 && j == 0 && chunk_start == 0, sync_end: true, read_head_outputs: true)
+              reset_sequence: greedy_loop_reset_on_first_generated && generated == 0 && j == 0 && chunk_start == 0, sync_end: true, read_head_outputs: true)
             chunk_verify_ms += (Time.instant - t_exact).total_milliseconds
             exact_id = output_head.top1_ids[0]
             chunk_exact_ids << exact_id
@@ -974,10 +1017,10 @@ begin
       gpu_ms = (Time.instant - gpu_t0).total_milliseconds
       measured_tokens = greedy_loop_tokens
     elsif greedy_loop_probe_restore
-      gpu_token = seed_token
+      gpu_token = greedy_loop_start_token
       gpu_t0 = Time.instant
       greedy_loop_tokens.times do |i|
-        pos = start_pos + i
+        pos = greedy_loop_decode_base_pos + i
         t_position = Time.instant
         mixed_stack.update_decode_position(pos)
         greedy_position_ms += (Time.instant - t_position).total_milliseconds
@@ -995,7 +1038,7 @@ begin
             mixed_stack.set_recurrent_ffn_raw_q8(true)
           end
           t_raw = Time.instant
-          mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: i == 0,
+          mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: greedy_loop_reset_on_first_generated && i == 0,
             sync_end: true, read_head_outputs: true)
           probe_raw_ms += (Time.instant - t_raw).total_milliseconds
           raw_best_id, _, raw_second_id, _, raw_margin = top2_from_logits(output_head.logits_gpu_all, 0, head_weights.vocab)
@@ -1012,7 +1055,7 @@ begin
 
         mixed_stack.set_recurrent_ffn_raw_q8(false) unless greedy_loop_probe_pca_updown
         t_exact = Time.instant
-        mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: i == 0,
+        mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: greedy_loop_reset_on_first_generated && i == 0,
           sync_end: true, read_head_outputs: true)
         probe_exact_ms += (Time.instant - t_exact).total_milliseconds
         gpu_token = output_head.top1_ids[0]
@@ -1050,11 +1093,11 @@ begin
           mixed_stack.first_sequence_input_device_ptr, greedy_loop_tokens)
       end
 
-      gpu_token = seed_token
+      gpu_token = greedy_loop_start_token
       gpu_t0 = Time.instant
       begin
         greedy_loop_tokens.times do |i|
-          pos = start_pos + i
+          pos = greedy_loop_decode_base_pos + i
           t_position = Time.instant
           if !greedy_loop_graph || i <= 1
             mixed_stack.update_decode_position(pos)
@@ -1072,7 +1115,7 @@ begin
             graph_exec.not_nil!.launch(graph_stream.not_nil!)
             graph_stream.not_nil!.synchronize unless greedy_loop_gpu_embedding
           else
-            mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: i == 0,
+            mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: greedy_loop_reset_on_first_generated && i == 0,
               sync_end: !greedy_loop_gpu_embedding, read_head_outputs: false)
           end
           greedy_body_ms += (Time.instant - t_body).total_milliseconds
@@ -1239,6 +1282,8 @@ begin
         lines << "chunk_probe_ngram_recursive=#{greedy_loop_probe_ngram_recursive}"
         lines << "chunk_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
         lines << "chunk_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
+        lines << "chunk_probe_ngram_replay_start=#{greedy_loop_probe_ngram_replay_start}"
+        lines << "chunk_probe_ngram_cursor_only=#{greedy_loop_probe_ngram_cursor_only}"
         lines << "chunk_probe_ngram_history_tokens=#{(greedy_loop_probe_ngram_history.empty? ? 1 : greedy_loop_probe_ngram_history.size)}"
         lines << "chunk_probe_ngram_match_lens=#{chunk_ngram_match_lens.join(",")}"
         lines << "chunk_probe_ngram_empty_fallbacks=#{chunk_ngram_empty_fallbacks}"
@@ -1386,6 +1431,9 @@ begin
   puts "greedy_loop_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
   puts "greedy_loop_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
   puts "greedy_loop_probe_ngram_history=#{greedy_loop_probe_ngram_history.join(",")}"
+  puts "greedy_loop_probe_ngram_replay_start=#{greedy_loop_probe_ngram_replay_start}"
+  puts "greedy_loop_probe_ngram_cursor_only=#{greedy_loop_probe_ngram_cursor_only}"
+  puts "greedy_loop_prefix_tokens=#{greedy_loop_prefix_tokens.join(",")}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"
@@ -1431,6 +1479,8 @@ begin
   puts "cpu_ms_per_token=#{(cpu_ms / (greedy_loop_tokens > 0 ? greedy_loop_tokens : tokens)).round(3)}"
   if greedy_loop_tokens > 0
     denom = greedy_loop_tokens.to_f64
+    puts "greedy_prefix_tokens=#{greedy_loop_prefix_tokens.size}"
+    puts "greedy_prefix_ms=#{greedy_prefix_ms.round(3)}"
     puts "greedy_position_ms=#{greedy_position_ms.round(3)}"
     puts "greedy_position_ms_per_token=#{(greedy_position_ms / denom).round(3)}"
     puts "greedy_embedding_ms=#{greedy_embedding_ms.round(3)}"

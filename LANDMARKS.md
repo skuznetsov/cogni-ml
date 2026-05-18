@@ -12966,3 +12966,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful pivot is controller/data-flow, not another kernel: turn real generation into already-optimized WBA verifier chunks by supplying cheap exact-ish proposals from history/cache.
 - maieutic: The oracle-history replay is a lower-bound potential, not a claim that arbitrary prompts speed up. It proves the verifier path is fast enough if the controller can source accepted chunks.
 - adversary: Keep conservative min-length/min-candidate gates for default experiments. One bad gamma4 proposal on seed0 non-repeat added about `45ms` verifier overhead, so a production route needs prompt/prefix confidence and source-aligned cursoring before enabling aggressive n-gram.
+
+**decision_update_270:** Added exact CUDA prefix prefill for greedy-loop probes and split n-gram replay into two controller modes: ambiguous suffix-search and aligned cursor replay. `--greedy-loop-prefix-tokens` preloads prompt/session tokens before the timed generation loop and reports `greedy_prefix_ms` separately. `--greedy-loop-probe-ngram-replay-start N` plus `--greedy-loop-probe-ngram-cursor-only` models a prompt/session-cache hit: proposals are read from a known history cursor and suffix-search is disabled when no cursor exists.
+
+**evidence_update_270:**
+- claim: "CUDA prefix prefill preserves the exact continuation boundary."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B seed0 gen24 printed `198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387,494,279,4400,328,760,27647,314,29539`; rerunning with `--greedy-loop-prefix-tokens 0,198,2,220,16,13,27416,198,760 --greedy-loop-tokens 16` printed exactly the expected suffix `2614,369,264,11782,314,279,1328,3387,494,279,4400,328,760,27647,314,29539`. Prefix preload reported `greedy_prefix_ms=175.367` and timed generation reported `23.122 ms/tok`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA state reset/copy semantics, full-attention KV position handling, prefix-cache integration, or greedy-loop timing changes
+- claim: "Naive repeated-context suffix n-gram is not safe enough; cursor-only fallback prevents that overhead."
+  source: remote repeated-context all-layer test with prefix `0,<seed0 exact64>,0` and unrestricted n-gram gamma8 had only `7.81%` token acceptance and regressed to `46.096 ms/tok`; conservative gamma8 still paid one bad verifier chunk and measured `26.615 ms/tok`. Cursor-only with no replay cursor made zero proposals (`raw_tokens=0`, `ngram_cursor_hits=0`, `margin_fallbacks=8`) and stayed near exact fallback at `23.654 ms/tok` for gen8.
+  verified_at: 2026-05-18
+  decay_trigger: n-gram risk gate, prompt-cache confidence model, cursor replay policy, or benchmark prompt distribution changes
+- claim: "Aligned cursor replay works as a correctness mechanism even when duplicate verifier stacks are unavailable."
+  source: remote all-layer gen8 with `--greedy-loop-prefix-tokens 0`, history `0,<seed0 exact24>,0`, `--greedy-loop-probe-ngram-replay-start 1`, and `--greedy-loop-probe-ngram-cursor-only` accepted `8/8` tokens through sequential exact verification (`full_accepts=2`, `ngram_cursor_hits=2`, `token_accept_rate=100%`) and printed the expected `198,2,220,16,13,27416,198,760`. A duplicate-stack gamma8/gamma16 all-layer speed rerun was blocked by the current host's ghost CUDA memory (`9648 MiB` used, no listed process).
+  verified_at: 2026-05-18
+  decay_trigger: CUDA memory state, duplicate verifier allocation strategy, cursor replay implementation, or prompt-cache state restoration changes
+
+**quadrumvirate_update_270:**
+- cassandra: Prefix state handling was the likely correctness trap; the slice test across base gen24 and prefix gen16 closed it.
+- daedalus: The important shift is from "n-gram by text repetition" to "cache-aligned replay cursor." Repetition alone changes model state and often rejects; a cache hit can know the source cursor and avoid suffix-search guesses.
+- maieutic: Timed generation excludes prefix preload by design. This models prompt-cache/session-cache reuse; for cold prompts, prefix cost must be charged separately.
+- adversary: Do not enable suffix-search as a default speed path. Cursor-only should be the production-safe mode until router evidence shows which prompt classes can tolerate speculative suffix-search.
