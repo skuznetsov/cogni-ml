@@ -335,6 +335,7 @@ known_replay_candidates = [] of Int32
 known_replay_history = [] of Int32
 known_replay_start = -1
 known_replay_tokens = 0
+known_replay_recover_on_reject = false
 gpu_final_dump_path : String? = nil
 
 OptionParser.parse do |p|
@@ -397,6 +398,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-history LIST", "Derive --input-tokens and --known-replay-candidates from a cached token history") { |v| known_replay_history = parse_i32_list(v); perf_only = true }
   p.on("--known-replay-start N", "Candidate start index inside --known-replay-history; inputs start at N-1") { |v| known_replay_start = v.to_i }
   p.on("--known-replay-tokens N", "Number of replay candidates to verify from --known-replay-history") { |v| known_replay_tokens = v.to_i }
+  p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--gpu-final-dump PATH", "Diagnostic: dump final hidden rows as raw little-endian f32 after a GPU run; works with --perf-only") { |v| gpu_final_dump_path = v }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -501,6 +503,10 @@ raise "--known-replay-candidates is incompatible with --greedy-loop-tokens" if !
 raise "--known-replay-candidates size must match --input-tokens size" if !known_replay_candidates.empty? && known_replay_candidates.size != input_tokens.size
 raise "--known-replay-start requires --known-replay-history" if known_replay_start >= 0 && known_replay_history.empty?
 raise "--known-replay-tokens requires --known-replay-history" if known_replay_tokens > 0 && known_replay_history.empty?
+raise "--known-replay-recover-on-reject requires --known-replay-candidates or --known-replay-history" if known_replay_recover_on_reject && known_replay_candidates.empty?
+if known_replay_recover_on_reject && (runtime_raw_q8 || runtime_skip_recurrent_ffn || runtime_pca_updown_zero || runtime_pca_updown_adapters_path)
+  raise "--known-replay-recover-on-reject is only supported for the exact default runner route"
+end
 raise "--gpu-logits-only is incompatible with --greedy-loop-tokens" if gpu_logits_only && greedy_loop_tokens > 0
 raise "--gpu-final-dump is incompatible with --greedy-loop-tokens" if gpu_final_dump_path && greedy_loop_tokens > 0
 raise "--gpu-final-dump is incompatible with --steady-reps/--steady-graph-reps" if gpu_final_dump_path && (steady_reps > 0 || steady_graph_reps > 0)
@@ -653,6 +659,7 @@ runners = [] of ML::CUDA::QwenMixedStackRunner::LayerRunner
 head = nil.as(ML::CUDA::QwenOutputHeadRunner?)
 stack = nil.as(ML::CUDA::QwenMixedStackRunner?)
 verifier_stack = nil.as(ML::CUDA::QwenMixedStackRunner?)
+known_replay_recovery_stack = nil.as(ML::CUDA::QwenMixedStackRunner?)
 final_gpu_all = Array(Float32).new(tokens * hidden, 0.0_f32)
 
 begin
@@ -1353,11 +1360,66 @@ begin
     commit_tokens = full_accept ? accepted : 0
     discarded_accept_prefix = full_accept ? 0 : accepted
     reject_recovery_required = !full_accept && accepted > 0
+    recovery_rows = 0
+    recovery_build_ms = 0.0
+    recovery_weight_upload_ms = 0.0
+    recovery_run_ms = 0.0
+    recovery_top1_ids = [] of Int32
+    recovery_prefix_match = false
+    recovery_released_main_stack = false
+    if known_replay_recover_on_reject && !full_accept
+      recovery_rows = accepted + 1
+      recovery_inputs = input_tokens[0, recovery_rows]
+      recovery_xs = Array(Float32).new(recovery_rows * hidden, 0.0_f32)
+      recovery_inputs.each_with_index do |tok, row|
+        emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, tok)
+        hidden.times { |h| recovery_xs[row * hidden + h] = emb[h] }
+      end
+
+      # This diagnostic measures the short-stack recovery lower bound. Keeping
+      # the full-span stack resident can OOM on small/fragmented CUDA hosts.
+      mixed_stack.close
+      recovery_released_main_stack = true
+
+      t_recovery_build = Time.instant
+      recovery_runners = [] of ML::CUDA::QwenMixedStackRunner::LayerRunner
+      layers.each_with_index do |layer, idx|
+        layer_input = idx == 0 ? recovery_xs : Array(Float32).new(recovery_rows * hidden, 0.0_f32)
+        if hparams.full_attention?(layer)
+          recovery_runners << ML::CUDA::QwenFullAttnLayerRunner.from_weights(full_weights[layer], recovery_rows, max_seq, start_pos,
+            hparams.n_head, hparams.n_head_kv, hparams.head_dim, hparams.rope_dim_count, hparams.rms_eps,
+            layer_input, cos_table, sin_table)
+        else
+          recovery_runners << ML::CUDA::QwenRecurrentLayerRunner.from_weights(recurrent_weights[layer], recovery_rows, layer_input,
+            conv_state_inits[layer], ssm_state_inits[layer])
+        end
+      end
+      recovery_head = ML::CUDA::QwenOutputHeadRunner.from_weights(head_weights, recovery_rows,
+        Array(Float32).new(recovery_rows * hidden, 0.0_f32), hparams.rms_eps, read_logits: false, read_top2: false)
+      known_replay_recovery_stack = ML::CUDA::QwenMixedStackRunner.new(layers, recovery_runners, recovery_head, recovery_rows, hidden, recovery_xs)
+      recovery_build_ms = (Time.instant - t_recovery_build).total_milliseconds
+      recovery_weight_upload_ms = known_replay_recovery_stack.not_nil!.upload_weights(profile: false)
+      t_recovery_run = Time.instant
+      known_replay_recovery_stack.not_nil!.run_sequence(profile_phases: false, debug_readback: false,
+        reset_sequence: true, sync_end: true, read_head_outputs: true)
+      recovery_run_ms = (Time.instant - t_recovery_run).total_milliseconds
+      recovery_top1_ids = known_replay_recovery_stack.not_nil!.head.top1_ids
+      recovery_prefix_match = recovery_top1_ids == gpu_top1_ids[0, recovery_rows]
+    end
     lines << "known_replay_candidates=#{known_replay_candidates.join(",")}"
     lines << "known_replay_policy=full_accept_only"
     lines << "known_replay_commit_tokens=#{commit_tokens}"
     lines << "known_replay_discarded_accept_prefix=#{discarded_accept_prefix}"
     lines << "known_replay_reject_recovery_required=#{reject_recovery_required}"
+    lines << "known_replay_recover_on_reject=#{known_replay_recover_on_reject}"
+    lines << "known_replay_recovery_rows=#{recovery_rows}" if known_replay_recover_on_reject
+    lines << "known_replay_recovery_build_ms=#{recovery_build_ms.round(3)}" if known_replay_recover_on_reject
+    lines << "known_replay_recovery_weight_upload_ms=#{recovery_weight_upload_ms.round(3)}" if known_replay_recover_on_reject
+    lines << "known_replay_recovery_run_ms=#{recovery_run_ms.round(3)}" if known_replay_recover_on_reject
+    lines << "known_replay_recovery_run_ms_per_token=#{(recovery_run_ms / Math.max(recovery_rows, 1)).round(3)}" if known_replay_recover_on_reject
+    lines << "known_replay_recovery_top1=#{recovery_top1_ids.join(",")}" if known_replay_recover_on_reject
+    lines << "known_replay_recovery_prefix_match=#{recovery_prefix_match}" if known_replay_recover_on_reject
+    lines << "known_replay_recovery_released_main_stack=#{recovery_released_main_stack}" if known_replay_recover_on_reject
     lines << "known_replay_accepted=#{accepted}"
     lines << "known_replay_total=#{known_replay_candidates.size}"
     lines << "known_replay_reject_index=#{reject_index}"
@@ -1500,6 +1562,7 @@ begin
   puts "known_replay_history_tokens=#{known_replay_history.size}"
   puts "known_replay_start_arg=#{known_replay_start}"
   puts "known_replay_tokens_arg=#{known_replay_tokens}"
+  puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "read_logits=#{read_logits}"
   puts "read_top2=#{read_top2}"
   puts "gpu_logits_only=#{gpu_logits_only}"
@@ -1557,6 +1620,7 @@ begin
   lines.each { |line| puts line }
   puts "ok=#{ok}"
 ensure
+  known_replay_recovery_stack.try(&.close)
   stack.try(&.close)
   cuda_ctx.try(&.close)
   gguf.close

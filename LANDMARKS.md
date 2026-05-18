@@ -13042,3 +13042,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The correct frame is commit policy first, recovery primitive second. Full-accept-only replay preserves the verified speed ceiling without corrupting canonical state on partial reject.
 - maieutic: The accepted prefix in a rejected band is not useless; it is a future optimization target. It is not safe to commit until full-attention KV and head routes can be bounded to active rows.
 - adversary: The explicit `discarded_accept_prefix` metric prevents verification theater by showing exactly how much potential speed is left on the table when partial recovery is unavailable.
+
+**decision_update_274:** Added an opt-in CUDA known-replay short-stack recovery probe and refuted dynamic construction as the production partial-reject path. `--known-replay-recover-on-reject` builds a fresh verifier stack for `accepted + 1` rows after a reject, runs it, and reports recovery build/upload/run timings plus prefix-top1 agreement. The probe is useful because it verifies the row boundary for canonical recovery, but it also shows that building/uploading a stack on reject is too expensive and memory-fragile.
+
+**evidence_update_274:**
+- claim: "Short-stack recovery computes the correct canonical prefix boundary after a known-replay reject."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_known_recovery_cuda crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen`, `crystal spec spec/ngram_draft_spec.cr`, and `git diff --check -- bin/cuda_mixed_stack_probe.cr` passed. Remote RTX 5060 Ti negative derived replay with `--known-replay-recover-on-reject` reported `known_replay_accepted=2`, `known_replay_reject_index=2`, `known_replay_recovery_rows=3`, `known_replay_recovery_top1=198,2,220`, and `known_replay_recovery_prefix_match=true`.
+  verified_at: 2026-05-18
+  decay_trigger: known-replay recovery slicing, output-head top1 semantics, CUDA runner construction, or cache-aligned replay controller changes
+- claim: "Dynamic short-stack construction is not the production speed path for partial rejects."
+  source: remote RTX 5060 Ti first recovery attempt OOMed with `cuMemAlloc failed with CUDA error 2` while the original known-span stack was resident. After the diagnostic explicitly released the main stack, the recovery lower bound still paid `known_replay_recovery_build_ms=130.516`, `known_replay_recovery_weight_upload_ms=817.542`, and `known_replay_recovery_run_ms=74.162` for 3 rows (`24.721 ms/token`), while the rejected 8-row known replay itself was `98.88ms`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA memory state, prebuilt stack pooling, active-row runner support, weight sharing, or GPU host allocation strategy
+
+**quadrumvirate_update_274:**
+- cassandra: The expected failure was allocation cost, and the observed failure was stronger: simultaneous dynamic recovery stack allocation can OOM under current host memory conditions.
+- daedalus: The next viable pivot is not more dynamic stack construction. Either add active-row/prefix support to the WBA runners, or prebuild a small recovery stack pool with shared weights if memory allows.
+- maieutic: The row math is sound: for first reject at row `k`, recovery must run rows `0..k`, because row `k` consumes the last accepted proposal as input and emits the corrected token.
+- adversary: Do not count `discarded_accept_prefix` as recoverable speed until one of the two viable recovery mechanisms passes a same-host memory and wall-time gate.
