@@ -13554,3 +13554,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next pivot should be free-run or exact-verified acceptance, not more source-aligned parity on the same prompt. If that passes, move the codec off scalar CPU.
 - maieutic: Source-aligned parity answers "does decoded state behave like exact state under the same known inputs?" It does not answer "will decoded state generate the same future inputs by itself?"
 - adversary: Keep the fail-closed distinction: until free-run/acceptance evidence exists, compressed recurrent state is a promising artifact codec candidate, not a broadly trusted exact restore format.
+
+**decision_update_302:** Added a free-run greedy parity gate for decoded recurrent block-INT8 artifact restores. `--known-replay-trusted-artifact-codec-free-run-steps=N` restores the exact host artifact state, runs N self-fed greedy steps, restores the decoded block-INT8 recurrent snapshot, runs N self-fed greedy steps from the same initial token, and reports exact/decoded free-run top1 sequences plus parity counts.
+
+**evidence_update_302:**
+- claim: "Decoded recurrent block-INT8 state preserves free-run greedy parity on the tested CUDA cache-artifact cursors."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start33/gen8 live-KV artifact with block256 printed `codec_ratio=0.2539`, `rel_rmse=0.012862`, `free_run_initial_input=16`, exact free-run top1 `13,16,33655,198,79214,2222,369,799`, decoded free-run top1 `13,16,33655,198,79214,2222,369,799`, `free_run_parity_count=8`, `free_run_parity_ok=true`, and `ok=true`. Start9/gen24 with block4096 printed `codec_ratio=0.2502`, `rel_rmse=0.019798`, `free_run_initial_input=2832`, exact/decoded free-run top1 `13,20817,8809,13,198,550,220,16,13,16,33655,198,79214,2222,369,799`, `free_run_parity_count=16`, `free_run_parity_ok=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: recurrent codec implementation, free-run harness, greedy feedback path, restore semantics, model/context distribution, or prompt-suite parity results change
+
+**quadrumvirate_update_302:**
+- cassandra: The branch has crossed a useful threshold: it survived both source-aligned and self-fed dynamics on one history. The next likely failure mode is prompt/cursor distribution, not this specific continuation.
+- daedalus: Stop proving the same history harder. Either widen the prompt/cursor suite or move the codec path off scalar CPU so the byte win can become a runtime win.
+- maieutic: Free-run parity still starts from a validated artifact state and one initial input token. It does not prove arbitrary compressed cold state, sampling parity, or cross-prompt stability.
+- adversary: Keep fail-closed semantics. Until a suite passes, block-INT8 recurrent restore is a promising trusted-artifact codec candidate for validated cache hits, not a universal exact state format.

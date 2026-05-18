@@ -363,10 +363,13 @@ Ti host, block sizes `64/256/1024/4096` preserved the same next top1 on
 start9/gen24, and block `256/4096` also preserved the same next top1 on a later
 start33/gen8 cursor. The multi-step source-aligned gate is stronger: block4096
 preserved `16/16` continuation top1 ids on start9/gen24, and block256/block4096
-preserved `8/8` continuation top1 ids on start33/gen8. This is still not a
-production codec: the current scalar CPU codec is too slow for the critical
-path, and source-aligned parity is not the same as proving arbitrary free-run
-greedy stability.
+preserved `8/8` continuation top1 ids on start33/gen8. The free-run greedy gate
+now starts both exact-restored and decoded-INT8-restored states from the same
+token and feeds back each path's own generated top1; block256 preserved `8/8`
+free-run ids on start33/gen8, and block4096 preserved `16/16` free-run ids on
+start9/gen24. This is still not a production codec: the current scalar CPU codec
+is too slow for the critical path, and these gates cover one prompt/history,
+not the full prompt distribution.
 
 Build the Metal bridge once:
 

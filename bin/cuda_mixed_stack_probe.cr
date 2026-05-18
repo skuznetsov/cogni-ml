@@ -547,6 +547,7 @@ known_replay_trusted_artifact_codec_bench = false
 known_replay_trusted_artifact_codec_block = 256
 known_replay_trusted_artifact_codec_restore_check = false
 known_replay_trusted_artifact_codec_restore_steps = 1
+known_replay_trusted_artifact_codec_free_run_steps = 0
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -632,6 +633,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-trusted-artifact-codec-block N", "Block size for recurrent block-INT8 codec bench, default 256") { |v| known_replay_trusted_artifact_codec_block = v.to_i }
   p.on("--known-replay-trusted-artifact-codec-restore-check", "With codec bench, restore decoded block-INT8 recurrent state and compare one continuation top1 against exact restored state") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-restore-steps N", "Source-aligned continuation steps for --known-replay-trusted-artifact-codec-restore-check, default 1") { |v| known_replay_trusted_artifact_codec_restore_steps = v.to_i; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-codec-free-run-steps N", "Free-run greedy steps to compare exact restored state against decoded block-INT8 restored state") { |v| known_replay_trusted_artifact_codec_free_run_steps = v.to_i; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; perf_only = true }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -784,6 +786,7 @@ raise "--known-replay-trusted-artifact-restore is incompatible with --known-repl
 raise "--known-replay-trusted-artifact-codec-restore-check requires --known-replay-trusted-artifact-codec-bench" if known_replay_trusted_artifact_codec_restore_check && !known_replay_trusted_artifact_codec_bench
 raise "--known-replay-trusted-artifact-codec-block must be positive" unless known_replay_trusted_artifact_codec_block > 0
 raise "--known-replay-trusted-artifact-codec-restore-steps must be positive" unless known_replay_trusted_artifact_codec_restore_steps > 0
+raise "--known-replay-trusted-artifact-codec-free-run-steps must be non-negative" unless known_replay_trusted_artifact_codec_free_run_steps >= 0
 known_replay_active_schedule_run.each do |size|
   raise "--known-replay-active-schedule-run sizes must be positive" unless size > 0
 end
@@ -966,7 +969,7 @@ begin
                            Math.max(tokens, greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0))
                          elsif !known_replay_history.empty?
                            (known_replay_start - 1) + tokens +
-                             (known_replay_trusted_artifact_codec_restore_check ? known_replay_trusted_artifact_codec_restore_steps : 0)
+                             (known_replay_trusted_artifact_codec_restore_check ? Math.max(known_replay_trusted_artifact_codec_restore_steps, known_replay_trusted_artifact_codec_free_run_steps) : 0)
                          else
                            tokens
                          end
@@ -1091,6 +1094,13 @@ begin
   known_replay_trusted_artifact_codec_continuation_decoded_top1 = [] of Int32
   known_replay_trusted_artifact_codec_continuation_parity_count = 0
   known_replay_trusted_artifact_codec_continuation_source_count = 0
+  known_replay_trusted_artifact_codec_free_run_initial_input = -1
+  known_replay_trusted_artifact_codec_free_run_exact_top1 = [] of Int32
+  known_replay_trusted_artifact_codec_free_run_decoded_top1 = [] of Int32
+  known_replay_trusted_artifact_codec_free_run_parity_count = 0
+  known_replay_trusted_artifact_codec_free_run_parity_ok = false
+  known_replay_trusted_artifact_codec_free_run_exact_ms = 0.0
+  known_replay_trusted_artifact_codec_free_run_decoded_ms = 0.0
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -1822,6 +1832,41 @@ begin
           known_replay_trusted_artifact_codec_next_decoded_source_ok =
             known_replay_trusted_artifact_codec_next_expected >= 0 &&
               known_replay_trusted_artifact_codec_next_decoded_top1 == known_replay_trusted_artifact_codec_next_expected
+
+          if known_replay_trusted_artifact_codec_free_run_steps > 0
+            known_replay_trusted_artifact_codec_free_run_initial_input = known_replay_history[continuation_input_index]
+
+            mixed_stack.restore_decode_state(restore_snapshot)
+            free_run_input = known_replay_trusted_artifact_codec_free_run_initial_input
+            known_replay_trusted_artifact_codec_free_run_steps.times do |step|
+              continuation_position = replay_base_pos + input_tokens.size + step
+              exact_next = run_trusted_artifact_continuation(mixed_stack, token_embd,
+                free_run_input, hidden, tokens, continuation_position)
+              exact_id = exact_next[:top1]
+              known_replay_trusted_artifact_codec_free_run_exact_top1 << exact_id
+              known_replay_trusted_artifact_codec_free_run_exact_ms += exact_next[:ms]
+              free_run_input = exact_id
+            end
+
+            mixed_stack.restore_decode_state(decoded_snapshot)
+            free_run_input = known_replay_trusted_artifact_codec_free_run_initial_input
+            known_replay_trusted_artifact_codec_free_run_steps.times do |step|
+              continuation_position = replay_base_pos + input_tokens.size + step
+              decoded_next = run_trusted_artifact_continuation(mixed_stack, token_embd,
+                free_run_input, hidden, tokens, continuation_position)
+              decoded_id = decoded_next[:top1]
+              known_replay_trusted_artifact_codec_free_run_decoded_top1 << decoded_id
+              known_replay_trusted_artifact_codec_free_run_decoded_ms += decoded_next[:ms]
+              free_run_input = decoded_id
+            end
+
+            known_replay_trusted_artifact_codec_free_run_exact_top1.each_with_index do |exact_id, step|
+              decoded_id = known_replay_trusted_artifact_codec_free_run_decoded_top1[step]
+              known_replay_trusted_artifact_codec_free_run_parity_count += 1 if decoded_id == exact_id
+            end
+            known_replay_trusted_artifact_codec_free_run_parity_ok =
+              known_replay_trusted_artifact_codec_free_run_parity_count == known_replay_trusted_artifact_codec_free_run_steps
+          end
         end
       else
         artifact_snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
@@ -1994,6 +2039,7 @@ begin
   lines = [] of String
   ok = true
   ok &&= known_replay_trusted_artifact_codec_next_parity_ok if known_replay_trusted_artifact_codec_restore_check
+  ok &&= known_replay_trusted_artifact_codec_free_run_parity_ok if known_replay_trusted_artifact_codec_free_run_steps > 0
   if greedy_loop_tokens > 0
     if perf_only
       lines << "perf_only=true"
@@ -2277,6 +2323,14 @@ begin
       lines << "known_replay_trusted_artifact_codec_continuation_decoded_top1=#{known_replay_trusted_artifact_codec_continuation_decoded_top1.join(",")}"
       lines << "known_replay_trusted_artifact_codec_continuation_parity_count=#{known_replay_trusted_artifact_codec_continuation_parity_count}"
       lines << "known_replay_trusted_artifact_codec_continuation_source_count=#{known_replay_trusted_artifact_codec_continuation_source_count}"
+      lines << "known_replay_trusted_artifact_codec_free_run_steps=#{known_replay_trusted_artifact_codec_free_run_steps}"
+      lines << "known_replay_trusted_artifact_codec_free_run_initial_input=#{known_replay_trusted_artifact_codec_free_run_initial_input}"
+      lines << "known_replay_trusted_artifact_codec_free_run_exact_top1=#{known_replay_trusted_artifact_codec_free_run_exact_top1.join(",")}"
+      lines << "known_replay_trusted_artifact_codec_free_run_decoded_top1=#{known_replay_trusted_artifact_codec_free_run_decoded_top1.join(",")}"
+      lines << "known_replay_trusted_artifact_codec_free_run_parity_count=#{known_replay_trusted_artifact_codec_free_run_parity_count}"
+      lines << "known_replay_trusted_artifact_codec_free_run_parity_ok=#{known_replay_trusted_artifact_codec_free_run_parity_ok}"
+      lines << "known_replay_trusted_artifact_codec_free_run_exact_ms=#{known_replay_trusted_artifact_codec_free_run_exact_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_codec_free_run_decoded_ms=#{known_replay_trusted_artifact_codec_free_run_decoded_ms.round(3)}"
     end
     unless known_replay_history.empty?
       lines << "known_replay_history_tokens=#{known_replay_history.size}"
@@ -2435,6 +2489,7 @@ begin
   puts "known_replay_trusted_artifact_codec_block_arg=#{known_replay_trusted_artifact_codec_block}"
   puts "known_replay_trusted_artifact_codec_restore_check_arg=#{known_replay_trusted_artifact_codec_restore_check}"
   puts "known_replay_trusted_artifact_codec_restore_steps_arg=#{known_replay_trusted_artifact_codec_restore_steps}"
+  puts "known_replay_trusted_artifact_codec_free_run_steps_arg=#{known_replay_trusted_artifact_codec_free_run_steps}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"
