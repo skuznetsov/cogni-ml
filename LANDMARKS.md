@@ -13568,3 +13568,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Stop proving the same history harder. Either widen the prompt/cursor suite or move the codec path off scalar CPU so the byte win can become a runtime win.
 - maieutic: Free-run parity still starts from a validated artifact state and one initial input token. It does not prove arbitrary compressed cold state, sampling parity, or cross-prompt stability.
 - adversary: Keep fail-closed semantics. Until a suite passes, block-INT8 recurrent restore is a promising trusted-artifact codec candidate for validated cache hits, not a universal exact state format.
+
+**decision_update_303:** Ran a wider same-history free-run recurrent codec matrix and refuted block4096 as a trusted artifact restore format. The tested matrix used six Qwen3.5-9B cache cursors (`start/tokens`: `1/16`, `9/16`, `17/16`, `25/16`, `33/8`, `41/8`) with 16 self-fed free-run steps on the remote RTX 5060 Ti host.
+
+**evidence_update_303:**
+- claim: "Block256 and block1024 survived the six-cursor free-run parity matrix on this history."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B live-KV artifact runs with `--known-replay-trusted-artifact-codec-free-run-steps 16` showed block256 `free_run_parity_count=16` and `ok=true` for all six cursors. Block1024 also reported `free_run_parity_count=16`, `free_run_parity_ok=true`, and `ok=true` for all six cursors; its ratios were about `0.251` and rel-RMSE ranged roughly `0.015849-0.016789` on the reported runs.
+  verified_at: 2026-05-18
+  decay_trigger: recurrent codec implementation, prompt/cursor suite, model weights, free-run harness, or codec block-size policy changes
+- claim: "Block4096 is not safe as a trusted exact restore format on this history."
+  source: block4096 passed earlier cursors but failed later free-run gates: `start25/tokens16` decoded sequence diverged at step 16 (`...12511,279` vs exact `...12511,1004`) with `free_run_parity_count=15` and `ok=false`; `start33/tokens8` also got `15/16`; `start41/tokens8` drifted hard after step 6 with `free_run_parity_count=6` and `ok=false`.
+  verified_at: 2026-05-18
+  decay_trigger: block4096 codec changes, exact-verifier acceptance tests, prompt-suite expansion, or use as proposal-only route
+
+**quadrumvirate_update_303:**
+- cassandra: The failure pattern matches accumulated quantization error crossing a greedy decision boundary; larger blocks reduce metadata but are too coarse for trusted recurrent state.
+- daedalus: The winning frame is no longer maximum compression. Use block1024/block256 for trusted restore candidates, and reserve block4096 for proposal-only experiments with exact verification.
+- maieutic: Passing one or two cursors was insufficient because later recurrent states exposed the drift. The useful invariant is suite-level free-run parity, not single-cursor parity.
+- adversary: Do not average the block4096 result into a positive summary. A single deterministic free-run divergence is enough to block trusted exact restore promotion for that block size.

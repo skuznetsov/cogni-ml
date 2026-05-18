@@ -367,9 +367,13 @@ preserved `8/8` continuation top1 ids on start33/gen8. The free-run greedy gate
 now starts both exact-restored and decoded-INT8-restored states from the same
 token and feeds back each path's own generated top1; block256 preserved `8/8`
 free-run ids on start33/gen8, and block4096 preserved `16/16` free-run ids on
-start9/gen24. This is still not a production codec: the current scalar CPU codec
-is too slow for the critical path, and these gates cover one prompt/history,
-not the full prompt distribution.
+start9/gen24. A wider six-cursor free-run sweep changed the conclusion: block256
+preserved `16/16` parity on all six tested cursors, and block1024 also preserved
+`16/16` on those cursors, but block4096 drifted on later cursors (`15/16`,
+`15/16`, and `6/16`). So block4096 is not a trusted restore format; block1024 is
+the current best compression/parity trade-off candidate. This is still not a
+production codec: the current scalar CPU codec is too slow for the critical
+path, and these gates cover one prompt/history, not the full prompt distribution.
 
 Build the Metal bridge once:
 
