@@ -13222,3 +13222,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This shifts the production frame to cache-state restore plus active scheduled verifier. Replaying the prefix is only a diagnostic proxy; the production path should load cached state instead of paying prefix time.
 - maieutic: The measured `269.385ms` excludes prefix build by design. That is valid for session-cache hit economics, but not for cold prompt ingest economics.
 - adversary: Real online integration still needs a safe state source, cursor validation by prompt/session hash, and fallback behavior after reject. This diagnostic proves verifier state alignment, not proposal-source quality.
+
+**decision_update_284:** Added a CUDA prefix-state restore proxy for session/cache replay. `--known-replay-restore-prefix-state` snapshots the prefix decode state after diagnostic prefix replay, deliberately poisons/resets the resident runner, restores the snapshot, and only then runs the active scheduled verifier. This separates three economics: cold prefix build, cached state snapshot/restore, and active WBA replay.
+
+**evidence_update_284:**
+- claim: "Restored cached prefix state can feed active scheduled replay exactly at a non-zero cursor."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9 replay with `--known-replay-prefill-prefix --known-replay-restore-prefix-state --known-replay-active-schedule-run 4,4,8,16` printed `known_replay_accepted=24`, `known_replay_full_accept=true`, chunks `4,4,8,8`, `cuda_ms=267.196`, `cuda_ms_per_token=11.133`, `known_replay_prefix_snapshot_ms=3.187`, `known_replay_prefix_poison_ms=34.504`, `known_replay_prefix_restore_ms=0.403`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: decode-state snapshot/restore implementation, active scheduled verifier, CUDA memory-copy behavior, or prefix-state cache representation
+- claim: "Restored prefix state preserves no-recovery reject semantics."
+  source: remote restored prefix reject-at-6 replay verified chunks `4,4`, committed `4`, discarded accepted prefix `2`, rejected at index `6`, measured `cuda_ms=90.818`, `cuda_ms_per_token=11.352`, `known_replay_prefix_restore_ms=0.424`, and printed `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: active schedule reject accounting, state restore, or fallback policy changes
+
+**quadrumvirate_update_284:**
+- cassandra: The failure risk was that snapshot/restore would omit KV or recurrent state and pass only by not perturbing the runner. The poison-reset step makes the restore path observable.
+- daedalus: The next speed path is now an online controller that restores cached state and calls the resident active verifier, not more offline known-replay diagnostics.
+- maieutic: The fast `~0.4ms` restore cost is a device-resident snapshot proxy, not a disk/database load number. A real persisted cache needs its own IO and host/device transfer accounting.
+- adversary: This still does not solve rejected-prefix recovery or proposal-source quality. It only proves that the verifier can start from cached decode state cheaply once that state is resident.

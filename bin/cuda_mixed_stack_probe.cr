@@ -339,6 +339,7 @@ known_replay_tokens = 0
 known_replay_active_tokens = 0
 known_replay_active_schedule_run = [] of Int32
 known_replay_prefill_prefix = false
+known_replay_restore_prefix_state = false
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -408,6 +409,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-active-tokens N", "Diagnostic: allocate the full known-replay span but run/compare only the first N active rows") { |v| known_replay_active_tokens = v.to_i }
   p.on("--known-replay-active-schedule-run LIST", "Diagnostic: execute progressive active-row chunks on one resident known-replay stack") { |v| known_replay_active_schedule_run = parse_i32_list(v); perf_only = true }
   p.on("--known-replay-prefill-prefix", "Diagnostic: replay history tokens before --known-replay-start to build cache/session state before active schedule timing") { known_replay_prefill_prefix = true }
+  p.on("--known-replay-restore-prefix-state", "Diagnostic: snapshot prefix state, poison/reset the runner, then restore before active schedule timing") { known_replay_restore_prefix_state = true }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -526,6 +528,7 @@ raise "--known-replay-active-schedule-run requires --known-replay-candidates or 
 raise "--known-replay-active-schedule-run is incompatible with --known-replay-active-tokens" if !known_replay_active_schedule_run.empty? && known_replay_active_tokens > 0
 raise "--known-replay-prefill-prefix requires --known-replay-history" if known_replay_prefill_prefix && known_replay_history.empty?
 raise "--known-replay-prefill-prefix requires --known-replay-active-schedule-run" if known_replay_prefill_prefix && known_replay_active_schedule_run.empty?
+raise "--known-replay-restore-prefix-state requires --known-replay-prefill-prefix" if known_replay_restore_prefix_state && !known_replay_prefill_prefix
 known_replay_active_schedule_run.each do |size|
   raise "--known-replay-active-schedule-run sizes must be positive" unless size > 0
 end
@@ -790,6 +793,9 @@ begin
   known_replay_active_schedule_discarded_accept_prefix = 0
   known_replay_active_schedule_reject_index = -1
   known_replay_prefill_prefix_ms = 0.0
+  known_replay_prefix_snapshot_ms = 0.0
+  known_replay_prefix_poison_ms = 0.0
+  known_replay_prefix_restore_ms = 0.0
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -1289,6 +1295,30 @@ begin
         end
         known_replay_prefill_prefix_ms = (Time.instant - t_prefix).total_milliseconds
         known_replay_prefix_state_built = true
+
+        if known_replay_restore_prefix_state
+          t_snapshot = Time.instant
+          prefix_snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
+          known_replay_prefix_snapshot_ms = (Time.instant - t_snapshot).total_milliseconds
+          begin
+            poison_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
+            emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, known_replay_history[0])
+            hidden.times { |h| poison_xs[h] = emb[h] }
+            mixed_stack.active_tokens = 1
+            mixed_stack.upload_first_sequence_input(poison_xs)
+            mixed_stack.update_decode_position(start_pos)
+            t_poison = Time.instant
+            mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+              reset_sequence: true, sync_end: true, read_head_outputs: false, run_head: false)
+            known_replay_prefix_poison_ms = (Time.instant - t_poison).total_milliseconds
+
+            t_restore = Time.instant
+            mixed_stack.restore_decode_state(prefix_snapshot)
+            known_replay_prefix_restore_ms = (Time.instant - t_restore).total_milliseconds
+          ensure
+            prefix_snapshot.close
+          end
+        end
       end
 
       schedule_pos = 0
@@ -1606,6 +1636,10 @@ begin
       lines << "known_replay_active_schedule_reject_index=#{known_replay_active_schedule_reject_index}"
       lines << "known_replay_prefill_prefix=#{known_replay_prefill_prefix}"
       lines << "known_replay_prefill_prefix_ms=#{known_replay_prefill_prefix_ms.round(3)}"
+      lines << "known_replay_restore_prefix_state=#{known_replay_restore_prefix_state}"
+      lines << "known_replay_prefix_snapshot_ms=#{known_replay_prefix_snapshot_ms.round(3)}"
+      lines << "known_replay_prefix_poison_ms=#{known_replay_prefix_poison_ms.round(3)}"
+      lines << "known_replay_prefix_restore_ms=#{known_replay_prefix_restore_ms.round(3)}"
     end
     unless known_replay_history.empty?
       lines << "known_replay_history_tokens=#{known_replay_history.size}"
@@ -1748,6 +1782,7 @@ begin
   puts "known_replay_active_tokens_arg=#{known_replay_active_tokens}"
   puts "known_replay_active_schedule_run_arg=#{known_replay_active_schedule_run.join(",")}"
   puts "known_replay_prefill_prefix_arg=#{known_replay_prefill_prefix}"
+  puts "known_replay_restore_prefix_state_arg=#{known_replay_restore_prefix_state}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"
