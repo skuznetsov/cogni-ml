@@ -900,6 +900,8 @@ begin
   chunk_ngram_schedule_chunks = [] of Int32
   chunk_ngram_schedule_full_accept_streak = 0
   chunk_ngram_schedule_resets = 0
+  chunk_ngram_cursor_serial_advances = 0
+  chunk_ngram_cursor_serial_drops = 0
   ngram_source_prefix_checked = false
   ngram_source_prefix_match = true
   if greedy_loop_tokens > 0
@@ -1100,6 +1102,17 @@ begin
           chunk_exact_ids << exact_id
           greedy_gpu_ids << exact_id
           ngram_index.try(&.append(exact_id))
+          if greedy_loop_probe_ngram
+            if cursor = ngram_replay_cursor
+              if cursor < ngram_replay_limit && ngram_source_history[cursor]? == exact_id
+                ngram_replay_cursor = cursor + 1
+                chunk_ngram_cursor_serial_advances += 1
+              else
+                ngram_replay_cursor = nil
+                chunk_ngram_cursor_serial_drops += 1
+              end
+            end
+          end
           gpu_token = exact_id
           generated += 1
           chunk_verify_tokens += 1
@@ -1636,6 +1649,8 @@ begin
         lines << "chunk_probe_ngram_empty_fallbacks=#{chunk_ngram_empty_fallbacks}"
         lines << "chunk_probe_ngram_risk_fallbacks=#{chunk_ngram_risk_fallbacks}"
         lines << "chunk_probe_ngram_cursor_hits=#{chunk_ngram_cursor_hits}"
+        lines << "chunk_probe_ngram_cursor_serial_advances=#{chunk_ngram_cursor_serial_advances}"
+        lines << "chunk_probe_ngram_cursor_serial_drops=#{chunk_ngram_cursor_serial_drops}"
       end
       lines << "chunk_probe_raw_ms=#{chunk_raw_ms.round(3)}"
       lines << "chunk_probe_raw_ms_per_raw_token=#{(chunk_raw_ms / Math.max(chunk_raw_tokens, 1)).round(3)}"

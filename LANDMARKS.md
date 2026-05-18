@@ -13308,3 +13308,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This is the first production-style risk gate: validate cheap metadata before entering the WBA fast lane.
 - maieutic: Prefix matching proves cursor alignment, not future-token correctness. Future divergence still requires exact verification and schedule/fallback economics.
 - adversary: Keep the gate default-on. Disabling it is diagnostic only because wrong cursors can erase the speedup.
+
+**decision_update_289:** Fixed cursor advancement after serial fallback inside cursor-only active replay. When the risk gate or an empty proposal forces one exact serial token, the controller now advances the source cursor if that exact token matches the source token at the cursor; otherwise it drops the cursor. This prevents a stale source cursor from producing a false reject after fallback.
+
+**evidence_update_289:**
+- claim: "Cursor advancement after serial fallback prevents stale-cursor false rejects on long cache replay."
+  source: before the fix, remote gen64 cache replay accepted the first 16 active tokens, then a risk-gated serial fallback left the cursor stale and caused a reject, regressing to `1547.367ms` (`24.178ms/tok`). After the fix, the same RTX 5060 Ti all-layer Qwen3.5-9B source replay with risk gate on had `chunk_probe_rejects=0`, `chunk_probe_raw_tokens=62`, `chunk_probe_accepted_tokens=62`, `chunk_probe_ngram_cursor_serial_advances=2`, `chunk_probe_ngram_cursor_serial_drops=0`, and measured `cuda_ms=891.908`, `cuda_ms_per_token=13.936`.
+  verified_at: 2026-05-18
+  decay_trigger: cursor fallback semantics, n-gram risk gate, active verifier schedule, or source-history API changes
+- claim: "Validated trusted cache replay can beat same-host llama.cpp tg64 by a meaningful margin."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B gen64 with validated source cursor, active verification, schedule `4,4,8,16`, and `--greedy-loop-probe-ngram-no-risk-gate` accepted `64/64`, used chunks `4,4,8,16,16,16`, measured `cuda_ms=730.05`, `cuda_ms_per_token=11.407`, and `ok=true`. Same-host llama.cpp CUDA tg64 reference is `14.89ms/tok`; native plain greedy gen64 is `23.306-23.496ms/tok`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA kernel performance, llama.cpp reference rerun, trusted-cache validation policy, or source cursor correctness
+
+**quadrumvirate_update_289:**
+- cassandra: The stale-cursor bug was a control-flow error, not a model-quality failure. The exact serial fallback must keep source and live cursors synchronized when it matches the source.
+- daedalus: For validated cache cursors, the risk gate can be counterproductive because exact verification already protects correctness. The trusted-cache fast lane should prioritize large WBA chunks and rely on verifier rejects.
+- maieutic: This speedup is conditional on a validated source cursor and cached-state economics. It is not a claim about arbitrary free-form generation.
+- adversary: Keep risk-gated mode for weaker n-gram/suffix proposals. Disable the risk gate only for trusted cache/session replay where prefix/source validation passed.
