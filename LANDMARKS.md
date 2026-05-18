@@ -13658,3 +13658,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The product frame is now adaptive artifact layout, not universal compression: raw for early/high-risk state, compressed GPU decode for stable cache regions.
 - maieutic: Passing this matrix does not prove `min_start=9` is globally optimal. It proves the harness can express and validate fail-closed policy boundaries.
 - adversary: The policy must keep reporting selected route. If future code hides raw fallback under a generic `codec ok`, the evidence becomes misleading.
+
+**decision_update_308:** Added a layer-selective raw recurrent diagnostic for GPU codec restore. `--known-replay-trusted-artifact-codec-raw-recurrent-layers=LIST` keeps selected recurrent layer states raw while GPU-decoding the rest of the recurrent artifact. This probes whether early-cursor codec failures are localized enough to preserve most of the compression win.
+
+**evidence_update_308:**
+- claim: "The known early-cursor block256 failure is not fixed by keeping any single recurrent layer raw."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B `seed=1919,start=1,tokens=16`, block256, GPU codec restore, and 16 free-run steps were rerun with each recurrent layer individually raw (`0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30`). Every single-layer run failed with `free_run_parity_count=0` and `ok=false`; decoded next token alternated between wrong ids such as `16661` and `7225`.
+  verified_at: 2026-05-18
+  decay_trigger: layer-selective codec implementation, recurrent layer set, higher precision codec, model weights, or failing cursor changes
+- claim: "A large raw prefix can restore correctness, but it erases most of the early-cursor compression benefit."
+  source: coarse band tests on the same failing cursor showed early6, first12, mid12, late12, all-even, and all-odd raw layer sets all failed; first12 fixed the immediate next token but only reached `3/16` free-run parity. Progressive prefixes found prefix18 (`0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22`) passed `16/16` with `gpu_decode_restore_ms=11.268` and `raw_recurrent_bytes=39518208`, close to raw host restore. Prefix21 also passed but had still more raw bytes.
+  verified_at: 2026-05-18
+  decay_trigger: codec precision/layout changes, layer grouping policy, cursor-age policy, or broader prompt/history results
+
+**quadrumvirate_update_308:**
+- cassandra: The quantization error is distributed enough that small raw patches do not restore the early decision boundary.
+- daedalus: For early cursors, optimize by eliminating lossy recurrent compression, not by tuning a complicated partial raw mask. Use raw-before-min-start unless a stronger codec appears.
+- maieutic: Layer-selective raw restore is still useful as a research probe, but current evidence does not justify it as a production speed path.
+- adversary: Do not claim layer-selective compression solved early fragility. The only passing partial mask is nearly as expensive as raw recurrent restore.

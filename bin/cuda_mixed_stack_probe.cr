@@ -119,12 +119,17 @@ class CudaRecurrentInt8CodecRestorer
   getter h2d_ms : Float64 = 0.0
   getter kv_ms : Float64 = 0.0
   getter kernel_ms : Float64 = 0.0
+  getter raw_recurrent_ms : Float64 = 0.0
+  getter raw_recurrent_bytes : UInt64 = 0_u64
   getter restore_ms : Float64 = 0.0
 
-  def initialize(codec : RecurrentInt8CodecBench, @block_size : Int32)
+  def initialize(codec : RecurrentInt8CodecBench,
+                 @block_size : Int32,
+                 raw_recurrent_layers : Array(Int32) = [] of Int32)
     @quant = codec.quant || raise "GPU recurrent codec restore requires encoded quant data"
     @scales = codec.scales || raise "GPU recurrent codec restore requires encoded scales"
     @segments = codec.segments || raise "GPU recurrent codec restore requires encoded segments"
+    @raw_recurrent_layers = raw_recurrent_layers.to_set
     raise "GPU recurrent codec restore requires non-empty quant data" if @quant.empty?
     raise "GPU recurrent codec restore requires non-empty scales" if @scales.empty?
 
@@ -156,17 +161,23 @@ class CudaRecurrentInt8CodecRestorer
     @h2d_ms = (Time.instant - t_h2d).total_milliseconds
 
     t_kernel = Time.instant
+    @raw_recurrent_ms = 0.0
+    @raw_recurrent_bytes = 0_u64
     buffer_idx = 0
     segment_idx = 0
-    stack.runners.each do |runner|
+    stack.layer_ids.zip(stack.runners).each do |layer_id, runner|
       case runner
       in ML::CUDA::QwenRecurrentLayerRunner
         conv_segment = @segments[segment_idx]
         ssm_segment = @segments[segment_idx + 1]
         raise "recurrent codec conv segment mismatch" unless conv_segment.buffer_index == buffer_idx
         raise "recurrent codec ssm segment mismatch" unless ssm_segment.buffer_index == buffer_idx + 1
-        decode_segment(conv_segment, runner.conv_state_device_ptr)
-        decode_segment(ssm_segment, runner.ssm_state_device_ptr)
+        if @raw_recurrent_layers.includes?(layer_id)
+          restore_raw_recurrent(runner, snapshot, buffer_idx)
+        else
+          decode_segment(conv_segment, runner.conv_state_device_ptr)
+          decode_segment(ssm_segment, runner.ssm_state_device_ptr)
+        end
         segment_idx += 2
         buffer_idx += 2
       in ML::CUDA::QwenFullAttnLayerRunner
@@ -201,6 +212,21 @@ class CudaRecurrentInt8CodecRestorer
     @values_ptr.value = segment.values.to_u32
     grid = ((segment.values + 255) // 256).to_u32
     ML::CUDA.launch!(@fn, grid, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, @params, "recurrent codec gpu decode")
+  end
+
+  private def restore_raw_recurrent(runner : ML::CUDA::QwenRecurrentLayerRunner,
+                                    snapshot : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot,
+                                    buffer_idx : Int32) : Nil
+    conv = snapshot.buffers[buffer_idx]
+    ssm = snapshot.buffers[buffer_idx + 1]
+    raise "snapshot host conv_state size mismatch" unless conv.size.to_u64 == runner.conv_state_bytesize
+    raise "snapshot host ssm_state size mismatch" unless ssm.size.to_u64 == runner.ssm_state_bytesize
+
+    t_raw = Time.instant
+    ML::CUDA.copy_htod!(runner.conv_state_device_ptr, conv.to_unsafe.as(Void*), runner.conv_state_bytesize, "restore raw recurrent codec conv_state")
+    ML::CUDA.copy_htod!(runner.ssm_state_device_ptr, ssm.to_unsafe.as(Void*), runner.ssm_state_bytesize, "restore raw recurrent codec ssm_state")
+    @raw_recurrent_ms += (Time.instant - t_raw).total_milliseconds
+    @raw_recurrent_bytes += runner.conv_state_bytesize.to_u64 + runner.ssm_state_bytesize.to_u64
   end
 
   private def restore_kv(stack : ML::CUDA::QwenMixedStackRunner,
@@ -694,6 +720,7 @@ known_replay_trusted_artifact_codec_restore_steps = 1
 known_replay_trusted_artifact_codec_free_run_steps = 0
 known_replay_trusted_artifact_codec_gpu_decode_check = false
 known_replay_trusted_artifact_codec_min_start = -1
+known_replay_trusted_artifact_codec_raw_recurrent_layers = [] of Int32
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -782,6 +809,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-trusted-artifact-codec-free-run-steps N", "Free-run greedy steps to compare exact restored state against decoded block-INT8 restored state") { |v| known_replay_trusted_artifact_codec_free_run_steps = v.to_i; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-gpu-decode-check", "With codec restore check, decode recurrent block-INT8 state on GPU and use it for the decoded-state parity path") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; known_replay_trusted_artifact_codec_gpu_decode_check = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-min-start N", "With GPU codec restore, use raw host recurrent restore for replay cursors before N; use compressed GPU decode at N and later") { |v| known_replay_trusted_artifact_codec_min_start = v.to_i; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; known_replay_trusted_artifact_codec_gpu_decode_check = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-codec-raw-recurrent-layers LIST", "With GPU codec restore, keep comma-separated recurrent layer ids raw while GPU-decoding the rest") { |v| known_replay_trusted_artifact_codec_raw_recurrent_layers = parse_layers(v); known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; known_replay_trusted_artifact_codec_gpu_decode_check = true; perf_only = true }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -1256,6 +1284,8 @@ begin
   known_replay_trusted_artifact_codec_gpu_decode_h2d_ms = 0.0
   known_replay_trusted_artifact_codec_gpu_decode_kernel_ms = 0.0
   known_replay_trusted_artifact_codec_gpu_decode_kv_ms = 0.0
+  known_replay_trusted_artifact_codec_raw_recurrent_ms = 0.0
+  known_replay_trusted_artifact_codec_raw_recurrent_bytes = 0_u64
   known_replay_trusted_artifact_codec_gpu_decode_restore_ms = 0.0
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
@@ -1913,7 +1943,9 @@ begin
           known_replay_trusted_artifact_codec_rel_rmse = codec.rel_rmse
           known_replay_trusted_artifact_codec_max_abs = codec.max_abs
           codec_decoded_snapshot = codec.decoded_snapshot
-          codec_gpu_restorer = CudaRecurrentInt8CodecRestorer.new(codec, known_replay_trusted_artifact_codec_block) if codec_policy_gpu_decode
+          codec_gpu_restorer = CudaRecurrentInt8CodecRestorer.new(codec,
+            known_replay_trusted_artifact_codec_block,
+            known_replay_trusted_artifact_codec_raw_recurrent_layers) if codec_policy_gpu_decode
         end
         poison_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
         emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, known_replay_history[0])
@@ -1991,6 +2023,8 @@ begin
             known_replay_trusted_artifact_codec_gpu_decode_h2d_ms = gpu_restorer.not_nil!.h2d_ms
             known_replay_trusted_artifact_codec_gpu_decode_kernel_ms = gpu_restorer.not_nil!.kernel_ms
             known_replay_trusted_artifact_codec_gpu_decode_kv_ms = gpu_restorer.not_nil!.kv_ms
+            known_replay_trusted_artifact_codec_raw_recurrent_ms = gpu_restorer.not_nil!.raw_recurrent_ms
+            known_replay_trusted_artifact_codec_raw_recurrent_bytes = gpu_restorer.not_nil!.raw_recurrent_bytes
             known_replay_trusted_artifact_codec_gpu_decode_restore_ms = gpu_restorer.not_nil!.restore_ms
           else
             mixed_stack.restore_decode_state(decoded_snapshot.not_nil!)
@@ -2045,6 +2079,8 @@ begin
               known_replay_trusted_artifact_codec_gpu_decode_h2d_ms = gpu_restorer.not_nil!.h2d_ms
               known_replay_trusted_artifact_codec_gpu_decode_kernel_ms = gpu_restorer.not_nil!.kernel_ms
               known_replay_trusted_artifact_codec_gpu_decode_kv_ms = gpu_restorer.not_nil!.kv_ms
+              known_replay_trusted_artifact_codec_raw_recurrent_ms = gpu_restorer.not_nil!.raw_recurrent_ms
+              known_replay_trusted_artifact_codec_raw_recurrent_bytes = gpu_restorer.not_nil!.raw_recurrent_bytes
               known_replay_trusted_artifact_codec_gpu_decode_restore_ms = gpu_restorer.not_nil!.restore_ms
               known_replay_trusted_artifact_codec_restore_ms = gpu_restorer.not_nil!.restore_ms
             else
@@ -2545,6 +2581,9 @@ begin
       lines << "known_replay_trusted_artifact_codec_gpu_decode_h2d_ms=#{known_replay_trusted_artifact_codec_gpu_decode_h2d_ms.round(3)}"
       lines << "known_replay_trusted_artifact_codec_gpu_decode_kernel_ms=#{known_replay_trusted_artifact_codec_gpu_decode_kernel_ms.round(3)}"
       lines << "known_replay_trusted_artifact_codec_gpu_decode_kv_ms=#{known_replay_trusted_artifact_codec_gpu_decode_kv_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_codec_raw_recurrent_layers=#{known_replay_trusted_artifact_codec_raw_recurrent_layers.join(",")}"
+      lines << "known_replay_trusted_artifact_codec_raw_recurrent_bytes=#{known_replay_trusted_artifact_codec_raw_recurrent_bytes}"
+      lines << "known_replay_trusted_artifact_codec_raw_recurrent_ms=#{known_replay_trusted_artifact_codec_raw_recurrent_ms.round(3)}"
       lines << "known_replay_trusted_artifact_codec_gpu_decode_restore_ms=#{known_replay_trusted_artifact_codec_gpu_decode_restore_ms.round(3)}"
     end
     unless known_replay_history.empty?
@@ -2707,6 +2746,7 @@ begin
   puts "known_replay_trusted_artifact_codec_free_run_steps_arg=#{known_replay_trusted_artifact_codec_free_run_steps}"
   puts "known_replay_trusted_artifact_codec_gpu_decode_check_arg=#{known_replay_trusted_artifact_codec_gpu_decode_check}"
   puts "known_replay_trusted_artifact_codec_min_start_arg=#{known_replay_trusted_artifact_codec_min_start}"
+  puts "known_replay_trusted_artifact_codec_raw_recurrent_layers_arg=#{known_replay_trusted_artifact_codec_raw_recurrent_layers.join(",")}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"
