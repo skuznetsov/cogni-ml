@@ -13676,3 +13676,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: For early cursors, optimize by eliminating lossy recurrent compression, not by tuning a complicated partial raw mask. Use raw-before-min-start unless a stronger codec appears.
 - maieutic: Layer-selective raw restore is still useful as a research probe, but current evidence does not justify it as a production speed path.
 - adversary: Do not claim layer-selective compression solved early fragility. The only passing partial mask is nearly as expensive as raw recurrent restore.
+
+**decision_update_309:** Added a BF16 recurrent artifact codec and GPU decode path. `--known-replay-trusted-artifact-codec-format=bf16` stores recurrent state at 2 bytes/value, and `--known-replay-trusted-artifact-codec-gpu-decode-check` copies BF16 recurrent bytes to CUDA and expands directly into recurrent FP32 state buffers. This is the safer middle path between raw FP32 and block-INT8 for early/high-risk cursors.
+
+**evidence_update_309:**
+- claim: "BF16 GPU recurrent restore fixes the known early-cursor INT8 failure while preserving a material restore-time win over raw host restore."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B `seed=1919,start=1,tokens=16`, live-KV BF16 GPU decode, and 16 free-run steps printed `known_replay_trusted_artifact_codec_raw_bytes=52690944`, `encoded_bytes=26345472`, `codec_ratio=0.5`, `codec_rel_rmse=0.00167`, raw host restore `10.726ms`, BF16 GPU restore `4.664ms` (`h2d=3.912`, `kernel=0.381`, `kv=0.370`), `free_run_parity_count=16`, `gpu_decode_check_ok=true`, and `ok=true`. The same cursor had failed block64/128/256 INT8 immediately.
+  verified_at: 2026-05-18
+  decay_trigger: BF16 codec implementation, CUDA BF16 decode kernel, artifact layout, model weights, or failing cursor changes
+- claim: "BF16 GPU recurrent restore passed the current 4-history x 6-cursor CUDA matrix."
+  source: remote matrix over generated histories from seeds `0,198,760,1919` and cursors `1/16`, `9/16`, `17/16`, `25/16`, `33/8`, `41/8` passed `24/24` with `free_run_parity_count=16` and `ok=true` for every case. Raw host restore was about `10.745-11.248ms`; BF16 GPU restore was about `4.607-5.146ms`.
+  verified_at: 2026-05-18
+  decay_trigger: broader prompt/history suite, sampling mode, CUDA device/driver, BF16 kernel, or cache artifact contract changes
+
+**quadrumvirate_update_309:**
+- cassandra: BF16 is slower and larger than INT8, but it removes the observed early decision-boundary failure in the current matrix.
+- daedalus: The adaptive artifact layout should become multi-tier: BF16 for early/high-risk regions, block256 INT8 for later/stable regions, raw FP32 only as the fail-closed fallback.
+- maieutic: Scalar host BF16 encode/decode is not a critical-path solution; the useful product path is offline/prefetched encode plus GPU decode on restore.
+- adversary: Do not overclaim global safety from one matrix. BF16 passed the current deterministic gates, but still needs broader prompt/history and longer-context coverage before production trust.

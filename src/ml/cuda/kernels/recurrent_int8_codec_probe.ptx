@@ -47,3 +47,37 @@
 DONE:
     ret;
 }
+
+.visible .entry recurrent_bf16_decode_f32(
+    .param .u64 encoded_param,
+    .param .u64 out_param,
+    .param .u32 values_param
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<10>;
+
+    ld.param.u64 %rd1, [encoded_param];
+    ld.param.u64 %rd2, [out_param];
+    ld.param.u32 %r1, [values_param];
+
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.u32 %r4, %tid.x;
+    mad.lo.u32 %r5, %r2, %r3, %r4;
+    setp.ge.u32 %p1, %r5, %r1;
+    @%p1 bra BF16_DONE;
+
+    mul.wide.u32 %rd3, %r5, 2;
+    add.u64 %rd4, %rd1, %rd3;
+    ld.global.u16 %r6, [%rd4];
+    shl.b32 %r7, %r6, 16;
+
+    mul.wide.u32 %rd5, %r5, 4;
+    add.u64 %rd6, %rd2, %rd5;
+    st.global.u32 [%rd6], %r7;
+
+BF16_DONE:
+    ret;
+}
