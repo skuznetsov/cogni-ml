@@ -13522,3 +13522,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next legal move is not to trust compressed state; it is to run a compressed-restore parity/continuation gate. If parity fails, switch to the dual frame: use compressed recurrent state only for draft/proposal and verify exactly.
 - maieutic: The `ok=true` signal here validates the surrounding uncompressed trusted replay path, not compressed-state correctness. The codec currently measures reconstruction error only.
 - adversary: Do not promote block-INT8 as exact artifact compression until decoded-state restore produces identical continuation or a bounded exact-verifier acceptance result.
+
+**decision_update_300:** Added a decoded recurrent block-INT8 artifact restore gate. `--known-replay-trusted-artifact-codec-restore-check` extends the prior error-only codec diagnostic by building a decoded host snapshot for recurrent buffers, restoring it, and comparing one continuation token against an exact uncompressed restored state. The gate also sizes the resident RoPE table one token beyond the replay span when continuation checking is enabled.
+
+**evidence_update_300:**
+- claim: "Decoded block-INT8 recurrent host snapshots can preserve the next exact top1 on the tested CUDA cache-artifact cursors."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9/gen24 live-KV artifact with block256 printed recurrent `52690944 -> 13378560` bytes (`ratio=0.2539`), `rel_rmse=0.012763`, exact continuation `next_exact_top1=13`, decoded continuation `next_decoded_top1=13`, `next_parity_ok=true`, `next_exact_source_ok=true`, `next_decoded_source_ok=true`, and `ok=true`. The same start9/gen24 cursor also passed block64/1024/4096 with `next_parity_ok=true`. A later start33/gen8 cursor passed block256 and block4096 with `next_exact_top1=13`, `next_decoded_top1=13`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: recurrent state layout, block-INT8 codec implementation, continuation-check harness, RoPE table sizing, CUDA runner restore semantics, model weights, or cache artifact contract changes
+- claim: "The restore/parity gate is narrow and does not make scalar block-INT8 production-ready."
+  source: the same remote runs still reported scalar CPU codec costs in the hundreds of milliseconds for encode/decode, while H2D restore remained about `12ms`; the parity check covers only one continuation token per cursor.
+  verified_at: 2026-05-18
+  decay_trigger: GPU/vectorized codec implementation, multi-step parity results, acceptance-gated proposal results, or persistent artifact service changes
+
+**quadrumvirate_update_300:**
+- cassandra: The byte win is real enough to keep the branch alive, but exactness can fail later than one token; multi-step continuation and acceptance gates are required before trusting compressed artifacts.
+- daedalus: The next frame is not scalar codec tuning. Either port encode/decode to a GPU/vectorized path for trusted cache restore, or use decoded compressed state as a proposal state and let the exact verifier police drift.
+- maieutic: One-token parity proves only that the tested decision boundary survived quantization. It does not prove hidden-state equivalence or long continuation stability.
+- adversary: Do not weaken the artifact trust contract. Compressed recurrent restore must remain fail-closed: if parity/acceptance evidence is weak, the compressed state is proposal-only, not trusted exact state.

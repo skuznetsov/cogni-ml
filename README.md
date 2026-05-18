@@ -356,10 +356,14 @@ A first scalar CPU recurrent-state block-INT8 codec diagnostic compresses the
 `52,690,944` recurrent bytes to `13.18-14.00MB` (`25.0-26.6%`) depending on
 block size. On start1/gen64, block sizes `64/256/1024/4096` measured relative
 RMSE `0.008798/0.012300/0.015476/0.019087`; encode/decode stayed around
-`457-469ms` / `121-125ms`. This is not a production codec yet: it proves the
-state is quantizable to about 4x smaller with modest error, but scalar CPU
-codec cost is far too high and the compressed state has not yet passed a
-restore/continuation parity gate.
+`457-469ms` / `121-125ms`. A follow-up restore gate now decodes the block-INT8
+recurrent buffers back into a host snapshot, restores that state, and runs one
+continuation token against an exact uncompressed restored state. On the RTX 5060
+Ti host, block sizes `64/256/1024/4096` preserved the same next top1 on
+start9/gen24, and block `256/4096` also preserved the same next top1 on a later
+start33/gen8 cursor. This is still not a production codec: the current scalar
+CPU codec is too slow for the critical path, and one-token parity gates are
+narrow evidence, not a proof that recurrent INT8 artifacts are globally exact.
 
 Build the Metal bridge once:
 
@@ -573,6 +577,7 @@ Same-host CUDA snapshot, RTX 5060 Ti, Qwen 3.5 9B Q4_K_M, `gen=64`:
 | cogni-ml CUDA trusted artifact restore, host-backed | 12.259 ms / 64 cached tokens | restores a full `max_seq=128` decode state from host memory; excludes durable IO/hash lookup |
 | cogni-ml CUDA trusted artifact restore, host-backed live KV | 11.358 ms / 64 cached tokens | restores recurrent state plus live KV rows only; recurrent state dominates at short context |
 | cogni-ml CUDA trusted artifact IO/hash, live KV | write/read/hash/restore: 17.695/42.046/59.556/13.003 ms | persistent-path diagnostic for a 56.9 MB artifact; exact cached output still `64/64` |
+| cogni-ml CUDA recurrent block-INT8 artifact codec | recurrent bytes `52.7MB -> ~13.2MB`; one-token continuation parity passed on tested cursors | scalar CPU encode/decode is too slow; treat as codec feasibility evidence, not production restore |
 | invalid trusted cursor | ~42.3 tok/s, ~23.64 ms/tok | fails closed: zero proposals, active verifier disabled, near plain fallback |
 
 CUDA cache-replay caveats:
