@@ -13604,3 +13604,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The frame shifts from scalar codec tuning to artifact service design: prefetch/resident compressed artifacts, GPU decode on restore, and fail-closed trust gates.
 - maieutic: This is still same-history evidence. It proves the mechanism and speed on selected deterministic cursors, not broad production safety across prompts/sampling/settings.
 - adversary: Do not promote compressed recurrent restore as universally exact yet. Block4096 is already refuted, and block1024/block256 still need broader prompt/history coverage before production trust.
+
+**decision_update_305:** Ran the first broader deterministic-seed GPU-restore codec falsifier and demoted block1024 from trusted-candidate status. The matrix generated four 65-token Qwen3.5-9B histories from seed tokens `0,198,760,1919`, then tested start25/tokens16 with 16 free-run steps on the remote RTX 5060 Ti host.
+
+**evidence_update_305:**
+- claim: "Block256 remained stable in the first deterministic-seed GPU-restore codec matrix."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B generated histories from seed tokens `0,198,760,1919`; block256 start25/tokens16 live-KV GPU decode restore printed `known_replay_trusted_artifact_codec_free_run_parity_count=16`, `known_replay_trusted_artifact_codec_free_run_parity_ok=true`, `known_replay_trusted_artifact_codec_gpu_decode_check_ok=true`, and `ok=true` for all four histories. GPU codec restore times were about `3.17-3.71ms` versus raw host restores about `11.88-12.997ms`.
+  verified_at: 2026-05-18
+  decay_trigger: broader prompt/history suite, block256 codec changes, restore harness changes, model weights, or sampling mode changes
+- claim: "Block1024 is not safe enough to promote as a trusted exact recurrent restore format."
+  source: the same seed matrix passed block1024 on seeds `0,198,760`, but seed `1919` failed free-run parity: next/source parity still passed (`next_exact_top1=12688`, `next_decoded_top1=12688`), but free-run exact sequence `12688,628,381,13849,13,198,2523,513,2574,264,716,314,82316,318,32011,11889` diverged from decoded sequence `12688,628,381,13849,13,198,2523,513,18101,539,264,6784,494,264,5646,314`, with `free_run_parity_count=8`, `gpu_decode_check_ok=false`, and `ok=false`. The same run still showed the speed potential (`12.825ms` raw restore vs `3.222ms` GPU codec restore), so the failure is quality/trust, not performance.
+  verified_at: 2026-05-18
+  decay_trigger: adaptive codec strategy, exact-verifier acceptance use, block1024 quantization changes, or broader suite evidence change
+
+**quadrumvirate_update_305:**
+- cassandra: One-token/source-aligned parity is insufficient; free-run drift can appear after eight matching steps even when the immediate token is exact.
+- daedalus: The trusted restore frame should narrow to block256. Block1024/block4096 remain useful as proposal-only or adaptive-codec candidates, not exact cache artifacts.
+- maieutic: The speed result survives the failure, but the artifact trust contract does not. A validated cache artifact must be fail-closed on deterministic greedy divergence.
+- adversary: Do not let average speed hide deterministic mismatch. A single same-command `ok=false` is enough to block trusted promotion for block1024.
