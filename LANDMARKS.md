@@ -13060,3 +13060,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next viable pivot is not more dynamic stack construction. Either add active-row/prefix support to the WBA runners, or prebuild a small recovery stack pool with shared weights if memory allows.
 - maieutic: The row math is sound: for first reject at row `k`, recovery must run rows `0..k`, because row `k` consumes the last accepted proposal as input and emits the corrected token.
 - adversary: Do not count `discarded_accept_prefix` as recoverable speed until one of the two viable recovery mechanisms passes a same-host memory and wall-time gate.
+
+**decision_update_275:** Refuted the small duplicate verifier/recovery pool shortcut on the current CUDA host. A production-shaped test using the existing batched verifier path with a `tokens=1` controller and a tiny `gamma=2` duplicate verifier failed before timing with CUDA OOM. This means the current memory envelope cannot support even a small duplicate all-layer verifier pool alongside the controller stack, so the exact partial-reject recovery path must move toward active-row/prefix execution inside the existing resident WBA stack.
+
+**evidence_update_275:**
+- claim: "Prebuilding a tiny duplicate verifier pool is not viable on the current RTX 5060 Ti host."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B run using the existing `--greedy-loop-probe-chunk-batched-verify` path, `--greedy-loop-tokens 4`, `--greedy-loop-probe-chunk-gamma 2`, cursor-only n-gram replay history, and `--skip-debug-readback` exited with `Unhandled exception: cuMemAlloc failed with CUDA error 2` before any `chunk_probe_*` timing output.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA memory state, GPU size, all-layer stack memory layout, shared-weight pool implementation, or host reboot clearing ghost allocations
+
+**quadrumvirate_update_275:**
+- cassandra: The pool shortcut was likely to fail under ghost memory; gamma2 failing confirms the issue is whole-stack duplication, not just large gamma.
+- daedalus: The next frame is in-place bounded execution: reuse resident weights/buffers and make kernels honor active rows, rather than allocating another model-shaped stack.
+- maieutic: This refutation is host/memory-envelope specific. A larger GPU may fit a pool, but this project target includes commodity cards, so active-row support is the stronger design.
+- adversary: If a future reboot clears ghost memory, retest before treating this as universal; for now, do not design the CUDA controller around duplicate all-layer stacks.
