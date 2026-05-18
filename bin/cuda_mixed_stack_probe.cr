@@ -29,6 +29,33 @@ def parse_f32_list(value : String) : Array(Float32)
   value.split(",").map(&.strip).reject(&.empty?).map(&.to_f32)
 end
 
+def write_host_snapshot_file(snapshot : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot, path : String) : Nil
+  File.open(path, "w") do |file|
+    snapshot.buffers.each { |buffer| file.write(buffer) }
+  end
+end
+
+def sha256_file(path : String) : String
+  output = IO::Memory.new
+  status = Process.run("sha256sum", [path], output: output, error: Process::Redirect::Close)
+  unless status.success?
+    output.clear
+    status = Process.run("shasum", ["-a", "256", path], output: output, error: Process::Redirect::Close)
+  end
+  raise "sha256 tool failed" unless status.success?
+
+  output.to_s.split.first
+end
+
+def read_host_snapshot_file(path : String, template : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot) : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot
+  buffers = template.buffers.map { |buffer| Bytes.new(buffer.size) }
+  File.open(path, "r") do |file|
+    buffers.each { |buffer| file.read_fully(buffer) }
+  end
+  ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot.new(buffers, template.include_kv,
+    template.kv_tokens, template.recurrent_bytes_total, template.kv_bytes_total)
+end
+
 alias FfnPcaUpdownAdapter = NamedTuple(
   rank: Int32,
   x_mean: Array(Float32),
@@ -373,6 +400,8 @@ known_replay_restore_prefix_state = false
 known_replay_trusted_artifact_restore = false
 known_replay_trusted_artifact_host_restore = false
 known_replay_trusted_artifact_live_kv = false
+known_replay_trusted_artifact_io_probe = false
+known_replay_trusted_artifact_io_path = ""
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -451,6 +480,8 @@ OptionParser.parse do |p|
   p.on("--known-replay-trusted-artifact-restore", "Diagnostic: simulate a trusted cache artifact by restoring post-replay state and emitting cached tokens without verifier recompute") { known_replay_trusted_artifact_restore = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-host-restore", "Diagnostic: simulate a host-backed trusted cache artifact with D2H snapshot and timed H2D restore") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-live-kv", "With host artifact restore, snapshot only KV rows up to the restored cursor instead of full max_seq") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_live_kv = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-io-probe", "With host artifact restore, time artifact write, read, and SHA-256 hash around the H2D restore") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-io-path PATH", "Path for --known-replay-trusted-artifact-io-probe; default is a temporary file") { |v| known_replay_trusted_artifact_io_path = v }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -877,6 +908,12 @@ begin
   known_replay_trusted_artifact_restore_ms = 0.0
   known_replay_trusted_artifact_bytes = 0_u64
   known_replay_trusted_artifact_kv_tokens = 0
+  known_replay_trusted_artifact_recurrent_bytes = 0_u64
+  known_replay_trusted_artifact_kv_bytes = 0_u64
+  known_replay_trusted_artifact_write_ms = 0.0
+  known_replay_trusted_artifact_read_ms = 0.0
+  known_replay_trusted_artifact_hash_ms = 0.0
+  known_replay_trusted_artifact_sha256_12 = ""
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -1502,6 +1539,8 @@ begin
         artifact_snapshot = mixed_stack.snapshot_decode_state_host(include_kv: true, kv_tokens: artifact_kv_tokens)
         known_replay_trusted_artifact_snapshot_ms = (Time.instant - t_artifact_snapshot).total_milliseconds
         known_replay_trusted_artifact_bytes = artifact_snapshot.bytesize_total
+        known_replay_trusted_artifact_recurrent_bytes = artifact_snapshot.recurrent_bytes_total
+        known_replay_trusted_artifact_kv_bytes = artifact_snapshot.kv_bytes_total
         poison_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
         emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, known_replay_history[0])
         hidden.times { |h| poison_xs[h] = emb[h] }
@@ -1513,8 +1552,28 @@ begin
           reset_sequence: true, sync_end: true, read_head_outputs: false, run_head: false)
         known_replay_trusted_artifact_poison_ms = (Time.instant - t_artifact_poison).total_milliseconds
 
+        restore_snapshot = artifact_snapshot
+        if known_replay_trusted_artifact_io_probe
+          artifact_path = known_replay_trusted_artifact_io_path.empty? ? File.tempname("cogni-qwen-artifact", ".bin") : known_replay_trusted_artifact_io_path
+          begin
+            t_artifact_write = Time.instant
+            write_host_snapshot_file(artifact_snapshot, artifact_path)
+            known_replay_trusted_artifact_write_ms = (Time.instant - t_artifact_write).total_milliseconds
+
+            t_artifact_hash = Time.instant
+            known_replay_trusted_artifact_sha256_12 = sha256_file(artifact_path)[0, 12]
+            known_replay_trusted_artifact_hash_ms = (Time.instant - t_artifact_hash).total_milliseconds
+
+            t_artifact_read = Time.instant
+            restore_snapshot = read_host_snapshot_file(artifact_path, artifact_snapshot)
+            known_replay_trusted_artifact_read_ms = (Time.instant - t_artifact_read).total_milliseconds
+          ensure
+            File.delete(artifact_path) if File.exists?(artifact_path)
+          end
+        end
+
         t_artifact_restore = Time.instant
-        mixed_stack.restore_decode_state(artifact_snapshot)
+        mixed_stack.restore_decode_state(restore_snapshot)
         known_replay_trusted_artifact_restore_ms = (Time.instant - t_artifact_restore).total_milliseconds
       else
         artifact_snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
@@ -1929,9 +1988,16 @@ begin
       lines << "known_replay_trusted_artifact_tokens=#{known_replay_candidates.size}"
       lines << "known_replay_trusted_artifact_kv_tokens=#{known_replay_trusted_artifact_kv_tokens}"
       lines << "known_replay_trusted_artifact_bytes=#{known_replay_trusted_artifact_bytes}"
+      lines << "known_replay_trusted_artifact_recurrent_bytes=#{known_replay_trusted_artifact_recurrent_bytes}"
+      lines << "known_replay_trusted_artifact_kv_bytes=#{known_replay_trusted_artifact_kv_bytes}"
       lines << "known_replay_trusted_artifact_build_ms=#{known_replay_trusted_artifact_build_ms.round(3)}"
       lines << "known_replay_trusted_artifact_snapshot_ms=#{known_replay_trusted_artifact_snapshot_ms.round(3)}"
       lines << "known_replay_trusted_artifact_poison_ms=#{known_replay_trusted_artifact_poison_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_io_probe=#{known_replay_trusted_artifact_io_probe}"
+      lines << "known_replay_trusted_artifact_write_ms=#{known_replay_trusted_artifact_write_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_read_ms=#{known_replay_trusted_artifact_read_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_hash_ms=#{known_replay_trusted_artifact_hash_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_sha256_12=#{known_replay_trusted_artifact_sha256_12}"
       lines << "known_replay_trusted_artifact_restore_ms=#{known_replay_trusted_artifact_restore_ms.round(3)}"
     end
     unless known_replay_history.empty?
@@ -2084,6 +2150,8 @@ begin
   puts "known_replay_trusted_artifact_restore_arg=#{known_replay_trusted_artifact_restore}"
   puts "known_replay_trusted_artifact_host_restore_arg=#{known_replay_trusted_artifact_host_restore}"
   puts "known_replay_trusted_artifact_live_kv_arg=#{known_replay_trusted_artifact_live_kv}"
+  puts "known_replay_trusted_artifact_io_probe_arg=#{known_replay_trusted_artifact_io_probe}"
+  puts "known_replay_trusted_artifact_io_path_arg=#{known_replay_trusted_artifact_io_path}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"

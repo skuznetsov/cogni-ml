@@ -309,6 +309,13 @@ To snapshot only KV rows up to the restored cursor instead of the full
   --known-replay-trusted-artifact-live-kv
 ```
 
+To include diagnostic artifact file IO and hash timing, add:
+
+```sh
+  --known-replay-trusted-artifact-io-probe \
+  --known-replay-trusted-artifact-io-path /path/to/artifact.bin
+```
+
 This is a different contract from verified replay. It simulates a cache artifact
 that already contains the exact token span and the post-span decode state for
 the same model/config/source hash. The timed region restores that state and
@@ -330,6 +337,15 @@ cache portion. On the same host/model, start1/gen64 stores `56,885,248` bytes
 and restores in `11.358ms`; start9/gen24 stores `54,788,096` bytes and restores
 in `10.984ms`. The modest delta is a useful finding: recurrent DeltaNet state,
 not KV capacity, dominates this short-context artifact.
+
+On the persistent reefy storage path, the live-KV start1/gen64 artifact breaks
+down into `52,690,944` recurrent-state bytes and `4,194,304` KV bytes. The
+diagnostic file path measured write `17.695ms`, read `42.046ms`, SHA-256
+verification `59.556ms`, and H2D restore `13.003ms`. For start9/gen24, the
+artifact is `52,690,944` recurrent bytes plus `2,097,152` KV bytes; write/read/
+hash/restore measured `18.249/42.994/53.814/12.825ms`. The SHA-256 timing uses
+the host `sha256sum`/`shasum` tool to avoid adding OpenSSL linkage to the CUDA
+probe, so treat it as a product-boundary diagnostic rather than a kernel metric.
 
 Build the Metal bridge once:
 
@@ -542,6 +558,7 @@ Same-host CUDA snapshot, RTX 5060 Ti, Qwen 3.5 9B Q4_K_M, `gen=64`:
 | cogni-ml CUDA trusted artifact restore, device-resident | restore-only lower bound: 0.189 ms / 64 cached tokens | no verifier recompute; requires validated post-span state artifact |
 | cogni-ml CUDA trusted artifact restore, host-backed | 12.259 ms / 64 cached tokens | restores a full `max_seq=128` decode state from host memory; excludes durable IO/hash lookup |
 | cogni-ml CUDA trusted artifact restore, host-backed live KV | 11.358 ms / 64 cached tokens | restores recurrent state plus live KV rows only; recurrent state dominates at short context |
+| cogni-ml CUDA trusted artifact IO/hash, live KV | write/read/hash/restore: 17.695/42.046/59.556/13.003 ms | persistent-path diagnostic for a 56.9 MB artifact; exact cached output still `64/64` |
 | invalid trusted cursor | ~42.3 tok/s, ~23.64 ms/tok | fails closed: zero proposals, active verifier disabled, near plain fallback |
 
 CUDA cache-replay caveats:
@@ -549,7 +566,7 @@ CUDA cache-replay caveats:
 - The fast rows are not arbitrary generation. They measure exact replay from a validated session/source cursor, which is the intended primitive for prompt/session cache hits and repeated known spans.
 - Exact greedy parity is preserved by verifying every proposed token through the target stack before committing it.
 - Wrong cursors must fail closed. The trusted-source mode is only trusted after the source-prefix gate passes; otherwise it falls back near plain decode speed instead of accepting proposal tokens.
-- The numbers above still exclude durable cache lookup, artifact IO, and hashing. The host-backed full-cache row includes host-to-device restore but intentionally copies all KV capacity. The live-KV row trims unused KV rows, but recurrent state still dominates the artifact at these context lengths.
+- The host-backed live-KV row excludes durable cache lookup, artifact IO, and hashing; the IO/hash row includes a simple persistent-path file write/read plus host SHA-256 tool timing, but still excludes pg/session lookup and production artifact indexing.
 - Trusted artifact restore is a cache-hit fast-forward path, not speculative decoding. It is only exact if the restored state artifact and emitted token span are validated against the same model/tokenizer/config/source contract.
 
 ### Speculative Decode Harnesses

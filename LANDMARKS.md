@@ -13460,3 +13460,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next serialization frame should target recurrent-state representation and durable IO/hash cost, not only KV length. KV length becomes more important at long context.
 - maieutic: The live-KV proof assumes attention never reads rows beyond the restored cursor. The exact `ok=true` checks support that for these cursor shapes, but long-context and nonzero `start_pos` should be tested before broad claims.
 - adversary: Do not infer that live-KV is enough for production. The measured path still excludes disk read, pg/session lookup, hash verification, compression, and allocator behavior under repeated restores.
+
+**decision_update_297:** Added a trusted artifact IO/hash timing probe. `--known-replay-trusted-artifact-io-probe` writes the host artifact to a file, hashes it with the host `sha256sum`/`shasum` tool, reads it back into a fresh host snapshot, and restores from the read copy. This keeps CUDA linking independent of OpenSSL while measuring the product boundary that device-only and host-only restore probes excluded.
+
+**evidence_update_297:**
+- claim: "Persistent-path IO and host SHA-256 dominate live-KV H2D restore for a 64-token trusted artifact."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start1/gen64 with `--known-replay-trusted-artifact-live-kv --known-replay-trusted-artifact-io-probe --known-replay-trusted-artifact-io-path /build/persisten/cogni-ml/tmp/qwen_artifact_io_probe.bin` printed `known_replay_trusted_artifact_bytes=56885248`, `known_replay_trusted_artifact_recurrent_bytes=52690944`, `known_replay_trusted_artifact_kv_bytes=4194304`, `known_replay_trusted_artifact_write_ms=17.695`, `known_replay_trusted_artifact_read_ms=42.046`, `known_replay_trusted_artifact_hash_ms=59.556`, `known_replay_trusted_artifact_restore_ms=13.003`, `known_replay_accepted=64`, `known_replay_full_accept=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: artifact file format, persistent storage path, host hash implementation, CUDA restore path, or state byte layout changes
+- claim: "Persistent-path IO/hash timing stays in the same regime for a non-zero shorter cursor."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9/gen24 with the same live-KV IO probe printed `known_replay_trusted_artifact_bytes=54788096`, `known_replay_trusted_artifact_recurrent_bytes=52690944`, `known_replay_trusted_artifact_kv_bytes=2097152`, `known_replay_trusted_artifact_write_ms=18.249`, `known_replay_trusted_artifact_read_ms=42.994`, `known_replay_trusted_artifact_hash_ms=53.814`, `known_replay_trusted_artifact_restore_ms=12.825`, `known_replay_accepted=24`, `known_replay_full_accept=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: artifact file format, persistent storage path, host hash implementation, or nonzero cursor snapshot sizing changes
+- claim: "The CUDA probe can time artifact hashing without adding OpenSSL linkage."
+  source: the first remote build with Crystal `Digest::SHA256` failed to link `EVP_MD_size`; after switching the diagnostic to host `sha256sum`/`shasum`, the remote CUDA build succeeded and the IO probe printed `known_replay_trusted_artifact_sha256_12`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA host environment, available hash tools, or Crystal/OpenSSL link configuration changes
+
+**quadrumvirate_update_297:**
+- cassandra: Product cache replay will not feel like the `~11ms` H2D lower bound if it synchronously reads and hashes 55-57MB artifacts on the critical path.
+- daedalus: The next frame is artifact service design: memory-mapped or pinned host artifacts, async prefetch before decode needs them, hash-at-write plus manifest validation, and recurrent-state compression/tiling.
+- maieutic: The hash timing uses an external host tool, so it includes process/tool overhead and is not a pure library SHA-256 benchmark. It is still a useful upper-ish product-boundary signal.
+- adversary: Do not weaken artifact integrity silently. Any faster hash/manifest design must preserve model/tokenizer/config/source/state binding, or it stops being exact cache replay.
