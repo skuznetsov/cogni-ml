@@ -352,6 +352,14 @@ gen24 remained noisy (`43.618ms` read). This points to some avoidable allocation
 fragmentation cost, but not enough to change the main conclusion: cache artifacts
 need async prefetch or a resident artifact service to stay off the decode
 critical path.
+A first scalar CPU recurrent-state block-INT8 codec diagnostic compresses the
+`52,690,944` recurrent bytes to `13.18-14.00MB` (`25.0-26.6%`) depending on
+block size. On start1/gen64, block sizes `64/256/1024/4096` measured relative
+RMSE `0.008798/0.012300/0.015476/0.019087`; encode/decode stayed around
+`457-469ms` / `121-125ms`. This is not a production codec yet: it proves the
+state is quantizable to about 4x smaller with modest error, but scalar CPU
+codec cost is far too high and the compressed state has not yet passed a
+restore/continuation parity gate.
 
 Build the Metal bridge once:
 

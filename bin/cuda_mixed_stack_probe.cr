@@ -52,8 +52,8 @@ def read_host_snapshot_file(path : String, template : ML::CUDA::QwenMixedStackRu
   File.open(path, "r") do |file|
     buffers.each { |buffer| file.read_fully(buffer) }
   end
-  ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot.new(buffers, template.include_kv,
-    template.kv_tokens, template.recurrent_bytes_total, template.kv_bytes_total)
+  ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot.new(buffers, template.buffer_roles,
+    template.include_kv, template.kv_tokens, template.recurrent_bytes_total, template.kv_bytes_total)
 end
 
 def read_host_snapshot_file_contiguous(path : String, template : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot) : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot
@@ -67,8 +67,96 @@ def read_host_snapshot_file_contiguous(path : String, template : ML::CUDA::QwenM
   end
   raise "artifact contiguous read size mismatch" unless offset.to_u64 == template.bytesize_total
 
-  ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot.new(buffers, template.include_kv,
-    template.kv_tokens, template.recurrent_bytes_total, template.kv_bytes_total, [storage])
+  ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot.new(buffers, template.buffer_roles,
+    template.include_kv, template.kv_tokens, template.recurrent_bytes_total, template.kv_bytes_total, [storage])
+end
+
+alias RecurrentInt8CodecBench = NamedTuple(
+  raw_bytes: UInt64,
+  encoded_bytes: UInt64,
+  blocks: Int32,
+  encode_ms: Float64,
+  decode_ms: Float64,
+  rel_rmse: Float64,
+  max_abs: Float32)
+
+def recurrent_int8_codec_bench(snapshot : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot,
+                               block_size : Int32) : RecurrentInt8CodecBench
+  raise ArgumentError.new("block_size must be positive") unless block_size > 0
+
+  recurrent_buffers = [] of Bytes
+  snapshot.buffers.each_with_index do |buffer, idx|
+    recurrent_buffers << buffer if snapshot.buffer_roles[idx] == 0_u8
+  end
+  raw_bytes = recurrent_buffers.sum(0_u64) { |buffer| buffer.size.to_u64 }
+  total_values = (raw_bytes // 4_u64).to_i
+  quant = Array(Int8).new(total_values, 0_i8)
+  scales = [] of Float32
+  max_abs_global = 0.0_f32
+
+  t_encode = Time.instant
+  q_idx = 0
+  recurrent_buffers.each do |buffer|
+    values = buffer.to_unsafe.as(Float32*)
+    count = buffer.size // 4
+    offset = 0
+    while offset < count
+      n = Math.min(block_size, count - offset)
+      max_abs = 0.0_f32
+      n.times do |i|
+        v_abs = values[offset + i].abs
+        max_abs = v_abs if v_abs > max_abs
+      end
+      max_abs_global = max_abs if max_abs > max_abs_global
+      scale = max_abs > 0.0_f32 ? max_abs / 127.0_f32 : 1.0_f32
+      scales << scale
+      n.times do |i|
+        q = (values[offset + i] / scale).round.to_i
+        quant[q_idx + i] = q.clamp(-127, 127).to_i8
+      end
+      q_idx += n
+      offset += n
+    end
+  end
+  encode_ms = (Time.instant - t_encode).total_milliseconds
+
+  t_decode = Time.instant
+  sum_sq = 0.0
+  err_sq = 0.0
+  q_idx = 0
+  block_idx = 0
+  recurrent_buffers.each do |buffer|
+    values = buffer.to_unsafe.as(Float32*)
+    count = buffer.size // 4
+    offset = 0
+    while offset < count
+      n = Math.min(block_size, count - offset)
+      scale = scales[block_idx]
+      n.times do |i|
+        orig = values[offset + i].to_f64
+        decoded = (quant[q_idx + i].to_i.to_f32 * scale).to_f64
+        sum_sq += orig * orig
+        diff = decoded - orig
+        err_sq += diff * diff
+      end
+      q_idx += n
+      offset += n
+      block_idx += 1
+    end
+  end
+  decode_ms = (Time.instant - t_decode).total_milliseconds
+  rel_rmse = sum_sq > 0.0 ? Math.sqrt(err_sq / sum_sq) : 0.0
+  encoded_bytes = quant.size.to_u64 + scales.size.to_u64 * 4_u64
+
+  {
+    raw_bytes: raw_bytes,
+    encoded_bytes: encoded_bytes,
+    blocks: scales.size,
+    encode_ms: encode_ms,
+    decode_ms: decode_ms,
+    rel_rmse: rel_rmse,
+    max_abs: max_abs_global,
+  }
 end
 
 alias FfnPcaUpdownAdapter = NamedTuple(
@@ -418,6 +506,8 @@ known_replay_trusted_artifact_live_kv = false
 known_replay_trusted_artifact_io_probe = false
 known_replay_trusted_artifact_io_path = ""
 known_replay_trusted_artifact_contiguous_read = false
+known_replay_trusted_artifact_codec_bench = false
+known_replay_trusted_artifact_codec_block = 256
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -499,6 +589,8 @@ OptionParser.parse do |p|
   p.on("--known-replay-trusted-artifact-io-probe", "With host artifact restore, time artifact write, read, and SHA-256 hash around the H2D restore") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-io-path PATH", "Path for --known-replay-trusted-artifact-io-probe; default is a temporary file") { |v| known_replay_trusted_artifact_io_path = v }
   p.on("--known-replay-trusted-artifact-contiguous-read", "With artifact IO probe, read the artifact into one host allocation and restore from slices") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; known_replay_trusted_artifact_contiguous_read = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-codec-bench", "With host artifact restore, benchmark block-INT8 compression on recurrent-state buffers") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-codec-block N", "Block size for recurrent block-INT8 codec bench, default 256") { |v| known_replay_trusted_artifact_codec_block = v.to_i }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -648,6 +740,7 @@ raise "--known-replay-trusted-artifact-restore requires --known-replay-history" 
 raise "--known-replay-trusted-artifact-restore requires --known-replay-candidates or --known-replay-history" if known_replay_trusted_artifact_restore && known_replay_candidates.empty?
 raise "--known-replay-trusted-artifact-restore is incompatible with --known-replay-active-schedule-run" if known_replay_trusted_artifact_restore && !known_replay_active_schedule_run.empty?
 raise "--known-replay-trusted-artifact-restore is incompatible with --known-replay-active-tokens" if known_replay_trusted_artifact_restore && known_replay_active_tokens > 0
+raise "--known-replay-trusted-artifact-codec-block must be positive" unless known_replay_trusted_artifact_codec_block > 0
 known_replay_active_schedule_run.each do |size|
   raise "--known-replay-active-schedule-run sizes must be positive" unless size > 0
 end
@@ -931,6 +1024,13 @@ begin
   known_replay_trusted_artifact_read_ms = 0.0
   known_replay_trusted_artifact_hash_ms = 0.0
   known_replay_trusted_artifact_sha256_12 = ""
+  known_replay_trusted_artifact_codec_raw_bytes = 0_u64
+  known_replay_trusted_artifact_codec_encoded_bytes = 0_u64
+  known_replay_trusted_artifact_codec_blocks = 0
+  known_replay_trusted_artifact_codec_encode_ms = 0.0
+  known_replay_trusted_artifact_codec_decode_ms = 0.0
+  known_replay_trusted_artifact_codec_rel_rmse = 0.0
+  known_replay_trusted_artifact_codec_max_abs = 0.0_f32
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -1558,6 +1658,16 @@ begin
         known_replay_trusted_artifact_bytes = artifact_snapshot.bytesize_total
         known_replay_trusted_artifact_recurrent_bytes = artifact_snapshot.recurrent_bytes_total
         known_replay_trusted_artifact_kv_bytes = artifact_snapshot.kv_bytes_total
+        if known_replay_trusted_artifact_codec_bench
+          codec = recurrent_int8_codec_bench(artifact_snapshot, known_replay_trusted_artifact_codec_block)
+          known_replay_trusted_artifact_codec_raw_bytes = codec[:raw_bytes]
+          known_replay_trusted_artifact_codec_encoded_bytes = codec[:encoded_bytes]
+          known_replay_trusted_artifact_codec_blocks = codec[:blocks]
+          known_replay_trusted_artifact_codec_encode_ms = codec[:encode_ms]
+          known_replay_trusted_artifact_codec_decode_ms = codec[:decode_ms]
+          known_replay_trusted_artifact_codec_rel_rmse = codec[:rel_rmse]
+          known_replay_trusted_artifact_codec_max_abs = codec[:max_abs]
+        end
         poison_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
         emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, known_replay_history[0])
         hidden.times { |h| poison_xs[h] = emb[h] }
@@ -2022,6 +2132,16 @@ begin
       lines << "known_replay_trusted_artifact_hash_ms=#{known_replay_trusted_artifact_hash_ms.round(3)}"
       lines << "known_replay_trusted_artifact_sha256_12=#{known_replay_trusted_artifact_sha256_12}"
       lines << "known_replay_trusted_artifact_restore_ms=#{known_replay_trusted_artifact_restore_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_codec_bench=#{known_replay_trusted_artifact_codec_bench}"
+      lines << "known_replay_trusted_artifact_codec_block=#{known_replay_trusted_artifact_codec_block}"
+      lines << "known_replay_trusted_artifact_codec_raw_bytes=#{known_replay_trusted_artifact_codec_raw_bytes}"
+      lines << "known_replay_trusted_artifact_codec_encoded_bytes=#{known_replay_trusted_artifact_codec_encoded_bytes}"
+      lines << "known_replay_trusted_artifact_codec_ratio=#{known_replay_trusted_artifact_codec_raw_bytes > 0 ? (known_replay_trusted_artifact_codec_encoded_bytes.to_f64 / known_replay_trusted_artifact_codec_raw_bytes).round(4) : 0.0}"
+      lines << "known_replay_trusted_artifact_codec_blocks=#{known_replay_trusted_artifact_codec_blocks}"
+      lines << "known_replay_trusted_artifact_codec_encode_ms=#{known_replay_trusted_artifact_codec_encode_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_codec_decode_ms=#{known_replay_trusted_artifact_codec_decode_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_codec_rel_rmse=#{known_replay_trusted_artifact_codec_rel_rmse.round(6)}"
+      lines << "known_replay_trusted_artifact_codec_max_abs=#{known_replay_trusted_artifact_codec_max_abs}"
     end
     unless known_replay_history.empty?
       lines << "known_replay_history_tokens=#{known_replay_history.size}"
@@ -2176,6 +2296,8 @@ begin
   puts "known_replay_trusted_artifact_io_probe_arg=#{known_replay_trusted_artifact_io_probe}"
   puts "known_replay_trusted_artifact_io_path_arg=#{known_replay_trusted_artifact_io_path}"
   puts "known_replay_trusted_artifact_contiguous_read_arg=#{known_replay_trusted_artifact_contiguous_read}"
+  puts "known_replay_trusted_artifact_codec_bench_arg=#{known_replay_trusted_artifact_codec_bench}"
+  puts "known_replay_trusted_artifact_codec_block_arg=#{known_replay_trusted_artifact_codec_block}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"

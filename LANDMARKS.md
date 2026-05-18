@@ -13500,3 +13500,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The frame should move from "make one read call faster" to "avoid critical-path read/hash entirely" via async prefetch, resident mmap/pinned cache, or session-local artifact warmup.
 - maieutic: These runs are not a clean storage benchmark because OS page cache and previous writes can affect read timings. The correctness signal is strong; the timing signal is directional.
 - adversary: Do not overfit to contiguous read. It preserves exact output, but it does not solve hash cost or recurrent-state artifact size.
+
+**decision_update_299:** Added the first recurrent-state codec diagnostic for trusted artifacts. `--known-replay-trusted-artifact-codec-bench` runs a scalar CPU block-INT8 encode/decode error benchmark over recurrent host buffers only. This is a compression-quality/cost probe, not a trusted compressed restore path yet.
+
+**evidence_update_299:**
+- claim: "Recurrent state is quantizable to about 4x smaller with modest block-INT8 reconstruction error."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start1/gen64 live-KV artifact with block256 codec bench printed `known_replay_trusted_artifact_codec_raw_bytes=52690944`, `known_replay_trusted_artifact_codec_encoded_bytes=13378560`, `known_replay_trusted_artifact_codec_ratio=0.2539`, `known_replay_trusted_artifact_codec_rel_rmse=0.0123`, `known_replay_trusted_artifact_codec_max_abs=43.62532`, `known_replay_accepted=64`, `known_replay_full_accept=true`, and `ok=true` for the uncompressed trusted restore path.
+  verified_at: 2026-05-18
+  decay_trigger: recurrent state layout, codec implementation, model architecture, artifact snapshot semantics, or parity-gate implementation changes
+- claim: "The current scalar CPU codec is far too slow for critical-path artifact use."
+  source: same block256 bench printed `known_replay_trusted_artifact_codec_encode_ms=460.897` and `known_replay_trusted_artifact_codec_decode_ms=122.467`. Block sweep results were similar: block64 `469.240/124.608ms`, block1024 `458.173/121.891ms`, block4096 `457.235/121.647ms` for encode/decode.
+  verified_at: 2026-05-18
+  decay_trigger: codec vectorization, GPU codec implementation, CPU host, compiler optimization, or block-size strategy changes
+- claim: "Block size trades a small amount of accuracy for slightly smaller metadata but does not change scalar CPU runtime much."
+  source: block64/256/1024/4096 sweep on the same start1/gen64 artifact reported ratios `0.2656/0.2539/0.2510/0.2502` and relative RMSE `0.008798/0.012300/0.015476/0.019087`.
+  verified_at: 2026-05-18
+  decay_trigger: codec block quantization, state distribution, or model/context changes
+
+**quadrumvirate_update_299:**
+- cassandra: Compression has a plausible byte win, but CPU scalar encode/decode increases the potential unless moved off critical path or ported to vectorized/GPU code.
+- daedalus: The next legal move is not to trust compressed state; it is to run a compressed-restore parity/continuation gate. If parity fails, switch to the dual frame: use compressed recurrent state only for draft/proposal and verify exactly.
+- maieutic: The `ok=true` signal here validates the surrounding uncompressed trusted replay path, not compressed-state correctness. The codec currently measures reconstruction error only.
+- adversary: Do not promote block-INT8 as exact artifact compression until decoded-state restore produces identical continuation or a bounded exact-verifier acceptance result.

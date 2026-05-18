@@ -45,6 +45,7 @@ module ML::CUDA
 
     class HostDecodeStateSnapshot
       getter buffers : Array(Bytes)
+      getter buffer_roles : Array(UInt8)
       getter include_kv : Bool
       getter kv_tokens : Int32?
       getter recurrent_bytes_total : UInt64
@@ -53,11 +54,14 @@ module ML::CUDA
       getter backing_stores : Array(Bytes)
 
       def initialize(@buffers : Array(Bytes),
+                     @buffer_roles : Array(UInt8),
                      @include_kv : Bool,
                      @kv_tokens : Int32? = nil,
                      @recurrent_bytes_total : UInt64 = 0_u64,
                      @kv_bytes_total : UInt64 = 0_u64,
                      @backing_stores : Array(Bytes) = [] of Bytes)
+        raise ArgumentError.new("host snapshot buffer/role count mismatch") unless @buffers.size == @buffer_roles.size
+
         @bytesize_total = @buffers.sum(0_u64) { |buffer| buffer.size.to_u64 }
       end
     end
@@ -299,24 +303,29 @@ module ML::CUDA
 
     def snapshot_decode_state_host(include_kv : Bool = true, kv_tokens : Int32? = nil) : HostDecodeStateSnapshot
       buffers = [] of Bytes
+      buffer_roles = [] of UInt8
       recurrent_bytes_total = 0_u64
       kv_bytes_total = 0_u64
       @runners.each do |runner|
         case runner
         in QwenRecurrentLayerRunner
           snapshot_host_buffer!(buffers, runner.conv_state_device_ptr, runner.conv_state_bytesize, "snapshot host conv_state")
+          buffer_roles << 0_u8
           snapshot_host_buffer!(buffers, runner.ssm_state_device_ptr, runner.ssm_state_bytesize, "snapshot host ssm_state")
+          buffer_roles << 0_u8
           recurrent_bytes_total += runner.conv_state_bytesize.to_u64 + runner.ssm_state_bytesize.to_u64
         in QwenFullAttnLayerRunner
           if include_kv
             kv_bytesize = kv_tokens ? runner.kv_cache_bytesize_for_tokens(kv_tokens.not_nil!) : runner.kv_cache_bytesize
             snapshot_host_buffer!(buffers, runner.k_cache_device_ptr, kv_bytesize, "snapshot host k_cache")
+            buffer_roles << 1_u8
             snapshot_host_buffer!(buffers, runner.v_cache_device_ptr, kv_bytesize, "snapshot host v_cache")
+            buffer_roles << 1_u8
             kv_bytes_total += kv_bytesize.to_u64 * 2_u64
           end
         end
       end
-      HostDecodeStateSnapshot.new(buffers, include_kv, kv_tokens, recurrent_bytes_total, kv_bytes_total)
+      HostDecodeStateSnapshot.new(buffers, buffer_roles, include_kv, kv_tokens, recurrent_bytes_total, kv_bytes_total)
     end
 
     def restore_decode_state(snapshot : DecodeStateSnapshot) : Nil
