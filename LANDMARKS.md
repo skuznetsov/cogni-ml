@@ -13258,3 +13258,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next frame is not more verifier mechanics; it is gating and source separation. The controller needs a trusted source cursor/cache hit before enabling active replay, and should fall back early when confidence is weak.
 - maieutic: This is exact greedy parity through verification, not approximate generation. The speedup depends on proposal acceptance; proposal quality remains an external condition.
 - adversary: Do not claim global CUDA victory from the full-accept case. The safe claim is conditional: high-confidence cache/cursor replay can run near the known-span verifier speed; bad cursors regress.
+
+**decision_update_286:** Split live n-gram history from cache/source replay history for the active CUDA controller. `--greedy-loop-probe-ngram-source-history` now supplies cursor proposals, while `--greedy-loop-prefix-tokens` / `--greedy-loop-probe-ngram-history` remain the live model history and are updated only after exact-verified tokens. This removes the previous test hack where proposal history had to end with the live prefix token.
+
+**evidence_update_286:**
+- claim: "The active online controller can replay from a separate cache/source history at start0 without changing exact output."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B gen24 with live prefix `0`, separate source history, replay cursor `1`, gamma16, schedule `4,4,8,16`, and active verification accepted `24/24`, used chunks `4,4,8,8`, printed `chunk_probe_ngram_history_tokens=25`, `chunk_probe_ngram_source_history_tokens=33`, `cuda_ms=297.043`, `cuda_ms_per_token=12.377`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: n-gram source/live history split, cursor policy, active verifier path, or session-cache representation
+- claim: "The active online controller can replay from a non-zero source cursor while live prefix state is separate."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B gen24 with live prefix `0,198,2,220,16,13,27416,198,760`, separate source history, replay cursor `9`, gamma16, schedule `4,4,8,16`, and active verification accepted `24/24`, used chunks `4,4,8,8`, printed `cuda_ms=286.771`, `cuda_ms_per_token=11.949`, separate cold `greedy_prefix_ms=187.905`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: prefix-state construction/restore, source-history cursor alignment, active verifier path, or CUDA WBA kernels
+
+**quadrumvirate_update_286:**
+- cassandra: The previous combined-history interface would fail real cache hits because source history and live prefix are different objects. The split fixes that API-level mismatch.
+- daedalus: The next production step is not another probe flag; it is a cache record containing source tokens, cursor, and decode-state snapshot/restore metadata.
+- maieutic: This proves source/live separation for supplied token lists, not persistence, hashing, or pg-backed lookup.
+- adversary: Cursor validation remains mandatory. A wrong source cursor still regresses, as shown by the reject branch in update_285.
