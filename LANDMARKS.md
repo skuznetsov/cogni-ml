@@ -13716,3 +13716,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Product shape is now tiered artifact selection: BF16 for early/high-risk, INT8 for later/stable, raw only as fail-closed fallback or when stronger evidence is missing.
 - maieutic: This does not prove compressed artifacts are universally exact; it proves the harness can express and verify a safer mixed policy with route visibility.
 - adversary: Route reporting is part of the trust contract. Keep `selected_format` and `restore_policy` in output so raw fallbacks or tier changes cannot silently inflate correctness claims.
+
+**decision_update_311:** Broadened the mixed recurrent artifact policy and changed the late INT8 implicit block size from 256 to 32 only when `--known-replay-trusted-artifact-codec-late-format=int8` is used without an explicit `--known-replay-trusted-artifact-codec-block`. Non-mixed INT8 codec checks keep the historical block256 default.
+
+**evidence_update_311:**
+- claim: "Block256 is not robust enough as the default late INT8 trusted tier for longer free-run gates."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B mixed BF16-early/block256-late run over seeds `0,1,2,16,198,220,760,1919`, cursors `1/16`, `9/16`, `33/16`, `65/16`, and 32 free-run steps passed `28/32` but failed four INT8-late cases: `seed=1,start=65` reached `4/32`, `seed=16,start=9` reached `26/32`, `seed=16,start=65` reached `31/32`, and `seed=1919,start=33` reached `21/32`.
+  verified_at: 2026-05-18
+  decay_trigger: prompt/history suite, free-run length, INT8 block policy, codec implementation, or model weights change
+- claim: "BF16 remains the safer fallback for the observed INT8-late failures."
+  source: targeted reruns of the four failing cases with `--known-replay-trusted-artifact-codec-format=bf16` all passed `32/32` free-run parity; GPU BF16 restore was about `4.888-5.695ms`.
+  verified_at: 2026-05-18
+  decay_trigger: BF16 codec implementation, broader prompts, longer free-run gates, or artifact restore semantics change
+- claim: "Block32 is the current best late INT8 default on the broader matrix."
+  source: block64 fixed three of four block256 failures but still failed `seed=1919,start=33` at `26/32`; block32, block16, and block8 all passed that targeted case, with block32 ratio `0.2812`, rel-RMSE `0.007235`, and GPU restore `3.595ms`. The full BF16-early/block32-late matrix over 8 seeds x 4 cursors passed `32/32`; early BF16 restore was about `4.701-5.409ms`, late block32 INT8 restore about `3.23-4.927ms`, with ratio `0.2812`.
+  verified_at: 2026-05-18
+  decay_trigger: codec block-size policy, wider prompt suite, longer contexts, CUDA kernel changes, or trust criteria changes
+- claim: "The CLI preserves the old non-mixed block256 behavior while making mixed late INT8 safer by default."
+  source: remote smoke without an explicit block and with `late-format=int8` selected `known_replay_trusted_artifact_codec_block=32`, `selected_format=int8`, `gpu_block_i8_after_min_start`, and passed `seed=1919,start=33` with `32/32`. The old no-late-format smoke selected `block=256`, `selected_format=int8`, `gpu_block_i8`, and passed `seed=1919,start=9` with `16/16`.
+  verified_at: 2026-05-18
+  decay_trigger: option parsing, default block policy, or restore harness changes
+
+**quadrumvirate_update_311:**
+- cassandra: Longer self-fed gates expose late INT8 boundary sensitivity that shorter 16-step gates missed; block size is a trust parameter, not just compression ratio.
+- daedalus: The mixed policy should not be only cursor-age based. It needs precision tier plus block-size tier, and eventually prompt/cache-local validation before using INT8 as trusted state.
+- maieutic: Passing block32 on this matrix still does not prove arbitrary prompts or sampling modes. It only raises the current trusted-candidate default above the known block256 refutation.
+- adversary: Keep block256 available for explicit experiments, but do not let it be the implicit trusted mixed policy after a 32-step deterministic refutation.
