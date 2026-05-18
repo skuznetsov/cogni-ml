@@ -13622,3 +13622,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The trusted restore frame should narrow to block256. Block1024/block4096 remain useful as proposal-only or adaptive-codec candidates, not exact cache artifacts.
 - maieutic: The speed result survives the failure, but the artifact trust contract does not. A validated cache artifact must be fail-closed on deterministic greedy divergence.
 - adversary: Do not let average speed hide deterministic mismatch. A single same-command `ok=false` is enough to block trusted promotion for block1024.
+
+**decision_update_306:** Ran the first multi-cursor block256 GPU-restore falsifier and refuted universal trusted recurrent compression. The matrix used four generated 65-token histories (`seed=0,198,760,1919`) and six cursors (`1/16`, `9/16`, `17/16`, `25/16`, `33/8`, `41/8`) on the remote RTX 5060 Ti host.
+
+**evidence_update_306:**
+- claim: "Block256 GPU restore is fast and often stable, but not universally safe as an exact trusted recurrent artifact."
+  source: block256 passed `23/24` seed/cursor gates with `free_run_parity_count=16`, `free_run_parity_ok=true`, and `ok=true`; raw host restore was about `11.967-13.353ms` while GPU codec restore was about `2.815-4.042ms`. The failing case was `seed=1919,start=1,tokens=16`: `next_exact_top1=5435`, `next_decoded_top1=16661`, `free_run_parity_count=0`, `free_run_parity_ok=false`, `gpu_decode_check_ok=false`, and `ok=false`.
+  verified_at: 2026-05-18
+  decay_trigger: codec precision/layout changes, cursor-age gate, layer-selective compression, exact-verifier proposal route, model weights, or broader prompt-suite results
+- claim: "The early-cursor failure is not fixed by smaller scalar block sizes."
+  source: retesting the failing `seed=1919,start=1,tokens=16` cursor with block64, block128, and block256 all produced the same immediate wrong decoded token (`16661` instead of exact/source `5435`) despite lower block64 RMSE (`0.008927`) and higher storage ratio (`0.2656`). GPU codec restore remained fast (`2.828-3.475ms`), but correctness failed for all tested block sizes.
+  verified_at: 2026-05-18
+  decay_trigger: nonuniform/layer-selective codec, higher precision codec, state rescaling, exact acceptance gate, or prompt-suite changes
+
+**quadrumvirate_update_306:**
+- cassandra: Early recurrent states can be decision-boundary sensitive; smaller blocks reduce average RMSE but do not guarantee top1 stability.
+- daedalus: The next frame is risk-gated artifact layout: raw recurrent state for early/high-risk cursors, compressed recurrent state for proven stable cursors, and proposal-only use when exact trust is not proven.
+- maieutic: Compression speed is not the bottleneck anymore; trust classification is. The question becomes "when may this artifact be trusted?", not "how fast can we decode it?"
+- adversary: Do not publish a blanket compressed-cache claim. Current evidence supports a fail-closed adaptive cache policy, not universal lossy recurrent restore.
