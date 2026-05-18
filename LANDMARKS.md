@@ -13200,3 +13200,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful frame is no longer simulated schedule economics. We now have a real resident active verifier primitive; the next pivot is session/cache controller integration, not more offline schedule accounting.
 - maieutic: This proves exact verification of a supplied known candidate span, not proposal quality. Speedup over greedy still depends on a real source of high-acceptance candidate spans and cheap fallback.
 - adversary: The reject tests deliberately show accepted-prefix discard under no-recovery. Do not claim production speedup until the online controller can either tolerate that discard cost or add safe prefix recovery/state handoff.
+
+**decision_update_283:** Added a session/cache-state proxy for active scheduled known replay. `--known-replay-prefill-prefix` now replays history tokens before `--known-replay-start` to build the same verifier state a prompt/session cache would restore, reports that prefix build separately, and the CUDA probe sizes resident RoPE tables for non-zero known-replay cursors. This closes the diagnostic gap where start0 replay was valid but later replay cursors could silently run from the wrong state or with too-short RoPE tables.
+
+**evidence_update_283:**
+- claim: "Non-zero replay cursors need prefix/cache state; without it, the measurement is invalid."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B active schedule from history cursor start9 without prefix state rejected at local index `1`, accepted only `1/24`, and produced top1 `2614,513,264,1103`, diverging from the cached continuation after the first token.
+  verified_at: 2026-05-18
+  decay_trigger: known-replay cursor semantics, prefix-state restoration, or probe state initialization changes
+- claim: "Prefix-state active scheduled replay preserves exact continuation at a non-zero cursor."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B with `--known-replay-start 9 --known-replay-tokens 24 --known-replay-active-schedule-run 4,4,8,16 --known-replay-prefill-prefix` printed `known_replay_accepted=24`, `known_replay_full_accept=true`, chunks `4,4,8,8`, `cuda_ms=269.385`, `cuda_ms_per_token=11.224`, separate `known_replay_prefill_prefix_ms=191.481`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: active schedule state carry, prefix replay route, RoPE table sizing, or CUDA WBA kernels
+- claim: "Prefix-state active replay keeps the intended reject semantics."
+  source: remote prefix-state reject-at-6 replay from start9 verified chunks `4,4`, committed `4`, discarded accepted prefix `2`, rejected at index `6`, measured `91.136ms` for 8 verified rows, and printed `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: no-recovery policy, active schedule reject accounting, or fallback/recovery integration
+
+**quadrumvirate_update_283:**
+- cassandra: The hidden failure was non-zero replay using start0 state. The without-prefix rejection made the bug observable; prefix replay restored the expected continuation.
+- daedalus: This shifts the production frame to cache-state restore plus active scheduled verifier. Replaying the prefix is only a diagnostic proxy; the production path should load cached state instead of paying prefix time.
+- maieutic: The measured `269.385ms` excludes prefix build by design. That is valid for session-cache hit economics, but not for cold prompt ingest economics.
+- adversary: Real online integration still needs a safe state source, cursor validation by prompt/session hash, and fallback behavior after reject. This diagnostic proves verifier state alignment, not proposal-source quality.

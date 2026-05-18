@@ -338,6 +338,7 @@ known_replay_start = -1
 known_replay_tokens = 0
 known_replay_active_tokens = 0
 known_replay_active_schedule_run = [] of Int32
+known_replay_prefill_prefix = false
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -406,6 +407,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-tokens N", "Number of replay candidates to verify from --known-replay-history") { |v| known_replay_tokens = v.to_i }
   p.on("--known-replay-active-tokens N", "Diagnostic: allocate the full known-replay span but run/compare only the first N active rows") { |v| known_replay_active_tokens = v.to_i }
   p.on("--known-replay-active-schedule-run LIST", "Diagnostic: execute progressive active-row chunks on one resident known-replay stack") { |v| known_replay_active_schedule_run = parse_i32_list(v); perf_only = true }
+  p.on("--known-replay-prefill-prefix", "Diagnostic: replay history tokens before --known-replay-start to build cache/session state before active schedule timing") { known_replay_prefill_prefix = true }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -522,6 +524,8 @@ raise "--known-replay-active-tokens must be non-negative" unless known_replay_ac
 raise "--known-replay-active-tokens must be <= known replay span" if known_replay_active_tokens > known_replay_candidates.size
 raise "--known-replay-active-schedule-run requires --known-replay-candidates or --known-replay-history" if !known_replay_active_schedule_run.empty? && known_replay_candidates.empty?
 raise "--known-replay-active-schedule-run is incompatible with --known-replay-active-tokens" if !known_replay_active_schedule_run.empty? && known_replay_active_tokens > 0
+raise "--known-replay-prefill-prefix requires --known-replay-history" if known_replay_prefill_prefix && known_replay_history.empty?
+raise "--known-replay-prefill-prefix requires --known-replay-active-schedule-run" if known_replay_prefill_prefix && known_replay_active_schedule_run.empty?
 known_replay_active_schedule_run.each do |size|
   raise "--known-replay-active-schedule-run sizes must be positive" unless size > 0
 end
@@ -696,7 +700,14 @@ begin
   cuda_ctx = ML::CUDA::Context.create
   # Full-attention CUDA kernels index RoPE tables by absolute decode position,
   # so upload a resident table once and update only start_pos in token loops.
-  rope_table_tokens = start_pos + (greedy_loop_tokens > 0 ? greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0) : tokens)
+  decode_position_span = if greedy_loop_tokens > 0
+                           greedy_loop_tokens + Math.max(greedy_loop_prefix_tokens.size - 1, 0)
+                         elsif !known_replay_history.empty?
+                           (known_replay_start - 1) + tokens
+                         else
+                           tokens
+                         end
+  rope_table_tokens = start_pos + decode_position_span
   cos_table, sin_table = rope_tables(rope_table_tokens, 0, hparams.rope_dim_count, hparams.rope_freq_base)
 
   layers.each_with_index do |layer, idx|
@@ -778,6 +789,7 @@ begin
   known_replay_active_schedule_committed_tokens = 0
   known_replay_active_schedule_discarded_accept_prefix = 0
   known_replay_active_schedule_reject_index = -1
+  known_replay_prefill_prefix_ms = 0.0
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -1262,7 +1274,25 @@ begin
     warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false, run_head: !skip_output_head) }
 
     if !known_replay_active_schedule_run.empty?
+      known_replay_prefix_state_built = false
+      if known_replay_prefill_prefix && known_replay_start > 1
+        t_prefix = Time.instant
+        (known_replay_start - 1).times do |i|
+          prefix_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
+          emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, known_replay_history[i])
+          hidden.times { |h| prefix_xs[h] = emb[h] }
+          mixed_stack.active_tokens = 1
+          mixed_stack.upload_first_sequence_input(prefix_xs)
+          mixed_stack.update_decode_position(start_pos + i)
+          mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+            reset_sequence: i == 0, sync_end: true, read_head_outputs: false, run_head: false)
+        end
+        known_replay_prefill_prefix_ms = (Time.instant - t_prefix).total_milliseconds
+        known_replay_prefix_state_built = true
+      end
+
       schedule_pos = 0
+      replay_base_pos = start_pos + (known_replay_history.empty? ? 0 : known_replay_start - 1)
       t_active_schedule = Time.instant
       while schedule_pos < known_replay_candidates.size
         schedule_idx = Math.min(known_replay_active_schedule_full_accept_chunks, known_replay_active_schedule_run.size - 1)
@@ -1276,9 +1306,9 @@ begin
         end
         mixed_stack.upload_first_sequence_input(chunk_xs)
         mixed_stack.active_tokens = chunk_size
-        mixed_stack.update_decode_position(start_pos + schedule_pos)
+        mixed_stack.update_decode_position(replay_base_pos + schedule_pos)
         mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
-          reset_sequence: schedule_pos == 0, sync_end: true, read_head_outputs: true)
+          reset_sequence: schedule_pos == 0 && !known_replay_prefix_state_built, sync_end: true, read_head_outputs: true)
 
         exact_ids = output_head.top1_ids[0, chunk_size]
         known_replay_active_schedule_top1_ids.concat(exact_ids)
@@ -1574,6 +1604,8 @@ begin
       lines << "known_replay_active_schedule_committed_tokens=#{known_replay_active_schedule_committed_tokens}"
       lines << "known_replay_active_schedule_discarded_accept_prefix=#{known_replay_active_schedule_discarded_accept_prefix}"
       lines << "known_replay_active_schedule_reject_index=#{known_replay_active_schedule_reject_index}"
+      lines << "known_replay_prefill_prefix=#{known_replay_prefill_prefix}"
+      lines << "known_replay_prefill_prefix_ms=#{known_replay_prefill_prefix_ms.round(3)}"
     end
     unless known_replay_history.empty?
       lines << "known_replay_history_tokens=#{known_replay_history.size}"
@@ -1715,6 +1747,7 @@ begin
   puts "known_replay_tokens_arg=#{known_replay_tokens}"
   puts "known_replay_active_tokens_arg=#{known_replay_active_tokens}"
   puts "known_replay_active_schedule_run_arg=#{known_replay_active_schedule_run.join(",")}"
+  puts "known_replay_prefill_prefix_arg=#{known_replay_prefill_prefix}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"
