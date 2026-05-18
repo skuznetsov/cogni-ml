@@ -336,6 +336,7 @@ known_replay_history = [] of Int32
 known_replay_start = -1
 known_replay_tokens = 0
 known_replay_recover_on_reject = false
+known_replay_split_report = [] of Int32
 gpu_final_dump_path : String? = nil
 
 OptionParser.parse do |p|
@@ -399,6 +400,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-start N", "Candidate start index inside --known-replay-history; inputs start at N-1") { |v| known_replay_start = v.to_i }
   p.on("--known-replay-tokens N", "Number of replay candidates to verify from --known-replay-history") { |v| known_replay_tokens = v.to_i }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
+  p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--gpu-final-dump PATH", "Diagnostic: dump final hidden rows as raw little-endian f32 after a GPU run; works with --perf-only") { |v| gpu_final_dump_path = v }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -507,6 +509,10 @@ raise "--known-replay-recover-on-reject requires --known-replay-candidates or --
 if known_replay_recover_on_reject && (runtime_raw_q8 || runtime_skip_recurrent_ffn || runtime_pca_updown_zero || runtime_pca_updown_adapters_path)
   raise "--known-replay-recover-on-reject is only supported for the exact default runner route"
 end
+known_replay_split_report.each do |size|
+  raise "--known-replay-split-report sizes must be positive" unless size > 0
+end
+raise "--known-replay-split-report requires --known-replay-candidates or --known-replay-history" if !known_replay_split_report.empty? && known_replay_candidates.empty?
 raise "--gpu-logits-only is incompatible with --greedy-loop-tokens" if gpu_logits_only && greedy_loop_tokens > 0
 raise "--gpu-final-dump is incompatible with --greedy-loop-tokens" if gpu_final_dump_path && greedy_loop_tokens > 0
 raise "--gpu-final-dump is incompatible with --steady-reps/--steady-graph-reps" if gpu_final_dump_path && (steady_reps > 0 || steady_graph_reps > 0)
@@ -1420,6 +1426,43 @@ begin
     lines << "known_replay_recovery_top1=#{recovery_top1_ids.join(",")}" if known_replay_recover_on_reject
     lines << "known_replay_recovery_prefix_match=#{recovery_prefix_match}" if known_replay_recover_on_reject
     lines << "known_replay_recovery_released_main_stack=#{recovery_released_main_stack}" if known_replay_recover_on_reject
+    unless known_replay_split_report.empty?
+      lines << "known_replay_split_report=#{known_replay_split_report.join(",")}"
+      known_replay_split_report.each do |split_size|
+        split_chunks = 0
+        split_full_accept_chunks = 0
+        split_verified_tokens = 0
+        split_committed_tokens = 0
+        split_discarded_accept_prefix = 0
+        split_reject_index = -1
+        split_pos = 0
+        while split_pos < known_replay_candidates.size
+          chunk_size = Math.min(split_size, known_replay_candidates.size - split_pos)
+          split_chunks += 1
+          split_verified_tokens += chunk_size
+          local_accept = 0
+          chunk_size.times do |j|
+            row = split_pos + j
+            if gpu_top1_ids[row]? == known_replay_candidates[row]
+              local_accept += 1
+            else
+              split_reject_index = row
+              break
+            end
+          end
+          if local_accept == chunk_size
+            split_full_accept_chunks += 1
+            split_committed_tokens += chunk_size
+            split_pos += chunk_size
+          else
+            split_discarded_accept_prefix = local_accept
+            break
+          end
+        end
+        split_full_accept = split_committed_tokens == known_replay_candidates.size
+        lines << "known_replay_split_size_#{split_size}=chunks:#{split_chunks},full_accept_chunks:#{split_full_accept_chunks},verified_tokens:#{split_verified_tokens},committed_tokens:#{split_committed_tokens},discarded_accept_prefix:#{split_discarded_accept_prefix},reject_index:#{split_reject_index},full_accept:#{split_full_accept}"
+      end
+    end
     lines << "known_replay_accepted=#{accepted}"
     lines << "known_replay_total=#{known_replay_candidates.size}"
     lines << "known_replay_reject_index=#{reject_index}"
@@ -1563,6 +1606,7 @@ begin
   puts "known_replay_start_arg=#{known_replay_start}"
   puts "known_replay_tokens_arg=#{known_replay_tokens}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
+  puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "read_logits=#{read_logits}"
   puts "read_top2=#{read_top2}"
   puts "gpu_logits_only=#{gpu_logits_only}"

@@ -13074,3 +13074,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next frame is in-place bounded execution: reuse resident weights/buffers and make kernels honor active rows, rather than allocating another model-shaped stack.
 - maieutic: This refutation is host/memory-envelope specific. A larger GPU may fit a pool, but this project target includes commodity cards, so active-row support is the stronger design.
 - adversary: If a future reboot clears ghost memory, retest before treating this as universal; for now, do not design the CUDA controller around duplicate all-layer stacks.
+
+**decision_update_276:** Added CUDA known-replay split-economics reporting for full-accept-only controllers. `--known-replay-split-report LIST` uses the already computed resident top1 rows and expected candidates to report, for each split size, chunk count, full-accept chunks, verified token rows, committed token rows, discarded accepted-prefix rows, first reject index, and full-accept status. This is a controller diagnostic, not a new verifier route.
+
+**evidence_update_276:**
+- claim: "Known-replay split reporting preserves clean replay economics."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_known_split_cuda crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen`, `crystal spec spec/ngram_draft_spec.cr`, and `git diff --check -- bin/cuda_mixed_stack_probe.cr` passed. Remote RTX 5060 Ti positive 32-token derived replay with `--known-replay-split-report 1,2,4,8,16,32` reported `known_replay_full_accept=true` and `committed_tokens:32` for every split size; full-span timing was `cuda_ms_per_token=11.013`.
+  verified_at: 2026-05-18
+  decay_trigger: known-replay top1 accounting, split-report output contract, or full-accept-only commit semantics
+- claim: "For early rejects, small probe bands reduce discarded accepted prefixes and verified waste."
+  source: remote RTX 5060 Ti negative derived replay with first reject at index 2 and `--known-replay-split-report 1,2,4,8` reported: split8 `verified_tokens:8, committed_tokens:0, discarded_accept_prefix:2`; split4 `verified_tokens:4, committed_tokens:0, discarded_accept_prefix:2`; split2 `verified_tokens:4, committed_tokens:2, discarded_accept_prefix:0`; split1 `verified_tokens:3, committed_tokens:2, discarded_accept_prefix:0`. Full-span timing was `cuda_ms_per_token=12.305`.
+  verified_at: 2026-05-18
+  decay_trigger: controller band schedule, active-row recovery support, n-gram/cache router confidence model, or verifier chunk-cost model
+
+**quadrumvirate_update_276:**
+- cassandra: This confirms the no-recovery controller risk: large bands are excellent only when acceptance is high; early rejects burn both verifier rows and accepted-prefix opportunity.
+- daedalus: The near-term exact controller should be staged bands, not partial recovery: probe with size 1-2, then grow to size 4/8/16 after full-accept evidence.
+- maieutic: Split reporting counts verified token rows, not wall time. Real speed still depends on active-row WBA efficiency and launch overhead per split.
+- adversary: Do not overfit to the synthetic reject-at-2 case. The diagnostic should be run over real cache/session histories before promoting a global split schedule.
