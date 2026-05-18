@@ -899,7 +899,9 @@ begin
   chunk_batched_verify_accepts = 0
   chunk_batched_verify_rejects = 0
   chunk_batched_verify_last_reject_commits = 0
+  chunk_active_snapshot_ms = 0.0
   chunk_active_verify_ms = 0.0
+  chunk_active_restore_ms = 0.0
   chunk_active_verify_chunks = 0
   chunk_active_verify_accepts = 0
   chunk_active_verify_rejects = 0
@@ -1136,7 +1138,9 @@ begin
         used_batched_verify = false
 
         if greedy_loop_probe_chunk_active_verify && generated + proposal_ids.size <= greedy_loop_tokens
+          t_snapshot = Time.instant
           snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
+          chunk_active_snapshot_ms += (Time.instant - t_snapshot).total_milliseconds
           begin
             verify_inputs = [gpu_token] + proposal_ids[0, proposal_ids.size - 1]
             upload_active_embeddings(mixed_stack, token_embd, verify_inputs, tokens, hidden)
@@ -1162,7 +1166,9 @@ begin
 
             if rejected
               chunk_active_verify_rejects += 1
+              t_restore = Time.instant
               mixed_stack.restore_decode_state(snapshot)
+              chunk_active_restore_ms += (Time.instant - t_restore).total_milliseconds
             else
               chunk_active_verify_accepts += 1
               chunk_accepted_tokens += proposal_ids.size
@@ -1682,7 +1688,9 @@ begin
       lines << "chunk_probe_active_verify_chunks=#{chunk_active_verify_chunks}"
       lines << "chunk_probe_active_verify_accepts=#{chunk_active_verify_accepts}"
       lines << "chunk_probe_active_verify_rejects=#{chunk_active_verify_rejects}"
+      lines << "chunk_probe_active_snapshot_ms=#{chunk_active_snapshot_ms.round(3)}"
       lines << "chunk_probe_active_verify_ms=#{chunk_active_verify_ms.round(3)}"
+      lines << "chunk_probe_active_restore_ms=#{chunk_active_restore_ms.round(3)}"
       lines << "chunk_probe_active_verify_ms_per_chunk=#{(chunk_active_verify_ms / Math.max(chunk_active_verify_chunks, 1)).round(3)}"
     end
   elsif perf_only

@@ -13362,3 +13362,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The LTP/WBA lever here is not another kernel; it is matching band size to source trust. Artifact-level cache replay can use bulk WBA, while weak proposal streams need smaller recovery-friendly bands.
 - maieutic: Prefix validation alone does not prove future correctness. The stronger premise for schedule `64` is same-model/source-artifact replay, not generic n-gram suffix matching.
 - adversary: Keep schedule `64` opt-in/recommended only for durable trusted replay. Do not promote it as a universal decode policy until rejected-prefix recovery or stronger future-token validation exists.
+
+**decision_update_292:** Added active-verifier snapshot/restore attribution for CUDA cursor replay. The clean trusted bulk path is dominated by exact active WBA verification, not rollback copy. This narrows the next optimization target away from rollback mechanics and toward verifier-body/kernel economics or a stronger artifact contract that can use bulk bands safely.
+
+**evidence_update_292:**
+- claim: "Clean trusted bulk replay spends only a few milliseconds on rollback snapshot."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B valid trusted-source gen64 with schedule `64` printed `chunk_probe_active_snapshot_ms=2.587`, `chunk_probe_active_verify_ms=692.239`, `chunk_probe_active_restore_ms=0.0`, `cuda_ms=699.036`, `cuda_ms_per_token=10.922`, accepted `64/64`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: active verifier snapshot implementation, CUDA memory copy performance, schedule policy, or runner state layout changes
+- claim: "The reject path attribution captures restore cost and remains exact."
+  source: remote same-prefix corrupted-source replay with trusted-source gate active triggered one active reject and printed `chunk_probe_active_snapshot_ms=3.309`, `chunk_probe_active_verify_ms=141.325`, `chunk_probe_active_restore_ms=0.418`, `chunk_probe_active_verify_rejects=1`, `chunk_probe_accepted_tokens=0`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: active reject recovery logic, restore implementation, or source-history cursor policy changes
+- claim: "Invalid prefix-gated cursors avoid active verifier snapshot/restore work."
+  source: remote invalid start8/gamma64 trusted-source replay printed `chunk_probe_active_verify=false`, `chunk_probe_active_snapshot_ms=0.0`, `chunk_probe_active_verify_ms=0.0`, `chunk_probe_active_restore_ms=0.0`, `chunk_probe_raw_tokens=0`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: prefix-gate preflight logic or active verifier allocation policy changes
+
+**quadrumvirate_update_292:**
+- cassandra: Rollback removal can at most save low single-digit milliseconds on clean trusted replay; it is not a path to another large speedup.
+- daedalus: The remaining speed wall is the exact active verifier body. LTP/WBA should now target body fusion/band execution, not state-copy elimination.
+- maieutic: The attribution is for one 9B CUDA host and one replay shape. It should not be generalized to long-context KV restore or persisted cache IO.
+- adversary: Keep rollback in normal exact fallback paths. A no-backup/abort-on-reject variant would be a separate artifact-validation probe, not a generation path.
