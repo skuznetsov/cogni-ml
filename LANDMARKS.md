@@ -13540,3 +13540,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next frame is not scalar codec tuning. Either port encode/decode to a GPU/vectorized path for trusted cache restore, or use decoded compressed state as a proposal state and let the exact verifier police drift.
 - maieutic: One-token parity proves only that the tested decision boundary survived quantization. It does not prove hidden-state equivalence or long continuation stability.
 - adversary: Do not weaken the artifact trust contract. Compressed recurrent restore must remain fail-closed: if parity/acceptance evidence is weak, the compressed state is proposal-only, not trusted exact state.
+
+**decision_update_301:** Extended the decoded recurrent block-INT8 artifact restore gate from one-token parity to source-aligned multi-step continuation parity. `--known-replay-trusted-artifact-codec-restore-steps=N` now restores the exact artifact state, runs N known future inputs, restores the decoded block-INT8 recurrent snapshot, runs the same N inputs, and reports exact/decoded top1 sequences plus parity/source counts.
+
+**evidence_update_301:**
+- claim: "Decoded recurrent block-INT8 state preserves multi-step source-aligned continuation parity on the tested CUDA cursors."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start33/gen8 live-KV artifact with block256 printed `codec_restore_steps=8`, `codec_ratio=0.2539`, `rel_rmse=0.012862`, exact top1 sequence `13,16,33655,198,79214,2222,369,799`, decoded top1 sequence `13,16,33655,198,79214,2222,369,799`, `continuation_parity_count=8`, `continuation_source_count=8`, and `ok=true`. The same start33/gen8 gate passed block4096 with `ratio=0.2502`, `rel_rmse=0.019482`, `continuation_parity_count=8`, and `ok=true`. Start9/gen24 with block4096 passed a 16-step continuation with exact/decoded top1 sequence `13,20817,8809,13,198,550,220,16,13,16,33655,198,79214,2222,369,799`, `continuation_parity_count=16`, `continuation_source_count=16`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: recurrent codec implementation, source-aligned continuation harness, restore semantics, model/context distribution, or free-run acceptance results change
+
+**quadrumvirate_update_301:**
+- cassandra: Passing 8-16 teacher-forced steps makes the compression branch more credible, but drift may still appear under free-run self-feeding or different prompt distributions.
+- daedalus: The next pivot should be free-run or exact-verified acceptance, not more source-aligned parity on the same prompt. If that passes, move the codec off scalar CPU.
+- maieutic: Source-aligned parity answers "does decoded state behave like exact state under the same known inputs?" It does not answer "will decoded state generate the same future inputs by itself?"
+- adversary: Keep the fail-closed distinction: until free-run/acceptance evidence exists, compressed recurrent state is a promising artifact codec candidate, not a broadly trusted exact restore format.

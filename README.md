@@ -361,9 +361,12 @@ recurrent buffers back into a host snapshot, restores that state, and runs one
 continuation token against an exact uncompressed restored state. On the RTX 5060
 Ti host, block sizes `64/256/1024/4096` preserved the same next top1 on
 start9/gen24, and block `256/4096` also preserved the same next top1 on a later
-start33/gen8 cursor. This is still not a production codec: the current scalar
-CPU codec is too slow for the critical path, and one-token parity gates are
-narrow evidence, not a proof that recurrent INT8 artifacts are globally exact.
+start33/gen8 cursor. The multi-step source-aligned gate is stronger: block4096
+preserved `16/16` continuation top1 ids on start9/gen24, and block256/block4096
+preserved `8/8` continuation top1 ids on start33/gen8. This is still not a
+production codec: the current scalar CPU codec is too slow for the critical
+path, and source-aligned parity is not the same as proving arbitrary free-run
+greedy stability.
 
 Build the Metal bridge once:
 
