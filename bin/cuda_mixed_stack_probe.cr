@@ -337,6 +337,7 @@ known_replay_history = [] of Int32
 known_replay_start = -1
 known_replay_tokens = 0
 known_replay_active_tokens = 0
+known_replay_active_schedule_run = [] of Int32
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -404,6 +405,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-start N", "Candidate start index inside --known-replay-history; inputs start at N-1") { |v| known_replay_start = v.to_i }
   p.on("--known-replay-tokens N", "Number of replay candidates to verify from --known-replay-history") { |v| known_replay_tokens = v.to_i }
   p.on("--known-replay-active-tokens N", "Diagnostic: allocate the full known-replay span but run/compare only the first N active rows") { |v| known_replay_active_tokens = v.to_i }
+  p.on("--known-replay-active-schedule-run LIST", "Diagnostic: execute progressive active-row chunks on one resident known-replay stack") { |v| known_replay_active_schedule_run = parse_i32_list(v); perf_only = true }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -518,6 +520,11 @@ raise "--known-replay-tokens requires --known-replay-history" if known_replay_to
 raise "--known-replay-active-tokens requires --known-replay-candidates or --known-replay-history" if known_replay_active_tokens > 0 && known_replay_candidates.empty?
 raise "--known-replay-active-tokens must be non-negative" unless known_replay_active_tokens >= 0
 raise "--known-replay-active-tokens must be <= known replay span" if known_replay_active_tokens > known_replay_candidates.size
+raise "--known-replay-active-schedule-run requires --known-replay-candidates or --known-replay-history" if !known_replay_active_schedule_run.empty? && known_replay_candidates.empty?
+raise "--known-replay-active-schedule-run is incompatible with --known-replay-active-tokens" if !known_replay_active_schedule_run.empty? && known_replay_active_tokens > 0
+known_replay_active_schedule_run.each do |size|
+  raise "--known-replay-active-schedule-run sizes must be positive" unless size > 0
+end
 raise "--known-replay-recover-on-reject requires --known-replay-candidates or --known-replay-history" if known_replay_recover_on_reject && known_replay_candidates.empty?
 if known_replay_recover_on_reject && (runtime_raw_q8 || runtime_skip_recurrent_ffn || runtime_pca_updown_zero || runtime_pca_updown_adapters_path)
   raise "--known-replay-recover-on-reject is only supported for the exact default runner route"
@@ -764,6 +771,13 @@ begin
   end
 
   measured_tokens = tokens
+  known_replay_active_schedule_top1_ids = [] of Int32
+  known_replay_active_schedule_chunks = [] of Int32
+  known_replay_active_schedule_full_accept_chunks = 0
+  known_replay_active_schedule_verified_tokens = 0
+  known_replay_active_schedule_committed_tokens = 0
+  known_replay_active_schedule_discarded_accept_prefix = 0
+  known_replay_active_schedule_reject_index = -1
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -1247,7 +1261,52 @@ begin
   else
     warmup.times { mixed_stack.run_sequence(profile_phases: false, debug_readback: false, run_head: !skip_output_head) }
 
-    if steady_graph_reps > 0
+    if !known_replay_active_schedule_run.empty?
+      schedule_pos = 0
+      t_active_schedule = Time.instant
+      while schedule_pos < known_replay_candidates.size
+        schedule_idx = Math.min(known_replay_active_schedule_full_accept_chunks, known_replay_active_schedule_run.size - 1)
+        chunk_size = Math.min(known_replay_active_schedule_run[schedule_idx], known_replay_candidates.size - schedule_pos)
+        known_replay_active_schedule_chunks << chunk_size
+
+        chunk_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
+        chunk_size.times do |row|
+          emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, input_tokens[schedule_pos + row])
+          hidden.times { |h| chunk_xs[row * hidden + h] = emb[h] }
+        end
+        mixed_stack.upload_first_sequence_input(chunk_xs)
+        mixed_stack.active_tokens = chunk_size
+        mixed_stack.update_decode_position(start_pos + schedule_pos)
+        mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+          reset_sequence: schedule_pos == 0, sync_end: true, read_head_outputs: true)
+
+        exact_ids = output_head.top1_ids[0, chunk_size]
+        known_replay_active_schedule_top1_ids.concat(exact_ids)
+        known_replay_active_schedule_verified_tokens += chunk_size
+
+        local_accept = 0
+        chunk_size.times do |row|
+          expected = known_replay_candidates[schedule_pos + row]
+          if exact_ids[row]? == expected
+            local_accept += 1
+          else
+            known_replay_active_schedule_reject_index = schedule_pos + row
+            break
+          end
+        end
+
+        if local_accept == chunk_size
+          known_replay_active_schedule_full_accept_chunks += 1
+          known_replay_active_schedule_committed_tokens += chunk_size
+          schedule_pos += chunk_size
+        else
+          known_replay_active_schedule_discarded_accept_prefix = local_accept
+          break
+        end
+      end
+      gpu_ms = (Time.instant - t_active_schedule).total_milliseconds
+      measured_tokens = known_replay_active_schedule_verified_tokens
+    elsif steady_graph_reps > 0
       mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: true, run_head: !skip_output_head)
       stream = ML::CUDA::CUDAStream.new
       graph = nil.as(ML::CUDA::CUDAGraph?)
@@ -1395,7 +1454,15 @@ begin
   else
     lines << "debug_readback=false"
   end
-  gpu_top1_ids = skip_output_head ? [] of Int32 : (greedy_loop_tokens > 0 ? greedy_gpu_ids : output_head.top1_ids)
+  gpu_top1_ids = if skip_output_head
+                   [] of Int32
+                 elsif greedy_loop_tokens > 0
+                   greedy_gpu_ids
+                 elsif !known_replay_active_schedule_top1_ids.empty?
+                   known_replay_active_schedule_top1_ids
+                 else
+                   output_head.top1_ids
+                 end
   unless known_replay_candidates.empty?
     known_replay_compare_tokens = known_replay_active_tokens > 0 ? known_replay_active_tokens : known_replay_candidates.size
     known_replay_expected = known_replay_candidates[0, known_replay_compare_tokens]
@@ -1499,6 +1566,15 @@ begin
     lines << "known_replay_accept_rate_pct=#{(100.0 * accepted / Math.max(known_replay_expected.size, 1)).round(2)}"
     lines << "known_replay_active_tokens=#{known_replay_active_tokens}" if known_replay_active_tokens > 0
     lines << "known_replay_allocated_tokens=#{known_replay_candidates.size}" if known_replay_active_tokens > 0
+    unless known_replay_active_schedule_run.empty?
+      lines << "known_replay_active_schedule_run=#{known_replay_active_schedule_run.join(",")}"
+      lines << "known_replay_active_schedule_chunks=#{known_replay_active_schedule_chunks.join(",")}"
+      lines << "known_replay_active_schedule_full_accept_chunks=#{known_replay_active_schedule_full_accept_chunks}"
+      lines << "known_replay_active_schedule_verified_tokens=#{known_replay_active_schedule_verified_tokens}"
+      lines << "known_replay_active_schedule_committed_tokens=#{known_replay_active_schedule_committed_tokens}"
+      lines << "known_replay_active_schedule_discarded_accept_prefix=#{known_replay_active_schedule_discarded_accept_prefix}"
+      lines << "known_replay_active_schedule_reject_index=#{known_replay_active_schedule_reject_index}"
+    end
     unless known_replay_history.empty?
       lines << "known_replay_history_tokens=#{known_replay_history.size}"
       lines << "known_replay_start=#{known_replay_start}"
@@ -1638,6 +1714,7 @@ begin
   puts "known_replay_start_arg=#{known_replay_start}"
   puts "known_replay_tokens_arg=#{known_replay_tokens}"
   puts "known_replay_active_tokens_arg=#{known_replay_active_tokens}"
+  puts "known_replay_active_schedule_run_arg=#{known_replay_active_schedule_run.join(",")}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"

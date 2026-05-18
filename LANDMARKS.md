@@ -13182,3 +13182,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This changes the controller frame from "build the exact chunk size" to "allocate a max-band verifier once and execute active WBA bands inside it."
 - maieutic: This proves active prefixes from the initial state. It does not yet prove state handoff after accepted bands, fallback after reject, or a full online controller loop.
 - adversary: The next gate must run multiple active bands on the same resident verifier stack, updating active count and decode state between bands, before claiming the `4,4,8,16` schedule is operational.
+
+**decision_update_282:** Executed the WBA-aligned `4,4,8,16` schedule through one resident active-row CUDA verifier stack. The probe now supports `--known-replay-active-schedule-run LIST`: it allocates the known-replay span once, uploads each active band into the active prefix, updates decode position before the band, carries verifier state across full-accept chunks, and stops at the first reject without claiming unsafe accepted-prefix commits.
+
+**evidence_update_282:**
+- claim: "Resident active-row schedule execution preserves exact known replay across multiple active bands."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B clean 32-token replay with `--known-replay-active-schedule-run 4,4,8,16` printed `known_replay_accepted=32`, `known_replay_total=32`, `known_replay_full_accept=true`, `known_replay_active_schedule_chunks=4,4,8,16`, `known_replay_active_schedule_committed_tokens=32`, `cuda_ms=362.069`, `cuda_ms_per_token=11.315`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA active-row runner plumbing, known-replay schedule path, verifier state reset/update semantics, or WBA chunk kernels
+- claim: "The active schedule has the intended no-recovery reject semantics."
+  source: remote reject-at-6 replay verified chunks `4,4`, committed `4`, discarded accepted prefix `2`, and rejected at index `6`; remote reject-at-2 replay verified one 4-row chunk, committed `0`, discarded accepted prefix `2`, and rejected at index `2`, both with `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: schedule acceptance policy, fallback/recovery support, or real session reject distribution
+
+**quadrumvirate_update_282:**
+- cassandra: The likely failure was state/position drift between active bands; the clean 32-token replay matching every top1 across four bands refutes that for known replay.
+- daedalus: The useful frame is no longer simulated schedule economics. We now have a real resident active verifier primitive; the next pivot is session/cache controller integration, not more offline schedule accounting.
+- maieutic: This proves exact verification of a supplied known candidate span, not proposal quality. Speedup over greedy still depends on a real source of high-acceptance candidate spans and cheap fallback.
+- adversary: The reject tests deliberately show accepted-prefix discard under no-recovery. Do not claim production speedup until the online controller can either tolerate that discard cost or add safe prefix recovery/state handoff.

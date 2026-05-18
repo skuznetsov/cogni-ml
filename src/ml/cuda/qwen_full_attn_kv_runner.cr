@@ -258,7 +258,7 @@ module ML::CUDA
     def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
       raise ArgumentError.new("start_pos must be non-negative") unless start_pos >= 0
       half = @rope_dim // 2
-      min_rope_table = (start_pos + @tokens) * half
+      min_rope_table = (start_pos + @active_tokens) * half
       raise ArgumentError.new("cos/sin table size mismatch") unless cos_table.size >= min_rope_table && sin_table.size >= min_rope_table
 
       @start_pos = start_pos
@@ -273,7 +273,7 @@ module ML::CUDA
     def update_decode_position(start_pos : Int32) : Nil
       raise ArgumentError.new("start_pos must be non-negative") unless start_pos >= 0
       half = @rope_dim // 2
-      min_rope_table = (start_pos + @tokens) * half
+      min_rope_table = (start_pos + @active_tokens) * half
       raise ArgumentError.new("resident cos/sin table too small") unless @cos_table.size >= min_rope_table && @sin_table.size >= min_rope_table
 
       @start_pos = start_pos
