@@ -4,6 +4,11 @@ module ML::GGUF
   module NgramDraft
     extend self
 
+    record CandidateSpan,
+      ids : Array(Int32),
+      match_len : Int32,
+      source_start : Int32
+
     class IndexedHistory
       getter history : Array(Int32)
       getter min_ngram : Int32
@@ -64,6 +69,36 @@ module ML::GGUF
         end
       end
 
+      def candidate_span(gamma : Int32,
+                         recursive : Bool = false,
+                         min_candidates : Int32 = 0) : CandidateSpan?
+        raise ArgumentError.new("gamma must be positive") unless gamma > 0
+        raise ArgumentError.new("min_candidates must be non-negative") unless min_candidates >= 0
+        return nil if @history.empty?
+
+        first = candidates_once_span(gamma)
+        return nil unless first
+
+        ids = first.ids
+        if recursive && ids.size < gamma
+          scratch = fork
+          scratch.append(ids)
+          expanded = ids.dup
+          while expanded.size < gamma
+            chunk = scratch.candidates_once(gamma - expanded.size)
+            break if chunk.empty?
+
+            expanded.concat(chunk)
+            scratch.append(chunk)
+          end
+          ids = expanded
+        end
+
+        return nil if min_candidates > 0 && ids.size < min_candidates
+
+        CandidateSpan.new(ids, first.match_len, first.source_start)
+      end
+
       def match_len : Int32
         return 0 if @history.empty?
 
@@ -92,6 +127,10 @@ module ML::GGUF
       end
 
       protected def candidates_once(gamma : Int32) : Array(Int32)
+        candidates_once_span(gamma).try(&.ids) || [] of Int32
+      end
+
+      protected def candidates_once_span(gamma : Int32) : CandidateSpan?
         max_len = Math.min(@max_ngram, @history.size)
         max_len.downto(@min_ngram) do |n|
           if start = latest_prior_match_start(n)
@@ -101,11 +140,11 @@ module ML::GGUF
               result << @history[k]
               k += 1
             end
-            return result unless result.empty?
+            return CandidateSpan.new(result, n, start) unless result.empty?
           end
         end
 
-        [] of Int32
+        nil
       end
 
       private def latest_prior_match_start(n : Int32) : Int32?

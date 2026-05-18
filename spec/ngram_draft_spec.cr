@@ -42,6 +42,16 @@ describe ML::GGUF::NgramDraft do
     index.candidates(gamma: 4, recursive: true).should eq(ML::GGUF::NgramDraft.candidates(history, gamma: 4, max_ngram: 2, min_ngram: 2, recursive: true))
   end
 
+  it "reports the source span used for indexed candidates" do
+    history = [10, 11, 12, 13, 14, 10, 11, 12]
+    index = ML::GGUF::NgramDraft::IndexedHistory.new(history, max_ngram: 4, min_ngram: 3)
+
+    span = index.candidate_span(gamma: 2).not_nil!
+    span.ids.should eq([13, 14])
+    span.match_len.should eq(3)
+    span.source_start.should eq(0)
+  end
+
   it "reports the suffix match length used by the n-gram draft" do
     history = [1, 2, 3, 4, 1, 2]
 

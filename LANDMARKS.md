@@ -12948,3 +12948,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The CUDA path to beating llama.cpp is not single-token greedy micro-tuning; it is increasing the fraction of real generation served by exact verifier-shaped chunks via self-spec, n-gram, MTP, or another proposal source.
 - maieutic: "Faster than llama.cpp" must name the mode. Metal has prior ahead/parity evidence; CUDA greedy does not. CUDA verifier chunks have strong local throughput but require a controller acceptance rate to become user-visible speed.
 - adversary: llama.cpp `pp64` is far faster than the native known-span probe because it is a different prompt-processing workload with different batching/attention semantics. Do not use native known-span as a prefill victory claim.
+
+**decision_update_269:** Added a CUDA n-gram chunk proposal source that reuses the existing exact verifier stack instead of running a raw-Q8 proposal body. The probe now supports `--greedy-loop-probe-ngram` plus min/max n-gram, risk gate, explicit history, and a source-aligned replay cursor. The cursor is important: after a full accepted chunk it continues through the matched source span instead of re-searching ambiguous one-token matches, which turned a synthetic prompt-cache replay from partial/reject-heavy to 100% accepted.
+
+**evidence_update_269:**
+- claim: "The n-gram proposal controller is fail-closed and preserves exact greedy output when no economical repeat is available."
+  source: local `crystal spec spec/ngram_draft_spec.cr` -> `22 examples, 0 failures`; local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_ngram_cuda crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen` -> exit 0; remote RTX 5060 Ti all-layer Qwen3.5-9B seed0 gen64 with conservative `--greedy-loop-probe-ngram-min 4 --greedy-loop-probe-ngram-min-candidates 4` produced the same top1 sequence as plain greedy, with no proposed chunks (`raw_tokens=0`, `margin_fallbacks=64`) and `23.621 ms/tok` versus plain `23.460 ms/tok`.
+  verified_at: 2026-05-18
+  decay_trigger: n-gram risk gate changes, CUDA verifier copyback semantics, output-head top1 route, or greedy-loop history/prefill integration
+- claim: "When the proposal source can replay a known exact continuation, CUDA verified chunks beat llama.cpp tg64 on the same host."
+  source: remote RTX 5060 Ti synthetic oracle-history replay with `history=[0, exact64, 0]`, `--greedy-loop-probe-ngram-min 1 --greedy-loop-probe-ngram-max 1 --greedy-loop-probe-ngram-no-risk-gate`, and batched fast verifier produced 100% accepted chunks and exact top1 output. Gamma4 measured `11.428 ms/tok`; gamma8 `11.025 ms/tok`; gamma16 `10.838 ms/tok`, versus same-host llama.cpp CUDA tg64 `14.89 ms/tok`.
+  verified_at: 2026-05-18
+  decay_trigger: real prompt-cache/history integration, verifier chunk shape, model prompt distribution, CUDA driver/JIT, or llama.cpp benchmark refresh
+
+**quadrumvirate_update_269:**
+- cassandra: Raw-Q8 speculation failed because proposal cost was near full greedy. N-gram removes proposal-body cost entirely but only helps on repeat/cache workloads; non-repeat prompts must fall back before paying verifier chunks.
+- daedalus: The useful pivot is controller/data-flow, not another kernel: turn real generation into already-optimized WBA verifier chunks by supplying cheap exact-ish proposals from history/cache.
+- maieutic: The oracle-history replay is a lower-bound potential, not a claim that arbitrary prompts speed up. It proves the verifier path is fast enough if the controller can source accepted chunks.
+- adversary: Keep conservative min-length/min-candidate gates for default experiments. One bad gamma4 proposal on seed0 non-repeat added about `45ms` verifier overhead, so a production route needs prompt/prefix confidence and source-aligned cursoring before enabling aggressive n-gram.

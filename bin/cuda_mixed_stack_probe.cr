@@ -7,6 +7,7 @@
 require "json"
 require "option_parser"
 require "../src/ml/gguf/reader"
+require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/quant_matmul"
 require "../src/ml/cuda/qwen_recurrent_layer_runner"
@@ -33,8 +34,7 @@ alias FfnPcaUpdownAdapter = NamedTuple(
   x_mean: Array(Float32),
   c_mean: Array(Float32),
   coeff_w: Array(Float32),
-  down: Array(Float32)
-)
+  down: Array(Float32))
 
 def json_f32_array(value : JSON::Any, label : String) : Array(Float32)
   value.as_a.map { |item| item.as_f.to_f32 }
@@ -309,6 +309,14 @@ greedy_loop_probe_chunk_gamma = 0
 greedy_loop_probe_chunk_margin = 0.03_f32
 greedy_loop_probe_chunk_batched_verify = false
 greedy_loop_probe_chunk_fast_verify_top1 = false
+greedy_loop_probe_ngram = false
+greedy_loop_probe_ngram_min = 2
+greedy_loop_probe_ngram_max = 8
+greedy_loop_probe_ngram_recursive = true
+greedy_loop_probe_ngram_min_candidates = 0
+greedy_loop_probe_ngram_risk_gate = true
+greedy_loop_probe_ngram_risk_min_size = 16
+greedy_loop_probe_ngram_history = [] of Int32
 runtime_raw_q8 = false
 runtime_skip_recurrent_ffn = false
 runtime_skip_recurrent_ffn_layers = nil.as(Array(Int32)?)
@@ -353,10 +361,18 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-restore-kv", "Also snapshot/restore full-attention KV caches in --greedy-loop-probe-restore") { greedy_loop_probe_restore_kv = true }
   p.on("--greedy-loop-probe-pca-updown", "Use loaded PCA-updown adapters as the discardable proposal route in --greedy-loop-probe-restore") { greedy_loop_probe_pca_updown = true }
   p.on("--greedy-loop-probe-pca-updown-raw-q8-rest", "With --greedy-loop-probe-pca-updown, use raw-Q8 recurrent FFN for non-PCA proposal layers") { greedy_loop_probe_pca_updown_raw_q8_rest = true }
-  p.on("--greedy-loop-probe-chunk-gamma N", "Diagnostic: raw-Q8 guarded chunk proposals with sequential exact verification; forces CPU feedback and no graph") { |v| greedy_loop_probe_chunk_gamma = v.to_i; perf_only = true; read_top2 = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
+  p.on("--greedy-loop-probe-chunk-gamma N", "Diagnostic: guarded chunk proposals with sequential/exact verification; forces CPU feedback and no graph") { |v| greedy_loop_probe_chunk_gamma = v.to_i; perf_only = true; read_top2 = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
   p.on("--greedy-loop-probe-chunk-margin F", "Raw-Q8 top1/top2 margin threshold for --greedy-loop-probe-chunk-gamma") { |v| greedy_loop_probe_chunk_margin = v.to_f32 }
   p.on("--greedy-loop-probe-chunk-batched-verify", "Use a second tokens=gamma stack to verify full raw-Q8 chunks and copy back only on full accept") { greedy_loop_probe_chunk_batched_verify = true }
   p.on("--greedy-loop-probe-chunk-fast-verify-top1", "Diagnostic: in batched chunk verification, trust resident CUDA top1 ids instead of copying/scanning full logits") { greedy_loop_probe_chunk_fast_verify_top1 = true }
+  p.on("--greedy-loop-probe-ngram", "Use history n-gram candidates as the guarded chunk proposal source instead of raw-Q8 proposal") { greedy_loop_probe_ngram = true; perf_only = true; greedy_loop_cpu_embedding = true; greedy_loop_no_graph = true }
+  p.on("--greedy-loop-probe-ngram-min N", "Minimum n-gram length for --greedy-loop-probe-ngram, default 2") { |v| greedy_loop_probe_ngram_min = v.to_i }
+  p.on("--greedy-loop-probe-ngram-max N", "Maximum n-gram length for --greedy-loop-probe-ngram, default 8") { |v| greedy_loop_probe_ngram_max = v.to_i }
+  p.on("--greedy-loop-probe-ngram-nonrecursive", "Disable recursive expansion for --greedy-loop-probe-ngram") { greedy_loop_probe_ngram_recursive = false }
+  p.on("--greedy-loop-probe-ngram-min-candidates N", "Require at least N proposed tokens from --greedy-loop-probe-ngram") { |v| greedy_loop_probe_ngram_min_candidates = v.to_i }
+  p.on("--greedy-loop-probe-ngram-no-risk-gate", "Disable n-gram risky-shape fallback gate") { greedy_loop_probe_ngram_risk_gate = false }
+  p.on("--greedy-loop-probe-ngram-risk-min-size N", "Minimum candidate size for the risky-shape gate, default 16") { |v| greedy_loop_probe_ngram_risk_min_size = v.to_i }
+  p.on("--greedy-loop-probe-ngram-history LIST", "Comma-separated proposal history token IDs; default is --seed-token only") { |v| greedy_loop_probe_ngram_history = parse_i32_list(v) }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--runtime-skip-recurrent-ffn", "Diagnostic proposal route: skip recurrent-layer FFNs and forward the post-attention residual") { runtime_skip_recurrent_ffn = true }
   p.on("--runtime-skip-recurrent-ffn-layers LIST", "Diagnostic proposal route: skip recurrent-layer FFNs only for comma-separated layer ids") { |v| runtime_skip_recurrent_ffn_layers = parse_layers(v) }
@@ -421,6 +437,11 @@ raise "--greedy-loop-probe-chunk-gamma is incompatible with --greedy-loop-probe-
 raise "--greedy-loop-probe-chunk-margin must be non-negative" unless greedy_loop_probe_chunk_margin >= 0.0_f32
 raise "--greedy-loop-probe-chunk-batched-verify requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_chunk_batched_verify && greedy_loop_probe_chunk_gamma == 0
 raise "--greedy-loop-probe-chunk-fast-verify-top1 requires --greedy-loop-probe-chunk-batched-verify" if greedy_loop_probe_chunk_fast_verify_top1 && !greedy_loop_probe_chunk_batched_verify
+raise "--greedy-loop-probe-ngram requires --greedy-loop-probe-chunk-gamma" if greedy_loop_probe_ngram && greedy_loop_probe_chunk_gamma == 0
+raise "--greedy-loop-probe-ngram-min must be positive" unless greedy_loop_probe_ngram_min > 0
+raise "--greedy-loop-probe-ngram-max must be >= min" unless greedy_loop_probe_ngram_max >= greedy_loop_probe_ngram_min
+raise "--greedy-loop-probe-ngram-min-candidates must be non-negative" unless greedy_loop_probe_ngram_min_candidates >= 0
+raise "--greedy-loop-probe-ngram-risk-min-size must be positive" unless greedy_loop_probe_ngram_risk_min_size > 0
 raise "--runtime-skip-recurrent-ffn is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn && runtime_raw_q8
 raise "use either --runtime-skip-recurrent-ffn or --runtime-skip-recurrent-ffn-layers, not both" if runtime_skip_recurrent_ffn && runtime_skip_recurrent_ffn_layers
 raise "--runtime-skip-recurrent-ffn-layers is incompatible with --runtime-raw-q8" if runtime_skip_recurrent_ffn_layers && runtime_raw_q8
@@ -698,6 +719,10 @@ begin
   chunk_batched_verify_accepts = 0
   chunk_batched_verify_rejects = 0
   chunk_batched_verify_last_reject_commits = 0
+  chunk_ngram_empty_fallbacks = 0
+  chunk_ngram_risk_fallbacks = 0
+  chunk_ngram_cursor_hits = 0
+  chunk_ngram_match_lens = [] of Int32
   if greedy_loop_tokens > 0
     warmup.times do
       warm_token = seed_token
@@ -712,7 +737,16 @@ begin
     end
 
     if greedy_loop_probe_chunk_gamma > 0
+      ngram_index = nil.as(ML::GGUF::NgramDraft::IndexedHistory?)
+      ngram_replay_cursor = nil.as(Int32?)
+      ngram_replay_limit = 0
       gpu_token = seed_token
+      if greedy_loop_probe_ngram
+        initial_history = greedy_loop_probe_ngram_history.empty? ? [seed_token] : greedy_loop_probe_ngram_history
+        ngram_index = ML::GGUF::NgramDraft::IndexedHistory.new(initial_history, greedy_loop_probe_ngram_max, greedy_loop_probe_ngram_min)
+        ngram_replay_limit = initial_history.size
+        gpu_token = initial_history.last
+      end
       generated = 0
       gpu_t0 = Time.instant
       while generated < greedy_loop_tokens
@@ -723,44 +757,85 @@ begin
         proposal_margins = [] of Float32
         proposal_top2 = [] of Int32
         fallback_due_margin = false
-        snapshot = mixed_stack.snapshot_decode_state(include_kv: greedy_loop_probe_restore_kv)
-        begin
-          mixed_stack.set_recurrent_ffn_raw_q8(true)
-          proposal_token = gpu_token
-          chunk_limit.times do |j|
-            pos = start_pos + generated + j
-            t_position = Time.instant
-            mixed_stack.update_decode_position(pos)
-            greedy_position_ms += (Time.instant - t_position).total_milliseconds
-
-            t_embedding = Time.instant
-            mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, proposal_token))
-            greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
-
-            t_raw = Time.instant
-            mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
-              reset_sequence: generated == 0 && j == 0, sync_end: true, read_head_outputs: true)
-            chunk_raw_ms += (Time.instant - t_raw).total_milliseconds
-            raw_best_id = output_head.top1_ids[0]
-            raw_second_id = output_head.top2_ids_gpu[0]
-            raw_margin = output_head.top1_values_gpu[0] - output_head.top2_values_gpu[0]
-            proposal_ids << raw_best_id
-            proposal_top2 << raw_second_id
-            proposal_margins << raw_margin
-            chunk_proposal_ids << raw_best_id
-            chunk_raw_top2_ids << raw_second_id
-            chunk_raw_margins << raw_margin
-            chunk_raw_tokens += 1
-            proposal_token = raw_best_id
-            if raw_margin < greedy_loop_probe_chunk_margin
-              fallback_due_margin = true
-              break
+        ngram_pending_replay_cursor = nil.as(Int32?)
+        ngram_match_len_for_gate = 0
+        if greedy_loop_probe_ngram
+          index = ngram_index.not_nil!
+          if cursor = ngram_replay_cursor
+            replay_count = Math.min(chunk_limit, ngram_replay_limit - cursor)
+            if replay_count > 0
+              proposal_ids = index.history[cursor, replay_count]
+              ngram_pending_replay_cursor = cursor + proposal_ids.size
+              chunk_ngram_cursor_hits += 1
+              chunk_ngram_match_lens << -1
+              ngram_match_len_for_gate = greedy_loop_probe_ngram_max
             end
           end
-          mixed_stack.restore_decode_state(snapshot)
-        ensure
-          mixed_stack.set_recurrent_ffn_raw_q8(false)
-          snapshot.close
+          if proposal_ids.empty?
+            span = index.candidate_span(chunk_limit,
+              recursive: greedy_loop_probe_ngram_recursive,
+              min_candidates: greedy_loop_probe_ngram_min_candidates)
+            if span
+              proposal_ids = span.ids
+              ngram_pending_replay_cursor = span.source_start + span.match_len + proposal_ids.size
+              chunk_ngram_match_lens << span.match_len
+              ngram_match_len_for_gate = span.match_len
+            else
+              chunk_ngram_match_lens << 0
+            end
+          end
+          if greedy_loop_probe_ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(proposal_ids, greedy_loop_probe_ngram_risk_min_size, ngram_match_len_for_gate)
+            chunk_ngram_risk_fallbacks += 1
+            proposal_ids = [] of Int32
+          end
+          if proposal_ids.empty?
+            chunk_ngram_empty_fallbacks += 1
+          else
+            proposal_ids.each do |id|
+              chunk_proposal_ids << id
+              chunk_raw_tokens += 1
+            end
+          end
+        else
+          snapshot = mixed_stack.snapshot_decode_state(include_kv: greedy_loop_probe_restore_kv)
+          begin
+            mixed_stack.set_recurrent_ffn_raw_q8(true)
+            proposal_token = gpu_token
+            chunk_limit.times do |j|
+              pos = start_pos + generated + j
+              t_position = Time.instant
+              mixed_stack.update_decode_position(pos)
+              greedy_position_ms += (Time.instant - t_position).total_milliseconds
+
+              t_embedding = Time.instant
+              mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, proposal_token))
+              greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
+
+              t_raw = Time.instant
+              mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+                reset_sequence: generated == 0 && j == 0, sync_end: true, read_head_outputs: true)
+              chunk_raw_ms += (Time.instant - t_raw).total_milliseconds
+              raw_best_id = output_head.top1_ids[0]
+              raw_second_id = output_head.top2_ids_gpu[0]
+              raw_margin = output_head.top1_values_gpu[0] - output_head.top2_values_gpu[0]
+              proposal_ids << raw_best_id
+              proposal_top2 << raw_second_id
+              proposal_margins << raw_margin
+              chunk_proposal_ids << raw_best_id
+              chunk_raw_top2_ids << raw_second_id
+              chunk_raw_margins << raw_margin
+              chunk_raw_tokens += 1
+              proposal_token = raw_best_id
+              if raw_margin < greedy_loop_probe_chunk_margin
+                fallback_due_margin = true
+                break
+              end
+            end
+            mixed_stack.restore_decode_state(snapshot)
+          ensure
+            mixed_stack.set_recurrent_ffn_raw_q8(false)
+            snapshot.close
+          end
         end
 
         if fallback_due_margin || proposal_ids.empty?
@@ -779,6 +854,7 @@ begin
           exact_id = output_head.top1_ids[0]
           chunk_exact_ids << exact_id
           greedy_gpu_ids << exact_id
+          ngram_index.try(&.append(exact_id))
           gpu_token = exact_id
           generated += 1
           chunk_verify_tokens += 1
@@ -834,6 +910,8 @@ begin
               verify_stack.copy_decode_state_to!(mixed_stack, include_kv: true)
               generated += proposal_ids.size
               gpu_token = exact_ids[accepted_this_chunk]
+              ngram_index.try(&.append(exact_ids[0, proposal_ids.size]))
+              ngram_replay_cursor = nil
               used_batched_verify = true
               chunk_batched_verify_last_reject_commits += 1
             else
@@ -848,6 +926,8 @@ begin
             verify_stack.copy_decode_state_to!(mixed_stack, include_kv: true)
             generated += proposal_ids.size
             gpu_token = proposal_ids.last
+            ngram_index.try(&.append(proposal_ids))
+            ngram_replay_cursor = ngram_pending_replay_cursor
             used_batched_verify = true
           end
         end
@@ -868,6 +948,7 @@ begin
             exact_id = output_head.top1_ids[0]
             chunk_exact_ids << exact_id
             greedy_gpu_ids << exact_id
+            ngram_index.try(&.append(exact_id))
             generated += 1
             chunk_verify_tokens += 1
             gpu_token = exact_id
@@ -884,8 +965,10 @@ begin
 
         if rejected
           chunk_rejects += 1
+          ngram_replay_cursor = nil if greedy_loop_probe_ngram
         elsif accepted_this_chunk == proposal_ids.size
           chunk_full_accepts += 1
+          ngram_replay_cursor = ngram_pending_replay_cursor if greedy_loop_probe_ngram && !proposal_ids.empty?
         end
       end
       gpu_ms = (Time.instant - gpu_t0).total_milliseconds
@@ -943,23 +1026,23 @@ begin
       graph_exec = nil.as(ML::CUDA::CUDAGraphExec?)
       gpu_embedder = nil.as(CudaQ4KTokenEmbedder?)
       if greedy_loop_graph && greedy_loop_tokens > 1
-      graph_stream = ML::CUDA::CUDAStream.new
-      ML::CUDA.with_stream(graph_stream.not_nil!) do
-        graph_stream.not_nil!.begin_capture
-        mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: false,
-          sync_end: false, read_head_outputs: false)
-        mixed_stack.increment_decode_position
-        graph = graph_stream.not_nil!.end_capture
-      end
-      graph_exec = if greedy_loop_graph_device_ready
-                     graph.not_nil!.instantiate_device_launch(graph_stream.not_nil!)
-                   else
-                     graph.not_nil!.instantiate
-                   end
-      graph.not_nil!.close
-      graph = nil
-      graph_exec.not_nil!.upload(graph_stream.not_nil!)
-      graph_stream.not_nil!.synchronize
+        graph_stream = ML::CUDA::CUDAStream.new
+        ML::CUDA.with_stream(graph_stream.not_nil!) do
+          graph_stream.not_nil!.begin_capture
+          mixed_stack.run_sequence(profile_phases: false, debug_readback: false, reset_sequence: false,
+            sync_end: false, read_head_outputs: false)
+          mixed_stack.increment_decode_position
+          graph = graph_stream.not_nil!.end_capture
+        end
+        graph_exec = if greedy_loop_graph_device_ready
+                       graph.not_nil!.instantiate_device_launch(graph_stream.not_nil!)
+                     else
+                       graph.not_nil!.instantiate
+                     end
+        graph.not_nil!.close
+        graph = nil
+        graph_exec.not_nil!.upload(graph_stream.not_nil!)
+        graph_stream.not_nil!.synchronize
       end
 
       if greedy_loop_gpu_embedding
@@ -971,53 +1054,53 @@ begin
       gpu_t0 = Time.instant
       begin
         greedy_loop_tokens.times do |i|
-        pos = start_pos + i
-        t_position = Time.instant
-        if !greedy_loop_graph || i <= 1
-          mixed_stack.update_decode_position(pos)
-        end
-        greedy_position_ms += (Time.instant - t_position).total_milliseconds
+          pos = start_pos + i
+          t_position = Time.instant
+          if !greedy_loop_graph || i <= 1
+            mixed_stack.update_decode_position(pos)
+          end
+          greedy_position_ms += (Time.instant - t_position).total_milliseconds
 
-        t_embedding = Time.instant
-        unless greedy_loop_gpu_embedding && i > 0
-          mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
-        end
-        greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
+          t_embedding = Time.instant
+          unless greedy_loop_gpu_embedding && i > 0
+            mixed_stack.upload_first_sequence_input(ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, gpu_token))
+          end
+          greedy_embedding_ms += (Time.instant - t_embedding).total_milliseconds
 
-        t_body = Time.instant
-        if greedy_loop_graph && i > 0
-          graph_exec.not_nil!.launch(graph_stream.not_nil!)
-          graph_stream.not_nil!.synchronize unless greedy_loop_gpu_embedding
-        else
-          mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: i == 0,
-            sync_end: !greedy_loop_gpu_embedding, read_head_outputs: false)
-        end
-        greedy_body_ms += (Time.instant - t_body).total_milliseconds
-
-        if greedy_loop_gpu_embedding
-          t_feedback = Time.instant
-          if stream = graph_stream
-            ML::CUDA.with_stream(stream) { gpu_embedder.not_nil!.record_and_embed(i) }
+          t_body = Time.instant
+          if greedy_loop_graph && i > 0
+            graph_exec.not_nil!.launch(graph_stream.not_nil!)
+            graph_stream.not_nil!.synchronize unless greedy_loop_gpu_embedding
           else
-            gpu_embedder.not_nil!.record_and_embed(i)
+            mixed_stack.run_sequence(profile_phases: false, debug_readback: debug_readback, reset_sequence: i == 0,
+              sync_end: !greedy_loop_gpu_embedding, read_head_outputs: false)
           end
-          greedy_embedding_ms += (Time.instant - t_feedback).total_milliseconds
-        else
-          t_read = Time.instant
-          mixed_stack.read_head_outputs
-          greedy_read_ms += (Time.instant - t_read).total_milliseconds
-          if greedy_loop_read_logits
-            best_id, best, second_id, second, margin = top2_from_logits(output_head.logits_gpu_all, 0, head_weights.vocab)
-            greedy_logits_top1_ids << best_id
-            greedy_top2_ids << second_id
-            greedy_top1_values << best
-            greedy_top2_values << second
-            greedy_top_margins << margin
-            greedy_logits_mismatches << "#{i}:#{best_id}:#{output_head.top1_ids[0]}" if best_id != output_head.top1_ids[0]
+          greedy_body_ms += (Time.instant - t_body).total_milliseconds
+
+          if greedy_loop_gpu_embedding
+            t_feedback = Time.instant
+            if stream = graph_stream
+              ML::CUDA.with_stream(stream) { gpu_embedder.not_nil!.record_and_embed(i) }
+            else
+              gpu_embedder.not_nil!.record_and_embed(i)
+            end
+            greedy_embedding_ms += (Time.instant - t_feedback).total_milliseconds
+          else
+            t_read = Time.instant
+            mixed_stack.read_head_outputs
+            greedy_read_ms += (Time.instant - t_read).total_milliseconds
+            if greedy_loop_read_logits
+              best_id, best, second_id, second, margin = top2_from_logits(output_head.logits_gpu_all, 0, head_weights.vocab)
+              greedy_logits_top1_ids << best_id
+              greedy_top2_ids << second_id
+              greedy_top1_values << best
+              greedy_top2_values << second
+              greedy_top_margins << margin
+              greedy_logits_mismatches << "#{i}:#{best_id}:#{output_head.top1_ids[0]}" if best_id != output_head.top1_ids[0]
+            end
+            gpu_token = output_head.top1_ids[0]
+            greedy_gpu_ids << gpu_token
           end
-          gpu_token = output_head.top1_ids[0]
-          greedy_gpu_ids << gpu_token
-        end
         end
         if greedy_loop_gpu_embedding
           t_read = Time.instant
@@ -1149,6 +1232,19 @@ begin
       lines << "chunk_probe_raw_top2_gpu=#{chunk_raw_top2_ids.join(",")}"
       lines << "chunk_probe_raw_margin_gpu=#{chunk_raw_margins.map { |v| v.round(6) }.join(",")}"
       lines << "chunk_probe_exact_top1_gpu=#{chunk_exact_ids.join(",")}"
+      lines << "chunk_probe_ngram=#{greedy_loop_probe_ngram}"
+      if greedy_loop_probe_ngram
+        lines << "chunk_probe_ngram_min=#{greedy_loop_probe_ngram_min}"
+        lines << "chunk_probe_ngram_max=#{greedy_loop_probe_ngram_max}"
+        lines << "chunk_probe_ngram_recursive=#{greedy_loop_probe_ngram_recursive}"
+        lines << "chunk_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
+        lines << "chunk_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
+        lines << "chunk_probe_ngram_history_tokens=#{(greedy_loop_probe_ngram_history.empty? ? 1 : greedy_loop_probe_ngram_history.size)}"
+        lines << "chunk_probe_ngram_match_lens=#{chunk_ngram_match_lens.join(",")}"
+        lines << "chunk_probe_ngram_empty_fallbacks=#{chunk_ngram_empty_fallbacks}"
+        lines << "chunk_probe_ngram_risk_fallbacks=#{chunk_ngram_risk_fallbacks}"
+        lines << "chunk_probe_ngram_cursor_hits=#{chunk_ngram_cursor_hits}"
+      end
       lines << "chunk_probe_raw_ms=#{chunk_raw_ms.round(3)}"
       lines << "chunk_probe_raw_ms_per_raw_token=#{(chunk_raw_ms / Math.max(chunk_raw_tokens, 1)).round(3)}"
       lines << "chunk_probe_verify_ms=#{chunk_verify_ms.round(3)}"
@@ -1283,6 +1379,13 @@ begin
   puts "greedy_loop_probe_chunk_margin=#{greedy_loop_probe_chunk_margin}"
   puts "greedy_loop_probe_chunk_batched_verify=#{greedy_loop_probe_chunk_batched_verify}"
   puts "greedy_loop_probe_chunk_fast_verify_top1=#{greedy_loop_probe_chunk_fast_verify_top1}"
+  puts "greedy_loop_probe_ngram=#{greedy_loop_probe_ngram}"
+  puts "greedy_loop_probe_ngram_min=#{greedy_loop_probe_ngram_min}"
+  puts "greedy_loop_probe_ngram_max=#{greedy_loop_probe_ngram_max}"
+  puts "greedy_loop_probe_ngram_recursive=#{greedy_loop_probe_ngram_recursive}"
+  puts "greedy_loop_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
+  puts "greedy_loop_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
+  puts "greedy_loop_probe_ngram_history=#{greedy_loop_probe_ngram_history.join(",")}"
   puts "seed_token=#{seed_token}"
   puts "input_token=#{input_token}"
   puts "input_tokens=#{input_tokens.join(",")}"
