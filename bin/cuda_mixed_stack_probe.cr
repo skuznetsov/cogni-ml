@@ -347,6 +347,7 @@ greedy_loop_probe_ngram_replay_start = -1
 greedy_loop_probe_ngram_cursor_only = false
 greedy_loop_probe_ngram_schedule = [] of Int32
 greedy_loop_prefix_tokens = [] of Int32
+greedy_loop_restore_prefix_state = false
 runtime_raw_q8 = false
 runtime_skip_recurrent_ffn = false
 runtime_skip_recurrent_ffn_layers = nil.as(Array(Int32)?)
@@ -420,6 +421,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-ngram-cursor-only", "Only propose from an active replay cursor; fallback instead of suffix-searching") { greedy_loop_probe_ngram_cursor_only = true }
   p.on("--greedy-loop-probe-ngram-schedule LIST", "Progressive cursor/n-gram chunk sizes; grows after full accepts and resets on reject/fallback") { |v| greedy_loop_probe_ngram_schedule = parse_i32_list(v) }
   p.on("--greedy-loop-prefix-tokens LIST", "Comma-separated prompt/prefix token IDs to prefill before timed greedy-loop generation") { |v| greedy_loop_prefix_tokens = parse_i32_list(v) }
+  p.on("--greedy-loop-restore-prefix-state", "Diagnostic: snapshot/poison/restore prefix state before timed greedy-loop generation") { greedy_loop_restore_prefix_state = true }
   p.on("--runtime-raw-q8", "Diagnostic: enable recurrent FFN raw-Q8 through the runtime stack switch instead of the environment default") { runtime_raw_q8 = true }
   p.on("--runtime-skip-recurrent-ffn", "Diagnostic proposal route: skip recurrent-layer FFNs and forward the post-attention residual") { runtime_skip_recurrent_ffn = true }
   p.on("--runtime-skip-recurrent-ffn-layers LIST", "Diagnostic proposal route: skip recurrent-layer FFNs only for comma-separated layer ids") { |v| runtime_skip_recurrent_ffn_layers = parse_layers(v) }
@@ -527,6 +529,7 @@ end
 raise "--greedy-loop-prefix-tokens requires --greedy-loop-tokens" if !greedy_loop_prefix_tokens.empty? && greedy_loop_tokens == 0
 raise "--greedy-loop-prefix-tokens must contain at least one token when provided" if greedy_loop_prefix_tokens.empty? && ARGV.any? { |arg| arg.starts_with?("--greedy-loop-prefix-tokens") }
 raise "--greedy-loop-prefix-tokens is incompatible with --greedy-loop-graph" if !greedy_loop_prefix_tokens.empty? && greedy_loop_graph
+raise "--greedy-loop-restore-prefix-state requires at least two --greedy-loop-prefix-tokens" if greedy_loop_restore_prefix_state && greedy_loop_prefix_tokens.size <= 1
 if !greedy_loop_prefix_tokens.empty? && !greedy_loop_probe_ngram_history.empty?
   raise "--greedy-loop-probe-ngram-history must end with --greedy-loop-prefix-tokens last token" unless greedy_loop_probe_ngram_history.last == greedy_loop_prefix_tokens.last
 end
@@ -838,6 +841,9 @@ begin
   greedy_body_ms = 0.0
   greedy_read_ms = 0.0
   greedy_prefix_ms = 0.0
+  greedy_prefix_snapshot_ms = 0.0
+  greedy_prefix_poison_ms = 0.0
+  greedy_prefix_restore_ms = 0.0
   greedy_logits_top1_ids = [] of Int32
   greedy_top2_ids = [] of Int32
   greedy_top1_values = [] of Float32
@@ -903,6 +909,26 @@ begin
           reset_sequence: i == 0, sync_end: true, read_head_outputs: false, run_head: false)
       end
       greedy_prefix_ms = (Time.instant - prefix_t0).total_milliseconds
+
+      if greedy_loop_restore_prefix_state
+        t_snapshot = Time.instant
+        prefix_snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
+        greedy_prefix_snapshot_ms = (Time.instant - t_snapshot).total_milliseconds
+        begin
+          upload_active_embeddings(mixed_stack, token_embd, [greedy_loop_prefix_tokens.first], tokens, hidden)
+          mixed_stack.update_decode_position(start_pos)
+          t_poison = Time.instant
+          mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+            reset_sequence: true, sync_end: true, read_head_outputs: false, run_head: false)
+          greedy_prefix_poison_ms = (Time.instant - t_poison).total_milliseconds
+
+          t_restore = Time.instant
+          mixed_stack.restore_decode_state(prefix_snapshot)
+          greedy_prefix_restore_ms = (Time.instant - t_restore).total_milliseconds
+        ensure
+          prefix_snapshot.close
+        end
+      end
     end
 
     if greedy_loop_probe_chunk_gamma > 0
@@ -1924,6 +1950,10 @@ begin
     denom = greedy_loop_tokens.to_f64
     puts "greedy_prefix_tokens=#{greedy_loop_prefix_tokens.size}"
     puts "greedy_prefix_ms=#{greedy_prefix_ms.round(3)}"
+    puts "greedy_restore_prefix_state=#{greedy_loop_restore_prefix_state}"
+    puts "greedy_prefix_snapshot_ms=#{greedy_prefix_snapshot_ms.round(3)}"
+    puts "greedy_prefix_poison_ms=#{greedy_prefix_poison_ms.round(3)}"
+    puts "greedy_prefix_restore_ms=#{greedy_prefix_restore_ms.round(3)}"
     puts "greedy_position_ms=#{greedy_position_ms.round(3)}"
     puts "greedy_position_ms_per_token=#{(greedy_position_ms / denom).round(3)}"
     puts "greedy_embedding_ms=#{greedy_embedding_ms.round(3)}"

@@ -13276,3 +13276,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next production step is not another probe flag; it is a cache record containing source tokens, cursor, and decode-state snapshot/restore metadata.
 - maieutic: This proves source/live separation for supplied token lists, not persistence, hashing, or pg-backed lookup.
 - adversary: Cursor validation remains mandatory. A wrong source cursor still regresses, as shown by the reject branch in update_285.
+
+**decision_update_287:** Validated active online replay after restored prefix state. `--greedy-loop-restore-prefix-state` now snapshots prefix decode state, deliberately poisons/resets the resident runner, restores the snapshot, and then starts timed generation. Combined with separate source history and active-row verification, this is the closest current probe to the intended production cache-hit path: restore state, read source cursor, verify WBA chunks exactly.
+
+**evidence_update_287:**
+- claim: "Active online cursor replay remains exact and fast after restored prefix state."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9 with live prefix `0,198,2,220,16,13,27416,198,760`, separate source history, replay cursor `9`, gamma16, schedule `4,4,8,16`, active verification, and `--greedy-loop-restore-prefix-state` accepted `24/24`, used chunks `4,4,8,8`, printed `cuda_ms=280.208`, `cuda_ms_per_token=11.675`, `greedy_prefix_ms=186.941`, `greedy_prefix_snapshot_ms=2.515`, `greedy_prefix_poison_ms=32.741`, `greedy_prefix_restore_ms=0.236`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: greedy prefix snapshot/restore, source-history cursor alignment, active verifier path, or CUDA WBA kernels
+
+**quadrumvirate_update_287:**
+- cassandra: Prefix restore could have omitted a state surface and silently diverged only after active chunks. The poison-reset step plus `24/24` exact replay refutes that for this path.
+- daedalus: The next remaining production gap is durable cache records and cursor validation/gating, not core verifier mechanics.
+- maieutic: The restore cost is device-resident. Persisted cache loading from pg/filesystem/host memory still needs separate IO and H2D/D2D accounting.
+- adversary: The path is high-confidence only for validated cache hits. Wrong cursors still regress, so the controller must fail closed.
