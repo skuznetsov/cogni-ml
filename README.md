@@ -296,12 +296,27 @@ Trusted artifact restore lower-bound:
   --skip-debug-readback
 ```
 
+For a conservative host-backed artifact simulation, add:
+
+```sh
+  --known-replay-trusted-artifact-host-restore
+```
+
 This is a different contract from verified replay. It simulates a cache artifact
 that already contains the exact token span and the post-span decode state for
 the same model/config/source hash. The timed region restores that state and
 emits cached tokens; it does not recompute the verifier body. Use it only for
 session/cache artifacts whose model hash, tokenizer hash, prefix hash, token
 span, and state artifact hash have been validated.
+
+The default trusted-artifact probe snapshots/restores state inside device memory
+and is a pure lower bound. The host-backed variant copies the complete decode
+state to host memory, poisons the runner, then times host-to-device restore. On
+the RTX 5060 Ti Qwen3.5-9B snapshot with `max_seq=128`, that state is
+`61,079,552` bytes; restore costs `12.259ms` for a 64-token artifact and
+`12.331ms` for a non-zero start9/24-token artifact. This is still not full
+production IO: durable lookup, disk reads, hashing, and live-length KV trimming
+remain outside the measured region.
 
 Build the Metal bridge once:
 
@@ -511,7 +526,8 @@ Same-host CUDA snapshot, RTX 5060 Ti, Qwen 3.5 9B Q4_K_M, `gen=64`:
 | cogni-ml CUDA source/cache cursor, risk-gated | 71.76 tok/s, 13.94 ms/tok | exact output; 62/62 active-verified tokens plus two serial cursor advances |
 | cogni-ml CUDA trusted source/cache cursor | 86.61 tok/s, 11.55 ms/tok | exact output; 64/64 active-verified tokens, chunks `4,4,8,16,16,16` |
 | cogni-ml CUDA trusted bulk replay | 91.69 tok/s, 10.91 ms/tok | exact output; 64/64 active-verified tokens, one `64`-token WBA chunk |
-| cogni-ml CUDA trusted artifact restore | restore-only lower bound: 0.189 ms / 64 cached tokens | no verifier recompute; requires validated post-span state artifact |
+| cogni-ml CUDA trusted artifact restore, device-resident | restore-only lower bound: 0.189 ms / 64 cached tokens | no verifier recompute; requires validated post-span state artifact |
+| cogni-ml CUDA trusted artifact restore, host-backed | 12.259 ms / 64 cached tokens | restores a full `max_seq=128` decode state from host memory; excludes durable IO/hash lookup |
 | invalid trusted cursor | ~42.3 tok/s, ~23.64 ms/tok | fails closed: zero proposals, active verifier disabled, near plain fallback |
 
 CUDA cache-replay caveats:
@@ -519,7 +535,7 @@ CUDA cache-replay caveats:
 - The fast rows are not arbitrary generation. They measure exact replay from a validated session/source cursor, which is the intended primitive for prompt/session cache hits and repeated known spans.
 - Exact greedy parity is preserved by verifying every proposed token through the target stack before committing it.
 - Wrong cursors must fail closed. The trusted-source mode is only trusted after the source-prefix gate passes; otherwise it falls back near plain decode speed instead of accepting proposal tokens.
-- The numbers above exclude durable cache lookup, artifact IO, and host-to-device restore costs. Production integration still needs session/hash lookup, serialized state artifacts, and end-to-end timing around those boundaries.
+- The numbers above still exclude durable cache lookup, artifact IO, and hashing. The host-backed artifact row includes host-to-device restore but intentionally uses a full-cache state copy, so it is a conservative upper bound until production stores only live KV/state bytes.
 - Trusted artifact restore is a cache-hit fast-forward path, not speculative decoding. It is only exact if the restored state artifact and emitted token span are validated against the same model/tokenizer/config/source contract.
 
 ### Speculative Decode Harnesses

@@ -13420,3 +13420,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The paradigm shift is from "verify known future tokens by recomputing" to "validate and restore a signed/hash-addressed future state." That makes pg/session/hash lookup and state serialization the next product bottleneck.
 - maieutic: The proof is a D2D snapshot/restore lower bound. It excludes disk IO, pg lookup, host-to-device transfer, and artifact hashing.
 - adversary: Do not compare this as arbitrary decode speed. It is exact only when model hash, tokenizer hash, prompt/source hash, token span, and state artifact hash all match.
+
+**decision_update_295:** Added a host-backed trusted cache-artifact restore probe. `--known-replay-trusted-artifact-host-restore` strengthens the prior lower-bound test by copying the post-span decode state into host memory and timing the host-to-device restore. It still emits cached tokens under the same trusted artifact contract, but now includes the PCIe H2D restore cost for a full `max_seq=128` decode-state artifact.
+
+**evidence_update_295:**
+- claim: "Host-backed trusted artifact restore remains exact for a 64-token cache hit and costs low double-digit milliseconds for the full decode state."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start1/gen64 with `--known-replay-trusted-artifact-host-restore --max-seq 128` printed `known_replay_trusted_artifact_bytes=61079552`, `known_replay_trusted_artifact_snapshot_ms=37.542`, `known_replay_trusted_artifact_restore_ms=12.259`, `cuda_ms=12.259`, `cuda_ms_per_token=0.192`, `known_replay_accepted=64`, `known_replay_full_accept=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA decode-state layout, host snapshot implementation, PCIe path, max-seq sizing, or artifact serialization format changes
+- claim: "The host-backed artifact path also works for a non-zero replay cursor."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9/gen24 with `--known-replay-trusted-artifact-host-restore --max-seq 128` printed `known_replay_trusted_artifact_bytes=61079552`, `known_replay_trusted_artifact_snapshot_ms=39.851`, `known_replay_trusted_artifact_restore_ms=12.331`, `known_replay_accepted=24`, `known_replay_full_accept=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: nonzero cursor handling, prefix-state build, host snapshot/restore, or source-history contract changes
+
+**quadrumvirate_update_295:**
+- cassandra: Host restore is no longer the dominant wall compared with recomputing the 64-token verifier body, but it is not free. For short cache hits it can dominate the replay path.
+- daedalus: The next product optimization is not more D2D restore tuning; it is live-length state serialization. The current probe copies the full KV cache capacity, so real artifacts should store only the used prefix/span state needed by the restored cursor.
+- maieutic: This still excludes durable IO, pg/session lookup, artifact hashing, and compression/decompression. It measures D2H snapshot plus H2D restore, not an end-to-end cache service.
+- adversary: Do not compare the host-backed artifact row to arbitrary decode. It is exact only when the artifact token span and post-span state are validated against the same model/tokenizer/config/source contract.

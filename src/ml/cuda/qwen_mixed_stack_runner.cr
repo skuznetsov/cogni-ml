@@ -43,6 +43,16 @@ module ML::CUDA
       end
     end
 
+    class HostDecodeStateSnapshot
+      getter buffers : Array(Bytes)
+      getter include_kv : Bool
+      getter bytesize_total : UInt64
+
+      def initialize(@buffers : Array(Bytes), @include_kv : Bool)
+        @bytesize_total = @buffers.sum(0_u64) { |buffer| buffer.size.to_u64 }
+      end
+    end
+
     getter layer_ids : Array(Int32)
     getter runners : Array(LayerRunner)
     getter head : QwenOutputHeadRunner
@@ -278,6 +288,23 @@ module ML::CUDA
       DecodeStateSnapshot.new(buffers, include_kv)
     end
 
+    def snapshot_decode_state_host(include_kv : Bool = true) : HostDecodeStateSnapshot
+      buffers = [] of Bytes
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          snapshot_host_buffer!(buffers, runner.conv_state_device_ptr, runner.conv_state_bytesize, "snapshot host conv_state")
+          snapshot_host_buffer!(buffers, runner.ssm_state_device_ptr, runner.ssm_state_bytesize, "snapshot host ssm_state")
+        in QwenFullAttnLayerRunner
+          if include_kv
+            snapshot_host_buffer!(buffers, runner.k_cache_device_ptr, runner.kv_cache_bytesize, "snapshot host k_cache")
+            snapshot_host_buffer!(buffers, runner.v_cache_device_ptr, runner.kv_cache_bytesize, "snapshot host v_cache")
+          end
+        end
+      end
+      HostDecodeStateSnapshot.new(buffers, include_kv)
+    end
+
     def restore_decode_state(snapshot : DecodeStateSnapshot) : Nil
       idx = 0
       @runners.each do |runner|
@@ -305,6 +332,33 @@ module ML::CUDA
       raise "unused decode snapshot buffers" unless idx == snapshot.buffers.size
     end
 
+    def restore_decode_state(snapshot : HostDecodeStateSnapshot) : Nil
+      idx = 0
+      @runners.each do |runner|
+        case runner
+        in QwenRecurrentLayerRunner
+          conv = snapshot.buffers[idx]
+          ssm = snapshot.buffers[idx + 1]
+          raise "snapshot host conv_state size mismatch" unless conv.size.to_u64 == runner.conv_state_bytesize
+          raise "snapshot host ssm_state size mismatch" unless ssm.size.to_u64 == runner.ssm_state_bytesize
+          ML::CUDA.copy_htod!(runner.conv_state_device_ptr, conv.to_unsafe.as(Void*), runner.conv_state_bytesize, "restore host conv_state")
+          ML::CUDA.copy_htod!(runner.ssm_state_device_ptr, ssm.to_unsafe.as(Void*), runner.ssm_state_bytesize, "restore host ssm_state")
+          idx += 2
+        in QwenFullAttnLayerRunner
+          if snapshot.include_kv
+            k_cache = snapshot.buffers[idx]
+            v_cache = snapshot.buffers[idx + 1]
+            raise "snapshot host k_cache size mismatch" unless k_cache.size.to_u64 == runner.kv_cache_bytesize
+            raise "snapshot host v_cache size mismatch" unless v_cache.size.to_u64 == runner.kv_cache_bytesize
+            ML::CUDA.copy_htod!(runner.k_cache_device_ptr, k_cache.to_unsafe.as(Void*), runner.kv_cache_bytesize, "restore host k_cache")
+            ML::CUDA.copy_htod!(runner.v_cache_device_ptr, v_cache.to_unsafe.as(Void*), runner.kv_cache_bytesize, "restore host v_cache")
+            idx += 2
+          end
+        end
+      end
+      raise "unused host decode snapshot buffers" unless idx == snapshot.buffers.size
+    end
+
     def copy_decode_state_to!(target : QwenMixedStackRunner, include_kv : Bool = true) : Nil
       raise ArgumentError.new("layer ids mismatch") unless @layer_ids == target.layer_ids
       raise ArgumentError.new("runner count mismatch") unless @runners.size == target.runners.size
@@ -324,6 +378,12 @@ module ML::CUDA
     private def snapshot_device_buffer!(buffers : Array(DeviceBuffer), source : DevicePtr, bytesize : LibC::SizeT, label : String) : Nil
       buffer = DeviceBuffer.new(bytesize)
       ML::CUDA.copy_dtod!(buffer.ptr, source, bytesize, label)
+      buffers << buffer
+    end
+
+    private def snapshot_host_buffer!(buffers : Array(Bytes), source : DevicePtr, bytesize : LibC::SizeT, label : String) : Nil
+      buffer = Bytes.new(bytesize.to_i)
+      ML::CUDA.copy_dtoh!(buffer.to_unsafe.as(Void*), source, bytesize, label)
       buffers << buffer
     end
 

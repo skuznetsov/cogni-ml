@@ -371,6 +371,7 @@ known_replay_active_schedule_run = [] of Int32
 known_replay_prefill_prefix = false
 known_replay_restore_prefix_state = false
 known_replay_trusted_artifact_restore = false
+known_replay_trusted_artifact_host_restore = false
 known_replay_recover_on_reject = false
 known_replay_split_report = [] of Int32
 known_replay_schedule_report = [] of Int32
@@ -447,6 +448,7 @@ OptionParser.parse do |p|
   p.on("--known-replay-prefill-prefix", "Diagnostic: replay history tokens before --known-replay-start to build cache/session state before active schedule timing") { known_replay_prefill_prefix = true }
   p.on("--known-replay-restore-prefix-state", "Diagnostic: snapshot prefix state, poison/reset the runner, then restore before active schedule timing") { known_replay_restore_prefix_state = true }
   p.on("--known-replay-trusted-artifact-restore", "Diagnostic: simulate a trusted cache artifact by restoring post-replay state and emitting cached tokens without verifier recompute") { known_replay_trusted_artifact_restore = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-host-restore", "Diagnostic: simulate a host-backed trusted cache artifact with D2H snapshot and timed H2D restore") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; perf_only = true }
   p.on("--known-replay-recover-on-reject", "Diagnostic: on known-replay reject, run a fresh short verifier for accepted-prefix+reject rows") { known_replay_recover_on_reject = true }
   p.on("--known-replay-split-report LIST", "Comma-separated split sizes for known-replay full-accept-only chunk economics") { |v| known_replay_split_report = parse_i32_list(v) }
   p.on("--known-replay-schedule-report LIST", "Comma-separated progressive chunk sizes for known-replay full-accept-only economics") { |v| known_replay_schedule_report = parse_i32_list(v) }
@@ -871,6 +873,7 @@ begin
   known_replay_trusted_artifact_snapshot_ms = 0.0
   known_replay_trusted_artifact_poison_ms = 0.0
   known_replay_trusted_artifact_restore_ms = 0.0
+  known_replay_trusted_artifact_bytes = 0_u64
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -1489,9 +1492,10 @@ begin
       known_replay_trusted_artifact_build_ms = (Time.instant - t_artifact_build).total_milliseconds
 
       t_artifact_snapshot = Time.instant
-      artifact_snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
-      known_replay_trusted_artifact_snapshot_ms = (Time.instant - t_artifact_snapshot).total_milliseconds
-      begin
+      if known_replay_trusted_artifact_host_restore
+        artifact_snapshot = mixed_stack.snapshot_decode_state_host(include_kv: true)
+        known_replay_trusted_artifact_snapshot_ms = (Time.instant - t_artifact_snapshot).total_milliseconds
+        known_replay_trusted_artifact_bytes = artifact_snapshot.bytesize_total
         poison_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
         emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, known_replay_history[0])
         hidden.times { |h| poison_xs[h] = emb[h] }
@@ -1506,8 +1510,28 @@ begin
         t_artifact_restore = Time.instant
         mixed_stack.restore_decode_state(artifact_snapshot)
         known_replay_trusted_artifact_restore_ms = (Time.instant - t_artifact_restore).total_milliseconds
-      ensure
-        artifact_snapshot.close
+      else
+        artifact_snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
+        known_replay_trusted_artifact_snapshot_ms = (Time.instant - t_artifact_snapshot).total_milliseconds
+        known_replay_trusted_artifact_bytes = artifact_snapshot.buffers.sum(0_u64) { |buffer| buffer.bytesize.to_u64 }
+        begin
+          poison_xs = Array(Float32).new(tokens * hidden, 0.0_f32)
+          emb = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, known_replay_history[0])
+          hidden.times { |h| poison_xs[h] = emb[h] }
+          mixed_stack.active_tokens = 1
+          mixed_stack.upload_first_sequence_input(poison_xs)
+          mixed_stack.update_decode_position(start_pos)
+          t_artifact_poison = Time.instant
+          mixed_stack.run_sequence(profile_phases: false, debug_readback: false,
+            reset_sequence: true, sync_end: true, read_head_outputs: false, run_head: false)
+          known_replay_trusted_artifact_poison_ms = (Time.instant - t_artifact_poison).total_milliseconds
+
+          t_artifact_restore = Time.instant
+          mixed_stack.restore_decode_state(artifact_snapshot)
+          known_replay_trusted_artifact_restore_ms = (Time.instant - t_artifact_restore).total_milliseconds
+        ensure
+          artifact_snapshot.close
+        end
       end
       gpu_ms = known_replay_trusted_artifact_restore_ms
       measured_tokens = known_replay_candidates.size
@@ -1894,7 +1918,9 @@ begin
     end
     if known_replay_trusted_artifact_restore
       lines << "known_replay_trusted_artifact_restore=true"
+      lines << "known_replay_trusted_artifact_host_restore=#{known_replay_trusted_artifact_host_restore}"
       lines << "known_replay_trusted_artifact_tokens=#{known_replay_candidates.size}"
+      lines << "known_replay_trusted_artifact_bytes=#{known_replay_trusted_artifact_bytes}"
       lines << "known_replay_trusted_artifact_build_ms=#{known_replay_trusted_artifact_build_ms.round(3)}"
       lines << "known_replay_trusted_artifact_snapshot_ms=#{known_replay_trusted_artifact_snapshot_ms.round(3)}"
       lines << "known_replay_trusted_artifact_poison_ms=#{known_replay_trusted_artifact_poison_ms.round(3)}"
@@ -2048,6 +2074,7 @@ begin
   puts "known_replay_prefill_prefix_arg=#{known_replay_prefill_prefix}"
   puts "known_replay_restore_prefix_state_arg=#{known_replay_restore_prefix_state}"
   puts "known_replay_trusted_artifact_restore_arg=#{known_replay_trusted_artifact_restore}"
+  puts "known_replay_trusted_artifact_host_restore_arg=#{known_replay_trusted_artifact_host_restore}"
   puts "known_replay_recover_on_reject_arg=#{known_replay_recover_on_reject}"
   puts "known_replay_split_report_arg=#{known_replay_split_report.join(",")}"
   puts "known_replay_schedule_report_arg=#{known_replay_schedule_report.join(",")}"
