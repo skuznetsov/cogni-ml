@@ -13024,3 +13024,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: This moves the interface closer to prompt-cache records: a cache hit should provide history plus cursor, not two manually maintained token arrays.
 - maieutic: This is still a verifier primitive. It does not restore decode state after partial reject or choose replay spans automatically.
 - adversary: Reject-index diagnostics must stay visible; hiding rejects behind full-accept-only reporting would reintroduce verification theater.
+
+**decision_update_273:** Made the CUDA known-replay production policy explicit and refuted unsafe same-stack partial-prefix commit for the current runner shape. The probe now reports `known_replay_policy=full_accept_only`, `known_replay_commit_tokens`, `known_replay_discarded_accept_prefix`, and `known_replay_reject_recovery_required`. This keeps cache-aligned replay honest: a fully accepted band can be committed, but a reject after an accepted prefix is diagnostic-only until the runner supports active-row/prefix execution.
+
+**evidence_update_273:**
+- claim: "Known-replay commit accounting is explicit and fail-closed."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_known_policy_cuda crystal build bin/cuda_mixed_stack_probe.cr -Dcpu_only -Duse_pcre2 --no-codegen`, `crystal spec spec/ngram_draft_spec.cr`, and `git diff --check -- bin/cuda_mixed_stack_probe.cr LANDMARKS.md TODO.md` passed. Remote RTX 5060 Ti all-layer derived positive replay (`start=1,tokens=32`) reported `cuda_ms_per_token=10.922`, `known_replay_full_accept=true`, `known_replay_commit_tokens=32`, and `known_replay_reject_recovery_required=false`. Remote negative replay (`start=1,tokens=8`, bad token at index 2) reported `cuda_ms_per_token=12.078`, `known_replay_accepted=2`, `known_replay_reject_index=2`, `known_replay_commit_tokens=0`, `known_replay_discarded_accept_prefix=2`, and `known_replay_reject_recovery_required=true`.
+  verified_at: 2026-05-18
+  decay_trigger: known-replay output contract, CUDA runner prefix execution, active-row support, or production cache-aligned replay controller changes
+- claim: "Same-stack partial-prefix recovery is unsafe without active-row/prefix support in the current WBA runners."
+  source: source audit: `ML::CUDA::ResidentSequenceRunner#run_sequence` falls back to `@tokens.times { @run_token.call(tok) }`, but `QwenFullAttnKVRunner` documents `Kernels index token by block id; launch all token blocks once` and its `run_token(0)` launches Q/K/attention over `@tokens`; `QwenOutputHeadRunner` runs four rows when `head_q6_tbatch4` and `tok % 4 == 0`. Therefore a naive `run_prefix(count)` would overprocess rows for full-attention KV and output-head tails.
+  verified_at: 2026-05-18
+  decay_trigger: full-attention KV runner scheduling, output-head tbatch route, ResidentSequenceRunner prefix API, or active-row kernel parameters
+
+**quadrumvirate_update_273:**
+- cassandra: The likely trap was a local API illusion: `run_token(tok)` sounds row-local, but several WBA implementations intentionally launch row bands or whole allocated spans.
+- daedalus: The correct frame is commit policy first, recovery primitive second. Full-accept-only replay preserves the verified speed ceiling without corrupting canonical state on partial reject.
+- maieutic: The accepted prefix in a rejected band is not useless; it is a future optimization target. It is not safe to commit until full-attention KV and head routes can be bounded to active rows.
+- adversary: The explicit `discarded_accept_prefix` metric prevents verification theater by showing exactly how much potential speed is left on the table when partial recovery is unavailable.

@@ -1350,7 +1350,14 @@ begin
       end
     end
     full_accept = accepted == known_replay_candidates.size
+    commit_tokens = full_accept ? accepted : 0
+    discarded_accept_prefix = full_accept ? 0 : accepted
+    reject_recovery_required = !full_accept && accepted > 0
     lines << "known_replay_candidates=#{known_replay_candidates.join(",")}"
+    lines << "known_replay_policy=full_accept_only"
+    lines << "known_replay_commit_tokens=#{commit_tokens}"
+    lines << "known_replay_discarded_accept_prefix=#{discarded_accept_prefix}"
+    lines << "known_replay_reject_recovery_required=#{reject_recovery_required}"
     lines << "known_replay_accepted=#{accepted}"
     lines << "known_replay_total=#{known_replay_candidates.size}"
     lines << "known_replay_reject_index=#{reject_index}"
