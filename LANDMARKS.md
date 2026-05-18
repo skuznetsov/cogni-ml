@@ -13438,3 +13438,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next product optimization is not more D2D restore tuning; it is live-length state serialization. The current probe copies the full KV cache capacity, so real artifacts should store only the used prefix/span state needed by the restored cursor.
 - maieutic: This still excludes durable IO, pg/session lookup, artifact hashing, and compression/decompression. It measures D2H snapshot plus H2D restore, not an end-to-end cache service.
 - adversary: Do not compare the host-backed artifact row to arbitrary decode. It is exact only when the artifact token span and post-span state are validated against the same model/tokenizer/config/source contract.
+
+**decision_update_296:** Added live-KV host-backed trusted artifact snapshots. `--known-replay-trusted-artifact-live-kv` stores full recurrent decode state but snapshots only KV cache rows up to the restored cursor. This tests the product intuition that persisted artifacts should not copy the entire `max_seq` KV capacity when the live cursor is shorter.
+
+**evidence_update_296:**
+- claim: "Live-KV host artifact restore preserves exact cached output for start1/gen64 and trims the full-cache artifact."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start1/gen64 with `--known-replay-trusted-artifact-live-kv --max-seq 128` printed `known_replay_trusted_artifact_kv_tokens=64`, `known_replay_trusted_artifact_bytes=56885248`, `known_replay_trusted_artifact_snapshot_ms=35.036`, `known_replay_trusted_artifact_restore_ms=11.358`, `cuda_ms=11.358`, `known_replay_accepted=64`, `known_replay_full_accept=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: live-KV byte sizing, KV cache layout, CUDA restore semantics, max-seq, or artifact format changes
+- claim: "Live-KV host artifact restore also works for a non-zero replay cursor."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9/gen24 with `--known-replay-trusted-artifact-live-kv --max-seq 128` printed `known_replay_trusted_artifact_kv_tokens=32`, `known_replay_trusted_artifact_bytes=54788096`, `known_replay_trusted_artifact_snapshot_ms=35.939`, `known_replay_trusted_artifact_restore_ms=10.984`, `known_replay_accepted=24`, `known_replay_full_accept=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: nonzero cursor live-KV sizing, prefix-state build, KV restore, or source-history contract changes
+- claim: "The prior full-cache host artifact mode remains intact after live-KV changes."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B start9/gen24 with `--known-replay-trusted-artifact-host-restore --max-seq 128` printed `known_replay_trusted_artifact_live_kv=false`, `known_replay_trusted_artifact_bytes=61079552`, `known_replay_trusted_artifact_restore_ms=12.257`, `known_replay_accepted=24`, `known_replay_full_accept=true`, and `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: host snapshot API, full-cache KV path, or restore output contract changes
+
+**quadrumvirate_update_296:**
+- cassandra: KV trimming is correct but only modestly improves short-context restore because recurrent DeltaNet state dominates the artifact size.
+- daedalus: The next serialization frame should target recurrent-state representation and durable IO/hash cost, not only KV length. KV length becomes more important at long context.
+- maieutic: The live-KV proof assumes attention never reads rows beyond the restored cursor. The exact `ok=true` checks support that for these cursor shapes, but long-context and nonzero `start_pos` should be tested before broad claims.
+- adversary: Do not infer that live-KV is enough for production. The measured path still excludes disk read, pg/session lookup, hash verification, compression, and allocator behavior under repeated restores.

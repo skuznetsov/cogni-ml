@@ -146,6 +146,10 @@ module ML::CUDA
       @kv.kv_cache_bytesize
     end
 
+    def kv_cache_bytesize_for_tokens(tokens : Int32) : LibC::SizeT
+      @kv.kv_cache_bytesize_for_tokens(tokens)
+    end
+
     def final_gpu_all : Array(Float32)
       @kv.final_gpu_all
     end

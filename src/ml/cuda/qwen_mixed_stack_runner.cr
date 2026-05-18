@@ -46,9 +46,10 @@ module ML::CUDA
     class HostDecodeStateSnapshot
       getter buffers : Array(Bytes)
       getter include_kv : Bool
+      getter kv_tokens : Int32?
       getter bytesize_total : UInt64
 
-      def initialize(@buffers : Array(Bytes), @include_kv : Bool)
+      def initialize(@buffers : Array(Bytes), @include_kv : Bool, @kv_tokens : Int32? = nil)
         @bytesize_total = @buffers.sum(0_u64) { |buffer| buffer.size.to_u64 }
       end
     end
@@ -288,7 +289,7 @@ module ML::CUDA
       DecodeStateSnapshot.new(buffers, include_kv)
     end
 
-    def snapshot_decode_state_host(include_kv : Bool = true) : HostDecodeStateSnapshot
+    def snapshot_decode_state_host(include_kv : Bool = true, kv_tokens : Int32? = nil) : HostDecodeStateSnapshot
       buffers = [] of Bytes
       @runners.each do |runner|
         case runner
@@ -297,12 +298,13 @@ module ML::CUDA
           snapshot_host_buffer!(buffers, runner.ssm_state_device_ptr, runner.ssm_state_bytesize, "snapshot host ssm_state")
         in QwenFullAttnLayerRunner
           if include_kv
-            snapshot_host_buffer!(buffers, runner.k_cache_device_ptr, runner.kv_cache_bytesize, "snapshot host k_cache")
-            snapshot_host_buffer!(buffers, runner.v_cache_device_ptr, runner.kv_cache_bytesize, "snapshot host v_cache")
+            kv_bytesize = kv_tokens ? runner.kv_cache_bytesize_for_tokens(kv_tokens.not_nil!) : runner.kv_cache_bytesize
+            snapshot_host_buffer!(buffers, runner.k_cache_device_ptr, kv_bytesize, "snapshot host k_cache")
+            snapshot_host_buffer!(buffers, runner.v_cache_device_ptr, kv_bytesize, "snapshot host v_cache")
           end
         end
       end
-      HostDecodeStateSnapshot.new(buffers, include_kv)
+      HostDecodeStateSnapshot.new(buffers, include_kv, kv_tokens)
     end
 
     def restore_decode_state(snapshot : DecodeStateSnapshot) : Nil
@@ -348,10 +350,11 @@ module ML::CUDA
           if snapshot.include_kv
             k_cache = snapshot.buffers[idx]
             v_cache = snapshot.buffers[idx + 1]
-            raise "snapshot host k_cache size mismatch" unless k_cache.size.to_u64 == runner.kv_cache_bytesize
-            raise "snapshot host v_cache size mismatch" unless v_cache.size.to_u64 == runner.kv_cache_bytesize
-            ML::CUDA.copy_htod!(runner.k_cache_device_ptr, k_cache.to_unsafe.as(Void*), runner.kv_cache_bytesize, "restore host k_cache")
-            ML::CUDA.copy_htod!(runner.v_cache_device_ptr, v_cache.to_unsafe.as(Void*), runner.kv_cache_bytesize, "restore host v_cache")
+            kv_bytesize = snapshot.kv_tokens ? runner.kv_cache_bytesize_for_tokens(snapshot.kv_tokens.not_nil!) : runner.kv_cache_bytesize
+            raise "snapshot host k_cache size mismatch" unless k_cache.size.to_u64 == kv_bytesize
+            raise "snapshot host v_cache size mismatch" unless v_cache.size.to_u64 == kv_bytesize
+            ML::CUDA.copy_htod!(runner.k_cache_device_ptr, k_cache.to_unsafe.as(Void*), kv_bytesize, "restore host k_cache")
+            ML::CUDA.copy_htod!(runner.v_cache_device_ptr, v_cache.to_unsafe.as(Void*), kv_bytesize, "restore host v_cache")
             idx += 2
           end
         end

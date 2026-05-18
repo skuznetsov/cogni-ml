@@ -255,6 +255,13 @@ module ML::CUDA
       bytesize_f32(@max_seq * @kv_dim)
     end
 
+    def kv_cache_bytesize_for_tokens(tokens : Int32) : LibC::SizeT
+      raise ArgumentError.new("kv tokens must be non-negative") unless tokens >= 0
+      raise ArgumentError.new("kv tokens exceed max_seq") unless tokens <= @max_seq
+
+      bytesize_f32(tokens * @kv_dim)
+    end
+
     def update_decode_position(start_pos : Int32, cos_table : Array(Float32), sin_table : Array(Float32)) : Nil
       raise ArgumentError.new("start_pos must be non-negative") unless start_pos >= 0
       half = @rope_dim // 2
