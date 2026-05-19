@@ -72,6 +72,36 @@ def read_host_snapshot_file_contiguous(path : String, template : ML::CUDA::QwenM
     template.include_kv, template.kv_tokens, template.recurrent_bytes_total, template.kv_bytes_total, [storage])
 end
 
+def read_host_snapshot_file_mmap(path : String, template : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot) : {ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot, Pointer(UInt8), UInt64}
+  size = File.size(path).to_u64
+  raise "artifact mmap read size mismatch" unless size == template.bytesize_total
+
+  file = File.open(path, "r")
+  ptr = LibC.mmap(
+    Pointer(Void).null,
+    size,
+    LibC::PROT_READ,
+    LibC::MAP_PRIVATE,
+    file.fd,
+    0
+  )
+  file.close
+  raise "artifact mmap failed" if ptr.address == LibC::MAP_FAILED.address
+
+  storage = Bytes.new(ptr.as(Pointer(UInt8)), size.to_i, read_only: true)
+  offset = 0
+  buffers = template.buffers.map do |buffer|
+    slice = storage[offset, buffer.size]
+    offset += buffer.size
+    slice
+  end
+  raise "artifact mmap slice size mismatch" unless offset.to_u64 == size
+
+  snapshot = ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot.new(buffers, template.buffer_roles,
+    template.include_kv, template.kv_tokens, template.recurrent_bytes_total, template.kv_bytes_total, [storage])
+  {snapshot, ptr.as(Pointer(UInt8)), size}
+end
+
 def qwen_snapshot_from_host_decode_snapshot(snapshot : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot,
                                             layer_ids : Array(Int32),
                                             runners : Array(ML::CUDA::QwenMixedStackRunner::LayerRunner),
@@ -985,6 +1015,8 @@ known_replay_trusted_artifact_live_kv = false
 known_replay_trusted_artifact_io_probe = false
 known_replay_trusted_artifact_io_path = ""
 known_replay_trusted_artifact_contiguous_read = false
+known_replay_trusted_artifact_mmap_read = false
+known_replay_trusted_artifact_skip_hash = false
 known_replay_trusted_artifact_codec_bench = false
 known_replay_trusted_artifact_codec_format = "int8"
 known_replay_trusted_artifact_codec_late_format = ""
@@ -1079,6 +1111,8 @@ OptionParser.parse do |p|
   p.on("--known-replay-trusted-artifact-io-probe", "With host artifact restore, time artifact write, read, and SHA-256 hash around the H2D restore") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-io-path PATH", "Path for --known-replay-trusted-artifact-io-probe; default is a temporary file") { |v| known_replay_trusted_artifact_io_path = v }
   p.on("--known-replay-trusted-artifact-contiguous-read", "With artifact IO probe, read the artifact into one host allocation and restore from slices") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; known_replay_trusted_artifact_contiguous_read = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-mmap-read", "With artifact IO probe, mmap the artifact and restore directly from mapped slices") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; known_replay_trusted_artifact_mmap_read = true; perf_only = true }
+  p.on("--known-replay-trusted-artifact-skip-hash", "With artifact IO probe, skip synchronous SHA-256 to measure trusted/session-local load lower bound") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_io_probe = true; known_replay_trusted_artifact_skip_hash = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-bench", "With host artifact restore, benchmark block-INT8 compression on recurrent-state buffers") { known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-format FORMAT", "Recurrent codec format for codec bench/restore checks: int8 or bf16; default int8") { |v| known_replay_trusted_artifact_codec_format = v; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; perf_only = true }
   p.on("--known-replay-trusted-artifact-codec-late-format FORMAT", "With --known-replay-trusted-artifact-codec-min-start, use this recurrent codec format at/after the threshold; before it uses --codec-format") { |v| known_replay_trusted_artifact_codec_late_format = v; known_replay_trusted_artifact_restore = true; known_replay_trusted_artifact_host_restore = true; known_replay_trusted_artifact_codec_bench = true; known_replay_trusted_artifact_codec_restore_check = true; known_replay_trusted_artifact_codec_gpu_decode_check = true; perf_only = true }
@@ -1246,6 +1280,7 @@ if known_replay_trusted_artifact_codec_late_format == "int8" && !known_replay_tr
   known_replay_trusted_artifact_codec_block = 8
 end
 raise "--known-replay-trusted-artifact-codec-block must be positive" unless known_replay_trusted_artifact_codec_block > 0
+raise "--known-replay-trusted-artifact-mmap-read conflicts with --known-replay-trusted-artifact-contiguous-read" if known_replay_trusted_artifact_mmap_read && known_replay_trusted_artifact_contiguous_read
 raise "--known-replay-trusted-artifact-codec-restore-steps must be positive" unless known_replay_trusted_artifact_codec_restore_steps > 0
 raise "--known-replay-trusted-artifact-codec-free-run-steps must be non-negative" unless known_replay_trusted_artifact_codec_free_run_steps >= 0
 raise "--known-replay-trusted-artifact-codec-gpu-decode-check requires --known-replay-trusted-artifact-codec-restore-check" if known_replay_trusted_artifact_codec_gpu_decode_check && !known_replay_trusted_artifact_codec_restore_check
@@ -2298,6 +2333,8 @@ begin
         known_replay_trusted_artifact_poison_ms = (Time.instant - t_artifact_poison).total_milliseconds
 
         restore_snapshot = artifact_snapshot
+        mapped_artifact_ptr = nil.as(Pointer(UInt8)?)
+        mapped_artifact_size = 0_u64
         if known_replay_trusted_artifact_io_probe
           artifact_path = known_replay_trusted_artifact_io_path.empty? ? File.tempname("cogni-qwen-artifact", ".bin") : known_replay_trusted_artifact_io_path
           begin
@@ -2306,12 +2343,22 @@ begin
             known_replay_trusted_artifact_write_ms = (Time.instant - t_artifact_write).total_milliseconds
 
             t_artifact_hash = Time.instant
-            known_replay_trusted_artifact_sha256_12 = sha256_file(artifact_path)[0, 12]
+            known_replay_trusted_artifact_sha256_12 =
+              if known_replay_trusted_artifact_skip_hash
+                "skipped"
+              else
+                sha256_file(artifact_path)[0, 12]
+              end
             known_replay_trusted_artifact_hash_ms = (Time.instant - t_artifact_hash).total_milliseconds
 
             t_artifact_read = Time.instant
             restore_snapshot =
-              if known_replay_trusted_artifact_contiguous_read
+              if known_replay_trusted_artifact_mmap_read
+                mapped = read_host_snapshot_file_mmap(artifact_path, artifact_snapshot)
+                mapped_artifact_ptr = mapped[1]
+                mapped_artifact_size = mapped[2]
+                mapped[0]
+              elsif known_replay_trusted_artifact_contiguous_read
                 read_host_snapshot_file_contiguous(artifact_path, artifact_snapshot)
               else
                 read_host_snapshot_file(artifact_path, artifact_snapshot)
@@ -2490,6 +2537,9 @@ begin
           codec_gpu_restorer.try(&.close)
           codec_gpu_bf16_restorer.try(&.close)
           codec_encoded_restorer.try(&.close)
+        end
+        if ptr = mapped_artifact_ptr
+          LibC.munmap(ptr.as(Void*), mapped_artifact_size)
         end
       else
         artifact_snapshot = mixed_stack.snapshot_decode_state(include_kv: true)
@@ -2914,11 +2964,14 @@ begin
       lines << "known_replay_trusted_artifact_poison_ms=#{known_replay_trusted_artifact_poison_ms.round(3)}"
       lines << "known_replay_trusted_artifact_io_probe=#{known_replay_trusted_artifact_io_probe}"
       lines << "known_replay_trusted_artifact_contiguous_read=#{known_replay_trusted_artifact_contiguous_read}"
+      lines << "known_replay_trusted_artifact_mmap_read=#{known_replay_trusted_artifact_mmap_read}"
+      lines << "known_replay_trusted_artifact_skip_hash=#{known_replay_trusted_artifact_skip_hash}"
       lines << "known_replay_trusted_artifact_write_ms=#{known_replay_trusted_artifact_write_ms.round(3)}"
       lines << "known_replay_trusted_artifact_read_ms=#{known_replay_trusted_artifact_read_ms.round(3)}"
       lines << "known_replay_trusted_artifact_hash_ms=#{known_replay_trusted_artifact_hash_ms.round(3)}"
       lines << "known_replay_trusted_artifact_sha256_12=#{known_replay_trusted_artifact_sha256_12}"
       lines << "known_replay_trusted_artifact_restore_ms=#{known_replay_trusted_artifact_restore_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_load_ms=#{(known_replay_trusted_artifact_read_ms + known_replay_trusted_artifact_hash_ms + known_replay_trusted_artifact_restore_ms).round(3)}"
       lines << "known_replay_trusted_artifact_codec_bench=#{known_replay_trusted_artifact_codec_bench}"
       lines << "known_replay_trusted_artifact_codec_format=#{known_replay_trusted_artifact_codec_format}"
       lines << "known_replay_trusted_artifact_codec_late_format=#{known_replay_trusted_artifact_codec_late_format}"
@@ -3124,6 +3177,8 @@ begin
   puts "known_replay_trusted_artifact_io_probe_arg=#{known_replay_trusted_artifact_io_probe}"
   puts "known_replay_trusted_artifact_io_path_arg=#{known_replay_trusted_artifact_io_path}"
   puts "known_replay_trusted_artifact_contiguous_read_arg=#{known_replay_trusted_artifact_contiguous_read}"
+  puts "known_replay_trusted_artifact_mmap_read_arg=#{known_replay_trusted_artifact_mmap_read}"
+  puts "known_replay_trusted_artifact_skip_hash_arg=#{known_replay_trusted_artifact_skip_hash}"
   puts "known_replay_trusted_artifact_codec_bench_arg=#{known_replay_trusted_artifact_codec_bench}"
   puts "known_replay_trusted_artifact_codec_format_arg=#{known_replay_trusted_artifact_codec_format}"
   puts "known_replay_trusted_artifact_codec_late_format_arg=#{known_replay_trusted_artifact_codec_late_format}"

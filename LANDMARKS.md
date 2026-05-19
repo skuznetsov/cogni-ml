@@ -13946,3 +13946,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Separating artifact byte serialization from durable hash validation is the cleaner boundary. Product cache restore can still require hashes/validation, while benchmark plumbing avoids host OpenSSL fragility.
 - maieutic: This does not solve Linux hashed-artifact packaging globally. It only proves that the encoded-restorer probe no longer trips it.
 - adversary: Keep fail-closed compressed artifact restore intact: compressed decode still requires explicit expected codec/block metadata, and hash validation remains available when callers supply `expected_sha256`.
+
+**decision_update_324:** Added persistent artifact load lower-bound probes. `--known-replay-trusted-artifact-mmap-read` maps the host artifact and restores directly from mapped slices, while `--known-replay-trusted-artifact-skip-hash` measures the session-local/trusted-storage lower bound without synchronous SHA-256. Defaults remain unchanged: normal IO probes still read normally and hash unless the diagnostic flags are explicit.
+
+**evidence_update_324:**
+- claim: "mmap eliminates explicit host artifact read time, but shifts page faults into restore rather than making bytes free."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B raw live-KV artifact, seed1919 history, `start=33`, `tokens=16`, artifact bytes `55,836,672` (`52,690,944` recurrent + `3,145,728` KV). Segmented IO probe reported read `30.867ms`, restore `11.558ms`, `ok=true`; mmap probe reported read `0.031ms`, restore `12.753ms`, `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: host artifact layout, IO probe read modes, CUDA H2D restore path, storage medium, or kernel driver page-fault behavior changes
+- claim: "Synchronous full SHA-256 dominates trusted artifact load latency on the current remote host."
+  source: same remote gate with mmap read. `mmap_hash` reported hash `50.236ms`, load `62.972ms`, `ok=true`; `mmap_nohash` reported hash `0.000ms`, load `12.713ms`, `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: hash implementation, artifact size/compression, storage stack, or validation policy changes
+
+**quadrumvirate_update_324:**
+- cassandra: mmap is a real product lever for avoiding a duplicate host copy, but full synchronous hashing erases the gain on this workload.
+- daedalus: The next cache-product path should separate trust validation from token-critical restore: manifest-local validation hashes, async/background full hash, or prevalidated session-local artifacts.
+- maieutic: Skipping hash is not a general security claim. It is a lower-bound measurement for already trusted/session-local storage; fail-closed public artifact restore still needs validation metadata and/or hash evidence.
+- adversary: The probe currently measures raw host snapshots, not compressed v2 artifact mmap plus encoded CUDA restore. That is the next sharper falsifier for real product economics.
