@@ -13868,3 +13868,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed slice should preserve encoded recurrent payloads and feed them to the existing CUDA BF16/INT8 decode kernels, instead of materializing full Float32 recurrent state on host.
 - maieutic: The bridge is useful because it gives one API surface for raw and compressed artifacts after validation. The assumption still needing proof is that direct encoded-artifact restore can share the probe kernels safely outside the benchmark harness.
 - adversary: The overload rejects missing and duplicate records and mismatched sizes, but it does not authenticate metadata itself; callers must still use `read_artifact(... expected_codec: ..., expected_codec_block: ...)` and prompt-cache validation before restore.
+
+**decision_update_319:** Added an encoded artifact reader boundary for v2 `.qkv` files. `Qwen35StateSnapshot.read_artifact_encoded` returns encoded records with codec, original byte size, and compressed payload bytes instead of forcing immediate Float32 materialization. The existing `read_artifact` path now decodes through this encoded representation, preserving current restore semantics.
+
+**evidence_update_319:**
+- claim: "The artifact reader can now preserve compressed BF16/INT8 payloads for downstream GPU decode restore."
+  source: focused specs `spec/qwen35_state_snapshot_spec.cr:23` and `spec/qwen35_state_snapshot_spec.cr:54` passed; they check BF16 encoded payload size/original size and INT8 block metadata/payload size. `spec/qwen35_prompt_cache_spec.cr:226` also passed, and `crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr` passed.
+  verified_at: 2026-05-18
+  decay_trigger: v2 artifact layout, encoded reader API, BF16/INT8 codec payload layout, or CUDA restore integration changes
+
+**quadrumvirate_update_319:**
+- cassandra: This removes the reader-level blocker for direct GPU decode, but the CUDA runner still needs a restorer that consumes `EncodedSnapshot` without building Float32 recurrent buffers.
+- daedalus: The next implementation should move the probe's BF16/INT8 restorer shape into reusable CUDA code around encoded records, not add another artifact format.
+- maieutic: Encoded payload preservation is useful only if callers keep validation metadata attached; encoded bytes alone are not a trust proof.
+- adversary: Keep `read_artifact` fail-closed behavior unchanged. Optimized paths must still call encoded read with expected codec/block metadata and reject stale/missing validation.

@@ -36,6 +36,11 @@ describe ML::GGUF::Qwen35StateSnapshot do
       floats_from(loaded.records[0].bytes).each_with_index do |actual, i|
         actual.should be_close(values[i], 0.01_f32)
       end
+      encoded = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded(path, expected_sha256: info.sha256, expected_codec: "recurrent-bf16")
+      encoded.codec.should eq(ML::GGUF::Qwen35StateSnapshot::RecordCodec::Bf16)
+      encoded.records[0].codec.should eq(ML::GGUF::Qwen35StateSnapshot::RecordCodec::Bf16)
+      encoded.records[0].original_byte_size.should eq(values.size * sizeof(Float32))
+      encoded.records[0].payload.size.should eq(values.size * sizeof(UInt16))
 
       expect_raises(ArgumentError, /codec mismatch/) do
         ML::GGUF::Qwen35StateSnapshot.read_artifact(path, expected_sha256: info.sha256, expected_codec: "recurrent-int8")
@@ -63,6 +68,17 @@ describe ML::GGUF::Qwen35StateSnapshot do
         expected_codec: "recurrent-int8",
         expected_codec_block: 2,
       )
+      encoded = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded(
+        path,
+        expected_sha256: info.sha256,
+        expected_codec: "recurrent-int8",
+        expected_codec_block: 2,
+      )
+      encoded.codec.should eq(ML::GGUF::Qwen35StateSnapshot::RecordCodec::BlockI8)
+      encoded.codec_block.should eq(2)
+      encoded.records[0].original_byte_size.should eq(values.size * sizeof(Float32))
+      encoded.records[0].payload.size.should be < encoded.records[0].original_byte_size
+
       floats_from(loaded.records[0].bytes).each_with_index do |actual, i|
         actual.should be_close(values[i], 0.6_f32)
       end
