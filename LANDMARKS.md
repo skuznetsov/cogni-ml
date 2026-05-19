@@ -13822,3 +13822,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed lever is not more manifest schema; it is productionizing the GPU decode/read path and async/prefetched artifact service around this format.
 - maieutic: The exact guarantee still comes from validation metadata plus downstream exact gates. BF16/INT8 artifacts remain approximate state restores unless locally validated for the cache key.
 - adversary: Do not treat a self-described compressed artifact as trusted. The reader now requires caller-supplied expected codec metadata before decoding v2.
+
+**decision_update_316:** Kept the mixed recurrent artifact codec policy unchanged after a small prompt-shaped CUDA gate. The new evidence supports `late-format=int8` defaulting to block8 on the tested prompt-shaped histories, but the matrix is still too small for production-trusted promotion beyond the existing fail-closed validation requirement.
+
+**evidence_update_316:**
+- claim: "Late INT8 block8 GPU decode passed the first post-reader prompt-shaped cache-artifact gate."
+  source: remote RTX 5060 Ti run using `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_mixed_codec3` over two prompts (`code`, `reason`), 96-token greedy continuations, two late cursors per prompt, `known_replay_tokens=16`, and `free_run_steps=32`. All four cases selected `gpu_block_i8_after_min_start`, `selected_format=int8`, `block=8`, `ratio=0.375`, `free_run_parity_count=32`, and `ok=true`; timed artifact restore was `11.212/11.882/11.572/12.252ms` for 16 cached tokens (`0.701/0.743/0.723/0.766ms/token`). Local log summary: `/tmp/cogni_codec_prompt_gate_20260518/summary.json`.
+  verified_at: 2026-05-18
+  decay_trigger: prompt suite expansion, longer contexts, sampling mode, CUDA codec decode path, or block8 default policy changes
+
+**quadrumvirate_update_316:**
+- cassandra: Passing two prompt classes reduces the chance that block8 was only fitting one synthetic history, but it does not prove robustness for chat, JSON, math, long reasoning, or sampled sessions.
+- daedalus: No default change is justified. The product boundary remains cache-local validation plus exact fallback, not global trust in one codec.
+- maieutic: The timing is restore-only for trusted artifacts, not generation speed. It proves cache-hit economics, not proposal quality.
+- adversary: The next falsifier should add more prompt classes and earlier/high-risk cursors; do not overfit to code/reason late cursors.
