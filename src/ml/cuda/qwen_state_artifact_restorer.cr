@@ -27,10 +27,13 @@ module ML::CUDA
     def initialize(@snapshot : ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot)
       @records = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => ML::GGUF::Qwen35StateSnapshot::EncodedRecord
       @segments = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => Segment
+      @kv_segments = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => Segment
       @i8_payload_bytes_total = 0
       @bf16_payload_bytes_total = 0
+      @kv_payload_bytes_total = 0
       @has_i8 = false
       @has_bf16 = false
+      @encoded_payloads_preuploaded = false
       @closed = false
 
       @snapshot.records.each do |record|
@@ -38,7 +41,10 @@ module ML::CUDA
         raise ArgumentError.new("duplicate Qwen encoded state record: layer=#{record.layer}, kind=#{record.kind}") if @records.has_key?(key)
 
         @records[key] = record
-        next unless recurrent_record_kind?(record.kind)
+        unless recurrent_record_kind?(record.kind)
+          add_kv_segment(record)
+          next
+        end
 
         case record.codec
         in ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32
@@ -61,6 +67,7 @@ module ML::CUDA
 
       @i8_quant_device = @has_i8 ? DeviceBuffer.new(@i8_payload_bytes_total.to_u64) : nil
       @bf16_payload_device = @has_bf16 ? DeviceBuffer.new(@bf16_payload_bytes_total.to_u64) : nil
+      @kv_payload_device = @kv_payload_bytes_total > 0 ? DeviceBuffer.new(@kv_payload_bytes_total.to_u64) : nil
 
       @i8_q_ptr = Pointer(DevicePtr).malloc(1)
       @i8_out_ptr = Pointer(DevicePtr).malloc(1)
@@ -82,9 +89,24 @@ module ML::CUDA
       @bf16_params[2] = @bf16_values_ptr.as(Void*)
     end
 
+    # Upload encoded recurrent payloads into staging buffers ahead of restore.
+    # Session-cache callers can run this during prefetch so activation only pays
+    # decode kernels and KV restore on the token-critical path.
+    def preupload_payloads : Float64
+      return 0.0 if @encoded_payloads_preuploaded
+
+      ms = upload_encoded_payloads + upload_kv_payloads
+      @encoded_payloads_preuploaded = true
+      ms
+    end
+
     def restore(stack : QwenMixedStackRunner) : Nil
       t_total = Time.instant
-      upload_encoded_payloads
+      if @encoded_payloads_preuploaded
+        @h2d_ms = 0.0
+      else
+        upload_encoded_payloads
+      end
 
       t_kernel = Time.instant
       stack.layer_ids.zip(stack.runners).each do |layer_id, runner|
@@ -113,11 +135,12 @@ module ML::CUDA
 
       @i8_quant_device.try(&.close)
       @bf16_payload_device.try(&.close)
+      @kv_payload_device.try(&.close)
       @module.try(&.close)
       @closed = true
     end
 
-    private def upload_encoded_payloads : Nil
+    private def upload_encoded_payloads : Float64
       t_h2d = Time.instant
       if device = @i8_quant_device
         @segments.each_value do |segment|
@@ -134,6 +157,18 @@ module ML::CUDA
         end
       end
       @h2d_ms = (Time.instant - t_h2d).total_milliseconds
+      @h2d_ms
+    end
+
+    private def upload_kv_payloads : Float64
+      return 0.0 if @kv_segments.empty?
+
+      device = @kv_payload_device.not_nil!
+      t_h2d = Time.instant
+      @kv_segments.each_value do |segment|
+        CUDA.copy_htod!(device.ptr + segment.payload_offset.to_u64, segment.payload.to_unsafe.as(Void*), segment.payload.size.to_u64, "qwen encoded artifact preupload kv")
+      end
+      (Time.instant - t_h2d).total_milliseconds
     end
 
     private def add_bf16_segment(record : ML::GGUF::Qwen35StateSnapshot::EncodedRecord) : Nil
@@ -160,6 +195,14 @@ module ML::CUDA
       @i8_payload_bytes_total += record.payload.size
       @segments[{record.layer, record.kind}] = Segment.new(record.layer, record.kind, record.codec, q_offset, values, record.payload)
       @has_i8 = true
+    end
+
+    private def add_kv_segment(record : ML::GGUF::Qwen35StateSnapshot::EncodedRecord) : Nil
+      raise ArgumentError.new("KV records must be raw in recurrent compressed artifacts") unless record.codec.raw_f32?
+
+      offset = @kv_payload_bytes_total
+      @kv_payload_bytes_total += record.payload.size
+      @kv_segments[{record.layer, record.kind}] = Segment.new(record.layer, record.kind, record.codec, offset, record.original_byte_size // sizeof(Float32), record.payload)
     end
 
     private def restore_recurrent_record(layer_id : Int32,
@@ -194,17 +237,19 @@ module ML::CUDA
         next unless runner.is_a?(QwenFullAttnLayerRunner)
 
         position = @snapshot.positions[layer_id]
-        restore_kv_record(runner, encoded_record(layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache), position, runner.k_cache_device_ptr, "restore encoded artifact k_cache")
-        restore_kv_record(runner, encoded_record(layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache), position, runner.v_cache_device_ptr, "restore encoded artifact v_cache")
+        restore_kv_record(runner, layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache, position, runner.k_cache_device_ptr, "restore encoded artifact k_cache")
+        restore_kv_record(runner, layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache, position, runner.v_cache_device_ptr, "restore encoded artifact v_cache")
         runner.update_decode_position(position)
       end
     end
 
     private def restore_kv_record(runner : QwenFullAttnLayerRunner,
-                                  record : ML::GGUF::Qwen35StateSnapshot::EncodedRecord,
+                                  layer_id : Int32,
+                                  kind : ML::GGUF::Qwen35StateSnapshot::RecordKind,
                                   position : Int32,
                                   dst : DevicePtr,
                                   label : String) : Nil
+      record = encoded_record(layer_id, kind)
       raise ArgumentError.new("#{label} must be raw in recurrent artifact") unless record.codec.raw_f32?
       actual = record.payload.size.to_u64
       full_bytesize = runner.kv_cache_bytesize.to_u64
@@ -213,7 +258,12 @@ module ML::CUDA
         raise ArgumentError.new("#{label} size mismatch: artifact=#{actual}, runner_full=#{full_bytesize}, runner_live=#{live_bytesize}")
       end
 
-      CUDA.copy_htod!(dst, record.payload.to_unsafe.as(Void*), actual, label)
+      if @encoded_payloads_preuploaded
+        segment = @kv_segments[{layer_id, kind}]? || raise ArgumentError.new("missing preuploaded KV segment: layer=#{layer_id}, kind=#{kind}")
+        CUDA.copy_dtod!(dst, @kv_payload_device.not_nil!.ptr + segment.payload_offset.to_u64, actual, label)
+      else
+        CUDA.copy_htod!(dst, record.payload.to_unsafe.as(Void*), actual, label)
+      end
     end
 
     private def encoded_record(layer : Int32, kind : ML::GGUF::Qwen35StateSnapshot::RecordKind) : ML::GGUF::Qwen35StateSnapshot::EncodedRecord

@@ -14000,3 +14000,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The useful product boundary is now: trusted manifest -> mmap v2 artifact -> zero-copy encoded snapshot -> CUDA encoded restorer. This is close to the desired session-cache fast path.
 - maieutic: mmap does not validate trust. It only avoids a host copy. Validation still belongs in manifest/cache policy and can be background or precomputed for session-local artifacts.
 - adversary: The gate is one deterministic seed history and short free-run. Broaden before defaulting compressed restore, and keep exact fallback on missing/stale validation metadata.
+
+**decision_update_327:** Added explicit GPU-resident preupload for encoded v2 artifacts. `QwenStateArtifactRestorer#preupload_payloads` uploads recurrent encoded payloads plus raw KV payloads into CUDA staging buffers before token-critical activation; later `restore` skips recurrent H2D and restores KV by device-to-device copy. The probe flag `--known-replay-trusted-artifact-encoded-preupload` models a session-cache prefetch path rather than a cold one-shot load.
+
+**evidence_update_327:**
+- claim: "GPU-resident preupload turns encoded artifact activation into a sub-millisecond hot restore for the current all-layer Qwen3.5-9B cache gate."
+  source: local `crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr --error-trace` passed. Remote RTX 5060 Ti all-layer Qwen3.5-9B seed1919 known-replay with mmap encoded artifacts and `--known-replay-trusted-artifact-encoded-preupload` passed both mixed-policy lanes. Early BF16 `start=1`: cold restore `7.071ms` (`h2d=6.246`, `kernel=0.399`, `kv=0.425`); preuploaded hot restore `0.366ms` (`h2d=0.000`, `kernel=0.236`, `kv=0.129`), `free_run_parity_count=16`, `ok=true`. Late block8 INT8 `start=33`: cold restore `6.285ms` (`h2d=5.007`, `kernel=0.347`, `kv=0.930`); preuploaded hot restore `0.392ms` (`h2d=0.000`, `kernel=0.253`, `kv=0.138`), `free_run_parity_count=16`, `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: `QwenStateArtifactRestorer`, encoded v2 artifact layout, CUDA staging buffer ownership, KV live-size policy, or known-replay validation path changes
+- claim: "This is a latency relocation, not a free cold-load improvement."
+  source: same remote gate: BF16 preupload cost `7.889ms` and cold-load-equivalent total `8.991ms`; INT8 preupload cost `6.685ms` and cold-load-equivalent total `7.842ms`. The product win is for session-cache prefetch where upload overlaps earlier work or happens before the user-visible decode continuation.
+  verified_at: 2026-05-18
+  decay_trigger: prefetch scheduler, cache hit policy, async upload path, or persistent GPU cache residency changes
+
+**quadrumvirate_update_327:**
+- cassandra: The immediate hot-restore bottleneck moved from H2D to recurrent decode + device-to-device KV copy, now both small at short context. More host parser work is no longer useful for this lane.
+- daedalus: Treat session cache as a two-stage system: durable trust/manifest/mmap on CPU, then optional GPU-resident activation artifact. This is a stronger boundary than repeatedly optimizing one cold restore function.
+- maieutic: Preupload only helps if the session has a predictable cache hit or idle/prefetch window. Cold one-shot requests still pay the same bytes, only at a different time.
+- adversary: Evidence is still seed1919 and max-seq 128. Long-context KV staging needs a separate memory-pressure and restore-latency gate before defaulting this policy.
