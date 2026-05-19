@@ -116,6 +116,29 @@ describe ML::GGUF::Qwen35StateSnapshot do
     encoded.records[0].payload.size.should be < encoded.records[0].original_byte_size
   end
 
+  it "can preserve encoded payloads as zero-copy slices backed by artifact bytes" do
+    values = [1.0_f32, -2.5_f32, 0.125_f32, 128.0_f32, -64.0_f32]
+    snapshot = synthetic_snapshot(values)
+
+    bytes = ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(
+      snapshot,
+      artifact_codec: "recurrent-int8",
+      artifact_codec_block: 2,
+    )
+    encoded = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
+      bytes,
+      expected_codec: "recurrent-int8",
+      expected_codec_block: 2,
+      copy_payloads: false,
+    )
+
+    encoded.backing_stores.size.should eq(1)
+    encoded.backing_stores[0].to_unsafe.address.should eq(bytes.to_unsafe.address)
+    payload = encoded.records[0].payload
+    payload.to_unsafe.address.should be > bytes.to_unsafe.address
+    payload.to_unsafe.address.should be < bytes.to_unsafe.address + bytes.size
+  end
+
   it "keeps KV records raw when writing recurrent compressed v2 artifacts" do
     snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
       max_seq: 8,

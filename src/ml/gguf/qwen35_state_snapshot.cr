@@ -66,13 +66,15 @@ module ML::GGUF
       getter records : Array(EncodedRecord)
       getter codec : RecordCodec
       getter codec_block : Int32
+      getter backing_stores : Array(Bytes)
 
       def initialize(@max_seq : Int32,
                      @layer_count : Int32,
                      @positions : Array(Int32),
                      @records : Array(EncodedRecord),
                      @codec : RecordCodec,
-                     @codec_block : Int32)
+                     @codec_block : Int32,
+                     @backing_stores : Array(Bytes) = [] of Bytes)
         raise ArgumentError.new("position count mismatch: positions=#{@positions.size}, layers=#{@layer_count}") unless @positions.size == @layer_count
       end
 
@@ -170,8 +172,9 @@ module ML::GGUF
 
     def decode_artifact_encoded_bytes(bytes : Bytes,
                                       expected_codec : String? = nil,
-                                      expected_codec_block : Int32? = nil) : EncodedSnapshot
-      decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block)
+                                      expected_codec_block : Int32? = nil,
+                                      copy_payloads : Bool = true) : EncodedSnapshot
+      decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block, copy_payloads: copy_payloads)
     end
 
     def read_artifact(path : String,
@@ -195,7 +198,7 @@ module ML::GGUF
         sha = Digest::SHA256.hexdigest(bytes)
         raise ArgumentError.new("Qwen state artifact sha256 mismatch") unless sha == expected.downcase
       end
-      decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block)
+      decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block, copy_payloads: false)
     end
 
     private def capture_pair(records : Array(Record),
@@ -292,7 +295,8 @@ module ML::GGUF
 
     private def decode_artifact_encoded(bytes : Bytes,
                                         expected_codec : String? = nil,
-                                        expected_codec_block : Int32? = nil) : EncodedSnapshot
+                                        expected_codec_block : Int32? = nil,
+                                        copy_payloads : Bool = true) : EncodedSnapshot
       io = IO::Memory.new(bytes)
       magic = Bytes.new(ARTIFACT_MAGIC.size)
       io.read_fully(magic)
@@ -345,13 +349,24 @@ module ML::GGUF
         end
         raise ArgumentError.new("Qwen state artifact record too large") if original_byte_size > Int32::MAX || payload_byte_size > Int32::MAX
 
-        payload = Bytes.new(payload_byte_size.to_i)
-        io.read_fully(payload)
+        payload = if copy_payloads
+                    copied = Bytes.new(payload_byte_size.to_i)
+                    io.read_fully(copied)
+                    copied
+                  else
+                    offset = io.pos
+                    size = payload_byte_size.to_i
+                    raise ArgumentError.new("truncated Qwen state artifact payload") if offset + size > bytes.size
+
+                    io.pos = offset + size
+                    bytes[offset, size]
+                  end
         records << EncodedRecord.new(layer, kind, storage_mode, record_codec, original_byte_size.to_i, payload)
       end
 
       raise ArgumentError.new("trailing bytes in Qwen state artifact") unless io.pos == bytes.size
-      EncodedSnapshot.new(max_seq, layer_count, positions, records, artifact_codec, artifact_block)
+      backing_stores = copy_payloads ? [] of Bytes : [bytes]
+      EncodedSnapshot.new(max_seq, layer_count, positions, records, artifact_codec, artifact_block, backing_stores)
     end
 
     private def decode_encoded_snapshot(encoded : EncodedSnapshot) : Snapshot

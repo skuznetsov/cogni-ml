@@ -13982,3 +13982,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next product optimization should either preserve a GPU-ready contiguous artifact layout at write time or batch/pin/asynchronously upload segments. For v2 INT8, interleaved direct decode is the right semantic boundary.
 - maieutic: The encoded v2 load number includes file read and artifact parse. If artifacts are mmap-resident or predecoded in a session cache, the token-critical path is closer to GPU restore (`~6.6ms` INT8, `~8.6ms` BF16) than full cold load.
 - adversary: The runtime gate is still one deterministic history with 16-step free-run. Keep cache-local validation and exact fallback before trusting compressed artifacts broadly.
+
+**decision_update_326:** Added zero-copy encoded v2 artifact parsing and mmap support for the encoded-restorer probe. `Qwen35StateSnapshot.decode_artifact_encoded_bytes(copy_payloads: false)` now preserves record payloads as slices backed by the artifact byte store, and `EncodedSnapshot` keeps that backing store alive. `--known-replay-trusted-artifact-encoded-mmap-read` maps the v2 `.qkv` artifact and feeds those zero-copy payload slices to `QwenStateArtifactRestorer` until restore/validation completes.
+
+**evidence_update_326:**
+- claim: "Zero-copy + mmap encoded artifact parsing preserves parity and makes compressed v2 load mostly GPU restore time."
+  source: local `crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr --error-trace` passed and full `spec/qwen35_state_snapshot_spec.cr` passed (`9 examples, 0 failures`) including zero-copy backing-store coverage. Remote RTX 5060 Ti all-layer Qwen3.5-9B seed1919 known-replay with `--known-replay-trusted-artifact-encoded-mmap-read` passed both mixed-policy lanes. Late block8 INT8 `start=33`: artifact bytes `22,906,524`, read `0.031ms`, decode `0.184ms`, restorer build `0.442ms`, GPU restore `6.126ms`, encoded load `6.783ms`, `free_run_parity_count=16`, `ok=true`. Early BF16 `start=1`: artifact bytes `27,395,740`, read `0.039ms`, decode `0.205ms`, build `0.501ms`, GPU restore `7.050ms`, encoded load `7.795ms`, `free_run_parity_count=16`, `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: EncodedSnapshot lifetime model, zero-copy parser, encoded artifact mmap flag, CUDA restorer payload ownership, or v2 artifact layout changes
+- claim: "The encoded compressed artifact cold-load path improved from CPU-bound to H2D/restore-bound."
+  source: same all-layer late INT8 path progression: first v2 encoded load `221.226ms`; after interleaved decode/direct segment upload `31.210ms`; after zero-copy+mmap `6.783ms`, with parity preserved at every promoted step.
+  verified_at: 2026-05-18
+  decay_trigger: artifact storage stack, CUDA H2D batching, mmap behavior, or prompt/cache validation policy changes
+
+**quadrumvirate_update_326:**
+- cassandra: The artifact parsing/read bottleneck is now largely removed for mmap-resident artifacts. Remaining speed work should focus on H2D copy batching/pinning and direct GPU-ready cache residency, not more host parser work.
+- daedalus: The useful product boundary is now: trusted manifest -> mmap v2 artifact -> zero-copy encoded snapshot -> CUDA encoded restorer. This is close to the desired session-cache fast path.
+- maieutic: mmap does not validate trust. It only avoids a host copy. Validation still belongs in manifest/cache policy and can be background or precomputed for session-local artifacts.
+- adversary: The gate is one deterministic seed history and short free-run. Broaden before defaulting compressed restore, and keep exact fallback on missing/stale validation metadata.
