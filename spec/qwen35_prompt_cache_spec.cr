@@ -156,6 +156,104 @@ describe ML::GGUF::Qwen35PromptCache do
     legacy.artifact_validation_hash.should be_nil
   end
 
+  it "skips cache entries with incomplete compressed-artifact validation metadata" do
+    root = File.tempname("qwen35-prompt-cache")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+        max_seq: 8,
+        layer_count: 1,
+        positions: [0_i32],
+        records: [] of ML::GGUF::Qwen35StateSnapshot::Record,
+      )
+      artifact = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, File.join(root, "manual.qkv"))
+      prompt_hash = ML::GGUF::Qwen35PromptCache.prompt_hash([42_i32], "x")
+      token_hash = ML::GGUF::Qwen35PromptCache.token_hash([42_i32])
+      raw = ML::GGUF::Qwen35PromptCache::Entry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+        session_id: "s",
+        turn_id: nil,
+        model_id: "m",
+        tokenizer_id: "t",
+        prompt_hash: prompt_hash,
+        prefix_len: 1,
+        max_seq: snapshot.max_seq,
+        layer_count: snapshot.layer_count,
+        artifact_path: artifact.path,
+        artifact_sha256: artifact.sha256,
+        artifact_byte_size: artifact.byte_size,
+        state_byte_size: snapshot.byte_size,
+        created_at_unix: 1_i64,
+        prompt_preview: nil,
+        token_hash: token_hash,
+      )
+      incomplete_compressed = ML::GGUF::Qwen35PromptCache::Entry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+        session_id: "s",
+        turn_id: nil,
+        model_id: "m",
+        tokenizer_id: "t",
+        prompt_hash: prompt_hash,
+        prefix_len: 1,
+        max_seq: snapshot.max_seq,
+        layer_count: snapshot.layer_count,
+        artifact_path: artifact.path,
+        artifact_sha256: artifact.sha256,
+        artifact_byte_size: artifact.byte_size,
+        state_byte_size: snapshot.byte_size,
+        created_at_unix: 2_i64,
+        prompt_preview: nil,
+        token_hash: token_hash,
+        artifact_codec: "recurrent-int8",
+        artifact_codec_block: 8,
+      )
+      File.open(store.manifest_path, "w") do |file|
+        raw.to_json(file)
+        file << '\n'
+        incomplete_compressed.to_json(file)
+        file << '\n'
+      end
+
+      hit = store.lookup_exact("m", "t", prompt_hash, 1).not_nil!
+      hit.artifact_codec.should be_nil
+      store.lookup_session("s").try(&.artifact_codec).should be_nil
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
+  it "validates compressed-artifact metadata before allowing trust but rejects raw-reader restore" do
+    entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+      runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+      session_id: "s",
+      turn_id: nil,
+      model_id: "m",
+      tokenizer_id: "t",
+      prompt_hash: "p",
+      prefix_len: 0,
+      max_seq: 1,
+      layer_count: 1,
+      artifact_path: "a",
+      artifact_sha256: "0" * 64,
+      artifact_byte_size: 0_i64,
+      state_byte_size: 0_i64,
+      created_at_unix: 1_i64,
+      prompt_preview: nil,
+      token_hash: "h",
+      artifact_codec: "recurrent-int8",
+      artifact_codec_block: 8,
+      artifact_validation_kind: "free-run-top1",
+      artifact_validation_steps: 32,
+      artifact_validation_hash: "hash",
+    )
+
+    ML::GGUF::Qwen35PromptCache.artifact_trust_metadata_valid?(entry).should be_true
+    expect_raises(ArgumentError, /raw \.qkv reader/) do
+      ML::GGUF::Qwen35PromptCache.validate_restorable_artifact!(entry)
+    end
+  end
+
   pending!("9B model not present") unless File.exists?(QWEN_9B_PROMPT_CACHE)
 
   it "saves and restores a prompt-prefill state from an exact cache hit" do

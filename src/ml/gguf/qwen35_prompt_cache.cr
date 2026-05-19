@@ -11,7 +11,9 @@ module ML::GGUF
   module Qwen35PromptCache
     extend self
 
-    RUNTIME_ID = "cogni-ml/qwen35-state-v1"
+    RUNTIME_ID                 = "cogni-ml/qwen35-state-v1"
+    RAW_ARTIFACT_CODECS        = {nil, "", "raw", "raw-fp32", "qkv-raw"}
+    COMPRESSED_ARTIFACT_CODECS = {"recurrent-bf16", "recurrent-int8"}
 
     class Entry
       include JSON::Serializable
@@ -130,7 +132,7 @@ module ML::GGUF
                        prefix_len : Int32) : Entry?
         entries.reverse_each.find do |entry|
           compatible?(entry, model_id, tokenizer_id, prompt_hash, prefix_len) &&
-            File.exists?(entry.artifact_path)
+            usable_entry?(entry)
         end
       end
 
@@ -163,7 +165,7 @@ module ML::GGUF
           next false if entry.prefix_len > max_prefix_len
           next false if entry.prefix_len > token_ids.size
           next false unless stored_token_hash = entry.token_hash
-          next false unless File.exists?(entry.artifact_path)
+          next false unless usable_entry?(entry)
 
           expected = hash_by_len[entry.prefix_len]?
           unless expected
@@ -184,7 +186,7 @@ module ML::GGUF
           next false if turn_id && entry.turn_id != turn_id
           next false if prefix_len && entry.prefix_len != prefix_len
 
-          File.exists?(entry.artifact_path)
+          usable_entry?(entry)
         end
         candidates.max_by? { |entry| {entry.created_at_unix, entry.prefix_len} }
       end
@@ -193,6 +195,7 @@ module ML::GGUF
                   hp : Qwen35Hparams,
                   prefer_metal : Bool = Qwen35Metal.available?) : Qwen35CPU::State
         raise ArgumentError.new("unsupported Qwen prompt-cache runtime: #{entry.runtime_id}") unless entry.runtime_id == RUNTIME_ID
+        Qwen35PromptCache.validate_restorable_artifact!(entry)
 
         snapshot = Qwen35StateSnapshot.read_artifact(entry.artifact_path, expected_sha256: entry.artifact_sha256)
         raise ArgumentError.new("prompt-cache max_seq mismatch") unless snapshot.max_seq == entry.max_seq
@@ -257,6 +260,11 @@ module ML::GGUF
           entry.prefix_len == prefix_len
       end
 
+      private def usable_entry?(entry : Entry) : Bool
+        File.exists?(entry.artifact_path) &&
+          Qwen35PromptCache.artifact_trust_metadata_valid?(entry)
+      end
+
       private def artifact_path(model_id : String,
                                 tokenizer_id : String,
                                 prompt_hash : String,
@@ -295,6 +303,34 @@ module ML::GGUF
         io.write_bytes(token_ids[i], IO::ByteFormat::LittleEndian)
       end
       Digest::SHA256.hexdigest(io.to_slice)
+    end
+
+    def artifact_trust_metadata_valid?(entry : Entry) : Bool
+      codec = normalized_artifact_codec(entry)
+      return true if RAW_ARTIFACT_CODECS.includes?(codec)
+      return false unless COMPRESSED_ARTIFACT_CODECS.includes?(codec)
+      return false unless entry.artifact_validation_kind.try(&.empty?) == false
+      return false unless entry.artifact_validation_hash.try(&.empty?) == false
+      steps = entry.artifact_validation_steps
+      return false unless steps && steps > 0
+
+      if codec == "recurrent-int8"
+        block = entry.artifact_codec_block
+        return false unless block && block > 0
+      end
+      true
+    end
+
+    def validate_restorable_artifact!(entry : Entry) : Nil
+      raise ArgumentError.new("prompt-cache artifact has invalid codec validation metadata") unless artifact_trust_metadata_valid?(entry)
+      codec = normalized_artifact_codec(entry)
+      return if RAW_ARTIFACT_CODECS.includes?(codec)
+
+      raise ArgumentError.new("prompt-cache artifact codec #{codec.inspect} is validated but not restorable by the raw .qkv reader")
+    end
+
+    private def normalized_artifact_codec(entry : Entry) : String?
+      entry.artifact_codec.try(&.downcase)
     end
 
     def short_hash(value : String) : String

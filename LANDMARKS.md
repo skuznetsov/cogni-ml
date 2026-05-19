@@ -13786,3 +13786,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Keep raw `.qkv` unchanged until compressed artifact read/write is backed by validated restore gates. Metadata first reduces migration risk.
 - maieutic: The missing hard piece remains artifact codec production: write/read compressed buffers and enforce metadata trust at restore time.
 - adversary: Existing DB deployments need schema migration outside `CREATE TABLE IF NOT EXISTS`; do not assume the new columns appear in already-created tables.
+
+**decision_update_314:** Made prompt-cache lookup and raw restore fail-closed on codec metadata. Lookup now requires either a raw/nil codec or complete compressed validation metadata. Raw `.qkv` restore accepts raw/nil codec entries, but rejects validated compressed codecs until a compressed artifact reader is implemented.
+
+**evidence_update_314:**
+- claim: "Incomplete compressed artifact metadata cannot silently win prompt-cache lookup."
+  source: focused spec `spec/qwen35_prompt_cache_spec.cr:159` passed; it writes a raw entry and a newer `recurrent-int8` entry missing validation metadata, and confirms exact/session lookup skips the incomplete compressed entry.
+  verified_at: 2026-05-18
+  decay_trigger: prompt-cache lookup filtering, Entry codec metadata, or manifest parsing changes
+- claim: "Validated compressed metadata is distinguished from raw-reader restorability."
+  source: focused spec `spec/qwen35_prompt_cache_spec.cr:226` passed; `artifact_trust_metadata_valid?` returns true for a validated `recurrent-int8` block8 entry, while `validate_restorable_artifact!` rejects it with a raw `.qkv` reader error.
+  verified_at: 2026-05-18
+  decay_trigger: compressed artifact reader implementation, restore dispatch changes, or codec metadata contract changes
+
+**quadrumvirate_update_314:**
+- cassandra: The fail-closed check prevents accidental trust inflation, but it also means compressed artifacts are metadata-ready rather than product-restorable.
+- daedalus: Next useful implementation is a compressed artifact read/write path plus restore dispatch, not more metadata fields.
+- maieutic: The trust boundary is now explicit: raw artifacts are exact, compressed artifacts need validation metadata and a matching reader.
+- adversary: A validated compressed artifact should never be decoded by the raw artifact reader; the spec now guards that boundary.
