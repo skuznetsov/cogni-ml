@@ -14057,3 +14057,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: local attribution run `gen=16,gamma=4,rank64` accepted `16/16` with `parity=true` but `plain_speedup=0.6016x`. Cost truth on the same route showed exact known-span verifier can be faster at `k16=11.071ms/tok` versus plain `22.902ms/tok`, but lowrank state-only known draft was `26.331ms/tok` and lowrank GPU chain was `28.018ms/tok`. No-FFN only improved one default-prompt row from `0.6478x` to `0.6756x`; skip-recurrent-FFN collapsed acceptance to `0/58`.
 - implication: Stop spending effort on early-layer lowrank gamma tuning. Speed work needs a smaller proposal operator: late-band pca-updown/rich route search, block surrogates, DN-summary reuse, or source routing by measured economics.
 - trust: {F:0.82,G:0.55,R:0.82}
+
+**LM-332 proposal-source router oracle [shared/ml]**
+- status: VERIFIED research diagnostic, not runtime policy
+- claim: Current proposal evidence supports fail-closed portfolio routing: select cheap n-gram for repeat/replay-like prompts, fail closed for categories where self-lowrank/neural proposal economics are negative.
+- evidence: local no-codegen build of `bin/qwen35_proposal_router_oracle.cr` passed. Oracle over `/tmp/qwen35_vlbp_cycles8`, `/tmp/qwen35_vlbp_cycles_repeat8`, `/tmp/qwen35_vlbp_selfspec_suite_cycles.jsonl`, and `/tmp/qwen35_vlbp_selfspec_suite6_gen16_cycles.jsonl` with `--min-cycles 2 --min-gain-ms 0` selected only `repeat -> ngram/ngram` (`+376.3ms`, `48/53` accepted proposals). It failed closed for chat/code/fact/math/structured/unknown; self-lowrank gamma4/gamma8 were globally negative (`-2904.0ms`, `-4550.6ms`).
+- implication: Do not optimize one universal drafter. Build measured source gates and keep direct exact decode as the fallback legal move. Next useful gate features: prefix/source cursor validity, repetition density, entropy/top-gap, prompt class, and source-specific cost.
+- caveat: Datasets are mixed-provenance and unbalanced; use this oracle for prioritization and falsification, not as proof of a production routing policy.
+- trust: {F:0.82,G:0.45,R:0.82}

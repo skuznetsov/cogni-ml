@@ -1007,3 +1007,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: Shift from "make early lowrank accepted" to "make proposal body materially smaller": late-band pca-updown where prior 27B ABBA was positive, route-scoreboard search with per-layer no-FFN/updown masks, or block-surrogate/tree proposal sources.
 - maieutic: The question is not "can the same model draft itself?" anymore; it can. The useful question is "which internal proposal operator has lower bytes/dispatch than one exact decode token while keeping verifier acceptance high?"
 - adversary: Do not use `serial_ms/overlap_ms` as production speed evidence. Keep `plain_exact_ms/overlap_ms` as the main gate until the paired serial baseline is proven to match the shipped decode path.
+
+**decision_update_332:** Added an offline proposal-source router oracle so the portfolio question is measured instead of argued. `bin/qwen35_proposal_router_oracle.cr` consumes atlas/self-spec cycle JSONL dumps, groups economics by `prompt_category` and `policy/kind`, and asks which source would be selected per category if the controller can fail closed to direct exact decode. This is diagnostic only; it does not change runtime policy.
+
+**evidence_update_332:**
+- claim: "Across the current mixed proposal dumps, a fail-closed source router selects n-gram only for repeat prompts and rejects self-lowrank/neural elsewhere."
+  source: local `crystal run bin/qwen35_proposal_router_oracle.cr -- /tmp/qwen35_vlbp_cycles8 /tmp/qwen35_vlbp_cycles_repeat8 /tmp/qwen35_vlbp_selfspec_suite_cycles.jsonl /tmp/qwen35_vlbp_selfspec_suite6_gen16_cycles.jsonl --min-cycles 2 --min-gain-ms 0`. Result: `ngram/ngram` global gain `+376.3ms`, accepted `48/53` proposed tokens; `self_lowrank/gamma=4` gain `-2904.0ms`; `self_lowrank/gamma=8` gain `-4550.6ms`; neural variants were negative. Category oracle selected only `repeat -> ngram/ngram`; chat/code/fact/math/structured/unknown failed closed.
+  verified_at: 2026-05-19
+  decay_trigger: cycle dump schema, prompt category balance, proposal-source implementation, verifier timing, or exact decode baseline changes
+- claim: "The oracle build and target-only adversary mode are stable enough for research use."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache crystal build --no-codegen bin/qwen35_proposal_router_oracle.cr --error-trace` passed. Rerun with `--include-target-only` preserved the same selected category (`repeat -> ngram/ngram`) because direct exact fallback rows have no proposal cycles and do not compete with proposal sources.
+  verified_at: 2026-05-19
+  decay_trigger: oracle source, Crystal version, or cycle-row fallback semantics changes
+
+**quadrumvirate_update_332:**
+- cassandra: A single universal proposal source is the wrong framing for current evidence. The measured pattern is source-specific: cheap n-gram wins on replay/repeat; early self-lowrank proves mechanism but loses economics; neural/0.8B is also negative in these local dumps.
+- daedalus: The next speed path should be a portfolio controller with fail-closed routing and source-specific gates, not more global gamma tuning. Treat proposal sources as legal moves under an LTP/WBA corridor: only enter a source when its local potential is negative relative to exact decode.
+- maieutic: The oracle is not a production router because source/category coverage is unbalanced and timing labels come from heterogeneous probes. It is a falsifier and prioritization tool.
+- adversary: A category label is too coarse for final policy. The next falsifier is a feature-level gate using prefix/source cursor validity, repetition density, entropy/top-gap, prompt class, and measured source cost.
