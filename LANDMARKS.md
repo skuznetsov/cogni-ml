@@ -13882,3 +13882,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next implementation should move the probe's BF16/INT8 restorer shape into reusable CUDA code around encoded records, not add another artifact format.
 - maieutic: Encoded payload preservation is useful only if callers keep validation metadata attached; encoded bytes alone are not a trust proof.
 - adversary: Keep `read_artifact` fail-closed behavior unchanged. Optimized paths must still call encoded read with expected codec/block metadata and reject stale/missing validation.
+
+**decision_update_320:** Corrected v2 recurrent artifact semantics before direct GPU decode integration. `recurrent-bf16` and `recurrent-int8` now compress only recurrent records (`ConvState`, `SsmState`); KV records remain raw per-record inside the same v2 artifact. This aligns the product artifact layout with the CUDA probe evidence, where recurrent state is compressed and live KV is copied raw.
+
+**evidence_update_320:**
+- claim: "Recurrent compressed `.qkv` artifacts keep KV records raw while compressing recurrent records."
+  source: full `spec/qwen35_state_snapshot_spec.cr` passed (`7 examples, 0 failures`), including the new mixed-record test that checks `KCache` stays `RawF32` and `SsmState` becomes `BlockI8` under `artifact_codec: recurrent-int8`. `spec/qwen35_prompt_cache_spec.cr:226` passed, and `crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr` passed.
+  verified_at: 2026-05-18
+  decay_trigger: artifact v2 record codec policy, prompt-cache codec names, CUDA direct decode restore, or KV compression experiments
+
+**quadrumvirate_update_320:**
+- cassandra: The previous all-record compression would have made direct CUDA restore diverge from the measured policy and forced unnecessary KV decode work.
+- daedalus: Per-record codec is the right abstraction: global artifact codec describes the recurrent compression policy, while each record states its actual payload codec.
+- maieutic: KV compression may be a future feature, but it needs separate validation and long-context economics; it should not ride silently on `recurrent-*` metadata.
+- adversary: Keep tests that assert mixed raw/compressed records, otherwise future refactors could accidentally compress KV again.

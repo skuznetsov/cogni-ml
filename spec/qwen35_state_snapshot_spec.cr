@@ -96,6 +96,59 @@ describe ML::GGUF::Qwen35StateSnapshot do
     end
   end
 
+  it "keeps KV records raw when writing recurrent compressed v2 artifacts" do
+    snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+      max_seq: 8,
+      layer_count: 1,
+      positions: [2_i32],
+      records: [
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          0,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+          bytes_from([1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          0,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::SsmState,
+          bytes_from([5.0_f32, -6.0_f32, 7.0_f32, -8.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+      ],
+    )
+    path = File.tempname("qwen35-state-recurrent-i8", ".qkv")
+    begin
+      info = ML::GGUF::Qwen35StateSnapshot.write_artifact(
+        snapshot,
+        path,
+        artifact_codec: "recurrent-int8",
+        artifact_codec_block: 2,
+      )
+      encoded = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded(
+        path,
+        expected_sha256: info.sha256,
+        expected_codec: "recurrent-int8",
+        expected_codec_block: 2,
+      )
+      encoded.records[0].kind.should eq(ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache)
+      encoded.records[0].codec.should eq(ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32)
+      encoded.records[0].payload.size.should eq(encoded.records[0].original_byte_size)
+      encoded.records[1].kind.should eq(ML::GGUF::Qwen35StateSnapshot::RecordKind::SsmState)
+      encoded.records[1].codec.should eq(ML::GGUF::Qwen35StateSnapshot::RecordCodec::BlockI8)
+      encoded.records[1].payload.size.should be < encoded.records[1].original_byte_size
+
+      loaded = ML::GGUF::Qwen35StateSnapshot.read_artifact(
+        path,
+        expected_sha256: info.sha256,
+        expected_codec: "recurrent-int8",
+        expected_codec_block: 2,
+      )
+      floats_from(loaded.records[0].bytes).should eq([1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32])
+    ensure
+      File.delete(path) if File.exists?(path)
+    end
+  end
+
   pending!("9B model not present") unless File.exists?(QWEN_9B_SNAPSHOT)
 
   it "round-trips a Metal-backed prompt state and preserves next-token top1" do

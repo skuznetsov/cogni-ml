@@ -263,11 +263,12 @@ module ML::GGUF
       end
 
       snapshot.records.each do |record|
-        payload = encode_record_payload(record.bytes, codec, block)
+        record_codec = recurrent_record_kind?(record.kind) ? codec : RecordCodec::RawF32
+        payload = encode_record_payload(record.bytes, record_codec, block)
         io.write_bytes(record.layer.to_u32, IO::ByteFormat::LittleEndian)
         io.write_byte(record.kind.value)
         io.write_byte(storage_mode_value(record.storage_mode))
-        io.write_byte(codec.value)
+        io.write_byte(record_codec.value)
         io.write_byte(0_u8)
         io.write_bytes(record.bytes.size.to_u64, IO::ByteFormat::LittleEndian)
         io.write_bytes(payload.size.to_u64, IO::ByteFormat::LittleEndian)
@@ -328,7 +329,7 @@ module ML::GGUF
           raise ArgumentError.new("corrupt Qwen state artifact record") unless reserved == 0_u8
           original_byte_size = io.read_bytes(UInt64, IO::ByteFormat::LittleEndian)
           payload_byte_size = io.read_bytes(UInt64, IO::ByteFormat::LittleEndian)
-          raise ArgumentError.new("Qwen state artifact record codec mismatch") unless record_codec == artifact_codec
+          validate_record_codec(record_codec, artifact_codec)
         end
         raise ArgumentError.new("Qwen state artifact record too large") if original_byte_size > Int32::MAX || payload_byte_size > Int32::MAX
 
@@ -385,6 +386,22 @@ module ML::GGUF
       else
         raise ArgumentError.new("unsupported Qwen state artifact codec: #{codec.inspect}")
       end
+    end
+
+    private def recurrent_record_kind?(kind : RecordKind) : Bool
+      case kind
+      in RecordKind::ConvState, RecordKind::SsmState
+        true
+      in RecordKind::KCache, RecordKind::VCache
+        false
+      end
+    end
+
+    private def validate_record_codec(record_codec : RecordCodec, artifact_codec : RecordCodec) : Nil
+      return if record_codec == RecordCodec::RawF32
+      return if record_codec == artifact_codec
+
+      raise ArgumentError.new("Qwen state artifact record codec mismatch")
     end
 
     private def codec_name(codec : RecordCodec) : String
