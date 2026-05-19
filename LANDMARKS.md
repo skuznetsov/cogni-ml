@@ -13854,3 +13854,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next speed/product pivot should measure persistent artifact service economics: mmap/read/prefetch/hash overlap and manifest-local validation, not more scalar codec microbenching.
 - maieutic: Passing restore parity does not mean the artifact is intrinsically exact. It means this cache key can be trusted only after validation evidence is recorded and checked.
 - adversary: Keep the global claim narrow. The gate used deterministic greedy histories and 32-step free-run parity; production must still fail closed on missing validation metadata and revalidate after model/kernel changes.
+
+**decision_update_318:** Added the first CUDA product bridge for versioned `.qkv` artifacts: `QwenMixedStackRunner#restore_decode_state(Qwen35StateSnapshot::Snapshot)` can restore a decoded raw/v2 artifact snapshot into resident CUDA recurrent and full-attention state. This intentionally decodes compressed v2 payloads through the existing artifact reader first; direct compressed-payload GPU decode remains the next optimization slice.
+
+**evidence_update_318:**
+- claim: "CUDA mixed stack code now accepts decoded Qwen state snapshots as a restore source."
+  source: local `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr` passed after adding the overload. The restore path validates duplicate/missing records, recurrent byte sizes, KV full/live byte sizes, and updates full-attention decode position from snapshot layer positions.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA runner state layout, Qwen35StateSnapshot record layout, KV live-size semantics, or artifact reader changes
+
+**quadrumvirate_update_318:**
+- cassandra: This closes a product plumbing gap but not the final speed gap; v2 BF16/INT8 artifacts are still decoded to Float32 bytes before this restore overload sees them.
+- daedalus: The next speed slice should preserve encoded recurrent payloads and feed them to the existing CUDA BF16/INT8 decode kernels, instead of materializing full Float32 recurrent state on host.
+- maieutic: The bridge is useful because it gives one API surface for raw and compressed artifacts after validation. The assumption still needing proof is that direct encoded-artifact restore can share the probe kernels safely outside the benchmark harness.
+- adversary: The overload rejects missing and duplicate records and mismatched sizes, but it does not authenticate metadata itself; callers must still use `read_artifact(... expected_codec: ..., expected_codec_block: ...)` and prompt-cache validation before restore.

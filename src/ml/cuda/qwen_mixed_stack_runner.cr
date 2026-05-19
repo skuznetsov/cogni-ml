@@ -1,6 +1,7 @@
 require "./qwen_recurrent_layer_runner"
 require "./qwen_full_attn_layer_runner"
 require "./qwen_output_head_runner"
+require "../gguf/qwen35_state_snapshot"
 
 module ML::CUDA
   # Model-body scaffold for a CUDA Qwen layer slice.
@@ -383,6 +384,35 @@ module ML::CUDA
       raise "unused host decode snapshot buffers" unless idx == snapshot.buffers.size
     end
 
+    def restore_decode_state(snapshot : ML::GGUF::Qwen35StateSnapshot::Snapshot) : Nil
+      records = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => ML::GGUF::Qwen35StateSnapshot::Record
+      snapshot.records.each do |record|
+        key = {record.layer, record.kind}
+        raise ArgumentError.new("duplicate Qwen state snapshot record: layer=#{record.layer}, kind=#{record.kind}") if records.has_key?(key)
+
+        records[key] = record
+      end
+
+      @layer_ids.zip(@runners).each do |layer_id, runner|
+        raise ArgumentError.new("Qwen state snapshot position missing for layer #{layer_id}") if layer_id < 0 || layer_id >= snapshot.positions.size
+
+        case runner
+        in QwenRecurrentLayerRunner
+          conv = snapshot_record(records, layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::ConvState)
+          ssm = snapshot_record(records, layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::SsmState)
+          copy_snapshot_record_to_device!(conv, runner.conv_state_device_ptr, runner.conv_state_bytesize, "restore qkv conv_state")
+          copy_snapshot_record_to_device!(ssm, runner.ssm_state_device_ptr, runner.ssm_state_bytesize, "restore qkv ssm_state")
+        in QwenFullAttnLayerRunner
+          position = snapshot.positions[layer_id]
+          k_cache = snapshot_record(records, layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache)
+          v_cache = snapshot_record(records, layer_id, ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache)
+          copy_kv_snapshot_record_to_device!(runner, k_cache, position, runner.k_cache_device_ptr, "restore qkv k_cache")
+          copy_kv_snapshot_record_to_device!(runner, v_cache, position, runner.v_cache_device_ptr, "restore qkv v_cache")
+          runner.update_decode_position(position)
+        end
+      end
+    end
+
     def copy_decode_state_to!(target : QwenMixedStackRunner, include_kv : Bool = true) : Nil
       raise ArgumentError.new("layer ids mismatch") unless @layer_ids == target.layer_ids
       raise ArgumentError.new("runner count mismatch") unless @runners.size == target.runners.size
@@ -409,6 +439,39 @@ module ML::CUDA
       buffer = Bytes.new(bytesize.to_i)
       ML::CUDA.copy_dtoh!(buffer.to_unsafe.as(Void*), source, bytesize, label)
       buffers << buffer
+    end
+
+    private def snapshot_record(records : Hash(Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind), ML::GGUF::Qwen35StateSnapshot::Record),
+                                layer : Int32,
+                                kind : ML::GGUF::Qwen35StateSnapshot::RecordKind) : ML::GGUF::Qwen35StateSnapshot::Record
+      records[{layer, kind}]? || raise ArgumentError.new("missing Qwen state snapshot record: layer=#{layer}, kind=#{kind}")
+    end
+
+    private def copy_snapshot_record_to_device!(record : ML::GGUF::Qwen35StateSnapshot::Record,
+                                                dst : DevicePtr,
+                                                expected_bytesize : LibC::SizeT,
+                                                label : String) : Nil
+      actual = record.bytes.size.to_u64
+      raise ArgumentError.new("#{label} size mismatch: artifact=#{actual}, runner=#{expected_bytesize}") unless actual == expected_bytesize.to_u64
+
+      ML::CUDA.copy_htod!(dst, record.bytes.to_unsafe.as(Void*), expected_bytesize, label)
+    end
+
+    private def copy_kv_snapshot_record_to_device!(runner : QwenFullAttnLayerRunner,
+                                                   record : ML::GGUF::Qwen35StateSnapshot::Record,
+                                                   position : Int32,
+                                                   dst : DevicePtr,
+                                                   label : String) : Nil
+      raise ArgumentError.new("#{label} position out of range: #{position}") if position < 0
+
+      actual = record.bytes.size.to_u64
+      full_bytesize = runner.kv_cache_bytesize.to_u64
+      live_bytesize = runner.kv_cache_bytesize_for_tokens(position).to_u64
+      unless actual == full_bytesize || actual == live_bytesize
+        raise ArgumentError.new("#{label} size mismatch: artifact=#{actual}, runner_full=#{full_bytesize}, runner_live=#{live_bytesize}")
+      end
+
+      ML::CUDA.copy_htod!(dst, record.bytes.to_unsafe.as(Void*), actual, label)
     end
 
     private def copy_recurrent_state_to!(source : QwenRecurrentLayerRunner, dest : QwenRecurrentLayerRunner) : Nil
