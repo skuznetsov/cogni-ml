@@ -13896,3 +13896,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Per-record codec is the right abstraction: global artifact codec describes the recurrent compression policy, while each record states its actual payload codec.
 - maieutic: KV compression may be a future feature, but it needs separate validation and long-context economics; it should not ride silently on `recurrent-*` metadata.
 - adversary: Keep tests that assert mixed raw/compressed records, otherwise future refactors could accidentally compress KV again.
+
+**decision_update_321:** Added the reusable CUDA encoded-artifact restorer. `ML::CUDA::QwenStateArtifactRestorer` consumes `Qwen35StateSnapshot::EncodedSnapshot`, uploads encoded recurrent BF16/block-INT8 payloads, decodes recurrent records directly into resident CUDA state, copies raw KV records, and updates full-attention positions. This promotes the probe decode pattern into a reusable source module while keeping validation responsibility at the prompt-cache/artifact-reader boundary.
+
+**evidence_update_321:**
+- claim: "The direct CUDA encoded-artifact restorer type-checks through its restore path."
+  source: local no-codegen compile guard `/tmp/qwen_artifact_restorer_compile.cr` required `ml/cuda/qwen_state_artifact_restorer`, instantiated an encoded snapshot/restorer, and type-checked `restorer.restore(uninitialized QwenMixedStackRunner)`. `crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr` also passed.
+  verified_at: 2026-05-18
+  decay_trigger: CUDA driver API, recurrent codec PTX signatures, EncodedSnapshot layout, or QwenMixedStackRunner state layout changes
+
+**quadrumvirate_update_321:**
+- cassandra: This is a compile-verified integration slice, not runtime proof. The next gate must wire it into a real CUDA artifact restore smoke and compare parity/timing against the existing probe path.
+- daedalus: The implementation now has the right product seam: encoded artifact reader -> validation metadata -> CUDA encoded restorer. Avoid further ad-hoc probe-only codec classes unless they expose a new kernel idea.
+- maieutic: The restorer assumes recurrent-compressed artifacts keep KV raw; decision_update_320's regression test protects that assumption.
+- adversary: Runtime risks remain: PTX function compatibility, payload offset parsing on large artifacts, and actual H2D/kernel timing. Do not call this VERIFIED for production until a remote runtime gate uses it.
