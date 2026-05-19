@@ -13836,3 +13836,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: No default change is justified. The product boundary remains cache-local validation plus exact fallback, not global trust in one codec.
 - maieutic: The timing is restore-only for trusted artifacts, not generation speed. It proves cache-hit economics, not proposal quality.
 - adversary: The next falsifier should add more prompt classes and earlier/high-risk cursors; do not overfit to code/reason late cursors.
+
+**decision_update_317:** Broadened recurrent codec GPU-restore evidence without changing defaults. The mixed policy remains BF16 before `min_start=9` and block8 INT8 for late cursors when `late-format=int8` is selected. This is stronger evidence for cache-hit artifact economics, but still not a blanket production trust claim without cache-local validation metadata and exact fallback.
+
+**evidence_update_317:**
+- claim: "The mixed recurrent artifact policy passed a broader prompt/early-cursor CUDA gate."
+  source: remote RTX 5060 Ti run using `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_mixed_codec3`, local script `/tmp/run_broader_codec_gate.py`, and summary `/tmp/cogni_codec_broader_gate_20260518/summary.json`. Prompt-late gate covered `db/json/chat/math`, 96-token greedy continuations, offsets `8` and `64`, `known_replay_tokens=16`, `free_run_steps=32`; all 8 rows selected `gpu_block_i8_after_min_start`, `selected_format=int8`, `block=8`, `ratio=0.375`, `free_run_parity_count=32`, and `ok=true`. Timed restore was `11.135-12.159ms`; GPU decode restore split was `4.207-5.017ms`.
+  verified_at: 2026-05-18
+  decay_trigger: prompt suite expansion, longer contexts, sampled histories, codec kernels, or block8 policy changes
+- claim: "The early/high-risk BF16 lane still passes the deterministic seed gate under the mixed policy."
+  source: same remote run over seed histories `0/198/760/1919` at `start=1`, `known_replay_tokens=16`, `free_run_steps=32`; all 4 rows selected `gpu_bf16_before_min_start`, `selected_format=bf16`, `ratio=0.5`, `free_run_parity_count=32`, and `ok=true`. Timed restore was `10.706-10.760ms`; GPU decode restore split was `4.635-4.672ms`.
+  verified_at: 2026-05-18
+  decay_trigger: early cursor policy, BF16 decode path, generated seed histories, or free-run gate length changes
+
+**quadrumvirate_update_317:**
+- cassandra: Block8 late INT8 is surviving broader deterministic prompt-shaped gates, while BF16 remains the safer early/high-risk lane. The main remaining failure risk is untested distribution shift: longer sessions, sampled prompts, chat/tool traces, and real saved session artifacts.
+- daedalus: The next speed/product pivot should measure persistent artifact service economics: mmap/read/prefetch/hash overlap and manifest-local validation, not more scalar codec microbenching.
+- maieutic: Passing restore parity does not mean the artifact is intrinsically exact. It means this cache key can be trusted only after validation evidence is recorded and checked.
+- adversary: Keep the global claim narrow. The gate used deterministic greedy histories and 32-step free-run parity; production must still fail closed on missing validation metadata and revalidate after model/kernel changes.
