@@ -14050,3 +14050,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: local M2 Max release gates, layers `0,2,4`, rank64. `gen=8` over 13 prompts accepted `208/208` proposed tokens across gamma4/gamma8 with all source runs `parity=true`, but mean `plain_speedup` was `0.626` for gamma4 and `0.5777` for gamma8. `gen=16` over 7 prompts accepted `224/224`, but mean `plain_speedup` was `0.6824` for gamma4 and `0.5981` for gamma8.
 - implication: Keep the "verified latent block proposal" research lane, but shift performance work from acceptance/gamma tuning to cheaper proposal bodies, layer-resident fusion, DN summaries, block surrogates, or routing among proposal sources by cost model.
 - trust: {F:0.82,G:0.60,R:0.82}
+
+**LM-331 early-lowrank self-draft cost split [shared/ml]**
+- status: VERIFIED bottleneck/refutation for current early-layer route
+- claim: For `layers=0,2,4`, the current low-rank same-model proposal body is too expensive; perfect acceptance still loses to direct exact decode.
+- evidence: local attribution run `gen=16,gamma=4,rank64` accepted `16/16` with `parity=true` but `plain_speedup=0.6016x`. Cost truth on the same route showed exact known-span verifier can be faster at `k16=11.071ms/tok` versus plain `22.902ms/tok`, but lowrank state-only known draft was `26.331ms/tok` and lowrank GPU chain was `28.018ms/tok`. No-FFN only improved one default-prompt row from `0.6478x` to `0.6756x`; skip-recurrent-FFN collapsed acceptance to `0/58`.
+- implication: Stop spending effort on early-layer lowrank gamma tuning. Speed work needs a smaller proposal operator: late-band pca-updown/rich route search, block surrogates, DN-summary reuse, or source routing by measured economics.
+- trust: {F:0.82,G:0.55,R:0.82}

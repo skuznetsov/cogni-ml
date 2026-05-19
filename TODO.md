@@ -985,3 +985,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The next speed pivot should optimize/eliminate the proposal body, not verifier acceptance: layer-resident super-fusion, cheaper block surrogate, DN summary reuse, or a route that chooses n-gram/MTP/self-lowrank only where its cost model wins.
 - maieutic: The repeated synthetic prompts make acceptance easier, so this does not prove broad free-run quality. It does prove that exact verification can anchor multi-token latent proposals when the proposal body tracks the target trajectory.
 - adversary: Paired `serial_ms/overlap_ms` speedups look positive in many rows, but the production-relevant comparison is `plain_exact_ms/overlap_ms`; by that metric this branch is currently refuted as a speedup.
+
+**decision_update_331:** Rechecked the self-draft cost split after the cross-prompt atlas. The current early-layer same-model route loses because it is not actually cheap enough: verifier has a faster known-span path in isolation, but the low-rank proposal body still runs too much full-model work, and the pipeline pays per-block orchestration/wait costs. This refutes more gamma-only or broad no-FFN tuning for `layers=0,2,4`.
+
+**evidence_update_331:**
+- claim: "Current `layers=0,2,4` low-rank self-draft is proposal-body limited, not acceptance-limited."
+  source: local M2 Max attribution run, `gen=16`, gamma4, layers `0,2,4`, rank64: `accepted_draft_tokens=16/16`, `parity=true`, but `plain_speedup=0.6016x`. Cost split: `draft_seed_ms=132.471`, `draft_next_ms=143.973`, `draft_wait_ms=104.476`, `verifier_ms=433.534`, `plain_exact_ms=432.084`; profiled draft wait dominated draft profile (`attr_draft_wait_block_ms=172.776`, `attr_draft_submit_ms=58.479` in the prior attr run).
+  verified_at: 2026-05-19
+  decay_trigger: self-spec scheduler, layer set, draft kernel fusion, or Metal command-buffer behavior changes
+- claim: "Known-span verifier can be faster in isolation, but current pipeline does not turn that into a plain-decode win because the draft body is too expensive."
+  source: `--simulate-cost-truth-table=4,8,16`, same prompt/layers/rank: plain exact `22.902ms/tok`; exact known-span verifier `k16=11.071ms/tok`; lowrank state-only known draft `26.331ms/tok`; lowrank GPU chain `28.018ms/tok`, agreement `16/16`. A rerun with pca-updown32 showed state-only draft improved versus lowrank (`31.190ms/tok` vs `38.806ms/tok` in that run) but was still slower than plain and free-run agreement collapsed to `1/16` for this early-layer route.
+  verified_at: 2026-05-19
+  decay_trigger: cost-truth probe, Metal low-rank kernel, pca-updown route, or exact decode baseline changes
+- claim: "Broad FFN deletion is not the speed lever for this route."
+  source: default-prompt gamma4 body ablation: baseline `plain_speedup=0.6478`; `--simulate-self-spec-gpu-pipeline-draft-no-ffn` preserved `16/16` acceptance but only improved to `0.6756`; `--simulate-self-spec-gpu-pipeline-draft-skip-recurrent-ffn` collapsed to `0/58` accepted, `16` rejects, `plain_speedup=0.1262`.
+  verified_at: 2026-05-19
+  decay_trigger: no-FFN layer routing, prompt, layer set, or self-spec reject/resync policy changes
+
+**quadrumvirate_update_331:**
+- cassandra: The trap is optimizing acceptance on a draft that is almost as expensive as the target. Even perfect acceptance cannot win if proposal + verifier exceeds direct decode.
+- daedalus: Shift from "make early lowrank accepted" to "make proposal body materially smaller": late-band pca-updown where prior 27B ABBA was positive, route-scoreboard search with per-layer no-FFN/updown masks, or block-surrogate/tree proposal sources.
+- maieutic: The question is not "can the same model draft itself?" anymore; it can. The useful question is "which internal proposal operator has lower bytes/dispatch than one exact decode token while keeping verifier acceptance high?"
+- adversary: Do not use `serial_ms/overlap_ms` as production speed evidence. Keep `plain_exact_ms/overlap_ms` as the main gate until the paired serial baseline is proven to match the shipped decode path.
