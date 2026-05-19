@@ -2346,7 +2346,7 @@ begin
                 codec_encoded_artifact_mmap_ptr = encoded_probe.mmap_ptr
                 codec_encoded_artifact_mmap_size = encoded_probe.mmap_size
                 t_restorer_build = Time.instant
-                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded_probe.snapshot)
+                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded_probe.snapshot, stage_kv_payloads: known_replay_trusted_artifact_encoded_preupload)
                 known_replay_trusted_artifact_encoded_restorer_build_ms = (Time.instant - t_restorer_build).total_milliseconds
                 if known_replay_trusted_artifact_encoded_preupload
                   known_replay_trusted_artifact_encoded_preupload_ms = codec_encoded_restorer.not_nil!.preupload_payloads
@@ -2380,7 +2380,7 @@ begin
                 codec_encoded_artifact_mmap_ptr = encoded_probe.mmap_ptr
                 codec_encoded_artifact_mmap_size = encoded_probe.mmap_size
                 t_restorer_build = Time.instant
-                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded_probe.snapshot)
+                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded_probe.snapshot, stage_kv_payloads: known_replay_trusted_artifact_encoded_preupload)
                 known_replay_trusted_artifact_encoded_restorer_build_ms = (Time.instant - t_restorer_build).total_milliseconds
                 if known_replay_trusted_artifact_encoded_preupload
                   known_replay_trusted_artifact_encoded_preupload_ms = codec_encoded_restorer.not_nil!.preupload_payloads

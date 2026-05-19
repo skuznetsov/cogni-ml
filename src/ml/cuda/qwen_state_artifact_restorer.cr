@@ -24,7 +24,8 @@ module ML::CUDA
     getter raw_recurrent_ms : Float64 = 0.0
     getter restore_ms : Float64 = 0.0
 
-    def initialize(@snapshot : ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot)
+    def initialize(@snapshot : ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot,
+                   @stage_kv_payloads : Bool = false)
       @records = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => ML::GGUF::Qwen35StateSnapshot::EncodedRecord
       @segments = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => Segment
       @kv_segments = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => Segment
@@ -67,7 +68,7 @@ module ML::CUDA
 
       @i8_quant_device = @has_i8 ? DeviceBuffer.new(@i8_payload_bytes_total.to_u64) : nil
       @bf16_payload_device = @has_bf16 ? DeviceBuffer.new(@bf16_payload_bytes_total.to_u64) : nil
-      @kv_payload_device = @kv_payload_bytes_total > 0 ? DeviceBuffer.new(@kv_payload_bytes_total.to_u64) : nil
+      @kv_payload_device = @stage_kv_payloads && @kv_payload_bytes_total > 0 ? DeviceBuffer.new(@kv_payload_bytes_total.to_u64) : nil
 
       @i8_q_ptr = Pointer(DevicePtr).malloc(1)
       @i8_out_ptr = Pointer(DevicePtr).malloc(1)
@@ -162,6 +163,7 @@ module ML::CUDA
 
     private def upload_kv_payloads : Float64
       return 0.0 if @kv_segments.empty?
+      raise ArgumentError.new("KV payload staging was not enabled for this Qwen artifact restorer") unless @stage_kv_payloads
 
       device = @kv_payload_device.not_nil!
       t_h2d = Time.instant
