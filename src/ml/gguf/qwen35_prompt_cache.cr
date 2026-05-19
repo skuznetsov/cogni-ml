@@ -97,7 +97,12 @@ module ML::GGUF
         prompt_hash = Qwen35PromptCache.prompt_hash(token_ids, prompt_text)
         token_hash = Qwen35PromptCache.token_hash(token_ids)
         artifact_path = artifact_path(model_id, tokenizer_id, prompt_hash, token_ids.size)
-        artifact = Qwen35StateSnapshot.write_artifact(snapshot, artifact_path)
+        artifact = Qwen35StateSnapshot.write_artifact(
+          snapshot,
+          artifact_path,
+          artifact_codec: artifact_codec,
+          artifact_codec_block: artifact_codec_block,
+        )
 
         entry = Entry.new(
           runtime_id: RUNTIME_ID,
@@ -197,7 +202,12 @@ module ML::GGUF
         raise ArgumentError.new("unsupported Qwen prompt-cache runtime: #{entry.runtime_id}") unless entry.runtime_id == RUNTIME_ID
         Qwen35PromptCache.validate_restorable_artifact!(entry)
 
-        snapshot = Qwen35StateSnapshot.read_artifact(entry.artifact_path, expected_sha256: entry.artifact_sha256)
+        snapshot = Qwen35StateSnapshot.read_artifact(
+          entry.artifact_path,
+          expected_sha256: entry.artifact_sha256,
+          expected_codec: entry.artifact_codec,
+          expected_codec_block: entry.artifact_codec_block,
+        )
         raise ArgumentError.new("prompt-cache max_seq mismatch") unless snapshot.max_seq == entry.max_seq
         raise ArgumentError.new("prompt-cache layer count mismatch") unless snapshot.layer_count == entry.layer_count
         Qwen35StateSnapshot.restore(snapshot, hp, prefer_metal: prefer_metal)
@@ -325,8 +335,9 @@ module ML::GGUF
       raise ArgumentError.new("prompt-cache artifact has invalid codec validation metadata") unless artifact_trust_metadata_valid?(entry)
       codec = normalized_artifact_codec(entry)
       return if RAW_ARTIFACT_CODECS.includes?(codec)
+      return if COMPRESSED_ARTIFACT_CODECS.includes?(codec)
 
-      raise ArgumentError.new("prompt-cache artifact codec #{codec.inspect} is validated but not restorable by the raw .qkv reader")
+      raise ArgumentError.new("unsupported prompt-cache artifact codec: #{codec.inspect}")
     end
 
     private def normalized_artifact_codec(entry : Entry) : String?

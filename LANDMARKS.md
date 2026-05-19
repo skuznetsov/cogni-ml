@@ -13804,3 +13804,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Next useful implementation is a compressed artifact read/write path plus restore dispatch, not more metadata fields.
 - maieutic: The trust boundary is now explicit: raw artifacts are exact, compressed artifacts need validation metadata and a matching reader.
 - adversary: A validated compressed artifact should never be decoded by the raw artifact reader; the spec now guards that boundary.
+
+**decision_update_315:** Added a versioned compressed `.qkv` artifact path. Raw artifacts remain v1 and are still the default. Compressed artifacts are v2 with explicit global codec metadata plus per-record codec/payload sizes; supported codecs are `recurrent-bf16` and block `recurrent-int8`. Prompt-cache save/restore now passes codec metadata into the artifact writer/reader, and compressed v2 artifacts fail closed unless the manifest provides an explicit expected codec.
+
+**evidence_update_315:**
+- claim: "Raw `.qkv` compatibility is preserved while compressed artifacts use the new v2 format."
+  source: focused spec `spec/qwen35_state_snapshot_spec.cr:9` passed and checks default raw writes version `1`; focused specs `spec/qwen35_state_snapshot_spec.cr:23` and `spec/qwen35_state_snapshot_spec.cr:48` passed and check BF16/INT8 compressed writes use version `2`.
+  verified_at: 2026-05-18
+  decay_trigger: artifact header layout, snapshot writer defaults, or codec dispatch changes
+- claim: "Compressed artifact restore is fail-closed on manifest codec metadata."
+  source: focused spec `spec/qwen35_state_snapshot_spec.cr:23` passed and rejects reading a compressed artifact without explicit expected codec metadata; focused spec `spec/qwen35_prompt_cache_spec.cr:226` passed and validates a compressed prompt-cache entry through the versioned reader.
+  verified_at: 2026-05-18
+  decay_trigger: prompt-cache restore path, artifact reader validation, or compressed artifact metadata contract changes
+
+**quadrumvirate_update_315:**
+- cassandra: The v2 reader/writer proves the product path shape, but it is CPU scalar encode/decode and not yet the optimized CUDA/Metal resident artifact pipeline.
+- daedalus: The next speed lever is not more manifest schema; it is productionizing the GPU decode/read path and async/prefetched artifact service around this format.
+- maieutic: The exact guarantee still comes from validation metadata plus downstream exact gates. BF16/INT8 artifacts remain approximate state restores unless locally validated for the cache key.
+- adversary: Do not treat a self-described compressed artifact as trusted. The reader now requires caller-supplied expected codec metadata before decoding v2.

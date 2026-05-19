@@ -223,7 +223,28 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
-  it "validates compressed-artifact metadata before allowing trust but rejects raw-reader restore" do
+  it "validates compressed-artifact metadata before allowing compressed-reader restore" do
+    root = File.tempname("qwen35-prompt-cache")
+    Dir.mkdir_p(root)
+    snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+      max_seq: 8,
+      layer_count: 1,
+      positions: [0_i32],
+      records: [
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          0,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::SsmState,
+          qwen35_cache_f32_bytes([1.0_f32, -2.0_f32, 3.0_f32, -4.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+      ],
+    )
+    artifact = ML::GGUF::Qwen35StateSnapshot.write_artifact(
+      snapshot,
+      File.join(root, "compressed.qkv"),
+      artifact_codec: "recurrent-int8",
+      artifact_codec_block: 8,
+    )
     entry = ML::GGUF::Qwen35PromptCache::Entry.new(
       runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
       session_id: "s",
@@ -232,12 +253,12 @@ describe ML::GGUF::Qwen35PromptCache do
       tokenizer_id: "t",
       prompt_hash: "p",
       prefix_len: 0,
-      max_seq: 1,
-      layer_count: 1,
-      artifact_path: "a",
-      artifact_sha256: "0" * 64,
-      artifact_byte_size: 0_i64,
-      state_byte_size: 0_i64,
+      max_seq: snapshot.max_seq,
+      layer_count: snapshot.layer_count,
+      artifact_path: artifact.path,
+      artifact_sha256: artifact.sha256,
+      artifact_byte_size: artifact.byte_size,
+      state_byte_size: snapshot.byte_size,
       created_at_unix: 1_i64,
       prompt_preview: nil,
       token_hash: "h",
@@ -249,9 +270,16 @@ describe ML::GGUF::Qwen35PromptCache do
     )
 
     ML::GGUF::Qwen35PromptCache.artifact_trust_metadata_valid?(entry).should be_true
-    expect_raises(ArgumentError, /raw \.qkv reader/) do
-      ML::GGUF::Qwen35PromptCache.validate_restorable_artifact!(entry)
-    end
+    ML::GGUF::Qwen35PromptCache.validate_restorable_artifact!(entry)
+    loaded = ML::GGUF::Qwen35StateSnapshot.read_artifact(
+      entry.artifact_path,
+      expected_sha256: entry.artifact_sha256,
+      expected_codec: entry.artifact_codec,
+      expected_codec_block: entry.artifact_codec_block,
+    )
+    loaded.records.size.should eq(1)
+  ensure
+    FileUtils.rm_rf(root) if root && Dir.exists?(root)
   end
 
   pending!("9B model not present") unless File.exists?(QWEN_9B_PROMPT_CACHE)
@@ -347,4 +375,17 @@ describe ML::GGUF::Qwen35PromptCache do
       FileUtils.rm_rf(root) if Dir.exists?(root)
     end
   end
+end
+
+private def qwen35_cache_f32_bytes(values : Array(Float32)) : Bytes
+  bytes = Bytes.new(values.size * sizeof(Float32))
+  values.each_with_index do |value, i|
+    bits = value.unsafe_as(UInt32)
+    offset = i * sizeof(Float32)
+    bytes[offset] = (bits & 0xff).to_u8
+    bytes[offset + 1] = ((bits >> 8) & 0xff).to_u8
+    bytes[offset + 2] = ((bits >> 16) & 0xff).to_u8
+    bytes[offset + 3] = ((bits >> 24) & 0xff).to_u8
+  end
+  bytes
 end
