@@ -13910,3 +13910,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The implementation now has the right product seam: encoded artifact reader -> validation metadata -> CUDA encoded restorer. Avoid further ad-hoc probe-only codec classes unless they expose a new kernel idea.
 - maieutic: The restorer assumes recurrent-compressed artifacts keep KV raw; decision_update_320's regression test protects that assumption.
 - adversary: Runtime risks remain: PTX function compatibility, payload offset parsing on large artifacts, and actual H2D/kernel timing. Do not call this VERIFIED for production until a remote runtime gate uses it.
+
+**decision_update_322:** Wired the reusable CUDA encoded-artifact restorer into the real known-replay artifact probe. `--known-replay-trusted-artifact-encoded-restorer` now exercises the product-shaped path: host snapshot -> v2 `.qkv` write/read with expected codec metadata -> `EncodedSnapshot` -> `QwenStateArtifactRestorer` -> resident CUDA recurrent/KV state. This validates the encoded artifact plumbing separately from the older probe-only codec restorer classes.
+
+**evidence_update_322:**
+- claim: "The CUDA encoded `.qkv` artifact restorer works in a runtime known-replay gate for both mixed-policy lanes."
+  source: local `crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr --error-trace` passed; full `spec/qwen35_state_snapshot_spec.cr` passed (`7 examples, 0 failures`); focused `spec/qwen35_prompt_cache_spec.cr:226` passed. Remote RTX 5060 Ti Qwen3.5-9B gate used `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_encoded_restorer` and seed1919 generated history. Early lane `start=1`, `codec_format=bf16`, `late_format=int8`, `min_start=9`, `free_run_steps=16`, `--known-replay-trusted-artifact-encoded-restorer` selected `gpu_bf16_before_min_start`, ratio `0.5`, `free_run_parity_count=16`, GPU decode split `h2d=0.774ms`, `kernel=0.200ms`, `kv=0.075ms`, restore `1.049ms`, `ok=true`. Late lane `start=33` selected `gpu_block_i8_after_min_start`, ratio `0.375`, `free_run_parity_count=16`, split `h2d=0.566ms`, `kernel=0.206ms`, `kv=0.124ms`, restore `0.897ms`, `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: `QwenStateArtifactRestorer`, v2 `.qkv` encoded reader, CUDA recurrent codec PTX, known-replay artifact probe, or mixed codec policy changes
+- claim: "The product-shaped encoded restorer adds only small overhead versus the older probe-only specialized restorers in the short-context smoke."
+  source: same remote binary/history without `--known-replay-trusted-artifact-encoded-restorer` passed the same gates: early BF16 restore `0.904ms`, late INT8 restore `0.844ms`, both `free_run_parity_count=16`, `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: artifact IO path, encoded restorer upload packing, KV live-size policy, or longer-context gate changes
+
+**quadrumvirate_update_322:**
+- cassandra: Runtime parity now covers the direct encoded restorer, but the gate is still one deterministic history and short 16-step free-run; it proves integration, not global codec trust.
+- daedalus: The next product speed pivot should be persistent-cache economics: mmap/pinned read, async prefetch, hash staging, and manifest validation. More probe-only restorer classes are lower ROI now.
+- maieutic: The encoded restorer is safe only when paired with expected codec metadata and cache-local validation evidence; encoded bytes by themselves are not a trust proof.
+- adversary: Keep the claim narrow. The remote build needed an OpenSSL 3 compatibility shim for this Crystal bundle (`EVP_MD_size -> EVP_MD_get_size`), so Linux packaging/link hygiene is a separate follow-up from CUDA runtime correctness.
