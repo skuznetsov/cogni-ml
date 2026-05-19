@@ -14043,3 +14043,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: local no-codegen passed; release Metal build passed; smoke `gen=8,gamma=4,layers=0,2,4,rank=64` emitted 2 rows and atlas reported `8/8`, p50/p90 accepted block `4`, `parity=true` in the source run.
 - caveat: chunk timing fields are proportional allocations from run totals; use them for source-level economics, not per-kernel attribution.
 - trust: {F:0.85,G:0.55,R:0.85}
+
+**LM-330 same-model lowrank block proposal economics [shared/ml]**
+- status: VERIFIED mechanism, REFUTED as current speedup
+- claim: Low-rank same-model self-draft can produce fully accepted multi-token blocks across the small synthetic suite, but the current proposal body is too expensive versus direct exact decode.
+- evidence: local M2 Max release gates, layers `0,2,4`, rank64. `gen=8` over 13 prompts accepted `208/208` proposed tokens across gamma4/gamma8 with all source runs `parity=true`, but mean `plain_speedup` was `0.626` for gamma4 and `0.5777` for gamma8. `gen=16` over 7 prompts accepted `224/224`, but mean `plain_speedup` was `0.6824` for gamma4 and `0.5981` for gamma8.
+- implication: Keep the "verified latent block proposal" research lane, but shift performance work from acceptance/gamma tuning to cheaper proposal bodies, layer-resident fusion, DN summaries, block surrogates, or routing among proposal sources by cost model.
+- trust: {F:0.82,G:0.60,R:0.82}

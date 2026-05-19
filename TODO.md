@@ -967,3 +967,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The next sharper falsifier is a cross-prompt same-model atlas gate that compares low-rank self-draft, n-gram, external draft, and MTP under the same accepted-block/economics table.
 - maieutic: Timing fields in chunk rows are proportional allocations from run totals, not per-chunk Metal timestamps. They are valid for source-level economics totals, but not for micro-attribution inside a chunk.
 - adversary: Keep `atlas_scope=chunk` and `parity=true` visible in rows; do not promote speed claims from this smoke because it deliberately used a tiny prompt/gen and lost to plain exact decode.
+
+**decision_update_330:** Ran the first cross-prompt same-model low-rank self-draft atlas gates. The mechanism is strong but the current economics are not: low-rank self-draft proposed perfectly accepted blocks across synthetic prompt categories, yet every run remained slower than direct exact decode by `plain_speedup`. This separates "latent block proposal exists" from "proposal body is cheap enough."
+
+**evidence_update_330:**
+- claim: "Same-model low-rank self-draft exposes robust accepted-block structure across multiple prompt categories in the current synthetic suite."
+  source: local M2 Max release probe `/tmp/qwen35_deltanet_vlbp_dump`, layers `0,2,4`, rank64, PCA basis. `gen=8`, 13 prompts including main plus fact/repeat/code/structured/math/chat suite, gammas `4,8`: 39 atlas chunk rows, gamma4 accepted `104/104`, gamma8 accepted `104/104`, all source runs `parity=true`. `gen=16`, 7 prompts including main plus one prompt per category, gammas `4,8`: 42 atlas chunk rows, gamma4 accepted `112/112`, gamma8 accepted `112/112`, all source runs `parity=true`.
+  verified_at: 2026-05-19
+  decay_trigger: prompt suite, basis training window, layer set, self-spec scheduler, or model changes
+- claim: "Current same-model low-rank self-draft is not faster than plain exact decode in these gates despite 100% acceptance."
+  source: `gen=8` summary from `/tmp/qwen35_vlbp_selfspec_suite.log`: gamma4 mean `plain_speedup=0.626` (median `0.6445`, `0/13` positive), gamma8 mean `0.5777` (median `0.5762`, `0/13` positive). `gen=16` summary from `/tmp/qwen35_vlbp_selfspec_suite6_gen16.log`: gamma4 mean `plain_speedup=0.6824` (median `0.6922`, `0/7` positive), gamma8 mean `0.5981` (median `0.5925`, `0/7` positive). Atlas totals: `gen=8` gamma4 gain `-1543.4ms`, gamma8 `-1790.4ms`; `gen=16` all categories had negative gain.
+  verified_at: 2026-05-19
+  decay_trigger: timing methodology, prompt/gen length, command-buffer scheduling, draft body kernel fusion, or exact decode baseline changes
+
+**quadrumvirate_update_330:**
+- cassandra: Acceptance is no longer the bottleneck for this specific route; proposal-body and scheduler cost dominate. More gamma tuning without reducing draft body cost is a micro-optimization trap.
+- daedalus: The next speed pivot should optimize/eliminate the proposal body, not verifier acceptance: layer-resident super-fusion, cheaper block surrogate, DN summary reuse, or a route that chooses n-gram/MTP/self-lowrank only where its cost model wins.
+- maieutic: The repeated synthetic prompts make acceptance easier, so this does not prove broad free-run quality. It does prove that exact verification can anchor multi-token latent proposals when the proposal body tracks the target trajectory.
+- adversary: Paired `serial_ms/overlap_ms` speedups look positive in many rows, but the production-relevant comparison is `plain_exact_ms/overlap_ms`; by that metric this branch is currently refuted as a speedup.
