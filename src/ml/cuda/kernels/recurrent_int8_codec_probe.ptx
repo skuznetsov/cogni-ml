@@ -48,6 +48,55 @@ DONE:
     ret;
 }
 
+.visible .entry recurrent_block_i8_interleaved_decode_f32(
+    .param .u64 payload_param,
+    .param .u64 out_param,
+    .param .u32 values_param,
+    .param .u32 block_size_param
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<14>;
+    .reg .f32 %f<4>;
+
+    ld.param.u64 %rd1, [payload_param];
+    ld.param.u64 %rd2, [out_param];
+    ld.param.u32 %r1, [values_param];
+    ld.param.u32 %r2, [block_size_param];
+
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mov.u32 %r5, %tid.x;
+    mad.lo.u32 %r6, %r3, %r4, %r5;
+    setp.ge.u32 %p1, %r6, %r1;
+    @%p1 bra I8_INTERLEAVED_DONE;
+
+    div.u32 %r7, %r6, %r2;
+    rem.u32 %r8, %r6, %r2;
+    add.u32 %r9, %r2, 4;
+    mul.lo.u32 %r10, %r7, %r9;
+
+    cvt.u64.u32 %rd3, %r10;
+    add.u64 %rd4, %rd1, %rd3;
+    ld.global.f32 %f1, [%rd4];
+
+    add.u32 %r11, %r10, 4;
+    add.u32 %r12, %r11, %r8;
+    cvt.u64.u32 %rd5, %r12;
+    add.u64 %rd6, %rd1, %rd5;
+    ld.global.s8 %r13, [%rd6];
+    cvt.rn.f32.s32 %f2, %r13;
+    mul.f32 %f3, %f1, %f2;
+
+    mul.wide.u32 %rd7, %r6, 4;
+    add.u64 %rd8, %rd2, %rd7;
+    st.global.f32 [%rd8], %f3;
+
+I8_INTERLEAVED_DONE:
+    ret;
+}
+
 .visible .entry recurrent_bf16_decode_f32(
     .param .u64 encoded_param,
     .param .u64 out_param,

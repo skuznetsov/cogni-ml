@@ -135,32 +135,49 @@ def qwen_snapshot_from_host_decode_snapshot(snapshot : ML::CUDA::QwenMixedStackR
   ML::GGUF::Qwen35StateSnapshot::Snapshot.new(max_seq, layer_count, positions, records)
 end
 
+record EncodedQkvArtifactProbe,
+  snapshot : ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot,
+  byte_size : Int64,
+  encode_ms : Float64,
+  write_ms : Float64,
+  read_ms : Float64,
+  decode_ms : Float64
+
 def write_read_encoded_qkv_artifact(snapshot : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot,
                                     layer_ids : Array(Int32),
                                     runners : Array(ML::CUDA::QwenMixedStackRunner::LayerRunner),
                                     max_seq : Int32,
                                     codec_format : String,
-                                    block_size : Int32) : ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot
+                                    block_size : Int32) : EncodedQkvArtifactProbe
   artifact_codec = codec_format == "bf16" ? "recurrent-bf16" : "recurrent-int8"
   qwen_snapshot = qwen_snapshot_from_host_decode_snapshot(snapshot, layer_ids, runners, max_seq)
   path = File.tempname("cogni-qwen-encoded-artifact", ".qkv")
   begin
+    t_encode = Time.instant
     bytes = ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(
       qwen_snapshot,
       artifact_codec: artifact_codec,
       artifact_codec_block: block_size,
     )
+    encode_ms = (Time.instant - t_encode).total_milliseconds
+    t_write = Time.instant
     File.open(path, "w") { |file| file.write(bytes) }
+    write_ms = (Time.instant - t_write).total_milliseconds
+    t_read = Time.instant
     read_bytes = File.open(path, "r") do |file|
       artifact_bytes = Bytes.new(file.size.to_i)
       file.read_fully(artifact_bytes)
       artifact_bytes
     end
-    ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
+    read_ms = (Time.instant - t_read).total_milliseconds
+    t_decode = Time.instant
+    encoded = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
       read_bytes,
       expected_codec: artifact_codec,
       expected_codec_block: codec_format == "int8" ? block_size : nil,
     )
+    decode_ms = (Time.instant - t_decode).total_milliseconds
+    EncodedQkvArtifactProbe.new(encoded, bytes.size.to_i64, encode_ms, write_ms, read_ms, decode_ms)
   ensure
     File.delete(path) if File.exists?(path)
   end
@@ -1612,6 +1629,12 @@ begin
   known_replay_trusted_artifact_codec_raw_recurrent_ms = 0.0
   known_replay_trusted_artifact_codec_raw_recurrent_bytes = 0_u64
   known_replay_trusted_artifact_codec_gpu_decode_restore_ms = 0.0
+  known_replay_trusted_artifact_encoded_artifact_bytes = 0_i64
+  known_replay_trusted_artifact_encoded_artifact_encode_ms = 0.0
+  known_replay_trusted_artifact_encoded_artifact_write_ms = 0.0
+  known_replay_trusted_artifact_encoded_artifact_read_ms = 0.0
+  known_replay_trusted_artifact_encoded_artifact_decode_ms = 0.0
+  known_replay_trusted_artifact_encoded_restorer_build_ms = 0.0
   greedy_gpu_ids = [] of Int32
   greedy_position_ms = 0.0
   greedy_embedding_ms = 0.0
@@ -2289,8 +2312,15 @@ begin
             codec_decoded_snapshot = codec.decoded_snapshot
             if codec_policy_gpu_decode
               if known_replay_trusted_artifact_encoded_restorer
-                encoded = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, codec_policy_format, known_replay_trusted_artifact_codec_block)
-                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded)
+                encoded_probe = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, codec_policy_format, known_replay_trusted_artifact_codec_block)
+                known_replay_trusted_artifact_encoded_artifact_bytes = encoded_probe.byte_size
+                known_replay_trusted_artifact_encoded_artifact_encode_ms = encoded_probe.encode_ms
+                known_replay_trusted_artifact_encoded_artifact_write_ms = encoded_probe.write_ms
+                known_replay_trusted_artifact_encoded_artifact_read_ms = encoded_probe.read_ms
+                known_replay_trusted_artifact_encoded_artifact_decode_ms = encoded_probe.decode_ms
+                t_restorer_build = Time.instant
+                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded_probe.snapshot)
+                known_replay_trusted_artifact_encoded_restorer_build_ms = (Time.instant - t_restorer_build).total_milliseconds
               else
                 codec_gpu_bf16_restorer = CudaRecurrentBf16CodecRestorer.new(codec)
               end
@@ -2311,8 +2341,15 @@ begin
               if known_replay_trusted_artifact_encoded_restorer
                 raise "--known-replay-trusted-artifact-encoded-restorer is incompatible with raw recurrent layer fallback" unless known_replay_trusted_artifact_codec_raw_recurrent_layers.empty?
 
-                encoded = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, codec_policy_format, known_replay_trusted_artifact_codec_block)
-                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded)
+                encoded_probe = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, codec_policy_format, known_replay_trusted_artifact_codec_block)
+                known_replay_trusted_artifact_encoded_artifact_bytes = encoded_probe.byte_size
+                known_replay_trusted_artifact_encoded_artifact_encode_ms = encoded_probe.encode_ms
+                known_replay_trusted_artifact_encoded_artifact_write_ms = encoded_probe.write_ms
+                known_replay_trusted_artifact_encoded_artifact_read_ms = encoded_probe.read_ms
+                known_replay_trusted_artifact_encoded_artifact_decode_ms = encoded_probe.decode_ms
+                t_restorer_build = Time.instant
+                codec_encoded_restorer = ML::CUDA::QwenStateArtifactRestorer.new(encoded_probe.snapshot)
+                known_replay_trusted_artifact_encoded_restorer_build_ms = (Time.instant - t_restorer_build).total_milliseconds
               else
                 codec_gpu_restorer = CudaRecurrentInt8CodecRestorer.new(codec,
                   known_replay_trusted_artifact_codec_block,
@@ -3016,6 +3053,13 @@ begin
       lines << "known_replay_trusted_artifact_codec_gpu_decode_check=#{known_replay_trusted_artifact_codec_gpu_decode_check}"
       lines << "known_replay_trusted_artifact_encoded_restorer=#{known_replay_trusted_artifact_encoded_restorer}"
       lines << "known_replay_trusted_artifact_codec_gpu_decode_check_ok=#{known_replay_trusted_artifact_codec_gpu_decode_check_ok}"
+      lines << "known_replay_trusted_artifact_encoded_artifact_bytes=#{known_replay_trusted_artifact_encoded_artifact_bytes}"
+      lines << "known_replay_trusted_artifact_encoded_artifact_encode_ms=#{known_replay_trusted_artifact_encoded_artifact_encode_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_encoded_artifact_write_ms=#{known_replay_trusted_artifact_encoded_artifact_write_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_encoded_artifact_read_ms=#{known_replay_trusted_artifact_encoded_artifact_read_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_encoded_artifact_decode_ms=#{known_replay_trusted_artifact_encoded_artifact_decode_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_encoded_restorer_build_ms=#{known_replay_trusted_artifact_encoded_restorer_build_ms.round(3)}"
+      lines << "known_replay_trusted_artifact_encoded_artifact_load_ms=#{(known_replay_trusted_artifact_encoded_artifact_read_ms + known_replay_trusted_artifact_encoded_artifact_decode_ms + known_replay_trusted_artifact_encoded_restorer_build_ms + known_replay_trusted_artifact_codec_gpu_decode_restore_ms).round(3)}"
       lines << "known_replay_trusted_artifact_codec_gpu_decode_h2d_ms=#{known_replay_trusted_artifact_codec_gpu_decode_h2d_ms.round(3)}"
       lines << "known_replay_trusted_artifact_codec_gpu_decode_kernel_ms=#{known_replay_trusted_artifact_codec_gpu_decode_kernel_ms.round(3)}"
       lines << "known_replay_trusted_artifact_codec_gpu_decode_kv_ms=#{known_replay_trusted_artifact_codec_gpu_decode_kv_ms.round(3)}"

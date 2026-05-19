@@ -13964,3 +13964,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next cache-product path should separate trust validation from token-critical restore: manifest-local validation hashes, async/background full hash, or prevalidated session-local artifacts.
 - maieutic: Skipping hash is not a general security claim. It is a lower-bound measurement for already trusted/session-local storage; fail-closed public artifact restore still needs validation metadata and/or hash evidence.
 - adversary: The probe currently measures raw host snapshots, not compressed v2 artifact mmap plus encoded CUDA restore. That is the next sharper falsifier for real product economics.
+
+**decision_update_325:** Measured and optimized the compressed v2 artifact load path for `QwenStateArtifactRestorer`. The first all-layer encoded-artifact measurement showed a CPU repack bottleneck: INT8 artifacts store interleaved `(scale, q...)` blocks, while the restorer was rebuilding separate scale and quant arrays before upload. Added `recurrent_block_i8_interleaved_decode_f32` and changed the reusable CUDA restorer to decode interleaved INT8 payloads directly. Then removed the extra host payload pack: the restorer now uploads encoded record payloads by segment into the device staging buffer.
+
+**evidence_update_325:**
+- claim: "Direct interleaved INT8 decode plus segment-payload upload preserves encoded-restorer parity and cuts all-layer v2 INT8 load latency substantially."
+  source: remote RTX 5060 Ti all-layer Qwen3.5-9B seed1919 known-replay, `start=33`, mixed BF16-early/block8-late policy, `free_run_steps=16`, `--known-replay-trusted-artifact-encoded-restorer`. Before optimization: v2 INT8 artifact bytes `22,906,524`, read `15.938ms`, decode `4.206ms`, restorer build `196.462ms`, GPU restore `4.620ms`, encoded load `221.226ms`, `16/16`, `ok=true`. After interleaved kernel and direct payload upload: read `12.140ms`, decode `11.472ms`, restorer build `1.005ms`, GPU restore `6.592ms`, encoded load `31.210ms`, `16/16`, `ok=true`.
+  verified_at: 2026-05-18
+  decay_trigger: v2 INT8 payload layout, PTX decode kernel, QwenStateArtifactRestorer upload strategy, or CUDA driver H2D behavior changes
+- claim: "The direct payload upload also reduces BF16 v2 restorer build overhead, but increases H2D restore cost due to per-segment copies."
+  source: same remote gate at `start=1` BF16 before threshold: encoded artifact bytes `27,395,740`, read `19.597ms`, decode `11.085ms`, restorer build `0.910ms`, GPU restore `8.617ms`, encoded load `40.209ms`, `16/16`, `ok=true`. The earlier packed-host-buffer BF16 path had build `24.277ms`, GPU restore `5.182ms`, encoded load `53.821ms`.
+  verified_at: 2026-05-18
+  decay_trigger: BF16 payload packing/upload strategy, number of recurrent records, or CUDA H2D launch overhead changes
+
+**quadrumvirate_update_325:**
+- cassandra: The new bottleneck is no longer CPU INT8 scale unpacking. It is artifact read/decode plus many H2D copies; more CPU-side repacking is the wrong direction.
+- daedalus: The next product optimization should either preserve a GPU-ready contiguous artifact layout at write time or batch/pin/asynchronously upload segments. For v2 INT8, interleaved direct decode is the right semantic boundary.
+- maieutic: The encoded v2 load number includes file read and artifact parse. If artifacts are mmap-resident or predecoded in a session cache, the token-critical path is closer to GPU restore (`~6.6ms` INT8, `~8.6ms` BF16) than full cold load.
+- adversary: The runtime gate is still one deterministic history with 16-step free-run. Keep cache-local validation and exact fallback before trusting compressed artifacts broadly.

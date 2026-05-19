@@ -15,8 +15,8 @@ module ML::CUDA
       kind : ML::GGUF::Qwen35StateSnapshot::RecordKind,
       codec : ML::GGUF::Qwen35StateSnapshot::RecordCodec,
       payload_offset : Int32,
-      scale_offset : Int32,
-      values : Int32
+      values : Int32,
+      payload : Bytes
 
     getter h2d_ms : Float64 = 0.0
     getter kernel_ms : Float64 = 0.0
@@ -27,9 +27,8 @@ module ML::CUDA
     def initialize(@snapshot : ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot)
       @records = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => ML::GGUF::Qwen35StateSnapshot::EncodedRecord
       @segments = {} of Tuple(Int32, ML::GGUF::Qwen35StateSnapshot::RecordKind) => Segment
-      @i8_quant = IO::Memory.new
-      @i8_scales = [] of Float32
-      @bf16_payload = IO::Memory.new
+      @i8_payload_bytes_total = 0
+      @bf16_payload_bytes_total = 0
       @has_i8 = false
       @has_bf16 = false
       @closed = false
@@ -56,27 +55,22 @@ module ML::CUDA
       @bf16_fn = nil.as(KernelFunction?)
       if @has_i8 || @has_bf16
         @module = CUDAModule.load(PTX, "qwen_state_artifact_restorer")
-        @i8_fn = @module.not_nil!.function("recurrent_block_i8_decode_f32") if @has_i8
+        @i8_fn = @module.not_nil!.function("recurrent_block_i8_interleaved_decode_f32") if @has_i8
         @bf16_fn = @module.not_nil!.function("recurrent_bf16_decode_f32") if @has_bf16
       end
 
-      @i8_quant_bytes = @i8_quant.to_slice
-      @bf16_payload_bytes = @bf16_payload.to_slice
-      @i8_quant_device = @has_i8 ? DeviceBuffer.new(@i8_quant_bytes.size.to_u64) : nil
-      @i8_scales_device = @has_i8 ? DeviceBuffer.new((@i8_scales.size * sizeof(Float32)).to_u64) : nil
-      @bf16_payload_device = @has_bf16 ? DeviceBuffer.new(@bf16_payload_bytes.size.to_u64) : nil
+      @i8_quant_device = @has_i8 ? DeviceBuffer.new(@i8_payload_bytes_total.to_u64) : nil
+      @bf16_payload_device = @has_bf16 ? DeviceBuffer.new(@bf16_payload_bytes_total.to_u64) : nil
 
       @i8_q_ptr = Pointer(DevicePtr).malloc(1)
-      @i8_scales_ptr = Pointer(DevicePtr).malloc(1)
       @i8_out_ptr = Pointer(DevicePtr).malloc(1)
       @i8_values_ptr = Pointer(UInt32).malloc(1)
       @i8_block_ptr = Pointer(UInt32).malloc(1)
-      @i8_params = Pointer(Void*).malloc(5)
+      @i8_params = Pointer(Void*).malloc(4)
       @i8_params[0] = @i8_q_ptr.as(Void*)
-      @i8_params[1] = @i8_scales_ptr.as(Void*)
-      @i8_params[2] = @i8_out_ptr.as(Void*)
-      @i8_params[3] = @i8_values_ptr.as(Void*)
-      @i8_params[4] = @i8_block_ptr.as(Void*)
+      @i8_params[1] = @i8_out_ptr.as(Void*)
+      @i8_params[2] = @i8_values_ptr.as(Void*)
+      @i8_params[3] = @i8_block_ptr.as(Void*)
       @i8_block_ptr.value = @snapshot.codec_block.to_u32
 
       @bf16_payload_ptr = Pointer(DevicePtr).malloc(1)
@@ -118,7 +112,6 @@ module ML::CUDA
       return if @closed
 
       @i8_quant_device.try(&.close)
-      @i8_scales_device.try(&.close)
       @bf16_payload_device.try(&.close)
       @module.try(&.close)
       @closed = true
@@ -127,11 +120,18 @@ module ML::CUDA
     private def upload_encoded_payloads : Nil
       t_h2d = Time.instant
       if device = @i8_quant_device
-        CUDA.copy_htod!(device.ptr, @i8_quant_bytes.to_unsafe.as(Void*), @i8_quant_bytes.size.to_u64, "qwen encoded artifact i8 quant")
-        CUDA.copy_htod!(@i8_scales_device.not_nil!.ptr, @i8_scales.to_unsafe.as(Void*), (@i8_scales.size * sizeof(Float32)).to_u64, "qwen encoded artifact i8 scales")
+        @segments.each_value do |segment|
+          next unless segment.codec.block_i8?
+
+          CUDA.copy_htod!(device.ptr + segment.payload_offset.to_u64, segment.payload.to_unsafe.as(Void*), segment.payload.size.to_u64, "qwen encoded artifact i8 interleaved")
+        end
       end
       if device = @bf16_payload_device
-        CUDA.copy_htod!(device.ptr, @bf16_payload_bytes.to_unsafe.as(Void*), @bf16_payload_bytes.size.to_u64, "qwen encoded artifact bf16")
+        @segments.each_value do |segment|
+          next unless segment.codec.bf16?
+
+          CUDA.copy_htod!(device.ptr + segment.payload_offset.to_u64, segment.payload.to_unsafe.as(Void*), segment.payload.size.to_u64, "qwen encoded artifact bf16")
+        end
       end
       @h2d_ms = (Time.instant - t_h2d).total_milliseconds
     end
@@ -139,9 +139,9 @@ module ML::CUDA
     private def add_bf16_segment(record : ML::GGUF::Qwen35StateSnapshot::EncodedRecord) : Nil
       raise ArgumentError.new("corrupt BF16 recurrent artifact payload") unless record.payload.size * 2 == record.original_byte_size
 
-      offset = @bf16_payload.size
-      @bf16_payload.write(record.payload)
-      @segments[{record.layer, record.kind}] = Segment.new(record.layer, record.kind, record.codec, offset, 0, record.original_byte_size // sizeof(Float32))
+      offset = @bf16_payload_bytes_total
+      @bf16_payload_bytes_total += record.payload.size
+      @segments[{record.layer, record.kind}] = Segment.new(record.layer, record.kind, record.codec, offset, record.original_byte_size // sizeof(Float32), record.payload)
       @has_bf16 = true
     end
 
@@ -150,25 +150,15 @@ module ML::CUDA
       raise ArgumentError.new("block INT8 recurrent artifact requires positive block size") unless block_size > 0
 
       values = record.original_byte_size // sizeof(Float32)
-      q_offset = @i8_quant.size
-      scale_offset = @i8_scales.size
-      payload_offset = 0
-      value_offset = 0
-      while value_offset < values
-        raise ArgumentError.new("corrupt INT8 recurrent artifact payload") if payload_offset + sizeof(Float32) > record.payload.size
+      q_offset = @i8_payload_bytes_total
+      full_blocks = values // block_size
+      tail = values % block_size
+      expected_payload = full_blocks * (sizeof(Float32) + block_size)
+      expected_payload += sizeof(Float32) + tail if tail > 0
+      raise ArgumentError.new("corrupt INT8 recurrent artifact payload") unless record.payload.size == expected_payload
 
-        @i8_scales << read_f32_le(record.payload, payload_offset)
-        payload_offset += sizeof(Float32)
-        count = Math.min(block_size, values - value_offset)
-        raise ArgumentError.new("corrupt INT8 recurrent artifact payload") if payload_offset + count > record.payload.size
-
-        @i8_quant.write(record.payload[payload_offset, count])
-        payload_offset += count
-        value_offset += count
-      end
-      raise ArgumentError.new("trailing bytes in INT8 recurrent artifact payload") unless payload_offset == record.payload.size
-
-      @segments[{record.layer, record.kind}] = Segment.new(record.layer, record.kind, record.codec, q_offset, scale_offset, values)
+      @i8_payload_bytes_total += record.payload.size
+      @segments[{record.layer, record.kind}] = Segment.new(record.layer, record.kind, record.codec, q_offset, values, record.payload)
       @has_i8 = true
     end
 
@@ -193,7 +183,6 @@ module ML::CUDA
       in ML::GGUF::Qwen35StateSnapshot::RecordCodec::BlockI8
         segment = segment_for(layer_id, kind)
         @i8_q_ptr.value = @i8_quant_device.not_nil!.ptr + segment.payload_offset.to_u64
-        @i8_scales_ptr.value = @i8_scales_device.not_nil!.ptr + (segment.scale_offset * sizeof(Float32)).to_u64
         @i8_out_ptr.value = dst
         @i8_values_ptr.value = segment.values.to_u32
         launch_values(@i8_fn.not_nil!, segment.values, @i8_params, "qwen encoded artifact i8 decode")
@@ -247,14 +236,6 @@ module ML::CUDA
     private def launch_values(fn : KernelFunction, values : Int32, params : Pointer(Void*), label : String) : Nil
       grid = ((values + 255) // 256).to_u32
       CUDA.launch!(fn, grid, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, params, label)
-    end
-
-    private def read_f32_le(bytes : Bytes, offset : Int32) : Float32
-      bits = bytes[offset].to_u32 |
-             (bytes[offset + 1].to_u32 << 8) |
-             (bytes[offset + 2].to_u32 << 16) |
-             (bytes[offset + 3].to_u32 << 24)
-      bits.unsafe_as(Float32)
     end
   end
 end
