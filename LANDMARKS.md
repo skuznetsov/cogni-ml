@@ -14018,3 +14018,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Treat session cache as a two-stage system: durable trust/manifest/mmap on CPU, then optional GPU-resident activation artifact. This is a stronger boundary than repeatedly optimizing one cold restore function.
 - maieutic: Preupload only helps if the session has a predictable cache hit or idle/prefetch window. Cold one-shot requests still pay the same bytes, only at a different time.
 - adversary: Evidence is still seed1919 and max-seq 128. Long-context KV staging needs a separate memory-pressure and restore-latency gate before defaulting this policy.
+
+**decision_update_328:** Opened the "verified latent block proposals" evidence lane. The research framing is: ordinary AR models can expose diffusion-like multi-token proposal structure without diffusion-specific training when exact AR verification is the semantic anchor. Added `bin/qwen35_proposal_block_atlas.cr`, an offline cycle-dump summarizer that reports accepted-block distributions and economics by proposal source (`policy/kind`) and prompt category.
+
+**evidence_update_328:**
+- claim: "Existing proposal sources already show block-proposal structure, but acceptance alone does not imply speed."
+  source: local 9B/0.8B speculative sweep with `--dump-cycles` over 8 fact prompts and 8 repeat prompts, then `crystal run bin/qwen35_proposal_block_atlas.cr -- /tmp/qwen35_vlbp_cycles8 /tmp/qwen35_vlbp_cycles_repeat8`. Fact external-neural cycles accepted `34/40` (`85.0%`) but had `gain_ms=-447.2`; repeat n-gram cycles accepted `48/53` (`90.6%`), p50 accepted block `12`, and had `gain_ms=+376.3`. Repeat external-neural cycles accepted `79/88` (`89.8%`) but still had `gain_ms=-387.9`, showing proposal cost/verifier wall can erase high acceptance.
+  verified_at: 2026-05-19
+  decay_trigger: speculative cycle dump schema, verifier timing, prompt suite, target/draft model, or n-gram router policy changes
+- claim: "Same-model low-rank self-draft can produce exact accepted blocks without diffusion training, but the economics are gamma-sensitive."
+  source: local `/tmp/qwen35_deltanet_vlbp --tokens=80 --calib-tokens=32 --ranks=64 --basis=pca --pca-iters=8 --simulate-logits-rank=64 --simulate-logits-layers=0,2,4 --simulate-generate=16 --simulate-self-spec-gpu-pipeline-gammas=4,8`. `gamma=4` accepted `16/16`, `parity=true`, `plain_speedup=1.0028x`; `gamma=8` accepted `16/16`, `parity=true`, but `plain_speedup=0.6438x`.
+  verified_at: 2026-05-19
+  decay_trigger: self-spec scheduler, low-rank basis route, target model, prompt, or timing methodology changes
+
+**quadrumvirate_update_328:**
+- cassandra: The main overclaim risk is terminology. Call this "verified latent block proposals" rather than "diffusion in Qwen" until a denoising/refinement mechanism is actually implemented.
+- daedalus: Unify n-gram, external draft, low-rank self-draft, MTP, DN summaries, and block surrogates under one interface: `proposal operator -> exact verifier -> accepted prefix`. This is the right experimental boundary.
+- maieutic: Current evidence proves emergence on selected routes, not broad generality. The next falsifier is cross-prompt/cross-model accepted-block economics for same-model proposal sources, not another single-prompt speed run.
+- adversary: n-gram wins may be pure repetition, not latent AR dynamics. The same-model low-rank row is the stronger mechanism evidence but only one prompt; broaden before any paper-level claim.
