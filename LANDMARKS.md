@@ -14036,3 +14036,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: Unify n-gram, external draft, low-rank self-draft, MTP, DN summaries, and block surrogates under one interface: `proposal operator -> exact verifier -> accepted prefix`. This is the right experimental boundary.
 - maieutic: Current evidence proves emergence on selected routes, not broad generality. The next falsifier is cross-prompt/cross-model accepted-block economics for same-model proposal sources, not another single-prompt speed run.
 - adversary: n-gram wins may be pure repetition, not latent AR dynamics. The same-model low-rank row is the stronger mechanism evidence but only one prompt; broaden before any paper-level claim.
+
+**LM-329 self-spec atlas chunk dumps [shared/ml]**
+- status: VERIFIED instrumentation, not speedup
+- claim: Real same-model low-rank GPU self-spec runs can emit atlas-compatible per-chunk JSONL rows via `--simulate-self-spec-gpu-pipeline-dump-cycles=PATH` or `QWEN35_SELF_SPEC_GPU_PIPELINE_DUMP_CYCLES`.
+- evidence: local no-codegen passed; release Metal build passed; smoke `gen=8,gamma=4,layers=0,2,4,rank=64` emitted 2 rows and atlas reported `8/8`, p50/p90 accepted block `4`, `parity=true` in the source run.
+- caveat: chunk timing fields are proportional allocations from run totals; use them for source-level economics, not per-kernel attribution.
+- trust: {F:0.85,G:0.55,R:0.85}
