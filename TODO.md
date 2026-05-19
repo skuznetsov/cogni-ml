@@ -1025,3 +1025,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The next speed path should be a portfolio controller with fail-closed routing and source-specific gates, not more global gamma tuning. Treat proposal sources as legal moves under an LTP/WBA corridor: only enter a source when its local potential is negative relative to exact decode.
 - maieutic: The oracle is not a production router because source/category coverage is unbalanced and timing labels come from heterogeneous probes. It is a falsifier and prioritization tool.
 - adversary: A category label is too coarse for final policy. The next falsifier is a feature-level gate using prefix/source cursor validity, repetition density, entropy/top-gap, prompt class, and measured source cost.
+
+**decision_update_333:** Extended the proposal router oracle with an n-gram feature-gate sweep. This tests whether cheap local candidate features can reject bad repeat proposals without disabling the profitable n-gram lane. It is still offline-only and does not alter generation.
+
+**evidence_update_333:**
+- claim: "For the current repeat n-gram dump, `ngram_match_len >= 7` or `candidate_features.ngram_match_ratio >= 0.875` removes the only rejecting n-gram cycle and improves measured gain."
+  source: local `crystal run bin/qwen35_proposal_router_oracle.cr -- /tmp/qwen35_vlbp_cycles8 /tmp/qwen35_vlbp_cycles_repeat8 /tmp/qwen35_vlbp_selfspec_suite_cycles.jsonl /tmp/qwen35_vlbp_selfspec_suite6_gen16_cycles.jsonl --min-cycles 2 --min-gain-ms 0`. Ungated n-gram: 5 cycles, `48/53` accepted, reject rate `20.0%`, gain `+376.3ms`. `match_len>=7`: 4 cycles, `48/48` accepted, reject rate `0.0%`, gain `+439.5ms`. `match_ratio>=0.875` gives the same selected set and gain.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram candidate feature schema, prompt suite, gamma schedule, verifier timing, or n-gram proposal generator changes
+- claim: "Simpler periodicity/compressibility gates are positive but stricter than the match-length gate on this tiny sample."
+  source: same oracle gate sweep. `lag4>=0.5`, `lag8>=0.5`, `unique_ratio<=0.5`, and `entropy<=0.6` each selected 3 cycles, `36/36` accepted, gain `+324.7ms`; `lag2>=0.5` selected 2 cycles, `24/24`, gain `+208.4ms`.
+  verified_at: 2026-05-19
+  decay_trigger: candidate feature extraction, repeat prompt mix, or tokenization/model changes
+
+**quadrumvirate_update_333:**
+- cassandra: The useful signal is not "repeat category" alone; it is high-confidence local replay shape. The bad row had `match_len=6` / `match_ratio=0.75`; the fully accepted rows were `match_len>=7` or exact ratio `>=0.875`.
+- daedalus: This is the LTP/WBA-style legal-move boundary for n-gram: enter only when the local proposal corridor is strong enough; otherwise exact decode is the lower-risk move.
+- maieutic: The sample is too small to promote a threshold to runtime default. The threshold is a hypothesis for the next larger replay suite and production cursor gate.
+- adversary: A gate that removes all rejects on five cycles may simply overfit. The next test must include long-context session-cache histories, code/structured replay, and deliberately near-miss repeats.

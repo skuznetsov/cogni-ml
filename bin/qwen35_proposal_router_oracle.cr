@@ -58,6 +58,19 @@ def json_f(rec : JSON::Any, key : String) : Float64
   rec[key]?.try(&.as_f?) || 0.0
 end
 
+def any_f(value : JSON::Any?) : Float64
+  return 0.0 unless value
+
+  value.as_f? || value.as_i?.try(&.to_f64) || 0.0
+end
+
+def feature_f(rec : JSON::Any, group : String, key : String) : Float64
+  obj = rec[group]?
+  return 0.0 unless obj
+
+  any_f(obj[key]?)
+end
+
 def category_key(rec : JSON::Any) : String
   rec["prompt_category"]?.try(&.as_s?) || "unknown"
 end
@@ -106,6 +119,7 @@ abort "no cycle JSONL files found" if files.empty?
 stats = Hash(Tuple(String, String), SourceStats).new { |hash, key| hash[key] = SourceStats.new }
 global = Hash(String, SourceStats).new { |hash, key| hash[key] = SourceStats.new }
 categories = Set(String).new
+records = [] of JSON::Any
 
 files.sort.each do |path|
   File.each_line(path) do |line|
@@ -118,6 +132,7 @@ files.sort.each do |path|
     next if !include_target_only && source.includes?("target_only")
 
     categories << category
+    records << rec
     stats[{category, source}].add(rec)
     global[source].add(rec)
   end
@@ -181,3 +196,33 @@ end
 
 puts
 puts "Oracle summary selected_categories=#{selected_categories} fail_closed=#{failed_closed} selected_cycles=#{selected_cycles} selected_gain_ms=#{selected_gain.round(1)} selected_wall_ms=#{selected_wall.round(1)}"
+
+ngram_rows = records.select { |rec| source_key(rec) == "ngram/ngram" && json_i(rec, "proposed_count") > 0 }
+unless ngram_rows.empty?
+  puts
+  puts "N-gram feature gate sweep"
+  printf "%-34s %7s %8s %8s %8s %9s %9s %s\n",
+    "gate", "cycles", "prop", "accepted", "rej%", "gain_ms", "wall_ms", "decision"
+
+  gate_specs = [
+    {"match_len>=6", ->(rec : JSON::Any) { json_i(rec, "ngram_match_len") >= 6 }},
+    {"match_len>=7", ->(rec : JSON::Any) { json_i(rec, "ngram_match_len") >= 7 }},
+    {"match_len>=8", ->(rec : JSON::Any) { json_i(rec, "ngram_match_len") >= 8 }},
+    {"match_ratio>=0.875", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "ngram_match_ratio") >= 0.875 }},
+    {"match_ratio>=1.0", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "ngram_match_ratio") >= 1.0 }},
+    {"lag2>=0.5", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_lag2_ratio") >= 0.5 }},
+    {"lag4>=0.5", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_lag4_ratio") >= 0.5 }},
+    {"lag8>=0.5", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_lag8_ratio") >= 0.5 }},
+    {"unique_ratio<=0.5", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_unique_ratio") <= 0.5 }},
+    {"entropy<=0.6", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_entropy_norm") <= 0.6 }},
+  ]
+
+  gate_specs.each do |name, gate|
+    stat = SourceStats.new
+    ngram_rows.each { |rec| stat.add(rec) if gate.call(rec) }
+    decision = stat.cycles > 0 && stat.gain_ms > min_gain_ms ? "select" : "fail_closed"
+    printf "%-34s %7d %8d %8d %7.1f%% %9.1f %9.1f %s\n",
+      name, stat.cycles, stat.proposed, stat.accepted, stat.reject_rate,
+      stat.gain_ms, stat.wall_ms, decision
+  end
+end

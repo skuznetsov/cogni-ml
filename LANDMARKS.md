@@ -14065,3 +14065,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Do not optimize one universal drafter. Build measured source gates and keep direct exact decode as the fallback legal move. Next useful gate features: prefix/source cursor validity, repetition density, entropy/top-gap, prompt class, and source-specific cost.
 - caveat: Datasets are mixed-provenance and unbalanced; use this oracle for prioritization and falsification, not as proof of a production routing policy.
 - trust: {F:0.82,G:0.45,R:0.82}
+
+**LM-333 ngram local replay gate [shared/ml]**
+- status: VERIFIED tiny-sample diagnostic, HYPOTHESIS for runtime
+- claim: On the current repeat replay dump, a local n-gram confidence gate (`ngram_match_len>=7` or `candidate_features.ngram_match_ratio>=0.875`) removes the only rejecting n-gram cycle while preserving all accepted n-gram proposals.
+- evidence: local oracle gate sweep over the mixed dumps. Ungated n-gram had 5 cycles, accepted `48/53`, reject rate `20.0%`, gain `+376.3ms`. `match_len>=7` and `match_ratio>=0.875` each selected 4 cycles, accepted `48/48`, reject rate `0.0%`, gain `+439.5ms`.
+- implication: The next runtime/controller gate should use local replay-shape features, not just prompt category. Fail closed to exact decode when match length/ratio is weak.
+- caveat: Only five n-gram proposal cycles are covered here. Broaden with long-context session-cache histories, code/structured replay, and adversarial near-miss repeats before making this a default.
+- trust: {F:0.80,G:0.25,R:0.80}
