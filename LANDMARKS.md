@@ -13928,3 +13928,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - daedalus: The next product speed pivot should be persistent-cache economics: mmap/pinned read, async prefetch, hash staging, and manifest validation. More probe-only restorer classes are lower ROI now.
 - maieutic: The encoded restorer is safe only when paired with expected codec metadata and cache-local validation evidence; encoded bytes by themselves are not a trust proof.
 - adversary: Keep the claim narrow. The remote build needed an OpenSSL 3 compatibility shim for this Crystal bundle (`EVP_MD_size -> EVP_MD_get_size`), so Linux packaging/link hygiene is a separate follow-up from CUDA runtime correctness.
+
+**decision_update_323:** Removed the encoded-restorer probe's accidental dependency on Crystal/OpenSSL SHA256 codegen. `Qwen35StateSnapshot.encode_artifact_bytes` and `decode_artifact_encoded_bytes` expose the v2 artifact byte encode/decode path for probe/product plumbing that already has separate trust metadata, while `write_artifact` and `read_artifact(expected_sha256: ...)` keep the hashed durable artifact path. `read_artifact_encoded` now computes SHA256 only when an expected hash is supplied.
+
+**evidence_update_323:**
+- claim: "The CUDA encoded-restorer probe builds on the reefy.ai Linux host without the OpenSSL 3 compatibility shim."
+  source: remote RTX 5060 Ti build of `/build/persisten/cogni-ml/tmp/cuda_mixed_stack_probe_encoded_restorer_nohash` passed using Crystal 1.20.1 with no `openssl_evp_md_size_compat.o`, only CUDA stub link flags. Local `crystal build --no-codegen -Dcpu_only bin/cuda_mixed_stack_probe.cr --error-trace` passed, and full `spec/qwen35_state_snapshot_spec.cr` passed (`8 examples, 0 failures`) including the new bytes encode/decode spec.
+  verified_at: 2026-05-18
+  decay_trigger: artifact byte API, Digest/SHA usage, Linux Crystal toolchain, or CUDA probe encoded artifact path changes
+- claim: "Removing the hash dependency from the probe path did not break the encoded-restorer runtime gate."
+  source: same no-shim remote binary and seed1919 history passed `--known-replay-trusted-artifact-encoded-restorer` for `start=1` BF16 (`free_run_parity_count=16`, restore `0.842ms`, `ok=true`) and `start=33` block8 INT8 (`free_run_parity_count=16`, restore `0.831ms`, `ok=true`).
+  verified_at: 2026-05-18
+  decay_trigger: known-replay artifact helper, v2 `.qkv` codec validation, or QwenStateArtifactRestorer changes
+
+**quadrumvirate_update_323:**
+- cassandra: The build failure was not CUDA-related; it was an avoidable codegen dependency from using the hashed durable writer in a probe path that only needed byte encode/decode plus codec metadata.
+- daedalus: Separating artifact byte serialization from durable hash validation is the cleaner boundary. Product cache restore can still require hashes/validation, while benchmark plumbing avoids host OpenSSL fragility.
+- maieutic: This does not solve Linux hashed-artifact packaging globally. It only proves that the encoded-restorer probe no longer trips it.
+- adversary: Keep fail-closed compressed artifact restore intact: compressed decode still requires explicit expected codec/block metadata, and hash validation remains available when callers supply `expected_sha256`.

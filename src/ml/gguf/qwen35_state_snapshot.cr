@@ -148,18 +148,30 @@ module ML::GGUF
                        path : String,
                        artifact_codec : String? = nil,
                        artifact_codec_block : Int32? = nil) : ArtifactInfo
-      codec = record_codec_for(artifact_codec)
-      bytes = if codec.raw_f32?
-                encode_artifact(snapshot)
-              else
-                encode_artifact_v2(snapshot, codec, artifact_codec_block)
-              end
+      bytes = encode_artifact_bytes(snapshot, artifact_codec: artifact_codec, artifact_codec_block: artifact_codec_block)
       sha = Digest::SHA256.hexdigest(bytes)
       if parent = Path[path].parent
         FileUtils.mkdir_p(parent.to_s)
       end
       File.open(path, "w") { |file| file.write(bytes) }
       ArtifactInfo.new(path, sha, bytes.size.to_i64)
+    end
+
+    def encode_artifact_bytes(snapshot : Snapshot,
+                              artifact_codec : String? = nil,
+                              artifact_codec_block : Int32? = nil) : Bytes
+      codec = record_codec_for(artifact_codec)
+      if codec.raw_f32?
+        encode_artifact(snapshot)
+      else
+        encode_artifact_v2(snapshot, codec, artifact_codec_block)
+      end
+    end
+
+    def decode_artifact_encoded_bytes(bytes : Bytes,
+                                      expected_codec : String? = nil,
+                                      expected_codec_block : Int32? = nil) : EncodedSnapshot
+      decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block)
     end
 
     def read_artifact(path : String,
@@ -179,8 +191,8 @@ module ML::GGUF
                               expected_codec : String? = nil,
                               expected_codec_block : Int32? = nil) : EncodedSnapshot
       bytes = read_all_bytes(path)
-      sha = Digest::SHA256.hexdigest(bytes)
       if expected = expected_sha256
+        sha = Digest::SHA256.hexdigest(bytes)
         raise ArgumentError.new("Qwen state artifact sha256 mismatch") unless sha == expected.downcase
       end
       decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block)

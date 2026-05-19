@@ -96,6 +96,26 @@ describe ML::GGUF::Qwen35StateSnapshot do
     end
   end
 
+  it "can encode and decode artifact bytes without requiring a hash check" do
+    values = [1.0_f32, -2.5_f32, 0.125_f32, 128.0_f32, -64.0_f32]
+    snapshot = synthetic_snapshot(values)
+
+    bytes = ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(
+      snapshot,
+      artifact_codec: "recurrent-int8",
+      artifact_codec_block: 2,
+    )
+    encoded = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
+      bytes,
+      expected_codec: "recurrent-int8",
+      expected_codec_block: 2,
+    )
+
+    encoded.codec.should eq(ML::GGUF::Qwen35StateSnapshot::RecordCodec::BlockI8)
+    encoded.codec_block.should eq(2)
+    encoded.records[0].payload.size.should be < encoded.records[0].original_byte_size
+  end
+
   it "keeps KV records raw when writing recurrent compressed v2 artifacts" do
     snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
       max_seq: 8,

@@ -115,15 +115,19 @@ def write_read_encoded_qkv_artifact(snapshot : ML::CUDA::QwenMixedStackRunner::H
   qwen_snapshot = qwen_snapshot_from_host_decode_snapshot(snapshot, layer_ids, runners, max_seq)
   path = File.tempname("cogni-qwen-encoded-artifact", ".qkv")
   begin
-    info = ML::GGUF::Qwen35StateSnapshot.write_artifact(
+    bytes = ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(
       qwen_snapshot,
-      path,
       artifact_codec: artifact_codec,
       artifact_codec_block: block_size,
     )
-    ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded(
-      path,
-      expected_sha256: info.sha256,
+    File.open(path, "w") { |file| file.write(bytes) }
+    read_bytes = File.open(path, "r") do |file|
+      artifact_bytes = Bytes.new(file.size.to_i)
+      file.read_fully(artifact_bytes)
+      artifact_bytes
+    end
+    ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
+      read_bytes,
       expected_codec: artifact_codec,
       expected_codec_block: codec_format == "int8" ? block_size : nil,
     )
