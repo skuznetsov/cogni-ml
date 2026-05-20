@@ -93,6 +93,31 @@ module ML::GGUF
       end
     end
 
+    class MappedEncodedSnapshot
+      getter encoded : EncodedSnapshot
+
+      def initialize(@encoded : EncodedSnapshot,
+                     @ptr : Pointer(UInt8)?,
+                     @size : UInt64,
+                     @bytes : Bytes)
+        @closed = false
+      end
+
+      def close : Nil
+        return if @closed
+
+        if ptr = @ptr
+          LibC.munmap(ptr.as(Void*), @size)
+          @ptr = nil
+        end
+        @closed = true
+      end
+
+      def finalize
+        close
+      end
+    end
+
     ARTIFACT_MAGIC      = Bytes[0x43, 0x51, 0x4b, 0x56] # "CQKV"
     ARTIFACT_VERSION_V1 = 1_u32
     ARTIFACT_VERSION_V2 = 2_u32
@@ -263,6 +288,43 @@ module ML::GGUF
         raise ArgumentError.new("Qwen state artifact sha256 mismatch") unless sha == expected.downcase
       end
       decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block, copy_payloads: false)
+    end
+
+    def read_artifact_encoded_mmap(path : String,
+                                   expected_sha256 : String? = nil,
+                                   expected_codec : String? = nil,
+                                   expected_codec_block : Int32? = nil) : MappedEncodedSnapshot
+      size = File.size(path).to_u64
+      raise ArgumentError.new("Qwen state artifact is empty") if size == 0
+      raise ArgumentError.new("Qwen state artifact too large to map into a Slice: #{size}") if size > Int32::MAX
+
+      ptr = nil.as(Pointer(UInt8)?)
+      File.open(path, "r") do |file|
+        mapped = LibC.mmap(
+          Pointer(Void).null,
+          size,
+          LibC::PROT_READ,
+          LibC::MAP_PRIVATE,
+          file.fd,
+          0
+        )
+        raise ArgumentError.new("Qwen state artifact mmap failed") if mapped.address == LibC::MAP_FAILED.address
+
+        ptr = mapped.as(Pointer(UInt8))
+      end
+
+      bytes = Bytes.new(ptr.not_nil!, size.to_i, read_only: true)
+      begin
+        if expected = expected_sha256
+          sha = Digest::SHA256.hexdigest(bytes)
+          raise ArgumentError.new("Qwen state artifact sha256 mismatch") unless sha == expected.downcase
+        end
+        encoded = decode_artifact_encoded(bytes, expected_codec: expected_codec, expected_codec_block: expected_codec_block, copy_payloads: false)
+        MappedEncodedSnapshot.new(encoded, ptr, size, bytes)
+      rescue ex
+        LibC.munmap(ptr.not_nil!.as(Void*), size)
+        raise ex
+      end
     end
 
     private def capture_pair(records : Array(Record),

@@ -340,20 +340,25 @@ module ML::GGUF
             raise ArgumentError.new("Metal recurrent-int8 prompt-cache restore requires QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1")
           end
 
-          encoded = Qwen35StateSnapshot.read_artifact_encoded(
+          mapped = Qwen35StateSnapshot.read_artifact_encoded_mmap(
             entry.artifact_path,
             expected_sha256: entry.artifact_sha256,
             expected_codec: entry.artifact_codec,
             expected_codec_block: entry.artifact_codec_block,
           )
-          raise ArgumentError.new("prompt-cache max_seq mismatch") unless encoded.max_seq == entry.max_seq
-          raise ArgumentError.new("prompt-cache layer count mismatch") unless encoded.layer_count == entry.layer_count
-          state = reuse_state
-          state = nil if state && state.max_seq != entry.max_seq
-          state ||= Qwen35CPU::State.new(hp, max_seq: entry.max_seq)
-          Qwen35StateSnapshot.restore_encoded_into(encoded, hp, state, prefer_metal: true)
-          remember_resident_state(entry, prefer_metal, state)
-          return state
+          begin
+            encoded = mapped.encoded
+            raise ArgumentError.new("prompt-cache max_seq mismatch") unless encoded.max_seq == entry.max_seq
+            raise ArgumentError.new("prompt-cache layer count mismatch") unless encoded.layer_count == entry.layer_count
+            state = reuse_state
+            state = nil if state && state.max_seq != entry.max_seq
+            state ||= Qwen35CPU::State.new(hp, max_seq: entry.max_seq)
+            Qwen35StateSnapshot.restore_encoded_into(encoded, hp, state, prefer_metal: true)
+            remember_resident_state(entry, prefer_metal, state)
+            return state
+          ensure
+            mapped.close
+          end
         end
 
         snapshot = Qwen35StateSnapshot.read_artifact(

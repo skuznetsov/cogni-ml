@@ -14437,3 +14437,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The next product step is not default INT8 Store restore. It is mmap/prefetch/background validation/resident artifact policy so compressed artifacts win by moving read/hash/upload work out of the token-critical path.
 - caveat: This is a short local bench with three measured iterations and one prompt state. It does not replace multi-prompt/cursor validation or production mmap timing.
 - trust: {F:0.84,G:0.48,R:0.82}
+
+**LM-377 compressed Metal Store restore uses mmap encoded artifacts [shared/ml]**
+- status: VERIFIED local product-path correctness + timing probe
+- claim: Validated compressed Metal prompt-cache restore now avoids the `File.read` artifact copy by mapping the v2 `.qkv` artifact and decoding from zero-copy payload slices.
+- evidence: `crystal spec spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`29 examples, 0 failures`), including mmap slice ownership, BF16 Store restore parity, and INT8 Store fail-closed guard. No-codegen builds passed for `bin/qwen35_generate.cr`, `bin/qwen35_warm_request_probe.cr`, and `bin/qwen35_artifact_restore_bench.cr`. Local bench with `--skip-hash` measured BF16 read+restore `10.215ms` vs mmap+restore `6.277ms`, and INT8 read+restore `9.205ms` vs mmap+restore `5.677ms`.
+- implementation: Added `Qwen35StateSnapshot::MappedEncodedSnapshot` and `read_artifact_encoded_mmap`; `Store.restore` uses it for compressed Metal artifacts and closes the mapping after synchronous restore. BF16 policy remains validation-metadata gated; INT8 remains behind `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1`.
+- implication: This is the first product-path form of the compressed artifact economics win on Metal. It removes read-copy/host allocation work without changing exactness policy.
+- caveat: The mapped bytes must outlive restore; current Store usage is synchronous. Future async/preuploaded artifact activation needs explicit owner lifetime management.
+- trust: {F:0.87,G:0.56,R:0.86}

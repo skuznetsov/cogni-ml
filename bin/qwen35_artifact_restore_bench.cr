@@ -184,6 +184,23 @@ begin
     loaded = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded(i8_path, expected_sha256: i8_expected_sha, expected_codec: "recurrent-int8", expected_codec_block: int8_block)
     ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(loaded, hp, reusable_i8, prefer_metal: true)
   end
+
+  bench("bf16_mmap_restore", warmups, iters) do
+    mapped = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded_mmap(bf16_path, expected_sha256: bf16_expected_sha, expected_codec: "recurrent-bf16")
+    begin
+      ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(mapped.encoded, hp, reusable_bf16, prefer_metal: true)
+    ensure
+      mapped.close
+    end
+  end
+  bench("int8_mmap_restore", warmups, iters) do
+    mapped = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded_mmap(i8_path, expected_sha256: i8_expected_sha, expected_codec: "recurrent-int8", expected_codec_block: int8_block)
+    begin
+      ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(mapped.encoded, hp, reusable_i8, prefer_metal: true)
+    ensure
+      mapped.close
+    end
+  end
 ensure
   FileUtils.rm_rf(root) if root && Dir.exists?(root)
 end

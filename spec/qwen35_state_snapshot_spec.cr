@@ -139,6 +139,36 @@ describe ML::GGUF::Qwen35StateSnapshot do
     payload.to_unsafe.address.should be < bytes.to_unsafe.address + bytes.size
   end
 
+  it "can mmap an encoded artifact and preserve payloads as mapped slices" do
+    values = [1.0_f32, -2.5_f32, 0.125_f32, 128.0_f32, -64.0_f32]
+    snapshot = synthetic_snapshot(values)
+    path = File.tempname("qwen35-state-i8-mmap", ".qkv")
+    mapped = nil.as(ML::GGUF::Qwen35StateSnapshot::MappedEncodedSnapshot?)
+    begin
+      info = ML::GGUF::Qwen35StateSnapshot.write_artifact(
+        snapshot,
+        path,
+        artifact_codec: "recurrent-int8",
+        artifact_codec_block: 2,
+      )
+      mapped = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded_mmap(
+        path,
+        expected_sha256: info.sha256,
+        expected_codec: "recurrent-int8",
+        expected_codec_block: 2,
+      )
+      encoded = mapped.encoded
+      encoded.backing_stores.size.should eq(1)
+      payload = encoded.records[0].payload
+      mapped_base = encoded.backing_stores[0].to_unsafe.address
+      payload.to_unsafe.address.should be > mapped_base
+      payload.to_unsafe.address.should be < mapped_base + encoded.backing_stores[0].size
+    ensure
+      mapped.try(&.close)
+      File.delete(path) if File.exists?(path)
+    end
+  end
+
   it "keeps KV records raw when writing recurrent compressed v2 artifacts" do
     snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
       max_seq: 8,

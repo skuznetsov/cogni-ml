@@ -1902,3 +1902,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: Shift from "faster decoder" to "remove token-critical IO/hash/upload." The highest-leverage product path is mmap + background validation + resident/preuploaded encoded artifacts.
 - maieutic: LTP window is a certified cache artifact hit; transport is persistent bytes -> encoded snapshot -> resident Metal state; the legal move must reduce `(sync_hash, read_copy, H2D/restore, rollback_risk)` without invalidating exact fallback.
 - adversary: Three-iteration local timing is a narrow benchmark. Treat it as directionally useful, not final policy; follow with prompt/cursor matrix before product default changes.
+
+**decision_update_377:** Promoted the mmap finding into the compressed Metal prompt-cache restore path. `Qwen35StateSnapshot.read_artifact_encoded_mmap` now maps v2 artifacts and keeps encoded payloads as mapped zero-copy slices owned by a `MappedEncodedSnapshot`. `Qwen35PromptCache::Store.restore` uses this mmap reader for compressed Metal artifacts, then closes the mapping after synchronous restore. Codec policy is unchanged: BF16 validated compressed restore is allowed, INT8 still requires the explicit env gate.
+
+**evidence_update_377:**
+- claim: "The mmap encoded-artifact reader preserves zero-copy payload slices and keeps ownership explicit."
+  source: `crystal spec spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`29 examples, 0 failures`). The new state snapshot spec maps a block-INT8 v2 artifact, verifies payload slices point inside the mapped backing slice, and closes the mapping.
+  verified_at: 2026-05-20
+  decay_trigger: encoded artifact reader, mmap wrapper ownership, or v2 payload slicing changes
+- claim: "The compressed Metal Store restore path still preserves prompt-cache correctness after switching to mmap."
+  source: same spec run passed (`29 examples, 0 failures`), including the BF16 Store restore parity spec and INT8 default fail-closed Store guard. No-codegen builds passed for `bin/qwen35_generate.cr`, `bin/qwen35_warm_request_probe.cr`, and `bin/qwen35_artifact_restore_bench.cr`.
+  verified_at: 2026-05-20
+  decay_trigger: `Store.restore`, compressed artifact validation, mmap reader, or Metal restore path changes
+- claim: "Mmap materially improves local compressed read+restore timing."
+  source: `crystal run bin/qwen35_artifact_restore_bench.cr --link-flags=... -- --tokens=32 --max-seq=128 --warmups=1 --iters=3 --skip-hash` measured BF16 read+restore `10.215ms` vs BF16 mmap+restore `6.277ms`, and INT8 read+restore `9.205ms` vs INT8 mmap+restore `5.677ms`; all routes preserved top1 parity.
+  verified_at: 2026-05-20
+  decay_trigger: filesystem cache state, artifact size/layout, mmap reader, or Metal decode kernels
+
+**quadrumvirate_update_377:**
+- cassandra: The mmap win is read-copy elimination, not a proof that compressed restore is universally faster. Keep raw/resident state paths intact.
+- daedalus: Product frame is now "mapped artifact activation." Next pivots: background SHA validation, resident mapped artifact cache, and preuploaded encoded payload buffers.
+- maieutic: Legal move lowers `(read_copy, host allocations, parse copy)` while preserving artifact hash validation when requested and exact fallback for unsupported/stale codecs.
+- adversary: Mapping lifetime is the main footgun. The wrapper owns the mmap and Store closes it only after restore; async/deferred restore would need a longer-lived owner.
