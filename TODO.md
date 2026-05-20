@@ -1309,5 +1309,23 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 
 **next_steps_update_347:**
 - [x] Test and refute product-CLI verifier warmup as an end-to-end speed fix.
-- [ ] Add clearer total request timing around model load, cache restore/replay, optional source-history lookup, first verifier use, and decode so cache/session speed claims cannot hide work outside the decode window.
+- [x] Add clearer total request timing around model load, cache restore/replay, optional source-history lookup, prefill, decode, and source-history save so cache/session speed claims cannot hide work outside the decode window.
 - [ ] If we want warm verifier behavior, implement it as explicit daemon/server startup warmup or benchmark warm phase, not as hidden per-request work in `qwen35_generate`.
+
+**decision_update_348:** Added product-CLI phase accounting to `qwen35_generate`. Every run now emits a `request summary` with total wall and major phase timings, so future prompt-cache/source-history claims can be checked against total request cost.
+
+**evidence_update_348:**
+- claim: "`qwen35_generate` phase accounting builds and prints for normal greedy generation."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed. Release runner `/tmp/qwen35_generate_phase_timing`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=2`, printed `greedy summary` and `request summary` with `total_ms=1437.9`, `model_load_ms=153.0`, `tokenize_ms=556.2`, `state_prepare_ms=5.2`, `prefill_ms=700.1`, `decode_ms=23.2`, `prompt_tokens=8`, `output_tokens=2`.
+  verified_at: 2026-05-19
+  decay_trigger: CLI timing output, prompt-tokenization path, greedy decode path, or summary format changes
+- claim: "The summary exposes prompt-cache/source-history phase costs."
+  source: two-run smoke with `/tmp/qwen35_generate_phase_timing`, cache root `/tmp/qwen35_phase_timing_cache_smoke`, session `phase-smoke`. Run 1 cache miss saved source-history and printed `source_history_save_ms=0.2`. Run 2 source-history/cache hit printed `cache_restore_ms=664.1`, `prefill_ms=0.0`, `decode_ms=545.9`, and `total_ms=1936.7`.
+  verified_at: 2026-05-19
+  decay_trigger: prompt-cache restore implementation, source-history wiring, n-gram decode path, or timing summary format changes
+
+**quadrumvirate_update_348:**
+- cassandra: The expected failure mode was hidden latency migration between phases; the new summary makes that visible.
+- daedalus: This is instrumentation, not optimization. It changes the measurement frame from local decode windows to whole-request accounting.
+- maieutic: The phase labels are still coarse; first verifier use is currently visible by comparing prefill/cache/decode phases, not as a separate kernel-warmup counter.
+- adversary: Keep speed claims tied to `total_ms` or explicitly state when a number is decode-only. Avoid treating the request summary as a benchmark harness; use it as CLI evidence and debugging attribution.

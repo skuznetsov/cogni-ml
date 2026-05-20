@@ -16,6 +16,17 @@ MODEL_PATH         = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/
 DRAFT_MODEL_PATH   = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
 LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 
+request_t0 = Time.instant
+model_load_ms = 0.0
+draft_load_ms = 0.0
+tokenize_ms = 0.0
+state_prepare_ms = 0.0
+source_history_lookup_ms = 0.0
+cache_restore_ms = 0.0
+prefill_ms = 0.0
+decode_ms = 0.0
+source_history_save_ms = 0.0
+
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
@@ -161,7 +172,8 @@ tok = ML::GGUF::Qwen35Tokenizer.from_gguf(g, MODEL_PATH, LLAMA_TOKENIZE_BIN)
 g.close
 w = ML::GGUF::Qwen35Weights.from_gguf(MODEL_PATH)
 hp = w.hparams
-puts "Loaded in #{(Time.instant - t0).total_seconds.round(1)}s. n_layer=#{hp.n_layer} n_embd=#{hp.n_embd} n_ff=#{hp.n_ff} vocab=#{w.output.out_dim}"
+model_load_ms = (Time.instant - t0).total_milliseconds
+puts "Loaded in #{(model_load_ms / 1000.0).round(1)}s. n_layer=#{hp.n_layer} n_embd=#{hp.n_embd} n_ff=#{hp.n_ff} vocab=#{w.output.out_dim}"
 
 draft = nil.as(ML::GGUF::Qwen35Weights?)
 if speculative_decode_enabled
@@ -169,17 +181,22 @@ if speculative_decode_enabled
   tstart = Time.instant
   draft = ML::GGUF::Qwen35Weights.from_gguf(draft_model_path)
   raise "target/draft vocab mismatch: #{w.output.out_dim} != #{draft.not_nil!.output.out_dim}" unless w.output.out_dim == draft.not_nil!.output.out_dim
-  puts "Loaded draft in #{(Time.instant - tstart).total_seconds.round(1)}s. n_layer=#{draft.not_nil!.hparams.n_layer} n_embd=#{draft.not_nil!.hparams.n_embd}"
+  draft_load_ms = (Time.instant - tstart).total_milliseconds
+  puts "Loaded draft in #{(draft_load_ms / 1000.0).round(1)}s. n_layer=#{draft.not_nil!.hparams.n_layer} n_embd=#{draft.not_nil!.hparams.n_embd}"
 end
 
 # Encode prompt
+tokenize_t0 = Time.instant
 ids = tok.encode(prompt)
+tokenize_ms = (Time.instant - tokenize_t0).total_milliseconds
 puts "Prompt tokens (#{ids.size}): #{ids.inspect}"
 puts "Prompt decoded: #{tok.decode(ids).inspect}"
 
 max_seq = ids.size + n_gen + 8
+state_prepare_t0 = Time.instant
 state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
 ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
+state_prepare_ms += (Time.instant - state_prepare_t0).total_milliseconds
 cache_store = nil.as(ML::GGUF::Qwen35PromptCache::Store?)
 cache_model = ""
 cache_tokenizer = ""
@@ -199,6 +216,7 @@ if prompt_cache_enabled
   max_prefix_len = ids.size > 0 ? ids.size - 1 : 0
 
   if prompt_cache_source_history_enabled
+    source_lookup_t0 = Time.instant
     if source = cache_store.not_nil!.lookup_source_history(session_id, cache_model, cache_tokenizer, turn_id: turn_id)
       replay_start = ids.size
       if source.token_ids.size > replay_start &&
@@ -212,12 +230,14 @@ if prompt_cache_enabled
     else
       STDOUT << "\nPrompt source-history miss (root=#{cache_root})\n"
     end
+    source_history_lookup_ms = (Time.instant - source_lookup_t0).total_milliseconds
   end
 
   if max_prefix_len > 0 && (hit = cache_store.not_nil!.lookup_longest_prefix(cache_model, cache_tokenizer, ids, max_prefix_len: max_prefix_len))
     tstart = Time.instant
     replay = cache_store.not_nil!.restore_and_replay_suffix(hit, w, ids)
     dt = (Time.instant - tstart).total_seconds
+    cache_restore_ms = dt * 1000.0
     state = replay.state
     pos = ids.size
     if top = replay.next_token_id
@@ -226,8 +246,10 @@ if prompt_cache_enabled
     else
       STDOUT << "\nPrompt cache hit had no suffix logits; falling back to normal prefill\n"
       pos = 0
+      state_prepare_t0 = Time.instant
       state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
       ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
+      state_prepare_ms += (Time.instant - state_prepare_t0).total_milliseconds
     end
   else
     STDOUT << "\nPrompt cache miss (root=#{cache_root})\n"
@@ -244,6 +266,7 @@ if output_ids.empty?
     top, top_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, ids, pos, state)
     output_ids << top.to_i32
     dt = (Time.instant - tstart).total_seconds
+    prefill_ms += dt * 1000.0
     STDOUT << "  chunked #{ids.size}/#{ids.size} tokens with final top1 took #{dt.round(2)}s\n"
     STDOUT.flush
     pos += ids.size
@@ -252,6 +275,7 @@ if output_ids.empty?
     tstart = Time.instant
     ML::GGUF::Qwen35CPU.prefill_tokens(w, prefix_ids, pos, state)
     dt = (Time.instant - tstart).total_seconds
+    prefill_ms += dt * 1000.0
     pos += prefix_ids.size
     STDOUT << "  prefix #{prefix_ids.size}/#{ids.size} tokens took #{dt.round(2)}s\n"
     STDOUT.flush
@@ -277,6 +301,7 @@ if output_ids.empty?
     top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
     output_ids << top.to_i32
     dt = (Time.instant - tstart).total_seconds
+    prefill_ms += dt * 1000.0
     STDOUT << "  final token #{ids.size}/#{ids.size} id=#{final_id} took #{dt.round(2)}s\n"
     STDOUT.flush
     pos += 1
@@ -723,6 +748,7 @@ end
 if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
   full_history = ids.dup
   full_history.concat(output_ids)
+  source_save_t0 = Time.instant
   saved_source = cache_store.not_nil!.save_source_history(
     session_id: session_id,
     turn_id: turn_id,
@@ -730,8 +756,12 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
     tokenizer_id: cache_tokenizer,
     token_ids: full_history,
   )
+  source_history_save_ms = (Time.instant - source_save_t0).total_milliseconds
   STDOUT << "  saved source-history tokens=#{saved_source.token_count} hash=#{saved_source.token_hash[0, 12]}\n"
 end
+
+total_ms = (Time.instant - request_t0).total_milliseconds
+STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
 puts "\n=== Generated token ids ==="
 puts output_ids.inspect

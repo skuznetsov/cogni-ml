@@ -14183,3 +14183,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Future cache/session benchmarks must report total request phases, not only decode-only wall. If verifier warmup is useful, it belongs in an explicit daemon/server startup warm phase or a clearly separated benchmark warm phase.
 - caveat: This refutes hidden per-request CLI warmup, not persistent-process prewarming. A server process may still amortize Metal first-use costs before the first user-visible request.
 - trust: {F:0.86,G:0.58,R:0.86}
+
+**LM-348 qwen35_generate request phase accounting [shared/ml]**
+- status: VERIFIED CLI instrumentation
+- claim: `bin/qwen35_generate.cr` now reports whole-request phase timing, including total wall, model/draft load, tokenization, state preparation, source-history lookup/save, prompt-cache restore, prefill, and decode. This prevents cache/session speed claims from relying only on decode-only windows.
+- evidence: local no-codegen build passed. Release runner `/tmp/qwen35_generate_phase_timing` printed `request summary` on greedy smoke (`total_ms=1437.9`, `prefill_ms=700.1`, `decode_ms=23.2`) and on a prompt-cache/source-history n-gram hit (`cache_restore_ms=664.1`, `prefill_ms=0.0`, `decode_ms=545.9`, `total_ms=1936.7`).
+- implication: Use `request summary total_ms` for product CLI claims, and use decode-only summaries only for operator attribution. This directly guards against the LM-347 warmup/measurement-boundary trap.
+- caveat: Phase accounting is coarse and one-shot CLI oriented; it is not a replacement for the interleaved benchmark harness or a daemon steady-state benchmark.
+- trust: {F:0.86,G:0.62,R:0.86}
