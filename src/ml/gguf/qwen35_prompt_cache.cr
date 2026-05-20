@@ -15,6 +15,7 @@ module ML::GGUF
     RAW_ARTIFACT_CODECS        = {nil, "", "raw", "raw-fp32", "qkv-raw"}
     COMPRESSED_ARTIFACT_CODECS = {"recurrent-bf16", "recurrent-int8"}
     SOURCE_HISTORY_RUNTIME_ID  = "cogni-ml/qwen35-source-history-v1"
+    TOKENIZED_PROMPT_RUNTIME_ID = "cogni-ml/qwen35-tokenized-prompt-v1"
 
     class Entry
       include JSON::Serializable
@@ -90,6 +91,29 @@ module ML::GGUF
       end
     end
 
+    class TokenizedPromptEntry
+      include JSON::Serializable
+
+      property runtime_id : String
+      property model_id : String
+      property tokenizer_id : String
+      property prompt_text_hash : String
+      property token_hash : String
+      property token_count : Int32
+      property token_ids : Array(Int32)
+      property created_at_unix : Int64
+
+      def initialize(@runtime_id : String,
+                     @model_id : String,
+                     @tokenizer_id : String,
+                     @prompt_text_hash : String,
+                     @token_hash : String,
+                     @token_count : Int32,
+                     @token_ids : Array(Int32),
+                     @created_at_unix : Int64)
+      end
+    end
+
     record ReplayResult,
       state : Qwen35CPU::State,
       reused_prefix_len : Int32,
@@ -102,10 +126,12 @@ module ML::GGUF
       getter root : String
       getter manifest_path : String
       getter source_history_manifest_path : String
+      getter tokenized_prompt_manifest_path : String
 
       def initialize(@root : String = Qwen35PromptCache.default_root)
         @manifest_path = File.join(@root, "manifest.jsonl")
         @source_history_manifest_path = File.join(@root, "source_history.jsonl")
+        @tokenized_prompt_manifest_path = File.join(@root, "tokenized_prompts.jsonl")
       end
 
       def save(session_id : String,
@@ -335,6 +361,60 @@ module ML::GGUF
         out
       end
 
+      def save_tokenized_prompt(model_id : String,
+                                tokenizer_id : String,
+                                prompt_text : String,
+                                token_ids : Array(Int32)) : TokenizedPromptEntry
+        entry = TokenizedPromptEntry.new(
+          runtime_id: TOKENIZED_PROMPT_RUNTIME_ID,
+          model_id: model_id,
+          tokenizer_id: tokenizer_id,
+          prompt_text_hash: Qwen35PromptCache.prompt_text_hash(prompt_text),
+          token_hash: Qwen35PromptCache.token_hash(token_ids),
+          token_count: token_ids.size.to_i32,
+          token_ids: token_ids.dup,
+          created_at_unix: Time.utc.to_unix,
+        )
+        FileUtils.mkdir_p(@root)
+        File.open(@tokenized_prompt_manifest_path, "a") do |file|
+          entry.to_json(file)
+          file << '\n'
+        end
+        entry
+      end
+
+      def lookup_tokenized_prompt(model_id : String,
+                                  tokenizer_id : String,
+                                  prompt_text : String) : TokenizedPromptEntry?
+        prompt_text_hash = Qwen35PromptCache.prompt_text_hash(prompt_text)
+        tokenized_prompt_entries.select do |entry|
+          next false unless entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID
+          next false unless entry.model_id == model_id
+          next false unless entry.tokenizer_id == tokenizer_id
+          next false unless entry.prompt_text_hash == prompt_text_hash
+
+          entry.token_count == entry.token_ids.size &&
+            entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
+        end.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+      end
+
+      def tokenized_prompt_entries : Array(TokenizedPromptEntry)
+        return [] of TokenizedPromptEntry unless File.exists?(@tokenized_prompt_manifest_path)
+
+        out = [] of TokenizedPromptEntry
+        File.each_line(@tokenized_prompt_manifest_path) do |line|
+          stripped = line.strip
+          next if stripped.empty?
+
+          begin
+            out << TokenizedPromptEntry.from_json(stripped)
+          rescue JSON::ParseException | KeyError
+            # A corrupt tokenized-prompt line must not produce a token cache hit.
+          end
+        end
+        out
+      end
+
       private def append_manifest(entry : Entry) : Nil
         FileUtils.mkdir_p(@root)
         File.open(@manifest_path, "a") do |file|
@@ -398,6 +478,10 @@ module ML::GGUF
         io.write_bytes(token_ids[i], IO::ByteFormat::LittleEndian)
       end
       Digest::SHA256.hexdigest(io.to_slice)
+    end
+
+    def prompt_text_hash(prompt_text : String) : String
+      Digest::SHA256.hexdigest("qwen35-prompt-text-v1\0#{prompt_text}")
     end
 
     def source_history_prefix_match?(source_history : Array(Int32),

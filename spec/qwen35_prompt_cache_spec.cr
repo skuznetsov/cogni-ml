@@ -102,6 +102,36 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "stores tokenized prompts with text-hash and token-hash validation" do
+    root = File.tempname("qwen35-tokenized-prompt")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      saved = store.save_tokenized_prompt(
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text: "Hello, world",
+        token_ids: [9419_i32, 11_i32, 1814_i32],
+      )
+
+      saved.prompt_text_hash.should eq(ML::GGUF::Qwen35PromptCache.prompt_text_hash("Hello, world"))
+      saved.token_hash.should eq(ML::GGUF::Qwen35PromptCache.token_hash([9419_i32, 11_i32, 1814_i32]))
+
+      hit = store.lookup_tokenized_prompt("model-a", "tok-a", "Hello, world")
+      hit.should_not be_nil
+      hit.not_nil!.token_ids.should eq([9419_i32, 11_i32, 1814_i32])
+      store.lookup_tokenized_prompt("model-a", "tok-a", "Hello, worlds").should be_nil
+      store.lookup_tokenized_prompt("model-a", "tok-b", "Hello, world").should be_nil
+
+      File.open(store.tokenized_prompt_manifest_path, "a") do |file|
+        file.puts("{bad json")
+      end
+      store.lookup_tokenized_prompt("model-a", "tok-a", "Hello, world").should_not be_nil
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "generates pg_sorted_heap metadata SQL without accepting unsafe identifiers" do
     sql = ML::GGUF::Qwen35PromptCache.pg_sorted_heap_schema_sql
     sql.should contain("CREATE EXTENSION IF NOT EXISTS pg_sorted_heap")

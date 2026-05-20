@@ -26,11 +26,13 @@ cache_restore_ms = 0.0
 prefill_ms = 0.0
 decode_ms = 0.0
 source_history_save_ms = 0.0
+token_cache_hit = false
 
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
 prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]? == "1"
+prompt_token_cache_enabled = prompt_cache_enabled && ENV["QWEN35_PROMPT_TOKEN_CACHE_OFF"]? != "1"
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
@@ -187,9 +189,27 @@ if speculative_decode_enabled
   puts "Loaded draft in #{(draft_load_ms / 1000.0).round(1)}s. n_layer=#{draft.not_nil!.hparams.n_layer} n_embd=#{draft.not_nil!.hparams.n_embd}"
 end
 
+cache_store = nil.as(ML::GGUF::Qwen35PromptCache::Store?)
+cache_model = ""
+cache_tokenizer = ""
+cache_root = ""
+if prompt_cache_enabled
+  cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
+  cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
+  cache_model = cache_model_id(MODEL_PATH)
+  cache_tokenizer = cache_tokenizer_id(cache_model, tok)
+end
+
 # Encode prompt
 tokenize_t0 = Time.instant
-ids = tok.encode(prompt)
+ids = if prompt_token_cache_enabled && (tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt(cache_model, cache_tokenizer, prompt))
+        token_cache_hit = true
+        tokenized_hit.token_ids
+      else
+        encoded = tok.encode(prompt)
+        cache_store.not_nil!.save_tokenized_prompt(cache_model, cache_tokenizer, prompt, encoded) if prompt_token_cache_enabled
+        encoded
+      end
 tokenize_ms = (Time.instant - tokenize_t0).total_milliseconds
 puts "Prompt tokens (#{ids.size}): #{ids.inspect}"
 puts "Prompt decoded: #{tok.decode(ids).inspect}"
@@ -199,9 +219,6 @@ state_prepare_t0 = Time.instant
 state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
 ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
 state_prepare_ms += (Time.instant - state_prepare_t0).total_milliseconds
-cache_store = nil.as(ML::GGUF::Qwen35PromptCache::Store?)
-cache_model = ""
-cache_tokenizer = ""
 session_id = ENV["QWEN35_SESSION_ID"]? || "default"
 turn_id = ENV["QWEN35_TURN_ID"]?
 ngram_source_history = [] of Int32
@@ -212,10 +229,6 @@ output_ids = [] of Int32
 pos = 0
 
 if prompt_cache_enabled
-  cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
-  cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
-  cache_model = cache_model_id(MODEL_PATH)
-  cache_tokenizer = cache_tokenizer_id(cache_model, tok)
   max_prefix_len = ids.size > 0 ? ids.size - 1 : 0
 
   if prompt_cache_source_history_enabled
@@ -773,7 +786,7 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
 end
 
 total_ms = (Time.instant - request_t0).total_milliseconds
-STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
+STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
 puts "\n=== Generated token ids ==="
 puts output_ids.inspect

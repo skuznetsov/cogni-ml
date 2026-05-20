@@ -1351,3 +1351,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The right frame is controller economics: cache/session replay is a legal transport corridor only when enough future tokens remain.
 - maieutic: The threshold `64` is empirical for one-shot Metal CLI and should be retuned for persistent server mode, different models, and different `gamma`.
 - adversary: This guard affects only `auto`; explicit `ngram` remains available for A/B and research. Do not generalize the alpha-repeat long win to arbitrary source histories without exact verification and broader session traces.
+
+**decision_update_350:** Added a tokenized-prompt sidecar under prompt cache. Repeated CLI/session prompts no longer have to shell out to `llama-tokenize` on every request when `QWEN35_PROMPT_CACHE=1` is enabled.
+
+**evidence_update_350:**
+- claim: "The tokenized-prompt cache stores token IDs safely enough for prompt-cache scope and validates them before reuse."
+  source: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++\"` passed (`10 examples, 0 failures`). The new spec covers prompt-text hash lookup, tokenizer/model mismatch miss, token hash validation, and corrupt JSONL tolerance.
+  verified_at: 2026-05-19
+  decay_trigger: tokenized-prompt JSON schema, tokenizer id computation, prompt text hash, or prompt-cache privacy policy changes
+- claim: "Repeated prompt tokenization is removed from the hot path."
+  source: release runner `/tmp/qwen35_generate_token_cache`, cache root `/tmp/qwen35_token_cache_smoke`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=2`. Run 1: `tokenize_ms=567.6`, `token_cache_hit=false`, `total_ms=1588.6`. Run 2: `tokenize_ms=0.0`, `token_cache_hit=true`, prompt-cache hit, `total_ms=828.6`.
+  verified_at: 2026-05-19
+  decay_trigger: external tokenizer path, prompt-cache token sidecar lookup, CLI phase timing, or model/tokenizer id changes
+- claim: "The touched CLI still builds after token-cache wiring."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; release build `/tmp/qwen35_generate_token_cache` passed.
+  verified_at: 2026-05-19
+  decay_trigger: qwen35_generate prompt-cache initialization or tokenization flow changes
+
+**quadrumvirate_update_350:**
+- cassandra: The bottleneck was not GPU compute; it was process-level tokenizer startup. Caching token IDs gives a deterministic repeated-session win.
+- daedalus: This is LTP/WBA at the session boundary: validated prompt text maps to token transport once, then the cached token corridor avoids repeated external work.
+- maieutic: Token IDs are prompt-derived data. Keeping this under `QWEN35_PROMPT_CACHE=1` is acceptable because prompt cache already stores sensitive local state, but docs should still treat it as local sensitive cache material.
+- adversary: Hash validation prevents corrupt token JSONL from producing hits. It does not solve first-time tokenization or replace a native BPE tokenizer; it only removes repeated external tokenization for identical prompts under the same model/tokenizer id.

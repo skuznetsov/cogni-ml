@@ -14200,3 +14200,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Source-cache replay should be routed by economics, not just validity. LTP/WBA legal corridor validation says "may propose"; the cache minimum says "worth proposing in this process mode."
 - caveat: Threshold `64` is empirical for local one-shot Metal CLI with `gamma=32`. Persistent server prewarming, CUDA, 27B, and different gamma schedules need their own gate.
 - trust: {F:0.86,G:0.56,R:0.86}
+
+**LM-350 prompt-cache tokenized-prompt sidecar [shared/ml]**
+- status: VERIFIED local CLI speed lever
+- claim: `QWEN35_PROMPT_CACHE=1` now also caches tokenized prompts by model/tokenizer id and prompt-text hash, eliminating repeated external `llama-tokenize` startup cost for identical prompts.
+- evidence: focused prompt-cache spec passes (`10 examples, 0 failures`) with corrupt JSONL and hash-validation coverage. Release runner `/tmp/qwen35_generate_token_cache` on repeated prompt `alpha beta gamma delta alpha beta gamma delta` showed run 1 `tokenize_ms=567.6`, `token_cache_hit=false`, `total_ms=1588.6`; run 2 `tokenize_ms=0.0`, `token_cache_hit=true`, `total_ms=828.6`.
+- implementation: `Qwen35PromptCache::TokenizedPromptEntry`, `Store#save_tokenized_prompt`, `Store#lookup_tokenized_prompt`, and `tokenized_prompts.jsonl`. `qwen35_generate` enables it automatically under prompt cache; `QWEN35_PROMPT_TOKEN_CACHE_OFF=1` disables it.
+- implication: Repeated local sessions now avoid both prompt prefill and external tokenization when prompt cache hits. This is a process-boundary LTP/WBA win, not a Metal kernel win.
+- caveat: Token IDs are prompt-derived sensitive local data. This is scoped to explicit prompt-cache usage, and first-time prompts still pay external tokenization until a native BPE encoder replaces the bootstrap path.
+- trust: {F:0.88,G:0.65,R:0.88}
