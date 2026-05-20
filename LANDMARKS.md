@@ -14428,3 +14428,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: We can now run Metal INT8 cache-restore probes and timing attribution without weakening the exact-serving product boundary.
 - caveat: INT8 remains approximate and not default-trusted. One local smoke does not validate broader prompt/cursor/session behavior or quality under reuse.
 - trust: {F:0.86,G:0.45,R:0.86}
+
+**LM-376 Metal compressed artifact economics: cold win, hot restore loss [shared/ml]**
+- status: VERIFIED local timing direction on one M2 Max 9B prompt-state artifact
+- claim: On Metal, recurrent BF16/INT8 compressed artifacts are useful for cold persistent read+restore, but raw decoded state remains faster when the snapshot is already loaded.
+- evidence: `crystal run bin/qwen35_artifact_restore_bench.cr --link-flags=... -- --tokens=32 --max-seq=128 --warmups=1 --iters=3 --skip-hash` measured raw/BF16/INT8 sizes `61080724/34735772/28149404` bytes, restore-only `1.409/5.197/4.169ms`, and read+restore `17.523/12.688/8.474ms`; all routes preserved top1 parity (`source_top=11`). With SHA enabled, read+restore measured raw/BF16/INT8 `42.977/25.398/21.152ms`, showing synchronous hash remains token-critical.
+- implementation: Added `bin/qwen35_artifact_restore_bench.cr`, a standalone probe that writes raw/BF16/INT8 artifacts from one captured Metal prompt state, verifies continuation parity, and reports restore-only plus read+restore timings with optional hash skipping.
+- implication: The next product step is not default INT8 Store restore. It is mmap/prefetch/background validation/resident artifact policy so compressed artifacts win by moving read/hash/upload work out of the token-critical path.
+- caveat: This is a short local bench with three measured iterations and one prompt state. It does not replace multi-prompt/cursor validation or production mmap timing.
+- trust: {F:0.84,G:0.48,R:0.82}

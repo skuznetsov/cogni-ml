@@ -1884,3 +1884,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The useful frame is "make the corridor measurable" rather than "enable INT8 cache hits." Low-level restore enables probes and timing attribution without changing serving policy.
 - maieutic: LTP window is a validated encoded INT8 recurrent record; transport is block scale/int8 payload -> prepared recurrent Metal buffer; potential decreases as `(host-decode-work, CPU Float32 bytes, artifact bytes)`, but product legality still requires a prompt/cursor validation frame.
 - adversary: One continuation smoke is not enough to default-enable INT8. Keep Store gated until multi-prompt/session validation proves parity/acceptance and rollback boundaries.
+
+**decision_update_376:** Added a standalone Metal artifact-restore economics probe (`bin/qwen35_artifact_restore_bench.cr`) and measured raw/BF16/INT8 restore on the same M2 Max Qwen3.5-9B prompt state. The result matches the CUDA/product intuition: compressed artifacts help cold persistent read+restore by reading fewer bytes, but raw decoded state is still faster for already-loaded hot restore. Therefore the next product step should be mmap/preupload/resident artifact policy, not default-enabling INT8 Store restore.
+
+**evidence_update_376:**
+- claim: "On local Metal, compressed artifacts reduce cold read+restore latency but not hot restore-only latency."
+  source: `crystal run bin/qwen35_artifact_restore_bench.cr --link-flags=... -- --tokens=32 --max-seq=128 --warmups=1 --iters=3 --skip-hash` on M2 Max Qwen3.5-9B. Artifact sizes: raw `61080724`, BF16 `34735772` (`0.5687x`), INT8 block8 `28149404` (`0.4609x`). Restore-only: raw `1.409ms`, BF16 `5.197ms`, INT8 `4.169ms`. Read+restore with hash skipped: raw `17.523ms`, BF16 `12.688ms`, INT8 `8.474ms`. All routes preserved top1 parity (`source_top=11`).
+  verified_at: 2026-05-20
+  decay_trigger: artifact reader, Metal decode kernels, filesystem cache state, or state layout changes
+- claim: "Synchronous SHA remains a token-critical bottleneck even with compressed artifacts."
+  source: `crystal run bin/qwen35_artifact_restore_bench.cr --link-flags=... -- --tokens=32 --max-seq=128 --warmups=1 --iters=3` on the same state. Read+restore with SHA: raw `42.977ms`, BF16 `25.398ms`, INT8 `21.152ms`; restore-only stayed `~1.6/4.1/4.1ms`.
+  verified_at: 2026-05-20
+  decay_trigger: hash implementation, artifact size, mmap/prefetch policy, or reader changes
+
+**quadrumvirate_update_376:**
+- cassandra: The tempting but wrong branch is to enable INT8 because it is smaller. Evidence says hot restore-only is slower than raw; INT8 only wins when artifact read bytes dominate.
+- daedalus: Shift from "faster decoder" to "remove token-critical IO/hash/upload." The highest-leverage product path is mmap + background validation + resident/preuploaded encoded artifacts.
+- maieutic: LTP window is a certified cache artifact hit; transport is persistent bytes -> encoded snapshot -> resident Metal state; the legal move must reduce `(sync_hash, read_copy, H2D/restore, rollback_risk)` without invalidating exact fallback.
+- adversary: Three-iteration local timing is a narrow benchmark. Treat it as directionally useful, not final policy; follow with prompt/cursor matrix before product default changes.
