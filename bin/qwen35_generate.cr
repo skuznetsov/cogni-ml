@@ -607,7 +607,12 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
     ngram_cycles += 1
     ngram_proposed += candidates.size
-    backup ||= ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq) unless ngram_replay_on_reject
+    unless ngram_replay_on_reject
+      unless backup
+        backup = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(backup.not_nil!, hp) if prepare_state_metal
+      end
+    end
     accepted_or_corrected = [] of Int32
     rejected = false
     stage_ngram = ngram_stage_min > 0 && candidates.size >= ngram_stage_min

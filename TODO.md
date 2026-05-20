@@ -1274,6 +1274,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
   source: release runner `/tmp/qwen35_generate_source_history`, cache root `/tmp/qwen35_source_history_cache_smoke`, session `source-smoke`. First greedy run saved `source-history tokens=16`. Second n-gram run reported `Prompt source-history hit: tokens=16 replay_start=8`, prompt-cache hit, n-gram `8/8`, `cursor_hits=1`, `cursor_accepts=1`, and identical generated ids `[8029, 13053, 20956, 9197, 8029, 13053, 20956, 9197]`.
   verified_at: 2026-05-19
   decay_trigger: qwen35_generate cache flow, n-gram decode loop, source-history prefix validation, or tokenizer changes
+- claim: "The current product prompt-cache restored-state path is the next speed blocker for this route."
+  source: follow-up smokes with `/tmp/qwen35_generate_source_history`: cache hit plus source cursor n-gram stayed slow (`~607 ms` for 8 tokens after preparing the backup state), cache hit plus ordinary suffix n-gram was similarly slow (`~672 ms`), while fresh prefill plus ordinary suffix n-gram was much faster (`~132 ms`). This points at restored-state/cache interaction rather than the source cursor proposal itself.
+  verified_at: 2026-05-19
+  decay_trigger: prompt-cache restore implementation, state artifact codec, n-gram verifier path, or Metal first-use behavior
 - claim: "No-codegen builds remain clean for the touched CLIs."
   source: `crystal build --no-codegen bin/qwen35_speculative_accept.cr --error-trace` and `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed.
   verified_at: 2026-05-19
@@ -1283,4 +1287,4 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - cassandra: The main risk is privacy/regression from raw token histories. Keeping source history opt-in and hash-validated bounds that risk.
 - daedalus: This is the useful bridge between product cache and inference speed: cache artifacts restore state, source-history sidecar supplies a legal proposal corridor.
 - maieutic: Source-history speed depends on prompt-cache restore cost and verifier chunk economics. The smoke proves wiring, not a stable speedup.
-- adversary: Do not store token histories by default. Future docs should call out that `QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1` stores raw token IDs locally.
+- adversary: Do not store token histories by default. Future docs should call out that `QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1` stores raw token IDs locally. Do not optimize source cursor further until restored-state decode slowness is isolated.
