@@ -14365,3 +14365,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: For terminal cached CLI outputs, the remaining lower bound is tokenizer metadata load plus manifest lookup and decoding, not model weight load or state restore.
 - caveat: This does not restore continuation state. Resident/server continuation should use the validated state-restore fast-forward path or exact replay.
 - trust: {F:0.86,G:0.56,R:0.86}
+
+**LM-369 qwen35_generate output-only fast-forward before GGUF open [shared/ml]**
+- status: VERIFIED local product-CLI smoke
+- claim: For a fully cached one-shot CLI request with cached generated text, `qwen35_generate` can emit exact cached ids/text without opening the GGUF for tokenizer metadata or weights.
+- evidence: release `/tmp/qwen35_generate_ff_zero`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, fast-forward env enabled, seed then repeat under cache root `/tmp/qwen35_product_ff_zero_61042`. Repeat ids matched seed exactly, printed `Prompt cache output fast-forward hit before tokenizer/weight load`, did not print `Loading tokenizer metadata`, did not print `Loading weights`, preserved generated text, and summary reported `total_ms=1.0`, `model_load_ms=0.0`, `tokenize_ms=0.9`, `token_cache_hit=true`, `state_prepare_ms=0.0`, `cache_restore_ms=0.0`, `prefill_ms=0.0`, `decode_ms=0.0`, `source_history_save_ms=0.0`. A miss prompt fell back to tokenizer/weight load and normal greedy decode. No-codegen build and focused prompt-cache spec passed.
+- implementation: source-history entries now optionally store `generated_token_count` and `generated_text`; tokenized-prompt cache has a same-model lookup. The preflight uses model file fingerprint, cached prompt tokens, source-history prefix validation, exact-known-span artifact validation, and cached generated text before opening GGUF.
+- implication: Terminal repeated CLI outputs now avoid the ML runtime entirely; remaining cost is process startup plus small manifest reads.
+- caveat: Text reuse is only attempted for exact cached output length. Partial cached spans and resident continuation still fall back to tokenizer metadata plus state restore/exact replay.
+- trust: {F:0.86,G:0.56,R:0.86}

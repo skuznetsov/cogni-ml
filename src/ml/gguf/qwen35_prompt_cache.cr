@@ -82,6 +82,8 @@ module ML::GGUF
       property token_hash : String
       property token_count : Int32
       property token_ids : Array(Int32)
+      property generated_token_count : Int32? = nil
+      property generated_text : String? = nil
       property created_at_unix : Int64
 
       def initialize(@runtime_id : String,
@@ -92,7 +94,9 @@ module ML::GGUF
                      @token_hash : String,
                      @token_count : Int32,
                      @token_ids : Array(Int32),
-                     @created_at_unix : Int64)
+                     @created_at_unix : Int64,
+                     @generated_token_count : Int32? = nil,
+                     @generated_text : String? = nil)
       end
     end
 
@@ -340,6 +344,8 @@ module ML::GGUF
                               model_id : String,
                               tokenizer_id : String,
                               token_ids : Array(Int32),
+                              generated_token_count : Int32? = nil,
+                              generated_text : String? = nil,
                               turn_id : String? = nil) : SourceHistoryEntry
         entry = SourceHistoryEntry.new(
           runtime_id: SOURCE_HISTORY_RUNTIME_ID,
@@ -351,6 +357,8 @@ module ML::GGUF
           token_count: token_ids.size.to_i32,
           token_ids: token_ids.dup,
           created_at_unix: Time.utc.to_unix,
+          generated_token_count: generated_token_count,
+          generated_text: generated_text,
         )
         FileUtils.mkdir_p(@root)
         File.open(@source_history_manifest_path, "a") do |file|
@@ -423,6 +431,19 @@ module ML::GGUF
           next false unless entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID
           next false unless entry.model_id == model_id
           next false unless entry.tokenizer_id == tokenizer_id
+          next false unless entry.prompt_text_hash == prompt_text_hash
+
+          entry.token_count == entry.token_ids.size &&
+            entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
+        end.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+      end
+
+      def lookup_tokenized_prompt_for_model(model_id : String,
+                                            prompt_text : String) : TokenizedPromptEntry?
+        prompt_text_hash = Qwen35PromptCache.prompt_text_hash(prompt_text)
+        tokenized_prompt_entries.select do |entry|
+          next false unless entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID
+          next false unless entry.model_id == model_id
           next false unless entry.prompt_text_hash == prompt_text_hash
 
           entry.token_count == entry.token_ids.size &&

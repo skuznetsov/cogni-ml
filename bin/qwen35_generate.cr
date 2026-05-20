@@ -196,6 +196,60 @@ cache_tokenizer = ""
 cache_root = ""
 source_history_hit = nil.as(ML::GGUF::Qwen35PromptCache::SourceHistoryEntry?)
 output_ids = [] of Int32
+output_text = nil.as(String?)
+cached_prompt_ids = nil.as(Array(Int32)?)
+
+if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
+  preflight_t0 = Time.instant
+  cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
+  cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
+  cache_model = cache_model_id(MODEL_PATH)
+  if tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt_for_model(cache_model, prompt)
+    token_cache_hit = true
+    cached_prompt_ids = tokenized_hit.token_ids
+    cache_tokenizer = tokenized_hit.tokenizer_id
+    source_history_hit = cache_store.not_nil!.lookup_source_history(session_id, cache_model, cache_tokenizer, turn_id: turn_id)
+    source_history_lookup_ms = (Time.instant - preflight_t0).total_milliseconds
+    if source = source_history_hit
+      ids = cached_prompt_ids.not_nil!
+      replay_start = ids.size
+      source_remaining = source.token_ids.size - replay_start
+      if source.token_ids.size > replay_start &&
+         source_remaining >= n_gen &&
+         source.generated_token_count == n_gen &&
+         (cached_text = source.generated_text) &&
+         ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
+        full_history_len = ids.size + n_gen
+        full_history = source.token_ids[0, full_history_len]
+        cached_prefix_len = full_history_len - 1
+        cached_prefix = full_history[0, cached_prefix_len]
+        if fast_hit = cache_store.not_nil!.lookup_longest_prefix(
+             cache_model,
+             cache_tokenizer,
+             cached_prefix,
+             min_prefix_len: cached_prefix_len,
+             max_prefix_len: cached_prefix_len)
+          if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, full_history, n_gen)
+            output_ids = full_history[ids.size, n_gen]
+            output_text = cached_text
+            tokenize_ms = source_history_lookup_ms
+            STDOUT << "\nPrompt cache output fast-forward hit before tokenizer/weight load: emitted #{output_ids.size} cached tokens\n"
+            total_ms = (Time.instant - request_t0).total_milliseconds
+            STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
+
+            puts "\n=== Generated token ids ==="
+            puts output_ids.inspect
+            puts "\n=== Generated text ==="
+            puts output_text
+            puts "\n=== Full output ==="
+            puts prompt + output_text.not_nil!
+            exit
+          end
+        end
+      end
+    end
+  end
+end
 
 puts "Loading tokenizer metadata..."
 t0 = Time.instant
@@ -205,16 +259,20 @@ g.close
 model_load_ms = (Time.instant - t0).total_milliseconds
 puts "Loaded tokenizer metadata in #{(model_load_ms / 1000.0).round(1)}s. vocab=#{tok.vocab.size}"
 
-if prompt_cache_enabled
+if prompt_cache_enabled && cache_store.nil?
   cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
   cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
   cache_model = cache_model_id(MODEL_PATH)
+  cache_tokenizer = cache_tokenizer_id(cache_model, tok)
+elsif prompt_cache_enabled && cache_tokenizer.empty?
   cache_tokenizer = cache_tokenizer_id(cache_model, tok)
 end
 
 # Encode prompt
 tokenize_t0 = Time.instant
-ids = if prompt_token_cache_enabled && (tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt(cache_model, cache_tokenizer, prompt))
+ids = if cached = cached_prompt_ids
+        cached
+      elsif prompt_token_cache_enabled && (tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt(cache_model, cache_tokenizer, prompt))
         token_cache_hit = true
         tokenized_hit.token_ids
       else
@@ -226,7 +284,7 @@ tokenize_ms = (Time.instant - tokenize_t0).total_milliseconds
 puts "Prompt tokens (#{ids.size}): #{ids.inspect}"
 puts "Prompt decoded: #{tok.decode(ids).inspect}"
 
-if prompt_cache_enabled && prompt_cache_source_history_enabled
+if prompt_cache_enabled && prompt_cache_source_history_enabled && source_history_hit.nil?
   source_lookup_t0 = Time.instant
   source_history_hit = cache_store.not_nil!.lookup_source_history(session_id, cache_model, cache_tokenizer, turn_id: turn_id)
   source_history_lookup_ms = (Time.instant - source_lookup_t0).total_milliseconds
@@ -935,6 +993,7 @@ end
 if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
   full_history = ids.dup
   full_history.concat(output_ids)
+  output_text = tok.decode(output_ids)
   if prompt_cache_fast_forward_used
     STDOUT << "  skipped source-history save after validated fast-forward hit\n"
   else
@@ -961,6 +1020,8 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
       model_id: cache_model,
       tokenizer_id: cache_tokenizer,
       token_ids: full_history,
+      generated_token_count: output_ids.size,
+      generated_text: output_text,
     )
     source_history_save_ms = (Time.instant - source_save_t0).total_milliseconds
     STDOUT << "  saved source-history tokens=#{saved_source.token_count} hash=#{saved_source.token_hash[0, 12]}\n"
@@ -973,6 +1034,6 @@ STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{mode
 puts "\n=== Generated token ids ==="
 puts output_ids.inspect
 puts "\n=== Generated text ==="
-puts tok.decode(output_ids)
+puts output_text || tok.decode(output_ids)
 puts "\n=== Full output ==="
-puts prompt + tok.decode(output_ids)
+puts prompt + (output_text || tok.decode(output_ids))

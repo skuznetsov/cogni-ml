@@ -1734,3 +1734,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The frame shift is stronger than restoring state: if the process only needs to return already-cached text, weights and decode state are unnecessary work.
 - maieutic: The legal boundary is full-span coverage. If requested tokens exceed cached source-history coverage or validation fails, weights load and exact generation proceeds.
 - adversary: The output-only path must not be used for interactive continuation inside a resident server unless the state artifact is also restored or the server treats the request as terminal.
+
+**decision_update_369:** Completed the stronger output-only CLI fast-forward by avoiding GGUF tokenizer metadata load too. Source-history entries now optionally persist generated token count and decoded generated text; on a cached hit, `qwen35_generate` can use the tokenized-prompt cache plus same-model source-history/exact-known-span metadata to emit cached token ids and cached text before opening the GGUF at all. If cached generated text is missing, the prompt is not token-cacheable, the requested length differs, or validation fails, the CLI falls back to the previous tokenizer/weight path.
+
+**evidence_update_369:**
+- claim: "A full cached CLI hit can now avoid both tokenizer metadata load and target weight load."
+  source: release `/tmp/qwen35_generate_ff_zero`, cache root `/tmp/qwen35_product_ff_zero_61042`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, fast-forward env enabled. Repeat ids matched seed (`16/16`), printed `Prompt cache output fast-forward hit before tokenizer/weight load`, did not print `Loading tokenizer metadata`, did not print `Loading weights`, preserved generated text, and summary reported `total_ms=1.0`, `model_load_ms=0.0`, `tokenize_ms=0.9`, `token_cache_hit=true`, `state_prepare_ms=0.0`, `cache_restore_ms=0.0`, `prefill_ms=0.0`, `decode_ms=0.0`, `source_history_save_ms=0.0`.
+  verified_at: 2026-05-20
+  decay_trigger: source-history generated_text metadata, tokenized prompt cache, or output-only fast-forward preflight changes
+- claim: "Misses still fall back to the normal exact path."
+  source: same fast-forward runner with prompt `alpha beta gamma epsilon`, `n_gen=4`, printed `Loading tokenizer metadata`, `Loading weights`, then ran normal greedy decode and saved source-history (`total_ms=990.4`, `prefill_ms=584.0`, `decode_ms=63.0`).
+  verified_at: 2026-05-20
+  decay_trigger: tokenized prompt lookup, source-history lookup, or preflight fallback changes
+- claim: "Prompt-cache manifest compatibility remains intact."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`13 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: SourceHistoryEntry JSON fields or prompt-cache lookup logic changes
+
+**quadrumvirate_update_369:**
+- cassandra: The next remaining one-shot hit floor is manifest read/JSON parse and process startup, not model/tokenizer/decode work.
+- daedalus: This is now true output cache serving. It eliminates the entire ML runtime for exact cached terminal outputs.
+- maieutic: The generated text is only reusable when `generated_token_count == n_gen`; partial-span text slicing is intentionally not attempted.
+- adversary: This should remain opt-in and clearly documented as terminal output-cache serving. Continuation requires state restore or exact replay.

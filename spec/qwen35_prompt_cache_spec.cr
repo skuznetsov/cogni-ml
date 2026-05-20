@@ -84,12 +84,17 @@ describe ML::GGUF::Qwen35PromptCache do
         model_id: "model-a",
         tokenizer_id: "tok-a",
         token_ids: [10_i32, 20_i32, 30_i32, 40_i32],
+        generated_token_count: 2,
+        generated_text: " generated text",
       )
 
       entry.token_hash.should eq(ML::GGUF::Qwen35PromptCache.token_hash([10_i32, 20_i32, 30_i32, 40_i32]))
+      entry.generated_token_count.should eq(2)
+      entry.generated_text.should eq(" generated text")
       hit = store.lookup_source_history("s1", "model-a", "tok-a", turn_id: "t1")
       hit.should_not be_nil
       hit.not_nil!.token_ids.should eq([10_i32, 20_i32, 30_i32, 40_i32])
+      hit.not_nil!.generated_text.should eq(" generated text")
       ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(hit.not_nil!.token_ids, [10_i32, 20_i32], 2).should be_true
       ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(hit.not_nil!.token_ids, [20_i32, 30_i32], 2).should be_false
 
@@ -120,13 +125,18 @@ describe ML::GGUF::Qwen35PromptCache do
       hit = store.lookup_tokenized_prompt("model-a", "tok-a", "Hello, world")
       hit.should_not be_nil
       hit.not_nil!.token_ids.should eq([9419_i32, 11_i32, 1814_i32])
+      model_hit = store.lookup_tokenized_prompt_for_model("model-a", "Hello, world")
+      model_hit.should_not be_nil
+      model_hit.not_nil!.tokenizer_id.should eq("tok-a")
       store.lookup_tokenized_prompt("model-a", "tok-a", "Hello, worlds").should be_nil
       store.lookup_tokenized_prompt("model-a", "tok-b", "Hello, world").should be_nil
+      store.lookup_tokenized_prompt_for_model("model-b", "Hello, world").should be_nil
 
       File.open(store.tokenized_prompt_manifest_path, "a") do |file|
         file.puts("{bad json")
       end
       store.lookup_tokenized_prompt("model-a", "tok-a", "Hello, world").should_not be_nil
+      store.lookup_tokenized_prompt_for_model("model-a", "Hello, world").should_not be_nil
     ensure
       FileUtils.rm_rf(root) if Dir.exists?(root)
     end

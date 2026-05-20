@@ -731,13 +731,14 @@ Local Metal resident cache snapshot, M2 Max, Qwen 3.5 9B Q4_K_M, prompt
 | cogni-ml Metal Store source replay, resident states on | `~4.51-4.55 ms/tok` | real Store hot state path; remaining wall is verifier body |
 | cogni-ml Metal Store fast-forward, resident states off | `~1.45 ms/tok` for 64 cached tokens | cold artifact restore; no verifier body |
 | cogni-ml Metal Store fast-forward, resident states on | `~0.07 ms/tok` for 64 cached tokens; `~0.02 ms/tok` for 256 cached tokens | hot validated state restore plus cached token emission; no verifier body |
-| `qwen35_generate` output-only fast-forward | `~80 ms` total for a 16-token cached span | one-shot CLI hit validates source/history metadata before loading weights; emits cached ids and exits |
+| `qwen35_generate` output-only fast-forward | `~1 ms` total for a 16-token cached span | one-shot CLI hit validates tokenized prompt, source/history metadata, and cached generated text before opening GGUF; emits cached ids/text and exits |
 
 Metal cache caveat: source replay and fast-forward are different contracts.
 Source replay still verifies the known span through the exact target stack.
 Fast-forward skips that body and is only legal after validating the cached
 post-span state artifact and full emitted-token history. The CLI output-only
-hit is exact for the emitted cached text, but it does not restore a continuation
+hit also requires cached generated text for exactly the requested output length;
+it is exact for the emitted cached text, but it does not restore a continuation
 state because the process exits.
 
 ### Speculative Decode Harnesses
