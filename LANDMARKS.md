@@ -14293,3 +14293,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: We can now run apples-vs-apples Metal attribution on the practical CLI path before porting CUDA active-row/artifact ideas.
 - caveat: This is host-side attribution and logical traffic accounting, not hardware counter profiling. Use it for branch ranking, then validate with wall-clock and llama.cpp comparisons.
 - trust: {F:0.86,G:0.62,R:0.86}
+
+**LM-361 resident Metal source replay benchmark [shared/ml]**
+- status: VERIFIED local resident-process probe
+- claim: CUDA's trusted-source bulk WBA replay idea transfers to Metal when measured as resident exact source replay rather than one-shot CLI generation.
+- evidence: `bin/qwen35_warm_request_probe.cr` now supports `--source-replay` and `--metal-profile`. Compile gates passed: `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace`, release Metal build, and `crystal spec spec/ngram_draft_spec.cr --error-trace` (`27 examples, 0 failures`). On M2 Max, prompt `alpha beta gamma delta alpha beta gamma delta`, `gen=64`, `requests=3`, `warmups=1`, resident greedy measured `avg_ms_per_tok=24.97`, `p50_decode_ms=1501.6`; resident source replay measured `avg_ms_per_tok=4.60`, `p50_restore_ms=4.0`, `p50_decode_ms=289.7`. Profiled source replay after warmup measured `289.7 ms / 4.53 ms/tok`, `cpu_fallback matvecs=0`, balanced grouped command buffers around `14-18 ms`, and the same FFN-heavy logical traffic mix.
+- implementation: the probe seeds one exact output span, stores the exact prompt state, restores that prompt state into each measured request, and verifies `source[0...-1]` through `prefill_tokens_top1s` so the final emitted token does not pay an unnecessary next-token tail.
+- implication: Metal already has the exact bulk verifier transport for trusted source spans; the remaining product work is cache artifact/state restore integration and strict benchmark separation from plain generation.
+- caveat: This is a clean repeated source corridor and resident-process benchmark. It is not a general generation speed claim and not yet a broad prompt/session distribution result.
+- trust: {F:0.88,G:0.56,R:0.88}

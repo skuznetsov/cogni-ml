@@ -22,6 +22,8 @@ requests = 5
 warmups = 1
 max_seq = 1024
 prepare_state = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
+source_replay = false
+metal_profile = ENV["QWEN35_METAL_PROFILE"]? == "1"
 quiet = false
 
 parser = OptionParser.new do |p|
@@ -33,6 +35,8 @@ parser = OptionParser.new do |p|
   p.on("--warmups N", "Explicit unmeasured warmup request count (default: 1)") { |v| warmups = v.to_i }
   p.on("--max-seq N", "State max sequence length (default: 1024)") { |v| max_seq = v.to_i }
   p.on("--no-prepare-state", "Do not eagerly prepare Metal state buffers before prefill") { prepare_state = false }
+  p.on("--source-replay", "Measure resident exact source-history replay instead of plain greedy decode") { source_replay = true }
+  p.on("--metal-profile", "Print Qwen35Metal profile report for measured requests") { metal_profile = true }
   p.on("--quiet", "Suppress generated token id rows") { quiet = true }
   p.on("-h", "--help", "Show this help") do
     puts p
@@ -51,19 +55,76 @@ struct RequestTiming
   getter total_ms : Float64
   getter tokenize_ms : Float64
   getter state_prepare_ms : Float64
+  getter restore_ms : Float64
   getter prefill_ms : Float64
   getter decode_ms : Float64
   getter prompt_tokens : Int32
   getter output_tokens : Int32
   getter first_token : Int32
 
-  def initialize(@total_ms, @tokenize_ms, @state_prepare_ms, @prefill_ms, @decode_ms,
+  def initialize(@total_ms, @tokenize_ms, @state_prepare_ms, @restore_ms, @prefill_ms, @decode_ms,
                  @prompt_tokens, @output_tokens, @first_token)
   end
 
   def ms_per_output : Float64
     output_tokens > 0 ? total_ms / output_tokens : 0.0
   end
+end
+
+struct SourceReplayTemplate
+  getter prompt_tokens : Int32
+  getter state : ML::GGUF::Qwen35CPU::State
+  getter output_ids : Array(Int32)
+
+  def initialize(@prompt_tokens, @state, @output_ids)
+  end
+end
+
+def copy_prompt_state!(dst : ML::GGUF::Qwen35CPU::State,
+                       src : ML::GGUF::Qwen35CPU::State,
+                       hp : ML::GGUF::Qwen35Hparams,
+                       used_tokens : Int32,
+                       prepare_state : Bool) : Nil
+  {% if flag?(:cpu_only) %}
+    dst.copy_from!(src)
+  {% else %}
+    if prepare_state && ML::GGUF::Qwen35Metal.available?
+      ML::GGUF::Qwen35CPU.copy_state_metal_used!(dst, src, hp, used_tokens: used_tokens)
+    else
+      dst.copy_from!(src)
+    end
+  {% end %}
+end
+
+def build_source_replay_template(weights : ML::GGUF::Qwen35Weights,
+                                 tokenizer : ML::GGUF::Qwen35Tokenizer,
+                                 prompt : String,
+                                 n_gen : Int32,
+                                 max_seq : Int32,
+                                 prepare_state : Bool) : SourceReplayTemplate
+  hp = weights.hparams
+  ids = tokenizer.encode(prompt)
+  raise "prompt encoded to zero tokens" if ids.empty?
+  raise "request exceeds max_seq: prompt=#{ids.size} gen=#{n_gen} max_seq=#{max_seq}" if ids.size + n_gen >= max_seq
+
+  prompt_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(prompt_state, hp) if prepare_state
+  first_token, _first_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, ids, 0, prompt_state)
+
+  gen_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(gen_state, hp, clear: false) if prepare_state
+  copy_prompt_state!(gen_state, prompt_state, hp, ids.size, prepare_state)
+
+  output_ids = [first_token]
+  pos = ids.size
+  while output_ids.size < n_gen
+    next_id, _next_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, output_ids[-1], pos, gen_state)
+    output_ids << next_id
+    pos += 1
+    break if next_id == tokenizer.eos_id
+  end
+
+  SourceReplayTemplate.new(ids.size, prompt_state, output_ids)
 end
 
 def run_request(weights : ML::GGUF::Qwen35Weights,
@@ -110,6 +171,7 @@ def run_request(weights : ML::GGUF::Qwen35Weights,
     total_ms,
     tokenize_ms,
     state_prepare_ms,
+    0.0,
     prefill_ms,
     decode_ms,
     ids.size,
@@ -117,6 +179,57 @@ def run_request(weights : ML::GGUF::Qwen35Weights,
     output_ids[0],
   )
   {timing, output_ids}
+end
+
+def run_source_replay_request(weights : ML::GGUF::Qwen35Weights,
+                              replay : SourceReplayTemplate,
+                              max_seq : Int32,
+                              prepare_state : Bool) : {RequestTiming, Array(Int32)}
+  hp = weights.hparams
+  request_t0 = Time.instant
+
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  state_prepare_ms = 0.0
+  if prepare_state
+    prepare_t0 = Time.instant
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp, clear: false)
+    state_prepare_ms = (Time.instant - prepare_t0).total_milliseconds
+  end
+
+  restore_t0 = Time.instant
+  copy_prompt_state!(state, replay.state, hp, replay.prompt_tokens, prepare_state)
+  restore_ms = (Time.instant - restore_t0).total_milliseconds
+
+  source = replay.output_ids
+  raise "source replay has no generated ids" if source.empty?
+
+  decode_t0 = Time.instant
+  if source.size > 1
+    # The final emitted token does not need a next-token prediction for this
+    # request, matching qwen35_generate's source-history tail-skip contract.
+    verify_ids = source[0, source.size - 1]
+    target_nexts = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, verify_ids, replay.prompt_tokens, state)
+    expected = source[0]
+    source.each_with_index do |candidate, i|
+      raise "source replay mismatch at token #{i}: candidate=#{candidate} expected=#{expected}" unless candidate == expected
+      expected = target_nexts[i][0] if i < target_nexts.size
+    end
+  end
+  decode_ms = (Time.instant - decode_t0).total_milliseconds
+
+  total_ms = (Time.instant - request_t0).total_milliseconds
+  timing = RequestTiming.new(
+    total_ms,
+    0.0,
+    state_prepare_ms,
+    restore_ms,
+    0.0,
+    decode_ms,
+    replay.prompt_tokens,
+    source.size,
+    source[0],
+  )
+  {timing, source}
 end
 
 startup_t0 = Time.instant
@@ -127,33 +240,58 @@ startup_ms = (Time.instant - startup_t0).total_milliseconds
 
 puts "qwen35_warm_request_probe"
 puts "  model=#{model_path}"
-puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state}"
+puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{source_replay ? "source_replay" : "greedy"}"
 puts "  startup_ms=#{startup_ms.round(1)}"
+
+source_template = source_replay ? build_source_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state) : nil
 
 warmup_ms = 0.0
 warmups.times do
   warm_t0 = Time.instant
-  run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state)
+  if replay = source_template
+    run_source_replay_request(weights, replay, max_seq, prepare_state)
+  else
+    run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state)
+  end
   warmup_ms += (Time.instant - warm_t0).total_milliseconds
 end
 puts "  explicit_warmup_ms=#{warmup_ms.round(1)}" if warmups > 0
 
 timings = [] of RequestTiming
+{% unless flag?(:cpu_only) %}
+  if metal_profile
+    ML::GGUF::Qwen35Metal::Profile.reset
+    ML::GGUF::Qwen35Metal::Profile.enable!
+  end
+{% end %}
+
 requests.times do |i|
-  timing, output_ids = run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state)
+  timing, output_ids = if replay = source_template
+                         run_source_replay_request(weights, replay, max_seq, prepare_state)
+                       else
+                         run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state)
+                       end
   timings << timing
   unless quiet
     puts "  request #{i + 1}: ids=#{output_ids.inspect}"
   end
-  puts "  request #{i + 1} summary: total_ms=#{timing.total_ms.round(1)} ms_per_tok=#{timing.ms_per_output.round(2)} tokenize_ms=#{timing.tokenize_ms.round(1)} state_prepare_ms=#{timing.state_prepare_ms.round(1)} prefill_ms=#{timing.prefill_ms.round(1)} decode_ms=#{timing.decode_ms.round(1)} prompt_tokens=#{timing.prompt_tokens} output_tokens=#{timing.output_tokens} first_token=#{timing.first_token}"
+  puts "  request #{i + 1} summary: total_ms=#{timing.total_ms.round(1)} ms_per_tok=#{timing.ms_per_output.round(2)} tokenize_ms=#{timing.tokenize_ms.round(1)} state_prepare_ms=#{timing.state_prepare_ms.round(1)} restore_ms=#{timing.restore_ms.round(1)} prefill_ms=#{timing.prefill_ms.round(1)} decode_ms=#{timing.decode_ms.round(1)} prompt_tokens=#{timing.prompt_tokens} output_tokens=#{timing.output_tokens} first_token=#{timing.first_token}"
 end
+
+{% unless flag?(:cpu_only) %}
+  if metal_profile
+    ML::GGUF::Qwen35Metal::Profile.disable!
+    STDOUT << ML::GGUF::Qwen35Metal::Profile.report_io
+  end
+{% end %}
 
 totals = timings.map(&.total_ms).sort
 decode_totals = timings.map(&.decode_ms).sort
 prefills = timings.map(&.prefill_ms).sort
+restores = timings.map(&.restore_ms).sort
 mid = totals.size // 2
 avg_total = timings.sum(&.total_ms) / timings.size
 avg_tok = timings.sum(&.output_tokens).to_f
 avg_ms_per_tok = timings.sum(&.total_ms) / avg_tok
 
-puts "  aggregate: avg_total_ms=#{avg_total.round(1)} p50_total_ms=#{totals[mid].round(1)} avg_ms_per_tok=#{avg_ms_per_tok.round(2)} p50_prefill_ms=#{prefills[mid].round(1)} p50_decode_ms=#{decode_totals[mid].round(1)}"
+puts "  aggregate: avg_total_ms=#{avg_total.round(1)} p50_total_ms=#{totals[mid].round(1)} avg_ms_per_tok=#{avg_ms_per_tok.round(2)} p50_restore_ms=#{restores[mid].round(1)} p50_prefill_ms=#{prefills[mid].round(1)} p50_decode_ms=#{decode_totals[mid].round(1)}"

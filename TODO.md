@@ -1570,3 +1570,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The next Metal step is not another policy knob; use this attribution to choose between exact verifier body work and artifact restore productization.
 - maieutic: This profile measures host-side wait/trace attribution, not a formal GPU counter trace. It is enough for ranking local branches, not for final public benchmark claims.
 - adversary: Keep apples-vs-apples separation: plain decode profile, verified source replay profile, and artifact restore profile must not be collapsed into one speed number.
+
+**decision_update_361:** Added a resident-process Metal source-replay benchmark mode. `bin/qwen35_warm_request_probe.cr --source-replay` now seeds an exact generated span once, restores the prompt state in-memory for each measured request, and verifies the known span in one chunk with the same final-token tail-skip contract as product source-history replay. This avoids confusing one-shot CLI disk/cache/lazy Metal compile costs with steady-state WBA verifier economics.
+
+**evidence_update_361:**
+- claim: "The resident source-replay probe compiles and preserves exact replay against a seeded span."
+  source: `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed; release Metal build to `/tmp/qwen35_warm_request_probe` passed; `crystal spec spec/ngram_draft_spec.cr --error-trace` passed (`27 examples, 0 failures`). Runtime `--source-replay --gen 64 --requests 3 --warmups 1 --quiet "alpha beta gamma delta alpha beta gamma delta"` completed without source replay mismatch.
+  verified_at: 2026-05-20
+  decay_trigger: warm request probe, source replay verifier, prompt-state copy, or `prefill_tokens_top1s` semantics change
+- claim: "Steady-state Metal exact source replay is much faster than same-process greedy decode for the clean repeated source corridor."
+  source: same prompt/gen resident AB. Greedy mode measured aggregate `avg_total_ms=1598.1`, `avg_ms_per_tok=24.97`, `p50_decode_ms=1501.6`. Source replay measured aggregate `avg_total_ms=294.4`, `avg_ms_per_tok=4.60`, `p50_restore_ms=4.0`, `p50_decode_ms=289.7` over 64 emitted tokens.
+  verified_at: 2026-05-20
+  decay_trigger: Metal kernels, source replay chunk size, prompt distribution, or host load changes
+- claim: "The one-shot source-history CLI outlier was mostly lazy/process overhead, not the steady-state verifier body."
+  source: one-shot `qwen35_generate` source-history profile showed `rec0-2 wait 643.58 ms` while other groups were about `4.5-6.5 ms`; resident `--source-replay --metal-profile` after warmup showed balanced grouped command buffers (`rec0-2 13.98 ms`, other layer bands `17.58-18.15 ms`) and total source replay `289.7 ms / 4.53 ms/tok`.
+  verified_at: 2026-05-20
+  decay_trigger: Metal library packaging, warmup behavior, profile accounting, or command-buffer grouping changes
+
+**quadrumvirate_update_361:**
+- cassandra: Do not optimize against one-shot `qwen35_generate` source-history wall until lazy pipeline/library costs are separated. Use resident probes for steady-state kernel economics.
+- daedalus: The useful frame shift is session/cache replay, not another plain decode micro-knob. Bulk WBA verifier transport already transfers to Metal when the source corridor is trusted.
+- maieutic: This does not mean generation itself is `4.6 ms/tok`; it means validated source/session replay can emit cached known spans at that speed while preserving exact verifier semantics.
+- adversary: Keep the benchmark label strict: source replay requires same model/tokenizer/prompt-state contract and a trusted generated source span. Plain greedy and cache replay remain separate rows.

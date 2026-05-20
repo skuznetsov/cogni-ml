@@ -474,6 +474,33 @@ measured set, then reports per-request total/tokenize/state-prepare/prefill/deco
 timings. Use it to evaluate daemon/server-mode economics; do not mix it with
 one-shot `qwen35_generate` totals.
 
+To isolate exact source-history replay economics without one-shot CLI cache,
+disk, or lazy Metal compile tax, run the resident replay mode:
+
+```sh
+./build/qwen35_warm_request_probe \
+  --source-replay \
+  --gen 64 \
+  --requests 3 \
+  --warmups 1 \
+  --quiet \
+  "alpha beta gamma delta alpha beta gamma delta"
+
+./build/qwen35_warm_request_probe \
+  --source-replay \
+  --metal-profile \
+  --gen 64 \
+  --requests 1 \
+  --warmups 1 \
+  --quiet \
+  "alpha beta gamma delta alpha beta gamma delta"
+```
+
+`--source-replay` seeds one exact generated span, restores the prompt state
+inside the same resident process, and verifies the known span in one chunk with
+the same tail-skip contract as source-history cache replay. It is a
+cache/session replay measurement, not plain generation throughput.
+
 Useful Qwen environment switches:
 
 | Variable | Effect |
