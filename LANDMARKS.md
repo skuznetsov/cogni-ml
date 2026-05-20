@@ -14251,3 +14251,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The trust-class split is wired correctly in the practical CLI: prefix-validated session cursor replay is a legal transport corridor, while local suffix replay remains gated by runtime evidence.
 - caveat: This is a local Metal one-prompt trace. CUDA/remote real session-cache traces and larger prompt diversity remain open.
 - trust: {F:0.84,G:0.52,R:0.84}
+
+**LM-356 lag8-alone corridor certificate disabled in product auto [shared/ml]**
+- status: VERIFIED local CLI guard fix
+- claim: Lag-8 repetition alone is too weak as a default `qwen35_generate` auto-mode certificate for untrusted suffix n-gram replay, so product auto now defaults `QWEN35_NGRAM_CORRIDOR_LAG8_MIN=2.0` while explicit env overrides retain the research path.
+- evidence: prior auto default on `Checklist:\n- Metal GEMV: done\n- Metal GEMM:`, `n_gen=16`, entered n-gram, accepted only `1/11`, and decoded in `420.6 ms` versus greedy `308.4 ms`. Fixed runner `/tmp/qwen35_generate_corridor_fix` keeps clean repeat n-gram active (`alpha beta gamma delta...`, `13/13`, `corridor_skips=0`) and makes the checklist prompt fail closed (`0/0`, `corridor_skips=2`, `312.0 ms`). Explicit old `QWEN35_NGRAM_CORRIDOR_LAG8_MIN=1.0` reproduces the bad checklist path (`1/11`, `422.8 ms`). Trusted source-history repeat still accepts `64/64` with `cursor_hits=2`, `corridor_skips=0`.
+- implication: Product auto should prefer high-precision untrusted suffix corridors. We keep speed on clean local repeats and validated source-cache replay, but avoid a known checklist/template false-positive without adding a new hand-tuned predicate.
+- caveat: This is conservative and may skip some valid period-8 local suffix opportunities. A learned/router trace corpus is still the right way to recover them safely.
+- trust: {F:0.86,G:0.56,R:0.86}

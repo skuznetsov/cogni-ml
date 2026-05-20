@@ -1468,3 +1468,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The remaining speed question is not legality; it is process economics. One-shot repeat was faster than seed overall, but decode still paid verifier/model work inside a fresh process.
 - maieutic: This is one local repeated prompt, not a production session trace corpus.
 - adversary: Keep the CUDA/remote real-trace item open; this local Metal trace only verifies product-CLI wiring and trust-class separation.
+
+**decision_update_356:** A 12-prompt local corridor trace found that lag-8 repetition alone is still too weak as a product `auto` certificate for untrusted suffix replay. Rather than adding another shape predicate, `qwen35_generate` now disables lag-8-only certification by default in `auto` (`QWEN35_NGRAM_CORRIDOR_LAG8_MIN=2.0`), while explicit `ngram` and explicit env overrides keep the research path available.
+
+**evidence_update_356:**
+- claim: "The previous product-auto corridor defaults still allowed a template false positive."
+  source: release runner `/tmp/qwen35_generate_corridor`, prompt `Checklist:\n- Metal GEMV: done\n- Metal GEMM:`, `n_gen=16`, `QWEN35_DECODE_POLICY=auto QWEN35_QUIET=1`: n-gram accepted only `1/11`, disabled after reject, and decoded in `420.6 ms` versus greedy `308.4 ms`.
+  verified_at: 2026-05-19
+  decay_trigger: product auto corridor thresholds, template prompt tokenization, n-gram verifier path, or risk gate changes
+- claim: "Disabling lag-8-only as a default product certificate fixes that false positive while preserving the clean repeat."
+  source: release runner `/tmp/qwen35_generate_corridor_fix`. Clean repeat `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, auto mode still accepted `13/13` with `corridor_skips=0`. Template checklist auto mode now accepted `0/0`, `corridor_skips=2`, and decoded in `312.0 ms`; explicit old `QWEN35_NGRAM_CORRIDOR_LAG8_MIN=1.0` reproduced the bad path (`1/11`, `422.8 ms`).
+  verified_at: 2026-05-19
+  decay_trigger: `QWEN35_NGRAM_CORRIDOR_LAG8_MIN` default, corridor helper semantics, or prompt suite changes
+- claim: "Trusted source-history cursor replay remains unaffected by the stricter local-suffix default."
+  source: same fixed runner, cache root `/tmp/qwen35_corridor_fix_source_cache_smoke`, session `corridor-fix`, `n_gen=64`, `QWEN35_PROMPT_CACHE=1 QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1 QWEN35_DECODE_POLICY=auto`: repeat run hit source history (`tokens=72 replay_start=8 remaining=64`), prompt cache reused `8/8`, n-gram accepted `64/64`, `cursor_hits=2`, `cursor_accepts=2`, `corridor_skips=0`, total `1133.3 ms`.
+  verified_at: 2026-05-19
+  decay_trigger: source-history replay, full-prompt cache restore, or trust-class split changes
+
+**quadrumvirate_update_356:**
+- cassandra: The failure pattern is not "need more micro-predicates"; it is that lag-8 periodicity can describe checklist/template continuations that still reject early.
+- daedalus: The safer frame is to remove a weak certificate from product auto, not keep expanding risk predicates.
+- maieutic: This sacrifices some possible untrusted suffix opportunities, but trusted source-cache replay and strong match/low-entropy corridors remain available.
+- adversary: Keep the larger trace-corpus item open; this fix is a conservative default guard, not a learned router.

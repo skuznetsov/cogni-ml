@@ -90,7 +90,7 @@ ngram_corridor_gate = if value = ENV["QWEN35_NGRAM_CORRIDOR_GATE"]?
 ngram_corridor_min_size = (ENV["QWEN35_NGRAM_CORRIDOR_MIN_SIZE"]? || "4").to_i
 ngram_corridor_match_len_min = (ENV["QWEN35_NGRAM_CORRIDOR_MATCH_LEN_MIN"]? || (decode_policy == "auto" ? "8" : "0")).to_i
 ngram_corridor_lag4_min = (ENV["QWEN35_NGRAM_CORRIDOR_LAG4_MIN"]? || "0.25").to_f
-ngram_corridor_lag8_min = (ENV["QWEN35_NGRAM_CORRIDOR_LAG8_MIN"]? || (decode_policy == "auto" ? "1.0" : "0.5")).to_f
+ngram_corridor_lag8_min = (ENV["QWEN35_NGRAM_CORRIDOR_LAG8_MIN"]? || (decode_policy == "auto" ? "2.0" : "0.5")).to_f
 ngram_corridor_entropy_max = (ENV["QWEN35_NGRAM_CORRIDOR_ENTROPY_MAX"]? || "0.6").to_f
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"

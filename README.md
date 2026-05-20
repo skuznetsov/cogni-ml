@@ -497,7 +497,7 @@ Useful Qwen environment switches:
 | `QWEN35_NGRAM_RISK_MIN_SIZE=16` | Candidate size threshold used by the n-gram risk gate. This is independent from `QWEN35_NGRAM_STAGE_MIN`, so staging can be disabled without weakening fail-closed risk checks. |
 | `QWEN35_NGRAM_CORRIDOR_GATE=0\|1` | In `auto`, require runtime repeat-corridor evidence for untrusted local suffix n-gram proposals. Trusted source-history cursor replay bypasses this gate after prefix validation. |
 | `QWEN35_NGRAM_CORRIDOR_MATCH_LEN_MIN=8` | In `auto`, allow untrusted suffix proposals when the repeated suffix match reaches this length. Explicit `ngram` defaults to `0`. |
-| `QWEN35_NGRAM_CORRIDOR_LAG8_MIN=1.0` | In `auto`, require strong lag-8 repetition unless match length or entropy already proves a corridor. Explicit `ngram` defaults to `0.5`. |
+| `QWEN35_NGRAM_CORRIDOR_LAG8_MIN=2.0` | In `auto`, lag-8 repetition alone is disabled as a product certificate after template false positives; set a lower value only for A/B. Explicit `ngram` defaults to `0.5`. |
 | `QWEN35_NGRAM_RECURSIVE_OFF=1` | Disable recursive n-gram extension through scratch history. |
 | `QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF=1` | Exploration mode: keep trying n-gram chunks after first rejection. |
 | `QWEN35_NGRAM_REPLAY_ON_REJECT=1` | Research/fast-path mode: skip n-gram target-state backups and rebuild the exact target state only after a non-final n-gram reject. Use with the default `auto` risk gate; it can regress badly when a large bad n-gram chunk is forced through verification. |
