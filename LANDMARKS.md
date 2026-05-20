@@ -14455,3 +14455,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: This removes repeated SHA from token-critical repeated session/cache activation without changing first-use validation or compressed codec policy.
 - caveat: This is a local performance memo, not an adversarial storage trust boundary. A malicious same-size rewrite with preserved mtime can still evade stat-based memo invalidation; cross-process/product hardening should use background cryptographic validation or immutable artifact naming.
 - trust: {F:0.86,G:0.55,R:0.85}
+
+**LM-379 product-shaped compressed artifact restore timing [shared/ml]**
+- status: VERIFIED local product-path timing probe
+- claim: In the real warm request prompt-cache fast-forward path on local Metal, validated BF16 compressed mmap artifacts are much faster than raw artifacts for cold persistent cache activation with no resident state cache.
+- evidence: `bin/qwen35_warm_request_probe.cr` now supports `--artifact-codec` and `--artifact-codec-block`; no-codegen build passed. Runtime on M2 Max Qwen3.5-9B with `--prompt-cache-fast-forward --gen=16 --requests=3 --warmups=1 --max-seq=128 --quiet` measured raw p50 restore `39.4ms`, BF16 p50 restore `7.6ms`, and gated INT8 p50 restore `8.5ms`; all routes used `Store.restore` and emitted the same cached span.
+- implementation: Warm request probe passes codec/block and validation metadata into `Store.save` for prompt-cache replay/fast-forward modes. INT8 measurement still requires `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1`.
+- implication: BF16 compressed artifacts are the current best default candidate for Metal persistent prompt-cache fast-forward once broader validation gates pass. INT8 is not compelling enough here to override its higher trust risk.
+- caveat: This is one prompt, `max_seq=128`, and short cached output. Broader prompt/cursor/session matrix and larger-context measurements are required before default compressed-save promotion.
+- trust: {F:0.84,G:0.46,R:0.83}

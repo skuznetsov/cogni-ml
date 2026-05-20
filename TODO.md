@@ -1942,3 +1942,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This moves the next bottleneck from repeated SHA to restore/upload/decode and sets up a cleaner resident mapped/preuploaded artifact cache.
 - maieutic: Potential decreases from `(sync_hash, read_copy, restore)` to `(fingerprint_stat, mmap/restore)` only when the artifact identity tuple is stable; if identity changes, the dual frame is full hash validation.
 - adversary: A malicious actor preserving file size and mtime could still defeat a local stat memo. Treat this as a process-local performance cache, not a cryptographic trust boundary across adversarial storage.
+
+**decision_update_379:** Added product-shaped artifact codec controls to `qwen35_warm_request_probe` so prompt-cache replay/fast-forward can be measured with raw, BF16, or gated INT8 artifacts through the real `Store.restore` path. This confirmed the lower-level artifact economics in the serving-shaped path: for cached 16-token fast-forward with no resident state cache, BF16 compressed mmap restore is far faster than raw restore on Metal.
+
+**evidence_update_379:**
+- claim: "The warm request probe can now benchmark prompt-cache artifact codecs through the real Store path."
+  source: `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed. Runtime probes with `--prompt-cache-fast-forward --gen=16 --requests=3 --warmups=1 --max-seq=128 --quiet` completed for raw, `--artifact-codec recurrent-bf16`, and gated `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1 --artifact-codec recurrent-int8`.
+  verified_at: 2026-05-20
+  decay_trigger: warm request probe options, Store save/restore, or compressed artifact validation policy changes
+- claim: "In the product-shaped fast-forward path, BF16 compressed mmap restore beats raw restore for this local Metal cache hit."
+  source: raw p50 restore `39.4ms` (`2.49ms/tok` p50 total for 16 emitted cached tokens); BF16 p50 restore `7.6ms` (`0.50ms/tok` p50 total); gated INT8 p50 restore `8.5ms` (`0.55ms/tok` p50 total). All three used the same prompt/model/max_seq and real `Store.restore` path.
+  verified_at: 2026-05-20
+  decay_trigger: filesystem cache state, state size/max_seq, artifact codec implementation, or Metal restore path changes
+
+**quadrumvirate_update_379:**
+- cassandra: The raw path is dominated by full artifact read/materialization even after SHA is memoized; compressed mmap is the correct product-shaped corridor for persistent cache hits.
+- daedalus: This shifts the default-candidate from raw artifacts to BF16 compressed artifacts for validated prompt-cache fast-forward on Metal. INT8 remains research/gated because BF16 is nearly as fast and safer.
+- maieutic: Legal LTP move: cache hit with validation metadata -> mapped compressed recurrent state -> restore -> emit certified output span. Potential decreases from `(read bytes, host materialization, restore wall)` while exact fallback remains raw/source replay.
+- adversary: This is one prompt and short max_seq. Do not make BF16 default until prompt/session matrix passes and compressed-save policy is explicit.
