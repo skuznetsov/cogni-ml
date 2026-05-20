@@ -14276,3 +14276,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: LTP/WBA cache acceleration has two valid frames: exact WBA verifier replay for source cursors, and validated artifact fast-forward for session/hash cache hits. The current exact verifier wall remains FFN/head work; artifact restore moves that work out of the token-critical path under a stronger cache contract.
 - caveat: Full-cache artifact snapshots are now robust but less product-shaped than live-KV snapshots. The speed claims are for one RTX 5060 Ti host and one generated source history; broader prompt/session and llama.cpp refreshed comparisons remain separate gates.
 - trust: {F:0.88,G:0.58,R:0.88}
+
+**LM-359 CUDA-to-Metal transfer plan [shared/ml]**
+- status: PROPOSED and persisted
+- claim: The next Metal speed phase should separate plain greedy decode, exact verified source/cache replay, and trusted artifact fast-forward, then port only the CUDA findings that preserve those contracts.
+- plan: First add Metal phase attribution for source-cache/known-span verifier; then port active-row/bulk WBA verifier semantics to trusted Metal cursor replay; then port compressed encoded artifact restore with BF16 early/high-risk and block8 INT8 later/stable recurrent-state lanes.
+- rationale: CUDA refreshed evidence says exact trusted replay is faster than plain decode because it verifies known spans in bulk WBA bands, while artifact restore is a different validated cache contract that can bypass verifier body. Metal needs direct attribution before assuming the same FFN/head wall.
+- caveat: This is a plan, not a verified Metal implementation. Apples-vs-apples claims require fresh llama.cpp Metal and native Metal runs under the same prompt/token/power state.
+- trust: {F:0.62,G:0.66,R:0.62}
+
+**LM-360 qwen35_generate Metal attribution [shared/ml]**
+- status: VERIFIED local Metal instrumentation
+- claim: `QWEN35_METAL_PROFILE=1` exposes Metal attribution for both plain decode and source-history n-gram replay in the product CLI.
+- evidence: local release `/tmp/qwen35_generate_metal_profile` with `QWEN35_METAL_PROFILE=1` printed `Qwen35Metal.Profile report` on a plain `The capital of France is` smoke, including wave timing, trace labels, matmul logical traffic, and `cpu_fallback matvecs=0`. A two-run prompt-cache/source-history smoke hit `tokens=24 replay_start=8`, accepted `16/16`, and printed grouped command buffers plus prefill/source-replay phase traces. Compile/spec gates passed: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace`, release Metal build, and `crystal spec spec/ngram_draft_spec.cr --error-trace` (`27 examples, 0 failures`).
+- implementation: `qwen35_generate` resets/enables/disables `Qwen35Metal::Profile` around the timed decode region when `QWEN35_METAL_PROFILE=1`; `Qwen35Metal.prefill_phase_profile_enabled?` also treats that switch as enabling source-replay phase traces.
+- implication: We can now run apples-vs-apples Metal attribution on the practical CLI path before porting CUDA active-row/artifact ideas.
+- caveat: This is host-side attribution and logical traffic accounting, not hardware counter profiling. Use it for branch ranking, then validate with wall-clock and llama.cpp comparisons.
+- trust: {F:0.86,G:0.62,R:0.86}

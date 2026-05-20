@@ -1534,3 +1534,39 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: For cache hits, the stronger frame remains validated artifact fast-forward; for verified replay, the next kernel target is FFN/head body economics.
 - maieutic: Trusted artifact restore is not general generation. It requires same-model/tokenizer/source/state validation; otherwise exact verifier replay or plain decode remains the legal fallback.
 - adversary: Keep live-KV as the product-shaped path. Full-cache snapshots now avoid the crash, but they store/copy more KV than necessary and should mainly be a compatibility/debug path.
+
+**decision_update_359:** Saved the CUDA-to-Metal transfer plan for apples-vs-apples speed work. The benchmark frame is now explicit: plain greedy decode must be compared directly against llama.cpp `tg`; exact verified source/cache replay is a cache-hit accelerator; trusted artifact fast-forward is validated session-cache restore, not generation speed. The next Metal work should first measure phase attribution, then port the CUDA-proven cache accelerators.
+
+**plan_update_359:**
+- [ ] Add Metal phase attribution for exact source-cache replay / known-span verifier and check whether recurrent FFN plus output head dominate as they do on CUDA.
+- [ ] Port active-row/bulk WBA verifier semantics to Metal source-history cache replay, using trusted cursor validation for large bands and fail-closed fallback for weak proposal sources.
+- [ ] Port encoded compressed artifact restore to Metal: BF16 recurrent early/high-risk lane, block8 INT8 later/stable lane, live-KV layout, mmap/prefetch/preupload-style staging where applicable.
+- [ ] Rerun apples-vs-apples Metal benchmarks against llama.cpp HEAD: same model, prompt, token count, warm state, and power state.
+
+**quadrumvirate_update_359:**
+- cassandra: The likely trap is mixing three different claims: plain decode, verified replay, and artifact restore. Keep them separated in benchmark tables.
+- daedalus: For product latency, validated cache artifact fast-forward is the larger frame shift. For plain decode competition, the verifier/decoder body still needs FFN/head attribution and optimization.
+- maieutic: CUDA evidence is transferable as architecture/policy evidence, not as absolute Metal timing. Metal must be measured directly.
+- adversary: Do not promote schedule64 or artifact restore outside trusted cursor/state contracts. Weak local suffix replay keeps conservative gates.
+
+**decision_update_360:** Added product-CLI Metal attribution for the timed decode/source-replay region. `QWEN35_METAL_PROFILE=1` now resets/enables `Qwen35Metal::Profile` around `qwen35_generate` decode, prints `Profile.report_io`, and makes the prefill/source-replay phase trace active without requiring the older separate `QWEN35_PREFILL_PHASE_PROFILE=1` switch. This gives the Metal source-history cache path an operator attribution surface comparable to the CUDA `--profile-phases` gate.
+
+**evidence_update_360:**
+- claim: "`qwen35_generate` now emits Metal attribution for plain decode."
+  source: local release runner `/tmp/qwen35_generate_metal_profile`, `QWEN35_METAL_PROFILE=1 QWEN35_QUIET=1`, prompt `The capital of France is`, `n_gen=2`, printed `Qwen35Metal.Profile report`, `wave=1`, decode `24.0 ms`, matmul logical weights `4010.53 MiB`, `cpu_fallback matvecs=0`, and generated `Paris.`.
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate decode timing, Qwen35Metal::Profile, or wave path changes
+- claim: "The same profile path covers prompt-cache/source-history n-gram replay."
+  source: local two-run cache smoke with cache root `/tmp/qwen35_metal_profile_source_cache`, prompt `alpha beta gamma delta alpha beta gamma delta`, explicit `ngram`, `gamma=16`. Repeat run printed `Prompt source-history hit: tokens=24 replay_start=8 remaining=16`, accepted `16/16`, `cursor_hits=1`, `wall_ms=1427.3`, then emitted a Metal profile with grouped command buffers, prefill phase traces, matmul logical weights `4010.53 MiB`, conversion traffic `84.38 MiB`, `cpu_fallback matvecs=0`, and `total metal syncs=3`.
+  verified_at: 2026-05-20
+  decay_trigger: source-history replay controller, prefill_tokens_top1s, or Metal profile trace labels
+- claim: "The new instrumentation is compile-checked and does not disturb n-gram unit behavior."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; release build with Metal bridge passed; `crystal spec spec/ngram_draft_spec.cr --error-trace` passed (`27 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate, qwen35_metal profile wiring, or n-gram draft API changes
+
+**quadrumvirate_update_360:**
+- cassandra: The first profile confirms the same broad traffic pattern as CUDA: FFN up/gate dominates logical weight traffic, with recurrent projection and FFN down behind it. But the current source-replay smoke also exposes high `cache_restore_ms`, so request-level claims still need total-wall accounting.
+- daedalus: The next Metal step is not another policy knob; use this attribution to choose between exact verifier body work and artifact restore productization.
+- maieutic: This profile measures host-side wait/trace attribution, not a formal GPU counter trace. It is enough for ranking local branches, not for final public benchmark claims.
+- adversary: Keep apples-vs-apples separation: plain decode profile, verified source replay profile, and artifact restore profile must not be collapsed into one speed number.

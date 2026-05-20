@@ -1812,7 +1812,7 @@ module ML
         end
 
         private def self.prefill_phase_profile_enabled? : Bool
-          ENV["QWEN35_PREFILL_PHASE_PROFILE"]? == "1"
+          ENV["QWEN35_PREFILL_PHASE_PROFILE"]? == "1" || ENV["QWEN35_METAL_PROFILE"]? == "1"
         end
 
         private def self.small_q4_gemv_enabled? : Bool

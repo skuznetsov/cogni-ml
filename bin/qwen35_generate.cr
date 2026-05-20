@@ -98,6 +98,7 @@ ngram_replay_on_reject = ENV["QWEN35_NGRAM_REPLAY_ON_REJECT"]? == "1"
 ngram_index_enabled = ENV["QWEN35_NGRAM_INDEX_OFF"]? != "1"
 ngram_cache_min_remaining = (ENV["QWEN35_NGRAM_CACHE_MIN_REMAINING"]? || (decode_policy == "auto" ? "64" : "0")).to_i
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
+metal_profile_enabled = ENV["QWEN35_METAL_PROFILE"]? == "1"
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
@@ -371,6 +372,13 @@ if output_ids.empty?
 end
 
 # Decode loop
+{% unless flag?(:cpu_only) %}
+  if metal_profile_enabled
+    ML::GGUF::Qwen35Metal::Profile.reset
+    ML::GGUF::Qwen35Metal::Profile.enable!
+  end
+{% end %}
+
 if speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
@@ -821,6 +829,13 @@ else
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)}\n"
 end
+
+{% unless flag?(:cpu_only) %}
+  if metal_profile_enabled
+    ML::GGUF::Qwen35Metal::Profile.disable!
+    STDOUT << ML::GGUF::Qwen35Metal::Profile.report_io
+  end
+{% end %}
 
 if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
   full_history = ids.dup

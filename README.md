@@ -484,6 +484,7 @@ Useful Qwen environment switches:
 | `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN=64` | Minimum requested generation length before a full-prompt cache hit can skip suffix replay and use stored next-token metadata. Lower values are useful for experiments but can move first model work into `decode_ms` without improving total wall time. |
 | `QWEN35_NATIVE_TOKENIZER_OFF=1` | Disable the native Crystal Qwen BPE encoder and use the external `llama-tokenize` bootstrap path. |
 | `QWEN35_PREPARE_STATE_OFF=1` | Disable eager Metal state-buffer preparation in `qwen35_generate`. By default the CLI prepares KV/DeltaNet buffers before timing prompt ingest. |
+| `QWEN35_METAL_PROFILE=1` | Enable Metal dispatch/profile attribution for the timed decode region in `qwen35_generate`. The report includes wave/group timings, prefill/source-replay phase traces, matmul logical traffic, conversion traffic, and CPU fallback counts. |
 | `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk gating; explicit policy overrides legacy mode envs. |
 | `QWEN35_TRACE_STEPS_OFF=1` | Suppress per-token/per-cycle trace lines in `qwen35_generate` while keeping summaries and final output. |
 | `QWEN35_QUIET=1` | Alias for suppressing per-step traces in `qwen35_generate`; useful for cleaner local timing. |
