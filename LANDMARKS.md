@@ -14392,3 +14392,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: For repeated terminal CLI/session outputs, the serving hot path is now direct certificate read/validate/emit rather than scanning durable history manifests. This preserves the LTP/WBA boundary: direct Spike on a certified local window, legacy validated scan as the dual-frame fallback.
 - caveat: This is not generation speed and not continuation-state restore. Resident continuation still needs state restore or exact source replay, and direct certificates are opt-in through `QWEN35_PROMPT_CACHE_FAST_FORWARD=1`.
 - trust: {F:0.89,G:0.60,R:0.88}
+
+**LM-372 BF16 recurrent artifact Metal parity guard [shared/ml]**
+- status: VERIFIED local Metal correctness guard
+- claim: The existing v2 `recurrent-bf16` artifact reader can restore a compressed recurrent snapshot through the Metal state path into prepared buffers while preserving the next-token top1 on the 9B prompt-state smoke.
+- evidence: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`11 examples, 0 failures`). The new spec writes a BF16 recurrent artifact from a Metal-backed prompt state, reads it with explicit codec metadata, restores into an already prepared Metal state, verifies buffer handles remain stable, and checks continuation top1/logit. A one-off probe reported `ltop=13`, `rtop=13`, logit delta `0.00025177002`, artifact bytes `28444316`.
+- implementation: This is a test/guard only. The path still decodes BF16 to Float32 bytes on host before writing Metal buffers; it does not yet implement direct encoded-payload GPU decode on Metal.
+- implication: Metal compressed artifact work can now proceed from the same product seam as CUDA: encoded artifact reader, validation metadata, then backend-specific encoded restorer.
+- caveat: BF16 parity on one prompt does not validate INT8 or broad session-cache trust. The speed-bearing Metal branch remains direct BF16/block8 INT8 decode into recurrent buffers plus prompt/cursor validation gates.
+- trust: {F:0.86,G:0.42,R:0.86}

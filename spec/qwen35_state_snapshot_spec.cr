@@ -298,6 +298,60 @@ describe ML::GGUF::Qwen35StateSnapshot do
     target_logit.should be_close(source_logit, 1e-4_f32)
   end
 
+  it "restores a BF16 recurrent artifact into a prepared Metal state" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_SNAPSHOT)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32] # "The capital of France is"
+
+    source = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+    target = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(source, hp)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(target, hp)
+    prompt.each_with_index do |token_id, pos|
+      ML::GGUF::Qwen35CPU.forward_top1(w, token_id, pos.to_i32, source)
+    end
+
+    handles = target.layers.map do |layer|
+      {
+        layer.k_cache_buf.try(&.handle),
+        layer.v_cache_buf.try(&.handle),
+        layer.conv_state_buf.try(&.handle),
+        layer.ssm_state_buf.try(&.handle),
+      }
+    end
+
+    snapshot = ML::GGUF::Qwen35StateSnapshot.capture(source)
+    path = File.tempname("qwen35-state-bf16-metal", ".qkv")
+    begin
+      info = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, path, artifact_codec: "recurrent-bf16")
+      info.byte_size.should be < snapshot.byte_size
+      loaded = ML::GGUF::Qwen35StateSnapshot.read_artifact(
+        path,
+        expected_sha256: info.sha256,
+        expected_codec: "recurrent-bf16",
+      )
+      ML::GGUF::Qwen35StateSnapshot.restore_into(loaded, hp, target)
+
+      target.layers.each_with_index do |layer, i|
+        {
+          layer.k_cache_buf.try(&.handle),
+          layer.v_cache_buf.try(&.handle),
+          layer.conv_state_buf.try(&.handle),
+          layer.ssm_state_buf.try(&.handle),
+        }.should eq(handles[i])
+      end
+
+      source_top, source_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, source)
+      target_top, target_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, target)
+      target_top.should eq(source_top)
+      target_logit.should be_close(source_logit, 1e-2_f32)
+    ensure
+      File.delete(path) if File.exists?(path)
+    end
+  end
+
   it "writes and reads a fail-closed .qkv artifact" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_SNAPSHOT)
     hp = w.hparams

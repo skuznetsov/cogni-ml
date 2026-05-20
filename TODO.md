@@ -1804,3 +1804,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The correct frame for repeated terminal outputs is direct certificate lookup; legacy manifests are durable history, not the serving index.
 - maieutic: The exactness boundary is the full prompt/output token history plus generated text certificate, not the presence of a model in memory.
 - adversary: This remains terminal output serving only. Continuation still needs state restore or exact replay; corrupt direct files must fall back instead of opening a trust hole.
+
+**decision_update_372:** Added the first local Metal parity guard for compressed recurrent artifacts. This does not implement direct encoded-payload GPU decode on Metal yet; it proves the existing v2 BF16 recurrent artifact reader can restore through the Metal state path into already prepared buffers and preserve next-token top1 on the 9B prompt-state smoke. This is the prerequisite for a later Metal encoded restorer: if CPU-decoded BF16 artifacts could not preserve the Metal continuation, a faster GPU decode kernel would be the wrong target.
+
+**evidence_update_372:**
+- claim: "BF16 recurrent v2 artifacts can restore into a prepared Metal state and preserve continuation top1."
+  source: focused `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`11 examples, 0 failures`). The new spec writes a `recurrent-bf16` artifact from a Metal-backed Qwen3.5-9B prompt state, reads it with explicit codec metadata, restores into an already prepared Metal state without replacing buffer handles, and checks the next-token top1/logit against the source state.
+  verified_at: 2026-05-20
+  decay_trigger: v2 artifact layout, BF16 codec, Metal state restore, or Qwen35 state-buffer ownership changes
+- claim: "The exploratory one-off smoke showed the expected compression and small logit drift."
+  source: temporary local probe on prompt `The capital of France is` restored BF16 artifact into Metal state: `ltop=13`, `rtop=13`, `delta=0.00025177002`, artifact bytes `28444316`.
+  verified_at: 2026-05-20
+  decay_trigger: prompt/model weights, BF16 codec implementation, or Metal restore path changes
+
+**quadrumvirate_update_372:**
+- cassandra: This is a correctness/parity prerequisite, not a speed win. The next speed-bearing branch must decode encoded payloads directly into Metal buffers instead of materializing Float32 bytes on host.
+- daedalus: The product seam should mirror CUDA: encoded artifact reader plus validated metadata plus backend-specific restorer. Do not add another artifact format.
+- maieutic: BF16 passing does not prove INT8 trust. INT8 still needs prompt/cursor gates and probably block8-late policy before any default promotion.
+- adversary: Keep compressed artifacts opt-in/fail-closed. A one-prompt BF16 parity guard is not broad session-cache quality evidence.
