@@ -14152,3 +14152,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The LTP/WBA corridor needs a minimum transport band, not only a strong suffix match. The speed lever is now routing: use this n-gram corridor only where a repeat/source-cache corridor exists, and fail closed to exact decode on mixed prompts.
 - caveat: The mixed64 aggregate is neutral because most prompts have no profitable n-gram corridor and target-only fallback timing is noisy. This evidence supports a safer opt-in policy and a router boundary, not global default activation.
 - trust: {F:0.84,G:0.52,R:0.84}
+
+**LM-344 sweep category gate is a measurement tool, not the production router [shared/ml]**
+- status: VERIFIED local sweep helper, REFUTED as a one-shot speed win
+- claim: `bin/qwen35_speculative_sweep.cr --policy-category-gate POLICY=cat1|cat2` can fail a policy closed to `target_only` outside selected prompt categories, which is useful for measuring routed policies. A static repeat-only category gate did not produce a reliable mixed64 speedup.
+- evidence: no-codegen build passed. Two-prompt smoke with `ngram_target_only_staged_corridor_min6=repeat` kept `repeat_alpha4` on n-gram (`13/13`) and sent `templ_checklist_metal_gemv` to exact fallback (`0/0`). Full mixed64 one-shot with the same gate had n-gram `52/52`, zero rejects, avg `0.986x`, median ratio `0.986x`; one outlier (`fact_cpu_gpu`, `68.06 ms/tok`) makes the mean noisy, but the median also does not show a win.
+- implication: Static prompt-category gating is too coarse. The production route should be source/cache-cursor validation or a runtime corridor detector, not a hand-labeled prompt category.
+- trust: {F:0.82,G:0.42,R:0.82}

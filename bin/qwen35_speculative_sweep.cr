@@ -171,6 +171,7 @@ dump_cycles_dir = ENV["QWEN35_SPEC_SWEEP_DUMP_CYCLES_DIR"]?
 dump_cycle_token_ids = ENV["QWEN35_SPEC_DUMP_TOKEN_IDS"]? == "1"
 dump_prompt_texts = ENV["QWEN35_SPEC_DUMP_PROMPT_TEXTS"]? == "1"
 router_model_path = ENV["QWEN35_SPEC_ROUTER_MODEL"]?
+policy_category_gate_specs = [] of String
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "Usage: qwen35_speculative_sweep [--runner PATH] [--tokens N] [--reps N] [--policies LIST] [--prompt TEXT|--prompts-jsonl PATH] [--extra-arg ARG]"
@@ -196,6 +197,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--dump-cycle-token-ids", "Forward --dump-cycle-token-ids to the runner; default sweep dumps only candidate hashes") { dump_cycle_token_ids = true }
   p.on("--dump-prompt-texts", "Include raw prompt text in dump prompt_manifest.jsonl; default writes labels and hashes only") { dump_prompt_texts = true }
   p.on("--router-model PATH", "Router JSON used by *_model policies; also accepted via QWEN35_SPEC_ROUTER_MODEL") { |v| router_model_path = v }
+  p.on("--policy-category-gate SPEC", "Fail closed to target_only for POLICY unless prompt category is allowed; SPEC=POLICY=cat1|cat2") { |v| policy_category_gate_specs << v }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -261,6 +263,16 @@ policies = {
     "QWEN35_HEAD_FULL_ROWS_GUARDED" => "1",
   }),
 }
+
+category_gates = Hash(String, Array(String)).new
+policy_category_gate_specs.each do |spec|
+  match = spec.match(/\A([^=]+)=(.+)\z/) || raise "invalid --policy-category-gate #{spec.inspect}; expected POLICY=cat1|cat2"
+  policy_name = match[1]
+  raise "unknown gated policy #{policy_name.inspect}; known: #{policies.keys.join(", ")}" unless policies.has_key?(policy_name)
+  categories = match[2].split(/[|,]/).map(&.strip).reject(&.empty?)
+  raise "empty category list in --policy-category-gate #{spec.inspect}" if categories.empty?
+  category_gates[policy_name] = categories
+end
 
 selected = policy_names.map do |name|
   policies[name]? || raise "unknown policy #{name.inspect}; known: #{policies.keys.join(", ")}"
@@ -352,7 +364,15 @@ write_prompt_manifest(dump_cycles_dir.not_nil!, prompts, dump_prompt_texts) if d
 reps.times do |rep|
   prompts.each_with_index do |prompt, prompt_index|
     selected.each do |policy|
-      result = run_one(runner, policy, prompt, prompt_index, rep, tokens, gamma, max_gamma, extra_args, dump_cycles_dir, dump_cycle_token_ids)
+      effective_policy = policy
+      if allowed_categories = category_gates[policy.name]?
+        category = prompt_category(prompt.name)
+        unless allowed_categories.includes?(category)
+          fallback = policies["target_only"]
+          effective_policy = Policy.new(policy.name, fallback.args, fallback.env)
+        end
+      end
+      result = run_one(runner, effective_policy, prompt, prompt_index, rep, tokens, gamma, max_gamma, extra_args, dump_cycles_dir, dump_cycle_token_ids)
       results << result
       unless result.ok
         STDERR.puts "FAILED policy=#{policy.name} prompt=#{prompt.name.inspect}"
@@ -370,6 +390,10 @@ end
 puts "Qwen35 speculative policy sweep"
 puts "runner=#{runner}"
 puts "tokens=#{tokens} gamma=#{gamma} max_gamma=#{max_gamma} reps=#{reps} dump_cycles_dir=#{dump_cycles_dir || ""} dump_token_ids=#{dump_cycle_token_ids}"
+unless category_gates.empty?
+  gates = category_gates.map { |name, cats| "#{name}=#{cats.join("|")}" }.join(",")
+  puts "policy_category_gates=#{gates}"
+end
 puts
 printf "%-18s %-26s %9s %9s %8s %9s %9s %7s %7s\n",
   "policy", "prompt", "spec", "plain", "speedup", "accept", "accepted", "cycles", "gamma"

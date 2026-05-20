@@ -1225,15 +1225,20 @@ Wall-clock tok/s measured with `/usr/bin/time`:
   source: `crystal build --no-codegen bin/qwen35_speculative_sweep.cr --error-trace` passed. Smoke with policy `ngram_target_only_staged_corridor_min6` on `repeat_alpha4` and `templ_checklist_metal_gemv` produced repeat n-gram `13/13`, template `0/0` exact fallback, avg `1.095x`, dump `/tmp/qwen35_corridor_named_policy_smoke`.
   verified_at: 2026-05-19
   decay_trigger: sweep policy table, speculative harness CLI options, or named policy semantics
+- claim: "Prompt-category fail-closed gating is implemented for sweeps but is not itself a speed solution."
+  source: `--policy-category-gate ngram_target_only_staged_corridor_min6=repeat` smoke kept `repeat_alpha4` on n-gram (`13/13`) and sent `templ_checklist_metal_gemv` to exact fallback (`0/0`). Full mixed64 one-shot dump `/tmp/qwen35_corridor_mixed64_category_repeat` had n-gram `52/52`, zero rejects, avg `0.986x`, median ratio `0.986x`; one outlier (`fact_cpu_gpu`, `68.06 ms/tok`) makes the mean noisy, but the median also does not show a win.
+  verified_at: 2026-05-19
+  decay_trigger: sweep category inference, prompt suite labels, target_only fallback path, or host/GPU timing stability
 
 **quadrumvirate_update_343:**
 - cassandra: The false-positive pattern shifted from medium structured tails to short high-entropy match overrides. A minimum transport band is a cleaner guard than another token-shape micro-rule.
-- daedalus: Stop treating n-gram as a global decode mode. Treat it as a routed LTP/WBA legal move: repeated/source corridor detected -> n-gram verifier; otherwise exact decode.
+- daedalus: Stop treating n-gram as a global decode mode. Treat it as a routed LTP/WBA legal move: validated source/cache corridor or runtime repeat corridor detected -> n-gram verifier; otherwise exact decode. Static prompt-category labels are only a measurement proxy.
 - maieutic: The two skipped 5-token fact chunks were accepted, so `min_candidates=6` trades tiny opportunistic wins for reject safety. That is acceptable only for untrusted replay; validated source-cursor replay can use a different legal frame.
 - adversary: Do not claim a production speedup from mixed64. The verified claim is zero-reject corridor selection plus a repeat-category routing boundary.
 
 **next_steps_update_343:**
 - [x] Add a named sweep policy for the current verified corridor recipe: `ngram_target_only_staged_corridor_min6`.
-- [ ] Add or reuse a fail-closed router policy that enables n-gram only for repeat/source-cache corridors instead of globally applying target-only n-gram mode.
+- [x] Add sweep-only category fail-closed gating for measuring routed policies.
+- [ ] Build the real router around validated source/cache cursors or runtime corridor detection, not static prompt category labels.
 - [ ] Run the same policy on real session-cache traces and trusted cursor replay when CUDA/remote access is restored.
 - [ ] Avoid more hand-tuned risk predicates until a larger trace corpus shows a repeated false-positive family.
