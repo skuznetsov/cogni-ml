@@ -1016,6 +1016,10 @@ greedy_loop_probe_ngram_recursive = true
 greedy_loop_probe_ngram_min_candidates = 0
 greedy_loop_probe_ngram_risk_gate = true
 greedy_loop_probe_ngram_corridor_gate = false
+greedy_loop_probe_ngram_corridor_min_size = 4
+greedy_loop_probe_ngram_corridor_lag4_min = 0.25
+greedy_loop_probe_ngram_corridor_lag8_min = 0.5
+greedy_loop_probe_ngram_corridor_entropy_max = 0.6
 greedy_loop_probe_ngram_risk_min_size = 16
 greedy_loop_probe_ngram_history = [] of Int32
 greedy_loop_probe_ngram_source_history = [] of Int32
@@ -1116,6 +1120,10 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-ngram-min-candidates N", "Require at least N proposed tokens from --greedy-loop-probe-ngram") { |v| greedy_loop_probe_ngram_min_candidates = v.to_i }
   p.on("--greedy-loop-probe-ngram-no-risk-gate", "Disable n-gram risky-shape fallback gate") { greedy_loop_probe_ngram_risk_gate = false }
   p.on("--greedy-loop-probe-ngram-corridor-gate", "Require periodic or low-entropy n-gram continuations before using untrusted verifier corridors") { greedy_loop_probe_ngram_corridor_gate = true }
+  p.on("--greedy-loop-probe-ngram-corridor-min-size N", "Minimum candidate length for --greedy-loop-probe-ngram-corridor-gate evidence, default 4") { |v| greedy_loop_probe_ngram_corridor_min_size = v.to_i }
+  p.on("--greedy-loop-probe-ngram-corridor-lag4-min F", "Minimum lag-4 ratio for --greedy-loop-probe-ngram-corridor-gate, default 0.25") { |v| greedy_loop_probe_ngram_corridor_lag4_min = v.to_f }
+  p.on("--greedy-loop-probe-ngram-corridor-lag8-min F", "Minimum lag-8 ratio for --greedy-loop-probe-ngram-corridor-gate, default 0.5") { |v| greedy_loop_probe_ngram_corridor_lag8_min = v.to_f }
+  p.on("--greedy-loop-probe-ngram-corridor-entropy-max F", "Maximum normalized entropy for --greedy-loop-probe-ngram-corridor-gate, default 0.6") { |v| greedy_loop_probe_ngram_corridor_entropy_max = v.to_f }
   p.on("--greedy-loop-probe-ngram-risk-min-size N", "Minimum candidate size for the risky-shape gate, default 16") { |v| greedy_loop_probe_ngram_risk_min_size = v.to_i }
   p.on("--greedy-loop-probe-ngram-history LIST", "Comma-separated proposal history token IDs; default is --seed-token only") { |v| greedy_loop_probe_ngram_history = parse_i32_list(v) }
   p.on("--greedy-loop-probe-ngram-source-history LIST", "Comma-separated cache/source token IDs for cursor replay; live history still comes from prefix/ngram-history") { |v| greedy_loop_probe_ngram_source_history = parse_i32_list(v) }
@@ -1248,6 +1256,7 @@ raise "--greedy-loop-probe-ngram-min must be positive" unless greedy_loop_probe_
 raise "--greedy-loop-probe-ngram-max must be >= min" unless greedy_loop_probe_ngram_max >= greedy_loop_probe_ngram_min
 raise "--greedy-loop-probe-ngram-min-candidates must be non-negative" unless greedy_loop_probe_ngram_min_candidates >= 0
 raise "--greedy-loop-probe-ngram-risk-min-size must be positive" unless greedy_loop_probe_ngram_risk_min_size > 0
+raise "--greedy-loop-probe-ngram-corridor-min-size must be positive" unless greedy_loop_probe_ngram_corridor_min_size > 0
 raise "--greedy-loop-probe-ngram-replay-start requires --greedy-loop-probe-ngram" if greedy_loop_probe_ngram_replay_start >= 0 && !greedy_loop_probe_ngram
 raise "--greedy-loop-probe-ngram-cursor-only requires --greedy-loop-probe-ngram" if greedy_loop_probe_ngram_cursor_only && !greedy_loop_probe_ngram
 raise "--greedy-loop-probe-ngram-schedule requires --greedy-loop-probe-ngram" if !greedy_loop_probe_ngram_schedule.empty? && !greedy_loop_probe_ngram
@@ -1841,7 +1850,11 @@ begin
               chunk_ngram_match_lens << 0
             end
           end
-          if greedy_loop_probe_ngram_corridor_gate && !ngram_trusted_source_active && !ML::GGUF::NgramDraft.corridor_candidate_shape?(proposal_ids)
+          if greedy_loop_probe_ngram_corridor_gate && !ngram_trusted_source_active && !ML::GGUF::NgramDraft.corridor_candidate_shape?(proposal_ids,
+               min_size: greedy_loop_probe_ngram_corridor_min_size,
+               lag4_min: greedy_loop_probe_ngram_corridor_lag4_min,
+               lag8_min: greedy_loop_probe_ngram_corridor_lag8_min,
+               entropy_max: greedy_loop_probe_ngram_corridor_entropy_max)
             chunk_ngram_corridor_fallbacks += 1
             proposal_ids = [] of Int32
           end
@@ -2856,6 +2869,10 @@ begin
         lines << "chunk_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
         lines << "chunk_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
         lines << "chunk_probe_ngram_corridor_gate=#{greedy_loop_probe_ngram_corridor_gate}"
+        lines << "chunk_probe_ngram_corridor_min_size=#{greedy_loop_probe_ngram_corridor_min_size}"
+        lines << "chunk_probe_ngram_corridor_lag4_min=#{greedy_loop_probe_ngram_corridor_lag4_min}"
+        lines << "chunk_probe_ngram_corridor_lag8_min=#{greedy_loop_probe_ngram_corridor_lag8_min}"
+        lines << "chunk_probe_ngram_corridor_entropy_max=#{greedy_loop_probe_ngram_corridor_entropy_max}"
         lines << "chunk_probe_ngram_trusted_source=#{greedy_loop_probe_ngram_trusted_source}"
         lines << "chunk_probe_ngram_trusted_source_active=#{ngram_trusted_source_active}"
         lines << "chunk_probe_ngram_source_prefix_gate=#{greedy_loop_probe_ngram_source_prefix_gate}"

@@ -1133,3 +1133,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The next useful experiment is not another CPU n-gram scan optimization. It is session/cache replay with this corridor certificate plus exact verifier accounting.
 - maieutic: `lag4>=0.25` is still empirical. Treat it as a visible tunable, not a theorem.
 - adversary: Current verification is compile/spec plus prior runtime evidence; rerun full repeat/structured A/B before making any production default change.
+
+**decision_update_339:** Made the corridor certificate thresholds runtime-observable and tunable before the next CUDA gate. This avoids baking an empirical constant into the session/cache replay controller and lets the remote probe sweep `min_size`, `lag4_min`, `lag8_min`, and `entropy_max` without another edit.
+
+**evidence_update_339:**
+- claim: "The threshold plumbing preserves current defaults and builds locally."
+  source: local `crystal spec spec/ngram_draft_spec.cr` passed (`26 examples, 0 failures`). No-codegen builds passed for `bin/qwen35_speculative_accept.cr` and `bin/cuda_mixed_stack_probe.cr -Dcpu_only`.
+  verified_at: 2026-05-19
+  decay_trigger: corridor helper signature, speculative harness CLI/env parsing, CUDA probe option parsing, or n-gram candidate feature semantics changes
+- claim: "Remote CUDA A/B is currently blocked by SSH auth on the correct workspace account."
+  source: `ssh app-dev-ubuntu@gputer--ssh--6be20df04dd5.reefy.ai` with host-key checking disabled returned `Permission denied (publickey,keyboard-interactive)`. `ssh reefy@...` succeeds and sees the RTX 5060 Ti, but that account has no `/build/persisten/cogni-ml` or model workspace.
+  verified_at: 2026-05-19
+  decay_trigger: reefy.ai account/key rotation, workspace mount changes, or copied workspace/model setup under the reachable account
+
+**quadrumvirate_update_339:**
+- cassandra: The next failure mode is overfitting the corridor threshold to one synthetic suite. The sweep must include weak suffix replay and validated source-cursor replay.
+- daedalus: Treat threshold constants as controller policy, not model math. Product replay should use source validation when possible and heuristic shape gates only for untrusted proposal streams.
+- maieutic: The remote blocker is external access, not code. Avoid rebuilding the whole CUDA workspace under the wrong user unless the user asks; it would duplicate large models/toolchains.
+- adversary: Do not claim a fresh CUDA speed result from this slice. The verified claim is local plumbing and reproducible options.

@@ -14113,3 +14113,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implementation: `ML::GGUF::NgramDraft.entropy_norm` and `corridor_candidate_shape?` now centralize the certificate. `qwen35_speculative_accept` uses the helper, the oracle uses matching thresholds, and `cuda_mixed_stack_probe` exposes `--greedy-loop-probe-ngram-corridor-gate` with `chunk_probe_ngram_corridor_fallbacks` stats. Trusted source-history cursor replay remains exempt after prefix validation because it is a stronger legal frame than candidate-shape inference.
 - implication: This is the session-cache/replay LTP/WBA gate to test next: repeated suffix is only the trigger; proposal body shape certifies the transport corridor; exact decode/verifier fallback remains the dual frame.
 - trust: {F:0.84,G:0.45,R:0.84}
+
+**LM-339 ngram corridor threshold knobs [shared/ml]**
+- status: VERIFIED local plumbing, remote gate BLOCKED by SSH auth
+- claim: The n-gram corridor certificate thresholds are now explicit runtime knobs for the Metal speculative harness and CUDA greedy/session replay probe, without changing defaults.
+- evidence: local `crystal spec spec/ngram_draft_spec.cr` passed (`26 examples, 0 failures`). No-codegen builds passed for `bin/qwen35_speculative_accept.cr` and `bin/cuda_mixed_stack_probe.cr -Dcpu_only`. Remote `app-dev-ubuntu@gputer--ssh--6be20df04dd5.reefy.ai` currently denies public-key auth; old `reefy@...` reaches the GPU host but lacks the `/build/persisten/cogni-ml` workspace/models, so the CUDA A/B gate is deferred until the app-dev key/access is restored.
+- implementation: `NgramDraft.corridor_candidate_shape?` accepts `min_size`, `lag4_min`, `lag8_min`, and `entropy_max`. `qwen35_speculative_accept` exposes `QWEN35_SPEC_NGRAM_CORRIDOR_*` envs plus matching CLI flags. `cuda_mixed_stack_probe` exposes matching `--greedy-loop-probe-ngram-corridor-*` flags and prints the selected thresholds in `chunk_probe_ngram_*` stats.
+- implication: Once remote access is fixed, run a threshold sweep over trusted cursor replay and weak suffix replay without another code edit. Trusted cursor replay should remain exempt after source-prefix validation; weak suffix replay should fail closed under stricter thresholds.
+- trust: {F:0.82,G:0.45,R:0.82}

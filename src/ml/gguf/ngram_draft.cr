@@ -359,12 +359,16 @@ module ML::GGUF
       max_entropy > 0.0 ? entropy / max_entropy : 0.0
     end
 
-    def corridor_candidate_shape?(ids : Array(Int32), min_size : Int32 = 4) : Bool
+    def corridor_candidate_shape?(ids : Array(Int32),
+                                  min_size : Int32 = 4,
+                                  lag4_min : Float64 = 0.25,
+                                  lag8_min : Float64 = 0.5,
+                                  entropy_max : Float64 = 0.6) : Bool
       return false if ids.size < min_size
 
-      lag_ratio(ids, 4) >= 0.25 ||
-        lag_ratio(ids, 8) >= 0.5 ||
-        entropy_norm(ids) <= 0.6
+      lag_ratio(ids, 4) >= lag4_min ||
+        lag_ratio(ids, 8) >= lag8_min ||
+        entropy_norm(ids) <= entropy_max
     end
 
     def exact_period(ids : Array(Int32), max_period : Int32) : Int32
