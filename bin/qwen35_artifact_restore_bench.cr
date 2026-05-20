@@ -95,6 +95,32 @@ def restore_encoded_top1(weights : ML::GGUF::Qwen35Weights,
   ML::GGUF::Qwen35CPU.forward_top1(weights, input_token, pos, state)
 end
 
+def snapshot_record_bytes(snapshot : ML::GGUF::Qwen35StateSnapshot::Snapshot) : Hash(ML::GGUF::Qwen35StateSnapshot::RecordKind, Int64)
+  totals = Hash(ML::GGUF::Qwen35StateSnapshot::RecordKind, Int64).new(0_i64)
+  snapshot.records.each do |record|
+    totals[record.kind] += record.bytes.size.to_i64
+  end
+  totals
+end
+
+def live_kv_bytes_estimate(snapshot : ML::GGUF::Qwen35StateSnapshot::Snapshot,
+                           hp : ML::GGUF::Qwen35Hparams,
+                           max_seq : Int32,
+                           fallback_live_tokens : Int32) : Int64
+  kv_row_bytes = (hp.head_dim * hp.n_head_kv).to_i64 * sizeof(Float32)
+  total = 0_i64
+  snapshot.records.each do |record|
+    next unless record.kind.k_cache? || record.kind.v_cache?
+    next unless hp.full_attention?(record.layer)
+
+    # Full-attention decode kernels are position-driven by the call-site, so
+    # layer.position may be zero even when the KV cache contains live rows.
+    live_tokens = Math.max(snapshot.positions[record.layer], fallback_live_tokens).clamp(0, max_seq)
+    total += live_tokens.to_i64 * kv_row_bytes
+  end
+  total
+end
+
 weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
 hp = weights.hparams
 
@@ -111,6 +137,11 @@ prompt.each_with_index do |token_id, pos|
   ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos.to_i32, source)
 end
 snapshot = ML::GGUF::Qwen35StateSnapshot.capture(source)
+record_bytes = snapshot_record_bytes(snapshot)
+full_kv_bytes = record_bytes[ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache] +
+                record_bytes[ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache]
+live_kv_bytes = live_kv_bytes_estimate(snapshot, hp, max_seq, prompt.size)
+position_max = snapshot.positions.max? || 0
 
 root = File.tempname("qwen35-artifact-restore-bench")
 Dir.mkdir_p(root)
@@ -144,6 +175,14 @@ begin
   puts "int8_bytes=#{i8_info.byte_size}"
   puts "bf16_ratio=#{(bf16_info.byte_size.to_f / raw_info.byte_size).round(4)}"
   puts "int8_ratio=#{(i8_info.byte_size.to_f / raw_info.byte_size).round(4)}"
+  puts "record_k_cache_bytes=#{record_bytes[ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache]}"
+  puts "record_v_cache_bytes=#{record_bytes[ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache]}"
+  puts "record_conv_state_bytes=#{record_bytes[ML::GGUF::Qwen35StateSnapshot::RecordKind::ConvState]}"
+  puts "record_ssm_state_bytes=#{record_bytes[ML::GGUF::Qwen35StateSnapshot::RecordKind::SsmState]}"
+  puts "snapshot_position_max=#{position_max}"
+  puts "full_kv_bytes=#{full_kv_bytes}"
+  puts "live_kv_bytes_estimate=#{live_kv_bytes}"
+  puts "live_kv_ratio=#{full_kv_bytes > 0 ? (live_kv_bytes.to_f / full_kv_bytes).round(4) : 0.0}"
   puts "source_top=#{source_top}"
   puts "raw_top=#{raw_top}"
   puts "bf16_top=#{bf16_top}"
