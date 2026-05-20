@@ -39,6 +39,8 @@ module ML::GGUF
       property artifact_validation_kind : String? = nil
       property artifact_validation_steps : Int32? = nil
       property artifact_validation_hash : String? = nil
+      property next_token_id : Int32? = nil
+      property next_token_logit : Float32? = nil
       property created_at_unix : Int64
       property prompt_preview : String?
 
@@ -62,7 +64,9 @@ module ML::GGUF
                      @artifact_codec_block : Int32? = nil,
                      @artifact_validation_kind : String? = nil,
                      @artifact_validation_steps : Int32? = nil,
-                     @artifact_validation_hash : String? = nil)
+                     @artifact_validation_hash : String? = nil,
+                     @next_token_id : Int32? = nil,
+                     @next_token_logit : Float32? = nil)
       end
     end
 
@@ -146,7 +150,9 @@ module ML::GGUF
                artifact_codec_block : Int32? = nil,
                artifact_validation_kind : String? = nil,
                artifact_validation_steps : Int32? = nil,
-               artifact_validation_hash : String? = nil) : Entry
+               artifact_validation_hash : String? = nil,
+               next_token_id : Int32? = nil,
+               next_token_logit : Float32? = nil) : Entry
         snapshot = Qwen35StateSnapshot.capture(state)
         prompt_hash = Qwen35PromptCache.prompt_hash(token_ids, prompt_text)
         token_hash = Qwen35PromptCache.token_hash(token_ids)
@@ -180,6 +186,8 @@ module ML::GGUF
           artifact_validation_kind: artifact_validation_kind,
           artifact_validation_steps: artifact_validation_steps,
           artifact_validation_hash: artifact_validation_hash,
+          next_token_id: next_token_id,
+          next_token_logit: next_token_logit,
         )
         append_manifest(entry)
         entry
@@ -283,6 +291,9 @@ module ML::GGUF
           top, logit = Qwen35CPU.prefill_tokens_top1(weights, token_ids[suffix_start..final_pos], suffix_start.to_i32, state)
           next_token_id = top
           next_token_logit = logit
+        elsif suffix_start == token_ids.size
+          next_token_id = entry.next_token_id
+          next_token_logit = entry.next_token_logit
         end
         ReplayResult.new(state, entry.prefix_len, token_ids.size - entry.prefix_len, entry, next_token_id, next_token_logit)
       end
@@ -556,6 +567,8 @@ module ML::GGUF
           artifact_validation_kind text,
           artifact_validation_steps integer CHECK (artifact_validation_steps IS NULL OR artifact_validation_steps >= 0),
           artifact_validation_hash text,
+          next_token_id      integer,
+          next_token_logit   real,
           created_at_unix    bigint NOT NULL,
           prompt_preview     text
       ) USING #{am};
@@ -580,6 +593,7 @@ module ML::GGUF
           artifact_path, artifact_sha256, artifact_byte_size, state_byte_size,
           artifact_codec, artifact_codec_block, artifact_validation_kind,
           artifact_validation_steps, artifact_validation_hash,
+          next_token_id, next_token_logit,
           created_at_unix, prompt_preview
       ) VALUES (
           $1, $2, $3, $4, $5,
@@ -587,7 +601,8 @@ module ML::GGUF
           $11, $12, $13, $14,
           $15, $16, $17,
           $18, $19,
-          $20, $21
+          $20, $21,
+          $22, $23
       )
       ON CONFLICT (model_id, tokenizer_id, prompt_hash, prefix_len)
       DO UPDATE SET
@@ -606,12 +621,14 @@ module ML::GGUF
           artifact_validation_kind = EXCLUDED.artifact_validation_kind,
           artifact_validation_steps = EXCLUDED.artifact_validation_steps,
           artifact_validation_hash = EXCLUDED.artifact_validation_hash,
+          next_token_id = EXCLUDED.next_token_id,
+          next_token_logit = EXCLUDED.next_token_logit,
           created_at_unix = EXCLUDED.created_at_unix,
           prompt_preview = EXCLUDED.prompt_preview;
       SQL
     end
 
-    def pg_insert_values(entry : Entry) : Array(String | Int32 | Int64 | Nil)
+    def pg_insert_values(entry : Entry) : Array(String | Int32 | Int64 | Float32 | Nil)
       [
         entry.runtime_id,
         entry.session_id,
@@ -632,9 +649,11 @@ module ML::GGUF
         entry.artifact_validation_kind,
         entry.artifact_validation_steps,
         entry.artifact_validation_hash,
+        entry.next_token_id,
+        entry.next_token_logit,
         entry.created_at_unix,
         entry.prompt_preview,
-      ] of String | Int32 | Int64 | Nil
+      ] of String | Int32 | Int64 | Float32 | Nil
     end
 
     private def pg_identifier(name : String) : String

@@ -1395,3 +1395,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This is a better frame than caching alone: eliminate the external process boundary for cold prompts, keep token-cache for repeated prompt lookup.
 - maieutic: Model load grew slightly because merge ranks are now loaded into a hash, but the net one-shot request win is still large on measured prompts.
 - adversary: Native BPE does not yet cover special-token insertion beyond the current no-BOS Qwen path; if a future model enables BOS or special-token parsing, the fallback path should remain until parity specs cover it.
+
+**decision_update_352:** Added full-prompt prompt-cache entries with stored `next_token_id`/`next_token_logit`, plus an economics gate for using exact full-prompt hits only when requested generation is long enough. This avoids replaying the final prompt token on long repeated/session requests while preserving the older prefix-replay behavior for short requests.
+
+**evidence_update_352:**
+- claim: "Full-prompt cache entries restore without replaying the final prompt token."
+  source: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++\"` passed (`11 examples, 0 failures`). The new spec saves an exact full-prompt state with `next_token_id`/`next_token_logit` and confirms restore reports `replayed_tokens=0`.
+  verified_at: 2026-05-19
+  decay_trigger: prompt-cache entry schema, restore/replay suffix logic, next-token metadata, or JSON compatibility changes
+- claim: "Long repeated/session requests benefit from full-prompt hits."
+  source: release runner `/tmp/qwen35_generate_full_gate`, cache root `/tmp/qwen35_full_gate_long`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=128`, `QWEN35_DECODE_POLICY=auto`. Seed run saved both prefix and full cache entries. Repeated run hit `8/8` prompt tokens, `replayed 0`, `cache_restore_ms=43.3`, n-gram accepted `128/128`, and total wall was `1546.8 ms`.
+  verified_at: 2026-05-19
+  decay_trigger: `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN`, source-history replay, auto n-gram policy, or cache artifact restore path changes
+- claim: "Short requests stay on prefix replay by default."
+  source: same runner, cache root `/tmp/qwen35_full_gate_short`, `n_gen=2`, default `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN=64`. Repeated run reused `7/8` prompt tokens and replayed `1`; full entry existed but was not selected.
+  verified_at: 2026-05-19
+  decay_trigger: full-hit gate default, lookup max-prefix selection, or short-request economics changes
+
+**quadrumvirate_update_352:**
+- cassandra: Full-prompt hits are a long-span optimization. For short requests they mainly move first model work from cache restore to decode, so the default gate avoids using them.
+- daedalus: The right frame is phase placement plus economics: exact full-state restore is only useful when it unlocks a long verified continuation, not when it hides a one-token warmup.
+- maieutic: The default threshold `64` is empirical and aligned with the source n-gram cache minimum. It should be retuned for daemon prewarming and other models.
+- adversary: Schema changes are backward-compatible because `next_token_id` and `next_token_logit` are optional. Exactness still depends on target verification of generated tokens; cached next-token metadata only seeds the same greedy next token for an exact full prompt.

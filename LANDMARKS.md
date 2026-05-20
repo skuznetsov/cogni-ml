@@ -14218,3 +14218,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: First-time local CLI prompts now avoid the largest non-GPU overhead. Tokenized-prompt cache remains useful for repeated prompts and for avoiding even native encode work, but the cold path is no longer dominated by process startup.
 - caveat: Keep the fallback until parity coverage includes more special-token/BOS cases and longer multilingual fixtures.
 - trust: {F:0.88,G:0.62,R:0.88}
+
+**LM-352 full-prompt cache hit economics [shared/ml]**
+- status: VERIFIED local CLI cache lever
+- claim: Prompt cache can now save exact full-prompt state plus `next_token_id`/`next_token_logit`, allowing full-prompt cache hits to restore without replaying the final prompt token. This is useful for long repeated/session continuations but not for short requests.
+- evidence: prompt-cache spec passed (`11 examples, 0 failures`) with a full-prompt no-replay restore case. Release `/tmp/qwen35_generate_full_gate` on repeated `n_gen=128` source-history auto run hit `8/8`, replayed `0`, restored in `43.3 ms`, accepted n-gram `128/128`, and completed in `1546.8 ms` total. Short `n_gen=2` repeated run used the default gate and selected the older `7/8` prefix replay path instead of the full hit.
+- implementation: `Qwen35PromptCache::Entry` has optional `next_token_id` and `next_token_logit`; pg_sorted_heap SQL/value helpers include those fields. `qwen35_generate` saves both prefix and full entries after a prompt-cache miss, and uses full hits only when `n_gen >= QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN` (default `64`).
+- implication: Cache routing now separates legal validity from economics: full-prompt state is exact and cheap to restore, but it should be used when enough future work exists to amortize first verifier/model-use costs.
+- caveat: Threshold `64` is local one-shot Metal evidence. Persistent server mode or explicit warm phases may want a lower threshold.
+- trust: {F:0.86,G:0.58,R:0.86}

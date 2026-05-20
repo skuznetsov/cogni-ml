@@ -33,6 +33,7 @@ n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
 prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]? == "1"
 prompt_token_cache_enabled = prompt_cache_enabled && ENV["QWEN35_PROMPT_TOKEN_CACHE_OFF"]? != "1"
+prompt_cache_full_hit_min_gen = (ENV["QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN"]? || "64").to_i
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
@@ -88,6 +89,7 @@ ngram_index_enabled = ENV["QWEN35_NGRAM_INDEX_OFF"]? != "1"
 ngram_cache_min_remaining = (ENV["QWEN35_NGRAM_CACHE_MIN_REMAINING"]? || (decode_policy == "auto" ? "64" : "0")).to_i
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 
+raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
 raise "QWEN35_NGRAM_MIN must be positive" unless ngram_min > 0
 raise "QWEN35_NGRAM_MAX must be >= QWEN35_NGRAM_MIN" unless ngram_max >= ngram_min
@@ -229,7 +231,14 @@ output_ids = [] of Int32
 pos = 0
 
 if prompt_cache_enabled
-  max_prefix_len = ids.size > 0 ? ids.size - 1 : 0
+  use_full_prompt_hit = n_gen >= prompt_cache_full_hit_min_gen
+  max_prefix_len = if ids.empty?
+                     0
+                   elsif use_full_prompt_hit
+                     ids.size
+                   else
+                     ids.size - 1
+                   end
 
   if prompt_cache_source_history_enabled
     source_lookup_t0 = Time.instant
@@ -327,6 +336,22 @@ if output_ids.empty?
     STDOUT << "  final token #{ids.size}/#{ids.size} id=#{final_id} took #{dt.round(2)}s\n"
     STDOUT.flush
     pos += 1
+    if prompt_cache_enabled
+      preview = ENV["QWEN35_PROMPT_CACHE_PREVIEW"]? == "1" ? tok.decode(ids) : nil
+      saved = cache_store.not_nil!.save(
+        session_id: ENV["QWEN35_SESSION_ID"]? || "default",
+        turn_id: turn_id,
+        model_id: cache_model,
+        tokenizer_id: cache_tokenizer,
+        prompt_text: "",
+        token_ids: ids,
+        state: state,
+        prompt_preview: preview,
+        next_token_id: top.to_i32,
+        next_token_logit: top_logit,
+      )
+      STDOUT << "  saved prompt-cache full #{ids.size} tokens sha=#{saved.artifact_sha256[0, 12]}\n"
+    end
   end
 end
 
