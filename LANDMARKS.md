@@ -14235,3 +14235,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Future daemon/server claims can be gated against warm resident request timing while preserving honest one-shot CLI `total_ms` accounting.
 - caveat: This is a probe, not a server. It uses fresh request state and a tiny two-request smoke; session-cache restore, longer prompts, n-gram/source-history routing, and larger suites still need separate resident-mode gates.
 - trust: {F:0.86,G:0.54,R:0.86}
+
+**LM-354 qwen35_generate runtime ngram corridor detector [shared/ml]**
+- status: VERIFIED local CLI router guard
+- claim: `QWEN35_DECODE_POLICY=auto` now applies runtime corridor gating to untrusted local suffix n-gram proposals while leaving validated source-history cursor replay on its separate trusted path.
+- evidence: `crystal spec spec/ngram_draft_spec.cr --error-trace` passed (`27 examples, 0 failures`), and no-codegen build passed for `bin/qwen35_generate.cr`. Release `/tmp/qwen35_generate_corridor` on `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, auto mode accepted `13/13` local repeat candidates with `corridor_skips=0`. On YAML-like `hosts:\n  - name: web\n    port: 443\n  - name: web`, `n_gen=8`, `QWEN35_NGRAM_RISK_GATE=0`, auto mode skipped the weak local suffix (`corridor_skips=1`, n-gram `0/0`) and emitted exact target `port: 80`; disabling both risk and corridor gates made the same prompt enter n-gram and reject after `5/8`, with slower decode (`223.3 ms` vs `144.6 ms`).
+- implication: The practical CLI no longer needs static prompt-category labels for the first non-cache suffix replay guard. It uses local candidate transport evidence as the LTP/WBA legal frame.
+- caveat: This is still a narrow local smoke plus prior harness evidence. Larger session traces are needed before changing deeper router thresholds or adding new hand-tuned predicates.
+- trust: {F:0.86,G:0.57,R:0.86}

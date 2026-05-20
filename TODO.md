@@ -1241,7 +1241,7 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - [x] Add sweep-only category fail-closed gating for measuring routed policies.
 - [x] Add Metal harness source-cache cursor replay with prefix validation and cursor-only trusted-source mode.
 - [x] Add opt-in prompt-cache source-history sidecar and wire `qwen35_generate` n-gram decode to validated same-session source cursor replay.
-- [ ] Build the remaining runtime corridor detector for non-cache histories; do not use static prompt category labels as the production router.
+- [x] Build the remaining runtime corridor detector for non-cache histories; do not use static prompt category labels as the production router.
 - [ ] Run the same policy on real session-cache traces and trusted cursor replay when CUDA/remote access is restored.
 - [ ] Avoid more hand-tuned risk predicates until a larger trace corpus shows a repeated false-positive family.
 
@@ -1431,3 +1431,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The right frame is process lifetime: one-shot CLI, warm resident process, and future daemon/server are different products and need different gates.
 - maieutic: The probe still allocates fresh request state; it measures warm process/request latency, not multi-turn session cache activation or a real API server.
 - adversary: Do not use the two-request smoke as a broad benchmark. Use it as a working harness and rerun with longer prompt suites before changing defaults.
+
+**decision_update_354:** Ported the runtime n-gram corridor detector into `qwen35_generate` auto mode for non-cache/untrusted suffix replay. The practical CLI now mirrors the harness framing: trusted source-history cursor replay is allowed after prefix validation, while local suffix n-gram proposals must pass repeat-corridor evidence or fail closed to exact target decode.
+
+**evidence_update_354:**
+- claim: "The practical CLI builds with the runtime corridor detector."
+  source: `crystal spec spec/ngram_draft_spec.cr --error-trace` passed (`27 examples, 0 failures`), and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gen_corridor_cache crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed.
+  verified_at: 2026-05-19
+  decay_trigger: `qwen35_generate` n-gram routing, `NgramDraft.corridor_candidate_shape?`, or auto-policy defaults change
+- claim: "Clean repeat corridors still use n-gram in auto mode."
+  source: release runner `/tmp/qwen35_generate_corridor`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, `QWEN35_DECODE_POLICY=auto QWEN35_QUIET=1`: n-gram accepted `13/13`, `corridor_skips=0`, generated the expected repeated continuation.
+  verified_at: 2026-05-19
+  decay_trigger: tokenizer/model, n-gram candidate generation, or corridor thresholds change
+- claim: "Weak YAML-like local suffix replay fails closed through the corridor gate when the older risk gate is disabled."
+  source: same runner, prompt `hosts:\n  - name: web\n    port: 443\n  - name: web`, `n_gen=8`, `QWEN35_DECODE_POLICY=auto QWEN35_NGRAM_RISK_GATE=0 QWEN35_QUIET=1`: `corridor_skips=1`, n-gram `0/0`, exact target emitted `port: 80`. With both risk and corridor gates disabled, the same prompt entered n-gram and rejected after `5/8` accepted candidates with slower decode (`223.3 ms` vs `144.6 ms`).
+  verified_at: 2026-05-19
+  decay_trigger: YAML prompt tokenization, corridor thresholds, or verifier timing changes
+
+**quadrumvirate_update_354:**
+- cassandra: This is an economics/safety router, not a new verifier. It should reduce false-positive local suffix proposals without weakening trusted source-cache replay.
+- daedalus: The useful frame remains legal corridor first, speed second: source-cache replay and runtime suffix replay are different trust classes.
+- maieutic: The defaults are empirical from local harness evidence. They should be retuned against larger session traces before broad claims.
+- adversary: The CLI smoke is intentionally narrow. Do not add more hand-tuned predicates until a larger trace corpus shows a repeated false-positive family.

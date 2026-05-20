@@ -82,6 +82,16 @@ ngram_risk_gate = if value = ENV["QWEN35_NGRAM_RISK_GATE"]?
                   else
                     decode_policy == "auto"
                   end
+ngram_corridor_gate = if value = ENV["QWEN35_NGRAM_CORRIDOR_GATE"]?
+                        value == "1"
+                      else
+                        decode_policy == "auto"
+                      end
+ngram_corridor_min_size = (ENV["QWEN35_NGRAM_CORRIDOR_MIN_SIZE"]? || "4").to_i
+ngram_corridor_match_len_min = (ENV["QWEN35_NGRAM_CORRIDOR_MATCH_LEN_MIN"]? || (decode_policy == "auto" ? "8" : "0")).to_i
+ngram_corridor_lag4_min = (ENV["QWEN35_NGRAM_CORRIDOR_LAG4_MIN"]? || "0.25").to_f
+ngram_corridor_lag8_min = (ENV["QWEN35_NGRAM_CORRIDOR_LAG8_MIN"]? || (decode_policy == "auto" ? "1.0" : "0.5")).to_f
+ngram_corridor_entropy_max = (ENV["QWEN35_NGRAM_CORRIDOR_ENTROPY_MAX"]? || "0.6").to_f
 ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 ngram_replay_on_reject = ENV["QWEN35_NGRAM_REPLAY_ON_REJECT"]? == "1"
@@ -98,6 +108,11 @@ raise "QWEN35_NGRAM_STAGE_GATE must be positive" unless ngram_stage_gate > 0
 raise "QWEN35_NGRAM_RISK_MIN_SIZE must be positive" unless ngram_risk_min_size > 0
 raise "QWEN35_NGRAM_MIN_CANDIDATES must be non-negative" unless ngram_min_candidates >= 0
 raise "QWEN35_NGRAM_CACHE_MIN_REMAINING must be non-negative" unless ngram_cache_min_remaining >= 0
+raise "QWEN35_NGRAM_CORRIDOR_MIN_SIZE must be positive" unless ngram_corridor_min_size > 0
+raise "QWEN35_NGRAM_CORRIDOR_MATCH_LEN_MIN must be non-negative" unless ngram_corridor_match_len_min >= 0
+raise "QWEN35_NGRAM_CORRIDOR_LAG4_MIN must be non-negative" unless ngram_corridor_lag4_min >= 0.0
+raise "QWEN35_NGRAM_CORRIDOR_LAG8_MIN must be non-negative" unless ngram_corridor_lag8_min >= 0.0
+raise "QWEN35_NGRAM_CORRIDOR_ENTROPY_MAX must be non-negative" unless ngram_corridor_entropy_max >= 0.0
 raise "QWEN35_SPEC_GAMMA must be positive" unless spec_gamma > 0
 raise "QWEN35_SPEC_MAX_GAMMA must be positive" unless spec_max_gamma > 0
 raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fallback_gamma > 0
@@ -585,7 +600,7 @@ if speculative_decode_enabled && !output_ids.empty?
   STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
-  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} min_candidates=#{ngram_min_candidates} cache_min_remaining=#{ngram_cache_min_remaining} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject} replay_on_reject=#{ngram_replay_on_reject} index=#{ngram_index_enabled}"
+  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} min_candidates=#{ngram_min_candidates} cache_min_remaining=#{ngram_cache_min_remaining} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} corridor_gate=#{ngram_corridor_gate} corridor_min_size=#{ngram_corridor_min_size} corridor_match_len_min=#{ngram_corridor_match_len_min} corridor_lag4_min=#{ngram_corridor_lag4_min} corridor_lag8_min=#{ngram_corridor_lag8_min} corridor_entropy_max=#{ngram_corridor_entropy_max} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject} replay_on_reject=#{ngram_replay_on_reject} index=#{ngram_index_enabled}"
   decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
@@ -597,6 +612,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
   ngram_cycles = 0
   ngram_accepted = 0
   ngram_proposed = 0
+  ngram_corridor_skips = 0
   ngram_cursor_hits = 0
   ngram_cursor_accepts = 0
   ngram_cursor_rejects = 0
@@ -646,6 +662,17 @@ elsif ngram_decode_enabled && !output_ids.empty?
     end
     if ngram_risk_gate && !ngram_from_source && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
+      candidates = [] of Int32
+    end
+    if ngram_corridor_gate && !ngram_from_source && !candidates.empty? &&
+       !ML::GGUF::NgramDraft.corridor_candidate_shape?(candidates,
+         match_len: match_len,
+         min_size: ngram_corridor_min_size,
+         match_len_min: ngram_corridor_match_len_min,
+         lag4_min: ngram_corridor_lag4_min,
+         lag8_min: ngram_corridor_lag8_min,
+         entropy_max: ngram_corridor_entropy_max)
+      ngram_corridor_skips += 1
       candidates = [] of Int32
     end
 
@@ -773,7 +800,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
-  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled} cursor_hits=#{ngram_cursor_hits} cursor_accepts=#{ngram_cursor_accepts} cursor_rejects=#{ngram_cursor_rejects} cursor_serial_advances=#{ngram_cursor_serial_advances} cursor_serial_drops=#{ngram_cursor_serial_drops} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} target_replay_ms=#{target_replay_ms.round(1)}\n"
+  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled} corridor_skips=#{ngram_corridor_skips} cursor_hits=#{ngram_cursor_hits} cursor_accepts=#{ngram_cursor_accepts} cursor_rejects=#{ngram_cursor_rejects} cursor_serial_advances=#{ngram_cursor_serial_advances} cursor_serial_drops=#{ngram_cursor_serial_drops} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} target_replay_ms=#{target_replay_ms.round(1)}\n"
 else
   puts "\nGenerating #{n_gen} tokens greedily..."
   decode_t0 = Time.instant
