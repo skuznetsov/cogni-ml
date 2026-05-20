@@ -215,6 +215,19 @@ unless ngram_rows.empty?
     {"lag8>=0.5", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_lag8_ratio") >= 0.5 }},
     {"unique_ratio<=0.5", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_unique_ratio") <= 0.5 }},
     {"entropy<=0.6", ->(rec : JSON::Any) { feature_f(rec, "candidate_features", "candidate_entropy_norm") <= 0.6 }},
+    {"periodic_or_low_entropy", ->(rec : JSON::Any) {
+      feature_f(rec, "candidate_features", "candidate_lag4_ratio") > 0.0 ||
+      feature_f(rec, "candidate_features", "candidate_lag8_ratio") > 0.0 ||
+      feature_f(rec, "candidate_features", "candidate_entropy_norm") <= 0.6
+    }},
+    {"match>=7_and_periodic_or_low_entropy", ->(rec : JSON::Any) {
+      feature_f(rec, "candidate_features", "ngram_match_ratio") >= 0.875 &&
+      (
+        feature_f(rec, "candidate_features", "candidate_lag4_ratio") > 0.0 ||
+        feature_f(rec, "candidate_features", "candidate_lag8_ratio") > 0.0 ||
+        feature_f(rec, "candidate_features", "candidate_entropy_norm") <= 0.6
+      )
+    }},
   ]
 
   gate_specs.each do |name, gate|

@@ -1043,3 +1043,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This is the LTP/WBA-style legal-move boundary for n-gram: enter only when the local proposal corridor is strong enough; otherwise exact decode is the lower-risk move.
 - maieutic: The sample is too small to promote a threshold to runtime default. The threshold is a hypothesis for the next larger replay suite and production cursor gate.
 - adversary: A gate that removes all rejects on five cycles may simply overfit. The next test must include long-context session-cache histories, code/structured replay, and deliberately near-miss repeats.
+
+**decision_update_334:** Broadened the n-gram gate test on the full synthetic repeat suite and refined the gate from a pure match-length window to a transport/candidate-shape window. The simple `ngram_match_len>=7` hypothesis was partially refuted: it helps the old mixed dump but still allows a bad `yaml_hosts` corridor in a fresh repeat run. The stronger offline diagnostic is `periodic_or_low_entropy` (`candidate_lag4_ratio > 0 || candidate_lag8_ratio > 0 || candidate_entropy_norm <= 0.6`), optionally combined with `match_ratio>=0.875` for min7-style runs.
+
+**evidence_update_334:**
+- claim: "On a fresh full repeat-suite min6 run, the composite `periodic_or_low_entropy` gate removes the only rejecting n-gram cycle and improves measured gain."
+  source: local sweep `bin/qwen35_speculative_sweep.cr --runner /tmp/qwen35_speculative_accept_research --tokens 16 --policies ngram_target_only_staged_risk --only-prompts <all repeat prompts> --dump-cycles-dir /tmp/qwen35_ngram_gate_min6 --extra-arg --no-warm-verifier`, then oracle over `/tmp/qwen35_ngram_gate_min6`. Ungated n-gram: 5 cycles, `54/59` accepted, reject rate `20.0%`, gain `+147.7ms`. `periodic_or_low_entropy`: 4 cycles, `54/54` accepted, reject rate `0.0%`, gain `+222.6ms`.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram candidate feature schema, repeat prompt suite, Qwen3.5 target model, verifier timing, or n-gram policy changes
+- claim: "On a fresh full repeat-suite min7 run, match-length alone is not enough; the composite gate again removes the rejecting cycle."
+  source: same sweep with extra args `--ngram-min 7`, dump dir `/tmp/qwen35_ngram_gate_min7`. Ungated/min7 n-gram: 5 cycles, `54/65` accepted, reject rate `20.0%`, gain `+142.6ms`. `match_len>=7` and `match_ratio>=0.875` still selected all 5 cycles and retained the reject. `periodic_or_low_entropy` and `match>=7_and_periodic_or_low_entropy` selected 4 cycles, `50/50` accepted, reject rate `0.0%`, gain `+189.4ms`.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram min/max settings, repeat prompt suite, feature thresholds, or verifier cost model changes
+
+**quadrumvirate_update_334:**
+- cassandra: Pure match length is an insufficient window predicate; it can transport into a sticky/bad corridor when the continuation is high-entropy and non-periodic.
+- daedalus: The better LTP/WBA structure is: local trigger = repeated suffix, transport corridor = proposed continuation, legal move = exact staged verification, potential = `(reject_risk, verifier_rows, fallback_tax, remaining_work)`. Candidate-shape features estimate `reject_risk` before entering the corridor.
+- maieutic: The composite gate is still an offline hypothesis. It must be tested on long-context session-cache histories and near-miss code/structured repeats before becoming a runtime default.
+- adversary: This evidence is stronger than LM-333 but still repeat-suite only. Do not generalize to neural/self-draft or natural language prompts; use it only to shape the next n-gram/cache replay controller.

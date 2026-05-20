@@ -14073,3 +14073,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The next runtime/controller gate should use local replay-shape features, not just prompt category. Fail closed to exact decode when match length/ratio is weak.
 - caveat: Only five n-gram proposal cycles are covered here. Broaden with long-context session-cache histories, code/structured replay, and adversarial near-miss repeats before making this a default.
 - trust: {F:0.80,G:0.25,R:0.80}
+
+**LM-334 ngram candidate-shape corridor gate [shared/ml]**
+- status: VERIFIED repeat-suite diagnostic, HYPOTHESIS for runtime
+- claim: A composite candidate-shape gate is more robust than pure n-gram match length on the fresh repeat suite: `candidate_lag4_ratio > 0 || candidate_lag8_ratio > 0 || candidate_entropy_norm <= 0.6` removes the observed bad n-gram corridors while preserving the profitable accepted corridors.
+- evidence: local all-repeat-prompt sweeps with `/tmp/qwen35_speculative_accept_research`, `tokens=16`, `ngram_target_only_staged_risk`, cycle dumps `/tmp/qwen35_ngram_gate_min6` and `/tmp/qwen35_ngram_gate_min7`. Min6 ungated n-gram: `54/59`, one reject, gain `+147.7ms`; composite gate: `54/54`, no rejects, gain `+222.6ms`. Min7 ungated n-gram: `54/65`, one reject, gain `+142.6ms`; `match_len>=7` alone still kept the reject; composite gate selected `50/50`, no rejects, gain `+189.4ms`.
+- implication: The LTP/WBA window for n-gram should be a repeated suffix plus continuation-shape corridor check, not suffix length alone. Runtime gate candidate: fail closed unless the proposal is periodic enough or low-entropy enough for the exact staged verifier corridor.
+- caveat: This is repeat-suite evidence only. Before defaulting, test long-context session-cache histories, code/structured replay, and deliberate near-miss repeats.
+- trust: {F:0.82,G:0.35,R:0.82}
