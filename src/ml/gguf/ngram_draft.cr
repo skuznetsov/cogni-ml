@@ -343,6 +343,30 @@ module ML::GGUF
       ids.to_set.size.to_f / ids.size
     end
 
+    def entropy_norm(ids : Array(Int32)) : Float64
+      return 0.0 if ids.empty?
+
+      counts = Hash(Int32, Int32).new(0)
+      ids.each { |id| counts[id] += 1 }
+
+      entropy = 0.0
+      counts.each_value do |count|
+        p = count.to_f / ids.size
+        entropy -= p * (Math.log(p) / Math.log(2.0))
+      end
+
+      max_entropy = ids.size > 1 ? Math.log(ids.size.to_f) / Math.log(2.0) : 1.0
+      max_entropy > 0.0 ? entropy / max_entropy : 0.0
+    end
+
+    def corridor_candidate_shape?(ids : Array(Int32), min_size : Int32 = 4) : Bool
+      return false if ids.size < min_size
+
+      lag_ratio(ids, 4) >= 0.25 ||
+        lag_ratio(ids, 8) >= 0.5 ||
+        entropy_norm(ids) <= 0.6
+    end
+
     def exact_period(ids : Array(Int32), max_period : Int32) : Int32
       return 0 if ids.empty?
 

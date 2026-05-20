@@ -1015,6 +1015,7 @@ greedy_loop_probe_ngram_max = 8
 greedy_loop_probe_ngram_recursive = true
 greedy_loop_probe_ngram_min_candidates = 0
 greedy_loop_probe_ngram_risk_gate = true
+greedy_loop_probe_ngram_corridor_gate = false
 greedy_loop_probe_ngram_risk_min_size = 16
 greedy_loop_probe_ngram_history = [] of Int32
 greedy_loop_probe_ngram_source_history = [] of Int32
@@ -1114,6 +1115,7 @@ OptionParser.parse do |p|
   p.on("--greedy-loop-probe-ngram-nonrecursive", "Disable recursive expansion for --greedy-loop-probe-ngram") { greedy_loop_probe_ngram_recursive = false }
   p.on("--greedy-loop-probe-ngram-min-candidates N", "Require at least N proposed tokens from --greedy-loop-probe-ngram") { |v| greedy_loop_probe_ngram_min_candidates = v.to_i }
   p.on("--greedy-loop-probe-ngram-no-risk-gate", "Disable n-gram risky-shape fallback gate") { greedy_loop_probe_ngram_risk_gate = false }
+  p.on("--greedy-loop-probe-ngram-corridor-gate", "Require periodic or low-entropy n-gram continuations before using untrusted verifier corridors") { greedy_loop_probe_ngram_corridor_gate = true }
   p.on("--greedy-loop-probe-ngram-risk-min-size N", "Minimum candidate size for the risky-shape gate, default 16") { |v| greedy_loop_probe_ngram_risk_min_size = v.to_i }
   p.on("--greedy-loop-probe-ngram-history LIST", "Comma-separated proposal history token IDs; default is --seed-token only") { |v| greedy_loop_probe_ngram_history = parse_i32_list(v) }
   p.on("--greedy-loop-probe-ngram-source-history LIST", "Comma-separated cache/source token IDs for cursor replay; live history still comes from prefix/ngram-history") { |v| greedy_loop_probe_ngram_source_history = parse_i32_list(v) }
@@ -1704,6 +1706,7 @@ begin
   chunk_active_verify_rejects = 0
   chunk_ngram_empty_fallbacks = 0
   chunk_ngram_risk_fallbacks = 0
+  chunk_ngram_corridor_fallbacks = 0
   chunk_ngram_cursor_hits = 0
   chunk_ngram_match_lens = [] of Int32
   chunk_ngram_schedule_chunks = [] of Int32
@@ -1837,6 +1840,10 @@ begin
             else
               chunk_ngram_match_lens << 0
             end
+          end
+          if greedy_loop_probe_ngram_corridor_gate && !ngram_trusted_source_active && !ML::GGUF::NgramDraft.corridor_candidate_shape?(proposal_ids)
+            chunk_ngram_corridor_fallbacks += 1
+            proposal_ids = [] of Int32
           end
           if greedy_loop_probe_ngram_risk_gate && !ngram_trusted_source_active && ML::GGUF::NgramDraft.risky_candidate_shape?(proposal_ids, greedy_loop_probe_ngram_risk_min_size, ngram_match_len_for_gate)
             chunk_ngram_risk_fallbacks += 1
@@ -2848,6 +2855,7 @@ begin
         lines << "chunk_probe_ngram_recursive=#{greedy_loop_probe_ngram_recursive}"
         lines << "chunk_probe_ngram_min_candidates=#{greedy_loop_probe_ngram_min_candidates}"
         lines << "chunk_probe_ngram_risk_gate=#{greedy_loop_probe_ngram_risk_gate}"
+        lines << "chunk_probe_ngram_corridor_gate=#{greedy_loop_probe_ngram_corridor_gate}"
         lines << "chunk_probe_ngram_trusted_source=#{greedy_loop_probe_ngram_trusted_source}"
         lines << "chunk_probe_ngram_trusted_source_active=#{ngram_trusted_source_active}"
         lines << "chunk_probe_ngram_source_prefix_gate=#{greedy_loop_probe_ngram_source_prefix_gate}"
@@ -2865,6 +2873,7 @@ begin
         lines << "chunk_probe_ngram_match_lens=#{chunk_ngram_match_lens.join(",")}"
         lines << "chunk_probe_ngram_empty_fallbacks=#{chunk_ngram_empty_fallbacks}"
         lines << "chunk_probe_ngram_risk_fallbacks=#{chunk_ngram_risk_fallbacks}"
+        lines << "chunk_probe_ngram_corridor_fallbacks=#{chunk_ngram_corridor_fallbacks}"
         lines << "chunk_probe_ngram_cursor_hits=#{chunk_ngram_cursor_hits}"
         lines << "chunk_probe_ngram_cursor_serial_advances=#{chunk_ngram_cursor_serial_advances}"
         lines << "chunk_probe_ngram_cursor_serial_drops=#{chunk_ngram_cursor_serial_drops}"

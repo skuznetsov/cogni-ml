@@ -14105,3 +14105,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Keep the runtime gate default-off but use this certificate for the next session-cache/known-history replay experiment.
 - caveat: Synthetic long prompts are not production session traces; speed numbers are noisy. The stable evidence is corridor reject filtering.
 - trust: {F:0.84,G:0.45,R:0.84}
+
+**LM-338 ngram reusable corridor certificate [shared/ml]**
+- status: VERIFIED local helper + probe wiring, HYPOTHESIS for production default
+- claim: The reusable n-gram corridor certificate is stricter than the first runtime heuristic: `candidate_count>=4 && (lag4>=0.25 || lag8>=0.5 || entropy_norm<=0.6)`. A nonzero `lag4` match is too weak as a reusable transport proof because accidental matches can admit heterogeneous YAML/code-like tails.
+- evidence: focused `spec/ngram_draft_spec.cr` covers high-diversity tails, low-entropy corridors, one-token false positives, and a weak near-miss with `lag4<0.25`, `lag8<0.5`, `entropy>0.6`; it passes (`26 examples, 0 failures`). No-codegen builds pass for `bin/qwen35_speculative_accept.cr`, `bin/qwen35_proposal_router_oracle.cr`, and `bin/cuda_mixed_stack_probe.cr -Dcpu_only`.
+- implementation: `ML::GGUF::NgramDraft.entropy_norm` and `corridor_candidate_shape?` now centralize the certificate. `qwen35_speculative_accept` uses the helper, the oracle uses matching thresholds, and `cuda_mixed_stack_probe` exposes `--greedy-loop-probe-ngram-corridor-gate` with `chunk_probe_ngram_corridor_fallbacks` stats. Trusted source-history cursor replay remains exempt after prefix validation because it is a stronger legal frame than candidate-shape inference.
+- implication: This is the session-cache/replay LTP/WBA gate to test next: repeated suffix is only the trigger; proposal body shape certifies the transport corridor; exact decode/verifier fallback remains the dual frame.
+- trust: {F:0.84,G:0.45,R:0.84}

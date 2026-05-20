@@ -1115,3 +1115,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The useful split is now visible: `lag4 > 0` captures short exact pattern corridors, `lag8 >= 0.5` captures strong long-period corridors, and `entropy <= 0.6` captures compressible low-diversity corridors.
 - maieutic: The gate is still heuristic, not a proof. The next evidence upgrade should be session-cache/known-history replay, not more synthetic prompt crafting.
 - adversary: Do not use aggregate speedups from the long suite as a stable production benchmark; per-run plain baselines are noisy. The robust claim is reject removal plus preserved accepted-cycle oracle accounting.
+
+**decision_update_338:** Promoted the n-gram corridor certificate into a reusable helper and wired it into the CUDA greedy/session replay probe. During spec hardening, the original `lag4 > 0` predicate was tightened to `lag4 >= 0.25`; one accidental lag-four match is not enough LTP/WBA transport evidence for a heterogeneous candidate tail.
+
+**evidence_update_338:**
+- claim: "The centralized corridor helper and CUDA probe flag build and preserve the intended fail-closed shape checks."
+  source: local `crystal spec spec/ngram_draft_spec.cr` passed (`26 examples, 0 failures`). No-codegen builds passed for `bin/qwen35_speculative_accept.cr`, `bin/qwen35_proposal_router_oracle.cr`, and `bin/cuda_mixed_stack_probe.cr -Dcpu_only`.
+  verified_at: 2026-05-19
+  decay_trigger: `ML::GGUF::NgramDraft` candidate features, n-gram verifier routing, CUDA greedy replay probe, or session-cache cursor validation changes
+- claim: "Trusted cursor replay remains a separate legal frame from heuristic candidate-shape replay."
+  source: code review of `bin/cuda_mixed_stack_probe.cr`: `--greedy-loop-probe-ngram-corridor-gate` applies only when `!ngram_trusted_source_active`; trusted source replay still requires source-prefix validation before bypassing heuristic gates.
+  verified_at: 2026-05-19
+  decay_trigger: source-prefix validation, trusted-source flag semantics, or replay cursor ownership changes
+
+**quadrumvirate_update_338:**
+- cassandra: Reusable gates must be stricter than one-off oracle rules; low accidental lag is a known false-positive pattern for structured tails.
+- daedalus: The next useful experiment is not another CPU n-gram scan optimization. It is session/cache replay with this corridor certificate plus exact verifier accounting.
+- maieutic: `lag4>=0.25` is still empirical. Treat it as a visible tunable, not a theorem.
+- adversary: Current verification is compile/spec plus prior runtime evidence; rerun full repeat/structured A/B before making any production default change.

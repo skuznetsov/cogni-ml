@@ -202,7 +202,25 @@ describe ML::GGUF::NgramDraft do
 
     ML::GGUF::NgramDraft.pair_unique_ratio(ids).should eq(1.0)
     ML::GGUF::NgramDraft.lag_ratio(ids, 4).should eq(0.0)
+    ML::GGUF::NgramDraft.entropy_norm(ids).should eq(1.0)
     ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16).should be_true
+    ML::GGUF::NgramDraft.corridor_candidate_shape?(ids).should be_false
+  end
+
+  it "corridor-gates only candidate shapes with enough repeating transport evidence" do
+    one_token = [42]
+    lag_four = [1, 2, 3, 4, 1, 9, 10, 11]
+    low_entropy = [7, 7, 8, 7, 7, 8, 7, 7]
+    weak_nearmiss = [198, 220, 471, 850, 25, 220, 17, 198, 262, 803, 25, 8029, 198, 262, 869, 25]
+
+    ML::GGUF::NgramDraft.corridor_candidate_shape?(one_token).should be_false
+    ML::GGUF::NgramDraft.corridor_candidate_shape?(lag_four).should be_true
+    ML::GGUF::NgramDraft.entropy_norm(low_entropy).should be <= 0.6
+    ML::GGUF::NgramDraft.corridor_candidate_shape?(low_entropy).should be_true
+    ML::GGUF::NgramDraft.lag_ratio(weak_nearmiss, 4).should be < 0.25
+    ML::GGUF::NgramDraft.lag_ratio(weak_nearmiss, 8).should be < 0.5
+    ML::GGUF::NgramDraft.entropy_norm(weak_nearmiss).should be > 0.6
+    ML::GGUF::NgramDraft.corridor_candidate_shape?(weak_nearmiss).should be_false
   end
 
   it "risk-gates structured YAML-like tails with weak lag-four reuse" do

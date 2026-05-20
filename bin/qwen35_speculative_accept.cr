@@ -319,18 +319,9 @@ def add_candidate_features(features : Hash(String, Float64), ids : Array(Int32))
   features["candidate_features_present"] = ids.empty? ? 0.0 : 1.0
   return if ids.empty?
 
-  counts = Hash(Int32, Int32).new(0)
-  ids.each { |id| counts[id] += 1 }
-  features["candidate_unique_ratio"] = counts.size.to_f / ids.size
+  features["candidate_unique_ratio"] = ML::GGUF::NgramDraft.unique_ratio(ids)
   features["candidate_pair_unique_ratio"] = ML::GGUF::NgramDraft.pair_unique_ratio(ids)
-
-  entropy = 0.0
-  counts.each_value do |count|
-    p = count.to_f / ids.size
-    entropy -= p * (Math.log(p) / Math.log(2.0))
-  end
-  max_entropy = ids.size > 1 ? Math.log(ids.size.to_f) / Math.log(2.0) : 1.0
-  features["candidate_entropy_norm"] = max_entropy > 0.0 ? entropy / max_entropy : 0.0
+  features["candidate_entropy_norm"] = ML::GGUF::NgramDraft.entropy_norm(ids)
 
   longest = 1
   run = 1
@@ -474,11 +465,7 @@ def ngram_candidate_feature_dump(candidates : Array(Int32),
 end
 
 def ngram_corridor_gate_pass?(candidates : Array(Int32), features : Hash(String, Float64)) : Bool
-  return false if candidates.size < 4
-
-  features["candidate_lag4_ratio"] > 0.0 ||
-    features["candidate_lag8_ratio"] >= 0.5 ||
-    features["candidate_entropy_norm"] <= 0.6
+  ML::GGUF::NgramDraft.corridor_candidate_shape?(candidates, min_size: 4)
 end
 
 def prompt_marker_features(prompt : String) : Hash(String, Float64)
