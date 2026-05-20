@@ -1169,3 +1169,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The WBA legal move is not one scalar threshold; it is a union of certificates: compressible transport body OR strong source-window match, with exact fallback as the dual frame.
 - maieutic: `match_len_min=8` is tied to current `ngram_max=8`. Broader sweeps should test whether it should be expressed as `match_len == ngram_max` rather than an absolute constant.
 - adversary: Do not default this yet. Test more code/structured near-miss prompts and the restored CUDA trusted-source path before promotion.
+
+**decision_update_341:** Broader local Metal adversary sweep refuted standalone `match_len_min=8` promotion. It remains a useful candidate feature, not a default policy.
+
+**evidence_update_341:**
+- claim: "On a 32-prompt code/repeat/structured adversary suite, match8 still admits structured near-miss rejects."
+  source: local release runner `/tmp/qwen35_speculative_accept_metal_corridor_local2`, prompt suite `/tmp/qwen35_corridor_broad_prompts.jsonl`, `tokens=16`, `--ngram-corridor-gate --ngram-corridor-match-len-min 8`, dump `/tmp/qwen35_corridor_broad_match8`. N-gram rows: `95/137`, `3` reject chunks, avg policy speedup `1.014x`. Rejected rows: `repeat_yaml_hosts` (`match_len=8`, `3/14`), `near_json_pairs` (`match_len=6`, `0/16`), `code_case_loop` (`match_len=6`, `1/16`).
+  verified_at: 2026-05-19
+  decay_trigger: prompt suite, tokenizer/model, n-gram candidate feature extraction, staged verifier policy, or corridor thresholds
+- claim: "Tightening lag8 helps but does not solve the match8/YAML case."
+  source: same suite with `--ngram-corridor-lag8-min 1.0`, dump `/tmp/qwen35_corridor_broad_match8_lag8one`: n-gram rows `94/105`, `1` reject chunk, avg `1.035x`; the remaining reject is `repeat_yaml_hosts` admitted by `match_len=8`.
+  verified_at: 2026-05-19
+  decay_trigger: lag8 threshold semantics, prompt suite composition, or structured-tail risk features
+
+**quadrumvirate_update_341:**
+- cassandra: Match strength and candidate-shape compression are complementary but insufficient on their own; structured high-diversity tails remain the failure mode.
+- daedalus: The better frame is "source trust hierarchy": validated cursor replay can use wide WBA bands; untrusted suffix replay needs both corridor evidence and structured-tail rejection.
+- maieutic: The missing predicate is not obvious from token aggregates alone: one accepted CSV-like row and the bad YAML row are both high-diversity and low-lag. Avoid overfitting a hand-made rule until more token-class/cycle evidence exists.
+- adversary: Do not promote `match_len_min=8` to default. Keep it opt-in for data collection and route-learning.

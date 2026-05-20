@@ -14129,3 +14129,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implementation: `NgramDraft.corridor_candidate_shape?` now accepts `match_len` and `match_len_min`. Metal and CUDA probes expose matching opt-in flags while keeping the default override disabled (`0`).
 - implication: For untrusted n-gram/session replay, test `match_len_min=8` as a candidate policy. Do not make it default until broader structured/code/repeat suites prove it does not admit high-match near-miss overruns.
 - trust: {F:0.84,G:0.40,R:0.84}
+
+**LM-341 ngram broad corridor adversary [shared/ml]**
+- status: VERIFIED refutation of standalone match8 promotion
+- claim: `match_len_min=8` is useful but unsafe as a standalone untrusted-corridor certificate. A broader local Metal adversary suite found high-match structured tails that still reject.
+- evidence: local Qwen3.5-9B Metal release runner, 32 prompts from code/repeat/structured plus hand-written near-misses, `tokens=16`. `--ngram-corridor-gate --ngram-corridor-match-len-min 8` produced n-gram `95/137`, 3 reject chunks, avg policy speedup `1.014x`; rejected rows were `repeat_yaml_hosts` (`match_len=8`, `3/14`), `near_json_pairs` (`match_len=6`, `0/16`), and `code_case_loop` (`match_len=6`, `1/16`). Tightening `--ngram-corridor-lag8-min 1.0` removed the two `lag8=0.75` false positives but still left `repeat_yaml_hosts` (`94/105`, 1 reject, avg `1.035x`).
+- implication: The current safest local policy remains default-off. The next policy boundary should be one of: trusted source-cursor replay, or match8 plus a structured-tail risk predicate that catches high-diversity YAML/JSON overruns without removing profitable code/CSV/markdown repeats.
+- trust: {F:0.84,G:0.50,R:0.84}
