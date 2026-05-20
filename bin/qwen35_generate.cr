@@ -297,10 +297,7 @@ if prompt_cache_enabled
            cached_prefix,
            min_prefix_len: cached_prefix_len,
            max_prefix_len: cached_prefix_len)
-        validation_ok = fast_hit.artifact_validation_kind == "exact-known-span-v1" &&
-          fast_hit.artifact_validation_hash == expected_hash &&
-          fast_hit.next_token_id == full_history[-1]
-        if validation_ok
+        if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, full_history, n_gen)
           tstart = Time.instant
           reuse_state = fast_hit.max_seq == state.max_seq ? state : nil
           replay = cache_store.not_nil!.restore_and_replay_suffix(fast_hit, w, cached_prefix, reuse_state: reuse_state)
@@ -906,7 +903,7 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
       prompt_text: "",
       token_ids: cached_prefix,
       state: state,
-      artifact_validation_kind: "exact-known-span-v1",
+      artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
       artifact_validation_steps: output_ids.size,
       artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),
       next_token_id: output_ids[-1],

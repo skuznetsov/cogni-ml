@@ -215,6 +215,49 @@ describe ML::GGUF::Qwen35PromptCache do
     legacy.artifact_validation_hash.should be_nil
   end
 
+  it "validates exact known-span fast-forward metadata strictly" do
+    full_history = [10_i32, 20_i32, 30_i32, 40_i32]
+    entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+      runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+      session_id: "s",
+      turn_id: nil,
+      model_id: "m",
+      tokenizer_id: "t",
+      prompt_hash: "p",
+      prefix_len: full_history.size - 1,
+      max_seq: 16,
+      layer_count: 1,
+      artifact_path: "a",
+      artifact_sha256: "0" * 64,
+      artifact_byte_size: 0_i64,
+      state_byte_size: 0_i64,
+      created_at_unix: 1_i64,
+      prompt_preview: nil,
+      token_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history, full_history.size - 1),
+      artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+      artifact_validation_steps: 2,
+      artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),
+      next_token_id: full_history[-1],
+    )
+
+    ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(entry, full_history, 2).should be_true
+
+    entry.artifact_validation_hash = ML::GGUF::Qwen35PromptCache.token_hash(full_history[0, 3])
+    ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(entry, full_history, 2).should be_false
+    entry.artifact_validation_hash = ML::GGUF::Qwen35PromptCache.token_hash(full_history)
+
+    entry.next_token_id = 999_i32
+    ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(entry, full_history, 2).should be_false
+    entry.next_token_id = full_history[-1]
+
+    entry.prefix_len = full_history.size - 2
+    ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(entry, full_history, 2).should be_false
+    entry.prefix_len = full_history.size - 1
+
+    entry.artifact_validation_steps = 1
+    ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(entry, full_history, 2).should be_false
+  end
+
   it "skips cache entries with incomplete compressed-artifact validation metadata" do
     root = File.tempname("qwen35-prompt-cache")
     Dir.mkdir_p(root)

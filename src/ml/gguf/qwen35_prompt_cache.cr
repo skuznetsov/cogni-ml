@@ -16,6 +16,7 @@ module ML::GGUF
     COMPRESSED_ARTIFACT_CODECS = {"recurrent-bf16", "recurrent-int8"}
     SOURCE_HISTORY_RUNTIME_ID  = "cogni-ml/qwen35-source-history-v1"
     TOKENIZED_PROMPT_RUNTIME_ID = "cogni-ml/qwen35-tokenized-prompt-v1"
+    EXACT_KNOWN_SPAN_VALIDATION_KIND = "exact-known-span-v1"
 
     class Entry
       include JSON::Serializable
@@ -572,6 +573,22 @@ module ML::GGUF
       return false if source_prefix_start + prefix_ids.size > source_history.size
 
       source_history[source_prefix_start, prefix_ids.size] == prefix_ids
+    end
+
+    def exact_known_span_entry_valid?(entry : Entry,
+                                      full_history : Array(Int32),
+                                      emitted_steps : Int32) : Bool
+      return false if full_history.empty?
+      return false unless emitted_steps > 0
+      return false unless full_history.size >= emitted_steps
+      return false unless entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
+      return false unless entry.artifact_validation_steps == emitted_steps
+      return false unless entry.artifact_validation_hash == token_hash(full_history)
+      return false unless entry.prefix_len == full_history.size - 1
+      return false unless entry.token_hash == token_hash(full_history, entry.prefix_len)
+      return false unless entry.next_token_id == full_history[-1]
+
+      true
     end
 
     def artifact_trust_metadata_valid?(entry : Entry) : Bool

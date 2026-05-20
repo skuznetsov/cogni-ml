@@ -251,7 +251,7 @@ def build_prompt_cache_fast_forward_template(weights : ML::GGUF::Qwen35Weights,
     prompt_text: "",
     token_ids: cached_prefix_tokens,
     state: span_state,
-    artifact_validation_kind: "exact-known-span-v1",
+    artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
     artifact_validation_steps: output_ids.size,
     artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history_tokens),
     next_token_id: output_ids[-1],
@@ -431,10 +431,9 @@ def run_prompt_cache_fast_forward_request(weights : ML::GGUF::Qwen35Weights,
     state_prepare_ms = (Time.instant - prepare_t0).total_milliseconds
   end
 
-  expected_hash = ML::GGUF::Qwen35PromptCache.token_hash(replay.full_history_tokens)
-  raise "fast-forward artifact validation kind mismatch" unless replay.entry.artifact_validation_kind == "exact-known-span-v1"
-  raise "fast-forward artifact validation hash mismatch" unless replay.entry.artifact_validation_hash == expected_hash
-  raise "fast-forward next token mismatch" unless replay.entry.next_token_id == replay.output_ids[-1]
+  unless ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(replay.entry, replay.full_history_tokens, replay.output_ids.size)
+    raise "fast-forward artifact validation mismatch"
+  end
 
   restore_t0 = Time.instant
   restored = replay.store.restore_and_replay_suffix(replay.entry, weights, replay.cached_prefix_tokens, reuse_state: state)
