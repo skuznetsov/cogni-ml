@@ -1822,3 +1822,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The product seam should mirror CUDA: encoded artifact reader plus validated metadata plus backend-specific restorer. Do not add another artifact format.
 - maieutic: BF16 passing does not prove INT8 trust. INT8 still needs prompt/cursor gates and probably block8-late policy before any default promotion.
 - adversary: Keep compressed artifacts opt-in/fail-closed. A one-prompt BF16 parity guard is not broad session-cache quality evidence.
+
+**decision_update_373:** Added the first Metal encoded-artifact restore primitive. `Qwen35StateSnapshot.restore_encoded_into` now accepts an `EncodedSnapshot` and, on Metal, restores raw records directly while batching BF16 recurrent payload decode through one `qwen35_artifact_bf16_decode_f32` command buffer into the prepared destination state buffers. `recurrent-int8` remains fail-closed on Metal until a guarded block8 decoder and prompt/cursor validation gate exist. This keeps the CUDA-proven product seam: encoded artifact reader -> validation metadata -> backend-specific restorer.
+
+**evidence_update_373:**
+- claim: "Metal encoded BF16 recurrent restore preserves continuation parity and rejects INT8 for now."
+  source: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`12 examples, 0 failures`). The BF16 spec uses `read_artifact_encoded` plus `restore_encoded_into`; the INT8 spec expects `Metal recurrent-int8 encoded restore is not implemented yet`.
+  verified_at: 2026-05-20
+  decay_trigger: Metal encoded restore, artifact codec policy, or recurrent artifact validation changes
+- claim: "The encoded Metal path is speed-bearing for cold artifact read+restore, but not for already-decoded resident templates."
+  source: temporary local BF16 benchmark on M2 Max Qwen3.5-9B prompt-state artifact (`raw_bytes=54788096`, `artifact_bytes=28444316`). Restore-only: encoded BF16 Metal decode averaged `5.32ms`, while already-decoded host Float32 restore averaged `1.74ms`. Full artifact read+restore: encoded BF16 path averaged `26.35ms`, while `read_artifact` CPU-decoded BF16 path averaged `715.43ms`.
+  verified_at: 2026-05-20
+  decay_trigger: BF16 codec implementation, file-cache state, artifact reader, or Metal command batching changes
+- claim: "Product compile gates still type-check after adding the encoded restore primitive."
+  source: `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed; `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed.
+  verified_at: 2026-05-20
+  decay_trigger: state snapshot API or prompt-cache restore integration changes
+
+**quadrumvirate_update_373:**
+- cassandra: Per-record dispatch would have made this a false speed path; batching reduced restore-only from `~20.1ms` to `~5.3ms`, but CPU writes still win when Float32 is already decoded.
+- daedalus: The useful frame is cold/persistent artifact serving, not hot resident state templates. Resident state cache should keep using copied templates; compressed encoded restore should target disk/mmap/prefetch hits.
+- maieutic: The legal LTP window is a validated BF16 artifact hit whose recurrent payload is still encoded. The transport is encoded payload -> prepared recurrent Metal buffers; the potential decreases as `(decoded-host-bytes, CPU-decode-work, artifact-bytes-read)`.
+- adversary: Do not enable INT8 by analogy. CUDA showed INT8 needs cursor/prompt gates; Metal must earn the same trust independently.

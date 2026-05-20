@@ -2,6 +2,12 @@ require "digest/sha256"
 require "file_utils"
 require "./qwen35_cpu"
 
+{% unless flag?(:cpu_only) %}
+  require "../metal/device"
+  require "../metal/dispatch"
+  require "../core/buffer"
+{% end %}
+
 module ML::GGUF
   # In-memory Qwen 3.5/3.6 decode-state snapshot.
   #
@@ -92,6 +98,11 @@ module ML::GGUF
     ARTIFACT_VERSION_V2 = 2_u32
     ARTIFACT_VERSION    = ARTIFACT_VERSION_V1
 
+    {% unless flag?(:cpu_only) %}
+      ARTIFACT_RESTORE_SOURCE = {{ read_file("#{__DIR__}/kernels/artifact_restore_qwen35.metal") }}
+      @@artifact_bf16_decode_pipeline : ML::Metal::ComputePipeline?
+    {% end %}
+
     def capture(state : Qwen35CPU::State) : Snapshot
       records = [] of Record
       positions = Array(Int32).new(state.layers.size)
@@ -155,6 +166,45 @@ module ML::GGUF
           end
         end
       end
+    end
+
+    def restore_encoded_into(encoded : EncodedSnapshot,
+                             hp : Qwen35Hparams,
+                             state : Qwen35CPU::State,
+                             prefer_metal : Bool = Qwen35Metal.available?) : Nil
+      raise ArgumentError.new("layer count mismatch: snapshot=#{encoded.layer_count}, hp=#{hp.n_layer}") unless encoded.layer_count == hp.n_layer
+      raise ArgumentError.new("state layer count mismatch: snapshot=#{encoded.layer_count}, state=#{state.layers.size}") unless encoded.layer_count == state.layers.size
+      raise ArgumentError.new("state max_seq mismatch: snapshot=#{encoded.max_seq}, state=#{state.max_seq}") unless encoded.max_seq == state.max_seq
+
+      unless prefer_metal && Qwen35Metal.available?
+        restore_into(decode_encoded_snapshot(encoded), hp, state, prefer_metal: false)
+        return
+      end
+
+      {% if flag?(:cpu_only) %}
+        restore_into(decode_encoded_snapshot(encoded), hp, state, prefer_metal: false)
+      {% else %}
+        encoded.positions.each_with_index do |position, i|
+          state.layers[i].position = position
+        end
+        bf16_jobs = [] of NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32)
+        encoded.records.each do |record|
+          raise ArgumentError.new("state record layer out of range: #{record.layer}") if record.layer < 0 || record.layer >= state.layers.size
+
+          layer = state.layers[record.layer]
+          case record.kind
+          in RecordKind::KCache
+            layer.k_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.k_cache_buf, bf16_jobs)
+          in RecordKind::VCache
+            layer.v_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.v_cache_buf, bf16_jobs)
+          in RecordKind::ConvState
+            layer.conv_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.conv_state_buf, bf16_jobs)
+          in RecordKind::SsmState
+            layer.ssm_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.ssm_state_buf, bf16_jobs)
+          end
+        end
+        dispatch_bf16_restore_jobs(bf16_jobs)
+      {% end %}
     end
 
     def write_artifact(snapshot : Snapshot,
@@ -251,6 +301,70 @@ module ML::GGUF
       buf.write_bytes(record.bytes.to_unsafe, record.bytes.size)
       buf
     end
+
+    {% unless flag?(:cpu_only) %}
+      private def artifact_bf16_decode_pipeline : ML::Metal::ComputePipeline
+        @@artifact_bf16_decode_pipeline ||= ML::Metal::PipelineCache.get("qwen35_artifact_bf16_decode_f32") {
+          ML::Metal::ComputePipeline.new("qwen35_artifact_bf16_decode_f32", ARTIFACT_RESTORE_SOURCE)
+        }
+      end
+
+      private def prepare_encoded_record_for_metal(record : EncodedRecord,
+                                                   block_size : Int32,
+                                                   reusable : ML::MetalBuffer?,
+                                                   bf16_jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32))) : ML::MetalBuffer
+        raise ArgumentError.new("state record byte size is not Float32-aligned: #{record.original_byte_size}") unless record.original_byte_size % sizeof(Float32) == 0
+
+        buf = reusable
+        if buf.nil? || buf.size != record.original_byte_size || buf.storage_mode != record.storage_mode
+          buf = ML::MetalBuffer.new(record.original_byte_size.to_i64, record.storage_mode)
+        end
+
+        case record.codec
+        in RecordCodec::RawF32
+          raise ArgumentError.new("corrupt raw Qwen encoded state record") unless record.payload.size == record.original_byte_size
+
+          buf.write_bytes(record.payload.to_unsafe, record.payload.size)
+        in RecordCodec::Bf16
+          bf16_jobs << prepare_bf16_restore_job(record, buf)
+        in RecordCodec::BlockI8
+          # Keep INT8 fail-closed until the Metal block8 decode kernel has its
+          # own prompt/cursor validation gate. CUDA evidence does not transfer
+          # automatically to Metal.
+          raise ArgumentError.new("Metal recurrent-int8 encoded restore is not implemented yet")
+        end
+
+        buf
+      end
+
+      private def prepare_bf16_restore_job(record : EncodedRecord, dst : ML::MetalBuffer) : NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32)
+        count = record.original_byte_size // sizeof(Float32)
+        expected_payload = count * sizeof(UInt16)
+        raise ArgumentError.new("corrupt BF16 Qwen encoded state record") unless record.payload.size == expected_payload
+
+        src = ML::MetalBuffer.new(record.payload.size.to_i64, ML::StorageMode::Shared)
+        src.write_bytes(record.payload.to_unsafe, record.payload.size)
+        {src: src, dst: dst, count: count.to_i32}
+      end
+
+      private def dispatch_bf16_restore_jobs(jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32))) : Nil
+        return if jobs.empty?
+
+        pipeline = artifact_bf16_decode_pipeline
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        enc.set_pipeline(pipeline)
+        jobs.each do |job|
+          count_u32 = job[:count].to_u32
+          enc.set_buffer(job[:src], 0)
+          enc.set_buffer(job[:dst], 1)
+          enc.set_value(count_u32, 2)
+          enc.dispatch_1d(job[:count], 256)
+        end
+        enc.end_encoding
+        cmd.commit_and_wait
+      end
+    {% end %}
 
     private def encode_artifact(snapshot : Snapshot) : Bytes
       io = IO::Memory.new

@@ -740,6 +740,7 @@ Local Metal resident cache snapshot, M2 Max, Qwen 3.5 9B Q4_K_M, prompt
 | cogni-ml Metal Store fast-forward, resident states off | `~1.45 ms/tok` for 64 cached tokens | cold artifact restore; no verifier body |
 | cogni-ml Metal Store fast-forward, resident states on | `~0.07 ms/tok` for 64 cached tokens; `~0.02 ms/tok` for 256 cached tokens | hot validated state restore plus cached token emission; no verifier body |
 | `qwen35_generate` direct output fast-forward | `~1-2 ms` total for a 16-token cached span even with 5k irrelevant legacy manifest rows per cache file | one-shot CLI hit reads a per-key output certificate, validates prompt/output/text/exact-span hashes before opening GGUF, emits cached ids/text, and exits |
+| Metal encoded BF16 artifact read+restore | `~26.35 ms` for a 28.4MB BF16 recurrent artifact in a one-prompt smoke | direct encoded BF16 recurrent decode into prepared Metal buffers; avoids CPU BF16 decode path measured at `~715 ms`, but resident decoded templates remain faster at `~1.7 ms` restore-only |
 
 Metal cache caveat: source replay and fast-forward are different contracts.
 Source replay still verifies the known span through the exact target stack.

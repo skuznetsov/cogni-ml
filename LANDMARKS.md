@@ -14401,3 +14401,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Metal compressed artifact work can now proceed from the same product seam as CUDA: encoded artifact reader, validation metadata, then backend-specific encoded restorer.
 - caveat: BF16 parity on one prompt does not validate INT8 or broad session-cache trust. The speed-bearing Metal branch remains direct BF16/block8 INT8 decode into recurrent buffers plus prompt/cursor validation gates.
 - trust: {F:0.86,G:0.42,R:0.86}
+
+**LM-373 Metal encoded BF16 recurrent artifact restorer [shared/ml]**
+- status: VERIFIED local Metal correctness guard + bounded timing probe
+- claim: `Qwen35StateSnapshot.restore_encoded_into` can restore encoded BF16 recurrent v2 artifacts directly into prepared Metal state buffers and avoids the huge CPU decode wall on cold artifact read+restore.
+- evidence: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`12 examples, 0 failures`), including BF16 encoded restore parity and INT8 fail-closed behavior. No-codegen product gates passed for `bin/qwen35_warm_request_probe.cr` and `bin/qwen35_generate.cr`. A temporary M2 Max Qwen3.5-9B BF16 artifact benchmark measured `raw_bytes=54788096`, `artifact_bytes=28444316`; restore-only encoded BF16 averaged `5.32ms` versus already-decoded Float32 restore `1.74ms`, while full artifact read+restore averaged `26.35ms` encoded versus `715.43ms` through CPU BF16 decode.
+- implementation: Added `qwen35_artifact_bf16_decode_f32` and a batched one-command-buffer BF16 decode path. Raw KV records are restored as raw records; recurrent BF16 records decode into destination Metal buffers; recurrent INT8 throws until a Metal block8 decoder and validation gate are implemented.
+- implication: This is a cold/persistent cache-hit accelerator and backend seam, not a replacement for resident state templates. For resident hot hits, copied decoded templates are still faster.
+- caveat: The timing probe is one prompt/artifact on one M2 Max and includes filesystem cache effects. INT8 remains explicitly unsupported on Metal.
+- trust: {F:0.87,G:0.50,R:0.86}
