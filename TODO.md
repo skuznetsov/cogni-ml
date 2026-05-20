@@ -1712,3 +1712,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: For a full cache hit, the correct frame is read/validate/emit; rewriting the same artifact is not a useful refresh policy.
 - maieutic: If a request falls back or extends beyond the cached span, it is no longer a full fast-forward hit and still saves the new exact history.
 - adversary: A future LRU/recency policy may want a cheap touch operation, but it should not rewrite `.qkv` artifacts on the hot path.
+
+**decision_update_368:** Added a one-shot CLI output-only fast-forward preflight. `qwen35_generate` now loads tokenizer metadata, encodes or token-cache-restores the prompt, validates source-history plus exact-known-span metadata, and, if the requested output span is fully cached, emits cached output ids and exits before loading model weights or preparing/restoring decode state. This is exact for serving an already cached span from a CLI process; resident/server continuation still uses the state-restore frame.
+
+**evidence_update_368:**
+- claim: "A full cached CLI hit can now avoid target weight load and state restore."
+  source: release `/tmp/qwen35_generate_ff_preload`, cache root `/tmp/qwen35_product_ff_preload_52868`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, fast-forward env enabled. Repeat ids matched seed (`16/16`), printed `Prompt cache output fast-forward hit before weight load`, did not print `Loading weights`, and summary reported `total_ms=79.9`, `model_load_ms=78.4`, `state_prepare_ms=0.0`, `cache_restore_ms=0.0`, `prefill_ms=0.0`, `decode_ms=0.0`, `source_history_save_ms=0.0`.
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate load order, tokenizer metadata load, tokenized prompt cache, or exact-known-span validation changes
+- claim: "A mismatched prompt still falls through to normal exact generation."
+  source: same cache/session with prompt `alpha beta gamma epsilon`, `n_gen=4`, printed `Loading weights`, then `Prompt source-history found but prefix did not validate; exact fallback remains active`, and ran normal greedy decode (`prefill_ms=582.7`, `decode_ms=66.7`, `source_history_save_ms=67.9`).
+  verified_at: 2026-05-20
+  decay_trigger: source-history lookup/prefix validation or output-only preflight control flow changes
+- claim: "Validation and compile guards are clean after the load-order change."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; release build `/tmp/qwen35_generate_ff_preload` passed; `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`13 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate, prompt-cache validation, or Metal bridge/spec changes
+
+**quadrumvirate_update_368:**
+- cassandra: This is a CLI/output cache optimization, not a continuation-state optimization. Do not merge it into plain generation speed claims.
+- daedalus: The frame shift is stronger than restoring state: if the process only needs to return already-cached text, weights and decode state are unnecessary work.
+- maieutic: The legal boundary is full-span coverage. If requested tokens exceed cached source-history coverage or validation fails, weights load and exact generation proceeds.
+- adversary: The output-only path must not be used for interactive continuation inside a resident server unless the state artifact is also restored or the server treats the request as terminal.

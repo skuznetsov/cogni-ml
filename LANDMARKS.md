@@ -14356,3 +14356,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Full cache hits now perform read/validate/restore/emit instead of read/validate/restore/emit/rewrite. Future recency tracking should be a cheap manifest touch, not artifact rewrite.
 - caveat: One-shot CLI still pays model load and cold restore. This does not change plain decode, exact source replay, or new-token generation speed.
 - trust: {F:0.86,G:0.56,R:0.86}
+
+**LM-368 qwen35_generate output-only fast-forward before weight load [shared/ml]**
+- status: VERIFIED local product-CLI smoke
+- claim: For a fully cached one-shot CLI request, `qwen35_generate` can validate source-history plus exact-known-span metadata and emit cached ids before loading target weights or restoring decode state.
+- evidence: release `/tmp/qwen35_generate_ff_preload`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, fast-forward env enabled, seed then repeat under cache root `/tmp/qwen35_product_ff_preload_52868`. Repeat ids matched seed exactly, printed `Prompt cache output fast-forward hit before weight load`, did not print `Loading weights`, and summary reported `total_ms=79.9`, `model_load_ms=78.4`, `state_prepare_ms=0.0`, `cache_restore_ms=0.0`, `prefill_ms=0.0`, `decode_ms=0.0`, `source_history_save_ms=0.0`. Mismatch prompt `alpha beta gamma epsilon` printed `Loading weights`, failed source-prefix validation, and ran normal greedy decode. No-codegen build and focused prompt-cache spec passed.
+- implementation: tokenizer metadata and prompt tokenization moved before weight load. The output-only preflight requires source-history prefix match, enough cached source tokens for `n_gen`, a matching exact-known-span cache entry over `prompt + output[0...n_gen-1]`, and `exact_known_span_entry_valid?`.
+- implication: For terminal cached CLI outputs, the remaining lower bound is tokenizer metadata load plus manifest lookup and decoding, not model weight load or state restore.
+- caveat: This does not restore continuation state. Resident/server continuation should use the validated state-restore fast-forward path or exact replay.
+- trust: {F:0.86,G:0.56,R:0.86}
