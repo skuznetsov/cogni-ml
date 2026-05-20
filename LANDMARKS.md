@@ -14383,3 +14383,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Text is now transported under the same certificate discipline as token ids/artifact metadata; stale legacy rows fail closed to tokenizer-backed paths.
 - caveat: This still is terminal output-cache serving only. It does not provide continuation state.
 - trust: {F:0.88,G:0.58,R:0.88}
+
+**LM-371 direct output fast-forward serving index [shared/ml]**
+- status: VERIFIED local product-CLI smoke + synthetic manifest-scale benchmark
+- claim: Terminal zero-GGUF cache hits no longer scale with legacy JSONL manifest size when a direct output fast-forward certificate exists.
+- evidence: Before the change, release `/tmp/qwen35_generate_ff_texthash` measured `total_ms=1.1` on a tiny repeated 16-token cached span, but `total_ms=66.2` after injecting 5k irrelevant rows into each of `tokenized_prompts.jsonl`, `source_history.jsonl`, and `manifest.jsonl`. After the change, release `/tmp/qwen35_generate_output_index` printed `Prompt cache direct output fast-forward hit before tokenizer/weight load`, matched seed ids, avoided tokenizer/weight load, and measured `total_ms=1.5` on the tiny cache and `total_ms=1.1` after the same 5k-row legacy-manifest inflation. Tampering the direct certificate `generated_text_hash` disabled the direct path and fell back to the older validated zero-GGUF path. Compile/spec gates passed: no-codegen builds for `bin/qwen35_generate.cr` and `bin/qwen35_warm_request_probe.cr`; focused prompt-cache spec `14 examples, 0 failures`.
+- implementation: `Qwen35PromptCache::OutputFastForwardEntry` is stored as a per-key JSON file under `output_fast_forward/<sha-prefix>/<sha-prefix>/<sha>.json`, keyed by model/session/turn/prompt-text hash/output length. Validation checks prompt token hash, output token hash, generated-text hash, full-history hash, exact-known-span validation kind/steps/hash, artifact prefix hash, and final token before emitting cached ids/text.
+- implication: For repeated terminal CLI/session outputs, the serving hot path is now direct certificate read/validate/emit rather than scanning durable history manifests. This preserves the LTP/WBA boundary: direct Spike on a certified local window, legacy validated scan as the dual-frame fallback.
+- caveat: This is not generation speed and not continuation-state restore. Resident continuation still needs state restore or exact source replay, and direct certificates are opt-in through `QWEN35_PROMPT_CACHE_FAST_FORWARD=1`.
+- trust: {F:0.89,G:0.60,R:0.88}

@@ -204,7 +204,26 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
   cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
   cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
   cache_model = cache_model_id(MODEL_PATH)
-  if tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt_for_model(cache_model, prompt)
+  if output_hit = cache_store.not_nil!.lookup_output_fast_forward(cache_model, session_id, prompt, n_gen, turn_id: turn_id)
+    token_cache_hit = true
+    cached_prompt_ids = output_hit.prompt_token_ids
+    cache_tokenizer = output_hit.tokenizer_id
+    output_ids = output_hit.output_token_ids
+    output_text = output_hit.generated_text
+    source_history_lookup_ms = (Time.instant - preflight_t0).total_milliseconds
+    tokenize_ms = source_history_lookup_ms
+    STDOUT << "\nPrompt cache direct output fast-forward hit before tokenizer/weight load: emitted #{output_ids.size} cached tokens\n"
+    total_ms = (Time.instant - request_t0).total_milliseconds
+    STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{cached_prompt_ids.not_nil!.size} output_tokens=#{output_ids.size}\n"
+
+    puts "\n=== Generated token ids ==="
+    puts output_ids.inspect
+    puts "\n=== Generated text ==="
+    puts output_text
+    puts "\n=== Full output ==="
+    puts prompt + output_text.not_nil!
+    exit
+  elsif tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt_for_model(cache_model, prompt)
     token_cache_hit = true
     cached_prompt_ids = tokenized_hit.token_ids
     cache_tokenizer = tokenized_hit.tokenizer_id
@@ -998,9 +1017,10 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
     STDOUT << "  skipped source-history save after validated fast-forward hit\n"
   else
     source_save_t0 = Time.instant
+    exact_known_span_entry = nil.as(ML::GGUF::Qwen35PromptCache::Entry?)
     if prompt_cache_fast_forward_enabled && !output_ids.empty?
       cached_prefix = full_history[0, full_history.size - 1]
-      cache_store.not_nil!.save(
+      exact_known_span_entry = cache_store.not_nil!.save(
         session_id: session_id,
         turn_id: turn_id,
         model_id: cache_model,
@@ -1023,6 +1043,19 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
       generated_token_count: output_ids.size,
       generated_text: output_text,
     )
+    if prompt_cache_fast_forward_enabled && (exact_entry = exact_known_span_entry) && output_text
+      cache_store.not_nil!.save_output_fast_forward(
+        session_id: session_id,
+        turn_id: turn_id,
+        model_id: cache_model,
+        tokenizer_id: cache_tokenizer,
+        prompt_text: prompt,
+        prompt_token_ids: ids,
+        output_token_ids: output_ids,
+        generated_text: output_text.not_nil!,
+        exact_entry: exact_entry,
+      )
+    end
     source_history_save_ms = (Time.instant - source_save_t0).total_milliseconds
     STDOUT << "  saved source-history tokens=#{saved_source.token_count} hash=#{saved_source.token_hash[0, 12]}\n"
   end

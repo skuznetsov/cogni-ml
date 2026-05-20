@@ -147,6 +147,93 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "stores direct output fast-forward certificates with hash validation" do
+    root = File.tempname("qwen35-output-fast-forward")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      prompt_ids = [10_i32, 20_i32]
+      output_ids = [30_i32, 40_i32, 50_i32]
+      full_history = prompt_ids + output_ids
+      exact_entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+        session_id: "s1",
+        turn_id: "t1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_hash: "unused",
+        prefix_len: full_history.size - 1,
+        max_seq: 16,
+        layer_count: 1,
+        artifact_path: "artifact.qkv",
+        artifact_sha256: "0" * 64,
+        artifact_byte_size: 0_i64,
+        state_byte_size: 0_i64,
+        created_at_unix: Time.utc.to_unix,
+        prompt_preview: nil,
+        token_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history, full_history.size - 1),
+        artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+        artifact_validation_steps: output_ids.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),
+        next_token_id: output_ids[-1],
+      )
+
+      saved = store.save_output_fast_forward(
+        session_id: "s1",
+        turn_id: "t1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text: "prompt text",
+        prompt_token_ids: prompt_ids,
+        output_token_ids: output_ids,
+        generated_text: " generated text",
+        exact_entry: exact_entry,
+      )
+
+      ML::GGUF::Qwen35PromptCache.output_fast_forward_entry_valid?(
+        saved,
+        "model-a",
+        "s1",
+        "prompt text",
+        output_ids.size,
+        turn_id: "t1",
+      ).should be_true
+      hit = store.lookup_output_fast_forward("model-a", "s1", "prompt text", output_ids.size, turn_id: "t1")
+      hit.should_not be_nil
+      hit.not_nil!.prompt_token_ids.should eq(prompt_ids)
+      hit.not_nil!.output_token_ids.should eq(output_ids)
+      hit.not_nil!.generated_text.should eq(" generated text")
+
+      saved.generated_text_hash = "bad"
+      ML::GGUF::Qwen35PromptCache.output_fast_forward_entry_valid?(
+        saved,
+        "model-a",
+        "s1",
+        "prompt text",
+        output_ids.size,
+        turn_id: "t1",
+      ).should be_false
+      store.lookup_output_fast_forward("model-a", "s1", "other prompt", output_ids.size, turn_id: "t1").should be_nil
+
+      exact_entry.artifact_validation_steps = output_ids.size - 1
+      expect_raises(ArgumentError, /validation steps mismatch/) do
+        store.save_output_fast_forward(
+          session_id: "s1",
+          turn_id: "t1",
+          model_id: "model-a",
+          tokenizer_id: "tok-a",
+          prompt_text: "prompt text",
+          prompt_token_ids: prompt_ids,
+          output_token_ids: output_ids,
+          generated_text: " generated text",
+          exact_entry: exact_entry,
+        )
+      end
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "generates pg_sorted_heap metadata SQL without accepting unsafe identifiers" do
     sql = ML::GGUF::Qwen35PromptCache.pg_sorted_heap_schema_sql
     sql.should contain("CREATE EXTENSION IF NOT EXISTS pg_sorted_heap")

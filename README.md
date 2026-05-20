@@ -439,6 +439,14 @@ artifacts:
 - exact prompt state, including optional full-prompt next-token metadata for
   long generations.
 
+When `QWEN35_PROMPT_CACHE_FAST_FORWARD=1` and source-history cache is enabled,
+the CLI also writes a direct per-key output fast-forward certificate for fully
+generated spans. On a repeated same-session terminal request, this lets
+`qwen35_generate` validate model/session/prompt/output hashes and emit cached
+token ids/text before opening the GGUF. The older tokenized-prompt +
+source-history + manifest scan remains as a fail-closed fallback for legacy or
+tampered direct certificates.
+
 The native tokenizer is the default. Set `QWEN35_NATIVE_TOKENIZER_OFF=1` only
 when comparing against the external `llama-tokenize` bootstrap path.
 
@@ -731,7 +739,7 @@ Local Metal resident cache snapshot, M2 Max, Qwen 3.5 9B Q4_K_M, prompt
 | cogni-ml Metal Store source replay, resident states on | `~4.51-4.55 ms/tok` | real Store hot state path; remaining wall is verifier body |
 | cogni-ml Metal Store fast-forward, resident states off | `~1.45 ms/tok` for 64 cached tokens | cold artifact restore; no verifier body |
 | cogni-ml Metal Store fast-forward, resident states on | `~0.07 ms/tok` for 64 cached tokens; `~0.02 ms/tok` for 256 cached tokens | hot validated state restore plus cached token emission; no verifier body |
-| `qwen35_generate` output-only fast-forward | `~1-2 ms` total for a 16-token cached span | one-shot CLI hit validates tokenized prompt, source/history metadata, cached generated-text hash, and exact-known-span artifact before opening GGUF; emits cached ids/text and exits |
+| `qwen35_generate` direct output fast-forward | `~1-2 ms` total for a 16-token cached span even with 5k irrelevant legacy manifest rows per cache file | one-shot CLI hit reads a per-key output certificate, validates prompt/output/text/exact-span hashes before opening GGUF, emits cached ids/text, and exits |
 
 Metal cache caveat: source replay and fast-forward are different contracts.
 Source replay still verifies the known span through the exact target stack.

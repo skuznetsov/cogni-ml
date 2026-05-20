@@ -1778,3 +1778,29 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The right fix is not reopening GGUF on every hit; it is adding a local certificate for the transported text.
 - maieutic: If the text certificate fails, token ids can still be served only through a tokenizer-backed path that can decode them.
 - adversary: Legacy rows without `generated_text_hash` intentionally do not qualify for zero-GGUF output serving.
+
+**decision_update_371:** Added a direct per-key output fast-forward certificate for terminal cached CLI spans. The previous zero-GGUF path still scanned `tokenized_prompts.jsonl`, `source_history.jsonl`, and `manifest.jsonl`; a synthetic cache with 5k irrelevant rows in each file raised the hit from `~1.1ms` to `~66.2ms`. `Qwen35PromptCache::Store` now writes `output_fast_forward/<hash>.json` entries keyed by model/session/turn/prompt-text hash/output length and validates prompt token hash, output token hash, generated-text hash, full-history hash, exact-known-span validation kind/steps/hash, artifact prefix hash, and final token before use. `qwen35_generate` tries this direct certificate before legacy manifest scans; tampered direct certificates fall back to the older validated path.
+
+**evidence_update_371:**
+- claim: "Legacy zero-GGUF manifest scans become visible at modest cache size."
+  source: release `/tmp/qwen35_generate_ff_texthash`, cache root `/tmp/qwen35_index_roi_94480`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`. Baseline zero-GGUF repeat measured `total_ms=1.1`; after injecting 5k irrelevant rows into each legacy JSONL manifest, the same repeat still hit before tokenizer/weight load but measured `total_ms=66.2`, `source_history_lookup_ms=40.3`.
+  verified_at: 2026-05-20
+  decay_trigger: prompt-cache lookup implementation, manifest layout, or timing summary changes
+- claim: "Direct output certificates preserve the zero-GGUF hit and avoid legacy scan growth."
+  source: release `/tmp/qwen35_generate_output_index`, cache root `/tmp/qwen35_output_index_1365`, same prompt and `n_gen=16`. Baseline direct repeat matched seed ids and printed `Prompt cache direct output fast-forward hit before tokenizer/weight load` with `total_ms=1.5`. After injecting 5k irrelevant legacy rows into each JSONL file, the repeat still matched seed ids, still avoided tokenizer/weight load, and measured `total_ms=1.1`, `source_history_lookup_ms=1.0`.
+  verified_at: 2026-05-20
+  decay_trigger: output-fast-forward certificate path, file-system layout, or preflight routing changes
+- claim: "Tampered direct output certificates fail closed."
+  source: manually changed the direct certificate `generated_text_hash` to `bad`; rerun did not use `direct output fast-forward`, fell back to the older zero-GGUF source/history validation path, and preserved the cached output without tokenizer/weight load (`total_ms=72.5` on the inflated legacy manifests).
+  verified_at: 2026-05-20
+  decay_trigger: output_fast_forward_entry_valid?, generated text hash validation, or fallback routing changes
+- claim: "Compile/spec gates pass with the direct certificate schema."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed; `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`14 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: prompt-cache schema, product preflight, or spec fixture changes
+
+**quadrumvirate_update_371:**
+- cassandra: The likely local-optimization trap was optimizing JSONL scans instead of eliminating them on the terminal hot path.
+- daedalus: The correct frame for repeated terminal outputs is direct certificate lookup; legacy manifests are durable history, not the serving index.
+- maieutic: The exactness boundary is the full prompt/output token history plus generated text certificate, not the presence of a model in memory.
+- adversary: This remains terminal output serving only. Continuation still needs state restore or exact replay; corrupt direct files must fall back instead of opening a trust hole.

@@ -11,11 +11,12 @@ module ML::GGUF
   module Qwen35PromptCache
     extend self
 
-    RUNTIME_ID                 = "cogni-ml/qwen35-state-v1"
-    RAW_ARTIFACT_CODECS        = {nil, "", "raw", "raw-fp32", "qkv-raw"}
-    COMPRESSED_ARTIFACT_CODECS = {"recurrent-bf16", "recurrent-int8"}
-    SOURCE_HISTORY_RUNTIME_ID  = "cogni-ml/qwen35-source-history-v1"
-    TOKENIZED_PROMPT_RUNTIME_ID = "cogni-ml/qwen35-tokenized-prompt-v1"
+    RUNTIME_ID                       = "cogni-ml/qwen35-state-v1"
+    RAW_ARTIFACT_CODECS              = {nil, "", "raw", "raw-fp32", "qkv-raw"}
+    COMPRESSED_ARTIFACT_CODECS       = {"recurrent-bf16", "recurrent-int8"}
+    SOURCE_HISTORY_RUNTIME_ID        = "cogni-ml/qwen35-source-history-v1"
+    TOKENIZED_PROMPT_RUNTIME_ID      = "cogni-ml/qwen35-tokenized-prompt-v1"
+    OUTPUT_FAST_FORWARD_RUNTIME_ID   = "cogni-ml/qwen35-output-fast-forward-v1"
     EXACT_KNOWN_SPAN_VALIDATION_KIND = "exact-known-span-v1"
 
     class Entry
@@ -125,6 +126,57 @@ module ML::GGUF
       end
     end
 
+    class OutputFastForwardEntry
+      include JSON::Serializable
+
+      property runtime_id : String
+      property session_id : String
+      property turn_id : String?
+      property model_id : String
+      property tokenizer_id : String
+      property prompt_text_hash : String
+      property prompt_token_hash : String
+      property prompt_token_count : Int32
+      property prompt_token_ids : Array(Int32)
+      property output_token_hash : String
+      property output_token_count : Int32
+      property output_token_ids : Array(Int32)
+      property full_history_hash : String
+      property generated_text : String
+      property generated_text_hash : String
+      property artifact_validation_kind : String
+      property artifact_validation_steps : Int32
+      property artifact_validation_hash : String
+      property artifact_prefix_len : Int32
+      property artifact_token_hash : String
+      property artifact_next_token_id : Int32
+      property created_at_unix : Int64
+
+      def initialize(@runtime_id : String,
+                     @session_id : String,
+                     @turn_id : String?,
+                     @model_id : String,
+                     @tokenizer_id : String,
+                     @prompt_text_hash : String,
+                     @prompt_token_hash : String,
+                     @prompt_token_count : Int32,
+                     @prompt_token_ids : Array(Int32),
+                     @output_token_hash : String,
+                     @output_token_count : Int32,
+                     @output_token_ids : Array(Int32),
+                     @full_history_hash : String,
+                     @generated_text : String,
+                     @generated_text_hash : String,
+                     @artifact_validation_kind : String,
+                     @artifact_validation_steps : Int32,
+                     @artifact_validation_hash : String,
+                     @artifact_prefix_len : Int32,
+                     @artifact_token_hash : String,
+                     @artifact_next_token_id : Int32,
+                     @created_at_unix : Int64)
+      end
+    end
+
     record ReplayResult,
       state : Qwen35CPU::State,
       reused_prefix_len : Int32,
@@ -138,12 +190,14 @@ module ML::GGUF
       getter manifest_path : String
       getter source_history_manifest_path : String
       getter tokenized_prompt_manifest_path : String
+      getter output_fast_forward_dir : String
 
       def initialize(@root : String = Qwen35PromptCache.default_root,
                      resident_state_cache_entries : Int32? = nil)
         @manifest_path = File.join(@root, "manifest.jsonl")
         @source_history_manifest_path = File.join(@root, "source_history.jsonl")
         @tokenized_prompt_manifest_path = File.join(@root, "tokenized_prompts.jsonl")
+        @output_fast_forward_dir = File.join(@root, "output_fast_forward")
         @resident_state_cache_limit = resident_state_cache_entries || (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
         raise ArgumentError.new("resident_state_cache_entries must be non-negative") if @resident_state_cache_limit < 0
         @resident_state_cache = {} of String => Qwen35CPU::State
@@ -472,6 +526,96 @@ module ML::GGUF
         out
       end
 
+      def save_output_fast_forward(session_id : String,
+                                   model_id : String,
+                                   tokenizer_id : String,
+                                   prompt_text : String,
+                                   prompt_token_ids : Array(Int32),
+                                   output_token_ids : Array(Int32),
+                                   generated_text : String,
+                                   exact_entry : Entry,
+                                   turn_id : String? = nil) : OutputFastForwardEntry
+        raise ArgumentError.new("output_token_ids must not be empty") if output_token_ids.empty?
+        tmp = nil.as(String?)
+
+        full_history = prompt_token_ids.dup
+        full_history.concat(output_token_ids)
+        full_history_hash = Qwen35PromptCache.token_hash(full_history)
+        artifact_steps = exact_entry.artifact_validation_steps
+        artifact_hash = exact_entry.artifact_validation_hash
+        artifact_next = exact_entry.next_token_id
+        raise ArgumentError.new("exact_entry is not an exact-known-span artifact") unless exact_entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
+        raise ArgumentError.new("exact_entry validation steps mismatch") unless artifact_steps == output_token_ids.size
+        raise ArgumentError.new("exact_entry validation hash mismatch") unless artifact_hash == full_history_hash
+        raise ArgumentError.new("exact_entry prefix mismatch") unless exact_entry.prefix_len == full_history.size - 1
+        raise ArgumentError.new("exact_entry prefix token hash mismatch") unless exact_entry.token_hash == Qwen35PromptCache.token_hash(full_history, exact_entry.prefix_len)
+        raise ArgumentError.new("exact_entry next token mismatch") unless artifact_next == output_token_ids[-1]
+
+        entry = OutputFastForwardEntry.new(
+          runtime_id: OUTPUT_FAST_FORWARD_RUNTIME_ID,
+          session_id: session_id,
+          turn_id: turn_id,
+          model_id: model_id,
+          tokenizer_id: tokenizer_id,
+          prompt_text_hash: Qwen35PromptCache.prompt_text_hash(prompt_text),
+          prompt_token_hash: Qwen35PromptCache.token_hash(prompt_token_ids),
+          prompt_token_count: prompt_token_ids.size.to_i32,
+          prompt_token_ids: prompt_token_ids.dup,
+          output_token_hash: Qwen35PromptCache.token_hash(output_token_ids),
+          output_token_count: output_token_ids.size.to_i32,
+          output_token_ids: output_token_ids.dup,
+          full_history_hash: full_history_hash,
+          generated_text: generated_text,
+          generated_text_hash: Qwen35PromptCache.generated_text_hash(generated_text),
+          artifact_validation_kind: exact_entry.artifact_validation_kind.not_nil!,
+          artifact_validation_steps: artifact_steps.not_nil!,
+          artifact_validation_hash: artifact_hash.not_nil!,
+          artifact_prefix_len: exact_entry.prefix_len,
+          artifact_token_hash: exact_entry.token_hash.not_nil!,
+          artifact_next_token_id: artifact_next.not_nil!,
+          created_at_unix: Time.utc.to_unix,
+        )
+        path = output_fast_forward_path(model_id, session_id, turn_id, entry.prompt_text_hash, output_token_ids.size)
+        FileUtils.mkdir_p(File.dirname(path))
+        tmp = "#{path}.tmp-#{Process.pid}-#{Random::Secure.hex(4)}"
+        File.open(tmp, "w") do |file|
+          entry.to_json(file)
+          file << '\n'
+        end
+        File.rename(tmp, path)
+        entry
+      ensure
+        File.delete(tmp) if tmp && File.exists?(tmp)
+      end
+
+      def lookup_output_fast_forward(model_id : String,
+                                     session_id : String,
+                                     prompt_text : String,
+                                     output_token_count : Int32,
+                                     turn_id : String? = nil) : OutputFastForwardEntry?
+        return nil if output_token_count <= 0
+
+        prompt_text_hash = Qwen35PromptCache.prompt_text_hash(prompt_text)
+        path = output_fast_forward_path(model_id, session_id, turn_id, prompt_text_hash, output_token_count)
+        return nil unless File.exists?(path)
+
+        begin
+          entry = OutputFastForwardEntry.from_json(File.read(path))
+        rescue JSON::ParseException | KeyError
+          return nil
+        end
+        return nil unless Qwen35PromptCache.output_fast_forward_entry_valid?(
+                            entry,
+                            model_id,
+                            session_id,
+                            prompt_text,
+                            output_token_count,
+                            turn_id: turn_id,
+                          )
+
+        entry
+      end
+
       private def append_manifest(entry : Entry) : Nil
         FileUtils.mkdir_p(@root)
         File.open(@manifest_path, "a") do |file|
@@ -552,6 +696,15 @@ module ML::GGUF
         backend = prefer_metal ? "metal" : "cpu"
         "#{backend}:#{entry.artifact_sha256}:#{entry.max_seq}:#{entry.layer_count}"
       end
+
+      private def output_fast_forward_path(model_id : String,
+                                           session_id : String,
+                                           turn_id : String?,
+                                           prompt_text_hash : String,
+                                           output_token_count : Int32) : String
+        key = Qwen35PromptCache.output_fast_forward_key(model_id, session_id, turn_id, prompt_text_hash, output_token_count)
+        File.join(@output_fast_forward_dir, key[0, 2], key[2, 2], "#{key}.json")
+      end
     end
 
     def default_root : String
@@ -593,6 +746,25 @@ module ML::GGUF
       Digest::SHA256.hexdigest("qwen35-generated-text-v1\0#{generated_text}")
     end
 
+    def output_fast_forward_key(model_id : String,
+                                session_id : String,
+                                turn_id : String?,
+                                prompt_text_hash : String,
+                                output_token_count : Int32) : String
+      io = IO::Memory.new
+      io.write("qwen35-output-fast-forward-key-v1\0".to_slice)
+      io.write(model_id.to_slice)
+      io.write_byte(0_u8)
+      io.write(session_id.to_slice)
+      io.write_byte(0_u8)
+      io.write((turn_id || "").to_slice)
+      io.write_byte(0_u8)
+      io.write(prompt_text_hash.to_slice)
+      io.write_byte(0_u8)
+      io.write_bytes(output_token_count.to_u32, IO::ByteFormat::LittleEndian)
+      Digest::SHA256.hexdigest(io.to_slice)
+    end
+
     def generated_text_metadata_valid?(entry : SourceHistoryEntry,
                                        expected_generated_tokens : Int32) : Bool
       return false unless expected_generated_tokens > 0
@@ -602,6 +774,39 @@ module ML::GGUF
       return false unless text && hash
 
       generated_text_hash(text) == hash
+    end
+
+    def output_fast_forward_entry_valid?(entry : OutputFastForwardEntry,
+                                         model_id : String,
+                                         session_id : String,
+                                         prompt_text : String,
+                                         expected_output_tokens : Int32,
+                                         turn_id : String? = nil) : Bool
+      return false unless expected_output_tokens > 0
+      return false unless entry.runtime_id == OUTPUT_FAST_FORWARD_RUNTIME_ID
+      return false unless entry.model_id == model_id
+      return false unless entry.session_id == session_id
+      return false if turn_id && entry.turn_id != turn_id
+      return false unless entry.prompt_text_hash == prompt_text_hash(prompt_text)
+      return false unless entry.prompt_token_count == entry.prompt_token_ids.size
+      return false unless entry.prompt_token_hash == token_hash(entry.prompt_token_ids)
+      return false unless entry.output_token_count == expected_output_tokens
+      return false unless entry.output_token_count == entry.output_token_ids.size
+      return false unless entry.output_token_hash == token_hash(entry.output_token_ids)
+      return false unless entry.generated_text_hash == generated_text_hash(entry.generated_text)
+
+      full_history = entry.prompt_token_ids.dup
+      full_history.concat(entry.output_token_ids)
+      full_hash = token_hash(full_history)
+      return false unless entry.full_history_hash == full_hash
+      return false unless entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
+      return false unless entry.artifact_validation_steps == entry.output_token_count
+      return false unless entry.artifact_validation_hash == full_hash
+      return false unless entry.artifact_prefix_len == full_history.size - 1
+      return false unless entry.artifact_token_hash == token_hash(full_history, entry.artifact_prefix_len)
+      return false unless entry.artifact_next_token_id == entry.output_token_ids[-1]
+
+      true
     end
 
     def source_history_prefix_match?(source_history : Array(Int32),
