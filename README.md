@@ -451,6 +451,28 @@ Use `total_ms` for one-shot CLI latency. Use `decode_ms / output_tokens` only
 when comparing decoder loops after the model, tokenizer, prompt cache, and
 state setup costs are already accounted for.
 
+Measure warm resident-process request latency without changing product CLI
+semantics:
+
+```sh
+crystal build --release --no-debug \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++" \
+  bin/qwen35_warm_request_probe.cr \
+  -o build/qwen35_warm_request_probe
+
+./build/qwen35_warm_request_probe \
+  --gen 16 \
+  --requests 5 \
+  --warmups 1 \
+  --quiet \
+  "The capital of France is"
+```
+
+This probe loads model/tokenizer once, runs explicit warmup requests outside the
+measured set, then reports per-request total/tokenize/state-prepare/prefill/decode
+timings. Use it to evaluate daemon/server-mode economics; do not mix it with
+one-shot `qwen35_generate` totals.
+
 Useful Qwen environment switches:
 
 | Variable | Effect |

@@ -1310,7 +1310,7 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **next_steps_update_347:**
 - [x] Test and refute product-CLI verifier warmup as an end-to-end speed fix.
 - [x] Add clearer total request timing around model load, cache restore/replay, optional source-history lookup, prefill, decode, and source-history save so cache/session speed claims cannot hide work outside the decode window.
-- [ ] If we want warm verifier behavior, implement it as explicit daemon/server startup warmup or benchmark warm phase, not as hidden per-request work in `qwen35_generate`.
+- [x] If we want warm verifier behavior, implement it as explicit daemon/server startup warmup or benchmark warm phase, not as hidden per-request work in `qwen35_generate`.
 
 **decision_update_348:** Added product-CLI phase accounting to `qwen35_generate`. Every run now emits a `request summary` with total wall and major phase timings, so future prompt-cache/source-history claims can be checked against total request cost.
 
@@ -1417,3 +1417,17 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The right frame is phase placement plus economics: exact full-state restore is only useful when it unlocks a long verified continuation, not when it hides a one-token warmup.
 - maieutic: The default threshold `64` is empirical and aligned with the source n-gram cache minimum. It should be retuned for daemon prewarming and other models.
 - adversary: Schema changes are backward-compatible because `next_token_id` and `next_token_logit` are optional. Exactness still depends on target verification of generated tokens; cached next-token metadata only seeds the same greedy next token for an exact full prompt.
+
+**decision_update_353:** Added `bin/qwen35_warm_request_probe.cr` as the explicit resident-process benchmark gate for warm request behavior. It loads the model/tokenizer once, runs optional startup warmup requests outside the measured set, then reports per-request `total_ms`, tokenization, state preparation, prefill, decode, and aggregate p50/average timings.
+
+**evidence_update_353:**
+- claim: "Warm process timing is now measured by an explicit probe rather than hidden work in `qwen35_generate`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_warm_probe_cache crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed. Release runner `/tmp/qwen35_warm_request_probe --gen 2 --requests 2 --warmups 1 --quiet "The capital of France is"` printed `startup_ms=164.9`, `explicit_warmup_ms=702.7`, then measured request summaries around `total_ms=89.9/90.3`, `tokenize_ms=0.0`, `state_prepare_ms=7.7/8.5`, `prefill_ms=62.3/61.8`, `decode_ms=19.9/20.0`.
+  verified_at: 2026-05-19
+  decay_trigger: resident benchmark implementation, Metal first-use behavior, tokenizer/load path, or decode/preload routing changes
+
+**quadrumvirate_update_353:**
+- cassandra: This closes the measurement-boundary hole without changing product CLI behavior.
+- daedalus: The right frame is process lifetime: one-shot CLI, warm resident process, and future daemon/server are different products and need different gates.
+- maieutic: The probe still allocates fresh request state; it measures warm process/request latency, not multi-turn session cache activation or a real API server.
+- adversary: Do not use the two-request smoke as a broad benchmark. Use it as a working harness and rerun with longer prompt suites before changing defaults.

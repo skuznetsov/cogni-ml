@@ -14227,3 +14227,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Cache routing now separates legal validity from economics: full-prompt state is exact and cheap to restore, but it should be used when enough future work exists to amortize first verifier/model-use costs.
 - caveat: Threshold `64` is local one-shot Metal evidence. Persistent server mode or explicit warm phases may want a lower threshold.
 - trust: {F:0.86,G:0.58,R:0.86}
+
+**LM-353 resident warm request probe [shared/ml]**
+- status: VERIFIED benchmark harness
+- claim: Warm verifier/process behavior is now measured by an explicit resident-process probe, not by hidden per-request work inside `qwen35_generate`.
+- evidence: added `bin/qwen35_warm_request_probe.cr`. No-codegen build passed with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_warm_probe_cache crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace`. Release smoke `/tmp/qwen35_warm_request_probe --gen 2 --requests 2 --warmups 1 --quiet "The capital of France is"` loaded the model once (`startup_ms=164.9`), ran explicit warmup (`702.7 ms`), then measured request totals `89.9/90.3 ms` with native tokenization at `0.0 ms`, prepared-state cost `7.7/8.5 ms`, prefill `62.3/61.8 ms`, and decode `19.9/20.0 ms`.
+- implication: Future daemon/server claims can be gated against warm resident request timing while preserving honest one-shot CLI `total_ms` accounting.
+- caveat: This is a probe, not a server. It uses fresh request state and a tiny two-request smoke; session-cache restore, longer prompts, n-gram/source-history routing, and larger suites still need separate resident-mode gates.
+- trust: {F:0.86,G:0.54,R:0.86}
