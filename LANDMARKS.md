@@ -14081,3 +14081,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The LTP/WBA window for n-gram should be a repeated suffix plus continuation-shape corridor check, not suffix length alone. Runtime gate candidate: fail closed unless the proposal is periodic enough or low-entropy enough for the exact staged verifier corridor.
 - caveat: This is repeat-suite evidence only. Before defaulting, test long-context session-cache histories, code/structured replay, and deliberate near-miss repeats.
 - trust: {F:0.82,G:0.35,R:0.82}
+
+**LM-335 ngram runtime corridor gate [shared/ml]**
+- status: VERIFIED default-off runtime lever, not production default
+- claim: `--ngram-corridor-gate` implements the LM-334 candidate-shape corridor check in `bin/qwen35_speculative_accept.cr` and preserves exact fallback when the corridor is unsafe.
+- evidence: local no-codegen build passed; release build with `build/bridge.o` Metal link flags passed. Full repeat-suite A/B with `/tmp/qwen35_speculative_accept_corridor`, `tokens=16`, `ngram_target_only_staged_risk`: gate off n-gram `54/59`, one reject, n-gram wall `1260.8ms`; gate on n-gram `54/54`, zero rejects, n-gram wall `1081.3ms`. Direct `repeat_sql_values` smoke with gate on reported `corridor_skips=1` and exact fallback completion.
+- implication: This is a concrete LTP/WBA legal-move gate: repeated suffix starts the window, candidate periodicity/entropy certifies the transport corridor, exact target fallback is the dual frame.
+- caveat: Total run speed still depends on fallback path cost and noisy plain baselines; pair with active WBA known-span/session-cache verification before promoting.
+- trust: {F:0.84,G:0.40,R:0.84}

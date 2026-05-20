@@ -53,6 +53,7 @@ ngram_probe_min = (ENV["QWEN35_SPEC_NGRAM_PROBE_MIN"]? || "2").to_i
 ngram_risk_min_size = (ENV["QWEN35_SPEC_NGRAM_RISK_MIN_SIZE"]? || "16").to_i
 ngram_min_candidates = (ENV["QWEN35_SPEC_NGRAM_MIN_CANDIDATES"]? || "0").to_i
 ngram_risk_gate = ENV["QWEN35_SPEC_NGRAM_RISK_GATE"]? == "1"
+ngram_corridor_gate = ENV["QWEN35_SPEC_NGRAM_CORRIDOR_GATE"]? == "1"
 ngram_recursive = ENV["QWEN35_SPEC_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 ngram_replay_on_reject = ENV["QWEN35_SPEC_NGRAM_REPLAY_ON_REJECT"]? == "1"
@@ -97,6 +98,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-risk-min-size N", "Minimum candidate size for the n-gram risk gate (default: 16)") { |value| ngram_risk_min_size = value.to_i }
   parser.on("--ngram-min-candidates N", "Skip n-gram chunks shorter than N candidates; 0 preserves historical behavior") { |value| ngram_min_candidates = value.to_i }
   parser.on("--ngram-risk-gate", "Research: skip n-gram chunks whose candidate-token shape matches known bad repeat tails") { ngram_risk_gate = true }
+  parser.on("--ngram-corridor-gate", "Research: require periodic or low-entropy n-gram continuation before entering the verifier corridor") { ngram_corridor_gate = true }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through scratch history") { ngram_recursive = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
   parser.on("--ngram-replay-on-reject", "Research: skip n-gram state backups and rebuild exact target state only after a non-final reject") { ngram_replay_on_reject = true }
@@ -471,6 +473,12 @@ def ngram_candidate_feature_dump(candidates : Array(Int32),
   features
 end
 
+def ngram_corridor_gate_pass?(features : Hash(String, Float64)) : Bool
+  features["candidate_lag4_ratio"] > 0.0 ||
+    features["candidate_lag8_ratio"] > 0.0 ||
+    features["candidate_entropy_norm"] <= 0.6
+end
+
 def prompt_marker_features(prompt : String) : Hash(String, Float64)
   lower = prompt.downcase
   features = Hash(String, Float64).new(0.0)
@@ -663,7 +671,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -716,6 +724,7 @@ ngram_accepted = 0
 ngram_proposed = 0
 ngram_router_checks = 0
 ngram_router_skips = 0
+ngram_corridor_skips = 0
 ngram_router_score_sum = 0.0
 target_verify_ms = 0.0
 proposal_ms = 0.0
@@ -769,6 +778,10 @@ while generated_ids.size < n_gen
                   ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
                 end
     cycle_candidate_features = ngram_candidates.empty? ? nil : ngram_candidate_feature_dump(ngram_candidates, match_len, ngram_max, tok)
+    if ngram_corridor_gate && (features = cycle_candidate_features) && !ngram_corridor_gate_pass?(features)
+      ngram_corridor_skips += 1
+      ngram_candidates = [] of Int32
+    end
     if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       ngram_candidates = [] of Int32
@@ -1481,7 +1494,7 @@ puts
 puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles}"
 if ngram_enabled
   ngram_rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
-  puts "ngram_stats accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{ngram_rate.round(2)}% cycles=#{ngram_cycles} disabled=#{ngram_disabled} pending_draft=#{pending_draft_tokens.size}"
+  puts "ngram_stats accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{ngram_rate.round(2)}% cycles=#{ngram_cycles} disabled=#{ngram_disabled} corridor_skips=#{ngram_corridor_skips} pending_draft=#{pending_draft_tokens.size}"
   if router_model
     avg_router_score = ngram_router_checks > 0 ? (ngram_router_score_sum / ngram_router_checks).round(4) : 0.0
     puts "ngram_router_stats checks=#{ngram_router_checks} skips=#{ngram_router_skips} threshold=#{router_model.not_nil!.threshold} avg_score=#{avg_router_score}"

@@ -1061,3 +1061,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The better LTP/WBA structure is: local trigger = repeated suffix, transport corridor = proposed continuation, legal move = exact staged verification, potential = `(reject_risk, verifier_rows, fallback_tax, remaining_work)`. Candidate-shape features estimate `reject_risk` before entering the corridor.
 - maieutic: The composite gate is still an offline hypothesis. It must be tested on long-context session-cache histories and near-miss code/structured repeats before becoming a runtime default.
 - adversary: This evidence is stronger than LM-333 but still repeat-suite only. Do not generalize to neural/self-draft or natural language prompts; use it only to shape the next n-gram/cache replay controller.
+
+**decision_update_335:** Added a default-off runtime n-gram corridor gate: `--ngram-corridor-gate` / `QWEN35_SPEC_NGRAM_CORRIDOR_GATE=1`. The gate skips n-gram verifier entry unless the candidate continuation is periodic enough or low-entropy enough (`lag4 > 0 || lag8 > 0 || entropy <= 0.6`). This encodes the LTP/WBA distinction between a local trigger (repeated suffix) and a legal transport corridor (candidate body shape), while preserving exact target fallback.
+
+**evidence_update_335:**
+- claim: "The default-off corridor gate builds and removes the observed bad repeat-suite n-gram corridor at runtime."
+  source: local no-codegen build passed; release build passed with `build/bridge.o` Metal link flags. A/B on all repeat prompts with `/tmp/qwen35_speculative_accept_corridor`, `tokens=16`, `ngram_target_only_staged_risk`, no warm verifier. Gate off cycle summary: n-gram `54/59`, one reject, n-gram wall `1260.8ms`, cycle gain `+425.4ms`. Gate on (`--ngram-corridor-gate`): n-gram `54/54`, zero rejects, n-gram wall `1081.3ms`, cycle gain `+416.8ms`; the skipped bad corridor falls back exactly.
+  verified_at: 2026-05-19
+  decay_trigger: `bin/qwen35_speculative_accept.cr` n-gram loop, candidate feature extraction, staged verifier, or prompt suite changes
+- claim: "The runtime gate preserves exact fallback accounting for a near-miss repeat."
+  source: direct local smoke on `repeat_sql_values`, `tokens=16`, `--ngram-corridor-gate`: `accept_rate=100.0% accepted=0/0`, `ngram_stats ... corridor_skips=1`, exact target-only continuation completed.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram skip path, target-only fallback loop, or stats output changes
+
+**quadrumvirate_update_335:**
+- cassandra: The gate removes reject tax but does not guarantee better total wall in every run because plain-target timing is noisy and skipped chunks become serial exact work. It is a correctness-safe lever, not yet a default speed win.
+- daedalus: Next frame shift is to pair this gate with active WBA known-span verification/session-cache replay; otherwise the fallback work still runs through the slower target-only loop.
+- maieutic: The legal move is now explicit, but the potential is still approximate. Promote only after long-context cache/replay gates show `proposal + verifier + fallback_tax < exact`.
+- adversary: Keep it default-off. The evidence covers synthetic repeat prompts and one near-miss path, not broad prompts or production session caches.
