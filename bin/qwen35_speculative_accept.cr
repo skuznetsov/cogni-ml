@@ -18,6 +18,10 @@ DEFAULT_TARGET    = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Q
 DEFAULT_DRAFT     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
 DEFAULT_TOKENIZER = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 
+def parse_i32_list(value : String) : Array(Int32)
+  value.split(",").map(&.strip).reject(&.empty?).map(&.to_i)
+end
+
 target_path = ENV["QWEN35_TARGET"]? || DEFAULT_TARGET
 draft_path = ENV["QWEN35_DRAFT"]? || DEFAULT_DRAFT
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
@@ -64,6 +68,11 @@ ngram_disable_after_reject = ENV["QWEN35_SPEC_NGRAM_DISABLE_AFTER_REJECT_OFF"]? 
 ngram_replay_on_reject = ENV["QWEN35_SPEC_NGRAM_REPLAY_ON_REJECT"]? == "1"
 ngram_target_only = ENV["QWEN35_SPEC_NGRAM_TARGET_ONLY"]? == "1"
 ngram_index_enabled = ENV["QWEN35_SPEC_NGRAM_INDEX_OFF"]? != "1"
+ngram_source_history = ENV["QWEN35_SPEC_NGRAM_SOURCE_HISTORY"]?.try { |v| parse_i32_list(v) } || [] of Int32
+ngram_replay_start = (ENV["QWEN35_SPEC_NGRAM_REPLAY_START"]? || "-1").to_i
+ngram_cursor_only = ENV["QWEN35_SPEC_NGRAM_CURSOR_ONLY"]? == "1"
+ngram_trusted_source = ENV["QWEN35_SPEC_NGRAM_TRUSTED_SOURCE"]? == "1"
+ngram_source_prefix_gate = ENV["QWEN35_SPEC_NGRAM_SOURCE_PREFIX_GATE_OFF"]? != "1"
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
@@ -113,6 +122,11 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram draft chunks after a rejected n-gram chunk") { ngram_disable_after_reject = false }
   parser.on("--ngram-replay-on-reject", "Research: skip n-gram state backups and rebuild exact target state only after a non-final reject") { ngram_replay_on_reject = true }
   parser.on("--ngram-target-only", "Research: after n-gram has no chunk, continue with exact target-only steps instead of neural draft") { ngram_target_only = true }
+  parser.on("--ngram-source-history LIST", "Comma-separated validated source/cache token IDs for cursor replay") { |value| ngram_source_history = parse_i32_list(value) }
+  parser.on("--ngram-replay-start N", "Start n-gram cursor replay at source-history offset N") { |value| ngram_replay_start = value.to_i }
+  parser.on("--ngram-cursor-only", "Only propose from an active source-history cursor; fallback instead of suffix-searching") { ngram_cursor_only = true }
+  parser.on("--ngram-trusted-source", "Bypass untrusted candidate-shape gates for source cursor proposals after prefix validation") { ngram_trusted_source = true }
+  parser.on("--ngram-no-source-prefix-gate", "Disable prompt-prefix validation before source cursor replay") { ngram_source_prefix_gate = false }
   parser.on("--no-warm-verifier", "Do not warm the target chunk-verifier route before decode timing") { warm_verifier = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
@@ -151,6 +165,13 @@ raise ArgumentError.new("QWEN35_SPEC_NGRAM_PROBE_GATE must be non-negative") unl
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_PROBE_MIN must be positive") unless ngram_probe_min > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_RISK_MIN_SIZE must be positive") unless ngram_risk_min_size > 0
 raise ArgumentError.new("QWEN35_SPEC_NGRAM_MIN_CANDIDATES must be non-negative") unless ngram_min_candidates >= 0
+raise ArgumentError.new("QWEN35_SPEC_NGRAM_REPLAY_START must be >= -1") unless ngram_replay_start >= -1
+raise ArgumentError.new("--ngram-cursor-only requires --ngram") if ngram_cursor_only && !ngram_enabled
+raise ArgumentError.new("--ngram-replay-start requires --ngram-source-history") if ngram_replay_start >= 0 && ngram_source_history.empty?
+raise ArgumentError.new("--ngram-trusted-source requires --ngram-source-history") if ngram_trusted_source && ngram_source_history.empty?
+raise ArgumentError.new("--ngram-trusted-source requires --ngram-cursor-only") if ngram_trusted_source && !ngram_cursor_only
+raise ArgumentError.new("--ngram-trusted-source requires --ngram-replay-start") if ngram_trusted_source && ngram_replay_start < 0
+raise ArgumentError.new("--ngram-trusted-source requires source prefix gate") if ngram_trusted_source && !ngram_source_prefix_gate
 raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_MIN must be positive") unless router_long_min > 0
 raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_THRESHOLD must be in [0,1]") if router_long_threshold && !(0.0..1.0).includes?(router_long_threshold.not_nil!)
 raise ArgumentError.new("router model not found: #{router_model_path}") if router_model_path && !File.file?(router_model_path.not_nil!)
@@ -674,6 +695,18 @@ end
 
 prompt_ids = tok.encode(prompt)
 raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
+ngram_source_prefix_checked = false
+ngram_source_prefix_match = true
+if ngram_enabled && ngram_replay_start >= 0
+  raise ArgumentError.new("--ngram-replay-start out of source history range") unless ngram_replay_start < ngram_source_history.size
+  if ngram_source_prefix_gate
+    source_prefix_start = ngram_replay_start - prompt_ids.size
+    ngram_source_prefix_checked = true
+    ngram_source_prefix_match = source_prefix_start >= 0 &&
+                                 source_prefix_start + prompt_ids.size <= ngram_source_history.size &&
+                                 ngram_source_history[source_prefix_start, prompt_ids.size] == prompt_ids
+  end
+end
 prompt_hash = fnv1a64_hex(prompt.to_slice)
 target_model_id = File.basename(target_path)
 draft_model_id = File.basename(draft_path)
@@ -683,7 +716,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -724,6 +757,8 @@ end
 generated_ids = [] of Int32
 history = prompt_ids.dup
 ngram_history = ngram_index_enabled ? ML::GGUF::NgramDraft::IndexedHistory.new(history, ngram_max, ngram_min) : nil
+ngram_replay_cursor = (ngram_enabled && ngram_replay_start >= 0 && (!ngram_source_prefix_gate || ngram_source_prefix_match)) ? ngram_replay_start : nil.as(Int32?)
+ngram_replay_limit = ngram_source_history.size
 pending_draft_tokens = [] of Int32
 pending_draft_start_pos = 0
 ngram_disabled = false
@@ -737,6 +772,11 @@ ngram_proposed = 0
 ngram_router_checks = 0
 ngram_router_skips = 0
 ngram_corridor_skips = 0
+ngram_cursor_hits = 0
+ngram_cursor_accepts = 0
+ngram_cursor_rejects = 0
+ngram_cursor_serial_advances = 0
+ngram_cursor_serial_drops = 0
 ngram_router_score_sum = 0.0
 target_verify_ms = 0.0
 proposal_ms = 0.0
@@ -767,30 +807,52 @@ while generated_ids.size < n_gen
   cycle_router_score = nil.as(Float64?)
   cycle_router_candidate_count = 0
   cycle_candidate_features = nil.as(Hash(String, Float64)?)
+  ngram_pending_replay_cursor = nil.as(Int32?)
+  ngram_from_trusted_source = false
 
   if !target_only && ngram_enabled && !ngram_disabled
     proposal0 = Time.instant
-    ngram_candidates = if index = ngram_history
-                         index.candidates(
-                           Math.min(ngram_gamma, n_gen - generated_ids.size),
-                           recursive: ngram_recursive,
-                           min_candidates: ngram_min_candidates)
-                       else
-                         ML::GGUF::NgramDraft.candidates(
-                           history,
-                           Math.min(ngram_gamma, n_gen - generated_ids.size),
-                           ngram_max,
-                           ngram_min,
-                           recursive: ngram_recursive,
-                           min_candidates: ngram_min_candidates)
-                       end
-    match_len = if index = ngram_history
-                  index.match_len
-                else
-                  ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
-                end
+    ngram_limit = Math.min(ngram_gamma, n_gen - generated_ids.size)
+    match_len = 0
+    ngram_candidates = [] of Int32
+    if cursor = ngram_replay_cursor
+      replay_count = Math.min(ngram_limit, ngram_replay_limit - cursor)
+      if replay_count > 0
+        ngram_candidates = ngram_source_history[cursor, replay_count]
+        if ngram_min_candidates > 0 && ngram_candidates.size < ngram_min_candidates
+          ngram_candidates = [] of Int32
+        else
+          ngram_pending_replay_cursor = cursor + ngram_candidates.size
+          ngram_from_trusted_source = ngram_trusted_source && (!ngram_source_prefix_gate || ngram_source_prefix_match)
+          ngram_cursor_hits += 1
+          match_len = ngram_max
+        end
+      end
+    end
+    if ngram_candidates.empty? && !ngram_cursor_only
+      if index = ngram_history
+        if span = index.candidate_span(
+             ngram_limit,
+             recursive: ngram_recursive,
+             min_candidates: ngram_min_candidates)
+          ngram_candidates = span.ids
+          match_len = span.match_len
+        else
+          match_len = index.match_len
+        end
+      else
+        ngram_candidates = ML::GGUF::NgramDraft.candidates(
+          history,
+          ngram_limit,
+          ngram_max,
+          ngram_min,
+          recursive: ngram_recursive,
+          min_candidates: ngram_min_candidates)
+        match_len = ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+      end
+    end
     cycle_candidate_features = ngram_candidates.empty? ? nil : ngram_candidate_feature_dump(ngram_candidates, match_len, ngram_max, tok)
-    if ngram_corridor_gate && (features = cycle_candidate_features) && !ngram_corridor_gate_pass?(
+    if ngram_corridor_gate && !ngram_from_trusted_source && (features = cycle_candidate_features) && !ngram_corridor_gate_pass?(
          ngram_candidates,
          features,
          match_len,
@@ -802,7 +864,7 @@ while generated_ids.size < n_gen
       ngram_corridor_skips += 1
       ngram_candidates = [] of Int32
     end
-    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
+    if ngram_risk_gate && !ngram_from_trusted_source && ML::GGUF::NgramDraft.risky_candidate_shape?(ngram_candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       ngram_candidates = [] of Int32
     end
@@ -836,11 +898,6 @@ while generated_ids.size < n_gen
       cycle_commit0 = commit_ms
       cycle_target_replay0 = target_replay_ms
       ngram_disabled_before = ngram_disabled
-      match_len = if index = ngram_history
-                    index.match_len
-                  else
-                    ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
-                  end
       ngram_cycles += 1
       ngram_proposed += ngram_candidates.size
       proposed += ngram_candidates.size
@@ -959,6 +1016,15 @@ while generated_ids.size < n_gen
         ngram_history.try &.append(new_history)
         commit_ms += (Time.instant - commit0).total_milliseconds
       end
+      if ngram_pending_replay_cursor
+        if rejected
+          ngram_replay_cursor = nil
+          ngram_cursor_rejects += 1
+        else
+          ngram_replay_cursor = ngram_pending_replay_cursor
+          ngram_cursor_accepts += 1
+        end
+      end
       if dump_cycles_path
         record_candidates = dump_cycle_token_ids ? ngram_candidates.dup : nil
         record = CycleDump.new(
@@ -1023,6 +1089,18 @@ while generated_ids.size < n_gen
     new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
     history.concat(new_history)
     ngram_history.try &.append(new_history)
+    if ngram_enabled
+      if cursor = ngram_replay_cursor
+        exact_id = new_history[0]?
+        if exact_id && cursor < ngram_replay_limit && ngram_source_history[cursor]? == exact_id
+          ngram_replay_cursor = cursor + 1
+          ngram_cursor_serial_advances += 1
+        else
+          ngram_replay_cursor = nil
+          ngram_cursor_serial_drops += 1
+        end
+      end
+    end
     commit_ms += (Time.instant - commit0).total_milliseconds
     if dump_cycles_path
       record = CycleDump.new(
@@ -1514,7 +1592,7 @@ puts
 puts "accept_rate=#{(accept_rate * 100.0).round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles}"
 if ngram_enabled
   ngram_rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
-  puts "ngram_stats accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{ngram_rate.round(2)}% cycles=#{ngram_cycles} disabled=#{ngram_disabled} corridor_skips=#{ngram_corridor_skips} pending_draft=#{pending_draft_tokens.size}"
+  puts "ngram_stats accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{ngram_rate.round(2)}% cycles=#{ngram_cycles} disabled=#{ngram_disabled} corridor_skips=#{ngram_corridor_skips} cursor_hits=#{ngram_cursor_hits} cursor_accepts=#{ngram_cursor_accepts} cursor_rejects=#{ngram_cursor_rejects} cursor_serial_advances=#{ngram_cursor_serial_advances} cursor_serial_drops=#{ngram_cursor_serial_drops} source_prefix_checked=#{ngram_source_prefix_checked} source_prefix_match=#{ngram_source_prefix_match} pending_draft=#{pending_draft_tokens.size}"
   if router_model
     avg_router_score = ngram_router_checks > 0 ? (ngram_router_score_sum / ngram_router_checks).round(4) : 0.0
     puts "ngram_router_stats checks=#{ngram_router_checks} skips=#{ngram_router_skips} threshold=#{router_model.not_nil!.threshold} avg_score=#{avg_router_score}"

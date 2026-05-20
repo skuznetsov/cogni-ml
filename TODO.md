@@ -1239,6 +1239,26 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **next_steps_update_343:**
 - [x] Add a named sweep policy for the current verified corridor recipe: `ngram_target_only_staged_corridor_min6`.
 - [x] Add sweep-only category fail-closed gating for measuring routed policies.
-- [ ] Build the real router around validated source/cache cursors or runtime corridor detection, not static prompt category labels.
+- [x] Add Metal harness source-cache cursor replay with prefix validation and cursor-only trusted-source mode.
+- [ ] Wire real prompt-cache/session artifacts to provide `--ngram-source-history` and `--ngram-replay-start` automatically.
+- [ ] Build the remaining runtime corridor detector for non-cache histories; do not use static prompt category labels as the production router.
 - [ ] Run the same policy on real session-cache traces and trusted cursor replay when CUDA/remote access is restored.
 - [ ] Avoid more hand-tuned risk predicates until a larger trace corpus shows a repeated false-positive family.
+
+**decision_update_345:** Ported the CUDA-style validated source cursor into the Metal speculative acceptance harness. This is the real LTP/WBA legal frame we wanted: cache/session replay proposes from a known source continuation after exact prompt-prefix validation, and untrusted/mismatched sources fail closed.
+
+**evidence_update_345:**
+- claim: "Metal source-cursor replay builds and accepts a validated repeated source continuation."
+  source: `crystal build --no-codegen bin/qwen35_speculative_accept.cr --error-trace` passed. Release runner `/tmp/qwen35_speculative_accept_source_cursor`, prompt `alpha beta gamma delta alpha beta gamma delta`, `tokens=16`, staged verifier, source history equal to prompt ids plus four repeated `alpha beta gamma delta` continuations, `--ngram-replay-start 8 --ngram-cursor-only --ngram-trusted-source`: `source_prefix_match=true`, `cursor_hits=1`, `cursor_accepts=1`, n-gram `16/16`, `14.78 ms/tok` vs plain exact `18.92 ms/tok`.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram source cursor options, prompt tokenizer, staged verifier path, or source-prefix validation changes
+- claim: "Corrupted source prefix fails closed without entering n-gram verifier."
+  source: same runner with first source-history token corrupted, `tokens=4`: `source_prefix_match=false`, `cursor_hits=0`, n-gram `0/0`, exact fallback `ngram_target_only=4`.
+  verified_at: 2026-05-19
+  decay_trigger: source-prefix validation, cursor-only fallback, or n-gram target-only path changes
+
+**quadrumvirate_update_345:**
+- cassandra: Validated source cursor should be safer than heuristic suffix replay because the proposal comes from an exact cached trajectory. Failure mode is stale/wrong source metadata; prefix validation is mandatory.
+- daedalus: The router pivot is from "classify prompt" to "validate a transport corridor". Source/cache cursor is a legal transport map; prompt category is only a weak proxy.
+- maieutic: Current CLI still requires explicit token IDs. The production value appears only when prompt-cache artifacts can supply source histories and replay offsets automatically.
+- adversary: Do not generalize the synthetic repeat speedup. The verified result is the primitive and fail-closed behavior, not session-cache performance.

@@ -14159,3 +14159,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: no-codegen build passed. Two-prompt smoke with `ngram_target_only_staged_corridor_min6=repeat` kept `repeat_alpha4` on n-gram (`13/13`) and sent `templ_checklist_metal_gemv` to exact fallback (`0/0`). Full mixed64 one-shot with the same gate had n-gram `52/52`, zero rejects, avg `0.986x`, median ratio `0.986x`; one outlier (`fact_cpu_gpu`, `68.06 ms/tok`) makes the mean noisy, but the median also does not show a win.
 - implication: Static prompt-category gating is too coarse. The production route should be source/cache-cursor validation or a runtime corridor detector, not a hand-labeled prompt category.
 - trust: {F:0.82,G:0.42,R:0.82}
+
+**LM-345 Metal ngram source-cursor replay hook [shared/ml]**
+- status: VERIFIED local Metal harness primitive
+- claim: `bin/qwen35_speculative_accept.cr` now has the same source/cache cursor legal frame as the CUDA probe: a validated source-history prefix can drive n-gram cursor proposals, optionally cursor-only and trusted, while prefix mismatch fails closed to exact target-only steps.
+- evidence: local no-codegen build passed. Release runner `/tmp/qwen35_speculative_accept_source_cursor` on `alpha beta gamma delta alpha beta gamma delta`, `tokens=16`, staged verifier, `--ngram-source-history`, `--ngram-replay-start 8`, `--ngram-cursor-only`, `--ngram-trusted-source` reported `source_prefix_match=true`, `cursor_hits=1`, n-gram `16/16`, and `14.78 ms/tok` versus plain exact `18.92 ms/tok`. A hostile prefix-mismatch smoke with a corrupted first source token reported `source_prefix_match=false`, `cursor_hits=0`, n-gram `0/0`, and exact fallback `ngram_target_only=4`.
+- implication: This is the correct LTP/WBA runtime boundary for session-cache replay on Metal: validated source cursor is a stronger legal frame than heuristic candidate-shape gates; unvalidated/mismatched source fails closed without verifier risk.
+- caveat: The speed smoke is a synthetic repeated-token corridor and should not be generalized. Next evidence needs real prompt-cache/session histories with artifact restore and source-history construction from cache metadata.
+- trust: {F:0.86,G:0.48,R:0.86}
