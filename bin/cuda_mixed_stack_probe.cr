@@ -105,10 +105,11 @@ end
 def qwen_snapshot_from_host_decode_snapshot(snapshot : ML::CUDA::QwenMixedStackRunner::HostDecodeStateSnapshot,
                                             layer_ids : Array(Int32),
                                             runners : Array(ML::CUDA::QwenMixedStackRunner::LayerRunner),
-                                            max_seq : Int32) : ML::GGUF::Qwen35StateSnapshot::Snapshot
+                                            max_seq : Int32,
+                                            restored_position : Int32) : ML::GGUF::Qwen35StateSnapshot::Snapshot
   max_layer = layer_ids.max?
   layer_count = max_layer ? max_layer.not_nil! + 1 : 0
-  position = snapshot.kv_tokens || max_seq
+  position = snapshot.kv_tokens || restored_position
   positions = Array(Int32).new(layer_count, position)
   records = [] of ML::GGUF::Qwen35StateSnapshot::Record
   idx = 0
@@ -149,11 +150,12 @@ def write_read_encoded_qkv_artifact(snapshot : ML::CUDA::QwenMixedStackRunner::H
                                     layer_ids : Array(Int32),
                                     runners : Array(ML::CUDA::QwenMixedStackRunner::LayerRunner),
                                     max_seq : Int32,
+                                    restored_position : Int32,
                                     codec_format : String,
                                     block_size : Int32,
                                     mmap_read : Bool = false) : EncodedQkvArtifactProbe
   artifact_codec = codec_format == "bf16" ? "recurrent-bf16" : "recurrent-int8"
-  qwen_snapshot = qwen_snapshot_from_host_decode_snapshot(snapshot, layer_ids, runners, max_seq)
+  qwen_snapshot = qwen_snapshot_from_host_decode_snapshot(snapshot, layer_ids, runners, max_seq, restored_position)
   path = File.tempname("cogni-qwen-encoded-artifact", ".qkv")
   begin
     t_encode = Time.instant
@@ -1529,6 +1531,12 @@ begin
                          else
                            tokens
                          end
+  # Some full-cache artifact restore paths may restore full-attention decode
+  # positions at max_seq. Live-KV artifacts carry the actual cursor and only
+  # need the replay span above.
+  if known_replay_trusted_artifact_restore && !known_replay_trusted_artifact_live_kv
+    decode_position_span = Math.max(decode_position_span, max_seq)
+  end
   rope_table_tokens = start_pos + decode_position_span
   cos_table, sin_table = rope_tables(rope_table_tokens, 0, hparams.rope_dim_count, hparams.rope_freq_base)
 
@@ -2362,7 +2370,7 @@ begin
             codec_decoded_snapshot = codec.decoded_snapshot
             if codec_policy_gpu_decode
               if known_replay_trusted_artifact_encoded_restorer
-                encoded_probe = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, codec_policy_format, known_replay_trusted_artifact_codec_block, known_replay_trusted_artifact_encoded_mmap_read)
+                encoded_probe = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, artifact_live_kv_tokens, codec_policy_format, known_replay_trusted_artifact_codec_block, known_replay_trusted_artifact_encoded_mmap_read)
                 known_replay_trusted_artifact_encoded_artifact_bytes = encoded_probe.byte_size
                 known_replay_trusted_artifact_encoded_artifact_encode_ms = encoded_probe.encode_ms
                 known_replay_trusted_artifact_encoded_artifact_write_ms = encoded_probe.write_ms
@@ -2396,7 +2404,7 @@ begin
               if known_replay_trusted_artifact_encoded_restorer
                 raise "--known-replay-trusted-artifact-encoded-restorer is incompatible with raw recurrent layer fallback" unless known_replay_trusted_artifact_codec_raw_recurrent_layers.empty?
 
-                encoded_probe = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, codec_policy_format, known_replay_trusted_artifact_codec_block, known_replay_trusted_artifact_encoded_mmap_read)
+                encoded_probe = write_read_encoded_qkv_artifact(artifact_snapshot, layers, runners, max_seq, artifact_live_kv_tokens, codec_policy_format, known_replay_trusted_artifact_codec_block, known_replay_trusted_artifact_encoded_mmap_read)
                 known_replay_trusted_artifact_encoded_artifact_bytes = encoded_probe.byte_size
                 known_replay_trusted_artifact_encoded_artifact_encode_ms = encoded_probe.encode_ms
                 known_replay_trusted_artifact_encoded_artifact_write_ms = encoded_probe.write_ms

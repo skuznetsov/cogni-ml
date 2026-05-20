@@ -1504,3 +1504,33 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The product controller is now high-precision but low-recall for local suffix replay. The next real speed source is trusted cache/session cursor replay or a learned router, not reopening lag8 with another ad hoc patch.
 - maieutic: One-shot paired CLI timings are noisy because every run reloads the model; use this for policy safety, not fine-grained speed ranking.
 - adversary: Keep larger session traces open. This 12-prompt trace is not enough to recover skipped valid period-8 opportunities safely.
+
+**decision_update_358:** Refreshed the CUDA Qwen3.5-9B gates after re-uploading the committed tree to the rebooted reefy host, then fixed a full-cache encoded artifact restore crash. Crystal `1.20.2` and the CUDA driver path are operational on the RTX 5060 Ti. Plain all-layer greedy remains around `23.39 ms/tok`; trusted source cursor replay with one bulk WBA band remains around `10.85 ms/tok`; compressed encoded artifact hot restore remains sub-`1 ms` restore after preupload and around `0.68-0.71 ms/tok` for 16-token cache fast-forward accounting.
+
+**evidence_update_358:**
+- claim: "Remote reefy CUDA toolchain and uploaded repo are usable after the host reset."
+  source: remote `crystal --version` printed `Crystal 1.20.2`; `nvidia-smi` saw `NVIDIA GeForce RTX 5060 Ti, 16311 MiB, 595.45.04`; uploaded `/build/persisten/cogni-ml/TODO.md` contained `decision_update_357`. `crystal build --release --no-debug -Dcpu_only bin/cuda_mixed_stack_probe.cr -o build/cuda_mixed_stack_probe` passed.
+  verified_at: 2026-05-20
+  decay_trigger: reefy host reset, driver/toolchain change, or repo re-upload
+- claim: "Same-host CUDA baseline and trusted source cursor replay still match prior speed bands."
+  source: remote all-layer Qwen3.5-9B Q4_K_M plain greedy `--greedy-loop-tokens 64` measured `cuda_ms=1496.78`, `cuda_ms_per_token=23.387`, `ok=true`. Trusted source cursor replay over the same generated 64-token source history with schedule `64` accepted `64/64`, `chunk_probe_ngram_source_prefix_match=true`, `chunk_probe_active_verify_ms=687.798`, `cuda_ms=694.059`, `cuda_ms_per_token=10.845`, `ok=true`.
+  verified_at: 2026-05-20
+  decay_trigger: CUDA WBA verifier kernels, source-history controller, GPU driver, or benchmark history distribution changes
+- claim: "Verifier-body attribution is stable: recurrent FFN plus output head remain the wall."
+  source: remote `--known-replay-active-schedule-run 64 --profile-phases` accepted `64/64`, `cuda_ms=693.932`, `phase_total_ms=692.461`, `phase_head_ms=75.818` with `phase_head_logits_ms=69.229`; representative recurrent layers stayed around `19.4-20.3 ms` with FFN around `11.0-11.9 ms` per 64-token band.
+  verified_at: 2026-05-20
+  decay_trigger: phase profiler, FFN/head kernels, active band size, or quant route changes
+- claim: "Encoded compressed artifact restore needs live cursor positions even when storing full KV bytes; the probe no longer crashes on full-cache encoded artifacts."
+  source: before the fix, full-cache encoded-restorer gate without `--known-replay-trusted-artifact-live-kv` crashed with `resident cos/sin table too small`. Patch passes the artifact restored cursor into v2 snapshot positions and sizes RoPE for full-cache snapshots. Local `crystal build -Dcpu_only --no-codegen bin/cuda_mixed_stack_probe.cr` passed. Remote rebuilt probe reran the same full-cache BF16 early gate without live-KV and passed: `known_replay_trusted_artifact_codec_continuation_parity_count=16`, `known_replay_trusted_artifact_codec_free_run_parity_count=16`, `known_replay_trusted_artifact_encoded_artifact_load_ms=1.169`, `cold_load_ms=15.79`, `ok=true`.
+  verified_at: 2026-05-20
+  decay_trigger: qkv artifact snapshot positions, encoded restorer, or RoPE table sizing changes
+- claim: "Live-KV encoded compressed artifact hot restore remains the product-shaped lower bound."
+  source: remote live-KV encoded mmap+preupload gate over start1 selected BF16 before `min_start`, passed continuation/free-run `16/16`, `encoded_artifact_load_ms=1.05`, `cold_load_ms=9.074`, GPU restore `0.336 ms`, `cuda_ms=10.831` for 16 cached tokens. Start33 selected block8 INT8 after `min_start`, passed `16/16`, `encoded_artifact_load_ms=1.003`, `cold_load_ms=7.726`, GPU restore `0.359 ms`, `cuda_ms=11.33`.
+  verified_at: 2026-05-20
+  decay_trigger: encoded artifact preupload, BF16/INT8 codec policy, live-KV artifact layout, or cache validation policy changes
+
+**quadrumvirate_update_358:**
+- cassandra: The stable bottleneck after reboot is still exact verifier body work, not rollback or source-cursor plumbing. Full-cache artifact position metadata was the hidden edge case.
+- daedalus: For cache hits, the stronger frame remains validated artifact fast-forward; for verified replay, the next kernel target is FFN/head body economics.
+- maieutic: Trusted artifact restore is not general generation. It requires same-model/tokenizer/source/state validation; otherwise exact verifier replay or plain decode remains the legal fallback.
+- adversary: Keep live-KV as the product-shaped path. Full-cache snapshots now avoid the crash, but they store/copy more KV than necessary and should mainly be a compatibility/debug path.

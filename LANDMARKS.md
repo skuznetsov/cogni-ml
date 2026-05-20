@@ -14267,3 +14267,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The product local-suffix n-gram router is now high-precision and low-recall on this small suite. Further speed should come from trusted cache/session cursor replay or learned routing, not more hand-tuned local suffix predicates.
 - caveat: One-shot CLI timing is noisy and the suite is small. This is policy-safety evidence, not a broad throughput benchmark.
 - trust: {F:0.84,G:0.54,R:0.84}
+
+**LM-358 CUDA reefy refresh and artifact-position fix [shared/ml]**
+- status: VERIFIED remote CUDA gate + local compile guard
+- claim: After re-uploading the repo to the rebooted reefy host, the CUDA Qwen3.5-9B path is operational and still shows the same speed structure: plain greedy around `23.39 ms/tok`, trusted source cursor bulk WBA replay around `10.85 ms/tok`, and encoded compressed artifact hot restore around `0.33-0.36 ms` GPU restore after preupload.
+- evidence: reefy reported `Crystal 1.20.2`, RTX 5060 Ti `16GB`, uploaded TODO marker `decision_update_357`, and remote release build of `bin/cuda_mixed_stack_probe.cr` passed. Plain gen64 measured `1496.78 ms / 23.387 ms/tok`. Trusted source cursor schedule64 accepted `64/64` at `694.059 ms / 10.845 ms/tok`. Known replay profile schedule64 accepted `64/64`, `phase_total_ms=692.461`, `phase_head_ms=75.818`, with recurrent FFN still around `11-12 ms` per 64-token layer band. Live-KV encoded artifact gates passed BF16 early and block8 INT8 late with continuation/free-run `16/16`, hot load around `1.0 ms`, cold load `7.7-9.1 ms`, and GPU restore `0.336-0.359 ms`.
+- implementation: `bin/cuda_mixed_stack_probe.cr` now passes the actual restored cursor into encoded `.qkv` snapshot positions and sizes resident RoPE tables for full-cache artifact snapshots. This fixes the no-live-KV encoded artifact regression that previously crashed with `resident cos/sin table too small`.
+- implication: LTP/WBA cache acceleration has two valid frames: exact WBA verifier replay for source cursors, and validated artifact fast-forward for session/hash cache hits. The current exact verifier wall remains FFN/head work; artifact restore moves that work out of the token-critical path under a stronger cache contract.
+- caveat: Full-cache artifact snapshots are now robust but less product-shaped than live-KV snapshots. The speed claims are for one RTX 5060 Ti host and one generated source history; broader prompt/session and llama.cpp refreshed comparisons remain separate gates.
+- trust: {F:0.88,G:0.58,R:0.88}
