@@ -1610,3 +1610,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The larger product frame remains resident/session cache with in-memory or preuploaded state artifacts; restore-into is the safe compatibility step toward that frame.
 - maieutic: Reusing a prepared state is only legal on shape-compatible artifacts. The implementation keeps a strict `max_seq` guard and falls back when shapes differ.
 - adversary: Do not count the `34.8 ms` one-shot restore as a stable improvement claim; use it only as smoke evidence that the product path stayed exact.
+
+**decision_update_363:** Added a default-off resident prompt-state cache for same-process session hits. `Qwen35PromptCache::Store` now accepts `resident_state_cache_entries` and also reads `QWEN35_PROMPT_CACHE_RESIDENT_STATES`; positive values keep restored states in memory keyed by artifact hash/backend/shape. Hot restores copy from the resident template into a caller-provided prepared state with `copy_state_metal_used!`, avoiding artifact reread/decode on repeated hits in a daemon/server process.
+
+**evidence_update_363:**
+- claim: "Resident prompt-state cache avoids artifact reread on a hot same-process restore."
+  source: new focused prompt-cache spec creates a store with `resident_state_cache_entries: 1`, saves/restores a prompt state once, deletes the `.qkv` artifact, then restores the same entry again into a prepared state and verifies next-token top1/logit parity. Focused spec command passed: `crystal spec spec/qwen35_prompt_cache_spec.cr spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` (`22 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: resident cache keying, Store.restore, State.copy_from/copy_state_metal_used, or artifact trust validation changes
+- claim: "The practical CLI accepts the resident-state env switch without changing one-shot correctness."
+  source: release `/tmp/qwen35_generate_resident_cache` with `QWEN35_PROMPT_CACHE_RESIDENT_STATES=1`, prompt-cache/source-history repeat, explicit n-gram `gamma=16`, accepted source replay `16/16` and completed the request summary. One-shot `cache_restore_ms` stayed high because a new process has no resident hot state.
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate Store construction or prompt-cache env parsing changes
+
+**quadrumvirate_update_363:**
+- cassandra: This will not improve separate CLI invocations; it is for resident server/session loops where the same Store instance survives across requests.
+- daedalus: The speed frame is now explicit: cold artifact restore remains disk/CPU/upload; hot resident restore becomes GPU/CPU state copy, matching the resident WBA replay measurement frame.
+- maieutic: A cached state cannot be returned directly because the verifier mutates state. The legal move is copy-from-template into a fresh/request state.
+- adversary: The cache is default-off and bounded. Trust still depends on the original artifact metadata validation; hot entries are populated only after a valid cold restore.

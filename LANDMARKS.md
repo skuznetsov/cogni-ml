@@ -14311,3 +14311,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The product cache path now has the ownership primitive needed for resident/session-cache fast restore. The next larger speed step is avoiding disk/CPU artifact decode on hot session hits, not more one-shot CLI retuning.
 - caveat: Strict same-shape restore is intentional. Cross-`max_seq` partial live-KV restore is a separate feature because artifacts currently store full KV capacity, not live KV byte ranges.
 - trust: {F:0.88,G:0.60,R:0.88}
+
+**LM-363 resident prompt-state cache for same-process session hits [shared/ml]**
+- status: VERIFIED local correctness guard
+- claim: Same-process prompt-cache hits can bypass artifact reread/decode by retaining a bounded resident state template and copying it into each request state.
+- evidence: `Qwen35PromptCache::Store` now accepts `resident_state_cache_entries` and `QWEN35_PROMPT_CACHE_RESIDENT_STATES`. Focused specs passed with Metal bridge link flags (`22 examples, 0 failures`); the new spec populates the resident cache, deletes the `.qkv` artifact, restores again from resident state, and verifies next-token parity. A release `qwen35_generate` one-shot smoke with `QWEN35_PROMPT_CACHE_RESIDENT_STATES=1` accepted source replay `16/16`, confirming env wiring without claiming one-shot speed.
+- implementation: hot entries are keyed by backend, artifact SHA, max sequence, and layer count. The cache stores a forked template so callers never mutate the resident copy; hot restore copies into a provided compatible request state using `copy_state_metal_used!` on Metal.
+- implication: This gives the product/session path the same kind of hot-state transport used by the resident source-replay benchmark. The next benchmark should measure a daemon-style loop, not separate CLI invocations.
+- caveat: Default is `0` entries. This is a memory/latency trade-off for resident processes only; it does not change cold cache restore or plain generation speed.
+- trust: {F:0.88,G:0.62,R:0.88}

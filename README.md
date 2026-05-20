@@ -509,6 +509,7 @@ Useful Qwen environment switches:
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
 | `QWEN35_PROMPT_TOKEN_CACHE_OFF=1` | Disable tokenized-prompt cache lookup/save while keeping prompt-state cache enabled. |
 | `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN=64` | Minimum requested generation length before a full-prompt cache hit can skip suffix replay and use stored next-token metadata. Lower values are useful for experiments but can move first model work into `decode_ms` without improving total wall time. |
+| `QWEN35_PROMPT_CACHE_RESIDENT_STATES=0` | Number of restored prompt-cache states to keep hot in a resident process. `0` disables the in-memory state cache. Positive values avoid rereading and redecompressing `.qkv` artifacts on repeated same-process session hits. |
 | `QWEN35_NATIVE_TOKENIZER_OFF=1` | Disable the native Crystal Qwen BPE encoder and use the external `llama-tokenize` bootstrap path. |
 | `QWEN35_PREPARE_STATE_OFF=1` | Disable eager Metal state-buffer preparation in `qwen35_generate`. By default the CLI prepares KV/DeltaNet buffers before timing prompt ingest. |
 | `QWEN35_METAL_PROFILE=1` | Enable Metal dispatch/profile attribution for the timed decode region in `qwen35_generate`. The report includes wave/group timings, prefill/source-replay phase traces, matmul logical traffic, conversion traffic, and CPU fallback counts. |

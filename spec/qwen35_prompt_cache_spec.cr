@@ -386,6 +386,53 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "can serve a hot restore from the resident state cache without rereading the artifact" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_PROMPT_CACHE)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32] # "The capital of France is"
+    prompt_text = "The capital of France is"
+
+    root = File.tempname("qwen35-resident-prompt-cache")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root, resident_state_cache_entries: 1)
+      live = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      prompt.each_with_index do |token_id, pos|
+        ML::GGUF::Qwen35CPU.forward_top1(w, token_id, pos.to_i32, live)
+      end
+
+      saved = store.save(
+        session_id: "resident-session",
+        model_id: "qwen35-9b-q4km-test",
+        tokenizer_id: "qwen35-tokenizer-test",
+        prompt_text: prompt_text,
+        token_ids: prompt,
+        state: live,
+      )
+      hit = store.lookup_prompt(
+        "qwen35-9b-q4km-test",
+        "qwen35-tokenizer-test",
+        prompt_text,
+        prompt,
+      ).not_nil!
+
+      store.restore(hit, hp)
+      File.delete(saved.artifact_path)
+
+      reuse = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(reuse, hp) if ML::GGUF::Qwen35Metal.available?
+      restored = store.restore(hit, hp, reuse_state: reuse)
+
+      live_top, live_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, live)
+      restored_top, restored_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, restored)
+
+      restored_top.should eq(live_top)
+      restored_logit.should be_close(live_logit, 1e-4_f32)
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "restores the longest cached prefix and replays only the suffix" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_PROMPT_CACHE)
     hp = w.hparams

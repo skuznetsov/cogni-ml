@@ -132,10 +132,15 @@ module ML::GGUF
       getter source_history_manifest_path : String
       getter tokenized_prompt_manifest_path : String
 
-      def initialize(@root : String = Qwen35PromptCache.default_root)
+      def initialize(@root : String = Qwen35PromptCache.default_root,
+                     resident_state_cache_entries : Int32? = nil)
         @manifest_path = File.join(@root, "manifest.jsonl")
         @source_history_manifest_path = File.join(@root, "source_history.jsonl")
         @tokenized_prompt_manifest_path = File.join(@root, "tokenized_prompts.jsonl")
+        @resident_state_cache_limit = resident_state_cache_entries || (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
+        raise ArgumentError.new("resident_state_cache_entries must be non-negative") if @resident_state_cache_limit < 0
+        @resident_state_cache = {} of String => Qwen35CPU::State
+        @resident_state_cache_order = [] of String
       end
 
       def save(session_id : String,
@@ -264,6 +269,9 @@ module ML::GGUF
                   reuse_state : Qwen35CPU::State? = nil) : Qwen35CPU::State
         raise ArgumentError.new("unsupported Qwen prompt-cache runtime: #{entry.runtime_id}") unless entry.runtime_id == RUNTIME_ID
         Qwen35PromptCache.validate_restorable_artifact!(entry)
+        if state = restore_resident_state(entry, hp, prefer_metal, reuse_state)
+          return state
+        end
 
         snapshot = Qwen35StateSnapshot.read_artifact(
           entry.artifact_path,
@@ -275,9 +283,12 @@ module ML::GGUF
         raise ArgumentError.new("prompt-cache layer count mismatch") unless snapshot.layer_count == entry.layer_count
         if state = reuse_state
           Qwen35StateSnapshot.restore_into(snapshot, hp, state, prefer_metal: prefer_metal)
+          remember_resident_state(entry, prefer_metal, state)
           state
         else
-          Qwen35StateSnapshot.restore(snapshot, hp, prefer_metal: prefer_metal)
+          state = Qwen35StateSnapshot.restore(snapshot, hp, prefer_metal: prefer_metal)
+          remember_resident_state(entry, prefer_metal, state)
+          state
         end
       end
 
@@ -466,6 +477,54 @@ module ML::GGUF
                                 prefix_len : Int32) : String
         bucket = Qwen35PromptCache.short_hash("#{model_id}\0#{tokenizer_id}")
         File.join(@root, "artifacts", bucket, "#{prefix_len}-#{prompt_hash.downcase}.qkv")
+      end
+
+      private def restore_resident_state(entry : Entry,
+                                         hp : Qwen35Hparams,
+                                         prefer_metal : Bool,
+                                         reuse_state : Qwen35CPU::State?) : Qwen35CPU::State?
+        return nil if @resident_state_cache_limit <= 0
+        cached = @resident_state_cache[resident_state_cache_key(entry, prefer_metal)]?
+        return nil unless cached
+
+        touch_resident_state(entry, prefer_metal)
+        if state = reuse_state
+          return nil unless state.max_seq == cached.max_seq
+
+          if prefer_metal && Qwen35Metal.available?
+            Qwen35CPU.prepare_state_metal!(state, hp, clear: false)
+            Qwen35CPU.copy_state_metal_used!(state, cached, hp, used_tokens: entry.prefix_len)
+          else
+            state.copy_from!(cached)
+          end
+          state
+        else
+          cached.fork
+        end
+      end
+
+      private def remember_resident_state(entry : Entry, prefer_metal : Bool, state : Qwen35CPU::State) : Nil
+        return if @resident_state_cache_limit <= 0
+
+        key = resident_state_cache_key(entry, prefer_metal)
+        @resident_state_cache[key] = state.fork
+        @resident_state_cache_order.delete(key)
+        @resident_state_cache_order << key
+        while @resident_state_cache_order.size > @resident_state_cache_limit
+          evicted = @resident_state_cache_order.shift
+          @resident_state_cache.delete(evicted)
+        end
+      end
+
+      private def touch_resident_state(entry : Entry, prefer_metal : Bool) : Nil
+        key = resident_state_cache_key(entry, prefer_metal)
+        @resident_state_cache_order.delete(key)
+        @resident_state_cache_order << key
+      end
+
+      private def resident_state_cache_key(entry : Entry, prefer_metal : Bool) : String
+        backend = prefer_metal ? "metal" : "cpu"
+        "#{backend}:#{entry.artifact_sha256}:#{entry.max_seq}:#{entry.layer_count}"
       end
     end
 
