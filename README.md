@@ -40,7 +40,8 @@ The native Qwen path targets `Qwen3.5-9B-Q4_K_M.gguf` on Apple Silicon. The code
 - DeltaNet/recurrent layers with GPU-resident recurrent state and chunked prefill scan.
 - Chunked prefill with final-token top1 shortcut.
 - Decode wave scheduling to reduce command-buffer boundaries.
-- Exact prompt-state save/restore and longest-prefix prompt cache.
+- Native Qwen BPE tokenizer with an external `llama-tokenize` fallback for A/B.
+- Exact prompt-state save/restore, tokenized-prompt reuse, and longest-prefix prompt cache.
 - Exact speculative decode harnesses:
   - neural draft with Qwen 3.5 0.8B Q8_0,
   - n-gram/cache draft for repeated/generated-template text,
@@ -429,12 +430,36 @@ QWEN35_SESSION_ID=demo \
 ./build/qwen35_generate "The capital of France is" 64
 ```
 
+With prompt cache enabled, `qwen35_generate` now caches two independent
+artifacts:
+
+- tokenized prompt text, so repeated prompts avoid the older external tokenizer
+  process path;
+- exact prompt state, including optional full-prompt next-token metadata for
+  long generations.
+
+The native tokenizer is the default. Set `QWEN35_NATIVE_TOKENIZER_OFF=1` only
+when comparing against the external `llama-tokenize` bootstrap path.
+
+Each generation ends with a compact request-phase summary:
+
+```text
+request summary: total_ms=... model_load_ms=... draft_load_ms=... tokenize_ms=... token_cache_hit=... state_prepare_ms=... source_history_lookup_ms=... cache_restore_ms=... prefill_ms=... decode_ms=... source_history_save_ms=... prompt_tokens=... output_tokens=...
+```
+
+Use `total_ms` for one-shot CLI latency. Use `decode_ms / output_tokens` only
+when comparing decoder loops after the model, tokenizer, prompt cache, and
+state setup costs are already accounted for.
+
 Useful Qwen environment switches:
 
 | Variable | Effect |
 |---|---|
 | `QWEN35_PROMPT_CACHE=1` | Enable exact prompt-state cache lookup/save in `qwen35_generate`. |
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
+| `QWEN35_PROMPT_TOKEN_CACHE_OFF=1` | Disable tokenized-prompt cache lookup/save while keeping prompt-state cache enabled. |
+| `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN=64` | Minimum requested generation length before a full-prompt cache hit can skip suffix replay and use stored next-token metadata. Lower values are useful for experiments but can move first model work into `decode_ms` without improving total wall time. |
+| `QWEN35_NATIVE_TOKENIZER_OFF=1` | Disable the native Crystal Qwen BPE encoder and use the external `llama-tokenize` bootstrap path. |
 | `QWEN35_PREPARE_STATE_OFF=1` | Disable eager Metal state-buffer preparation in `qwen35_generate`. By default the CLI prepares KV/DeltaNet buffers before timing prompt ingest. |
 | `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk gating; explicit policy overrides legacy mode envs. |
 | `QWEN35_TRACE_STEPS_OFF=1` | Suppress per-token/per-cycle trace lines in `qwen35_generate` while keeping summaries and final output. |
@@ -450,6 +475,7 @@ Useful Qwen environment switches:
 | `QWEN35_NGRAM_RECURSIVE_OFF=1` | Disable recursive n-gram extension through scratch history. |
 | `QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF=1` | Exploration mode: keep trying n-gram chunks after first rejection. |
 | `QWEN35_NGRAM_REPLAY_ON_REJECT=1` | Research/fast-path mode: skip n-gram target-state backups and rebuild the exact target state only after a non-final n-gram reject. Use with the default `auto` risk gate; it can regress badly when a large bad n-gram chunk is forced through verification. |
+| `QWEN35_NGRAM_CACHE_MIN_REMAINING=64` | In `auto`, require at least this many remaining requested tokens before using source-history/cache n-gram proposals. This keeps short cache-hit requests on the cheaper exact replay/greedy path. Explicit `ngram` defaults to `0` unless set. |
 | `QWEN35_SPECULATIVE_DECODE=1` | Enable exact neural speculative decode in `qwen35_generate` using the 0.8B draft. |
 | `QWEN35_DRAFT_MODEL=/path` | Override the Qwen 3.5 draft GGUF used by neural speculative decode. |
 | `QWEN35_SPEC_GAMMA=4` | Initial neural draft chunk size in `qwen35_generate`. |
@@ -663,6 +689,7 @@ Speculative decode caveats:
 - Neural speculative speed depends on draft acceptance. High-accept prompts are faster; rejection-heavy prompts quickly fall back to plain target decode.
 - In `qwen35_generate`, neural speculative decode is useful for longer high-accept generations. In a local 64-token smoke, `The capital of France is` measured `20.40 ms/tok` greedy, `16.61 ms/tok` neural speculative, and `15.10 ms/tok` neural speculative with guarded full-row verification. A 32-token smoke was slower due fixed draft/verifier overhead.
 - N-gram speculation is a workload-specialized path for repeated/generated-template text. `QWEN35_DECODE_POLICY=auto` is the recommended product profile: risk-gated, `min_candidates=8`, no neural fallback, and exact target-only fallback outside clean cheap-copy spans.
+- Prompt cache and source-history n-gram are request-level accelerators, so judge them by `total_ms`, not decode-only `ms/tok`. In a local repeated long-generation smoke, native tokenization removed the external tokenizer cost (`~560 ms -> ~0.1 ms`), tokenized-prompt cache made repeated tokenization effectively `0.0 ms`, and full-prompt cache plus source-history n-gram accepted `128/128` generated tokens with total wall around `1.55 s`. For short generations, the default `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN=64` avoids a misleading path that only shifts first model work between `cache_restore_ms` and `decode_ms`.
 - In the research acceptance harness, `--ngram-target-only` / `QWEN35_SPEC_NGRAM_TARGET_ONLY=1` skips neural draft fallback after the cheap n-gram proposal source and uses exact target-only steps instead. On a 27B mixed JSONL gate it beat neural default on `5/7` prompts with paired ratio `0.909x` when combined with `--ngram-risk-gate`, but its average speed was near plain target decode; the real win is on clean repeated spans.
 - The n-gram risk gate now also catches small-period prefix overruns such as IP/YAML tails. A focused 27B probe kept clean `alpha beta gamma` repeats at `~2.58x` while turning a YAML overrun from `0.80x` into fail-closed target-only `1.006x`.
 - The productization smoke after the structured-tail fix kept clean 27B repeats fast (`~2.55x` over plain), made a YAML-like overrun fail closed (`1.003x`), and had `ngram_target_only_risk` beat neural default on the tiny paired suite (`0.815x` ratio). Treat this as opt-in CLI evidence, not a broad default claim.
