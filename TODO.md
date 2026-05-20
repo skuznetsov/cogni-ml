@@ -1221,6 +1221,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
   source: proposal router oracle over `/tmp/qwen35_corridor_broad_min6` and `/tmp/qwen35_corridor_mixed64_min6`: source economics `ngram/ngram` has `143/143`, zero rejects, gain `+794.9ms`; with `--min-cycles 2`, only `repeat` is selected (`9` cycles, `+672.3ms`) while one-off `code` and `near` categories fail closed.
   verified_at: 2026-05-19
   decay_trigger: router oracle logic, prompt categories, or dump schema changes
+- claim: "The verified corridor recipe is now reproducible by named sweep policy."
+  source: `crystal build --no-codegen bin/qwen35_speculative_sweep.cr --error-trace` passed. Smoke with policy `ngram_target_only_staged_corridor_min6` on `repeat_alpha4` and `templ_checklist_metal_gemv` produced repeat n-gram `13/13`, template `0/0` exact fallback, avg `1.095x`, dump `/tmp/qwen35_corridor_named_policy_smoke`.
+  verified_at: 2026-05-19
+  decay_trigger: sweep policy table, speculative harness CLI options, or named policy semantics
 
 **quadrumvirate_update_343:**
 - cassandra: The false-positive pattern shifted from medium structured tails to short high-entropy match overrides. A minimum transport band is a cleaner guard than another token-shape micro-rule.
@@ -1229,6 +1233,7 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - adversary: Do not claim a production speedup from mixed64. The verified claim is zero-reject corridor selection plus a repeat-category routing boundary.
 
 **next_steps_update_343:**
-- [ ] Add or reuse a fail-closed router policy that enables n-gram only for repeat/source-cache corridors, with current recommended local args: `--ngram-corridor-gate --ngram-corridor-match-len-min 8 --ngram-corridor-lag8-min 1.0 --ngram-min-candidates 6 --ngram-risk-gate`.
+- [x] Add a named sweep policy for the current verified corridor recipe: `ngram_target_only_staged_corridor_min6`.
+- [ ] Add or reuse a fail-closed router policy that enables n-gram only for repeat/source-cache corridors instead of globally applying target-only n-gram mode.
 - [ ] Run the same policy on real session-cache traces and trusted cursor replay when CUDA/remote access is restored.
 - [ ] Avoid more hand-tuned risk predicates until a larger trace corpus shows a repeated false-positive family.
