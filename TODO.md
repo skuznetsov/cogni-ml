@@ -1373,3 +1373,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This is LTP/WBA at the session boundary: validated prompt text maps to token transport once, then the cached token corridor avoids repeated external work.
 - maieutic: Token IDs are prompt-derived data. Keeping this under `QWEN35_PROMPT_CACHE=1` is acceptable because prompt cache already stores sensitive local state, but docs should still treat it as local sensitive cache material.
 - adversary: Hash validation prevents corrupt token JSONL from producing hits. It does not solve first-time tokenization or replace a native BPE tokenizer; it only removes repeated external tokenization for identical prompts under the same model/tokenizer id.
+
+**decision_update_351:** Added a native Qwen3.5/Qwen3.6 GPT-2 BPE encoder and made it the default for `Qwen35Tokenizer`. The old external `llama-tokenize` path remains available via `QWEN35_NATIVE_TOKENIZER_OFF=1`.
+
+**evidence_update_351:**
+- claim: "Native Qwen3.5 BPE matches llama.cpp tokenization on representative prompts."
+  source: `crystal spec spec/qwen35_tokenizer_spec.cr --error-trace` passed (`4 examples, 0 failures`). The new parity spec compares native versus `llama-tokenize` for English, repeated text, code, YAML, accented Latin, Cyrillic, and Japanese prompts.
+  verified_at: 2026-05-19
+  decay_trigger: tokenizer pre-tokenizer regex, GGUF merge parsing, llama.cpp tokenization behavior, or Qwen tokenizer metadata changes
+- claim: "Cold prompt tokenization overhead is removed from one-shot CLI runs."
+  source: release runner `/tmp/qwen35_generate_native_tok`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=2`. Native tokenizer run: `tokenize_ms=0.1`, `total_ms=930.1`, generated ids `[8029, 13053]`. External fallback run with `QWEN35_NATIVE_TOKENIZER_OFF=1`: `tokenize_ms=561.4`, `total_ms=1524.8`, same generated ids `[8029, 13053]`.
+  verified_at: 2026-05-19
+  decay_trigger: CLI timing, native tokenizer default, external tokenizer path, or model GGUF metadata changes
+- claim: "The touched CLI still builds after native tokenizer wiring."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_crystal_cache crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed.
+  verified_at: 2026-05-19
+  decay_trigger: `Qwen35Tokenizer` constructor/API changes or `qwen35_generate` tokenization flow changes
+
+**quadrumvirate_update_351:**
+- cassandra: The main risk is tokenizer exactness drift. Parity against `llama-tokenize` on mixed prompts is a solid first guard, but broader tokenizer fixtures should be added before deleting the fallback.
+- daedalus: This is a better frame than caching alone: eliminate the external process boundary for cold prompts, keep token-cache for repeated prompt lookup.
+- maieutic: Model load grew slightly because merge ranks are now loaded into a hash, but the net one-shot request win is still large on measured prompts.
+- adversary: Native BPE does not yet cover special-token insertion beyond the current no-BOS Qwen path; if a future model enables BOS or special-token parsing, the fallback path should remain until parity specs cover it.

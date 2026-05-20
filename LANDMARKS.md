@@ -14209,3 +14209,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Repeated local sessions now avoid both prompt prefill and external tokenization when prompt cache hits. This is a process-boundary LTP/WBA win, not a Metal kernel win.
 - caveat: Token IDs are prompt-derived sensitive local data. This is scoped to explicit prompt-cache usage, and first-time prompts still pay external tokenization until a native BPE encoder replaces the bootstrap path.
 - trust: {F:0.88,G:0.65,R:0.88}
+
+**LM-351 native Qwen BPE tokenizer [shared/ml]**
+- status: VERIFIED local CLI speed lever
+- claim: `Qwen35Tokenizer` now has a native Crystal Qwen3.5/Qwen3.6 GPT-2 BPE encoder using `tokenizer.ggml.merges`, removing the external `llama-tokenize` process from cold CLI prompts.
+- evidence: tokenizer parity spec passed (`4 examples, 0 failures`) against `llama-tokenize` over English, repeated text, code, YAML, accented Latin, Cyrillic, and Japanese samples. Release `qwen35_generate` A/B on `alpha beta gamma delta alpha beta gamma delta`, `n_gen=2`, produced identical generated ids `[8029, 13053]`; native path measured `tokenize_ms=0.1`, `total_ms=930.1`, external fallback measured `tokenize_ms=561.4`, `total_ms=1524.8`.
+- implementation: Native encoder is default when merge ranks are available and no BOS insertion is requested. `QWEN35_NATIVE_TOKENIZER_OFF=1` keeps the old external path for A/B/debugging.
+- implication: First-time local CLI prompts now avoid the largest non-GPU overhead. Tokenized-prompt cache remains useful for repeated prompts and for avoiding even native encode work, but the cold path is no longer dominated by process startup.
+- caveat: Keep the fallback until parity coverage includes more special-token/BOS cases and longer multilingual fixtures.
+- trust: {F:0.88,G:0.62,R:0.88}

@@ -43,4 +43,39 @@ describe ML::GGUF::Qwen35Tokenizer do
     ids2 = tok.encode(sample)
     tok.decode(ids2).should eq(sample)
   end
+
+  it "native BPE encoder matches llama-tokenize on representative Qwen3.5 prompts" do
+    pending!("9B model not present") unless File.exists?(QWEN_9B_TOK)
+    pending!("llama-tokenize not built") unless File.exists?(LLAMA_TOKENIZE_BIN)
+
+    g = ML::GGUF::GGUFFile.new(QWEN_9B_TOK)
+    tok = ML::GGUF::Qwen35Tokenizer.from_gguf(g, QWEN_9B_TOK, LLAMA_TOKENIZE_BIN)
+    g.close
+
+    tok.native_encoder_available?.should be_true
+
+    samples = [
+      "Hello, world",
+      "The capital of France is Paris.",
+      "alpha beta gamma delta alpha beta gamma delta",
+      "def fibonacci(n):\n    return n if n < 2 else fibonacci(n-1) + fibonacci(n-2)",
+      "YAML:\n- host: api-1\n- host: api-2\n",
+      "Unicode: café, naïve, Привет, こんにちは",
+    ]
+
+    old = ENV["QWEN35_NATIVE_TOKENIZER_OFF"]?
+    samples.each do |sample|
+      native = tok.encode(sample)
+      ENV["QWEN35_NATIVE_TOKENIZER_OFF"] = "1"
+      external = tok.encode(sample)
+      native.should eq(external)
+      tok.decode(native).should eq(sample)
+    end
+  ensure
+    if old
+      ENV["QWEN35_NATIVE_TOKENIZER_OFF"] = old
+    else
+      ENV.delete("QWEN35_NATIVE_TOKENIZER_OFF")
+    end
+  end
 end

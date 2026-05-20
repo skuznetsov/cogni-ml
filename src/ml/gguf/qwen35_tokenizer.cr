@@ -2,12 +2,12 @@ require "./reader"
 
 # Qwen 3.5 / 3.6 tokenizer (GPT-2-style BPE).
 #
-# Current scope: DECODER + bootstrap ENCODER.
+# Current scope: native decoder + native Qwen3.5 BPE encoder.
 # - Decoder is native Crystal: uses tokenizer.ggml.tokens[] from GGUF, handles
 #   Ġ-for-space and Ċ-for-newline conventions.
-# - Encoder shells out to llama.cpp's `llama-tokenize` binary (bootstrap only);
-#   a native pure-Crystal BPE encoder is deferred (Phase 1b.7 goal, but the
-#   decoder is the critical piece for end-to-end verification).
+# - Encoder is native Crystal using tokenizer.ggml.merges[] and the Qwen3.5
+#   pre-tokenizer. Set `QWEN35_NATIVE_TOKENIZER_OFF=1` to use the older
+#   llama.cpp `llama-tokenize` bootstrap path for A/B and debugging.
 module ML::GGUF
   class Qwen35Tokenizer
     getter vocab : Array(String)
@@ -16,10 +16,14 @@ module ML::GGUF
     getter? add_bos : Bool
     getter llama_tokenize_bin : String
     getter model_path : String
+    getter token_to_id : Hash(String, Int32)
+    getter bpe_ranks : Hash(Tuple(String, String), Int32)
 
     def initialize(@vocab : Array(String), @eos_id : Int32, @pad_id : Int32,
                    @add_bos : Bool, @model_path : String,
-                   @llama_tokenize_bin : String = "")
+                   @llama_tokenize_bin : String = "",
+                   @token_to_id : Hash(String, Int32) = {} of String => Int32,
+                   @bpe_ranks : Hash(Tuple(String, String), Int32) = {} of Tuple(String, String) => Int32)
     end
 
     def self.from_gguf(g : GGUFFile, model_path : String,
@@ -37,7 +41,22 @@ module ML::GGUF
                 else           false
                 end
 
-      new(vocab, eos, pad, add_bos, model_path, llama_tokenize_bin)
+      token_to_id = {} of String => Int32
+      vocab.each_with_index { |piece, id| token_to_id[piece] = id.to_i32 }
+
+      bpe_ranks = {} of Tuple(String, String) => Int32
+      if merges_raw = g.metadata["tokenizer.ggml.merges"]?
+        if merges_raw.is_a?(Array)
+          merges_raw.each_with_index do |merge, rank|
+            parts = merge.as(String).split(' ', limit: 2)
+            next unless parts.size == 2
+
+            bpe_ranks[{parts[0], parts[1]}] = rank.to_i32
+          end
+        end
+      end
+
+      new(vocab, eos, pad, add_bos, model_path, llama_tokenize_bin, token_to_id, bpe_ranks)
     end
 
     # Decode a list of token ids back into a UTF-8 string.
@@ -65,6 +84,83 @@ module ML::GGUF
     # Requires `llama_tokenize_bin` to be set to a valid llama-tokenize executable
     # (from llama.cpp build). Falls back to raising.
     def encode(text : String, *, add_bos_override : Bool? = nil) : Array(Int32)
+      should_add_bos = (add_bos_override == true) || (add_bos_override.nil? && @add_bos)
+      if ENV["QWEN35_NATIVE_TOKENIZER_OFF"]? != "1" && !should_add_bos && native_encoder_available?
+        return encode_native(text)
+      end
+
+      encode_external(text, add_bos_override: add_bos_override)
+    end
+
+    def native_encoder_available? : Bool
+      !@token_to_id.empty? && !@bpe_ranks.empty?
+    end
+
+    private QWEN35_PRETOKENIZER = /(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+/
+
+    private def encode_native(text : String) : Array(Int32)
+      ids = [] of Int32
+      text.scan(QWEN35_PRETOKENIZER) do |match|
+        encoded_piece = encode_piece_bytes(match[0])
+        bpe(encoded_piece).each do |piece|
+          id = @token_to_id[piece]?
+          raise "native encode: missing token piece #{piece.inspect}" unless id
+
+          ids << id
+        end
+      end
+      ids
+    end
+
+    private def encode_piece_bytes(piece : String) : String
+      String.build do |io|
+        piece.to_slice.each do |byte|
+          io << self.class.gpt2_char_for(byte)
+        end
+      end
+    end
+
+    private def bpe(piece : String) : Array(String)
+      return [piece] if @token_to_id.has_key?(piece)
+
+      word = piece.chars.map(&.to_s)
+      return word if word.size <= 1
+
+      loop do
+        best_rank = Int32::MAX
+        best_pair = nil.as(Tuple(String, String)?)
+        (word.size - 1).times do |i|
+          pair = {word[i], word[i + 1]}
+          if rank = @bpe_ranks[pair]?
+            if rank < best_rank
+              best_rank = rank
+              best_pair = pair
+            end
+          end
+        end
+
+        pair = best_pair
+        break unless pair
+
+        merged = [] of String
+        i = 0
+        while i < word.size
+          if i < word.size - 1 && word[i] == pair[0] && word[i + 1] == pair[1]
+            merged << word[i] + word[i + 1]
+            i += 2
+          else
+            merged << word[i]
+            i += 1
+          end
+        end
+        word = merged
+        break if word.size == 1
+      end
+
+      word
+    end
+
+    private def encode_external(text : String, *, add_bos_override : Bool? = nil) : Array(Int32)
       bin = @llama_tokenize_bin
       raise "encode: llama_tokenize_bin not configured (pass to from_gguf)" if bin.empty?
       raise "encode: llama_tokenize_bin not found at #{bin}" unless File.exists?(bin)
