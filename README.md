@@ -516,6 +516,31 @@ in-memory restored-state template path:
   "alpha beta gamma delta alpha beta gamma delta"
 ```
 
+To measure validated session-cache fast-forward, use
+`--prompt-cache-fast-forward`. This mode seeds an exact span once, stores the
+state after the processed part of that span, validates the full token-history
+hash, restores the cached state, and emits the cached output ids without running
+the verifier body:
+
+```sh
+./build/qwen35_warm_request_probe \
+  --prompt-cache-fast-forward \
+  --resident-states 1 \
+  --gen 64 \
+  --requests 3 \
+  --warmups 1 \
+  --quiet \
+  "alpha beta gamma delta alpha beta gamma delta"
+```
+
+This is a cache-hit/session fast-forward measurement, not generation
+throughput. It is exact only when the cached span and state artifact are
+validated for the same model, tokenizer, prompt/session tokens, and runtime
+contract. On a local M2 Max Qwen3.5 9B Q4_K_M smoke, resident fast-forward
+measured `~4.5 ms` total for 64 cached tokens (`~0.07 ms/tok`), while the same
+Store source replay path measured `~4.55 ms/tok` because it still runs the exact
+bulk verifier body.
+
 Useful Qwen environment switches:
 
 | Variable | Effect |
@@ -693,6 +718,23 @@ CUDA cache-replay caveats:
 - Wrong cursors must fail closed. The trusted-source mode is only trusted after the source-prefix gate passes; otherwise it falls back near plain decode speed instead of accepting proposal tokens.
 - The host-backed live-KV row excludes durable cache lookup, artifact IO, and hashing; the IO/hash row includes a simple persistent-path file write/read plus host SHA-256 tool timing, but still excludes pg/session lookup and production artifact indexing.
 - Trusted artifact restore is a cache-hit fast-forward path, not speculative decoding. It is only exact if the restored state artifact and emitted token span are validated against the same model/tokenizer/config/source contract.
+
+Local Metal resident cache snapshot, M2 Max, Qwen 3.5 9B Q4_K_M, prompt
+`alpha beta gamma delta alpha beta gamma delta`:
+
+| Mode | Speed | Notes |
+|---|---:|---|
+| cogni-ml Metal plain greedy resident | `~24.97 ms/tok` | fresh request state, same process, no proposal reuse |
+| cogni-ml Metal exact source replay | `~4.60 ms/tok` | synthetic resident prompt-state copy plus exact bulk verifier |
+| cogni-ml Metal Store source replay, resident states off | `~5.82 ms/tok` | real prompt-cache Store path; cold artifact restore dominates restore phase |
+| cogni-ml Metal Store source replay, resident states on | `~4.51-4.55 ms/tok` | real Store hot state path; remaining wall is verifier body |
+| cogni-ml Metal Store fast-forward, resident states off | `~1.45 ms/tok` for 64 cached tokens | cold artifact restore; no verifier body |
+| cogni-ml Metal Store fast-forward, resident states on | `~0.07 ms/tok` for 64 cached tokens; `~0.02 ms/tok` for 256 cached tokens | hot validated state restore plus cached token emission; no verifier body |
+
+Metal cache caveat: source replay and fast-forward are different contracts.
+Source replay still verifies the known span through the exact target stack.
+Fast-forward skips that body and is only legal after validating the cached
+post-span state artifact and full emitted-token history.
 
 ### Speculative Decode Harnesses
 

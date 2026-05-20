@@ -1646,3 +1646,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: For cached sessions, the next frame shift is not disk/cache plumbing; it is either validated artifact fast-forward that skips verifier body, or a faster exact/guarded verifier body.
 - maieutic: The speedup is only for hot same-process hits after a cold valid restore or seed. Separate CLI invocations cannot benefit because resident state is process-local.
 - adversary: Keep memory pressure explicit. `QWEN35_PROMPT_CACHE_RESIDENT_STATES=1` stores a full prompt-state template; larger values trade RAM for latency and need eviction policy validation under multi-session load.
+
+**decision_update_365:** Added a validated Metal prompt-cache fast-forward benchmark mode. `bin/qwen35_warm_request_probe.cr --prompt-cache-fast-forward` seeds an exact generated span, stores the state after the processed part of that span, records the full emitted-token history hash, then measured requests restore the cached state and emit the cached output ids without running the verifier body. This is the Metal counterpart of the CUDA artifact fast-forward frame: exact under a stronger cache/session artifact contract, but not a plain-generation or speculative-decoding speed claim.
+
+**evidence_update_365:**
+- claim: "The warm probe can now measure validated Store fast-forward separately from exact Store source replay."
+  source: `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed; Metal-linked `crystal spec spec/qwen35_prompt_cache_spec.cr spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`22 examples, 0 failures`); release build `/tmp/qwen35_warm_request_probe_ff` passed.
+  verified_at: 2026-05-20
+  decay_trigger: warm request probe, prompt-cache entry validation metadata, or Store restore semantics change
+- claim: "Validated resident fast-forward removes the verifier body from the hot session-cache path."
+  source: M2 Max Qwen3.5-9B Q4_K_M, prompt `alpha beta gamma delta alpha beta gamma delta`, `gen=64`, `requests=3`, `warmups=1`. `--prompt-cache-fast-forward --resident-states 1`: aggregate `avg_total_ms=4.5`, `avg_ms_per_tok=0.07`, `p50_restore_ms=3.9`, `p50_decode_ms=0.0`. Matched `--prompt-cache-replay --resident-states 1`: aggregate `avg_total_ms=291.1`, `avg_ms_per_tok=4.55`, `p50_restore_ms=3.9`, `p50_decode_ms=285.1`. `--prompt-cache-fast-forward --resident-states 0` measured `avg_ms_per_tok=1.45`, showing cold artifact restore dominates without resident state. `--prompt-cache-fast-forward --resident-states 1 --gen 256` measured `avg_total_ms=4.9`, `avg_ms_per_tok=0.02`.
+  verified_at: 2026-05-20
+  decay_trigger: host load, resident state copy policy, artifact size/layout, or prompt/session distribution changes
+- claim: "The fast-forward hot path does not invoke target matmul/recurrent kernels."
+  source: profiled `--prompt-cache-fast-forward --resident-states 1 --metal-profile --gen 64 --requests 1 --warmups 1` printed `gemv/gemm/dn/attn/wave 0 calls`, `cpu_fallback matvecs=0`, and `total metal syncs=0`; request wall was restore-only (`restore_ms=10.6` on that profiled one-shot).
+  verified_at: 2026-05-20
+  decay_trigger: Metal profile accounting, Store restore copy path, or fast-forward validation path changes
+
+**quadrumvirate_update_365:**
+- cassandra: The speed lever is real but only under a stronger validated artifact contract. The likely mistake would be to advertise it as generation or verifier speed.
+- daedalus: This confirms the useful frame shift for sessions: when the exact state and emitted span are already certified, eliminate verifier body work rather than optimize it.
+- maieutic: The legal boundary is the cached state after `N-1` emitted tokens plus `next_token_id` for the final cached token, matching the existing greedy tail-skip continuation contract.
+- adversary: Productization still needs durable session/span lookup, artifact validation policy, eviction/memory-pressure gates, and a fail-closed fallback to exact source replay or plain decode.
