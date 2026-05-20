@@ -1628,3 +1628,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The speed frame is now explicit: cold artifact restore remains disk/CPU/upload; hot resident restore becomes GPU/CPU state copy, matching the resident WBA replay measurement frame.
 - maieutic: A cached state cannot be returned directly because the verifier mutates state. The legal move is copy-from-template into a fresh/request state.
 - adversary: The cache is default-off and bounded. Trust still depends on the original artifact metadata validation; hot entries are populated only after a valid cold restore.
+
+**decision_update_364:** Added a real `Qwen35PromptCache::Store` resident replay benchmark to `bin/qwen35_warm_request_probe.cr`. `--prompt-cache-replay` seeds a full-prompt cache entry once, then each measured request restores through `Store.restore_and_replay_suffix` and verifies the known generated source span. `--resident-states=N` controls the Store's hot in-memory state-cache entries, so the benchmark now separates cold artifact restore from hot same-process session restore.
+
+**evidence_update_364:**
+- claim: "Real Store prompt-cache replay now has a resident benchmark mode."
+  source: `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed; `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`12 examples, 0 failures`); release build `/tmp/qwen35_warm_request_probe_cache` passed.
+  verified_at: 2026-05-20
+  decay_trigger: warm request probe, Store.restore_and_replay_suffix, or resident state cache API changes
+- claim: "Resident prompt-state cache closes the product Store restore gap for hot same-process source replay."
+  source: M2 Max Qwen3.5-9B, prompt `alpha beta gamma delta alpha beta gamma delta`, `gen=64`, `requests=3`, `warmups=1`. `--prompt-cache-replay --resident-states 0`: aggregate `avg_ms_per_tok=5.82`, `p50_restore_ms=85.6`, `p50_decode_ms=286.8`. `--prompt-cache-replay --resident-states 1`: aggregate `avg_ms_per_tok=4.51`, `p50_restore_ms=3.3`, `p50_decode_ms=284.8`. Profiled hot run: `total_ms=294.2`, `restore_ms=5.1`, `decode_ms=288.7`, `cpu_fallback matvecs=0`.
+  verified_at: 2026-05-20
+  decay_trigger: host load, Metal kernels, resident cache copy policy, or prompt distribution changes
+
+**quadrumvirate_update_364:**
+- cassandra: The product session cache path is now close to the synthetic resident source-replay lower bound. Remaining wall is verifier FFN/head body, not cache restore.
+- daedalus: For cached sessions, the next frame shift is not disk/cache plumbing; it is either validated artifact fast-forward that skips verifier body, or a faster exact/guarded verifier body.
+- maieutic: The speedup is only for hot same-process hits after a cold valid restore or seed. Separate CLI invocations cannot benefit because resident state is process-local.
+- adversary: Keep memory pressure explicit. `QWEN35_PROMPT_CACHE_RESIDENT_STATES=1` stores a full prompt-state template; larger values trade RAM for latency and need eviction policy validation under multi-session load.

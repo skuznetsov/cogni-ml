@@ -501,6 +501,21 @@ inside the same resident process, and verifies the known span in one chunk with
 the same tail-skip contract as source-history cache replay. It is a
 cache/session replay measurement, not plain generation throughput.
 
+To measure the real prompt-cache `Store` restore path in the same resident
+process, use `--prompt-cache-replay`. `--resident-states=1` enables the hot
+in-memory restored-state template path:
+
+```sh
+./build/qwen35_warm_request_probe \
+  --prompt-cache-replay \
+  --resident-states 1 \
+  --gen 64 \
+  --requests 3 \
+  --warmups 1 \
+  --quiet \
+  "alpha beta gamma delta alpha beta gamma delta"
+```
+
 Useful Qwen environment switches:
 
 | Variable | Effect |

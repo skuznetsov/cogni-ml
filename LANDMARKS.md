@@ -14320,3 +14320,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: This gives the product/session path the same kind of hot-state transport used by the resident source-replay benchmark. The next benchmark should measure a daemon-style loop, not separate CLI invocations.
 - caveat: Default is `0` entries. This is a memory/latency trade-off for resident processes only; it does not change cold cache restore or plain generation speed.
 - trust: {F:0.88,G:0.62,R:0.88}
+
+**LM-364 real Store resident replay benchmark [shared/ml]**
+- status: VERIFIED local resident-process benchmark
+- claim: The real prompt-cache Store path reaches the resident source-replay speed band when `QWEN35_PROMPT_CACHE_RESIDENT_STATES` is enabled.
+- evidence: `bin/qwen35_warm_request_probe.cr --prompt-cache-replay` uses `Qwen35PromptCache::Store.restore_and_replay_suffix` for each measured request. Compile/spec/build gates passed. On M2 Max Qwen3.5-9B, prompt `alpha beta gamma delta alpha beta gamma delta`, `gen=64`, `requests=3`, `warmups=1`: resident states off measured `avg_ms_per_tok=5.82`, `p50_restore_ms=85.6`; resident states on measured `avg_ms_per_tok=4.51`, `p50_restore_ms=3.3`; profiled hot run measured `restore_ms=5.1`, `decode_ms=288.7`, `cpu_fallback matvecs=0`.
+- implementation: the warm probe seeds one full-prompt cache artifact, then restores and verifies a known source span through the same Store API used by product prompt-cache hits. `--resident-states` controls hot restored-state templates.
+- implication: For resident/server use, prompt-cache state restore is no longer the hot-path bottleneck. The remaining `~4.5 ms/tok` wall is exact bulk verifier body traffic, mainly recurrent FFN/head work.
+- caveat: This is a clean repeated source corridor and one host. It is a hot session-cache claim, not plain generation speed and not yet a multi-session memory-pressure result.
+- trust: {F:0.88,G:0.62,R:0.88}
