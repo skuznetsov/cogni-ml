@@ -1329,3 +1329,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This is instrumentation, not optimization. It changes the measurement frame from local decode windows to whole-request accounting.
 - maieutic: The phase labels are still coarse; first verifier use is currently visible by comparing prefill/cache/decode phases, not as a separate kernel-warmup counter.
 - adversary: Keep speed claims tied to `total_ms` or explicitly state when a number is decode-only. Avoid treating the request summary as a benchmark harness; use it as CLI evidence and debugging attribution.
+
+**decision_update_349:** Added an auto-policy minimum-span guard for prompt-cache/source-history n-gram replay. In one-shot CLI mode, cold chunk-verifier cost makes short cache-hit n-gram neutral or slower; validated source n-gram becomes useful only when enough continuation remains to amortize that cost.
+
+**evidence_update_349:**
+- claim: "Short cache-hit source/local n-gram is not worth enabling in auto."
+  source: `/tmp/qwen35_generate_phase_timing`, cache root `/tmp/qwen35_phase_timing_long_cache`, session `phase-long`, `n_gen=32`. Cache-hit greedy decode was `643.2 ms`; cache-hit explicit source n-gram with `gamma=32` was `650.6 ms`; auto before the guard found a local suffix chunk and measured `715.5 ms` decode.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram verifier cost, prompt-cache restore behavior, auto policy defaults, or Metal first-use behavior changes
+- claim: "Long cache-hit source n-gram is a real speed path after the fixed cold cost is amortized."
+  source: same runner, cache root `/tmp/qwen35_phase_timing_long128_cache`, session `phase-long128`, `n_gen=128`, `gamma=32`. Cache-hit greedy decode was `2800.7 ms`; cache-hit source n-gram accepted `128/128` in `4` cycles and decoded in `1162.9 ms`.
+  verified_at: 2026-05-19
+  decay_trigger: source-history quality, requested generation length, n-gram gamma, verifier chunk implementation, or model/tokenizer changes
+- claim: "The new auto guard fails closed on short cache-hit requests and preserves the long source-cache speed path."
+  source: `/tmp/qwen35_generate_cache_min` with default `QWEN35_NGRAM_CACHE_MIN_REMAINING=64` in `auto`. On the 32-token cache hit, source history reported `remaining=32 min=64`, auto printed `ngram auto cache gate`, proposed `0/0`, and decoded via exact target fallback in `639.7 ms`. Explicit `QWEN35_DECODE_POLICY=ngram` stayed unchanged (`32/32`, `653.2 ms`) because the default guard is `0` outside auto. On the 128-token cache hit, auto accepted `128/128` and decoded in `1164.2 ms`.
+  verified_at: 2026-05-19
+  decay_trigger: `QWEN35_NGRAM_CACHE_MIN_REMAINING`, auto policy mapping, source-history prefix validation, or n-gram decode loop changes
+
+**quadrumvirate_update_349:**
+- cassandra: The failure was a minimum-economics bug, not a correctness bug. Short requests cannot amortize cold verifier startup after cache restore.
+- daedalus: The right frame is controller economics: cache/session replay is a legal transport corridor only when enough future tokens remain.
+- maieutic: The threshold `64` is empirical for one-shot Metal CLI and should be retuned for persistent server mode, different models, and different `gamma`.
+- adversary: This guard affects only `auto`; explicit `ngram` remains available for A/B and research. Do not generalize the alpha-repeat long win to arbitrary source histories without exact verification and broader session traces.

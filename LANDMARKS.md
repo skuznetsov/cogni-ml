@@ -14191,3 +14191,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Use `request summary total_ms` for product CLI claims, and use decode-only summaries only for operator attribution. This directly guards against the LM-347 warmup/measurement-boundary trap.
 - caveat: Phase accounting is coarse and one-shot CLI oriented; it is not a replacement for the interleaved benchmark harness or a daemon steady-state benchmark.
 - trust: {F:0.86,G:0.62,R:0.86}
+
+**LM-349 cache-hit ngram minimum economics gate [shared/ml]**
+- status: VERIFIED local Metal auto-policy guard
+- claim: Prompt-cache/source-history n-gram replay needs a minimum remaining-span gate in one-shot CLI auto mode. Short cache-hit requests do not amortize the cold chunk-verifier cost, while long validated source continuations do.
+- evidence: before the guard, cache-hit `n_gen=32` source/local n-gram was neutral or slower than greedy (`643.2 ms` greedy decode, `650.6 ms` explicit source n-gram, `715.5 ms` auto local suffix n-gram). Cache-hit `n_gen=128` source n-gram accepted `128/128` and decoded in `1162.9 ms` versus greedy `2800.7 ms`. After adding default `QWEN35_NGRAM_CACHE_MIN_REMAINING=64` for `auto`, 32-token cache-hit auto fails closed to exact target fallback (`0/0`, `639.7 ms`) while explicit `ngram` remains unchanged and 128-token auto still uses source n-gram (`128/128`, `1164.2 ms`).
+- implementation: `qwen35_generate` now exposes `QWEN35_NGRAM_CACHE_MIN_REMAINING`. Default is `64` only for `QWEN35_DECODE_POLICY=auto`; explicit `ngram` defaults to `0` for research/backward compatibility.
+- implication: Source-cache replay should be routed by economics, not just validity. LTP/WBA legal corridor validation says "may propose"; the cache minimum says "worth proposing in this process mode."
+- caveat: Threshold `64` is empirical for local one-shot Metal CLI with `gamma=32`. Persistent server prewarming, CUDA, 27B, and different gamma schedules need their own gate.
+- trust: {F:0.86,G:0.56,R:0.86}

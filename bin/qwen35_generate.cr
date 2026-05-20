@@ -83,6 +83,7 @@ ngram_recursive = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 ngram_disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 ngram_replay_on_reject = ENV["QWEN35_NGRAM_REPLAY_ON_REJECT"]? == "1"
 ngram_index_enabled = ENV["QWEN35_NGRAM_INDEX_OFF"]? != "1"
+ngram_cache_min_remaining = (ENV["QWEN35_NGRAM_CACHE_MIN_REMAINING"]? || (decode_policy == "auto" ? "64" : "0")).to_i
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
@@ -92,6 +93,7 @@ raise "QWEN35_NGRAM_STAGE_MIN must be non-negative" unless ngram_stage_min >= 0
 raise "QWEN35_NGRAM_STAGE_GATE must be positive" unless ngram_stage_gate > 0
 raise "QWEN35_NGRAM_RISK_MIN_SIZE must be positive" unless ngram_risk_min_size > 0
 raise "QWEN35_NGRAM_MIN_CANDIDATES must be non-negative" unless ngram_min_candidates >= 0
+raise "QWEN35_NGRAM_CACHE_MIN_REMAINING must be non-negative" unless ngram_cache_min_remaining >= 0
 raise "QWEN35_SPEC_GAMMA must be positive" unless spec_gamma > 0
 raise "QWEN35_SPEC_MAX_GAMMA must be positive" unless spec_max_gamma > 0
 raise "QWEN35_SPEC_PLAIN_FALLBACK_GAMMA must be positive" unless spec_plain_fallback_gamma > 0
@@ -204,6 +206,7 @@ session_id = ENV["QWEN35_SESSION_ID"]? || "default"
 turn_id = ENV["QWEN35_TURN_ID"]?
 ngram_source_history = [] of Int32
 ngram_replay_cursor = nil.as(Int32?)
+prompt_cache_reused = false
 
 output_ids = [] of Int32
 pos = 0
@@ -221,9 +224,14 @@ if prompt_cache_enabled
       replay_start = ids.size
       if source.token_ids.size > replay_start &&
          ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
-        ngram_source_history = source.token_ids
-        ngram_replay_cursor = replay_start
-        STDOUT << "\nPrompt source-history hit: tokens=#{source.token_count} replay_start=#{replay_start}\n"
+        source_remaining = source.token_ids.size - replay_start
+        if source_remaining >= ngram_cache_min_remaining
+          ngram_source_history = source.token_ids
+          ngram_replay_cursor = replay_start
+          STDOUT << "\nPrompt source-history hit: tokens=#{source.token_count} replay_start=#{replay_start} remaining=#{source_remaining}\n"
+        else
+          STDOUT << "\nPrompt source-history hit below cache n-gram minimum: remaining=#{source_remaining} min=#{ngram_cache_min_remaining}; exact fallback remains active\n"
+        end
       else
         STDOUT << "\nPrompt source-history found but prefix did not validate; exact fallback remains active\n"
       end
@@ -242,6 +250,7 @@ if prompt_cache_enabled
     pos = ids.size
     if top = replay.next_token_id
       output_ids << top
+      prompt_cache_reused = true
       STDOUT << "\nPrompt cache hit: reused #{replay.reused_prefix_len}/#{ids.size} prompt tokens, replayed #{replay.replayed_tokens}, restore+replay took #{dt.round(3)}s\n"
     else
       STDOUT << "\nPrompt cache hit had no suffix logits; falling back to normal prefill\n"
@@ -538,12 +547,15 @@ if speculative_decode_enabled && !output_ids.empty?
   STDOUT << "  speculative summary: accepted=#{accepted}/#{proposed} rate=#{rate.round(2)}% cycles=#{cycles} fallback_steps=#{plain_fallback_steps} early_rejects=#{early_rejects} single_fast=#{single_fast} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} draft_ms=#{draft_ms.round(1)} target_ms=#{target_verify_ms.round(1)} draft_resync_ms=#{draft_resync_ms.round(1)} draft_backup_skips=#{draft_backup_skips} draft_resync_skips=#{draft_resync_skips}\n"
 elsif ngram_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact n-gram speculative decode..."
-  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} min_candidates=#{ngram_min_candidates} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject} replay_on_reject=#{ngram_replay_on_reject} index=#{ngram_index_enabled}"
+  puts "  ngram gamma=#{ngram_gamma} min=#{ngram_min} max=#{ngram_max} min_candidates=#{ngram_min_candidates} cache_min_remaining=#{ngram_cache_min_remaining} stage_min=#{ngram_stage_min} stage_gate=#{ngram_stage_gate} risk_gate=#{ngram_risk_gate} risk_min_size=#{ngram_risk_min_size} recursive=#{ngram_recursive} disable_after_reject=#{ngram_disable_after_reject} replay_on_reject=#{ngram_replay_on_reject} index=#{ngram_index_enabled}"
   decode_t0 = Time.instant
   next_id = output_ids.pop
   history = ids.dup
   ngram_history = ngram_index_enabled ? ML::GGUF::NgramDraft::IndexedHistory.new(history, ngram_max, ngram_min) : nil
-  ngram_disabled = false
+  ngram_disabled = decode_policy == "auto" && prompt_cache_reused && n_gen < ngram_cache_min_remaining
+  if ngram_disabled
+    STDOUT << "  ngram auto cache gate: requested=#{n_gen} min=#{ngram_cache_min_remaining}; using exact target fallback\n"
+  end
   ngram_cycles = 0
   ngram_accepted = 0
   ngram_proposed = 0
