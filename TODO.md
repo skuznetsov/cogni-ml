@@ -1079,3 +1079,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: Next frame shift is to pair this gate with active WBA known-span verification/session-cache replay; otherwise the fallback work still runs through the slower target-only loop.
 - maieutic: The legal move is now explicit, but the potential is still approximate. Promote only after long-context cache/replay gates show `proposal + verifier + fallback_tax < exact`.
 - adversary: Keep it default-off. The evidence covers synthetic repeat prompts and one near-miss path, not broad prompts or production session caches.
+
+**decision_update_336:** Tightened the runtime/oracle corridor gate after an adversary sweep found a false-positive tiny corridor. One-token candidates have normalized entropy `0.0`, so the first implementation could admit `entropy<=0.6` despite there being no meaningful transport band. The gate now requires at least 4 proposed tokens before periodic/low-entropy evidence can certify a corridor.
+
+**evidence_update_336:**
+- claim: "The min-corridor-size guard blocks the structured one-token false positive while preserving the repeat-suite composite gate accounting."
+  source: local builds passed for `bin/qwen35_speculative_accept.cr` and `bin/qwen35_proposal_router_oracle.cr`. Oracle over `/tmp/qwen35_ngram_corridor_code_struct_on` now reports `periodic_or_low_entropy` as fail-closed for the one-token structured row (`0` selected cycles), while oracle over `/tmp/qwen35_ngram_corridor_off` still reports the repeat composite gate as `54/54`, no rejects, gain `+527.2ms`.
+  verified_at: 2026-05-19
+  decay_trigger: candidate feature extraction, corridor gate threshold, oracle gate definitions, or n-gram staged verifier changes
+- claim: "Runtime skip accounting works for the tightened gate on a structured near-miss prompt."
+  source: direct local smoke with `/tmp/qwen35_speculative_accept_corridor2`, `tokens=16`, `--ngram-corridor-gate`, prompt `structured_toml`: `accept_rate=100.0% accepted=0/0`, `ngram_stats ... corridor_skips=2`, exact fallback completed.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram target-only fallback, stats output, or prompt/tokenization changes
+
+**quadrumvirate_update_336:**
+- cassandra: Entropy alone is unsafe on tiny candidate sets; small samples can look perfectly low-entropy by construction.
+- daedalus: The LTP/WBA corridor needs a minimum transport length before candidate-shape features become meaningful. Otherwise the trigger degenerates into a scalar gate with no band.
+- maieutic: The exact threshold `4` is pragmatic and evidence-backed only for current probes. Keep it visible and re-tune with long-context cache traces.
+- adversary: Do not use the direct alpha smoke timing from this round as speed evidence; per-process Metal source compilation made the wall noisy. Use it only as a functional gate check when needed.

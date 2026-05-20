@@ -473,7 +473,9 @@ def ngram_candidate_feature_dump(candidates : Array(Int32),
   features
 end
 
-def ngram_corridor_gate_pass?(features : Hash(String, Float64)) : Bool
+def ngram_corridor_gate_pass?(candidates : Array(Int32), features : Hash(String, Float64)) : Bool
+  return false if candidates.size < 4
+
   features["candidate_lag4_ratio"] > 0.0 ||
     features["candidate_lag8_ratio"] > 0.0 ||
     features["candidate_entropy_norm"] <= 0.6
@@ -778,7 +780,7 @@ while generated_ids.size < n_gen
                   ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
                 end
     cycle_candidate_features = ngram_candidates.empty? ? nil : ngram_candidate_feature_dump(ngram_candidates, match_len, ngram_max, tok)
-    if ngram_corridor_gate && (features = cycle_candidate_features) && !ngram_corridor_gate_pass?(features)
+    if ngram_corridor_gate && (features = cycle_candidate_features) && !ngram_corridor_gate_pass?(ngram_candidates, features)
       ngram_corridor_skips += 1
       ngram_candidates = [] of Int32
     end

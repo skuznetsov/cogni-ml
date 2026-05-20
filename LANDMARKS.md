@@ -14089,3 +14089,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: This is a concrete LTP/WBA legal-move gate: repeated suffix starts the window, candidate periodicity/entropy certifies the transport corridor, exact target fallback is the dual frame.
 - caveat: Total run speed still depends on fallback path cost and noisy plain baselines; pair with active WBA known-span/session-cache verification before promoting.
 - trust: {F:0.84,G:0.40,R:0.84}
+
+**LM-336 ngram corridor minimum length [shared/ml]**
+- status: VERIFIED guard refinement
+- claim: The n-gram corridor gate must require a minimum transport length; otherwise one-token candidates pass the low-entropy predicate trivially.
+- evidence: code/structured adversary sweep produced a one-token structured n-gram row that passed `entropy<=0.6` but rejected. After adding `candidates.size >= 4` to the runtime gate and oracle composite gate, local no-codegen builds passed, the code/structured oracle failed closed for that row, and repeat-suite oracle accounting still preserved `54/54` accepted under `periodic_or_low_entropy`.
+- implication: LTP/WBA gates should distinguish "local trigger exists" from "corridor has enough length for shape features to be meaningful."
+- caveat: threshold `4` is a pragmatic guard, not a proof-level constant; retune with long-context cache traces.
+- trust: {F:0.84,G:0.45,R:0.84}
