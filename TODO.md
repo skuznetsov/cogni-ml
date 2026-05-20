@@ -1242,7 +1242,8 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - [x] Add Metal harness source-cache cursor replay with prefix validation and cursor-only trusted-source mode.
 - [x] Add opt-in prompt-cache source-history sidecar and wire `qwen35_generate` n-gram decode to validated same-session source cursor replay.
 - [x] Build the remaining runtime corridor detector for non-cache histories; do not use static prompt category labels as the production router.
-- [ ] Run the same policy on real session-cache traces and trusted cursor replay when CUDA/remote access is restored.
+- [x] Run the same policy on a local Metal product-CLI prompt-cache/source-history trace.
+- [ ] Run the same policy on real CUDA/remote session-cache traces and trusted cursor replay when access is restored.
 - [ ] Avoid more hand-tuned risk predicates until a larger trace corpus shows a repeated false-positive family.
 
 **decision_update_345:** Ported the CUDA-style validated source cursor into the Metal speculative acceptance harness. This is the real LTP/WBA legal frame we wanted: cache/session replay proposes from a known source continuation after exact prompt-prefix validation, and untrusted/mismatched sources fail closed.
@@ -1453,3 +1454,17 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The useful frame remains legal corridor first, speed second: source-cache replay and runtime suffix replay are different trust classes.
 - maieutic: The defaults are empirical from local harness evidence. They should be retuned against larger session traces before broad claims.
 - adversary: The CLI smoke is intentionally narrow. Do not add more hand-tuned predicates until a larger trace corpus shows a repeated false-positive family.
+
+**decision_update_355:** Verified the post-corridor product-CLI source-history path on a real local prompt-cache trace. The trusted source cursor still bypasses the untrusted suffix corridor detector after prefix validation, while request-phase accounting keeps the one-shot CLI economics visible.
+
+**evidence_update_355:**
+- claim: "Trusted prompt-cache source-history cursor replay still works after the runtime corridor gate."
+  source: release runner `/tmp/qwen35_generate_corridor`, cache root `/tmp/qwen35_corridor_source_cache_smoke`, session `corridor-src`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=64`, `QWEN35_PROMPT_CACHE=1 QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1 QWEN35_DECODE_POLICY=auto QWEN35_QUIET=1`. Seed run saved source history and accepted local n-gram `61/61`. Repeat run reported `Prompt source-history hit: tokens=72 replay_start=8 remaining=64`, prompt cache reused `8/8` with `replayed 0`, n-gram accepted `64/64`, `cursor_hits=2`, `cursor_accepts=2`, `corridor_skips=0`, `token_cache_hit=true`, and `total_ms=1190.9`.
+  verified_at: 2026-05-19
+  decay_trigger: prompt-cache source-history validation, full-prompt restore, runtime corridor defaults, or n-gram cursor replay changes
+
+**quadrumvirate_update_355:**
+- cassandra: The expected regression risk was accidentally applying untrusted suffix gates to trusted source cursor replay; the smoke did not show that.
+- daedalus: The remaining speed question is not legality; it is process economics. One-shot repeat was faster than seed overall, but decode still paid verifier/model work inside a fresh process.
+- maieutic: This is one local repeated prompt, not a production session trace corpus.
+- adversary: Keep the CUDA/remote real-trace item open; this local Metal trace only verifies product-CLI wiring and trust-class separation.

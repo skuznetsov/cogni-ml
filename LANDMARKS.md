@@ -14243,3 +14243,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The practical CLI no longer needs static prompt-category labels for the first non-cache suffix replay guard. It uses local candidate transport evidence as the LTP/WBA legal frame.
 - caveat: This is still a narrow local smoke plus prior harness evidence. Larger session traces are needed before changing deeper router thresholds or adding new hand-tuned predicates.
 - trust: {F:0.86,G:0.57,R:0.86}
+
+**LM-355 source-history cursor bypasses suffix corridor gate [shared/ml]**
+- status: VERIFIED local product-CLI trace
+- claim: After the runtime corridor gate, validated prompt-cache source-history cursor replay still uses the trusted-source path and is not blocked by untrusted suffix corridor checks.
+- evidence: release `/tmp/qwen35_generate_corridor`, cache root `/tmp/qwen35_corridor_source_cache_smoke`, session `corridor-src`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=64`, `QWEN35_PROMPT_CACHE=1 QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1 QWEN35_DECODE_POLICY=auto QWEN35_QUIET=1`. Seed saved source history and accepted local n-gram `61/61`. Repeat reported `Prompt source-history hit: tokens=72 replay_start=8 remaining=64`, prompt cache reused `8/8` with `replayed 0`, n-gram accepted `64/64`, `cursor_hits=2`, `cursor_accepts=2`, `corridor_skips=0`, `token_cache_hit=true`, and `total_ms=1190.9`.
+- implication: The trust-class split is wired correctly in the practical CLI: prefix-validated session cursor replay is a legal transport corridor, while local suffix replay remains gated by runtime evidence.
+- caveat: This is a local Metal one-prompt trace. CUDA/remote real session-cache traces and larger prompt diversity remain open.
+- trust: {F:0.84,G:0.52,R:0.84}
