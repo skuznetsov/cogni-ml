@@ -101,6 +101,7 @@ module ML::GGUF
     {% unless flag?(:cpu_only) %}
       ARTIFACT_RESTORE_SOURCE = {{ read_file("#{__DIR__}/kernels/artifact_restore_qwen35.metal") }}
       @@artifact_bf16_decode_pipeline : ML::Metal::ComputePipeline?
+      @@artifact_i8_decode_pipeline : ML::Metal::ComputePipeline?
     {% end %}
 
     def capture(state : Qwen35CPU::State) : Snapshot
@@ -188,22 +189,24 @@ module ML::GGUF
           state.layers[i].position = position
         end
         bf16_jobs = [] of NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32)
+        i8_jobs = [] of NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32, block_size: Int32)
         encoded.records.each do |record|
           raise ArgumentError.new("state record layer out of range: #{record.layer}") if record.layer < 0 || record.layer >= state.layers.size
 
           layer = state.layers[record.layer]
           case record.kind
           in RecordKind::KCache
-            layer.k_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.k_cache_buf, bf16_jobs)
+            layer.k_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.k_cache_buf, bf16_jobs, i8_jobs)
           in RecordKind::VCache
-            layer.v_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.v_cache_buf, bf16_jobs)
+            layer.v_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.v_cache_buf, bf16_jobs, i8_jobs)
           in RecordKind::ConvState
-            layer.conv_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.conv_state_buf, bf16_jobs)
+            layer.conv_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.conv_state_buf, bf16_jobs, i8_jobs)
           in RecordKind::SsmState
-            layer.ssm_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.ssm_state_buf, bf16_jobs)
+            layer.ssm_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.ssm_state_buf, bf16_jobs, i8_jobs)
           end
         end
         dispatch_bf16_restore_jobs(bf16_jobs)
+        dispatch_i8_restore_jobs(i8_jobs)
       {% end %}
     end
 
@@ -309,10 +312,17 @@ module ML::GGUF
         }
       end
 
+      private def artifact_i8_decode_pipeline : ML::Metal::ComputePipeline
+        @@artifact_i8_decode_pipeline ||= ML::Metal::PipelineCache.get("qwen35_artifact_block_i8_decode_f32") {
+          ML::Metal::ComputePipeline.new("qwen35_artifact_block_i8_decode_f32", ARTIFACT_RESTORE_SOURCE)
+        }
+      end
+
       private def prepare_encoded_record_for_metal(record : EncodedRecord,
                                                    block_size : Int32,
                                                    reusable : ML::MetalBuffer?,
-                                                   bf16_jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32))) : ML::MetalBuffer
+                                                   bf16_jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32)),
+                                                   i8_jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32, block_size: Int32))) : ML::MetalBuffer
         raise ArgumentError.new("state record byte size is not Float32-aligned: #{record.original_byte_size}") unless record.original_byte_size % sizeof(Float32) == 0
 
         buf = reusable
@@ -328,10 +338,7 @@ module ML::GGUF
         in RecordCodec::Bf16
           bf16_jobs << prepare_bf16_restore_job(record, buf)
         in RecordCodec::BlockI8
-          # Keep INT8 fail-closed until the Metal block8 decode kernel has its
-          # own prompt/cursor validation gate. CUDA evidence does not transfer
-          # automatically to Metal.
-          raise ArgumentError.new("Metal recurrent-int8 encoded restore is not implemented yet")
+          i8_jobs << prepare_i8_restore_job(record, block_size, buf)
         end
 
         buf
@@ -347,6 +354,18 @@ module ML::GGUF
         {src: src, dst: dst, count: count.to_i32}
       end
 
+      private def prepare_i8_restore_job(record : EncodedRecord, block_size : Int32, dst : ML::MetalBuffer) : NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32, block_size: Int32)
+        raise ArgumentError.new("recurrent-int8 artifact block size must be positive") unless block_size > 0
+
+        count = record.original_byte_size // sizeof(Float32)
+        expected_payload = block_i8_payload_size(count, block_size)
+        raise ArgumentError.new("corrupt INT8 Qwen encoded state record") unless record.payload.size == expected_payload
+
+        src = ML::MetalBuffer.new(record.payload.size.to_i64, ML::StorageMode::Shared)
+        src.write_bytes(record.payload.to_unsafe, record.payload.size)
+        {src: src, dst: dst, count: count.to_i32, block_size: block_size.to_i32}
+      end
+
       private def dispatch_bf16_restore_jobs(jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32))) : Nil
         return if jobs.empty?
 
@@ -359,6 +378,26 @@ module ML::GGUF
           enc.set_buffer(job[:src], 0)
           enc.set_buffer(job[:dst], 1)
           enc.set_value(count_u32, 2)
+          enc.dispatch_1d(job[:count], 256)
+        end
+        enc.end_encoding
+        cmd.commit_and_wait
+      end
+
+      private def dispatch_i8_restore_jobs(jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32, block_size: Int32))) : Nil
+        return if jobs.empty?
+
+        pipeline = artifact_i8_decode_pipeline
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        enc.set_pipeline(pipeline)
+        jobs.each do |job|
+          count_u32 = job[:count].to_u32
+          block_size_u32 = job[:block_size].to_u32
+          enc.set_buffer(job[:src], 0)
+          enc.set_buffer(job[:dst], 1)
+          enc.set_value(count_u32, 2)
+          enc.set_value(block_size_u32, 3)
           enc.dispatch_1d(job[:count], 256)
         end
         enc.end_encoding
@@ -682,6 +721,9 @@ module ML::GGUF
       raise ArgumentError.new("recurrent-int8 artifact block size must be positive") unless block_size > 0
 
       count = original_byte_size // sizeof(Float32)
+      expected_payload = block_i8_payload_size(count, block_size)
+      raise ArgumentError.new("corrupt INT8 Qwen state artifact payload") unless payload.size == expected_payload
+
       output = Bytes.new(original_byte_size)
       io = IO::Memory.new(payload)
       offset = 0
@@ -700,6 +742,13 @@ module ML::GGUF
       end
       raise ArgumentError.new("trailing bytes in INT8 Qwen state artifact payload") unless io.pos == payload.size
       output
+    end
+
+    private def block_i8_payload_size(value_count : Int32, block_size : Int32) : Int32
+      raise ArgumentError.new("recurrent-int8 artifact block size must be positive") unless block_size > 0
+
+      blocks = (value_count + block_size - 1) // block_size
+      value_count + blocks * sizeof(Float32)
     end
 
     private def read_u16_le(bytes : Bytes, offset : Int32) : UInt16

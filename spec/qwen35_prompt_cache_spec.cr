@@ -623,6 +623,55 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "keeps validated INT8 recurrent prompt-cache Metal restore behind an explicit gate" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_PROMPT_CACHE)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32] # "The capital of France is"
+    prompt_text = "The capital of France is"
+    old_gate = ENV["QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE"]?
+    ENV.delete("QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE")
+
+    root = File.tempname("qwen35-i8-prompt-cache")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      live = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(live, hp)
+      prompt.each_with_index do |token_id, pos|
+        ML::GGUF::Qwen35CPU.forward_top1(w, token_id, pos.to_i32, live)
+      end
+
+      saved = store.save(
+        session_id: "i8-session",
+        model_id: "qwen35-9b-q4km-test",
+        tokenizer_id: "qwen35-tokenizer-test",
+        prompt_text: prompt_text,
+        token_ids: prompt,
+        state: live,
+        artifact_codec: "recurrent-int8",
+        artifact_codec_block: 8,
+        artifact_validation_kind: "prompt-cache-i8-smoke",
+        artifact_validation_steps: prompt.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(prompt),
+      )
+
+      reuse = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(reuse, hp)
+      expect_raises(ArgumentError, /QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1/) do
+        store.restore(saved, hp, reuse_state: reuse)
+      end
+    ensure
+      if old_gate
+        ENV["QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE"] = old_gate
+      else
+        ENV.delete("QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE")
+      end
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "restores the longest cached prefix and replays only the suffix" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_PROMPT_CACHE)
     hp = w.hparams

@@ -14419,3 +14419,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Product prompt-cache restore can now consume BF16 compressed artifacts on Metal under the existing validation metadata contract.
 - caveat: BF16 compressed save is still opt-in; this does not change default artifact policy, and INT8 remains pending.
 - trust: {F:0.88,G:0.54,R:0.87}
+
+**LM-375 Metal block8 INT8 artifact decoder with product fail-closed gate [shared/ml]**
+- status: VERIFIED low-level Metal primitive + guarded product boundary
+- claim: `Qwen35StateSnapshot.restore_encoded_into` can restore block8 `recurrent-int8` encoded records directly into prepared Metal buffers, while `Qwen35PromptCache::Store.restore` still rejects INT8 compressed prompt-cache artifacts by default unless an explicit env gate is set.
+- evidence: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`12 examples, 0 failures`), including a 9B Metal state smoke that writes a `recurrent-int8` block8 artifact, reads it as encoded, restores it through the low-level path, and checks continuation top1/logit. `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`16 examples, 0 failures`), including the default Store fail-closed guard for validated INT8 artifacts. No-codegen builds passed for `bin/qwen35_generate.cr` and `bin/qwen35_warm_request_probe.cr`.
+- implementation: Added `qwen35_artifact_block_i8_decode_f32`, an INT8 pipeline cache entry, payload-size validation, and batched INT8 decode dispatch. Store adds a `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1` gate before routing INT8 compressed artifacts through encoded Metal restore.
+- implication: We can now run Metal INT8 cache-restore probes and timing attribution without weakening the exact-serving product boundary.
+- caveat: INT8 remains approximate and not default-trusted. One local smoke does not validate broader prompt/cursor/session behavior or quality under reuse.
+- trust: {F:0.86,G:0.45,R:0.86}

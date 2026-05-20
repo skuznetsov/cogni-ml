@@ -352,7 +352,7 @@ describe ML::GGUF::Qwen35StateSnapshot do
     end
   end
 
-  it "fails closed for Metal encoded INT8 recurrent restore until a guarded decoder exists" do
+  it "restores a Metal encoded INT8 recurrent artifact through the low-level decoder" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_SNAPSHOT)
@@ -378,9 +378,12 @@ describe ML::GGUF::Qwen35StateSnapshot do
         expected_codec: "recurrent-int8",
         expected_codec_block: 8,
       )
-      expect_raises(ArgumentError, /Metal recurrent-int8 encoded restore is not implemented yet/) do
-        ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(encoded, hp, state)
-      end
+      ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(encoded, hp, state)
+
+      source_top, source_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, 1_i32, source)
+      state_top, state_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, 1_i32, state)
+      state_top.should eq(source_top)
+      state_logit.should be_close(source_logit, 2e-1_f32)
     ensure
       File.delete(path) if File.exists?(path)
     end

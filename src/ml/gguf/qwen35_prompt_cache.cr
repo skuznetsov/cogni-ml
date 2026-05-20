@@ -336,6 +336,10 @@ module ML::GGUF
 
         codec = entry.artifact_codec.try(&.downcase)
         if prefer_metal && Qwen35Metal.available? && COMPRESSED_ARTIFACT_CODECS.includes?(codec)
+          if codec == "recurrent-int8" && ENV["QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE"]? != "1"
+            raise ArgumentError.new("Metal recurrent-int8 prompt-cache restore requires QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1")
+          end
+
           encoded = Qwen35StateSnapshot.read_artifact_encoded(
             entry.artifact_path,
             expected_sha256: entry.artifact_sha256,

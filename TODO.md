@@ -1862,3 +1862,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The next speed-bearing step is not another restore API; it is either enabling BF16 artifact save under a guarded product flag or adding Metal block8 INT8 decode with the same prompt/cursor trust gates used on CUDA.
 - maieutic: The boundary remains metadata-driven. A compressed artifact without validation metadata is ignored by lookup; a validated INT8 artifact still cannot restore on Metal until the decoder and gates exist.
 - adversary: Specs cover one BF16 prompt-cache hit. Broader prompt/session and eviction tests are still needed before default cache policy changes.
+
+**decision_update_375:** Added the low-level Metal block-INT8 encoded recurrent artifact decoder, but kept product prompt-cache INT8 restore fail-closed by default. `Qwen35StateSnapshot.restore_encoded_into` can now decode `recurrent-int8` records into prepared Metal buffers using `qwen35_artifact_block_i8_decode_f32`; `Qwen35PromptCache::Store.restore` still rejects validated INT8 compressed artifacts unless `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1` is explicitly set. This preserves the product safety boundary while making the primitive available for probes.
+
+**evidence_update_375:**
+- claim: "The low-level Metal encoded-state restorer can restore block8 INT8 recurrent records without CPU Float32 materialization."
+  source: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`12 examples, 0 failures`). The INT8 spec writes a `recurrent-int8` block8 artifact from a Metal-backed 9B state, reads it as an encoded snapshot, restores it through `restore_encoded_into`, and checks continuation top1/logit against the original state.
+  verified_at: 2026-05-20
+  decay_trigger: INT8 artifact layout, Metal artifact restore kernel, or state snapshot API changes
+- claim: "The prompt-cache product path still fails closed for INT8 compressed artifacts by default."
+  source: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`16 examples, 0 failures`). The new Store spec saves a validated `recurrent-int8` artifact and verifies default restore raises unless the explicit Metal INT8 gate is enabled.
+  verified_at: 2026-05-20
+  decay_trigger: `Store.restore`, compressed artifact trust metadata, or env-gate policy changes
+- claim: "Product compile guards remain clean."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed.
+  verified_at: 2026-05-20
+  decay_trigger: prompt-cache restore integration or state snapshot API changes
+
+**quadrumvirate_update_375:**
+- cassandra: INT8 is approximate, so the risk is not decode mechanics; it is product over-trust. The guard deliberately separates primitive availability from automatic session-cache trust.
+- daedalus: The useful frame is "make the corridor measurable" rather than "enable INT8 cache hits." Low-level restore enables probes and timing attribution without changing serving policy.
+- maieutic: LTP window is a validated encoded INT8 recurrent record; transport is block scale/int8 payload -> prepared recurrent Metal buffer; potential decreases as `(host-decode-work, CPU Float32 bytes, artifact bytes)`, but product legality still requires a prompt/cursor validation frame.
+- adversary: One continuation smoke is not enough to default-enable INT8. Keep Store gated until multi-prompt/session validation proves parity/acceptance and rollback boundaries.
