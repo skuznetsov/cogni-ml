@@ -1205,3 +1205,30 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The controller stack now has three distinct legal frames: trusted cursor replay, untrusted suffix replay with corridor+risk gates, and exact target fallback.
 - maieutic: The accepted CSV-like row and rejected YAML row are close enough that token-aggregate heuristics can still overfit. The next step should collect more rows rather than adding many hand-tuned clauses.
 - adversary: Keep the predicate behind `--ngram-risk-gate`; production auto policy must not silently inherit this until a larger suite confirms the precision.
+
+**decision_update_343:** Broader mixed-prompt Metal evidence shows that the safer untrusted n-gram corridor policy is `--ngram-min-candidates 6` plus the existing corridor/risk gates. This removes the remaining 5-token high-entropy template reject while keeping longer repeat corridors. It does not justify global n-gram activation: mixed64 aggregate speed is neutral because most prompts have no profitable corridor.
+
+**evidence_update_343:**
+- claim: "A six-token minimum transport band removes the remaining mixed64 n-gram reject."
+  source: local release runner `/tmp/qwen35_speculative_accept_metal_corridor_local3`, prompt suite `/tmp/qwen35_corridor_mixed64_prompts.jsonl`, `tokens=16`, policy `ngram_target_only_staged_risk`, args `--ngram-corridor-gate --ngram-corridor-match-len-min 8 --ngram-corridor-lag8-min 1.0 --ngram-min-candidates 6`, dump `/tmp/qwen35_corridor_mixed64_min6`. N-gram rows: `52/52`, zero rejects, n-gram gain `+296.2ms`; prior same-suite run without the min-candidate guard had `63/67` with one reject from `templ_checklist_metal_gemv` (`1/5`, `match_len=8`, entropy `1.0`, lag4/lag8 `0.0`).
+  verified_at: 2026-05-19
+  decay_trigger: prompt suite, n-gram candidate generation, candidate feature extraction, staged verifier accounting, or corridor thresholds
+- claim: "The same six-token guard preserves broad-suite repeat wins."
+  source: same runner and args on `/tmp/qwen35_corridor_broad_prompts.jsonl`, dump `/tmp/qwen35_corridor_broad_min6`: n-gram rows `91/91`, zero rejects, avg policy speedup `1.095x`, n-gram gain `+498.7ms`.
+  verified_at: 2026-05-19
+  decay_trigger: broad prompt suite, staged n-gram policy, risk gate, or baseline timing method
+- claim: "The remaining speed issue is routing, not corridor correctness."
+  source: proposal router oracle over `/tmp/qwen35_corridor_broad_min6` and `/tmp/qwen35_corridor_mixed64_min6`: source economics `ngram/ngram` has `143/143`, zero rejects, gain `+794.9ms`; with `--min-cycles 2`, only `repeat` is selected (`9` cycles, `+672.3ms`) while one-off `code` and `near` categories fail closed.
+  verified_at: 2026-05-19
+  decay_trigger: router oracle logic, prompt categories, or dump schema changes
+
+**quadrumvirate_update_343:**
+- cassandra: The false-positive pattern shifted from medium structured tails to short high-entropy match overrides. A minimum transport band is a cleaner guard than another token-shape micro-rule.
+- daedalus: Stop treating n-gram as a global decode mode. Treat it as a routed LTP/WBA legal move: repeated/source corridor detected -> n-gram verifier; otherwise exact decode.
+- maieutic: The two skipped 5-token fact chunks were accepted, so `min_candidates=6` trades tiny opportunistic wins for reject safety. That is acceptable only for untrusted replay; validated source-cursor replay can use a different legal frame.
+- adversary: Do not claim a production speedup from mixed64. The verified claim is zero-reject corridor selection plus a repeat-category routing boundary.
+
+**next_steps_update_343:**
+- [ ] Add or reuse a fail-closed router policy that enables n-gram only for repeat/source-cache corridors, with current recommended local args: `--ngram-corridor-gate --ngram-corridor-match-len-min 8 --ngram-corridor-lag8-min 1.0 --ngram-min-candidates 6 --ngram-risk-gate`.
+- [ ] Run the same policy on real session-cache traces and trusted cursor replay when CUDA/remote access is restored.
+- [ ] Avoid more hand-tuned risk predicates until a larger trace corpus shows a repeated false-positive family.
