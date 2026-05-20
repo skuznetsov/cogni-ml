@@ -281,7 +281,8 @@ if prompt_cache_enabled
 
   if max_prefix_len > 0 && (hit = cache_store.not_nil!.lookup_longest_prefix(cache_model, cache_tokenizer, ids, max_prefix_len: max_prefix_len))
     tstart = Time.instant
-    replay = cache_store.not_nil!.restore_and_replay_suffix(hit, w, ids)
+    reuse_state = hit.max_seq == state.max_seq ? state : nil
+    replay = cache_store.not_nil!.restore_and_replay_suffix(hit, w, ids, reuse_state: reuse_state)
     dt = (Time.instant - tstart).total_seconds
     cache_restore_ms = dt * 1000.0
     state = replay.state

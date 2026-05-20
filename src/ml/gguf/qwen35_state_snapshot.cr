@@ -109,6 +109,18 @@ module ML::GGUF
       raise ArgumentError.new("layer count mismatch: snapshot=#{snapshot.layer_count}, hp=#{hp.n_layer}") unless snapshot.layer_count == hp.n_layer
 
       state = Qwen35CPU::State.new(hp, max_seq: snapshot.max_seq)
+      restore_into(snapshot, hp, state, prefer_metal: prefer_metal)
+      state
+    end
+
+    def restore_into(snapshot : Snapshot,
+                     hp : Qwen35Hparams,
+                     state : Qwen35CPU::State,
+                     prefer_metal : Bool = Qwen35Metal.available?) : Nil
+      raise ArgumentError.new("layer count mismatch: snapshot=#{snapshot.layer_count}, hp=#{hp.n_layer}") unless snapshot.layer_count == hp.n_layer
+      raise ArgumentError.new("state layer count mismatch: snapshot=#{snapshot.layer_count}, state=#{state.layers.size}") unless snapshot.layer_count == state.layers.size
+      raise ArgumentError.new("state max_seq mismatch: snapshot=#{snapshot.max_seq}, state=#{state.max_seq}") unless snapshot.max_seq == state.max_seq
+
       snapshot.positions.each_with_index do |position, i|
         state.layers[i].position = position
       end
@@ -119,31 +131,30 @@ module ML::GGUF
         case record.kind
         in RecordKind::KCache
           if prefer_metal
-            layer.k_cache_buf = buffer_from(record)
+            layer.k_cache_buf = buffer_from(record, layer.k_cache_buf)
           else
             layer.k_cache = float_array_from(record.bytes)
           end
         in RecordKind::VCache
           if prefer_metal
-            layer.v_cache_buf = buffer_from(record)
+            layer.v_cache_buf = buffer_from(record, layer.v_cache_buf)
           else
             layer.v_cache = float_array_from(record.bytes)
           end
         in RecordKind::ConvState
           if prefer_metal
-            layer.conv_state_buf = buffer_from(record)
+            layer.conv_state_buf = buffer_from(record, layer.conv_state_buf)
           else
             layer.conv_state = float_array_from(record.bytes)
           end
         in RecordKind::SsmState
           if prefer_metal
-            layer.ssm_state_buf = buffer_from(record)
+            layer.ssm_state_buf = buffer_from(record, layer.ssm_state_buf)
           else
             layer.ssm_state = float_array_from(record.bytes)
           end
         end
       end
-      state
     end
 
     def write_artifact(snapshot : Snapshot,
@@ -232,8 +243,11 @@ module ML::GGUF
       values
     end
 
-    private def buffer_from(record : Record) : ML::MetalBuffer
-      buf = ML::MetalBuffer.new(record.bytes.size.to_i64, record.storage_mode)
+    private def buffer_from(record : Record, reusable : ML::MetalBuffer? = nil) : ML::MetalBuffer
+      buf = reusable
+      if buf.nil? || buf.size != record.bytes.size || buf.storage_mode != record.storage_mode
+        buf = ML::MetalBuffer.new(record.bytes.size.to_i64, record.storage_mode)
+      end
       buf.write_bytes(record.bytes.to_unsafe, record.bytes.size)
       buf
     end

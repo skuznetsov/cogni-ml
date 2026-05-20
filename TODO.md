@@ -1592,3 +1592,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The useful frame shift is session/cache replay, not another plain decode micro-knob. Bulk WBA verifier transport already transfers to Metal when the source corridor is trusted.
 - maieutic: This does not mean generation itself is `4.6 ms/tok`; it means validated source/session replay can emit cached known spans at that speed while preserving exact verifier semantics.
 - adversary: Keep the benchmark label strict: source replay requires same model/tokenizer/prompt-state contract and a trusted generated source span. Plain greedy and cache replay remain separate rows.
+
+**decision_update_362:** Added a strict restore-into-prepared-state path for prompt-cache artifacts. `Qwen35StateSnapshot.restore_into` can now refill an existing same-shape state and reuse matching Metal buffers instead of allocating a replacement state. `Qwen35PromptCache::Store.restore_and_replay_suffix` accepts an optional `reuse_state`; `qwen35_generate` passes its already prepared state on exact `max_seq` matches and falls back to the old allocation path otherwise.
+
+**evidence_update_362:**
+- claim: "Restore-into preserves correctness and reuses prepared Metal buffers."
+  source: `crystal spec spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`21 examples, 0 failures`). The new spec records target buffer handles before `restore_into`, verifies the handles are unchanged afterward, then checks next-token top1/logit parity against a source state.
+  verified_at: 2026-05-20
+  decay_trigger: Qwen35StateSnapshot restore semantics, MetalBuffer ownership, or prompt-cache state layout changes
+- claim: "The practical CLI uses restore-into when the cache artifact shape matches the already prepared request state."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; release `/tmp/qwen35_generate_restore_into` prompt-cache/source-history repeat with `gen=64` hit `reused 8/8`, accepted source replay `64/64`, and reported `cache_restore_ms=34.8`, `decode_ms=903.6`, `parity` implied by exact verifier acceptance with no mismatch.
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate prompt-cache restore path, max_seq policy, or source-history verifier changes
+
+**quadrumvirate_update_362:**
+- cassandra: This is a small allocation/ownership cleanup, not the main session-cache speed breakthrough. The one-shot CLI wall is still dominated by lazy Metal compile and verifier body.
+- daedalus: The larger product frame remains resident/session cache with in-memory or preuploaded state artifacts; restore-into is the safe compatibility step toward that frame.
+- maieutic: Reusing a prepared state is only legal on shape-compatible artifacts. The implementation keeps a strict `max_seq` guard and falls back when shapes differ.
+- adversary: Do not count the `34.8 ms` one-shot restore as a stable improvement claim; use it only as smoke evidence that the product path stayed exact.

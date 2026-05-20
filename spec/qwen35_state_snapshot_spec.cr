@@ -259,6 +259,45 @@ describe ML::GGUF::Qwen35StateSnapshot do
     restored.layers.all? { |layer| layer.k_cache_buf.nil? && layer.v_cache_buf.nil? && layer.conv_state_buf.nil? && layer.ssm_state_buf.nil? }.should be_true
   end
 
+  it "can restore into a prepared Metal state without replacing matching buffers" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_SNAPSHOT)
+    hp = w.hparams
+
+    source = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 16)
+    target = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 16)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(source, hp)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(target, hp)
+    ML::GGUF::Qwen35CPU.forward_top1(w, 0_i32, 0_i32, source)
+
+    handles = target.layers.map do |layer|
+      {
+        layer.k_cache_buf.try(&.handle),
+        layer.v_cache_buf.try(&.handle),
+        layer.conv_state_buf.try(&.handle),
+        layer.ssm_state_buf.try(&.handle),
+      }
+    end
+
+    snapshot = ML::GGUF::Qwen35StateSnapshot.capture(source)
+    ML::GGUF::Qwen35StateSnapshot.restore_into(snapshot, hp, target)
+
+    target.layers.each_with_index do |layer, i|
+      {
+        layer.k_cache_buf.try(&.handle),
+        layer.v_cache_buf.try(&.handle),
+        layer.conv_state_buf.try(&.handle),
+        layer.ssm_state_buf.try(&.handle),
+      }.should eq(handles[i])
+    end
+
+    source_top, source_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 42_i32, 1_i32, source)
+    target_top, target_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 42_i32, 1_i32, target)
+    target_top.should eq(source_top)
+    target_logit.should be_close(source_logit, 1e-4_f32)
+  end
+
   it "writes and reads a fail-closed .qkv artifact" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_SNAPSHOT)
     hp = w.hparams

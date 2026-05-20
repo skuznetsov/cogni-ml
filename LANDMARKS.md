@@ -14302,3 +14302,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Metal already has the exact bulk verifier transport for trusted source spans; the remaining product work is cache artifact/state restore integration and strict benchmark separation from plain generation.
 - caveat: This is a clean repeated source corridor and resident-process benchmark. It is not a general generation speed claim and not yet a broad prompt/session distribution result.
 - trust: {F:0.88,G:0.56,R:0.88}
+
+**LM-362 prompt-cache restore-into prepared Metal state [shared/ml]**
+- status: VERIFIED local correctness guard
+- claim: Prompt-cache artifact restore can reuse an already prepared same-shape Metal state instead of discarding it and allocating replacement buffers.
+- evidence: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed. Focused Metal-linked specs passed: `crystal spec spec/qwen35_state_snapshot_spec.cr spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` (`21 examples, 0 failures`). The new state-snapshot spec verifies buffer handles remain unchanged across `restore_into` and then checks exact next-token parity. Release `qwen35_generate` prompt-cache/source-history repeat hit `reused 8/8`, accepted `64/64`, and completed with `cache_restore_ms=34.8`.
+- implementation: `Qwen35StateSnapshot.restore_into` restores a snapshot into a caller-provided state and reuses same-size/same-storage Metal buffers. `Qwen35PromptCache::Store.restore_and_replay_suffix` accepts `reuse_state`, and `qwen35_generate` passes its prepared state only when `hit.max_seq == state.max_seq`.
+- implication: The product cache path now has the ownership primitive needed for resident/session-cache fast restore. The next larger speed step is avoiding disk/CPU artifact decode on hot session hits, not more one-shot CLI retuning.
+- caveat: Strict same-shape restore is intentional. Cross-`max_seq` partial live-KV restore is a separate feature because artifacts currently store full KV capacity, not live KV byte ranges.
+- trust: {F:0.88,G:0.60,R:0.88}

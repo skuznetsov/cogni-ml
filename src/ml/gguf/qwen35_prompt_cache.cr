@@ -260,7 +260,8 @@ module ML::GGUF
 
       def restore(entry : Entry,
                   hp : Qwen35Hparams,
-                  prefer_metal : Bool = Qwen35Metal.available?) : Qwen35CPU::State
+                  prefer_metal : Bool = Qwen35Metal.available?,
+                  reuse_state : Qwen35CPU::State? = nil) : Qwen35CPU::State
         raise ArgumentError.new("unsupported Qwen prompt-cache runtime: #{entry.runtime_id}") unless entry.runtime_id == RUNTIME_ID
         Qwen35PromptCache.validate_restorable_artifact!(entry)
 
@@ -272,16 +273,24 @@ module ML::GGUF
         )
         raise ArgumentError.new("prompt-cache max_seq mismatch") unless snapshot.max_seq == entry.max_seq
         raise ArgumentError.new("prompt-cache layer count mismatch") unless snapshot.layer_count == entry.layer_count
-        Qwen35StateSnapshot.restore(snapshot, hp, prefer_metal: prefer_metal)
+        if state = reuse_state
+          Qwen35StateSnapshot.restore_into(snapshot, hp, state, prefer_metal: prefer_metal)
+          state
+        else
+          Qwen35StateSnapshot.restore(snapshot, hp, prefer_metal: prefer_metal)
+        end
       end
 
       def restore_and_replay_suffix(entry : Entry,
                                     weights : Qwen35Weights,
                                     token_ids : Array(Int32),
-                                    prefer_metal : Bool = Qwen35Metal.available?) : ReplayResult
+                                    prefer_metal : Bool = Qwen35Metal.available?,
+                                    reuse_state : Qwen35CPU::State? = nil) : ReplayResult
         raise ArgumentError.new("cache prefix longer than prompt: prefix=#{entry.prefix_len}, prompt=#{token_ids.size}") if entry.prefix_len > token_ids.size
 
-        state = restore(entry, weights.hparams, prefer_metal: prefer_metal)
+        reusable = reuse_state
+        reusable = nil if reusable && reusable.max_seq != entry.max_seq
+        state = restore(entry, weights.hparams, prefer_metal: prefer_metal, reuse_state: reusable)
         next_token_id = nil.as(Int32?)
         next_token_logit = nil.as(Float32?)
 
