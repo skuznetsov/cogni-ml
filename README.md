@@ -548,6 +548,7 @@ Useful Qwen environment switches:
 | `QWEN35_PROMPT_CACHE=1` | Enable exact prompt-state cache lookup/save in `qwen35_generate`. |
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
 | `QWEN35_PROMPT_TOKEN_CACHE_OFF=1` | Disable tokenized-prompt cache lookup/save while keeping prompt-state cache enabled. |
+| `QWEN35_PROMPT_CACHE_FAST_FORWARD=1` | With prompt cache and source-history enabled, save and use validated post-span state artifacts so exact session-cache hits can emit cached spans without verifier recompute. Default off; falls back when source prefix, token hash, or artifact validation fails. |
 | `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN=64` | Minimum requested generation length before a full-prompt cache hit can skip suffix replay and use stored next-token metadata. Lower values are useful for experiments but can move first model work into `decode_ms` without improving total wall time. |
 | `QWEN35_PROMPT_CACHE_RESIDENT_STATES=0` | Number of restored prompt-cache states to keep hot in a resident process. `0` disables the in-memory state cache. Positive values avoid rereading and redecompressing `.qkv` artifacts on repeated same-process session hits. |
 | `QWEN35_NATIVE_TOKENIZER_OFF=1` | Disable the native Crystal Qwen BPE encoder and use the external `llama-tokenize` bootstrap path. |

@@ -32,6 +32,7 @@ prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
 prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]? == "1"
+prompt_cache_fast_forward_enabled = prompt_cache_enabled && prompt_cache_source_history_enabled && ENV["QWEN35_PROMPT_CACHE_FAST_FORWARD"]? == "1"
 prompt_token_cache_enabled = prompt_cache_enabled && ENV["QWEN35_PROMPT_TOKEN_CACHE_OFF"]? != "1"
 prompt_cache_full_hit_min_gen = (ENV["QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN"]? || "64").to_i
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
@@ -241,7 +242,9 @@ session_id = ENV["QWEN35_SESSION_ID"]? || "default"
 turn_id = ENV["QWEN35_TURN_ID"]?
 ngram_source_history = [] of Int32
 ngram_replay_cursor = nil.as(Int32?)
+source_history_hit = nil.as(ML::GGUF::Qwen35PromptCache::SourceHistoryEntry?)
 prompt_cache_reused = false
+prompt_cache_fast_forward_used = false
 
 output_ids = [] of Int32
 pos = 0
@@ -262,6 +265,7 @@ if prompt_cache_enabled
       replay_start = ids.size
       if source.token_ids.size > replay_start &&
          ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
+        source_history_hit = source
         source_remaining = source.token_ids.size - replay_start
         if source_remaining >= ngram_cache_min_remaining
           ngram_source_history = source.token_ids
@@ -279,28 +283,75 @@ if prompt_cache_enabled
     source_history_lookup_ms = (Time.instant - source_lookup_t0).total_milliseconds
   end
 
-  if max_prefix_len > 0 && (hit = cache_store.not_nil!.lookup_longest_prefix(cache_model, cache_tokenizer, ids, max_prefix_len: max_prefix_len))
-    tstart = Time.instant
-    reuse_state = hit.max_seq == state.max_seq ? state : nil
-    replay = cache_store.not_nil!.restore_and_replay_suffix(hit, w, ids, reuse_state: reuse_state)
-    dt = (Time.instant - tstart).total_seconds
-    cache_restore_ms = dt * 1000.0
-    state = replay.state
-    pos = ids.size
-    if top = replay.next_token_id
-      output_ids << top
-      prompt_cache_reused = true
-      STDOUT << "\nPrompt cache hit: reused #{replay.reused_prefix_len}/#{ids.size} prompt tokens, replayed #{replay.replayed_tokens}, restore+replay took #{dt.round(3)}s\n"
+  if prompt_cache_fast_forward_enabled && output_ids.empty? && (source = source_history_hit)
+    source_remaining = source.token_ids.size - ids.size
+    if source_remaining >= n_gen
+      full_history_len = ids.size + n_gen
+      full_history = source.token_ids[0, full_history_len]
+      cached_prefix_len = full_history_len - 1
+      cached_prefix = full_history[0, cached_prefix_len]
+      expected_hash = ML::GGUF::Qwen35PromptCache.token_hash(full_history)
+      if fast_hit = cache_store.not_nil!.lookup_longest_prefix(
+           cache_model,
+           cache_tokenizer,
+           cached_prefix,
+           min_prefix_len: cached_prefix_len,
+           max_prefix_len: cached_prefix_len)
+        validation_ok = fast_hit.artifact_validation_kind == "exact-known-span-v1" &&
+          fast_hit.artifact_validation_hash == expected_hash &&
+          fast_hit.next_token_id == full_history[-1]
+        if validation_ok
+          tstart = Time.instant
+          reuse_state = fast_hit.max_seq == state.max_seq ? state : nil
+          replay = cache_store.not_nil!.restore_and_replay_suffix(fast_hit, w, cached_prefix, reuse_state: reuse_state)
+          cache_restore_ms = (Time.instant - tstart).total_milliseconds
+          if replay.replayed_tokens == 0 && replay.next_token_id == full_history[-1]
+            state = replay.state
+            pos = cached_prefix_len
+            output_ids = full_history[ids.size, n_gen]
+            prompt_cache_reused = true
+            prompt_cache_fast_forward_used = true
+            STDOUT << "\nPrompt cache fast-forward hit: emitted #{output_ids.size} cached tokens, reused_state_prefix=#{cached_prefix_len}, restore took #{(cache_restore_ms / 1000.0).round(3)}s\n"
+          else
+            STDOUT << "\nPrompt cache fast-forward validation failed after restore; exact fallback remains active\n"
+            output_ids.clear
+            pos = 0
+          end
+        else
+          STDOUT << "\nPrompt cache fast-forward artifact failed validation; exact fallback remains active\n"
+        end
+      else
+        STDOUT << "\nPrompt cache fast-forward state miss; exact fallback remains active\n"
+      end
     else
-      STDOUT << "\nPrompt cache hit had no suffix logits; falling back to normal prefill\n"
-      pos = 0
-      state_prepare_t0 = Time.instant
-      state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
-      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
-      state_prepare_ms += (Time.instant - state_prepare_t0).total_milliseconds
+      STDOUT << "\nPrompt cache fast-forward source span too short: remaining=#{source_remaining} requested=#{n_gen}; exact fallback remains active\n"
+    end
+  end
+
+  if max_prefix_len > 0 && (hit = cache_store.not_nil!.lookup_longest_prefix(cache_model, cache_tokenizer, ids, max_prefix_len: max_prefix_len))
+    unless prompt_cache_fast_forward_used
+      tstart = Time.instant
+      reuse_state = hit.max_seq == state.max_seq ? state : nil
+      replay = cache_store.not_nil!.restore_and_replay_suffix(hit, w, ids, reuse_state: reuse_state)
+      dt = (Time.instant - tstart).total_seconds
+      cache_restore_ms += dt * 1000.0
+      state = replay.state
+      pos = ids.size
+      if top = replay.next_token_id
+        output_ids << top
+        prompt_cache_reused = true
+        STDOUT << "\nPrompt cache hit: reused #{replay.reused_prefix_len}/#{ids.size} prompt tokens, replayed #{replay.replayed_tokens}, restore+replay took #{dt.round(3)}s\n"
+      else
+        STDOUT << "\nPrompt cache hit had no suffix logits; falling back to normal prefill\n"
+        pos = 0
+        state_prepare_t0 = Time.instant
+        state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
+        state_prepare_ms += (Time.instant - state_prepare_t0).total_milliseconds
+      end
     end
   else
-    STDOUT << "\nPrompt cache miss (root=#{cache_root})\n"
+    STDOUT << "\nPrompt cache miss (root=#{cache_root})\n" unless prompt_cache_fast_forward_used
   end
 end
 
@@ -380,7 +431,10 @@ end
   end
 {% end %}
 
-if speculative_decode_enabled && !output_ids.empty?
+if output_ids.size >= n_gen
+  STDOUT << "\nGeneration satisfied from validated cache; no decode loop needed.\n"
+  decode_ms = 0.0
+elsif speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
   puts "  gamma=#{spec_gamma} max_gamma=#{spec_max_gamma} bootstrap_gamma=#{spec_bootstrap_gamma} bootstrap_streak=#{spec_bootstrap_streak} fallback=#{spec_plain_fallback_enabled} fallback_gamma=#{spec_plain_fallback_gamma} full_accept_streak=#{spec_full_accept_streak} fast_regrow_min_gamma=#{spec_fast_regrow_min_gamma} single_fast=#{spec_single_fast_enabled} verify=#{spec_verify_mode}"
@@ -842,6 +896,22 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
   full_history = ids.dup
   full_history.concat(output_ids)
   source_save_t0 = Time.instant
+  if prompt_cache_fast_forward_enabled && !output_ids.empty?
+    cached_prefix = full_history[0, full_history.size - 1]
+    cache_store.not_nil!.save(
+      session_id: session_id,
+      turn_id: turn_id,
+      model_id: cache_model,
+      tokenizer_id: cache_tokenizer,
+      prompt_text: "",
+      token_ids: cached_prefix,
+      state: state,
+      artifact_validation_kind: "exact-known-span-v1",
+      artifact_validation_steps: output_ids.size,
+      artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),
+      next_token_id: output_ids[-1],
+    )
+  end
   saved_source = cache_store.not_nil!.save_source_history(
     session_id: session_id,
     turn_id: turn_id,

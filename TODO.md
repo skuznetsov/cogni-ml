@@ -1668,3 +1668,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This confirms the useful frame shift for sessions: when the exact state and emitted span are already certified, eliminate verifier body work rather than optimize it.
 - maieutic: The legal boundary is the cached state after `N-1` emitted tokens plus `next_token_id` for the final cached token, matching the existing greedy tail-skip continuation contract.
 - adversary: Productization still needs durable session/span lookup, artifact validation policy, eviction/memory-pressure gates, and a fail-closed fallback to exact source replay or plain decode.
+
+**decision_update_366:** Productized the validated fast-forward path behind `QWEN35_PROMPT_CACHE_FAST_FORWARD=1`. `qwen35_generate` now saves an exact-known-span state artifact alongside source-history when prompt cache/source-history/fast-forward are enabled, then future matching requests can validate the source prefix, full token-history hash, artifact validation kind, and final `next_token_id`, restore the post-span state, emit the cached output ids, and skip the decode loop. The path is default-off and fail-closed.
+
+**evidence_update_366:**
+- claim: "The product CLI compile gate accepts the new fast-forward path."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; release build `/tmp/qwen35_generate_ff` passed with Metal bridge link flags. Existing Metal-linked prompt-cache/state specs were also rerun in this slice and passed (`22 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate prompt-cache routing, Store restore API, or artifact validation metadata changes
+- claim: "A validated repeated request uses product fast-forward and preserves output ids."
+  source: two one-shot CLI runs with cache root `/tmp/qwen35_product_ff_smoke_32011`, session `ff-smoke`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, `QWEN35_PROMPT_CACHE=1 QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1 QWEN35_PROMPT_CACHE_FAST_FORWARD=1 QWEN35_PROMPT_CACHE_RESIDENT_STATES=1 QWEN35_DECODE_POLICY=greedy QWEN35_QUIET=1`. Seed saved source-history `24` tokens. Repeat printed `Prompt source-history hit`, `Prompt cache fast-forward hit: emitted 16 cached tokens`, `Generation satisfied from validated cache; no decode loop needed`, `prefill_ms=0.0`, `decode_ms=0.0`, and generated ids matched the seed exactly (`16/16`).
+  verified_at: 2026-05-20
+  decay_trigger: prompt-cache artifact layout, source-history token hash, or qwen35_generate decode control flow changes
+- claim: "Prefix mismatch fails closed instead of using fast-forward."
+  source: same cache/session with prompt `alpha beta gamma epsilon`, `n_gen=4`, printed `Prompt source-history found but prefix did not validate; exact fallback remains active` and ran normal greedy decode (`decode_ms=62.7`), with no fast-forward hit line.
+  verified_at: 2026-05-20
+  decay_trigger: source_history_prefix_match, session lookup, or product cache routing changes
+
+**quadrumvirate_update_366:**
+- cassandra: The main risk was control-flow: a full cached span could have fallen through into greedy generation and appended extra tokens. Added an explicit `output_ids.size >= n_gen` decode-loop bypass.
+- daedalus: The product frame is now cache artifact fast-forward, not verifier replay. The remaining work is durable lookup/eviction and possibly resident-server state reuse, not proving the math again.
+- maieutic: The path is exact only for the cached span; if the user asks for more tokens than the validated source span contains, it falls back to existing exact generation/replay.
+- adversary: Default-off remains correct. Public benchmark tables must keep this separate from plain decode and exact source replay.

@@ -14338,3 +14338,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: For trusted session/cache spans, the stronger LTP/WBA move is elimination of verifier body work, not another FFN/head verifier optimization. Exactness comes from artifact/session validation, not recomputation.
 - caveat: This is not plain generation speed and not speculative decoding. Product promotion still needs durable lookup, stronger artifact validation policy, eviction/memory-pressure checks, and fail-closed fallback to exact source replay or plain decode.
 - trust: {F:0.88,G:0.58,R:0.88}
+
+**LM-366 qwen35_generate validated fast-forward product path [shared/ml]**
+- status: VERIFIED local product-CLI smoke
+- claim: `qwen35_generate` can now use validated prompt-cache fast-forward in the product CLI when explicitly enabled by `QWEN35_PROMPT_CACHE_FAST_FORWARD=1`, and it fails closed on source-prefix mismatch.
+- evidence: compile/build gates passed: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` and release `/tmp/qwen35_generate_ff` with Metal bridge link flags. Product smoke with prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, cache/source-history/fast-forward enabled, and session `ff-smoke`: seed saved source-history `24` tokens; repeat printed `Prompt cache fast-forward hit: emitted 16 cached tokens`, `Generation satisfied from validated cache; no decode loop needed`, `prefill_ms=0.0`, `decode_ms=0.0`, and generated ids matched seed exactly. Mismatch smoke on prompt `alpha beta gamma epsilon` printed source-history prefix validation failure and ran normal greedy decode without a fast-forward hit.
+- implementation: after source-history prefix validation, the CLI looks for a state artifact at `prompt + cached_output[0...n_gen-1]`, checks `artifact_validation_kind=exact-known-span-v1`, checks full history `token_hash`, checks final `next_token_id`, restores through `Store.restore_and_replay_suffix`, emits cached output ids, and bypasses decode if `output_ids.size >= n_gen`. At request end, the CLI saves a matching exact-known-span artifact alongside source history.
+- implication: The verified benchmark path now has a product-shaped entry point. It remains opt-in because it relies on a strong cache/session artifact contract.
+- caveat: Separate one-shot CLI invocations still pay model load and cold artifact restore; resident/server mode is needed to realize the hot-state lower bound. Longer-than-cached continuation falls back to exact replay/generation.
+- trust: {F:0.86,G:0.56,R:0.86}
