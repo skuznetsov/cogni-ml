@@ -578,6 +578,39 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "does not reuse a session artifact validation memo after the artifact file changes" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_PROMPT_CACHE)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32] # "The capital of France is"
+    prompt_text = "The capital of France is"
+
+    root = File.tempname("qwen35-artifact-validation-memo")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      live = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      prompt.each_with_index do |token_id, pos|
+        ML::GGUF::Qwen35CPU.forward_top1(w, token_id, pos.to_i32, live)
+      end
+
+      saved = store.save(
+        session_id: "memo-session",
+        model_id: "qwen35-9b-q4km-test",
+        tokenizer_id: "qwen35-tokenizer-test",
+        prompt_text: prompt_text,
+        token_ids: prompt,
+        state: live,
+      )
+      File.open(saved.artifact_path, "a") { |file| file.write_byte(0_u8) }
+
+      expect_raises(ArgumentError, /byte-size mismatch|sha256 mismatch/) do
+        store.restore(saved, hp)
+      end
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "restores a validated BF16 recurrent prompt-cache artifact through the Metal encoded path" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 

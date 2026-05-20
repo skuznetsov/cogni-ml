@@ -192,6 +192,13 @@ module ML::GGUF
       getter tokenized_prompt_manifest_path : String
       getter output_fast_forward_dir : String
 
+      private record ArtifactFingerprint,
+        sha256 : String,
+        artifact_byte_size : Int64,
+        file_byte_size : Int64,
+        mtime_unix : Int64,
+        mtime_nanosecond : Int32
+
       def initialize(@root : String = Qwen35PromptCache.default_root,
                      resident_state_cache_entries : Int32? = nil)
         @manifest_path = File.join(@root, "manifest.jsonl")
@@ -202,6 +209,7 @@ module ML::GGUF
         raise ArgumentError.new("resident_state_cache_entries must be non-negative") if @resident_state_cache_limit < 0
         @resident_state_cache = {} of String => Qwen35CPU::State
         @resident_state_cache_order = [] of String
+        @validated_artifacts = {} of String => ArtifactFingerprint
       end
 
       def save(session_id : String,
@@ -256,6 +264,7 @@ module ML::GGUF
           next_token_logit: next_token_logit,
         )
         append_manifest(entry)
+        remember_validated_artifact(entry)
         entry
       end
 
@@ -340,9 +349,11 @@ module ML::GGUF
             raise ArgumentError.new("Metal recurrent-int8 prompt-cache restore requires QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1")
           end
 
+          fingerprint = artifact_fingerprint(entry)
+          expected_sha256 = expected_artifact_sha256(entry, fingerprint)
           mapped = Qwen35StateSnapshot.read_artifact_encoded_mmap(
             entry.artifact_path,
-            expected_sha256: entry.artifact_sha256,
+            expected_sha256: expected_sha256,
             expected_codec: entry.artifact_codec,
             expected_codec_block: entry.artifact_codec_block,
           )
@@ -354,19 +365,25 @@ module ML::GGUF
             state = nil if state && state.max_seq != entry.max_seq
             state ||= Qwen35CPU::State.new(hp, max_seq: entry.max_seq)
             Qwen35StateSnapshot.restore_encoded_into(encoded, hp, state, prefer_metal: true)
+            ensure_artifact_unchanged!(entry, fingerprint)
             remember_resident_state(entry, prefer_metal, state)
+            remember_validated_artifact(entry, fingerprint) if expected_sha256
             return state
           ensure
             mapped.close
           end
         end
 
+        fingerprint = artifact_fingerprint(entry)
+        expected_sha256 = expected_artifact_sha256(entry, fingerprint)
         snapshot = Qwen35StateSnapshot.read_artifact(
           entry.artifact_path,
-          expected_sha256: entry.artifact_sha256,
+          expected_sha256: expected_sha256,
           expected_codec: entry.artifact_codec,
           expected_codec_block: entry.artifact_codec_block,
         )
+        ensure_artifact_unchanged!(entry, fingerprint)
+        remember_validated_artifact(entry, fingerprint) if expected_sha256
         raise ArgumentError.new("prompt-cache max_seq mismatch") unless snapshot.max_seq == entry.max_seq
         raise ArgumentError.new("prompt-cache layer count mismatch") unless snapshot.layer_count == entry.layer_count
         if state = reuse_state
@@ -722,6 +739,44 @@ module ML::GGUF
       private def resident_state_cache_key(entry : Entry, prefer_metal : Bool) : String
         backend = prefer_metal ? "metal" : "cpu"
         "#{backend}:#{entry.artifact_sha256}:#{entry.max_seq}:#{entry.layer_count}"
+      end
+
+      private def artifact_validation_key(entry : Entry) : String
+        "#{entry.artifact_path}:#{entry.artifact_sha256.downcase}:#{entry.artifact_byte_size}"
+      end
+
+      private def artifact_fingerprint(entry : Entry) : ArtifactFingerprint
+        info = File.info(entry.artifact_path)
+        file_size = info.size
+        raise ArgumentError.new("prompt-cache artifact byte-size mismatch") unless file_size == entry.artifact_byte_size
+
+        mtime = info.modification_time
+        ArtifactFingerprint.new(
+          entry.artifact_sha256.downcase,
+          entry.artifact_byte_size,
+          file_size,
+          mtime.to_unix,
+          mtime.nanosecond,
+        )
+      end
+
+      private def expected_artifact_sha256(entry : Entry, fingerprint : ArtifactFingerprint) : String?
+        cached = @validated_artifacts[artifact_validation_key(entry)]?
+        cached == fingerprint ? nil : entry.artifact_sha256
+      end
+
+      private def ensure_artifact_unchanged!(entry : Entry, fingerprint : ArtifactFingerprint) : Nil
+        return if artifact_fingerprint(entry) == fingerprint
+
+        raise ArgumentError.new("prompt-cache artifact changed during restore")
+      end
+
+      private def remember_validated_artifact(entry : Entry) : Nil
+        remember_validated_artifact(entry, artifact_fingerprint(entry))
+      end
+
+      private def remember_validated_artifact(entry : Entry, fingerprint : ArtifactFingerprint) : Nil
+        @validated_artifacts[artifact_validation_key(entry)] = fingerprint
       end
 
       private def output_fast_forward_path(model_id : String,

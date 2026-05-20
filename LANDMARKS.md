@@ -14446,3 +14446,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: This is the first product-path form of the compressed artifact economics win on Metal. It removes read-copy/host allocation work without changing exactness policy.
 - caveat: The mapped bytes must outlive restore; current Store usage is synchronous. Future async/preuploaded artifact activation needs explicit owner lifetime management.
 - trust: {F:0.87,G:0.56,R:0.86}
+
+**LM-378 prompt-cache session artifact validation memo [shared/ml]**
+- status: VERIFIED local correctness guard
+- claim: `Qwen35PromptCache::Store.restore` can avoid repeated synchronous SHA for artifacts already validated in the same Store instance, while re-hashing when the artifact file identity changes.
+- evidence: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`17 examples, 0 failures`), including a stale-memo guard that mutates a saved artifact and expects restore to reject it. `spec/qwen35_state_snapshot_spec.cr` passed (`13 examples, 0 failures`), product no-codegen builds passed, and the Metal artifact restore bench still preserved all-route top1 parity.
+- implementation: Store records a validation fingerprint keyed by path, expected SHA, manifest byte size, actual file size, and modification timestamp. Restore passes `expected_sha256: nil` only when that tuple still matches; otherwise it performs the full hash check and refreshes the memo after a successful unchanged restore.
+- implication: This removes repeated SHA from token-critical repeated session/cache activation without changing first-use validation or compressed codec policy.
+- caveat: This is a local performance memo, not an adversarial storage trust boundary. A malicious same-size rewrite with preserved mtime can still evade stat-based memo invalidation; cross-process/product hardening should use background cryptographic validation or immutable artifact naming.
+- trust: {F:0.86,G:0.55,R:0.85}

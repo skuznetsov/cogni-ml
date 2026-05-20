@@ -1924,3 +1924,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: Product frame is now "mapped artifact activation." Next pivots: background SHA validation, resident mapped artifact cache, and preuploaded encoded payload buffers.
 - maieutic: Legal move lowers `(read_copy, host allocations, parse copy)` while preserving artifact hash validation when requested and exact fallback for unsupported/stale codecs.
 - adversary: Mapping lifetime is the main footgun. The wrapper owns the mmap and Store closes it only after restore; async/deferred restore would need a longer-lived owner.
+
+**decision_update_378:** Added a per-process prompt-cache artifact validation memo. `Store.restore` now hashes an artifact on first use unless it was written and fingerprinted by the same Store instance, then reuses that validation only while the artifact path, expected SHA, manifest byte size, actual file size, and mtime timestamp remain unchanged. This targets repeated resident/session restores where synchronous SHA was dominating the cache-activation path, while still re-hashing if the file changes.
+
+**evidence_update_378:**
+- claim: "Prompt-cache restore does not blindly trust a stale validation memo after artifact mutation."
+  source: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`17 examples, 0 failures`). The new spec saves an artifact, mutates the artifact file after the Store has memoized it, and verifies restore raises a byte-size/hash validation error instead of using the stale memo.
+  verified_at: 2026-05-20
+  decay_trigger: `Store.restore`, artifact fingerprint fields, or artifact writer changes
+- claim: "State snapshot/product compile and Metal artifact restore probes remain clean."
+  source: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`13 examples, 0 failures`); no-codegen builds passed for `bin/qwen35_generate.cr` and `bin/qwen35_warm_request_probe.cr`; `crystal run bin/qwen35_artifact_restore_bench.cr --link-flags=... -- --tokens=32 --max-seq=128 --warmups=1 --iters=3 --skip-hash` preserved all-route top1 parity and measured mmap restore `7.045ms` BF16 / `6.326ms` INT8 in that run.
+  verified_at: 2026-05-20
+  decay_trigger: artifact restore path, Metal decode kernels, or prompt-cache Store changes
+
+**quadrumvirate_update_378:**
+- cassandra: The memo is a local Spike only after a certified artifact window exists; it is not a replacement for first-use hashing or stale-file detection.
+- daedalus: This moves the next bottleneck from repeated SHA to restore/upload/decode and sets up a cleaner resident mapped/preuploaded artifact cache.
+- maieutic: Potential decreases from `(sync_hash, read_copy, restore)` to `(fingerprint_stat, mmap/restore)` only when the artifact identity tuple is stable; if identity changes, the dual frame is full hash validation.
+- adversary: A malicious actor preserving file size and mtime could still defeat a local stat memo. Treat this as a process-local performance cache, not a cryptographic trust boundary across adversarial storage.
