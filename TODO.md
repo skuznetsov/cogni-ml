@@ -1844,3 +1844,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The useful frame is cold/persistent artifact serving, not hot resident state templates. Resident state cache should keep using copied templates; compressed encoded restore should target disk/mmap/prefetch hits.
 - maieutic: The legal LTP window is a validated BF16 artifact hit whose recurrent payload is still encoded. The transport is encoded payload -> prepared recurrent Metal buffers; the potential decreases as `(decoded-host-bytes, CPU-decode-work, artifact-bytes-read)`.
 - adversary: Do not enable INT8 by analogy. CUDA showed INT8 needs cursor/prompt gates; Metal must earn the same trust independently.
+
+**decision_update_374:** Wired the Metal encoded BF16 restorer into the real prompt-cache `Store.restore` path. When a cache entry has validated compressed metadata and `prefer_metal=true`, `Store.restore` now reads the v2 artifact as an encoded snapshot and calls `Qwen35StateSnapshot.restore_encoded_into`, avoiding `read_artifact`'s CPU Float32 materialization for BF16 recurrent payloads. Raw artifacts continue through the old path. Metal INT8 remains fail-closed through `restore_encoded_into`.
+
+**evidence_update_374:**
+- claim: "The real prompt-cache Store can restore a validated BF16 recurrent artifact through the Metal encoded path."
+  source: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`15 examples, 0 failures`). The new spec saves a `recurrent-bf16` prompt-cache artifact with validation metadata, restores it into a prepared Metal state through `Store.restore`, and checks next-token top1/logit against the original Metal state.
+  verified_at: 2026-05-20
+  decay_trigger: `Store.restore`, BF16 artifact metadata, or Metal encoded restore changes
+- claim: "Existing state snapshot and product compile guards remain clean."
+  source: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`12 examples, 0 failures`); `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed.
+  verified_at: 2026-05-20
+  decay_trigger: prompt-cache restore integration or state snapshot API changes
+
+**quadrumvirate_update_374:**
+- cassandra: This is the product seam, not the final policy. It only applies to validated compressed entries and does not make compressed artifacts default.
+- daedalus: The next speed-bearing step is not another restore API; it is either enabling BF16 artifact save under a guarded product flag or adding Metal block8 INT8 decode with the same prompt/cursor trust gates used on CUDA.
+- maieutic: The boundary remains metadata-driven. A compressed artifact without validation metadata is ignored by lookup; a validated INT8 artifact still cannot restore on Metal until the decoder and gates exist.
+- adversary: Specs cover one BF16 prompt-cache hit. Broader prompt/session and eviction tests are still needed before default cache policy changes.

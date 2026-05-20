@@ -14410,3 +14410,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: This is a cold/persistent cache-hit accelerator and backend seam, not a replacement for resident state templates. For resident hot hits, copied decoded templates are still faster.
 - caveat: The timing probe is one prompt/artifact on one M2 Max and includes filesystem cache effects. INT8 remains explicitly unsupported on Metal.
 - trust: {F:0.87,G:0.50,R:0.86}
+
+**LM-374 prompt-cache Store uses Metal encoded BF16 restore [shared/ml]**
+- status: VERIFIED local Metal prompt-cache correctness guard
+- claim: `Qwen35PromptCache::Store.restore` now routes validated compressed BF16 prompt-cache artifacts through the Metal encoded restore path instead of forcing CPU Float32 materialization first.
+- evidence: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`15 examples, 0 failures`). The new Store spec saves a validated `recurrent-bf16` prompt-cache artifact, restores it into a prepared Metal state via `Store.restore`, and checks next-token top1/logit against the original state. `spec/qwen35_state_snapshot_spec.cr` also passed (`12 examples, 0 failures`), plus no-codegen builds for `bin/qwen35_generate.cr` and `bin/qwen35_warm_request_probe.cr`.
+- implementation: `Store.restore` uses `read_artifact_encoded(... expected_codec: ..., expected_codec_block: ...)` and `Qwen35StateSnapshot.restore_encoded_into` when `prefer_metal` and the artifact codec is compressed. Raw artifacts keep the existing `read_artifact` path. Metal INT8 still fails closed inside `restore_encoded_into`.
+- implication: Product prompt-cache restore can now consume BF16 compressed artifacts on Metal under the existing validation metadata contract.
+- caveat: BF16 compressed save is still opt-in; this does not change default artifact policy, and INT8 remains pending.
+- trust: {F:0.88,G:0.54,R:0.87}

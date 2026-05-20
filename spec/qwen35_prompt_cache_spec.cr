@@ -578,6 +578,51 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "restores a validated BF16 recurrent prompt-cache artifact through the Metal encoded path" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_PROMPT_CACHE)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32] # "The capital of France is"
+    prompt_text = "The capital of France is"
+
+    root = File.tempname("qwen35-bf16-prompt-cache")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      live = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(live, hp)
+      prompt.each_with_index do |token_id, pos|
+        ML::GGUF::Qwen35CPU.forward_top1(w, token_id, pos.to_i32, live)
+      end
+
+      saved = store.save(
+        session_id: "bf16-session",
+        model_id: "qwen35-9b-q4km-test",
+        tokenizer_id: "qwen35-tokenizer-test",
+        prompt_text: prompt_text,
+        token_ids: prompt,
+        state: live,
+        artifact_codec: "recurrent-bf16",
+        artifact_validation_kind: "prompt-cache-bf16-smoke",
+        artifact_validation_steps: prompt.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(prompt),
+      )
+      saved.artifact_codec.should eq("recurrent-bf16")
+
+      reuse = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(reuse, hp)
+      restored = store.restore(saved, hp, reuse_state: reuse)
+
+      live_top, live_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, live)
+      restored_top, restored_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, restored)
+      restored_top.should eq(live_top)
+      restored_logit.should be_close(live_logit, 1e-2_f32)
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "restores the longest cached prefix and replays only the suffix" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_PROMPT_CACHE)
     hp = w.hparams
