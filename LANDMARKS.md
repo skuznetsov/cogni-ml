@@ -14167,3 +14167,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: This is the correct LTP/WBA runtime boundary for session-cache replay on Metal: validated source cursor is a stronger legal frame than heuristic candidate-shape gates; unvalidated/mismatched source fails closed without verifier risk.
 - caveat: The speed smoke is a synthetic repeated-token corridor and should not be generalized. Next evidence needs real prompt-cache/session histories with artifact restore and source-history construction from cache metadata.
 - trust: {F:0.86,G:0.48,R:0.86}
+
+**LM-346 opt-in prompt-cache source-history sidecar [shared/ml]**
+- status: VERIFIED local CLI primitive, not default
+- claim: Prompt/session cache can now persist exact token source histories behind `QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1`, and `bin/qwen35_generate.cr` can use a validated same-session source history as an n-gram cursor replay source.
+- evidence: added `Qwen35PromptCache::SourceHistoryEntry`, `Store#save_source_history`, `Store#lookup_source_history`, and `source_history_prefix_match?`. Focused prompt-cache specs pass (`9 examples, 0 failures` with Metal bridge link flags), and no-codegen builds pass for `bin/qwen35_speculative_accept.cr` and `bin/qwen35_generate.cr`. Two-run local smoke with cache root `/tmp/qwen35_source_history_cache_smoke`: run 1 saved `16` source-history tokens for session `source-smoke`; run 2 reported `Prompt source-history hit: tokens=16 replay_start=8`, prompt-cache hit, n-gram cursor `8/8`, `cursor_hits=1`, `cursor_accepts=1`, and identical generated token ids.
+- implication: The product path is now concrete: session cache can supply a validated source-history corridor, and n-gram replay can enter through that legal frame instead of prompt labels or untrusted suffix guesses.
+- caveat: Source histories contain raw token IDs and are therefore opt-in. The two-run smoke validates wiring, not performance; the measured n-gram wall was source-compile/restore noisy.
+- trust: {F:0.86,G:0.55,R:0.86}

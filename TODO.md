@@ -1240,7 +1240,7 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - [x] Add a named sweep policy for the current verified corridor recipe: `ngram_target_only_staged_corridor_min6`.
 - [x] Add sweep-only category fail-closed gating for measuring routed policies.
 - [x] Add Metal harness source-cache cursor replay with prefix validation and cursor-only trusted-source mode.
-- [ ] Wire real prompt-cache/session artifacts to provide `--ngram-source-history` and `--ngram-replay-start` automatically.
+- [x] Add opt-in prompt-cache source-history sidecar and wire `qwen35_generate` n-gram decode to validated same-session source cursor replay.
 - [ ] Build the remaining runtime corridor detector for non-cache histories; do not use static prompt category labels as the production router.
 - [ ] Run the same policy on real session-cache traces and trusted cursor replay when CUDA/remote access is restored.
 - [ ] Avoid more hand-tuned risk predicates until a larger trace corpus shows a repeated false-positive family.
@@ -1262,3 +1262,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The router pivot is from "classify prompt" to "validate a transport corridor". Source/cache cursor is a legal transport map; prompt category is only a weak proxy.
 - maieutic: Current CLI still requires explicit token IDs. The production value appears only when prompt-cache artifacts can supply source histories and replay offsets automatically.
 - adversary: Do not generalize the synthetic repeat speedup. The verified result is the primitive and fail-closed behavior, not session-cache performance.
+
+**decision_update_346:** Added an opt-in source-history sidecar to prompt/session cache and wired `qwen35_generate` to use it for trusted n-gram cursor replay. This keeps raw token storage default-off while making the validated-corridor route usable without manual token ID flags.
+
+**evidence_update_346:**
+- claim: "Prompt-cache source history stores and validates token histories."
+  source: `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=\"$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++\"` passed (`9 examples, 0 failures`). The new spec saves a source history, checks `token_hash`, validates prefix matching, and ignores corrupt JSONL lines.
+  verified_at: 2026-05-19
+  decay_trigger: source-history JSON schema, token hash format, prompt-cache store lookup, or privacy defaults change
+- claim: "`qwen35_generate` can consume an opt-in source-history hit as an n-gram cursor."
+  source: release runner `/tmp/qwen35_generate_source_history`, cache root `/tmp/qwen35_source_history_cache_smoke`, session `source-smoke`. First greedy run saved `source-history tokens=16`. Second n-gram run reported `Prompt source-history hit: tokens=16 replay_start=8`, prompt-cache hit, n-gram `8/8`, `cursor_hits=1`, `cursor_accepts=1`, and identical generated ids `[8029, 13053, 20956, 9197, 8029, 13053, 20956, 9197]`.
+  verified_at: 2026-05-19
+  decay_trigger: qwen35_generate cache flow, n-gram decode loop, source-history prefix validation, or tokenizer changes
+- claim: "No-codegen builds remain clean for the touched CLIs."
+  source: `crystal build --no-codegen bin/qwen35_speculative_accept.cr --error-trace` and `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed.
+  verified_at: 2026-05-19
+  decay_trigger: CLI option wiring, source-history API, or n-gram decode changes
+
+**quadrumvirate_update_346:**
+- cassandra: The main risk is privacy/regression from raw token histories. Keeping source history opt-in and hash-validated bounds that risk.
+- daedalus: This is the useful bridge between product cache and inference speed: cache artifacts restore state, source-history sidecar supplies a legal proposal corridor.
+- maieutic: Source-history speed depends on prompt-cache restore cost and verifier chunk economics. The smoke proves wiring, not a stable speedup.
+- adversary: Do not store token histories by default. Future docs should call out that `QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1` stores raw token IDs locally.

@@ -14,6 +14,7 @@ module ML::GGUF
     RUNTIME_ID                 = "cogni-ml/qwen35-state-v1"
     RAW_ARTIFACT_CODECS        = {nil, "", "raw", "raw-fp32", "qkv-raw"}
     COMPRESSED_ARTIFACT_CODECS = {"recurrent-bf16", "recurrent-int8"}
+    SOURCE_HISTORY_RUNTIME_ID  = "cogni-ml/qwen35-source-history-v1"
 
     class Entry
       include JSON::Serializable
@@ -64,6 +65,31 @@ module ML::GGUF
       end
     end
 
+    class SourceHistoryEntry
+      include JSON::Serializable
+
+      property runtime_id : String
+      property session_id : String
+      property turn_id : String?
+      property model_id : String
+      property tokenizer_id : String
+      property token_hash : String
+      property token_count : Int32
+      property token_ids : Array(Int32)
+      property created_at_unix : Int64
+
+      def initialize(@runtime_id : String,
+                     @session_id : String,
+                     @turn_id : String?,
+                     @model_id : String,
+                     @tokenizer_id : String,
+                     @token_hash : String,
+                     @token_count : Int32,
+                     @token_ids : Array(Int32),
+                     @created_at_unix : Int64)
+      end
+    end
+
     record ReplayResult,
       state : Qwen35CPU::State,
       reused_prefix_len : Int32,
@@ -75,9 +101,11 @@ module ML::GGUF
     class Store
       getter root : String
       getter manifest_path : String
+      getter source_history_manifest_path : String
 
       def initialize(@root : String = Qwen35PromptCache.default_root)
         @manifest_path = File.join(@root, "manifest.jsonl")
+        @source_history_manifest_path = File.join(@root, "source_history.jsonl")
       end
 
       def save(session_id : String,
@@ -250,6 +278,63 @@ module ML::GGUF
         out
       end
 
+      def save_source_history(session_id : String,
+                              model_id : String,
+                              tokenizer_id : String,
+                              token_ids : Array(Int32),
+                              turn_id : String? = nil) : SourceHistoryEntry
+        entry = SourceHistoryEntry.new(
+          runtime_id: SOURCE_HISTORY_RUNTIME_ID,
+          session_id: session_id,
+          turn_id: turn_id,
+          model_id: model_id,
+          tokenizer_id: tokenizer_id,
+          token_hash: Qwen35PromptCache.token_hash(token_ids),
+          token_count: token_ids.size.to_i32,
+          token_ids: token_ids.dup,
+          created_at_unix: Time.utc.to_unix,
+        )
+        FileUtils.mkdir_p(@root)
+        File.open(@source_history_manifest_path, "a") do |file|
+          entry.to_json(file)
+          file << '\n'
+        end
+        entry
+      end
+
+      def lookup_source_history(session_id : String,
+                                model_id : String,
+                                tokenizer_id : String,
+                                turn_id : String? = nil) : SourceHistoryEntry?
+        source_history_entries.select do |entry|
+          next false unless entry.runtime_id == SOURCE_HISTORY_RUNTIME_ID
+          next false unless entry.session_id == session_id
+          next false unless entry.model_id == model_id
+          next false unless entry.tokenizer_id == tokenizer_id
+          next false if turn_id && entry.turn_id != turn_id
+
+          entry.token_count == entry.token_ids.size &&
+            entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
+        end.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+      end
+
+      def source_history_entries : Array(SourceHistoryEntry)
+        return [] of SourceHistoryEntry unless File.exists?(@source_history_manifest_path)
+
+        out = [] of SourceHistoryEntry
+        File.each_line(@source_history_manifest_path) do |line|
+          stripped = line.strip
+          next if stripped.empty?
+
+          begin
+            out << SourceHistoryEntry.from_json(stripped)
+          rescue JSON::ParseException | KeyError
+            # A corrupt source-history line must not produce a replay source.
+          end
+        end
+        out
+      end
+
       private def append_manifest(entry : Entry) : Nil
         FileUtils.mkdir_p(@root)
         File.open(@manifest_path, "a") do |file|
@@ -313,6 +398,17 @@ module ML::GGUF
         io.write_bytes(token_ids[i], IO::ByteFormat::LittleEndian)
       end
       Digest::SHA256.hexdigest(io.to_slice)
+    end
+
+    def source_history_prefix_match?(source_history : Array(Int32),
+                                     prefix_ids : Array(Int32),
+                                     replay_start : Int32) : Bool
+      return false if replay_start < prefix_ids.size
+      source_prefix_start = replay_start - prefix_ids.size
+      return false if source_prefix_start < 0
+      return false if source_prefix_start + prefix_ids.size > source_history.size
+
+      source_history[source_prefix_start, prefix_ids.size] == prefix_ids
     end
 
     def artifact_trust_metadata_valid?(entry : Entry) : Bool

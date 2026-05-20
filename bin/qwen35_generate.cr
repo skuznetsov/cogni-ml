@@ -19,6 +19,7 @@ LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-to
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
+prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]? == "1"
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
@@ -182,6 +183,10 @@ ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp) if prepare_state_metal
 cache_store = nil.as(ML::GGUF::Qwen35PromptCache::Store?)
 cache_model = ""
 cache_tokenizer = ""
+session_id = ENV["QWEN35_SESSION_ID"]? || "default"
+turn_id = ENV["QWEN35_TURN_ID"]?
+ngram_source_history = [] of Int32
+ngram_replay_cursor = nil.as(Int32?)
 
 output_ids = [] of Int32
 pos = 0
@@ -192,6 +197,22 @@ if prompt_cache_enabled
   cache_model = cache_model_id(MODEL_PATH)
   cache_tokenizer = cache_tokenizer_id(cache_model, tok)
   max_prefix_len = ids.size > 0 ? ids.size - 1 : 0
+
+  if prompt_cache_source_history_enabled
+    if source = cache_store.not_nil!.lookup_source_history(session_id, cache_model, cache_tokenizer, turn_id: turn_id)
+      replay_start = ids.size
+      if source.token_ids.size > replay_start &&
+         ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
+        ngram_source_history = source.token_ids
+        ngram_replay_cursor = replay_start
+        STDOUT << "\nPrompt source-history hit: tokens=#{source.token_count} replay_start=#{replay_start}\n"
+      else
+        STDOUT << "\nPrompt source-history found but prefix did not validate; exact fallback remains active\n"
+      end
+    else
+      STDOUT << "\nPrompt source-history miss (root=#{cache_root})\n"
+    end
+  end
 
   if max_prefix_len > 0 && (hit = cache_store.not_nil!.lookup_longest_prefix(cache_model, cache_tokenizer, ids, max_prefix_len: max_prefix_len))
     tstart = Time.instant
@@ -239,7 +260,7 @@ if output_ids.empty?
       preview = ENV["QWEN35_PROMPT_CACHE_PREVIEW"]? == "1" ? tok.decode(prefix_ids) : nil
       saved = cache_store.not_nil!.save(
         session_id: ENV["QWEN35_SESSION_ID"]? || "default",
-        turn_id: ENV["QWEN35_TURN_ID"]?,
+        turn_id: turn_id,
         model_id: cache_model,
         tokenizer_id: cache_tokenizer,
         prompt_text: "",
@@ -501,30 +522,54 @@ elsif ngram_decode_enabled && !output_ids.empty?
   ngram_cycles = 0
   ngram_accepted = 0
   ngram_proposed = 0
+  ngram_cursor_hits = 0
+  ngram_cursor_accepts = 0
+  ngram_cursor_rejects = 0
+  ngram_cursor_serial_advances = 0
+  ngram_cursor_serial_drops = 0
   plain_steps = 0
   target_replay_ms = 0.0
   backup = nil.as(ML::GGUF::Qwen35CPU::State?)
 
   while output_ids.size < n_gen
     remaining = n_gen - output_ids.size
-    candidates = if ngram_disabled
-                   [] of Int32
-                 elsif index = ngram_history
-                   index.candidates(Math.min(ngram_gamma, remaining),
-                     recursive: ngram_recursive, min_candidates: ngram_min_candidates)
-                 else
-                   ML::GGUF::NgramDraft.candidates(
-                     history, Math.min(ngram_gamma, remaining), ngram_max, ngram_min,
-                     recursive: ngram_recursive, min_candidates: ngram_min_candidates)
-                 end
-    match_len = if ngram_disabled
-                  0
-                elsif index = ngram_history
-                  index.match_len
-                else
-                  ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
-                end
-    if ngram_risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, ngram_risk_min_size, match_len)
+    ngram_pending_replay_cursor = nil.as(Int32?)
+    ngram_from_source = false
+    candidates = [] of Int32
+    match_len = 0
+    unless ngram_disabled
+      if cursor = ngram_replay_cursor
+        replay_count = Math.min(Math.min(ngram_gamma, remaining), ngram_source_history.size - cursor)
+        if replay_count > 0
+          candidates = ngram_source_history[cursor, replay_count]
+          if ngram_min_candidates > 0 && candidates.size < ngram_min_candidates
+            candidates = [] of Int32
+          else
+            ngram_pending_replay_cursor = cursor + candidates.size
+            ngram_from_source = true
+            ngram_cursor_hits += 1
+            match_len = ngram_max
+          end
+        end
+      end
+      if candidates.empty?
+        if index = ngram_history
+          if span = index.candidate_span(Math.min(ngram_gamma, remaining),
+               recursive: ngram_recursive, min_candidates: ngram_min_candidates)
+            candidates = span.ids
+            match_len = span.match_len
+          else
+            match_len = index.match_len
+          end
+        else
+          candidates = ML::GGUF::NgramDraft.candidates(
+            history, Math.min(ngram_gamma, remaining), ngram_max, ngram_min,
+            recursive: ngram_recursive, min_candidates: ngram_min_candidates)
+          match_len = ML::GGUF::NgramDraft.match_len(history, ngram_max, ngram_min)
+        end
+      end
+    end
+    if ngram_risk_gate && !ngram_from_source && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, ngram_risk_min_size, match_len)
       ngram_disabled = true
       candidates = [] of Int32
     end
@@ -535,6 +580,15 @@ elsif ngram_decode_enabled && !output_ids.empty?
       output_ids << emitted
       history << emitted
       ngram_history.try &.append(emitted)
+      if cursor = ngram_replay_cursor
+        if cursor < ngram_source_history.size && ngram_source_history[cursor]? == emitted
+          ngram_replay_cursor = cursor + 1
+          ngram_cursor_serial_advances += 1
+        else
+          ngram_replay_cursor = nil
+          ngram_cursor_serial_drops += 1
+        end
+      end
       if output_ids.size < n_gen && emitted != tok.eos_id
         top, _top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, emitted, pos, state)
         next_id = top
@@ -598,6 +652,10 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
       if rejected
         ngram_disabled = true if ngram_disable_after_reject
+        if ngram_pending_replay_cursor
+          ngram_replay_cursor = nil
+          ngram_cursor_rejects += 1
+        end
         if output_ids.size < n_gen && output_ids.last? != tok.eos_id
           if ngram_replay_on_reject
             replay_t0 = Time.instant
@@ -620,6 +678,10 @@ elsif ngram_decode_enabled && !output_ids.empty?
         break if output_ids.last? == tok.eos_id
       end
     end
+    if ngram_pending_replay_cursor && !rejected
+      ngram_replay_cursor = ngram_pending_replay_cursor
+      ngram_cursor_accepts += 1
+    end
     dt = (Time.instant - tstart).total_seconds
 
     if trace_steps
@@ -631,7 +693,7 @@ elsif ngram_decode_enabled && !output_ids.empty?
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = ngram_proposed > 0 ? (ngram_accepted.to_f64 * 100.0 / ngram_proposed.to_f64) : 0.0
-  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} target_replay_ms=#{target_replay_ms.round(1)}\n"
+  STDOUT << "  ngram summary: accepted=#{ngram_accepted}/#{ngram_proposed} rate=#{rate.round(2)}% cycles=#{ngram_cycles} plain_steps=#{plain_steps} disabled=#{ngram_disabled} cursor_hits=#{ngram_cursor_hits} cursor_accepts=#{ngram_cursor_accepts} cursor_rejects=#{ngram_cursor_rejects} cursor_serial_advances=#{ngram_cursor_serial_advances} cursor_serial_drops=#{ngram_cursor_serial_drops} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} target_replay_ms=#{target_replay_ms.round(1)}\n"
 else
   puts "\nGenerating #{n_gen} tokens greedily..."
   decode_t0 = Time.instant
@@ -651,6 +713,19 @@ else
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)}\n"
+end
+
+if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
+  full_history = ids.dup
+  full_history.concat(output_ids)
+  saved_source = cache_store.not_nil!.save_source_history(
+    session_id: session_id,
+    turn_id: turn_id,
+    model_id: cache_model,
+    tokenizer_id: cache_tokenizer,
+    token_ids: full_history,
+  )
+  STDOUT << "  saved source-history tokens=#{saved_source.token_count} hash=#{saved_source.token_hash[0, 12]}\n"
 end
 
 puts "\n=== Generated token ids ==="

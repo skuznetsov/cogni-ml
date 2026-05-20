@@ -73,6 +73,35 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "stores opt-in source histories with hash validation" do
+    root = File.tempname("qwen35-source-history")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      entry = store.save_source_history(
+        session_id: "s1",
+        turn_id: "t1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        token_ids: [10_i32, 20_i32, 30_i32, 40_i32],
+      )
+
+      entry.token_hash.should eq(ML::GGUF::Qwen35PromptCache.token_hash([10_i32, 20_i32, 30_i32, 40_i32]))
+      hit = store.lookup_source_history("s1", "model-a", "tok-a", turn_id: "t1")
+      hit.should_not be_nil
+      hit.not_nil!.token_ids.should eq([10_i32, 20_i32, 30_i32, 40_i32])
+      ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(hit.not_nil!.token_ids, [10_i32, 20_i32], 2).should be_true
+      ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(hit.not_nil!.token_ids, [20_i32, 30_i32], 2).should be_false
+
+      File.open(store.source_history_manifest_path, "a") do |file|
+        file.puts("{bad json")
+      end
+      store.lookup_source_history("s1", "model-a", "tok-a").should_not be_nil
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "generates pg_sorted_heap metadata SQL without accepting unsafe identifiers" do
     sql = ML::GGUF::Qwen35PromptCache.pg_sorted_heap_schema_sql
     sql.should contain("CREATE EXTENSION IF NOT EXISTS pg_sorted_heap")
