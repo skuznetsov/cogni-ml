@@ -84,6 +84,7 @@ module ML::GGUF
       property token_ids : Array(Int32)
       property generated_token_count : Int32? = nil
       property generated_text : String? = nil
+      property generated_text_hash : String? = nil
       property created_at_unix : Int64
 
       def initialize(@runtime_id : String,
@@ -96,7 +97,8 @@ module ML::GGUF
                      @token_ids : Array(Int32),
                      @created_at_unix : Int64,
                      @generated_token_count : Int32? = nil,
-                     @generated_text : String? = nil)
+                     @generated_text : String? = nil,
+                     @generated_text_hash : String? = nil)
       end
     end
 
@@ -347,6 +349,7 @@ module ML::GGUF
                               generated_token_count : Int32? = nil,
                               generated_text : String? = nil,
                               turn_id : String? = nil) : SourceHistoryEntry
+        generated_text_hash = generated_text ? Qwen35PromptCache.generated_text_hash(generated_text) : nil
         entry = SourceHistoryEntry.new(
           runtime_id: SOURCE_HISTORY_RUNTIME_ID,
           session_id: session_id,
@@ -359,6 +362,7 @@ module ML::GGUF
           created_at_unix: Time.utc.to_unix,
           generated_token_count: generated_token_count,
           generated_text: generated_text,
+          generated_text_hash: generated_text_hash,
         )
         FileUtils.mkdir_p(@root)
         File.open(@source_history_manifest_path, "a") do |file|
@@ -583,6 +587,21 @@ module ML::GGUF
 
     def prompt_text_hash(prompt_text : String) : String
       Digest::SHA256.hexdigest("qwen35-prompt-text-v1\0#{prompt_text}")
+    end
+
+    def generated_text_hash(generated_text : String) : String
+      Digest::SHA256.hexdigest("qwen35-generated-text-v1\0#{generated_text}")
+    end
+
+    def generated_text_metadata_valid?(entry : SourceHistoryEntry,
+                                       expected_generated_tokens : Int32) : Bool
+      return false unless expected_generated_tokens > 0
+      return false unless entry.generated_token_count == expected_generated_tokens
+      text = entry.generated_text
+      hash = entry.generated_text_hash
+      return false unless text && hash
+
+      generated_text_hash(text) == hash
     end
 
     def source_history_prefix_match?(source_history : Array(Int32),

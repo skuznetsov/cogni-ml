@@ -1756,3 +1756,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This is now true output cache serving. It eliminates the entire ML runtime for exact cached terminal outputs.
 - maieutic: The generated text is only reusable when `generated_token_count == n_gen`; partial-span text slicing is intentionally not attempted.
 - adversary: This should remain opt-in and clearly documented as terminal output-cache serving. Continuation requires state restore or exact replay.
+
+**decision_update_370:** Hardened zero-GGUF output fast-forward with a generated-text hash. Source-history entries now store `generated_text_hash` alongside optional generated text, and the zero-GGUF preflight requires `generated_text_hash(generated_text)` to match before emitting cached text without opening the GGUF. This closes the metadata-integrity gap while preserving backward compatibility: old source-history rows without text hash fall back to tokenizer metadata / exact paths.
+
+**evidence_update_370:**
+- claim: "Generated text metadata is hash-validated before zero-GGUF output serving."
+  source: `Qwen35PromptCache.generated_text_metadata_valid?` added and covered by `spec/qwen35_prompt_cache_spec.cr`: valid generated text metadata passes, wrong generated token count fails, and tampered `generated_text_hash` fails. Focused spec passed (`13 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: SourceHistoryEntry JSON fields, generated text metadata validation, or output-only preflight changes
+- claim: "The zero-GGUF product hit still works after text-hash hardening."
+  source: release `/tmp/qwen35_generate_ff_texthash`, cache root `/tmp/qwen35_product_ff_texthash_88142`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, fast-forward env enabled. Repeat ids matched seed (`16/16`), printed `Prompt cache output fast-forward hit before tokenizer/weight load`, did not load tokenizer metadata or weights, and summary reported `total_ms=1.9`, `model_load_ms=0.0`, `tokenize_ms=1.8`, `decode_ms=0.0`.
+  verified_at: 2026-05-20
+  decay_trigger: manifest size, JSON parsing, generated text hash, or qwen35_generate preflight routing changes
+- claim: "Tampered generated-text hash blocks the zero-GGUF path."
+  source: manually changed the cached source-history row's `generated_text_hash` to `bad`; rerun no longer used the `before tokenizer/weight load` path. It loaded tokenizer metadata and then used the safer tokenizer-backed pre-weight fast-forward (`total_ms=103.6`), preserving exact cached ids without trusting tampered text metadata.
+  verified_at: 2026-05-20
+  decay_trigger: generated text hash validation or fallback routing changes
+
+**quadrumvirate_update_370:**
+- cassandra: Text metadata was the weak link because token ids were validated but decoded text was not independently certified.
+- daedalus: The right fix is not reopening GGUF on every hit; it is adding a local certificate for the transported text.
+- maieutic: If the text certificate fails, token ids can still be served only through a tokenizer-backed path that can decode them.
+- adversary: Legacy rows without `generated_text_hash` intentionally do not qualify for zero-GGUF output serving.

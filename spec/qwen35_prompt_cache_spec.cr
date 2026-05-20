@@ -91,10 +91,15 @@ describe ML::GGUF::Qwen35PromptCache do
       entry.token_hash.should eq(ML::GGUF::Qwen35PromptCache.token_hash([10_i32, 20_i32, 30_i32, 40_i32]))
       entry.generated_token_count.should eq(2)
       entry.generated_text.should eq(" generated text")
+      entry.generated_text_hash.should eq(ML::GGUF::Qwen35PromptCache.generated_text_hash(" generated text"))
       hit = store.lookup_source_history("s1", "model-a", "tok-a", turn_id: "t1")
       hit.should_not be_nil
       hit.not_nil!.token_ids.should eq([10_i32, 20_i32, 30_i32, 40_i32])
       hit.not_nil!.generated_text.should eq(" generated text")
+      ML::GGUF::Qwen35PromptCache.generated_text_metadata_valid?(hit.not_nil!, 2).should be_true
+      ML::GGUF::Qwen35PromptCache.generated_text_metadata_valid?(hit.not_nil!, 1).should be_false
+      hit.not_nil!.generated_text_hash = "bad"
+      ML::GGUF::Qwen35PromptCache.generated_text_metadata_valid?(hit.not_nil!, 2).should be_false
       ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(hit.not_nil!.token_ids, [10_i32, 20_i32], 2).should be_true
       ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(hit.not_nil!.token_ids, [20_i32, 30_i32], 2).should be_false
 

@@ -216,7 +216,7 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
       source_remaining = source.token_ids.size - replay_start
       if source.token_ids.size > replay_start &&
          source_remaining >= n_gen &&
-         source.generated_token_count == n_gen &&
+         ML::GGUF::Qwen35PromptCache.generated_text_metadata_valid?(source, n_gen) &&
          (cached_text = source.generated_text) &&
          ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
         full_history_len = ids.size + n_gen

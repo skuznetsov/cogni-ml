@@ -14374,3 +14374,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Terminal repeated CLI outputs now avoid the ML runtime entirely; remaining cost is process startup plus small manifest reads.
 - caveat: Text reuse is only attempted for exact cached output length. Partial cached spans and resident continuation still fall back to tokenizer metadata plus state restore/exact replay.
 - trust: {F:0.86,G:0.56,R:0.86}
+
+**LM-370 generated-text hash for zero-GGUF output serving [shared/ml]**
+- status: VERIFIED local product-CLI smoke + spec guard
+- claim: Zero-GGUF output fast-forward now validates cached generated text with a source-history `generated_text_hash`, so tampered text metadata cannot be emitted without reopening tokenizer metadata.
+- evidence: `Qwen35PromptCache.generated_text_metadata_valid?` is covered by focused prompt-cache specs (`13 examples, 0 failures`): valid metadata passes, wrong generated token count fails, and a bad generated-text hash fails. Release `/tmp/qwen35_generate_ff_texthash` on the cached repeat prompt still hit the zero-GGUF path (`before tokenizer/weight load`), matched ids `16/16`, and reported `total_ms=1.9`, `model_load_ms=0.0`, `decode_ms=0.0`. After manually changing the source-history row's `generated_text_hash` to `bad`, the same request no longer used the zero-GGUF path; it loaded tokenizer metadata and used the tokenizer-backed pre-weight fast-forward instead.
+- implementation: source-history rows store optional `generated_text_hash = SHA256("qwen35-generated-text-v1\\0" + generated_text)`. Zero-GGUF preflight requires `generated_token_count == n_gen`, generated text present, hash present, and hash valid.
+- implication: Text is now transported under the same certificate discipline as token ids/artifact metadata; stale legacy rows fail closed to tokenizer-backed paths.
+- caveat: This still is terminal output-cache serving only. It does not provide continuation state.
+- trust: {F:0.88,G:0.58,R:0.88}
