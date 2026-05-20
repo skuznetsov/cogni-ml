@@ -55,6 +55,7 @@ ngram_min_candidates = (ENV["QWEN35_SPEC_NGRAM_MIN_CANDIDATES"]? || "0").to_i
 ngram_risk_gate = ENV["QWEN35_SPEC_NGRAM_RISK_GATE"]? == "1"
 ngram_corridor_gate = ENV["QWEN35_SPEC_NGRAM_CORRIDOR_GATE"]? == "1"
 ngram_corridor_min_size = (ENV["QWEN35_SPEC_NGRAM_CORRIDOR_MIN_SIZE"]? || "4").to_i
+ngram_corridor_match_len_min = (ENV["QWEN35_SPEC_NGRAM_CORRIDOR_MATCH_LEN_MIN"]? || "0").to_i
 ngram_corridor_lag4_min = (ENV["QWEN35_SPEC_NGRAM_CORRIDOR_LAG4_MIN"]? || "0.25").to_f
 ngram_corridor_lag8_min = (ENV["QWEN35_SPEC_NGRAM_CORRIDOR_LAG8_MIN"]? || "0.5").to_f
 ngram_corridor_entropy_max = (ENV["QWEN35_SPEC_NGRAM_CORRIDOR_ENTROPY_MAX"]? || "0.6").to_f
@@ -104,6 +105,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-risk-gate", "Research: skip n-gram chunks whose candidate-token shape matches known bad repeat tails") { ngram_risk_gate = true }
   parser.on("--ngram-corridor-gate", "Research: require periodic or low-entropy n-gram continuation before entering the verifier corridor") { ngram_corridor_gate = true }
   parser.on("--ngram-corridor-min-size N", "Minimum candidate length for --ngram-corridor-gate evidence (default: 4)") { |value| ngram_corridor_min_size = value.to_i }
+  parser.on("--ngram-corridor-match-len-min N", "Accept candidate corridors with at least this suffix match length; 0 disables (default)") { |value| ngram_corridor_match_len_min = value.to_i }
   parser.on("--ngram-corridor-lag4-min F", "Minimum lag-4 ratio for --ngram-corridor-gate (default: 0.25)") { |value| ngram_corridor_lag4_min = value.to_f }
   parser.on("--ngram-corridor-lag8-min F", "Minimum lag-8 ratio for --ngram-corridor-gate (default: 0.5)") { |value| ngram_corridor_lag8_min = value.to_f }
   parser.on("--ngram-corridor-entropy-max F", "Maximum normalized entropy for --ngram-corridor-gate (default: 0.6)") { |value| ngram_corridor_entropy_max = value.to_f }
@@ -474,12 +476,16 @@ end
 
 def ngram_corridor_gate_pass?(candidates : Array(Int32),
                               features : Hash(String, Float64),
+                              match_len : Int32,
                               min_size : Int32,
+                              match_len_min : Int32,
                               lag4_min : Float64,
                               lag8_min : Float64,
                               entropy_max : Float64) : Bool
   ML::GGUF::NgramDraft.corridor_candidate_shape?(candidates,
+    match_len: match_len,
     min_size: min_size,
+    match_len_min: match_len_min,
     lag4_min: lag4_min,
     lag8_min: lag8_min,
     entropy_max: entropy_max)
@@ -677,7 +683,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -787,7 +793,9 @@ while generated_ids.size < n_gen
     if ngram_corridor_gate && (features = cycle_candidate_features) && !ngram_corridor_gate_pass?(
          ngram_candidates,
          features,
+         match_len,
          ngram_corridor_min_size,
+         ngram_corridor_match_len_min,
          ngram_corridor_lag4_min,
          ngram_corridor_lag8_min,
          ngram_corridor_entropy_max)

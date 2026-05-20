@@ -1151,3 +1151,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: Treat threshold constants as controller policy, not model math. Product replay should use source validation when possible and heuristic shape gates only for untrusted proposal streams.
 - maieutic: The remote blocker is external access, not code. Avoid rebuilding the whole CUDA workspace under the wrong user unless the user asks; it would duplicate large models/toolchains.
 - adversary: Do not claim a fresh CUDA speed result from this slice. The verified claim is local plumbing and reproducible options.
+
+**decision_update_340:** Added an opt-in match-length corridor override after local Metal A/B showed shape-only gating was too conservative. `match_len_min=8` is not a default; it is a measurable policy knob for the next broader replay sweep.
+
+**evidence_update_340:**
+- claim: "On the local Metal 4-prompt suite, `match_len_min=8` gives the best tested n-gram corridor trade-off."
+  source: release runner `/tmp/qwen35_speculative_accept_metal_corridor_local2`, prompts `/tmp/qwen35_corridor_local_prompts.jsonl`, `tokens=16`, `reps=2`, no warm verifier. Gate off dump `/tmp/qwen35_corridor_local_off_r2`: n-gram `66/96`, `2` reject chunks, avg policy speedup `1.092x`. Strict shape gate `/tmp/qwen35_corridor_local_strict_r2`: n-gram `32/32`, `0` rejects, avg `1.074x`. Shape+match8 `/tmp/qwen35_corridor_local_match8_r2`: n-gram `64/64`, `0` rejects, avg `1.153x`.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram candidate feature extraction, prompt suite, Qwen3.5-9B Metal verifier, staged n-gram policy, or match-length semantics changes
+- claim: "The match override recovers a high-entropy but exact code-loop chunk while keeping the SQL overrun skipped."
+  source: parsed cycle dumps: off-gate `code_loop` had `match_len=8`, `entropy=0.875`, accepted `16/16`; off-gate `repeat_sql` had `match_len=6`, `entropy=0.844`, accepted only `1/16`. Under shape+match8, code-loop accepted `16/16` in both reps while SQL proposed `0` n-gram chunks and fell back exactly.
+  verified_at: 2026-05-19
+  decay_trigger: tokenizer/model changes, prompt shape changes, or corridor policy thresholds
+
+**quadrumvirate_update_340:**
+- cassandra: Shape-only gates will miss high-entropy but exact code/template repeats. Pure match-length gates can still over-admit structured near-misses. The policy needs both frames.
+- daedalus: The WBA legal move is not one scalar threshold; it is a union of certificates: compressible transport body OR strong source-window match, with exact fallback as the dual frame.
+- maieutic: `match_len_min=8` is tied to current `ngram_max=8`. Broader sweeps should test whether it should be expressed as `match_len == ngram_max` rather than an absolute constant.
+- adversary: Do not default this yet. Test more code/structured near-miss prompts and the restored CUDA trusted-source path before promotion.

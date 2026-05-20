@@ -215,6 +215,7 @@ describe ML::GGUF::NgramDraft do
 
     ML::GGUF::NgramDraft.corridor_candidate_shape?(one_token).should be_false
     ML::GGUF::NgramDraft.corridor_candidate_shape?(lag_four).should be_true
+    ML::GGUF::NgramDraft.corridor_candidate_shape?(weak_nearmiss, match_len: 8, match_len_min: 8).should be_true
     ML::GGUF::NgramDraft.entropy_norm(low_entropy).should be <= 0.6
     ML::GGUF::NgramDraft.corridor_candidate_shape?(low_entropy).should be_true
     ML::GGUF::NgramDraft.lag_ratio(weak_nearmiss, 4).should be < 0.25

@@ -14121,3 +14121,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implementation: `NgramDraft.corridor_candidate_shape?` accepts `min_size`, `lag4_min`, `lag8_min`, and `entropy_max`. `qwen35_speculative_accept` exposes `QWEN35_SPEC_NGRAM_CORRIDOR_*` envs plus matching CLI flags. `cuda_mixed_stack_probe` exposes matching `--greedy-loop-probe-ngram-corridor-*` flags and prints the selected thresholds in `chunk_probe_ngram_*` stats.
 - implication: Once remote access is fixed, run a threshold sweep over trusted cursor replay and weak suffix replay without another code edit. Trusted cursor replay should remain exempt after source-prefix validation; weak suffix replay should fail closed under stricter thresholds.
 - trust: {F:0.82,G:0.45,R:0.82}
+
+**LM-340 ngram match-length corridor override [shared/ml]**
+- status: VERIFIED local Metal diagnostic, opt-in only
+- claim: The corridor gate needs two independent legal frames: candidate-shape evidence and strong suffix-match evidence. On the local Metal repeat/near-miss suite, shape-only strict gating removed bad SQL overrun but skipped a profitable high-entropy code-loop n-gram chunk; adding an explicit `match_len_min=8` override recovered the code-loop win without re-admitting the SQL overrun.
+- evidence: local Qwen3.5-9B Metal release runner, 4 prompts x 2 reps, `tokens=16`, policies `target_only,ngram_target_only_staged_risk`, no warm verifier. Gate off: n-gram `66/96`, 2 rejects, policy avg `1.092x`. Strict shape corridor: `32/32`, 0 rejects, avg `1.074x`. Shape plus `--ngram-corridor-match-len-min 8`: `64/64`, 0 rejects, avg `1.153x`. The recovered code-loop chunk had `match_len=8`, high entropy, and accepted `16/16`; the rejected SQL chunk had `match_len=6` and stayed skipped.
+- implementation: `NgramDraft.corridor_candidate_shape?` now accepts `match_len` and `match_len_min`. Metal and CUDA probes expose matching opt-in flags while keeping the default override disabled (`0`).
+- implication: For untrusted n-gram/session replay, test `match_len_min=8` as a candidate policy. Do not make it default until broader structured/code/repeat suites prove it does not admit high-match near-miss overruns.
+- trust: {F:0.84,G:0.40,R:0.84}

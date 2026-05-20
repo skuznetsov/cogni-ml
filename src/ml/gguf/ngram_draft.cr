@@ -360,11 +360,14 @@ module ML::GGUF
     end
 
     def corridor_candidate_shape?(ids : Array(Int32),
+                                  match_len : Int32 = 0,
                                   min_size : Int32 = 4,
+                                  match_len_min : Int32 = 0,
                                   lag4_min : Float64 = 0.25,
                                   lag8_min : Float64 = 0.5,
                                   entropy_max : Float64 = 0.6) : Bool
       return false if ids.size < min_size
+      return true if match_len_min > 0 && match_len >= match_len_min
 
       lag_ratio(ids, 4) >= lag4_min ||
         lag_ratio(ids, 8) >= lag8_min ||
