@@ -555,6 +555,27 @@ measured `~4.5 ms` total for 64 cached tokens (`~0.07 ms/tok`), while the same
 Store source replay path measured `~4.55 ms/tok` because it still runs the exact
 bulk verifier body.
 
+For a repeatable raw-vs-compressed cache-artifact gate, use the matrix runner:
+
+```sh
+scripts/qwen35_cache_artifact_matrix.sh
+```
+
+By default it builds/uses `/tmp/qwen35_warm_request_probe_matrix`, runs five
+prompt classes through `--prompt-cache-fast-forward`, and reports tab-separated
+rows for `raw` and `recurrent-bf16` artifacts. Useful overrides:
+
+```sh
+QWEN35_MATRIX_PROMPT_LIMIT=1 \
+QWEN35_MATRIX_REQUESTS=1 \
+QWEN35_MATRIX_WARMUPS=0 \
+QWEN35_MATRIX_CODECS="raw recurrent-bf16" \
+scripts/qwen35_cache_artifact_matrix.sh
+```
+
+Use the matrix for cache-artifact economics only. It does not measure first-run
+prefill or plain generation throughput.
+
 Useful Qwen environment switches:
 
 | Variable | Effect |
