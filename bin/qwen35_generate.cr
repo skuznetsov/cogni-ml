@@ -290,7 +290,6 @@ if prompt_cache_enabled
       full_history = source.token_ids[0, full_history_len]
       cached_prefix_len = full_history_len - 1
       cached_prefix = full_history[0, cached_prefix_len]
-      expected_hash = ML::GGUF::Qwen35PromptCache.token_hash(full_history)
       if fast_hit = cache_store.not_nil!.lookup_longest_prefix(
            cache_model,
            cache_tokenizer,
@@ -892,32 +891,36 @@ end
 if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
   full_history = ids.dup
   full_history.concat(output_ids)
-  source_save_t0 = Time.instant
-  if prompt_cache_fast_forward_enabled && !output_ids.empty?
-    cached_prefix = full_history[0, full_history.size - 1]
-    cache_store.not_nil!.save(
+  if prompt_cache_fast_forward_used
+    STDOUT << "  skipped source-history save after validated fast-forward hit\n"
+  else
+    source_save_t0 = Time.instant
+    if prompt_cache_fast_forward_enabled && !output_ids.empty?
+      cached_prefix = full_history[0, full_history.size - 1]
+      cache_store.not_nil!.save(
+        session_id: session_id,
+        turn_id: turn_id,
+        model_id: cache_model,
+        tokenizer_id: cache_tokenizer,
+        prompt_text: "",
+        token_ids: cached_prefix,
+        state: state,
+        artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+        artifact_validation_steps: output_ids.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),
+        next_token_id: output_ids[-1],
+      )
+    end
+    saved_source = cache_store.not_nil!.save_source_history(
       session_id: session_id,
       turn_id: turn_id,
       model_id: cache_model,
       tokenizer_id: cache_tokenizer,
-      prompt_text: "",
-      token_ids: cached_prefix,
-      state: state,
-      artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
-      artifact_validation_steps: output_ids.size,
-      artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),
-      next_token_id: output_ids[-1],
+      token_ids: full_history,
     )
+    source_history_save_ms = (Time.instant - source_save_t0).total_milliseconds
+    STDOUT << "  saved source-history tokens=#{saved_source.token_count} hash=#{saved_source.token_hash[0, 12]}\n"
   end
-  saved_source = cache_store.not_nil!.save_source_history(
-    session_id: session_id,
-    turn_id: turn_id,
-    model_id: cache_model,
-    tokenizer_id: cache_tokenizer,
-    token_ids: full_history,
-  )
-  source_history_save_ms = (Time.instant - source_save_t0).total_milliseconds
-  STDOUT << "  saved source-history tokens=#{saved_source.token_count} hash=#{saved_source.token_hash[0, 12]}\n"
 end
 
 total_ms = (Time.instant - request_t0).total_milliseconds

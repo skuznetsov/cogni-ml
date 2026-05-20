@@ -1690,3 +1690,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The product frame is now cache artifact fast-forward, not verifier replay. The remaining work is durable lookup/eviction and possibly resident-server state reuse, not proving the math again.
 - maieutic: The path is exact only for the cached span; if the user asks for more tokens than the validated source span contains, it falls back to existing exact generation/replay.
 - adversary: Default-off remains correct. Public benchmark tables must keep this separate from plain decode and exact source replay.
+
+**decision_update_367:** Removed duplicate cache writes after a validated product fast-forward hit. A repeat request that restored and emitted a fully cached span was still rewriting the same source-history and exact-known-span artifact, leaving `decode_ms=0` but `source_history_save_ms≈80-90ms`. The CLI now skips source-history/artifact save when `prompt_cache_fast_forward_used=true`; non-fast-forward fallback/generation still saves as before.
+
+**evidence_update_367:**
+- claim: "Fast-forward repeat no longer pays redundant source-history save."
+  source: release `/tmp/qwen35_generate_ff_skip`, cache root `/tmp/qwen35_product_ff_skip_47433`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, fast-forward env enabled. Repeat generated ids matched seed exactly (`16/16`), printed `Prompt cache fast-forward hit`, printed `skipped source-history save after validated fast-forward hit`, and summary reported `prefill_ms=0.0`, `decode_ms=0.0`, `source_history_save_ms=0.0`, `total_ms=258.6`.
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate cache-save control flow or source-history artifact policy changes
+- claim: "Prefix mismatch still saves the newly generated exact span."
+  source: same cache/session with prompt `alpha beta gamma epsilon`, `n_gen=4`, printed source-history prefix validation failure, ran normal greedy decode, saved source-history tokens `8`, and summary reported `source_history_save_ms=65.5`.
+  verified_at: 2026-05-20
+  decay_trigger: source-history prefix validation or fast-forward save-skip guard changes
+- claim: "The code and prompt-cache validation spec remain clean."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; release build `/tmp/qwen35_generate_ff_skip` passed; `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`13 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: qwen35_generate, prompt-cache validation, or Metal bridge/spec changes
+
+**quadrumvirate_update_367:**
+- cassandra: The local win is request-level overhead, not target-kernel speed. The fix matters because it removes self-inflicted write amplification on exact cache hits.
+- daedalus: For a full cache hit, the correct frame is read/validate/emit; rewriting the same artifact is not a useful refresh policy.
+- maieutic: If a request falls back or extends beyond the cached span, it is no longer a full fast-forward hit and still saves the new exact history.
+- adversary: A future LRU/recency policy may want a cheap touch operation, but it should not rewrite `.qkv` artifacts on the hot path.

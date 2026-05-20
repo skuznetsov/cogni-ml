@@ -14347,3 +14347,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The verified benchmark path now has a product-shaped entry point. It remains opt-in because it relies on a strong cache/session artifact contract.
 - caveat: Separate one-shot CLI invocations still pay model load and cold artifact restore; resident/server mode is needed to realize the hot-state lower bound. Longer-than-cached continuation falls back to exact replay/generation.
 - trust: {F:0.86,G:0.56,R:0.86}
+
+**LM-367 product fast-forward skips duplicate cache writes [shared/ml]**
+- status: VERIFIED local product-CLI smoke
+- claim: After a validated full fast-forward hit, `qwen35_generate` no longer rewrites the same source-history and exact-known-span artifact, removing the remaining cache-save wall from the hit path.
+- evidence: release `/tmp/qwen35_generate_ff_skip`, prompt `alpha beta gamma delta alpha beta gamma delta`, `n_gen=16`, fast-forward env enabled, seed then repeat under one cache root/session. Repeat ids matched seed exactly, printed `Prompt cache fast-forward hit`, printed `skipped source-history save after validated fast-forward hit`, and summary reported `prefill_ms=0.0`, `decode_ms=0.0`, `source_history_save_ms=0.0`, `total_ms=258.6`. Mismatch prompt `alpha beta gamma epsilon` still failed closed and saved the newly generated exact history (`source_history_save_ms=65.5`). `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` and focused prompt-cache spec (`13 examples, 0 failures`) passed.
+- implementation: request-end cache save is skipped only when `prompt_cache_fast_forward_used=true`; all fallback/generation paths keep the existing save behavior.
+- implication: Full cache hits now perform read/validate/restore/emit instead of read/validate/restore/emit/rewrite. Future recency tracking should be a cheap manifest touch, not artifact rewrite.
+- caveat: One-shot CLI still pays model load and cold restore. This does not change plain decode, exact source replay, or new-token generation speed.
+- trust: {F:0.86,G:0.56,R:0.86}
