@@ -14175,3 +14175,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The product path is now concrete: session cache can supply a validated source-history corridor, and n-gram replay can enter through that legal frame instead of prompt labels or untrusted suffix guesses.
 - caveat: Source histories contain raw token IDs and are therefore opt-in. The two-run smoke validates wiring, not performance. Follow-up A/B showed the slow wall comes from the prompt-cache restored-state path itself: cache hit plus ordinary suffix n-gram was similarly slow (`~672 ms` for 8 tokens), while fresh prefill plus suffix n-gram was much faster (`~132 ms`).
 - trust: {F:0.86,G:0.55,R:0.86}
+
+**LM-347 prompt-cache ngram warmup timing refutation [shared/ml]**
+- status: VERIFIED refutation
+- claim: A product-CLI n-gram verifier warmup before the decode timer is not a real speed fix for prompt-cache/source-history replay. It only moves first-use verifier cost out of the decode-only window.
+- evidence: temporary `qwen35_generate` warmup experiment built no-codegen and release. On `/tmp/qwen35_generate_source_history` with cache root `/tmp/qwen35_source_history_cache_smoke`, session `source-smoke`, source-history n-gram decode dropped from prior `~607 ms` for 8 tokens to `116-118 ms`, but the warmup reported `611-633 ms`. Same-binary `/usr/bin/time -p` A/B showed warm-on external wall `2.24s`/`2.23s` versus warm-off `2.01s`/`2.02s`.
+- implication: Future cache/session benchmarks must report total request phases, not only decode-only wall. If verifier warmup is useful, it belongs in an explicit daemon/server startup warm phase or a clearly separated benchmark warm phase.
+- caveat: This refutes hidden per-request CLI warmup, not persistent-process prewarming. A server process may still amortize Metal first-use costs before the first user-visible request.
+- trust: {F:0.86,G:0.58,R:0.86}

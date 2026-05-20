@@ -1288,3 +1288,26 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This is the useful bridge between product cache and inference speed: cache artifacts restore state, source-history sidecar supplies a legal proposal corridor.
 - maieutic: Source-history speed depends on prompt-cache restore cost and verifier chunk economics. The smoke proves wiring, not a stable speedup.
 - adversary: Do not store token histories by default. Future docs should call out that `QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1` stores raw token IDs locally. Do not optimize source cursor further until restored-state decode slowness is isolated.
+
+**decision_update_347:** Refuted the naive product-CLI n-gram verifier warmup as a real speed fix. It explains the misleading decode-only timing gap after prompt-cache restore, but does not improve end-to-end latency.
+
+**evidence_update_347:**
+- claim: "Prompt-cache n-gram decode-only timing was polluted by first-use verifier cost."
+  source: release runner `/tmp/qwen35_generate_source_history`, cache root `/tmp/qwen35_source_history_cache_smoke`, session `source-smoke`. With a temporary warmup before the decode timer, source-history n-gram decode changed from prior `~607 ms` for 8 tokens to `116-118 ms`, while the temporary warmup itself reported `611-633 ms`.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram timing window, prompt-cache restore flow, Metal pipeline first-use behavior, or verifier prefill path changes
+- claim: "The warmup is not a product speedup."
+  source: same binary, `/usr/bin/time -p`, two warm-on and two warm-off runs. Warm-on external wall was `2.24s` and `2.23s`; warm-off external wall was `2.01s` and `2.02s`. Warm-on only moved roughly the same verifier cost outside the measured decode window and made total wall slightly worse.
+  verified_at: 2026-05-19
+  decay_trigger: process lifetime model, persistent daemon/server mode, Metal library caching, or total-latency measurement method changes
+
+**quadrumvirate_update_347:**
+- cassandra: The apparent cache-hit source-history slowdown was a measurement-boundary issue plus first-use work, not a source-cursor proposal failure.
+- daedalus: Do not optimize reported decode-only windows by shifting work earlier. The useful product metric is first positive token / full request wall, or a persistent server steady-state metric with an explicit startup warm phase.
+- maieutic: A warmup may still be valid for a daemon that amortizes it before user-visible requests, but it is not valid inside a one-shot CLI request if counted outside decode.
+- adversary: Removed the temporary warmup patch instead of committing misleading behavior. Next work should instrument total request phases and/or persistent-process warm steady state before changing cache decode flow.
+
+**next_steps_update_347:**
+- [x] Test and refute product-CLI verifier warmup as an end-to-end speed fix.
+- [ ] Add clearer total request timing around model load, cache restore/replay, optional source-history lookup, first verifier use, and decode so cache/session speed claims cannot hide work outside the decode window.
+- [ ] If we want warm verifier behavior, implement it as explicit daemon/server startup warmup or benchmark warm phase, not as hidden per-request work in `qwen35_generate`.
