@@ -1187,3 +1187,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The better frame is "source trust hierarchy": validated cursor replay can use wide WBA bands; untrusted suffix replay needs both corridor evidence and structured-tail rejection.
 - maieutic: The missing predicate is not obvious from token aggregates alone: one accepted CSV-like row and the bad YAML row are both high-diversity and low-lag. Avoid overfitting a hand-made rule until more token-class/cycle evidence exists.
 - adversary: Do not promote `match_len_min=8` to default. Keep it opt-in for data collection and route-learning.
+
+**decision_update_342:** Added a narrow medium-tail risk predicate for structured high-diversity match8 overruns. This is still opt-in via the existing `--ngram-risk-gate`; defaults remain unchanged.
+
+**evidence_update_342:**
+- claim: "The medium-tail risk predicate removes the remaining broad-suite YAML reject while preserving the profitable n-gram chunks."
+  source: local release runner `/tmp/qwen35_speculative_accept_metal_corridor_local3`, prompt suite `/tmp/qwen35_corridor_broad_prompts.jsonl`, `tokens=16`, policy `ngram_target_only_staged_risk`, args `--ngram-corridor-gate --ngram-corridor-match-len-min 8 --ngram-corridor-lag8-min 1.0`, dump `/tmp/qwen35_corridor_broad_structrisk`. N-gram rows: `91/91`, `0` rejects, cycle gain `+374.0ms`. Previous same-suite lag8-one run before the predicate had `94/105`, `1` reject (`repeat_yaml_hosts`).
+  verified_at: 2026-05-19
+  decay_trigger: `NgramDraft.risky_candidate_shape?`, staged n-gram policy, prompt suite, tokenizer/model, or corridor thresholds
+- claim: "The helper/build gate is clean after the risk refinement."
+  source: local `crystal spec spec/ngram_draft_spec.cr` passed (`27 examples, 0 failures`); no-codegen builds passed for `bin/qwen35_speculative_accept.cr` and `bin/cuda_mixed_stack_probe.cr -Dcpu_only`.
+  verified_at: 2026-05-19
+  decay_trigger: n-gram helper semantics, CUDA probe option parsing, or Metal speculative harness changes
+
+**quadrumvirate_update_342:**
+- cassandra: This is a narrow empirical guard, not a general structured-output theorem. It should be broadened against more JSON/YAML/code traces before any default change.
+- daedalus: The controller stack now has three distinct legal frames: trusted cursor replay, untrusted suffix replay with corridor+risk gates, and exact target fallback.
+- maieutic: The accepted CSV-like row and rejected YAML row are close enough that token-aggregate heuristics can still overfit. The next step should collect more rows rather than adding many hand-tuned clauses.
+- adversary: Keep the predicate behind `--ngram-risk-gate`; production auto policy must not silently inherit this until a larger suite confirms the precision.

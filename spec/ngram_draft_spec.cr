@@ -233,6 +233,16 @@ describe ML::GGUF::NgramDraft do
     ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 8).should be_true
   end
 
+  it "risk-gates medium high-diversity tails under a full suffix match" do
+    ids = [198, 220, 471, 850, 25, 221, 17, 199, 262, 803, 26, 8029, 869, 320]
+
+    ML::GGUF::NgramDraft.pair_unique_ratio(ids).should be >= 0.95
+    ML::GGUF::NgramDraft.entropy_norm(ids).should be >= 0.80
+    ML::GGUF::NgramDraft.lag_ratio(ids, 4).should be < 0.10
+    ML::GGUF::NgramDraft.lag_ratio(ids, 8).should be < 0.10
+    ML::GGUF::NgramDraft.risky_candidate_shape?(ids, min_size: 16, match_len: 8).should be_true
+  end
+
   it "risk-gates CSV-like diverse tails with only weak lag-four reuse" do
     ids = [1, 2, 3, 4, 1, 6, 7, 8, 1, 10, 11, 12, 13, 14, 15, 16]
 

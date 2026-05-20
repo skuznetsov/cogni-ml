@@ -307,6 +307,13 @@ module ML::GGUF
         return true if lag_ratio(ids, 8) < 0.75
       end
 
+      if ids.size >= 12 && ids.size < min_size && match_len >= 8
+        return true if pair_unique_ratio(ids) >= 0.95 &&
+                       entropy_norm(ids) >= 0.80 &&
+                       lag_ratio(ids, 4) < 0.10 &&
+                       lag_ratio(ids, 8) < 0.10
+      end
+
       prefix_run = prefix_period_run(ids, 4)
       return true if prefix_run >= 6 && prefix_run < ids.size && exact_period(ids, 4) == 0
 
