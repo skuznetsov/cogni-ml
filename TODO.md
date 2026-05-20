@@ -1982,3 +1982,17 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This turns the compressed artifact work from a probe into a product-controlled cache policy. The next pivot is resident/preuploaded mapped artifacts, not more codec plumbing.
 - maieutic: LTP window is an exact-known-span cache save with full-history validation; transport is raw recurrent state -> BF16 recurrent v2 artifact -> mmap restore on future hit; potential lowers persistent activation bytes while exact direct-output/source-history fallbacks stay intact.
 - adversary: Direct output fast-forward bypasses restore on exact repeated terminal requests, so restore-speed value applies to continuation/session-cache activation and legacy/direct-certificate fallback paths. Keep measuring those separately.
+
+**decision_update_381:** Measured the existing resident state cache against the new BF16 mmap artifact path before building a separate preuploaded encoded-payload cache. For same-process repeated fast-forward hits, resident decoded state already wins strongly: BF16 mmap with `resident_states=0` restored at p50 `9.4ms`, while `resident_states=1` restored at p50 `2.5ms` for the same prompt/span. Therefore a preuploaded encoded-payload cache is not the next same-process hot-hit lever; it is only worth revisiting for first activation, many distinct artifacts, or server startup prewarm.
+
+**evidence_update_381:**
+- claim: "Existing resident state cache beats compressed mmap for repeated same-process fast-forward hits."
+  source: release `/tmp/qwen35_warm_request_probe_matrix --prompt-cache-fast-forward --artifact-codec recurrent-bf16 --gen=16 --requests=5 --warmups=1 --max-seq=256 --quiet \"The capital of France is\"`. With `--resident-states=0`, p50 restore was `9.4ms`; with `--resident-states=1`, p50 restore was `2.5ms`, total p50 `3.0ms`, output `16` cached tokens.
+  verified_at: 2026-05-20
+  decay_trigger: resident state cache implementation, copy_state_metal_used!, artifact restore path, or server usage pattern changes
+
+**quadrumvirate_update_381:**
+- cassandra: Preuploaded encoded buffers are attractive but would optimize the wrong hot path if resident decoded templates are available.
+- daedalus: Split cache layers explicitly: direct output certificate for exact repeated terminal spans; resident decoded state for same-process repeated continuation; mmap BF16 artifact for cold persistent activation; preuploaded encoded payload only for prewarm/many-artifact workloads.
+- maieutic: LTP corridors differ by trigger. Hot same-process trigger should transport decoded resident state; cold persistent trigger should transport mapped compressed bytes; preupload is a separate corridor only if activation work can be moved before the request.
+- adversary: Resident state cache costs memory. For large numbers of sessions, BF16 mmap remains the lower-memory fallback; do not replace one with the other globally.

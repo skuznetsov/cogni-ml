@@ -14473,3 +14473,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: BF16 is now product-controllable for exact fast-forward artifacts and is the safer compressed artifact tier for Metal. It should be the first candidate for broader default-on policy after larger session/cache validation.
 - caveat: Direct output certificates bypass state restore on exact repeated terminal spans, so the BF16 restore win matters most for continuation/session-cache activation and fallback paths. Larger contexts and more prompts still need measurement.
 - trust: {F:0.86,G:0.58,R:0.85}
+
+**LM-381 cache activation ladder: direct output, resident state, mmap BF16 [shared/ml]**
+- status: VERIFIED local timing boundary
+- claim: For same-process repeated prompt-cache fast-forward hits, the existing resident decoded state cache is already faster than restoring from compressed mmap artifacts; preuploaded encoded buffers are not the next hot-hit optimization unless the workload has many distinct artifacts or can prewarm before request time.
+- evidence: release `/tmp/qwen35_warm_request_probe_matrix --prompt-cache-fast-forward --artifact-codec recurrent-bf16 --gen=16 --requests=5 --warmups=1 --max-seq=256 --quiet \"The capital of France is\"`. With `--resident-states=0`, p50 restore was `9.4ms`; with `--resident-states=1`, p50 restore was `2.5ms` and p50 total was `3.0ms` for 16 cached tokens.
+- implementation: No code change. This is a routing/priority landmark for cache-layer work.
+- implication: Current ladder should be: direct output certificate for exact repeated terminal spans; resident decoded state for same-process continuation; mmap BF16 artifact for cold persistent activation; preuploaded encoded artifact only for prewarm/many-session servers.
+- caveat: Resident decoded state spends memory and does not scale to unbounded sessions. BF16 mmap remains the lower-memory product fallback.
+- trust: {F:0.84,G:0.52,R:0.83}
