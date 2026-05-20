@@ -1097,3 +1097,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The LTP/WBA corridor needs a minimum transport length before candidate-shape features become meaningful. Otherwise the trigger degenerates into a scalar gate with no band.
 - maieutic: The exact threshold `4` is pragmatic and evidence-backed only for current probes. Keep it visible and re-tune with long-context cache traces.
 - adversary: Do not use the direct alpha smoke timing from this round as speed evidence; per-process Metal source compilation made the wall noisy. Use it only as a functional gate check when needed.
+
+**decision_update_337:** Tightened the corridor periodicity certificate after a long structured/code near-miss suite. The first composite gate used `lag8 > 0`, which was too permissive: a YAML near-miss had `lag8=0.041`, `entropy=0.681`, proposed 32 tokens, accepted only 6, and rejected. The gate now uses `lag4 > 0 || lag8 >= 0.5 || entropy <= 0.6` with the existing `proposed_count >= 4` minimum.
+
+**evidence_update_337:**
+- claim: "The refined composite gate removes the long YAML near-miss reject while preserving profitable long repeat/code/structured corridors in oracle accounting."
+  source: local long synthetic suite dumps `/tmp/qwen35_ngram_corridor_long_on`, then oracle after refining `lag8>=0.5`. Before refinement the gate admitted 6 n-gram cycles, `153/179`, one reject. Refined `periodic_or_low_entropy` selects 5 cycles, `147/147`, zero rejects, gain `+5635.7ms`; stricter `match>=7_and_periodic_or_low_entropy` selects 4 cycles, `128/128`, gain `+4847.2ms`. Repeat-suite accounting remains `54/54`, zero rejects, gain `+527.2ms`.
+  verified_at: 2026-05-19
+  decay_trigger: long synthetic prompt mix, candidate lag/entropy feature definitions, n-gram proposal generation, or exact verifier timing changes
+- claim: "The refined runtime gate skips the YAML near-miss corridor and falls back exactly."
+  source: release build `/tmp/qwen35_speculative_accept_corridor3`, direct YAML near-miss prompt, `tokens=32`, `--ngram-corridor-gate`: `accept_rate=100.0% accepted=0/0`, `ngram_stats ... corridor_skips=26`, exact fallback completed.
+  verified_at: 2026-05-19
+  decay_trigger: runtime corridor gate, n-gram target-only fallback, or prompt/tokenization changes
+
+**quadrumvirate_update_337:**
+- cassandra: Any nonzero lag on a long heterogeneous structured chunk is too weak; tiny accidental periodicity must not certify a transport corridor.
+- daedalus: The useful split is now visible: `lag4 > 0` captures short exact pattern corridors, `lag8 >= 0.5` captures strong long-period corridors, and `entropy <= 0.6` captures compressible low-diversity corridors.
+- maieutic: The gate is still heuristic, not a proof. The next evidence upgrade should be session-cache/known-history replay, not more synthetic prompt crafting.
+- adversary: Do not use aggregate speedups from the long suite as a stable production benchmark; per-run plain baselines are noisy. The robust claim is reject removal plus preserved accepted-cycle oracle accounting.

@@ -219,7 +219,7 @@ unless ngram_rows.empty?
       json_i(rec, "proposed_count") >= 4 &&
       (
         feature_f(rec, "candidate_features", "candidate_lag4_ratio") > 0.0 ||
-        feature_f(rec, "candidate_features", "candidate_lag8_ratio") > 0.0 ||
+        feature_f(rec, "candidate_features", "candidate_lag8_ratio") >= 0.5 ||
         feature_f(rec, "candidate_features", "candidate_entropy_norm") <= 0.6
       )
     }},
@@ -227,7 +227,7 @@ unless ngram_rows.empty?
       feature_f(rec, "candidate_features", "ngram_match_ratio") >= 0.875 &&
       json_i(rec, "proposed_count") >= 4 &&
       (feature_f(rec, "candidate_features", "candidate_lag4_ratio") > 0.0 ||
-       feature_f(rec, "candidate_features", "candidate_lag8_ratio") > 0.0 ||
+       feature_f(rec, "candidate_features", "candidate_lag8_ratio") >= 0.5 ||
        feature_f(rec, "candidate_features", "candidate_entropy_norm") <= 0.6)
     }},
   ]

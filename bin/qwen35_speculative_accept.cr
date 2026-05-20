@@ -477,7 +477,7 @@ def ngram_corridor_gate_pass?(candidates : Array(Int32), features : Hash(String,
   return false if candidates.size < 4
 
   features["candidate_lag4_ratio"] > 0.0 ||
-    features["candidate_lag8_ratio"] > 0.0 ||
+    features["candidate_lag8_ratio"] >= 0.5 ||
     features["candidate_entropy_norm"] <= 0.6
 end
 

@@ -14097,3 +14097,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: LTP/WBA gates should distinguish "local trigger exists" from "corridor has enough length for shape features to be meaningful."
 - caveat: threshold `4` is a pragmatic guard, not a proof-level constant; retune with long-context cache traces.
 - trust: {F:0.84,G:0.45,R:0.84}
+
+**LM-337 ngram refined periodicity certificate [shared/ml]**
+- status: VERIFIED synthetic long-suite refinement, HYPOTHESIS for session-cache default
+- claim: The current n-gram corridor certificate should be `proposed_count>=4 && (lag4>0 || lag8>=0.5 || entropy<=0.6)`. Nonzero `lag8` alone is too weak.
+- evidence: long synthetic structured/code/repeat suite exposed a YAML near-miss with `lag8=0.041`, `entropy=0.681`, proposed 32, accepted 6, rejected. Refined oracle over `/tmp/qwen35_ngram_corridor_long_on` selects 5 cycles, `147/147`, zero rejects, gain `+5635.7ms`, versus the prior gate's 6 cycles and `153/179` with one reject. Direct refined runtime smoke on the YAML near-miss reports `corridor_skips=26` and exact fallback completion.
+- implication: Keep the runtime gate default-off but use this certificate for the next session-cache/known-history replay experiment.
+- caveat: Synthetic long prompts are not production session traces; speed numbers are noisy. The stable evidence is corridor reject filtering.
+- trust: {F:0.84,G:0.45,R:0.84}
