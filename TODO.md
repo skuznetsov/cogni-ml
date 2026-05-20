@@ -1490,3 +1490,17 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: The safer frame is to remove a weak certificate from product auto, not keep expanding risk predicates.
 - maieutic: This sacrifices some possible untrusted suffix opportunities, but trusted source-cache replay and strong match/low-entropy corridors remain available.
 - adversary: Keep the larger trace-corpus item open; this fix is a conservative default guard, not a learned router.
+
+**decision_update_357:** Ran a 12-prompt product-CLI mixed trace after the conservative lag8 default. The fixed `auto` profile is now fail-closed on the local mixed suite: it enters n-gram only on the clean repeat corridor, rejects zero n-gram chunks, and skips the prior template/checklist false positive.
+
+**evidence_update_357:**
+- claim: "The conservative product auto policy is clean on the local mixed 12-prompt trace."
+  source: `/tmp/qwen35_product_trace.py` using release runner `/tmp/qwen35_generate_corridor_fix`, prompts `/tmp/qwen35_corridor_trace12.jsonl`, `n_gen=16`, paired one-shot `greedy` vs `auto`. Summary: `12` prompts, auto/greedy decode avg ratio `0.974`, wins `7/12`, n-gram rows `1`, reject rows `0`, corridor skips `4`. The only n-gram row was `repeat_alpha4` (`13/13`, ratio `0.647`). `repeat_yaml_hosts`, `repeat_json_pairs`, `structured_markdown_table`, and `templ_checklist_metal_gemv` all failed closed through exact target fallback or corridor skips; checklist ratio was `1.003` instead of the previous bad `1/11` path.
+  verified_at: 2026-05-19
+  decay_trigger: product auto thresholds, prompt suite, one-shot timing noise, or qwen35_generate n-gram routing changes
+
+**quadrumvirate_update_357:**
+- cassandra: The remaining mixed-suite variance is mostly plain exact decode noise when no proposals are used; the relevant verifier-risk signal is zero n-gram rejects.
+- daedalus: The product controller is now high-precision but low-recall for local suffix replay. The next real speed source is trusted cache/session cursor replay or a learned router, not reopening lag8 with another ad hoc patch.
+- maieutic: One-shot paired CLI timings are noisy because every run reloads the model; use this for policy safety, not fine-grained speed ranking.
+- adversary: Keep larger session traces open. This 12-prompt trace is not enough to recover skipped valid period-8 opportunities safely.

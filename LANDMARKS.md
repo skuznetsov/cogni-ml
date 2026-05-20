@@ -14259,3 +14259,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Product auto should prefer high-precision untrusted suffix corridors. We keep speed on clean local repeats and validated source-cache replay, but avoid a known checklist/template false-positive without adding a new hand-tuned predicate.
 - caveat: This is conservative and may skip some valid period-8 local suffix opportunities. A learned/router trace corpus is still the right way to recover them safely.
 - trust: {F:0.86,G:0.56,R:0.86}
+
+**LM-357 fixed product auto 12-prompt trace [shared/ml]**
+- status: VERIFIED local policy-safety trace
+- claim: After disabling lag8-alone as a product auto certificate, the local 12-prompt product-CLI trace has zero n-gram rejects and only enters n-gram on the clean repeat corridor.
+- evidence: `/tmp/qwen35_product_trace.py` ran `/tmp/qwen35_generate_corridor_fix` over `/tmp/qwen35_corridor_trace12.jsonl`, `n_gen=16`, paired one-shot greedy versus auto. Summary: `12` prompts, auto/greedy decode avg ratio `0.974`, wins `7/12`, n-gram rows `1`, reject rows `0`, corridor skips `4`. The only n-gram row was `repeat_alpha4` (`13/13`, ratio `0.647`). `repeat_yaml_hosts`, `repeat_json_pairs`, `structured_markdown_table`, and `templ_checklist_metal_gemv` failed closed; checklist ratio was `1.003` instead of the prior bad `1/11` n-gram path.
+- implication: The product local-suffix n-gram router is now high-precision and low-recall on this small suite. Further speed should come from trusted cache/session cursor replay or learned routing, not more hand-tuned local suffix predicates.
+- caveat: One-shot CLI timing is noisy and the suite is small. This is policy-safety evidence, not a broad throughput benchmark.
+- trust: {F:0.84,G:0.54,R:0.84}
