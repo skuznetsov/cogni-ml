@@ -447,6 +447,12 @@ token ids/text before opening the GGUF. The older tokenized-prompt +
 source-history + manifest scan remains as a fail-closed fallback for legacy or
 tampered direct certificates.
 
+Fast-forward state artifacts can also be stored in the guarded compressed v2
+format. Set `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC=recurrent-bf16` to compress
+recurrent DeltaNet state while keeping KV rows raw; Metal restores these
+validated artifacts through the mmap encoded path. `recurrent-int8` remains
+explicitly gated by `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1`.
+
 The native tokenizer is the default. Set `QWEN35_NATIVE_TOKENIZER_OFF=1` only
 when comparing against the external `llama-tokenize` bootstrap path.
 
@@ -557,6 +563,9 @@ Useful Qwen environment switches:
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
 | `QWEN35_PROMPT_TOKEN_CACHE_OFF=1` | Disable tokenized-prompt cache lookup/save while keeping prompt-state cache enabled. |
 | `QWEN35_PROMPT_CACHE_FAST_FORWARD=1` | With prompt cache and source-history enabled, save and use validated post-span state artifacts so exact session-cache hits can emit cached spans without verifier recompute. Default off; falls back when source prefix, token hash, or artifact validation fails. |
+| `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC=recurrent-bf16` | Store validated fast-forward state artifacts in compressed v2 BF16 recurrent format. KV rows remain raw. Default is raw; `recurrent-int8` is available only with the explicit Metal INT8 gate. |
+| `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK=8` | Block size for `recurrent-int8` prompt-cache artifacts. Ignored for raw/BF16. |
+| `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1` | Explicitly allow Metal restore of validated `recurrent-int8` artifacts. Default off because INT8 remains approximate and needs stronger prompt/session validation than BF16. |
 | `QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN=64` | Minimum requested generation length before a full-prompt cache hit can skip suffix replay and use stored next-token metadata. Lower values are useful for experiments but can move first model work into `decode_ms` without improving total wall time. |
 | `QWEN35_PROMPT_CACHE_RESIDENT_STATES=0` | Number of restored prompt-cache states to keep hot in a resident process. `0` disables the in-memory state cache. Positive values avoid rereading and redecompressing `.qkv` artifacts on repeated same-process session hits. |
 | `QWEN35_NATIVE_TOKENIZER_OFF=1` | Disable the native Crystal Qwen BPE encoder and use the external `llama-tokenize` bootstrap path. |

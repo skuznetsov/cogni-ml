@@ -35,6 +35,9 @@ prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]?
 prompt_cache_fast_forward_enabled = prompt_cache_enabled && prompt_cache_source_history_enabled && ENV["QWEN35_PROMPT_CACHE_FAST_FORWARD"]? == "1"
 prompt_token_cache_enabled = prompt_cache_enabled && ENV["QWEN35_PROMPT_TOKEN_CACHE_OFF"]? != "1"
 prompt_cache_full_hit_min_gen = (ENV["QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN"]? || "64").to_i
+prompt_cache_artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?.try(&.downcase)
+prompt_cache_artifact_codec = nil if prompt_cache_artifact_codec == "raw" || prompt_cache_artifact_codec == ""
+prompt_cache_artifact_codec_block = (ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK"]? || "8").to_i
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
@@ -102,6 +105,13 @@ prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 metal_profile_enabled = ENV["QWEN35_METAL_PROFILE"]? == "1"
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
+raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
+unless prompt_cache_artifact_codec.nil? || prompt_cache_artifact_codec == "recurrent-bf16" || prompt_cache_artifact_codec == "recurrent-int8"
+  raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC must be raw, recurrent-bf16, or recurrent-int8"
+end
+if prompt_cache_artifact_codec == "recurrent-int8" && ENV["QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE"]? != "1"
+  raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC=recurrent-int8 requires QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1"
+end
 raise "QWEN35_NGRAM_GAMMA must be positive" unless ngram_gamma > 0
 raise "QWEN35_NGRAM_MIN must be positive" unless ngram_min > 0
 raise "QWEN35_NGRAM_MAX must be >= QWEN35_NGRAM_MIN" unless ngram_max >= ngram_min
@@ -1028,6 +1038,8 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
         prompt_text: "",
         token_ids: cached_prefix,
         state: state,
+        artifact_codec: prompt_cache_artifact_codec,
+        artifact_codec_block: prompt_cache_artifact_codec ? prompt_cache_artifact_codec_block : nil,
         artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
         artifact_validation_steps: output_ids.size,
         artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),

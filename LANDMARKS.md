@@ -14464,3 +14464,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: BF16 compressed artifacts are the current best default candidate for Metal persistent prompt-cache fast-forward once broader validation gates pass. INT8 is not compelling enough here to override its higher trust risk.
 - caveat: This is one prompt, `max_seq=128`, and short cached output. Broader prompt/cursor/session matrix and larger-context measurements are required before default compressed-save promotion.
 - trust: {F:0.84,G:0.46,R:0.83}
+
+**LM-380 guarded BF16 fast-forward artifact save policy [shared/ml]**
+- status: VERIFIED local product CLI smoke + 5-prompt matrix
+- claim: `qwen35_generate` can opt into v2 BF16 recurrent artifacts for exact fast-forward cache saves via `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC=recurrent-bf16`, and BF16 compressed restore wins across a small prompt-class matrix on local Metal.
+- evidence: 5-prompt warm-probe matrix at `max_seq=256`, `gen=16`, no resident state cache: raw p50 restore `17.7/29.5/29.6/27.9/32.0ms`; BF16 p50 restore `9.0/9.8/10.3/9.1/9.4ms`, winning `5/5`. Product CLI release smoke saved a manifest entry with `artifact_codec=recurrent-bf16`, `artifact_codec_block=8`, `artifact_validation_kind=exact-known-span-v1`, `artifact_validation_steps=16`; repeat used direct output fast-forward before model load with `total_ms=1.0`.
+- implementation: Added `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC` and `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK` handling to `bin/qwen35_generate.cr` exact-known-span save path. Default remains raw. `recurrent-int8` requires `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1`. README documents the knobs.
+- implication: BF16 is now product-controllable for exact fast-forward artifacts and is the safer compressed artifact tier for Metal. It should be the first candidate for broader default-on policy after larger session/cache validation.
+- caveat: Direct output certificates bypass state restore on exact repeated terminal spans, so the BF16 restore win matters most for continuation/session-cache activation and fallback paths. Larger contexts and more prompts still need measurement.
+- trust: {F:0.86,G:0.58,R:0.85}

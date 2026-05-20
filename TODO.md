@@ -1960,3 +1960,25 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: This shifts the default-candidate from raw artifacts to BF16 compressed artifacts for validated prompt-cache fast-forward on Metal. INT8 remains research/gated because BF16 is nearly as fast and safer.
 - maieutic: Legal LTP move: cache hit with validation metadata -> mapped compressed recurrent state -> restore -> emit certified output span. Potential decreases from `(read bytes, host materialization, restore wall)` while exact fallback remains raw/source replay.
 - adversary: This is one prompt and short max_seq. Do not make BF16 default until prompt/session matrix passes and compressed-save policy is explicit.
+
+**decision_update_380:** Added an explicit product save policy for compressed fast-forward cache artifacts. `qwen35_generate` now accepts `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC=recurrent-bf16` and writes exact-known-span fast-forward artifacts in v2 BF16 recurrent format while preserving the existing raw default. `recurrent-int8` is still rejected unless `QWEN35_PROMPT_CACHE_METAL_INT8_RESTORE=1` is set. README documents the codec knobs and the fact that KV rows remain raw.
+
+**evidence_update_380:**
+- claim: "BF16 compressed fast-forward restore wins across a small prompt-class matrix."
+  source: release `/tmp/qwen35_warm_request_probe_matrix` with `--prompt-cache-fast-forward --gen=16 --requests=3 --warmups=1 --max-seq=256 --quiet` over 5 prompts (fact, code, JSON, repeat, reasoning). Raw p50 restore ms: `17.7/29.5/29.6/27.9/32.0`; BF16 p50 restore ms: `9.0/9.8/10.3/9.1/9.4`. BF16 won `5/5` with real `Store.restore`.
+  verified_at: 2026-05-20
+  decay_trigger: prompt mix, model/tokenizer, max_seq, artifact codec, or Metal restore path changes
+- claim: "The product CLI can save a BF16 fast-forward artifact and still hit the direct output fast-forward path on repeat."
+  source: release `/tmp/qwen35_generate_bf16_cache` smoke with `QWEN35_PROMPT_CACHE=1 QWEN35_PROMPT_CACHE_SOURCE_HISTORY=1 QWEN35_PROMPT_CACHE_FAST_FORWARD=1 QWEN35_PROMPT_CACHE_ARTIFACT_CODEC=recurrent-bf16 QWEN35_SESSION_ID=bf16-smoke QWEN35_QUIET=1`. Seed saved source history and manifest entry with `artifact_codec=recurrent-bf16`, `artifact_codec_block=8`, `artifact_validation_kind=exact-known-span-v1`, `artifact_validation_steps=16`. Repeat printed `Prompt cache direct output fast-forward hit before tokenizer/weight load` and `total_ms=1.0`.
+  verified_at: 2026-05-20
+  decay_trigger: `qwen35_generate` save path, direct output certificate validation, or prompt-cache artifact metadata changes
+- claim: "Compile/spec gates remain clean."
+  source: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace` passed; `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`17 examples, 0 failures`).
+  verified_at: 2026-05-20
+  decay_trigger: product CLI, Store save/restore, or prompt-cache specs change
+
+**quadrumvirate_update_380:**
+- cassandra: Making BF16 the unconditional default would be premature; the safe Spike is opt-in codec selection on exact-known-span artifacts only.
+- daedalus: This turns the compressed artifact work from a probe into a product-controlled cache policy. The next pivot is resident/preuploaded mapped artifacts, not more codec plumbing.
+- maieutic: LTP window is an exact-known-span cache save with full-history validation; transport is raw recurrent state -> BF16 recurrent v2 artifact -> mmap restore on future hit; potential lowers persistent activation bytes while exact direct-output/source-history fallbacks stay intact.
+- adversary: Direct output fast-forward bypasses restore on exact repeated terminal requests, so restore-speed value applies to continuation/session-cache activation and legacy/direct-certificate fallback paths. Keep measuring those separately.
