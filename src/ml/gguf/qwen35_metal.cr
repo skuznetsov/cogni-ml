@@ -196,6 +196,7 @@ module ML
         @@add_vec_pipeline : ML::Metal::ComputePipeline?
         @@rmsnorm_vec_pipeline : ML::Metal::ComputePipeline?
         @@rmsnorm_rows_pipeline : ML::Metal::ComputePipeline?
+        @@rmsnorm_rows_f32_h16_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_ab_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_ab_chunk_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_pipeline : ML::Metal::ComputePipeline?
@@ -1125,6 +1126,12 @@ module ML
           }
         end
 
+        private def self.rmsnorm_rows_f32_h16_pipeline : ML::Metal::ComputePipeline
+          @@rmsnorm_rows_f32_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_rmsnorm_rows_f32_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_rmsnorm_rows_f32_h16", FFN_SOURCE)
+          }
+        end
+
         private def self.recurrent_ab_pipeline : ML::Metal::ComputePipeline
           @@recurrent_ab_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_ab") {
             ML::Metal::ComputePipeline.new("qwen35_recurrent_ab", RECURRENT_SOURCE)
@@ -1749,8 +1756,11 @@ module ML
         end
 
         private def self.prefill_swiglu_h16_down_candidate?(qw : QuantWeight, batch : Int32) : Bool
-          return false unless prefill_swiglu_h16_down_enabled? && batch > GEMM_BATCH_THRESHOLD
+          prefill_swiglu_h16_down_enabled? && h16_batch_gemm_candidate?(qw, batch)
+        end
 
+        private def self.h16_batch_gemm_candidate?(qw : QuantWeight, batch : Int32) : Bool
+          return false unless batch > GEMM_BATCH_THRESHOLD
           force_small_q4_gemv = small_q4_gemv_enabled? && qw.type.q4_k? && qw.out_dim <= 64
           (q4_h16_gemm_enabled? && qw.type.q4_k? && !force_small_q4_gemv) ||
             (q56_batch_gemm_enabled? && (qw.type.q5_k? || qw.type.q6_k?))
@@ -1846,6 +1856,25 @@ module ML
           enc.set_value(dim.to_u32, 3)
           enc.set_value(n_rows.to_u32, 4)
           enc.set_value(eps, 5)
+          enc.dispatch_threadgroups({n_rows, 1, 1}, {256, 1, 1})
+        end
+
+        private def self.encode_rmsnorm_rows_f32_h16(enc : ML::Metal::ComputeEncoder,
+                                                     x_buf : ML::MetalBuffer,
+                                                     weight_buf : ML::MetalBuffer,
+                                                     out_buf : ML::MetalBuffer,
+                                                     out_h16_buf : ML::MetalBuffer,
+                                                     dim : Int32,
+                                                     n_rows : Int32,
+                                                     eps : Float32) : Nil
+          enc.set_pipeline(rmsnorm_rows_f32_h16_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(weight_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(out_h16_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(dim.to_u32, 4)
+          enc.set_value(n_rows.to_u32, 5)
+          enc.set_value(eps, 6)
           enc.dispatch_threadgroups({n_rows, 1, 1}, {256, 1, 1})
         end
 
@@ -1978,6 +2007,10 @@ module ML
 
         private def self.prefill_swiglu_h16_down_enabled? : Bool
           ENV["QWEN35_SWIGLU_H16_DOWN"]? == "1"
+        end
+
+        private def self.prefill_rmsnorm_h16_proj_enabled? : Bool
+          ENV["QWEN35_RMSNORM_H16_PROJ"]? == "1"
         end
 
         private def self.q4_pair_h16_min_batch : Int32
@@ -4558,6 +4591,7 @@ module ML
           src_buf = Scratch.get(:rec_chunk_many_hidden_a, inp.size.to_i64 * sizeof(Float32))
           dst_buf = Scratch.get(:rec_chunk_many_hidden_b, inp.size.to_i64 * sizeof(Float32))
           cur_buf = Scratch.get(:rec_chunk_many_cur, inp.size.to_i64 * sizeof(Float32))
+          cur_h16_buf = Scratch.get(:rec_chunk_many_cur_h16, inp.size.to_i64 * 2_i64)
           qkv_buf = Scratch.get(:rec_chunk_many_qkv, (n_tokens * qkv_dim).to_i64 * sizeof(Float32))
           qkv_h16_buf = Scratch.get(:rec_chunk_many_qkv_h16, (n_tokens * qkv_dim).to_i64 * 2_i64)
           z_buf = Scratch.get(:rec_chunk_many_z, (n_tokens * d_inner).to_i64 * sizeof(Float32))
@@ -4608,7 +4642,12 @@ module ML
             ffn_down_w_buf, ffn_down_w_off = weight_slot(lw.ffn_down_qw)
 
             norm_enc = ML::Metal::ComputeEncoder.new(cmd)
-            encode_rmsnorm_rows(norm_enc, src_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)
+            norm_h16_proj = prefill_rmsnorm_h16_proj_enabled? && n_tokens > GEMM_BATCH_THRESHOLD
+            if norm_h16_proj
+              encode_rmsnorm_rows_f32_h16(norm_enc, src_buf, norm_w_buf, cur_buf, cur_h16_buf, hidden_dim, n_tokens, eps)
+            else
+              encode_rmsnorm_rows(norm_enc, src_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)
+            end
             norm_enc.end_encoding
 
             Profile.trace("prefill.rec.proj") do
@@ -4620,7 +4659,12 @@ module ML
               qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
               shared_h16 = rec_proj_shared_h16_enabled? && qkv_h16 && q4_h16_gemm_enabled? &&
                            lw.attn_gate_qw.type.q4_k? && n_tokens > GEMM_BATCH_THRESHOLD
-              if shared_h16
+              if shared_h16 && norm_h16_proj
+                Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
+                encode_q56k_gemm_h16_from_h16(proj_enc, mm5_pipeline, cur_h16_buf, qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+                Profile.bump_matmul_shape("q4_h16_gemm #{lw.attn_gate_qw.type.name} #{lw.attn_gate_qw.in_dim}x#{lw.attn_gate_qw.out_dim} b#{n_tokens}", lw.attn_gate_qw.raw.size.to_i64)
+                encode_q4k_gemm_h16_from_h16(proj_enc, cur_h16_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
+              elsif shared_h16
                 proj_x16_buf = Scratch.get(:rec_chunk_layer_proj_x16, (n_tokens * lw.attn_qkv_qw.in_dim).to_i64 * 2_i64)
                 Profile.bump_conversion("f32_to_f16 rec_proj_shared_input #{lw.attn_qkv_qw.in_dim} b#{n_tokens}", (n_tokens * lw.attn_qkv_qw.in_dim).to_i64 * 6_i64)
                 proj_enc.set_pipeline(f32_to_f16_pipeline)
@@ -4633,6 +4677,10 @@ module ML
                 encode_q56k_gemm_h16_from_h16(proj_enc, mm5_pipeline, proj_x16_buf, qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.attn_gate_qw.type.name} #{lw.attn_gate_qw.in_dim}x#{lw.attn_gate_qw.out_dim} b#{n_tokens}", lw.attn_gate_qw.raw.size.to_i64)
                 encode_q4k_gemm_h16_from_h16(proj_enc, proj_x16_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
+              elsif qkv_h16 && norm_h16_proj
+                Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
+                encode_q56k_gemm_h16_from_h16(proj_enc, mm5_pipeline, cur_h16_buf, qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+                encode_matmul(proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, cur_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
               elsif qkv_h16
                 Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
                 encode_q56k_gemm_h16(proj_enc, mm5_pipeline, cur_buf, qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
@@ -5815,6 +5863,7 @@ module ML
           inp_buf = Scratch.get(:frec_inp, inp.size.to_i64 * sizeof(Float32))
           full_norm_w_buf = Scratch.get("#{full_tag}_norm_w", attn_norm.size.to_i64 * sizeof(Float32))
           full_cur_buf = Scratch.get(:frec_full_cur, inp.size.to_i64 * sizeof(Float32))
+          full_cur_h16_buf = Scratch.get(:frec_full_cur_h16, inp.size.to_i64 * 2_i64)
           full_qfull_buf = Scratch.get(:frec_full_qfull, (n_tokens * q_qw.out_dim).to_i64 * sizeof(Float32))
           full_q_buf = Scratch.get(:frec_full_q, (n_tokens * q_dim).to_i64 * sizeof(Float32))
           full_gate_buf = Scratch.get(:frec_full_gate, (n_tokens * q_dim).to_i64 * sizeof(Float32))
@@ -5837,6 +5886,7 @@ module ML
 
           rec_dst_buf = Scratch.get(:frec_rec_hidden_b, inp.size.to_i64 * sizeof(Float32))
           rec_cur_buf = Scratch.get(:frec_rec_cur, inp.size.to_i64 * sizeof(Float32))
+          rec_cur_h16_buf = Scratch.get(:frec_rec_cur_h16, inp.size.to_i64 * 2_i64)
           rec_qkv_buf = Scratch.get(:frec_rec_qkv, (n_tokens * rec_qkv_dim).to_i64 * sizeof(Float32))
           rec_qkv_h16_buf = Scratch.get(:frec_rec_qkv_h16, (n_tokens * rec_qkv_dim).to_i64 * 2_i64)
           rec_z_buf = Scratch.get(:frec_rec_z, (n_tokens * d_inner).to_i64 * sizeof(Float32))
@@ -5877,14 +5927,31 @@ module ML
           phase_t0 = Time.instant
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_rmsnorm_rows(norm_enc, inp_buf, full_norm_w_buf, full_cur_buf, hidden_dim, n_tokens, eps)
+          full_norm_h16_proj = prefill_rmsnorm_h16_proj_enabled? && n_tokens > GEMM_BATCH_THRESHOLD
+          if full_norm_h16_proj
+            encode_rmsnorm_rows_f32_h16(norm_enc, inp_buf, full_norm_w_buf, full_cur_buf, full_cur_h16_buf, hidden_dim, n_tokens, eps)
+          else
+            encode_rmsnorm_rows(norm_enc, inp_buf, full_norm_w_buf, full_cur_buf, hidden_dim, n_tokens, eps)
+          end
           norm_enc.end_encoding
 
           Profile.trace("prefill.full.qkv") do
             proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-            encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, full_cur_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
-            encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, full_cur_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
-            encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, full_cur_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+            if full_norm_h16_proj && h16_batch_gemm_candidate?(q_qw, n_tokens)
+              raise "unsupported h16 full q route" unless encode_matmul_from_h16(proj_enc, q_qw, full_cur_h16_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+            else
+              encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, full_cur_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+            end
+            if full_norm_h16_proj && h16_batch_gemm_candidate?(k_qw, n_tokens)
+              raise "unsupported h16 full k route" unless encode_matmul_from_h16(proj_enc, k_qw, full_cur_h16_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+            else
+              encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, full_cur_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+            end
+            if full_norm_h16_proj && h16_batch_gemm_candidate?(v_qw, n_tokens)
+              raise "unsupported h16 full v route" unless encode_matmul_from_h16(proj_enc, v_qw, full_cur_h16_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+            else
+              encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, full_cur_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+            end
             proj_enc.end_encoding
           end
 
@@ -6094,7 +6161,12 @@ module ML
             rec_ffn_down_w_buf, rec_ffn_down_w_off = weight_slot(lw.ffn_down_qw)
 
             rec_norm_enc = ML::Metal::ComputeEncoder.new(cmd)
-            encode_rmsnorm_rows(rec_norm_enc, src_buf, norm_w_buf, rec_cur_buf, hidden_dim, n_tokens, eps)
+            rec_norm_h16_proj = prefill_rmsnorm_h16_proj_enabled? && n_tokens > GEMM_BATCH_THRESHOLD
+            if rec_norm_h16_proj
+              encode_rmsnorm_rows_f32_h16(rec_norm_enc, src_buf, norm_w_buf, rec_cur_buf, rec_cur_h16_buf, hidden_dim, n_tokens, eps)
+            else
+              encode_rmsnorm_rows(rec_norm_enc, src_buf, norm_w_buf, rec_cur_buf, hidden_dim, n_tokens, eps)
+            end
             rec_norm_enc.end_encoding
 
             Profile.trace("prefill.rec.proj") do
@@ -6102,7 +6174,12 @@ module ML
               qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
               shared_h16 = rec_proj_shared_h16_enabled? && qkv_h16 && q4_h16_gemm_enabled? &&
                            lw.attn_gate_qw.type.q4_k? && n_tokens > GEMM_BATCH_THRESHOLD
-              if shared_h16
+              if shared_h16 && rec_norm_h16_proj
+                Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
+                encode_q56k_gemm_h16_from_h16(rec_proj_enc, mm5_pipeline, rec_cur_h16_buf, rec_qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+                Profile.bump_matmul_shape("q4_h16_gemm #{lw.attn_gate_qw.type.name} #{lw.attn_gate_qw.in_dim}x#{lw.attn_gate_qw.out_dim} b#{n_tokens}", lw.attn_gate_qw.raw.size.to_i64)
+                encode_q4k_gemm_h16_from_h16(rec_proj_enc, rec_cur_h16_buf, rec_z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
+              elsif shared_h16
                 rec_proj_x16_buf = Scratch.get(:full_rec_chunk_many_rec_proj_x16, (n_tokens * lw.attn_qkv_qw.in_dim).to_i64 * 2_i64)
                 Profile.bump_conversion("f32_to_f16 rec_proj_shared_input #{lw.attn_qkv_qw.in_dim} b#{n_tokens}", (n_tokens * lw.attn_qkv_qw.in_dim).to_i64 * 6_i64)
                 rec_proj_enc.set_pipeline(f32_to_f16_pipeline)
@@ -6115,6 +6192,10 @@ module ML
                 encode_q56k_gemm_h16_from_h16(rec_proj_enc, mm5_pipeline, rec_proj_x16_buf, rec_qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.attn_gate_qw.type.name} #{lw.attn_gate_qw.in_dim}x#{lw.attn_gate_qw.out_dim} b#{n_tokens}", lw.attn_gate_qw.raw.size.to_i64)
                 encode_q4k_gemm_h16_from_h16(rec_proj_enc, rec_proj_x16_buf, rec_z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
+              elsif qkv_h16 && rec_norm_h16_proj
+                Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
+                encode_q56k_gemm_h16_from_h16(rec_proj_enc, mm5_pipeline, rec_cur_h16_buf, rec_qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
+                encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, rec_cur_buf, rec_z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
               elsif qkv_h16
                 Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
                 encode_q56k_gemm_h16(rec_proj_enc, mm5_pipeline, rec_cur_buf, rec_qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)

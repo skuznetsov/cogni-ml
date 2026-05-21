@@ -645,6 +645,7 @@ Useful Qwen environment switches:
 | `QWEN35_Q4K_PAIR_H16_MIN_BATCH=64` | Tune the prefill Q4 gate/up shared H16 conversion threshold. The current default enables sharing from pp64 upward after refreshed A/B showed a small exact win. |
 | `QWEN35_ADDNORM_H16_FFN=1` | Experimental exact prefill route: residual add+RMSNorm writes H16 rows directly for following Q4_H16 FFN gate/up GEMMs. Default off; current evidence is mixed and it is retained only as an attribution/probe knob. |
 | `QWEN35_SWIGLU_H16_DOWN=1` | Experimental exact prefill route: SwiGLU writes H16 activations directly for FFN-down Q4/Q5/Q6 batch GEMM consumers. Default off; it removes large conversion traffic at long prompts, but paired wall timing is mixed and not a promotion signal yet. |
+| `QWEN35_RMSNORM_H16_PROJ=1` | Experimental exact prefill route: RMSNorm writes f32 plus H16 rows so Q4/Q5/Q6 projection GEMMs can skip their separate input conversion. Default off; useful for attribution, but current paired wall timing is noise-level. |
 | `QWEN35_REC_PROJ_SHARED_H16_OFF=1` | Disable the exact recurrent prefill projection optimization that shares one H16 input conversion between Q5 qkv and Q4 gate GEMMs. |
 | `QWEN35_PREFILL_CHUNK_OFF=1` | Force older non-chunked prefill path. |
 | `QWEN35_DECODE_WAVE_OFF=1` | Force older non-wave decode path. |

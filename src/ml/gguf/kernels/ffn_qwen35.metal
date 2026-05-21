@@ -179,6 +179,49 @@ kernel void qwen35_rmsnorm_rows(
     }
 }
 
+// Plain RMSNorm with both f32 and h16 outputs. The h16 output is exact
+// relative to routes that immediately cast the f32 RMSNorm result to half
+// before a Q4/Q5/Q6 batch GEMM, while the f32 output preserves downstream
+// consumers that still need full precision.
+kernel void qwen35_rmsnorm_rows_f32_h16(
+    device const float* x       [[buffer(0)]],
+    device const float* weight  [[buffer(1)]],
+    device       float* out     [[buffer(2)]],
+    device       half*  out_h16 [[buffer(3)]],
+    constant     uint&  dim     [[buffer(4)]],
+    constant     uint&  n_rows  [[buffer(5)]],
+    constant     float& eps     [[buffer(6)]],
+    uint row [[threadgroup_position_in_grid]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    if (row >= n_rows) return;
+
+    threadgroup float partial[QWEN35_VEC_TG];
+    const uint base = row * dim;
+
+    float ss = 0.0f;
+    for (uint i = tid; i < dim; i += QWEN35_VEC_TG) {
+        const float v = x[base + i];
+        ss += v * v;
+    }
+    partial[tid] = ss;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (ushort stride = QWEN35_VEC_TG / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            partial[tid] += partial[tid + stride];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    const float inv_rms = rsqrt(partial[0] / float(dim) + eps);
+    for (uint i = tid; i < dim; i += QWEN35_VEC_TG) {
+        const float v = x[base + i] * inv_rms * weight[i];
+        out[base + i] = v;
+        out_h16[base + i] = half(v);
+    }
+}
+
 // Residual add + RMSNorm on token-major rows.
 kernel void qwen35_add_rmsnorm_rows(
     device const float* x       [[buffer(0)]],
