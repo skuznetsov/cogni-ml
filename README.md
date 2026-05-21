@@ -643,6 +643,7 @@ Useful Qwen environment switches:
 | `QWEN35_HEAD_FULL_ROWS_MARGIN=0.25` | Margin threshold for the guarded full-row verifier route. Higher is safer but falls back more often. |
 | `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1` | Disable decode-wave FFN-down residual-add fusion for Q4/Q6 target and Q8 draft experiments. |
 | `QWEN35_Q4K_PAIR_H16_MIN_BATCH=64` | Tune the prefill Q4 gate/up shared H16 conversion threshold. The current default enables sharing from pp64 upward after refreshed A/B showed a small exact win. |
+| `QWEN35_Q4K_H16_B48_OFF=1` | Disable the exact 48-token Q4_K H16 prefill tile. The default route uses this only for exact 48-token chunks. |
 | `QWEN35_Q4K_H16_B64_OFF=1` | Disable the exact wide-batch Q4_K H16 prefill GEMM. The default route uses a 64-token batch tile for prompt chunks that are exact multiples of 64; irregular chunk sizes stay on the older 32-token tile to avoid tail regressions. |
 | `QWEN35_Q4K_H16_B80_OFF=1` | Disable the exact 80-token Q4_K H16 prefill tile. The default route uses this only for exact 80-token chunks. |
 | `QWEN35_Q4K_H16_B96_OFF=1` | Disable the exact 96-token Q4_K H16 prefill tile. The default route uses this only for exact 96-token chunks; wider irregular chunks still avoid B96 after pp160/pp192 regressions. |
