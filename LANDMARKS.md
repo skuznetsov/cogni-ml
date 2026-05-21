@@ -14528,3 +14528,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The next exact branch should be size-dependent. Short-prompt work should still target recurrent FFN up/gate repeated-weight work or first-run state/lifecycle tax; longer-prompt work should investigate a broader activation-staging corridor, not another isolated conversion micro-optimization that previous pp64 gates refuted.
 - caveat: Host load was not quiet-gated and the benchmark compares native p50 against llama average because that is what the existing harness reports. Rerun under quiet-host gating before updating public benchmark tables or claiming stable superiority.
 - trust: {F:0.78,G:0.48,R:0.72}
+
+**LM-387 default-off ADDNORM_H16_FFN activation-staging probe [shared/ml]**
+- status: IMPLEMENTED probe, not promoted
+- claim: `QWEN35_ADDNORM_H16_FFN=1` is an exact default-off probe for writing residual add+RMSNorm FFN input rows directly as H16 when the following prefill FFN gate/up pair consumes Q4_H16 input.
+- evidence: `crystal build --no-codegen bin/qwen35_prefill_attribution.cr --error-trace --link-flags=...` passed, and `crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --error-trace --link-flags=...` passed (`18 examples, 0 failures`). Relaxed paired A/B with `/tmp/qwen35_prefill_attribution_addnorm_h16 --prepare-state --compare-env=QWEN35_ADDNORM_H16_FFN=1` showed pp256 regression/noise: default p50 `602.05ms`, h16 p50 `616.73ms`, wins `3/6`; pp1024 was mixed/small-positive: default p50 `2293.69ms`, h16 p50 `2252.83ms`, wins `1/3`.
+- atlas: With `QWEN35_ADDNORM_H16_FFN=1 QWEN35_PREFILL_PHASE_PROFILE=1` at pp1024, the atlas showed conversion traffic drop from the prior `4848 MiB` to `4104 MiB` by removing FFN-upgate `q4_pair_input` conversions, but grouped wall stayed noisy (`grouped_wait_ms=2321.80` in the profiled run).
+- implication: The activation-staging corridor is real in byte terms, but direct H16 addnorm alone is not enough for a robust pp256 win and is not proven at pp1024. Keep the probe default-off; next long-prompt work needs a larger corridor such as FFN-down staging or a full FFN dataflow change, with paired quiet-host timing.
+- caveat: This partially repeats the older `ADDNORM_H16_FFN` neutral falsifier after surrounding H16 routes changed. It is retained only because it is exact, default-off, and gives a current lower-bound for removed conversion bytes.
+- trust: {F:0.82,G:0.42,R:0.78}
