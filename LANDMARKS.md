@@ -14592,3 +14592,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The Q4_B64 LTP/WBA win does not transfer by direct copying. Q5/Q6 f32-output kernels already have a different dequant/register/precision balance, and widening the batch tile adds enough pressure that the saved repeated weight-tile work is below the noise floor for current prefill shapes.
 - implication: Do not promote or keep the direct Q5/Q6 B64 kernels. Future Q5/Q6 prefill work should be shape-specific or use a different schedule; the next exact Metal prefill branch should prioritize Q4 irregular-tail handling, deeper Q4 tile/register layout, or graph-level scheduling.
 - trust: {F:0.78,G:0.46,R:0.76}
+
+**LM-394 Q4_B64 tail32 policy refuted [shared/ml]**
+- status: REFUTED and removed
+- claim tested: The existing `simd_mm_q4k_h16_b64` kernel might safely handle `64n+32` prompt chunks if guarded behind an opt-in `QWEN35_Q4K_H16_B64_TAIL32=1`, avoiding the extra split-tail dispatch while gaining partial B64 weight reuse.
+- evidence: A temporary branch changed only the B64 route predicate to allow `batch % 64 == 32` when the opt-in env was set. The focused build passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_q4_tail32_build crystal build --release bin/qwen35_prefill_attribution.cr -o /tmp/qwen35_prefill_attribution_q4tail32 --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"`.
+- relaxed A/B: pp96 regressed strongly (`401.49ms` default vs `453.48ms` opt-in, default wins `6/6`). pp160 also regressed (`421.16ms` default vs `446.72ms` opt-in, default wins `5/6`). pp80 was used as an adversary/noise check because the tail32 gate should not activate there; its mixed result (`556.11ms` vs `541.23ms` avg, wins `2/4`) is not evidence for the branch and confirms host variance can be comparable to small deltas.
+- diagnosis: Half-full B64 tiles waste too much threadgroup work/register pressure relative to the saved weight-tile reuse. The legal modulo-64 gate in LM-392 remains the correct boundary for the current B64 kernel.
+- implication: Do not widen the current B64 predicate to `64n+32`. Future irregular-tail work needs a distinct low-waste tail kernel, row-packing multiple tails, or a graph-level batching strategy that keeps the 64-row tile full.
+- trust: {F:0.80,G:0.48,R:0.78}
