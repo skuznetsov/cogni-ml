@@ -14663,3 +14663,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Dispatch/offset scheduling cost dominated the saved row packing. For larger irregular shapes, the next branch should avoid extra dispatches and either pack rows inside one kernel or choose an exact-shape one-dispatch tile that stays under the resource cliff.
 - LTP/WBA: The local window was valid (`160 = 80 + 80`), but the legal move failed the lexicographic potential because `Area/dispatch_count` increased enough to outweigh lower repeated weight work. Dual frame: return to exact default route and record split160 as a refuted corridor.
 - trust: {F:0.74,G:0.42,R:0.76}
+
+**LM-402 matched prefill/llama snapshot after Q4 row-packing [shared/ml]**
+- status: VERIFIED relaxed-host snapshot, not public benchmark evidence
+- claim: B48/B80/B96/B112 exact-shape Q4 row-packing improved selected native prefill shapes, but it does not close the full pp256 prefill gap against llama.cpp. Decode remains ahead.
+- evidence: Fresh `bin/benchmark_qwen_vs_llama.cr` release build to `/private/tmp/benchmark_qwen_vs_llama_rowpack` ran with `--native-prefill-prepare-state --gen=64 --reps=2..3 --warmup=1 --load-warning-threshold=0 --load-total-warning-threshold=0`. Prepared-state prefill p50/native vs llama: pp64 `448.82 tok/s` vs `464.23` (`-3.32%`), pp80 `424.61` vs `426.55` (`-0.45%`), pp96 `479.06` vs `505.07` (`-5.15%`), pp112 `469.86` vs `458.68` (`+2.44%`), pp256 `541.92` vs `576.69` (`-6.03%`). Decode gap stayed positive at `+3.24..+5.08%`.
+- implication: The next prefill improvement should not assume Q4 row packing alone is the remaining gap. pp256 needs broader scheduling/operator attribution, likely Q5/Q6/projection/full-attention or command-buffer grouping rather than another narrow exact Q4 tile.
+- trust: {F:0.78,G:0.48,R:0.76}
