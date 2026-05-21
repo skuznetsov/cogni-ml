@@ -14655,3 +14655,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the exact 112-row prompt chunk. Transport is the prompt-row corridor inside one Q4_H16 prefill GEMM dispatch. Legal move packs the row band into 14 simdgroups while preserving exact state, quantization, and accumulator semantics. Potential decreases as repeated weight-tile work and tail routing are eliminated without crossing the B128 resource cliff.
 - caveat: Relaxed-host evidence only; quiet-host rerun required before public benchmark claims.
 - trust: {F:0.86,G:0.46,R:0.84}
+
+**LM-401 graph-level Q4 split160 via B80+B80 refuted [shared/ml]**
+- status: REFUTED and removed
+- claim tested: Exact pp160 might improve by splitting the prompt-row corridor into two offset B80 GEMM sub-dispatches, reusing the strong B80 tile without adding a monolithic B160 kernel.
+- evidence: A temporary opt-in `QWEN35_Q4K_H16_SPLIT160=1` branch built with `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_q4_split160_build crystal build --release bin/qwen35_prefill_attribution.cr -o /private/tmp/qwen35_prefill_attribution_q4split160 --link-flags=...`. Runtime pp160 A/B measured default p50 `303.48ms` vs split p50 `316.55ms`, with default winning all pairs (`default wins 10/10`).
+- diagnosis: Dispatch/offset scheduling cost dominated the saved row packing. For larger irregular shapes, the next branch should avoid extra dispatches and either pack rows inside one kernel or choose an exact-shape one-dispatch tile that stays under the resource cliff.
+- LTP/WBA: The local window was valid (`160 = 80 + 80`), but the legal move failed the lexicographic potential because `Area/dispatch_count` increased enough to outweigh lower repeated weight work. Dual frame: return to exact default route and record split160 as a refuted corridor.
+- trust: {F:0.74,G:0.42,R:0.76}
