@@ -643,6 +643,7 @@ Useful Qwen environment switches:
 | `QWEN35_HEAD_FULL_ROWS_MARGIN=0.25` | Margin threshold for the guarded full-row verifier route. Higher is safer but falls back more often. |
 | `QWEN35_FFN_DOWN_ADD_FUSED_OFF=1` | Disable decode-wave FFN-down residual-add fusion for Q4/Q6 target and Q8 draft experiments. |
 | `QWEN35_Q4K_PAIR_H16_MIN_BATCH=64` | Tune the prefill Q4 gate/up shared H16 conversion threshold. The current default enables sharing from pp64 upward after refreshed A/B showed a small exact win. |
+| `QWEN35_Q4K_H16_B64_OFF=1` | Disable the exact wide-batch Q4_K H16 prefill GEMM. The default route uses a 64-token batch tile for prompt chunks that are exact multiples of 64; irregular chunk sizes stay on the older 32-token tile to avoid tail regressions. |
 | `QWEN35_ADDNORM_H16_FFN=1` | Experimental exact prefill route: residual add+RMSNorm writes H16 rows directly for following Q4_H16 FFN gate/up GEMMs. Default off; current evidence is mixed and it is retained only as an attribution/probe knob. |
 | `QWEN35_SWIGLU_H16_DOWN=1` | Experimental exact prefill route: SwiGLU writes H16 activations directly for FFN-down Q4/Q5/Q6 batch GEMM consumers. Default off; it removes large conversion traffic at long prompts, but paired wall timing is mixed and not a promotion signal yet. |
 | `QWEN35_RMSNORM_H16_PROJ=1` | Experimental exact prefill route: RMSNorm writes f32 plus H16 rows so Q4/Q5/Q6 projection GEMMs can skip their separate input conversion. Default off; useful for attribution, but current paired wall timing is noise-level. |
