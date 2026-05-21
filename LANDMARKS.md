@@ -14677,3 +14677,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: Current default pp256 attribution measured conversion `1212 MiB` (`23.29%`) and wall p50 `469.50ms`. With `QWEN35_ADDNORM_H16_FFN=1 QWEN35_SWIGLU_H16_DOWN=1 QWEN35_RMSNORM_H16_PROJ=1 QWEN35_DN_POST_H16_OPROJ=1`, conversion dropped to `54 MiB` (`1.33%`) but wall p50 was only `467.41ms` in an unpaired relaxed run.
 - implication: Conversion cleanup remains useful for memory hygiene, but the remaining pp256 gap is dominated by matmul/scheduling behavior, not f32-to-f16 traffic alone.
 - trust: {F:0.68,G:0.42,R:0.66}
+
+**LM-404 Q5/Q6 direct f32out store refuted [shared/ml]**
+- status: REFUTED and removed
+- claim tested: Q5/Q6 batch GEMM might speed up if exact full tiles directly store `simdgroup_float8x8` accumulators to f32 output instead of staging through threadgroup memory and writing `float(half(acc))`.
+- evidence: A temporary opt-in `QWEN35_Q56K_DIRECT_F32OUT=1` branch added `simd_mm_q5k_f32out_direct` and `simd_mm_q6k_f32out_direct`. Release build passed, and focused specs passed with the opt-in route (`18 examples, 0 failures`), but pp256 paired A/B measured default p50 `476.40ms` vs direct p50 `477.04ms`, wins `5/10`.
+- diagnosis: The semantic risk of skipping the existing half-rounding output contract buys no wall speed on pp256. Keep the current staging path.
+- trust: {F:0.78,G:0.42,R:0.78}
