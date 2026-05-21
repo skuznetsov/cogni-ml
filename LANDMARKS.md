@@ -14620,3 +14620,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the `96 = 3x32` prompt-row chunk where old B32 repeats Q4 dequant/load three times. Transport is the prompt-row corridor inside a single prefill GEMM dispatch. Legal move repacks rows into a full 12-simdgroup tile without changing quantization or accumulation semantics. Potential decreases as repeated weight-tile work falls from three B32 tiles to one B96 tile. Boundary safety is the exact-96 gate plus rollback env.
 - caveat: Evidence is local relaxed-host M2 Max and effect size is about one percent by median. Keep quiet-host rerun before public benchmark claims, and do not generalize to pp160/pp192.
 - trust: {F:0.86,G:0.46,R:0.82}
+
+**LM-397 exact Q4_H16 B128 prefill tile refuted [shared/ml]**
+- status: REFUTED and removed
+- claim tested: A 16-simdgroup `simd_mm_q4k_h16_b128` tile might beat the current exact-128 route by replacing two B64 tiles with one dequant/load pass over 128 prompt rows.
+- evidence: A temporary opt-in `QWEN35_Q4K_H16_B128=1` branch built and created the Metal pipeline successfully. Runtime smoke A/B at pp128 measured default B64 p50 `253.26ms` vs B128 p50 `269.43ms`, with default wins `3/3`.
+- diagnosis: The larger monolithic tile crosses a resource-pressure boundary: 512-thread groups and 32 KiB threadgroup memory outweigh the saved repeated Q4 dequant/load work.
+- implication: Do not pursue larger one-dispatch Q4 tiles by simple scaling. The viable row-packing frontier is narrow B96-like packing or a different register/tile layout that avoids the 512-thread/32KiB pressure cliff.
+- trust: {F:0.72,G:0.42,R:0.74}
