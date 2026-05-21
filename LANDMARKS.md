@@ -14491,3 +14491,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The next product step is manifest-local live-KV metadata plus Store restore/save policy. This is the LTP/WBA live-row corridor: transport only live KV rows while preserving the exact recurrent state and full-capacity restore boundary.
 - caveat: Product prompt-cache still writes old raw/full-KV or BF16/full-KV artifacts. v3 live-KV requires explicit prefix/live-row validation before serving; destination bytes beyond live KV rows are intentionally not trusted.
 - trust: {F:0.86,G:0.50,R:0.85}
+
+**LM-383 guarded product live-KV artifact metadata and opt-in policy [shared/ml]**
+- status: VERIFIED local product-path smoke
+- claim: Product prompt-cache can now save and restore v3 live-KV artifacts behind explicit opt-in metadata without weakening the default full-KV/raw policy.
+- evidence: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace --link-flags=...` passed; `crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace --link-flags=...` passed; `crystal spec spec/qwen35_prompt_cache_spec.cr spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`32 examples, 0 failures`). Local release warm-probe BF16 fast-forward at `max_seq=256`, `gen=16`, no resident state measured full-KV p50 restore `10.1ms`; with `--live-kv-artifacts`, p50 restore was `8.0ms`, emitting the same cached output span.
+- implementation: `Qwen35PromptCache::Entry` has optional `artifact_live_kv_tokens`; pg_sorted_heap schema/insert values include it; trust metadata rejects live-KV rows with missing token hash or live rows outside `1..prefix_len`; `qwen35_generate` exposes `QWEN35_PROMPT_CACHE_LIVE_KV_ARTIFACTS=1`; `qwen35_warm_request_probe` exposes `--live-kv-artifacts`.
+- implication: The LTP/WBA live-row corridor is now product-shaped: cold cache activation can transport only verified live KV rows, while exact fallback/default behavior remains unchanged.
+- caveat: The policy is still opt-in. Broader prompt/context matrix and direct Store manifest compatibility tests should run before making live-KV a default compressed artifact mode.
+- trust: {F:0.87,G:0.55,R:0.86}

@@ -30,6 +30,7 @@ resident_states = (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
 metal_profile = ENV["QWEN35_METAL_PROFILE"]? == "1"
 artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?
 artifact_codec_block = (ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK"]? || "8").to_i
+artifact_live_kv = ENV["QWEN35_PROMPT_CACHE_LIVE_KV_ARTIFACTS"]? == "1"
 quiet = false
 
 parser = OptionParser.new do |p|
@@ -47,6 +48,7 @@ parser = OptionParser.new do |p|
   p.on("--resident-states N", "Resident Store state-cache entries for --prompt-cache-replay") { |v| resident_states = v.to_i }
   p.on("--artifact-codec CODEC", "Prompt-cache artifact codec for cache modes (raw, recurrent-bf16, recurrent-int8)") { |v| artifact_codec = v == "raw" ? nil : v }
   p.on("--artifact-codec-block N", "Prompt-cache recurrent-int8 artifact block size (default: 8)") { |v| artifact_codec_block = v.to_i }
+  p.on("--live-kv-artifacts", "Write prompt-cache artifacts with only live KV rows") { artifact_live_kv = true }
   p.on("--metal-profile", "Print Qwen35Metal profile report for measured requests") { metal_profile = true }
   p.on("--quiet", "Suppress generated token id rows") { quiet = true }
   p.on("-h", "--help", "Show this help") do
@@ -171,7 +173,8 @@ def build_prompt_cache_replay_template(weights : ML::GGUF::Qwen35Weights,
                                        prepare_state : Bool,
                                        resident_states : Int32,
                                        artifact_codec : String?,
-                                       artifact_codec_block : Int32) : PromptCacheReplayTemplate
+                                       artifact_codec_block : Int32,
+                                       artifact_live_kv : Bool) : PromptCacheReplayTemplate
   hp = weights.hparams
   ids = tokenizer.encode(prompt)
   raise "prompt encoded to zero tokens" if ids.empty?
@@ -194,6 +197,7 @@ def build_prompt_cache_replay_template(weights : ML::GGUF::Qwen35Weights,
     state: prompt_state,
     artifact_codec: artifact_codec,
     artifact_codec_block: artifact_codec ? artifact_codec_block : nil,
+    artifact_live_kv_tokens: artifact_live_kv ? ids.size : nil,
     artifact_validation_kind: artifact_codec ? "warm-request-prefix" : nil,
     artifact_validation_steps: artifact_codec ? ids.size : nil,
     artifact_validation_hash: artifact_codec ? ML::GGUF::Qwen35PromptCache.token_hash(ids) : nil,
@@ -225,7 +229,8 @@ def build_prompt_cache_fast_forward_template(weights : ML::GGUF::Qwen35Weights,
                                              prepare_state : Bool,
                                              resident_states : Int32,
                                              artifact_codec : String?,
-                                             artifact_codec_block : Int32) : PromptCacheFastForwardTemplate
+                                             artifact_codec_block : Int32,
+                                             artifact_live_kv : Bool) : PromptCacheFastForwardTemplate
   hp = weights.hparams
   ids = tokenizer.encode(prompt)
   raise "prompt encoded to zero tokens" if ids.empty?
@@ -267,6 +272,7 @@ def build_prompt_cache_fast_forward_template(weights : ML::GGUF::Qwen35Weights,
     state: span_state,
     artifact_codec: artifact_codec,
     artifact_codec_block: artifact_codec ? artifact_codec_block : nil,
+    artifact_live_kv_tokens: artifact_live_kv ? cached_prefix_tokens.size : nil,
     artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
     artifact_validation_steps: output_ids.size,
     artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history_tokens),
@@ -491,12 +497,12 @@ mode = if prompt_cache_fast_forward
        else
          "greedy"
        end
-puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block}"
+puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv}"
 puts "  startup_ms=#{startup_ms.round(1)}"
 
 source_template = source_replay ? build_source_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state) : nil
-prompt_cache_template = prompt_cache_replay ? build_prompt_cache_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block) : nil
-prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block) : nil
+prompt_cache_template = prompt_cache_replay ? build_prompt_cache_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
+prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 
 warmup_ms = 0.0
 warmups.times do

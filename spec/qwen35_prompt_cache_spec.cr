@@ -241,6 +241,7 @@ describe ML::GGUF::Qwen35PromptCache do
     sql.should contain("qwen35_prompt_cache_exact_idx")
     sql.should contain("qwen35_prompt_cache_prefix_idx")
     sql.should contain("artifact_codec")
+    sql.should contain("artifact_live_kv_tokens")
     sql.should contain("artifact_validation_hash")
 
     legacy = ML::GGUF::Qwen35PromptCache.pg_sorted_heap_schema_sql(table_am: "clustered_heap")
@@ -268,11 +269,12 @@ describe ML::GGUF::Qwen35PromptCache do
         token_hash: "h",
         artifact_codec: "recurrent-int8",
         artifact_codec_block: 8,
+        artifact_live_kv_tokens: 1,
         artifact_validation_kind: "free-run-top1",
         artifact_validation_steps: 32,
         artifact_validation_hash: "v",
       )
-    ).size.should eq(23)
+    ).size.should eq(24)
 
     expect_raises(ArgumentError, /unsafe PostgreSQL identifier/) do
       ML::GGUF::Qwen35PromptCache.pg_sorted_heap_schema_sql(table_name: "cache; drop table x")
@@ -299,6 +301,7 @@ describe ML::GGUF::Qwen35PromptCache do
       token_hash: "h",
       artifact_codec: "recurrent-int8",
       artifact_codec_block: 8,
+      artifact_live_kv_tokens: 0,
       artifact_validation_kind: "free-run-top1",
       artifact_validation_steps: 32,
       artifact_validation_hash: "hash",
@@ -307,6 +310,7 @@ describe ML::GGUF::Qwen35PromptCache do
     parsed = ML::GGUF::Qwen35PromptCache::Entry.from_json(entry.to_json)
     parsed.artifact_codec.should eq("recurrent-int8")
     parsed.artifact_codec_block.should eq(8)
+    parsed.artifact_live_kv_tokens.should eq(0)
     parsed.artifact_validation_kind.should eq("free-run-top1")
     parsed.artifact_validation_steps.should eq(32)
     parsed.artifact_validation_hash.should eq("hash")
@@ -314,7 +318,37 @@ describe ML::GGUF::Qwen35PromptCache do
     legacy_json = %({"runtime_id":"#{ML::GGUF::Qwen35PromptCache::RUNTIME_ID}","session_id":"s","turn_id":null,"model_id":"m","tokenizer_id":"t","prompt_hash":"p","token_hash":"h","prefix_len":0,"max_seq":1,"layer_count":1,"artifact_path":"a","artifact_sha256":"#{"0" * 64}","artifact_byte_size":0,"state_byte_size":0,"created_at_unix":1,"prompt_preview":null})
     legacy = ML::GGUF::Qwen35PromptCache::Entry.from_json(legacy_json)
     legacy.artifact_codec.should be_nil
+    legacy.artifact_live_kv_tokens.should be_nil
     legacy.artifact_validation_hash.should be_nil
+  end
+
+  it "requires valid live-KV metadata before trusting live-KV artifacts" do
+    entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+      runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+      session_id: "s",
+      turn_id: nil,
+      model_id: "m",
+      tokenizer_id: "t",
+      prompt_hash: "p",
+      prefix_len: 4,
+      max_seq: 8,
+      layer_count: 1,
+      artifact_path: "a",
+      artifact_sha256: "0" * 64,
+      artifact_byte_size: 0_i64,
+      state_byte_size: 0_i64,
+      created_at_unix: 1_i64,
+      prompt_preview: nil,
+      token_hash: "h",
+      artifact_live_kv_tokens: 4,
+    )
+
+    ML::GGUF::Qwen35PromptCache.artifact_trust_metadata_valid?(entry).should be_true
+    entry.artifact_live_kv_tokens = 5
+    ML::GGUF::Qwen35PromptCache.artifact_trust_metadata_valid?(entry).should be_false
+    entry.artifact_live_kv_tokens = 4
+    entry.token_hash = nil
+    ML::GGUF::Qwen35PromptCache.artifact_trust_metadata_valid?(entry).should be_false
   end
 
   it "validates exact known-span fast-forward metadata strictly" do

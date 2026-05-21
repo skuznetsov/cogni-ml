@@ -38,6 +38,7 @@ prompt_cache_full_hit_min_gen = (ENV["QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN"]? ||
 prompt_cache_artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?.try(&.downcase)
 prompt_cache_artifact_codec = nil if prompt_cache_artifact_codec == "raw" || prompt_cache_artifact_codec == ""
 prompt_cache_artifact_codec_block = (ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK"]? || "8").to_i
+prompt_cache_live_kv_artifacts = ENV["QWEN35_PROMPT_CACHE_LIVE_KV_ARTIFACTS"]? == "1"
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
@@ -1040,6 +1041,7 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
         state: state,
         artifact_codec: prompt_cache_artifact_codec,
         artifact_codec_block: prompt_cache_artifact_codec ? prompt_cache_artifact_codec_block : nil,
+        artifact_live_kv_tokens: prompt_cache_live_kv_artifacts ? cached_prefix.size : nil,
         artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
         artifact_validation_steps: output_ids.size,
         artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),

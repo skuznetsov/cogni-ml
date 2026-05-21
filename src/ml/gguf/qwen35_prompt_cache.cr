@@ -38,6 +38,7 @@ module ML::GGUF
       property state_byte_size : Int64
       property artifact_codec : String? = nil
       property artifact_codec_block : Int32? = nil
+      property artifact_live_kv_tokens : Int32? = nil
       property artifact_validation_kind : String? = nil
       property artifact_validation_steps : Int32? = nil
       property artifact_validation_hash : String? = nil
@@ -64,6 +65,7 @@ module ML::GGUF
                      @token_hash : String? = nil,
                      @artifact_codec : String? = nil,
                      @artifact_codec_block : Int32? = nil,
+                     @artifact_live_kv_tokens : Int32? = nil,
                      @artifact_validation_kind : String? = nil,
                      @artifact_validation_steps : Int32? = nil,
                      @artifact_validation_hash : String? = nil,
@@ -222,6 +224,7 @@ module ML::GGUF
                prompt_preview : String? = nil,
                artifact_codec : String? = nil,
                artifact_codec_block : Int32? = nil,
+               artifact_live_kv_tokens : Int32? = nil,
                artifact_validation_kind : String? = nil,
                artifact_validation_steps : Int32? = nil,
                artifact_validation_hash : String? = nil,
@@ -236,6 +239,7 @@ module ML::GGUF
           artifact_path,
           artifact_codec: artifact_codec,
           artifact_codec_block: artifact_codec_block,
+          artifact_live_kv_tokens: artifact_live_kv_tokens,
         )
 
         entry = Entry.new(
@@ -257,6 +261,7 @@ module ML::GGUF
           token_hash: token_hash,
           artifact_codec: artifact_codec,
           artifact_codec_block: artifact_codec_block,
+          artifact_live_kv_tokens: artifact_live_kv_tokens,
           artifact_validation_kind: artifact_validation_kind,
           artifact_validation_steps: artifact_validation_steps,
           artifact_validation_hash: artifact_validation_hash,
@@ -920,7 +925,7 @@ module ML::GGUF
 
     def artifact_trust_metadata_valid?(entry : Entry) : Bool
       codec = normalized_artifact_codec(entry)
-      return true if RAW_ARTIFACT_CODECS.includes?(codec)
+      return live_kv_metadata_valid?(entry) if RAW_ARTIFACT_CODECS.includes?(codec)
       return false unless COMPRESSED_ARTIFACT_CODECS.includes?(codec)
       return false unless entry.artifact_validation_kind.try(&.empty?) == false
       return false unless entry.artifact_validation_hash.try(&.empty?) == false
@@ -931,6 +936,7 @@ module ML::GGUF
         block = entry.artifact_codec_block
         return false unless block && block > 0
       end
+      return false unless live_kv_metadata_valid?(entry)
       true
     end
 
@@ -945,6 +951,17 @@ module ML::GGUF
 
     private def normalized_artifact_codec(entry : Entry) : String?
       entry.artifact_codec.try(&.downcase)
+    end
+
+    private def live_kv_metadata_valid?(entry : Entry) : Bool
+      live = entry.artifact_live_kv_tokens
+      return true unless live
+      return false unless live > 0
+      return false if live > entry.max_seq
+      return false if live > entry.prefix_len
+      return false unless entry.token_hash.try(&.empty?) == false
+
+      true
     end
 
     def short_hash(value : String) : String
@@ -976,6 +993,7 @@ module ML::GGUF
           state_byte_size    bigint NOT NULL CHECK (state_byte_size >= 0),
           artifact_codec     text,
           artifact_codec_block integer CHECK (artifact_codec_block IS NULL OR artifact_codec_block > 0),
+          artifact_live_kv_tokens integer CHECK (artifact_live_kv_tokens IS NULL OR artifact_live_kv_tokens > 0),
           artifact_validation_kind text,
           artifact_validation_steps integer CHECK (artifact_validation_steps IS NULL OR artifact_validation_steps >= 0),
           artifact_validation_hash text,
@@ -1003,7 +1021,8 @@ module ML::GGUF
           runtime_id, session_id, turn_id, model_id, tokenizer_id,
           prompt_hash, token_hash, prefix_len, max_seq, layer_count,
           artifact_path, artifact_sha256, artifact_byte_size, state_byte_size,
-          artifact_codec, artifact_codec_block, artifact_validation_kind,
+          artifact_codec, artifact_codec_block, artifact_live_kv_tokens,
+          artifact_validation_kind,
           artifact_validation_steps, artifact_validation_hash,
           next_token_id, next_token_logit,
           created_at_unix, prompt_preview
@@ -1012,9 +1031,10 @@ module ML::GGUF
           $6, $7, $8, $9, $10,
           $11, $12, $13, $14,
           $15, $16, $17,
-          $18, $19,
-          $20, $21,
-          $22, $23
+          $18,
+          $19, $20,
+          $21, $22,
+          $23, $24
       )
       ON CONFLICT (model_id, tokenizer_id, prompt_hash, prefix_len)
       DO UPDATE SET
@@ -1030,6 +1050,7 @@ module ML::GGUF
           state_byte_size = EXCLUDED.state_byte_size,
           artifact_codec = EXCLUDED.artifact_codec,
           artifact_codec_block = EXCLUDED.artifact_codec_block,
+          artifact_live_kv_tokens = EXCLUDED.artifact_live_kv_tokens,
           artifact_validation_kind = EXCLUDED.artifact_validation_kind,
           artifact_validation_steps = EXCLUDED.artifact_validation_steps,
           artifact_validation_hash = EXCLUDED.artifact_validation_hash,
@@ -1058,6 +1079,7 @@ module ML::GGUF
         entry.state_byte_size,
         entry.artifact_codec,
         entry.artifact_codec_block,
+        entry.artifact_live_kv_tokens,
         entry.artifact_validation_kind,
         entry.artifact_validation_steps,
         entry.artifact_validation_hash,
