@@ -14482,3 +14482,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: Current ladder should be: direct output certificate for exact repeated terminal spans; resident decoded state for same-process continuation; mmap BF16 artifact for cold persistent activation; preuploaded encoded artifact only for prewarm/many-session servers.
 - caveat: Resident decoded state spends memory and does not scale to unbounded sessions. BF16 mmap remains the lower-memory product fallback.
 - trust: {F:0.84,G:0.52,R:0.83}
+
+**LM-382 probe-level Metal live-KV v3 artifacts [shared/ml]**
+- status: VERIFIED local probe correctness + timing direction
+- claim: v3 encoded Qwen state artifacts can preserve exact continuation while storing only live full-attention KV rows and restoring them into full-capacity Metal destination buffers.
+- evidence: `crystal spec spec/qwen35_state_snapshot_spec.cr --error-trace --link-flags=...` passed (`14 examples, 0 failures`), including a synthetic v3 live-KV truncation guard. `crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags=...` passed (`17 examples, 0 failures`). Local M2 Max Qwen3.5-9B artifact bench with `--tokens=32 --max-seq=256 --warmups=1 --iters=3 --skip-hash` preserved raw/BF16/INT8 top1 parity; BF16 full-KV artifact bytes/restore were `43.12MB`, `bf16_mmap_restore_ms=7.604`, `bf16_read_restore_ms=11.456`; live-KV v3 reduced this to `28.44MB`, `bf16_mmap_restore_ms=5.596`, `bf16_read_restore_ms=8.283`.
+- implementation: Added `ARTIFACT_VERSION_V3`, optional `artifact_live_kv_tokens` on `write_artifact`/`encode_artifact_bytes`, truncated raw KV payload support for v3, and decode/Metal restore paths that allocate full original buffers while copying only live KV payload bytes. `bin/qwen35_artifact_restore_bench.cr` now exposes `--live-kv-artifacts`.
+- implication: The next product step is manifest-local live-KV metadata plus Store restore/save policy. This is the LTP/WBA live-row corridor: transport only live KV rows while preserving the exact recurrent state and full-capacity restore boundary.
+- caveat: Product prompt-cache still writes old raw/full-KV or BF16/full-KV artifacts. v3 live-KV requires explicit prefix/live-row validation before serving; destination bytes beyond live KV rows are intentionally not trusted.
+- trust: {F:0.86,G:0.50,R:0.85}

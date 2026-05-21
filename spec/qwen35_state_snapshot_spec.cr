@@ -222,6 +222,61 @@ describe ML::GGUF::Qwen35StateSnapshot do
     end
   end
 
+  it "can write live-KV v3 artifacts with truncated KV payloads" do
+    snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+      max_seq: 4,
+      layer_count: 1,
+      positions: [0_i32],
+      records: [
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          0,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+          bytes_from([1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32, 5.0_f32, 6.0_f32, 7.0_f32, 8.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          0,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::SsmState,
+          bytes_from([9.0_f32, -10.0_f32, 11.0_f32, -12.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+      ],
+    )
+    path = File.tempname("qwen35-state-live-kv", ".qkv")
+    begin
+      info = ML::GGUF::Qwen35StateSnapshot.write_artifact(
+        snapshot,
+        path,
+        artifact_codec: "recurrent-bf16",
+        artifact_live_kv_tokens: 2,
+      )
+      File.read(path)[4, 4].bytes.should eq([3_u8, 0_u8, 0_u8, 0_u8])
+
+      encoded = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded(
+        path,
+        expected_sha256: info.sha256,
+        expected_codec: "recurrent-bf16",
+      )
+      encoded.artifact_version.should eq(ML::GGUF::Qwen35StateSnapshot::ARTIFACT_VERSION_V3)
+      encoded.records[0].kind.should eq(ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache)
+      encoded.records[0].original_byte_size.should eq(8 * sizeof(Float32))
+      encoded.records[0].payload.size.should eq(4 * sizeof(Float32))
+      encoded.records[1].codec.should eq(ML::GGUF::Qwen35StateSnapshot::RecordCodec::Bf16)
+
+      loaded = ML::GGUF::Qwen35StateSnapshot.read_artifact(
+        path,
+        expected_sha256: info.sha256,
+        expected_codec: "recurrent-bf16",
+      )
+      floats_from(loaded.records[0].bytes).should eq([
+        1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32,
+        0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32,
+      ])
+    ensure
+      File.delete(path) if File.exists?(path)
+    end
+  end
+
   pending!("9B model not present") unless File.exists?(QWEN_9B_SNAPSHOT)
 
   it "round-trips a Metal-backed prompt state and preserves next-token top1" do

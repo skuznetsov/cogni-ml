@@ -66,6 +66,7 @@ module ML::GGUF
     end
 
     class EncodedSnapshot
+      getter artifact_version : UInt32
       getter max_seq : Int32
       getter layer_count : Int32
       getter positions : Array(Int32)
@@ -80,7 +81,8 @@ module ML::GGUF
                      @records : Array(EncodedRecord),
                      @codec : RecordCodec,
                      @codec_block : Int32,
-                     @backing_stores : Array(Bytes) = [] of Bytes)
+                     @backing_stores : Array(Bytes) = [] of Bytes,
+                     @artifact_version : UInt32 = 2_u32)
         raise ArgumentError.new("position count mismatch: positions=#{@positions.size}, layers=#{@layer_count}") unless @positions.size == @layer_count
       end
 
@@ -121,6 +123,7 @@ module ML::GGUF
     ARTIFACT_MAGIC      = Bytes[0x43, 0x51, 0x4b, 0x56] # "CQKV"
     ARTIFACT_VERSION_V1 = 1_u32
     ARTIFACT_VERSION_V2 = 2_u32
+    ARTIFACT_VERSION_V3 = 3_u32
     ARTIFACT_VERSION    = ARTIFACT_VERSION_V1
 
     {% unless flag?(:cpu_only) %}
@@ -219,15 +222,16 @@ module ML::GGUF
           raise ArgumentError.new("state record layer out of range: #{record.layer}") if record.layer < 0 || record.layer >= state.layers.size
 
           layer = state.layers[record.layer]
+          allow_truncated_raw = encoded.artifact_version == ARTIFACT_VERSION_V3 && kv_record_kind?(record.kind)
           case record.kind
           in RecordKind::KCache
-            layer.k_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.k_cache_buf, bf16_jobs, i8_jobs)
+            layer.k_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.k_cache_buf, bf16_jobs, i8_jobs, allow_truncated_raw: allow_truncated_raw)
           in RecordKind::VCache
-            layer.v_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.v_cache_buf, bf16_jobs, i8_jobs)
+            layer.v_cache_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.v_cache_buf, bf16_jobs, i8_jobs, allow_truncated_raw: allow_truncated_raw)
           in RecordKind::ConvState
-            layer.conv_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.conv_state_buf, bf16_jobs, i8_jobs)
+            layer.conv_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.conv_state_buf, bf16_jobs, i8_jobs, allow_truncated_raw: allow_truncated_raw)
           in RecordKind::SsmState
-            layer.ssm_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.ssm_state_buf, bf16_jobs, i8_jobs)
+            layer.ssm_state_buf = prepare_encoded_record_for_metal(record, encoded.codec_block, layer.ssm_state_buf, bf16_jobs, i8_jobs, allow_truncated_raw: allow_truncated_raw)
           end
         end
         dispatch_bf16_restore_jobs(bf16_jobs)
@@ -238,8 +242,9 @@ module ML::GGUF
     def write_artifact(snapshot : Snapshot,
                        path : String,
                        artifact_codec : String? = nil,
-                       artifact_codec_block : Int32? = nil) : ArtifactInfo
-      bytes = encode_artifact_bytes(snapshot, artifact_codec: artifact_codec, artifact_codec_block: artifact_codec_block)
+                       artifact_codec_block : Int32? = nil,
+                       artifact_live_kv_tokens : Int32? = nil) : ArtifactInfo
+      bytes = encode_artifact_bytes(snapshot, artifact_codec: artifact_codec, artifact_codec_block: artifact_codec_block, artifact_live_kv_tokens: artifact_live_kv_tokens)
       sha = Digest::SHA256.hexdigest(bytes)
       if parent = Path[path].parent
         FileUtils.mkdir_p(parent.to_s)
@@ -250,12 +255,13 @@ module ML::GGUF
 
     def encode_artifact_bytes(snapshot : Snapshot,
                               artifact_codec : String? = nil,
-                              artifact_codec_block : Int32? = nil) : Bytes
+                              artifact_codec_block : Int32? = nil,
+                              artifact_live_kv_tokens : Int32? = nil) : Bytes
       codec = record_codec_for(artifact_codec)
-      if codec.raw_f32?
+      if codec.raw_f32? && artifact_live_kv_tokens.nil?
         encode_artifact(snapshot)
       else
-        encode_artifact_v2(snapshot, codec, artifact_codec_block)
+        encode_artifact_v2(snapshot, codec, artifact_codec_block, artifact_live_kv_tokens)
       end
     end
 
@@ -384,7 +390,8 @@ module ML::GGUF
                                                    block_size : Int32,
                                                    reusable : ML::MetalBuffer?,
                                                    bf16_jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32)),
-                                                   i8_jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32, block_size: Int32))) : ML::MetalBuffer
+                                                   i8_jobs : Array(NamedTuple(src: ML::MetalBuffer, dst: ML::MetalBuffer, count: Int32, block_size: Int32)),
+                                                   allow_truncated_raw : Bool = false) : ML::MetalBuffer
         raise ArgumentError.new("state record byte size is not Float32-aligned: #{record.original_byte_size}") unless record.original_byte_size % sizeof(Float32) == 0
 
         buf = reusable
@@ -394,7 +401,12 @@ module ML::GGUF
 
         case record.codec
         in RecordCodec::RawF32
-          raise ArgumentError.new("corrupt raw Qwen encoded state record") unless record.payload.size == record.original_byte_size
+          if allow_truncated_raw
+            raise ArgumentError.new("corrupt live-KV Qwen encoded state record") if record.payload.size > record.original_byte_size
+            raise ArgumentError.new("live-KV raw payload must be Float32-aligned") unless record.payload.size % sizeof(Float32) == 0
+          else
+            raise ArgumentError.new("corrupt raw Qwen encoded state record") unless record.payload.size == record.original_byte_size
+          end
 
           buf.write_bytes(record.payload.to_unsafe, record.payload.size)
         in RecordCodec::Bf16
@@ -490,11 +502,17 @@ module ML::GGUF
       io.to_slice
     end
 
-    private def encode_artifact_v2(snapshot : Snapshot, codec : RecordCodec, block_size : Int32?) : Bytes
+    private def encode_artifact_v2(snapshot : Snapshot, codec : RecordCodec, block_size : Int32?, live_kv_tokens : Int32? = nil) : Bytes
       block = artifact_block_size(codec, block_size)
+      live_tokens = live_kv_tokens
+      if live_tokens
+        raise ArgumentError.new("artifact_live_kv_tokens must be non-negative") unless live_tokens >= 0
+        raise ArgumentError.new("artifact_live_kv_tokens exceeds max_seq") if live_tokens > snapshot.max_seq
+      end
+      version = live_tokens ? ARTIFACT_VERSION_V3 : ARTIFACT_VERSION_V2
       io = IO::Memory.new
       io.write(ARTIFACT_MAGIC)
-      io.write_bytes(ARTIFACT_VERSION_V2, IO::ByteFormat::LittleEndian)
+      io.write_bytes(version, IO::ByteFormat::LittleEndian)
       io.write_bytes(snapshot.max_seq.to_u32, IO::ByteFormat::LittleEndian)
       io.write_bytes(snapshot.layer_count.to_u32, IO::ByteFormat::LittleEndian)
       io.write_bytes(snapshot.records.size.to_u32, IO::ByteFormat::LittleEndian)
@@ -509,6 +527,9 @@ module ML::GGUF
       snapshot.records.each do |record|
         record_codec = recurrent_record_kind?(record.kind) ? codec : RecordCodec::RawF32
         payload = encode_record_payload(record.bytes, record_codec, block)
+        if live_tokens && kv_record_kind?(record.kind)
+          payload = truncate_kv_payload(record, payload, live_tokens, snapshot.max_seq)
+        end
         io.write_bytes(record.layer.to_u32, IO::ByteFormat::LittleEndian)
         io.write_byte(record.kind.value)
         io.write_byte(storage_mode_value(record.storage_mode))
@@ -532,14 +553,14 @@ module ML::GGUF
       raise ArgumentError.new("not a Qwen state artifact") unless magic == ARTIFACT_MAGIC
 
       version = io.read_bytes(UInt32, IO::ByteFormat::LittleEndian)
-      raise ArgumentError.new("unsupported Qwen state artifact version: #{version}") unless version == ARTIFACT_VERSION_V1 || version == ARTIFACT_VERSION_V2
+      raise ArgumentError.new("unsupported Qwen state artifact version: #{version}") unless version == ARTIFACT_VERSION_V1 || version == ARTIFACT_VERSION_V2 || version == ARTIFACT_VERSION_V3
 
       max_seq = io.read_bytes(UInt32, IO::ByteFormat::LittleEndian).to_i32
       layer_count = io.read_bytes(UInt32, IO::ByteFormat::LittleEndian).to_i32
       record_count = io.read_bytes(UInt32, IO::ByteFormat::LittleEndian)
       artifact_codec = RecordCodec::RawF32
       artifact_block = 0_i32
-      if version == ARTIFACT_VERSION_V2
+      if version == ARTIFACT_VERSION_V2 || version == ARTIFACT_VERSION_V3
         artifact_codec = RecordCodec.from_value(io.read_byte.not_nil!)
         reserved0 = io.read_byte.not_nil!
         reserved1 = io.read_bytes(UInt16, IO::ByteFormat::LittleEndian)
@@ -595,12 +616,13 @@ module ML::GGUF
 
       raise ArgumentError.new("trailing bytes in Qwen state artifact") unless io.pos == bytes.size
       backing_stores = copy_payloads ? [] of Bytes : [bytes]
-      EncodedSnapshot.new(max_seq, layer_count, positions, records, artifact_codec, artifact_block, backing_stores)
+      EncodedSnapshot.new(max_seq, layer_count, positions, records, artifact_codec, artifact_block, backing_stores, version)
     end
 
     private def decode_encoded_snapshot(encoded : EncodedSnapshot) : Snapshot
       records = encoded.records.map do |record|
-        bytes = decode_record_payload(record.payload, record.codec, encoded.codec_block, record.original_byte_size)
+        allow_truncated_raw = encoded.artifact_version == ARTIFACT_VERSION_V3 && kv_record_kind?(record.kind)
+        bytes = decode_record_payload(record.payload, record.codec, encoded.codec_block, record.original_byte_size, allow_truncated_raw: allow_truncated_raw)
         Record.new(record.layer, record.kind, bytes, record.storage_mode)
       end
       Snapshot.new(encoded.max_seq, encoded.layer_count, encoded.positions, records)
@@ -649,6 +671,15 @@ module ML::GGUF
       in RecordKind::ConvState, RecordKind::SsmState
         true
       in RecordKind::KCache, RecordKind::VCache
+        false
+      end
+    end
+
+    private def kv_record_kind?(kind : RecordKind) : Bool
+      case kind
+      in RecordKind::KCache, RecordKind::VCache
+        true
+      in RecordKind::ConvState, RecordKind::SsmState
         false
       end
     end
@@ -715,8 +746,21 @@ module ML::GGUF
       end
     end
 
-    private def decode_record_payload(payload : Bytes, codec : RecordCodec, block_size : Int32, original_byte_size : Int32) : Bytes
-      return payload if codec.raw_f32?
+    private def decode_record_payload(payload : Bytes,
+                                      codec : RecordCodec,
+                                      block_size : Int32,
+                                      original_byte_size : Int32,
+                                      allow_truncated_raw : Bool = false) : Bytes
+      if codec.raw_f32?
+        return payload if payload.size == original_byte_size
+        raise ArgumentError.new("corrupt raw Qwen encoded state record") unless allow_truncated_raw
+        raise ArgumentError.new("corrupt live-KV Qwen encoded state record") if payload.size > original_byte_size
+        raise ArgumentError.new("live-KV raw payload must be Float32-aligned") unless payload.size % sizeof(Float32) == 0
+
+        output = Bytes.new(original_byte_size)
+        output[0, payload.size].copy_from(payload)
+        return output
+      end
       raise ArgumentError.new("state record byte size is not Float32-aligned: #{original_byte_size}") unless original_byte_size % sizeof(Float32) == 0
 
       case codec
@@ -738,6 +782,17 @@ module ML::GGUF
         write_u16_le(output, i * sizeof(UInt16), half)
       end
       output
+    end
+
+    private def truncate_kv_payload(record : Record, payload : Bytes, live_tokens : Int32, max_seq : Int32) : Bytes
+      raise ArgumentError.new("live-KV artifact requires positive max_seq") unless max_seq > 0
+      raise ArgumentError.new("KV record byte size must be divisible by max_seq") unless record.bytes.size % max_seq == 0
+
+      row_bytes = record.bytes.size // max_seq
+      live_bytes = live_tokens * row_bytes
+      raise ArgumentError.new("live-KV byte count exceeds payload") if live_bytes > payload.size
+
+      payload[0, live_bytes]
     end
 
     private def decode_bf16_payload(payload : Bytes, original_byte_size : Int32) : Bytes

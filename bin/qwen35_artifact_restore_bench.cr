@@ -20,6 +20,7 @@ warmups = 2
 iters = 8
 int8_block = 8
 skip_hash = false
+live_kv_artifacts = false
 
 parser = OptionParser.new do |p|
   p.banner = "Usage: qwen35_artifact_restore_bench [options]"
@@ -30,6 +31,7 @@ parser = OptionParser.new do |p|
   p.on("--iters N", "Measured restore iterations per route (default: 8)") { |v| iters = v.to_i }
   p.on("--int8-block N", "Block size for recurrent-int8 artifacts (default: 8)") { |v| int8_block = v.to_i }
   p.on("--skip-hash", "Skip SHA-256 during read+restore timing") { skip_hash = true }
+  p.on("--live-kv-artifacts", "Write artifacts with only live KV rows while preserving full destination capacity") { live_kv_artifacts = true }
   p.on("-h", "--help", "Show this help") do
     puts p
     exit
@@ -150,9 +152,10 @@ bf16_path = File.join(root, "bf16.qkv")
 i8_path = File.join(root, "i8.qkv")
 
 begin
-  raw_info = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, raw_path)
-  bf16_info = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, bf16_path, artifact_codec: "recurrent-bf16")
-  i8_info = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, i8_path, artifact_codec: "recurrent-int8", artifact_codec_block: int8_block)
+  live_kv_tokens = live_kv_artifacts ? tokens : nil
+  raw_info = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, raw_path, artifact_live_kv_tokens: live_kv_tokens)
+  bf16_info = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, bf16_path, artifact_codec: "recurrent-bf16", artifact_live_kv_tokens: live_kv_tokens)
+  i8_info = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, i8_path, artifact_codec: "recurrent-int8", artifact_codec_block: int8_block, artifact_live_kv_tokens: live_kv_tokens)
 
   raw_snapshot = ML::GGUF::Qwen35StateSnapshot.read_artifact(raw_path, expected_sha256: raw_info.sha256)
   bf16_encoded = ML::GGUF::Qwen35StateSnapshot.read_artifact_encoded(bf16_path, expected_sha256: bf16_info.sha256, expected_codec: "recurrent-bf16")
@@ -170,6 +173,7 @@ begin
   puts "warmups=#{warmups}"
   puts "int8_block=#{int8_block}"
   puts "skip_hash=#{skip_hash}"
+  puts "live_kv_artifacts=#{live_kv_artifacts}"
   puts "raw_bytes=#{raw_info.byte_size}"
   puts "bf16_bytes=#{bf16_info.byte_size}"
   puts "int8_bytes=#{i8_info.byte_size}"
