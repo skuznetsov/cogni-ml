@@ -804,6 +804,12 @@ module ML
           }
         end
 
+        private def self.mm_h16_b64_swiglu_pipeline : ML::Metal::ComputePipeline
+          @@mm_h16_b64_swiglu_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b64_swiglu") {
+            ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b64_swiglu", GEMM_Q4K_SOURCE)
+          }
+        end
+
         private def self.mm_h16_b80_pipeline : ML::Metal::ComputePipeline
           @@mm_h16_b80_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b80") {
             ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b80", GEMM_Q4K_SOURCE)
@@ -1656,6 +1662,55 @@ module ML
           encode_q4k_gemm_h16_from_h16(enc, x16_buf, out_b_buf, w_b_buf, w_b_offset, in_dim, out_dim, batch)
         end
 
+        private def self.encode_q4k_gemm_h16_b64_swiglu_from_h16(enc : ML::Metal::ComputeEncoder,
+                                                                 x16_buf : ML::MetalBuffer,
+                                                                 gate_buf : ML::MetalBuffer,
+                                                                 out_buf : ML::MetalBuffer,
+                                                                 w_buf : ML::MetalBuffer,
+                                                                 w_offset : Int64,
+                                                                 in_dim : Int32,
+                                                                 out_dim : Int32,
+                                                                 batch : Int32) : Nil
+          enc.set_pipeline(mm_h16_b64_swiglu_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x16_buf, 1)
+          enc.set_buffer(gate_buf, 2)
+          enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 4)
+          enc.set_value(out_dim.to_u32, 5)
+          enc.set_value(batch.to_u32, 6)
+          enc.set_threadgroup_memory(MM64_SHMEM, 0)
+          enc.dispatch_threadgroups({
+            (batch + MM64_NR1 - 1) // MM64_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }, {MM64_TG, 1, 1})
+        end
+
+        private def self.encode_q4k_gemm_h16_pair_b64_swiglu(enc : ML::Metal::ComputeEncoder,
+                                                             x_buf : ML::MetalBuffer,
+                                                             gate_buf : ML::MetalBuffer,
+                                                             act_buf : ML::MetalBuffer,
+                                                             gate_w_buf : ML::MetalBuffer,
+                                                             gate_w_offset : Int64,
+                                                             up_w_buf : ML::MetalBuffer,
+                                                             up_w_offset : Int64,
+                                                             in_dim : Int32,
+                                                             out_dim : Int32,
+                                                             batch : Int32) : Nil
+          x16_buf = Scratch.get(:mm4_pair_swiglu_x16, (batch * in_dim).to_i64 * 2_i64)
+
+          Profile.bump_conversion("f32_to_f16 q4_pair_swiglu_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
+          enc.set_pipeline(f32_to_f16_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
+          enc.set_value((batch * in_dim).to_u32, 2)
+          enc.dispatch_1d(batch * in_dim, 256)
+
+          encode_q4k_gemm_h16_from_h16(enc, x16_buf, gate_buf, gate_w_buf, gate_w_offset, in_dim, out_dim, batch)
+          encode_q4k_gemm_h16_b64_swiglu_from_h16(enc, x16_buf, gate_buf, act_buf, up_w_buf, up_w_offset, in_dim, out_dim, batch)
+        end
+
         private def self.encode_q56k_gemm_f32(enc : ML::Metal::ComputeEncoder,
                                               pipeline : ML::Metal::ComputePipeline,
                                               x_buf : ML::MetalBuffer,
@@ -2179,6 +2234,10 @@ module ML
           ENV["QWEN35_DN_POST_H16_OPROJ"]? == "1"
         end
 
+        private def self.prefill_q4_b64_up_swiglu_enabled? : Bool
+          ENV["QWEN35_Q4K_B64_UP_SWIGLU"]? == "1"
+        end
+
         private def self.q4_pair_h16_min_batch : Int32
           (ENV["QWEN35_Q4K_PAIR_H16_MIN_BATCH"]? || Q4_PAIR_H16_MIN_BATCH.to_s).to_i32
         end
@@ -2230,6 +2289,19 @@ module ML
             gate_qw.type.q4_k? && up_qw.type.q4_k? &&
             gate_qw.in_dim == up_qw.in_dim &&
             gate_qw.out_dim == up_qw.out_dim
+        end
+
+        private def self.q4_b64_up_swiglu_candidate?(gate_qw : QuantWeight,
+                                                     up_qw : QuantWeight,
+                                                     batch : Int32,
+                                                     down_h16 : Bool) : Bool
+          prefill_q4_b64_up_swiglu_enabled? &&
+            !down_h16 &&
+            q4_h16_b64_gemm_enabled? &&
+            q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch) &&
+            batch >= MM64_NR1 &&
+            (batch % MM64_NR1) == 0 &&
+            (up_qw.out_dim % MM_NR0) == 0
         end
 
         private def self.read_shared_top1(id_buf : ML::MetalBuffer, value_buf : ML::MetalBuffer) : Array(Float32)
@@ -4978,13 +5050,25 @@ module ML
             end
             addnorm_enc.end_encoding
 
+            ffn_act_buf = swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
+            ffn_down_h16 = prefill_swiglu_h16_down_candidate?(lw.ffn_down_qw, n_tokens)
+            up_swiglu_fused = false
+
             Profile.trace("prefill.rec.ffn_upgate") do
               ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
               pair_q4 = q4_pair_h16_gemm_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens)
               if pair_q4
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.ffn_gate_qw.type.name} #{lw.ffn_gate_qw.in_dim}x#{lw.ffn_gate_qw.out_dim} b#{n_tokens}", lw.ffn_gate_qw.raw.size.to_i64)
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.ffn_up_qw.type.name} #{lw.ffn_up_qw.in_dim}x#{lw.ffn_up_qw.out_dim} b#{n_tokens}", lw.ffn_up_qw.raw.size.to_i64)
-                if ffn_pair_h16
+                if q4_b64_up_swiglu_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens, ffn_down_h16)
+                  up_swiglu_fused = true
+                  if ffn_pair_h16
+                    encode_q4k_gemm_h16_from_h16(ffn_proj_enc, normed_h16_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
+                    encode_q4k_gemm_h16_b64_swiglu_from_h16(ffn_proj_enc, normed_h16_buf, ffn_gate_buf, ffn_act_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                  else
+                    encode_q4k_gemm_h16_pair_b64_swiglu(ffn_proj_enc, normed_buf, ffn_gate_buf, ffn_act_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
+                  end
+                elsif ffn_pair_h16
                   encode_q4k_gemm_h16_from_h16(ffn_proj_enc, normed_h16_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
                   encode_q4k_gemm_h16_from_h16(ffn_proj_enc, normed_h16_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
                 else
@@ -4997,16 +5081,16 @@ module ML
               ffn_proj_enc.end_encoding
             end
 
-            swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
-            ffn_act_buf = swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
-            ffn_down_h16 = prefill_swiglu_h16_down_candidate?(lw.ffn_down_qw, n_tokens)
-            swiglu_enc.set_pipeline(ffn_down_h16 ? ffn_swiglu_h16_pipeline : ffn_swiglu_pipeline)
-            swiglu_enc.set_buffer(ffn_gate_buf, 0)
-            swiglu_enc.set_buffer(ffn_up_buf, 1)
-            swiglu_enc.set_buffer(ffn_down_h16 ? ffn_comb_h16_buf : ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
-            swiglu_enc.set_value((n_tokens * ffn_dim).to_u32, 3)
-            swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
-            swiglu_enc.end_encoding
+            unless up_swiglu_fused
+              swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+              swiglu_enc.set_pipeline(ffn_down_h16 ? ffn_swiglu_h16_pipeline : ffn_swiglu_pipeline)
+              swiglu_enc.set_buffer(ffn_gate_buf, 0)
+              swiglu_enc.set_buffer(ffn_up_buf, 1)
+              swiglu_enc.set_buffer(ffn_down_h16 ? ffn_comb_h16_buf : ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
+              swiglu_enc.set_value((n_tokens * ffn_dim).to_u32, 3)
+              swiglu_enc.dispatch_1d(n_tokens * ffn_dim, 256)
+              swiglu_enc.end_encoding
+            end
 
             fused_down_add = false
             if prefill_ffn_down_add_fused_enabled?
@@ -6237,13 +6321,25 @@ module ML
           end
           addnorm_enc.end_encoding
 
+          full_ffn_act_buf = swiglu_inplace_enabled? ? full_ffn_up_buf : full_ffn_comb_buf
+          full_ffn_down_h16 = prefill_swiglu_h16_down_candidate?(ffn_down_qw, n_tokens)
+          full_up_swiglu_fused = false
+
           Profile.trace("prefill.full.ffn_upgate") do
             full_ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
             pair_q4 = q4_pair_h16_gemm_candidate?(ffn_gate_qw, ffn_up_qw, n_tokens)
             if pair_q4
               Profile.bump_matmul_shape("q4_h16_gemm #{ffn_gate_qw.type.name} #{ffn_gate_qw.in_dim}x#{ffn_gate_qw.out_dim} b#{n_tokens}", ffn_gate_qw.raw.size.to_i64)
               Profile.bump_matmul_shape("q4_h16_gemm #{ffn_up_qw.type.name} #{ffn_up_qw.in_dim}x#{ffn_up_qw.out_dim} b#{n_tokens}", ffn_up_qw.raw.size.to_i64)
-              if full_ffn_pair_h16
+              if q4_b64_up_swiglu_candidate?(ffn_gate_qw, ffn_up_qw, n_tokens, full_ffn_down_h16)
+                full_up_swiglu_fused = true
+                if full_ffn_pair_h16
+                  encode_q4k_gemm_h16_from_h16(full_ffn_proj_enc, full_normed_h16_buf, full_ffn_gate_buf, full_ffn_gate_w_buf, full_ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
+                  encode_q4k_gemm_h16_b64_swiglu_from_h16(full_ffn_proj_enc, full_normed_h16_buf, full_ffn_gate_buf, full_ffn_act_buf, full_ffn_up_w_buf, full_ffn_up_w_off, ffn_up_qw.in_dim, ffn_up_qw.out_dim, n_tokens)
+                else
+                  encode_q4k_gemm_h16_pair_b64_swiglu(full_ffn_proj_enc, full_normed_buf, full_ffn_gate_buf, full_ffn_act_buf, full_ffn_gate_w_buf, full_ffn_gate_w_off, full_ffn_up_w_buf, full_ffn_up_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
+                end
+              elsif full_ffn_pair_h16
                 encode_q4k_gemm_h16_from_h16(full_ffn_proj_enc, full_normed_h16_buf, full_ffn_gate_buf, full_ffn_gate_w_buf, full_ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
                 encode_q4k_gemm_h16_from_h16(full_ffn_proj_enc, full_normed_h16_buf, full_ffn_up_buf, full_ffn_up_w_buf, full_ffn_up_w_off, ffn_up_qw.in_dim, ffn_up_qw.out_dim, n_tokens)
               else
@@ -6256,16 +6352,16 @@ module ML
             full_ffn_proj_enc.end_encoding
           end
 
-          full_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
-          full_ffn_act_buf = swiglu_inplace_enabled? ? full_ffn_up_buf : full_ffn_comb_buf
-          full_ffn_down_h16 = prefill_swiglu_h16_down_candidate?(ffn_down_qw, n_tokens)
-          full_swiglu_enc.set_pipeline(full_ffn_down_h16 ? ffn_swiglu_h16_pipeline : ffn_swiglu_pipeline)
-          full_swiglu_enc.set_buffer(full_ffn_gate_buf, 0)
-          full_swiglu_enc.set_buffer(full_ffn_up_buf, 1)
-          full_swiglu_enc.set_buffer(full_ffn_down_h16 ? full_ffn_comb_h16_buf : full_ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
-          full_swiglu_enc.set_value((n_tokens * full_ffn_dim).to_u32, 3)
-          full_swiglu_enc.dispatch_1d(n_tokens * full_ffn_dim, 256)
-          full_swiglu_enc.end_encoding
+          unless full_up_swiglu_fused
+            full_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+            full_swiglu_enc.set_pipeline(full_ffn_down_h16 ? ffn_swiglu_h16_pipeline : ffn_swiglu_pipeline)
+            full_swiglu_enc.set_buffer(full_ffn_gate_buf, 0)
+            full_swiglu_enc.set_buffer(full_ffn_up_buf, 1)
+            full_swiglu_enc.set_buffer(full_ffn_down_h16 ? full_ffn_comb_h16_buf : full_ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
+            full_swiglu_enc.set_value((n_tokens * full_ffn_dim).to_u32, 3)
+            full_swiglu_enc.dispatch_1d(n_tokens * full_ffn_dim, 256)
+            full_swiglu_enc.end_encoding
+          end
 
           fused_down_add = false
           if prefill_ffn_down_add_fused_enabled?
@@ -6499,13 +6595,25 @@ module ML
             end
             rec_addnorm_enc.end_encoding
 
+            rec_ffn_act_buf = swiglu_inplace_enabled? ? rec_ffn_up_buf : rec_ffn_comb_buf
+            rec_ffn_down_h16 = prefill_swiglu_h16_down_candidate?(lw.ffn_down_qw, n_tokens)
+            rec_up_swiglu_fused = false
+
             Profile.trace("prefill.rec.ffn_upgate") do
               rec_ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
               pair_q4 = q4_pair_h16_gemm_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens)
               if pair_q4
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.ffn_gate_qw.type.name} #{lw.ffn_gate_qw.in_dim}x#{lw.ffn_gate_qw.out_dim} b#{n_tokens}", lw.ffn_gate_qw.raw.size.to_i64)
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.ffn_up_qw.type.name} #{lw.ffn_up_qw.in_dim}x#{lw.ffn_up_qw.out_dim} b#{n_tokens}", lw.ffn_up_qw.raw.size.to_i64)
-                if rec_ffn_pair_h16
+                if q4_b64_up_swiglu_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens, rec_ffn_down_h16)
+                  rec_up_swiglu_fused = true
+                  if rec_ffn_pair_h16
+                    encode_q4k_gemm_h16_from_h16(rec_ffn_proj_enc, rec_normed_h16_buf, rec_ffn_gate_buf, rec_ffn_gate_w_buf, rec_ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
+                    encode_q4k_gemm_h16_b64_swiglu_from_h16(rec_ffn_proj_enc, rec_normed_h16_buf, rec_ffn_gate_buf, rec_ffn_act_buf, rec_ffn_up_w_buf, rec_ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                  else
+                    encode_q4k_gemm_h16_pair_b64_swiglu(rec_ffn_proj_enc, rec_normed_buf, rec_ffn_gate_buf, rec_ffn_act_buf, rec_ffn_gate_w_buf, rec_ffn_gate_w_off, rec_ffn_up_w_buf, rec_ffn_up_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
+                  end
+                elsif rec_ffn_pair_h16
                   encode_q4k_gemm_h16_from_h16(rec_ffn_proj_enc, rec_normed_h16_buf, rec_ffn_gate_buf, rec_ffn_gate_w_buf, rec_ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
                   encode_q4k_gemm_h16_from_h16(rec_ffn_proj_enc, rec_normed_h16_buf, rec_ffn_up_buf, rec_ffn_up_w_buf, rec_ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
                 else
@@ -6518,16 +6626,16 @@ module ML
               rec_ffn_proj_enc.end_encoding
             end
 
-            rec_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
-            rec_ffn_act_buf = swiglu_inplace_enabled? ? rec_ffn_up_buf : rec_ffn_comb_buf
-            rec_ffn_down_h16 = prefill_swiglu_h16_down_candidate?(lw.ffn_down_qw, n_tokens)
-            rec_swiglu_enc.set_pipeline(rec_ffn_down_h16 ? ffn_swiglu_h16_pipeline : ffn_swiglu_pipeline)
-            rec_swiglu_enc.set_buffer(rec_ffn_gate_buf, 0)
-            rec_swiglu_enc.set_buffer(rec_ffn_up_buf, 1)
-            rec_swiglu_enc.set_buffer(rec_ffn_down_h16 ? rec_ffn_comb_h16_buf : rec_ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
-            rec_swiglu_enc.set_value((n_tokens * rec_ffn_dim).to_u32, 3)
-            rec_swiglu_enc.dispatch_1d(n_tokens * rec_ffn_dim, 256)
-            rec_swiglu_enc.end_encoding
+            unless rec_up_swiglu_fused
+              rec_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+              rec_swiglu_enc.set_pipeline(rec_ffn_down_h16 ? ffn_swiglu_h16_pipeline : ffn_swiglu_pipeline)
+              rec_swiglu_enc.set_buffer(rec_ffn_gate_buf, 0)
+              rec_swiglu_enc.set_buffer(rec_ffn_up_buf, 1)
+              rec_swiglu_enc.set_buffer(rec_ffn_down_h16 ? rec_ffn_comb_h16_buf : rec_ffn_act_buf, 2, ML::Metal::BufferAccess::Write)
+              rec_swiglu_enc.set_value((n_tokens * rec_ffn_dim).to_u32, 3)
+              rec_swiglu_enc.dispatch_1d(n_tokens * rec_ffn_dim, 256)
+              rec_swiglu_enc.end_encoding
+            end
 
             fused_down_add = false
             if prefill_ffn_down_add_fused_enabled?

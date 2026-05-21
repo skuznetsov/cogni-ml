@@ -14684,3 +14684,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: A temporary opt-in `QWEN35_Q56K_DIRECT_F32OUT=1` branch added `simd_mm_q5k_f32out_direct` and `simd_mm_q6k_f32out_direct`. Release build passed, and focused specs passed with the opt-in route (`18 examples, 0 failures`), but pp256 paired A/B measured default p50 `476.40ms` vs direct p50 `477.04ms`, wins `5/10`.
 - diagnosis: The semantic risk of skipping the existing half-rounding output contract buys no wall speed on pp256. Keep the current staging path.
 - trust: {F:0.78,G:0.42,R:0.78}
+
+**LM-405 Q4 B64 up-projection plus SwiGLU fusion probe [shared/ml]**
+- status: IMPLEMENTED default-off probe, not promoted
+- claim: An exact producer-consumer fusion can remove the separate `up -> swiglu` activation step for B64 Q4 prefill FFN routes. `QWEN35_Q4K_B64_UP_SWIGLU=1` runs the up-projection through a B64 kernel that reads the already materialized gate projection and writes `silu(gate) * up` directly to the FFN activation buffer.
+- evidence: Release build passed with `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_q4_up_swiglu_build crystal build --release bin/qwen35_prefill_attribution.cr -o /private/tmp/qwen35_prefill_attribution_q4upswiglu --link-flags=...`. Focused opt-in specs passed: `CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_q4_up_swiglu_spec QWEN35_Q4K_B64_UP_SWIGLU=1 crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --error-trace --link-flags=...` -> `18 examples, 0 failures`.
+- relaxed A/B: pp256 prepared-state longer gate measured default p50 `469.45ms` vs opt-in p50 `468.56ms`, with default winning `5/20` pairs. pp1024 measured default p50 `1919.63ms` vs opt-in p50 `1914.68ms`, default winning `1/5`. pp64 was neutral/noise-level (`141.49ms` vs `141.27ms`, default winning `4/10`).
+- diagnosis: The LTP/WBA window is real, but the effect is small because the fused route loses the original B64 direct simdgroup device store and has to stage the up accumulator through threadgroup memory before applying SwiGLU. The saved separate SwiGLU dispatch/memory traffic slightly wins on larger 64-multiple prompts, but not enough for default-on promotion without quiet-host proof.
+- implication: Keep this as a controlled exact fusion primitive and candidate for a future deeper FFN fusion. Do not present it as a public benchmark gain yet. A stronger follow-up would preserve direct-store-like behavior or fuse further into the down projection consumer.
+- trust: {F:0.82,G:0.44,R:0.78}
