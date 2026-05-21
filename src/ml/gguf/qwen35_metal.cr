@@ -175,6 +175,7 @@ module ML
         @@dn128_chunk_rowwise_checkpoint_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@dn_post_chunk_h16_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_coeffs_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_coeffs_chunk_pipeline : ML::Metal::ComputePipeline?
         @@lowrank_project_state_pipeline : ML::Metal::ComputePipeline?
@@ -997,6 +998,12 @@ module ML
         private def self.dn_post_chunk_pipeline : ML::Metal::ComputePipeline
           @@dn_post_chunk_pipeline ||= ML::Metal::PipelineCache.get("delta_net_post_norm_gate_chunk") {
             ML::Metal::ComputePipeline.new("delta_net_post_norm_gate_chunk", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.dn_post_chunk_h16_pipeline : ML::Metal::ComputePipeline
+          @@dn_post_chunk_h16_pipeline ||= ML::Metal::PipelineCache.get("delta_net_post_norm_gate_chunk_h16") {
+            ML::Metal::ComputePipeline.new("delta_net_post_norm_gate_chunk_h16", DELTA_NET_SOURCE)
           }
         end
 
@@ -2011,6 +2018,10 @@ module ML
 
         private def self.prefill_rmsnorm_h16_proj_enabled? : Bool
           ENV["QWEN35_RMSNORM_H16_PROJ"]? == "1"
+        end
+
+        private def self.prefill_dn_post_h16_oproj_enabled? : Bool
+          ENV["QWEN35_DN_POST_H16_OPROJ"]? == "1"
         end
 
         private def self.q4_pair_h16_min_batch : Int32
@@ -4602,6 +4613,7 @@ module ML
           k_buf = Scratch.get(:rec_chunk_many_k, (n_tokens * h_k * s).to_i64 * sizeof(Float32))
           v_buf = Scratch.get(:rec_chunk_many_v, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           attn_mid_buf = Scratch.get(:rec_chunk_many_mid, (n_tokens * d_inner).to_i64 * sizeof(Float32))
+          attn_mid_h16_buf = Scratch.get(:rec_chunk_many_mid_h16, (n_tokens * d_inner).to_i64 * 2_i64)
           attn_out_buf = Scratch.get(:rec_chunk_many_attn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
           residual_buf = Scratch.get(:rec_chunk_many_residual, inp.size.to_i64 * sizeof(Float32))
           normed_buf = Scratch.get(:rec_chunk_many_normed, inp.size.to_i64 * sizeof(Float32))
@@ -4772,20 +4784,33 @@ module ML
             dn_enc.end_encoding
 
             post_enc = ML::Metal::ComputeEncoder.new(cmd)
-            post_enc.set_pipeline(dn_post_chunk_pipeline)
+            o_proj_h16 = prefill_dn_post_h16_oproj_enabled? && h16_batch_gemm_candidate?(lw.ssm_out_qw, n_tokens)
+            post_enc.set_pipeline(o_proj_h16 ? dn_post_chunk_h16_pipeline : dn_post_chunk_pipeline)
             post_enc.set_buffer(attn_mid_buf, 0, ML::Metal::BufferAccess::ReadWrite)
             post_enc.set_buffer(z_buf, 1)
             post_enc.set_buffer(ssm_norm_buf, 2)
-            post_enc.set_value(h_v.to_u32, 3)
-            post_enc.set_value(s.to_u32, 4)
-            post_enc.set_value(eps, 5)
-            post_enc.set_value(n_tokens.to_u32, 6)
+            if o_proj_h16
+              post_enc.set_buffer(attn_mid_h16_buf, 3, ML::Metal::BufferAccess::Write)
+              post_enc.set_value(h_v.to_u32, 4)
+              post_enc.set_value(s.to_u32, 5)
+              post_enc.set_value(eps, 6)
+              post_enc.set_value(n_tokens.to_u32, 7)
+            else
+              post_enc.set_value(h_v.to_u32, 3)
+              post_enc.set_value(s.to_u32, 4)
+              post_enc.set_value(eps, 5)
+              post_enc.set_value(n_tokens.to_u32, 6)
+            end
             post_enc.dispatch_threadgroups({h_v, n_tokens, 1}, {32, 1, 1})
             post_enc.end_encoding
 
             Profile.trace("prefill.rec.o_proj") do
               out_enc = ML::Metal::ComputeEncoder.new(cmd)
-              encode_matmul(out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, lw.ssm_out_qw, attn_mid_buf, attn_out_buf, out_w_buf, out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
+              if o_proj_h16
+                raise "unsupported h16 recurrent o_proj route" unless encode_matmul_from_h16(out_enc, lw.ssm_out_qw, attn_mid_h16_buf, attn_out_buf, out_w_buf, out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
+              else
+                encode_matmul(out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, lw.ssm_out_qw, attn_mid_buf, attn_out_buf, out_w_buf, out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
+              end
               out_enc.end_encoding
             end
 
@@ -5897,6 +5922,7 @@ module ML
           rec_k_buf = Scratch.get(:frec_rec_k, (n_tokens * h_k * s).to_i64 * sizeof(Float32))
           rec_v_buf = Scratch.get(:frec_rec_v, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           rec_attn_mid_buf = Scratch.get(:frec_rec_mid, (n_tokens * d_inner).to_i64 * sizeof(Float32))
+          rec_attn_mid_h16_buf = Scratch.get(:frec_rec_mid_h16, (n_tokens * d_inner).to_i64 * 2_i64)
           rec_attn_out_buf = Scratch.get(:frec_rec_attn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
           rec_residual_buf = Scratch.get(:frec_rec_residual, inp.size.to_i64 * sizeof(Float32))
           rec_normed_buf = Scratch.get(:frec_rec_normed, inp.size.to_i64 * sizeof(Float32))
@@ -6279,20 +6305,33 @@ module ML
             dn_enc.end_encoding
 
             post_enc = ML::Metal::ComputeEncoder.new(cmd)
-            post_enc.set_pipeline(dn_post_chunk_pipeline)
+            rec_o_proj_h16 = prefill_dn_post_h16_oproj_enabled? && h16_batch_gemm_candidate?(lw.ssm_out_qw, n_tokens)
+            post_enc.set_pipeline(rec_o_proj_h16 ? dn_post_chunk_h16_pipeline : dn_post_chunk_pipeline)
             post_enc.set_buffer(rec_attn_mid_buf, 0, ML::Metal::BufferAccess::ReadWrite)
             post_enc.set_buffer(rec_z_buf, 1)
             post_enc.set_buffer(ssm_norm_buf, 2)
-            post_enc.set_value(h_v.to_u32, 3)
-            post_enc.set_value(s.to_u32, 4)
-            post_enc.set_value(eps, 5)
-            post_enc.set_value(n_tokens.to_u32, 6)
+            if rec_o_proj_h16
+              post_enc.set_buffer(rec_attn_mid_h16_buf, 3, ML::Metal::BufferAccess::Write)
+              post_enc.set_value(h_v.to_u32, 4)
+              post_enc.set_value(s.to_u32, 5)
+              post_enc.set_value(eps, 6)
+              post_enc.set_value(n_tokens.to_u32, 7)
+            else
+              post_enc.set_value(h_v.to_u32, 3)
+              post_enc.set_value(s.to_u32, 4)
+              post_enc.set_value(eps, 5)
+              post_enc.set_value(n_tokens.to_u32, 6)
+            end
             post_enc.dispatch_threadgroups({h_v, n_tokens, 1}, {32, 1, 1})
             post_enc.end_encoding
 
             Profile.trace("prefill.rec.o_proj") do
               rec_out_enc = ML::Metal::ComputeEncoder.new(cmd)
-              encode_matmul(rec_out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, lw.ssm_out_qw, rec_attn_mid_buf, rec_attn_out_buf, rec_out_w_buf, rec_out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
+              if rec_o_proj_h16
+                raise "unsupported h16 recurrent o_proj route" unless encode_matmul_from_h16(rec_out_enc, lw.ssm_out_qw, rec_attn_mid_h16_buf, rec_attn_out_buf, rec_out_w_buf, rec_out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
+              else
+                encode_matmul(rec_out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, lw.ssm_out_qw, rec_attn_mid_buf, rec_attn_out_buf, rec_out_w_buf, rec_out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
+              end
               rec_out_enc.end_encoding
             end
 

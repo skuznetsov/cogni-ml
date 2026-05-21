@@ -1063,3 +1063,42 @@ kernel void delta_net_post_norm_gate_chunk(
         Y[d] = Y[d] * inv_rms * ssm_norm[d] * (zv * sig);
     }
 }
+
+// Chunked post-processing that writes the final post-gate rows directly as
+// H16 for downstream Q4/Q5/Q6 H16 GEMM consumers. This is exact relative to
+// routes that immediately cast the f32 post output to half before o_proj.
+kernel void delta_net_post_norm_gate_chunk_h16(
+    device const float* y        [[buffer(0)]],
+    device const float* z        [[buffer(1)]],
+    device const float* ssm_norm [[buffer(2)]],
+    device       half*  out_h16  [[buffer(3)]],
+    constant     uint&  h_v      [[buffer(4)]],
+    constant     uint&  s        [[buffer(5)]],
+    constant     float& eps      [[buffer(6)]],
+    constant     uint&  n_tokens [[buffer(7)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint h = tgpig.x;
+    const uint t = tgpig.y;
+    if (h >= h_v || t >= n_tokens) return;
+
+    device const float* Y = y + (t * h_v + h) * s;
+    device const float* Z = z + (t * h_v + h) * s;
+    device half* O = out_h16 + (t * h_v + h) * s;
+
+    float ss = 0.0f;
+    for (uint d = tiisg; d < s; d += DN_SG) {
+        float v = Y[d];
+        ss += v * v;
+    }
+
+    const float sum = simd_sum(ss);
+    const float inv_rms = rsqrt(sum / float(s) + eps);
+
+    for (uint d = tiisg; d < s; d += DN_SG) {
+        const float zv = Z[d];
+        const float sig = 1.0f / (1.0f + exp(-zv));
+        O[d] = half(Y[d] * inv_rms * ssm_norm[d] * (zv * sig));
+    }
+}

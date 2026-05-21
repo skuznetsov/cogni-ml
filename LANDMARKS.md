@@ -14564,3 +14564,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The legal WBA move reduced dispatch/input-tile duplication, but increased register pressure and threadgroup-memory footprint enough to dominate. The current two-kernel Q4_H16 route is faster for these shapes.
 - implication: Do not retest this exact dual-output FFN gate/up shape blindly. A future FFN breakthrough must either reduce weight reads/rows mathematically, use a different tiling/register allocation, or fuse at a larger dataflow level without doubling per-thread accumulators.
 - trust: {F:0.76,G:0.42,R:0.78}
+
+**LM-391 default-off DN_POST_H16_OPROJ conversion corridor completion [shared/ml]**
+- status: IMPLEMENTED probe, not promoted
+- claim: `QWEN35_DN_POST_H16_OPROJ=1` is an exact default-off prefill probe that writes recurrent DeltaNet post-gate output directly as H16 for following o_proj Q4/Q5/Q6 batch GEMM consumers.
+- evidence: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_dn_h16_build crystal build --no-codegen bin/qwen35_prefill_attribution.cr --error-trace --link-flags=...` passed, and `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_dn_h16_spec crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --error-trace --link-flags=...` passed (`18 examples, 0 failures`). Relaxed paired A/B with `/tmp/qwen35_prefill_attribution_dn_h16 --prepare-state --compare-env=QWEN35_DN_POST_H16_OPROJ=1` measured pp256 default p50 `478.72ms` vs h16 `478.94ms`, and pp1024 default p50 `1916.78ms` vs h16 `1915.59ms`.
+- atlas: Standalone pp1024 `QWEN35_DN_POST_H16_OPROJ=1` drops conversion traffic from default `4848.00 MiB` to `4272.00 MiB` by removing recurrent o_proj conversions. With all four H16 staging probes enabled (`ADDNORM_H16_FFN`, `SWIGLU_H16_DOWN`, `RMSNORM_H16_PROJ`, `DN_POST_H16_OPROJ`), pp1024 conversion traffic drops to `216.00 MiB`, leaving mostly full-attention o_proj conversion (`168.00 MiB`) plus two small unscoped Q4 rows.
+- implication: The conversion corridor is now almost fully mapped and is not the wall-time breakthrough. Future exact prefill work should pivot to grouped body scheduling, logical weight reads, or mathematical work reduction rather than adding more isolated H16 staging.
+- caveat: Evidence is relaxed-host; the probe is default-off and useful as attribution machinery. It should not be stacked into defaults without quiet-host wall evidence.
+- trust: {F:0.85,G:0.45,R:0.81}
