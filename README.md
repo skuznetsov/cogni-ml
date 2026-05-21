@@ -577,6 +577,22 @@ scripts/qwen35_cache_artifact_matrix.sh
 Use the matrix for cache-artifact economics only. It does not measure first-run
 prefill or plain generation throughput.
 
+For prefill/decode profiling logs, use the graph-atlas helper to turn
+`Qwen35Metal.Profile` reports into ranked LTP/WBA windows:
+
+```sh
+QWEN35_PREFILL_PHASE_PROFILE=1 /tmp/qwen35_prefill_attribution \
+  --prompt=64 --warmup=1 --reps=1 --prepare-state \
+  --load-warning-threshold=0 --load-total-warning-threshold=0 \
+  > /tmp/qwen35_prefill_profile.log
+
+scripts/qwen35_profile_atlas.cr /tmp/qwen35_prefill_profile.log --top=8
+```
+
+The atlas is an attribution aid, not a benchmark by itself. Phase profiling
+intentionally changes command-buffer boundaries, so use paired wall timing
+before promoting any kernel or scheduling change.
+
 Useful Qwen environment switches:
 
 | Variable | Effect |

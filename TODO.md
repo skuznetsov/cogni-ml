@@ -8,6 +8,12 @@
 
 **Protocol:** v13.2. Quadrumvirate on each phase start. LOGBOOK in conversation, persistent state in LANDMARKS.md.
 
+**Current LTP/WBA speed frontier (2026-05-20):**
+- [x] Add `scripts/qwen35_profile_atlas.cr`, a profile-log atlas that ranks Metal wait buckets, grouped command-buffer waits, logical matmul traffic, conversion traffic, and candidate LTP/WBA windows without claiming a speedup.
+  - Evidence: `crystal build --no-codegen scripts/qwen35_profile_atlas.cr --error-trace` passed; sample-log smoke parsed grouped waits and dominant matmul traffic; real M2 Max pp64 prepared phase profile parsed from `/tmp/qwen35_prefill_atlas_pp64.log`.
+  - Current atlas signal: pp64 prepared profile reports `grouped_wait_ms=146.31`, logical traffic `3992.54 MiB` matmul + `303.00 MiB` conversion, with dominant scope `prefill.rec.ffn_upgate q4_h16_gemm Q4_K 4096x12288 b64` at `1296.00 MiB` / `32.5%` of matmul traffic. Conversion is only `7.05%` of logical traffic in this pp64 profile, so the next exact Metal prefill attempt should target repeated recurrent FFN up/gate work before another conversion-only branch.
+- [ ] Use the atlas on an apples-vs-apples quiet-host pp64/pp256/pp1024 run and compare against llama.cpp profile/throughput before changing kernels. Required output: top weighted windows, paired native wall timing, llama.cpp baseline command, and one falsifier for the chosen branch.
+
 ---
 
 ## Phase 0 — Verification & infrastructure

@@ -14509,3 +14509,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: For cold persistent compressed artifacts, live-KV BF16 is now the stronger default candidate than full-KV BF16. The LTP/WBA potential decreases through fewer bytes read/copied while preserving exact cached output.
 - caveat: This is still short `gen=16`, `max_seq=256`, five prompts. Larger contexts, source replay, and resident-state interaction still need separate gates before changing defaults.
 - trust: {F:0.87,G:0.58,R:0.86}
+
+**LM-385 Qwen35 Metal profile atlas for LTP/WBA windows [shared/ml]**
+- status: VERIFIED local attribution tooling + one real pp64 parse
+- claim: `scripts/qwen35_profile_atlas.cr` can parse existing `Qwen35Metal.Profile` logs and rank wait buckets, grouped command-buffer waits, matmul logical traffic, conversion traffic, and candidate LTP/WBA windows without modifying runtime behavior.
+- evidence: `crystal build --no-codegen scripts/qwen35_profile_atlas.cr --error-trace` passed. A synthetic profile smoke parsed wait buckets, grouped waits, dominant matmul traffic, conversion traffic, and LTP/WBA candidate lines. A real M2 Max pp64 prepared phase profile was captured with `QWEN35_PREFILL_PHASE_PROFILE=1 /tmp/qwen35_prefill_attribution_atlas --prompt=64 --warmup=1 --reps=1 --prepare-state --load-warning-threshold=0 --load-total-warning-threshold=0 > /tmp/qwen35_prefill_atlas_pp64.log` and parsed with `scripts/qwen35_profile_atlas.cr /tmp/qwen35_prefill_atlas_pp64.log --top=6`.
+- finding: The pp64 atlas reported `grouped_wait_ms=146.31`, logical traffic `3992.54 MiB` matmul + `303.00 MiB` conversion, and dominant scope `prefill.rec.ffn_upgate q4_h16_gemm Q4_K 4096x12288 b64` at `1296.00 MiB` / `32.5%` of matmul traffic. Conversion was `7.05%` of logical traffic, so this profile argues against another conversion-only prefill branch as the primary lever.
+- implementation: The script reads profile logs from files or stdin, has a TSV mode for future runners, and emits LTP/WBA windows using trigger/corridor/potential/legal-move language. It treats phase-profile grouped waits as attribution data, not benchmark truth.
+- implication: The next apples-vs-apples speed step should be a quiet-host graph atlas across pp64/pp256/pp1024 plus llama.cpp baseline comparison, then a targeted recurrent FFN up/gate or related repeated-work branch. Do not retune command-buffer boundaries solely from the phase-profile output.
+- caveat: The real profile was one pp64 run on a potentially noisy host, and `QWEN35_PREFILL_PHASE_PROFILE=1` changes command-buffer boundaries. Use paired wall timing before promoting any kernel/scheduling change.
+- trust: {F:0.84,G:0.52,R:0.83}
