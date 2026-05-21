@@ -14670,3 +14670,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: Fresh `bin/benchmark_qwen_vs_llama.cr` release build to `/private/tmp/benchmark_qwen_vs_llama_rowpack` ran with `--native-prefill-prepare-state --gen=64 --reps=2..3 --warmup=1 --load-warning-threshold=0 --load-total-warning-threshold=0`. Prepared-state prefill p50/native vs llama: pp64 `448.82 tok/s` vs `464.23` (`-3.32%`), pp80 `424.61` vs `426.55` (`-0.45%`), pp96 `479.06` vs `505.07` (`-5.15%`), pp112 `469.86` vs `458.68` (`+2.44%`), pp256 `541.92` vs `576.69` (`-6.03%`). Decode gap stayed positive at `+3.24..+5.08%`.
 - implication: The next prefill improvement should not assume Q4 row packing alone is the remaining gap. pp256 needs broader scheduling/operator attribution, likely Q5/Q6/projection/full-attention or command-buffer grouping rather than another narrow exact Q4 tile.
 - trust: {F:0.78,G:0.48,R:0.76}
+
+**LM-403 combined H16 staging retest after row-packing [shared/ml]**
+- status: REVALIDATED neutral/slightly positive, not a promotion
+- claim: Removing most activation conversion traffic is still not the pp256 breakthrough lever after Q4 row-packing.
+- evidence: Current default pp256 attribution measured conversion `1212 MiB` (`23.29%`) and wall p50 `469.50ms`. With `QWEN35_ADDNORM_H16_FFN=1 QWEN35_SWIGLU_H16_DOWN=1 QWEN35_RMSNORM_H16_PROJ=1 QWEN35_DN_POST_H16_OPROJ=1`, conversion dropped to `54 MiB` (`1.33%`) but wall p50 was only `467.41ms` in an unpaired relaxed run.
+- implication: Conversion cleanup remains useful for memory hygiene, but the remaining pp256 gap is dominated by matmul/scheduling behavior, not f32-to-f16 traffic alone.
+- trust: {F:0.68,G:0.42,R:0.66}
