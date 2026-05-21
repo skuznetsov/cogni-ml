@@ -38,6 +38,22 @@ kernel void qwen35_swiglu_mul(
     out[gid] = (g * sig) * up[gid];
 }
 
+// Same operation as qwen35_swiglu_mul, but writes the activation in half
+// precision for downstream Q4/Q6 H16 GEMM consumers. This is exact relative
+// to routes that immediately cast the f32 activation to half before matmul.
+kernel void qwen35_swiglu_mul_h16(
+    device const float* gate  [[buffer(0)]],
+    device const float* up    [[buffer(1)]],
+    device       half*  out   [[buffer(2)]],
+    constant     uint&  count [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count) return;
+    const float g = gate[gid];
+    const float sig = 1.0f / (1.0f + exp(-g));
+    out[gid] = half((g * sig) * up[gid]);
+}
+
 // Residual add + RMSNorm in one pass:
 //   residual[i] = x[i] + y[i]
 //   normed[i]   = residual[i] * rsqrt(mean(residual^2) + eps) * weight[i]
