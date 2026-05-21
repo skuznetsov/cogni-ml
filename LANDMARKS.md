@@ -14556,3 +14556,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The projection staging corridor composes legally with the FFN staging corridors and almost eliminates conversion traffic in the pp1024 atlas, but wall time remains controlled by grouped command-buffer/kernel scheduling and dominant weight-read work. The next promising exact branch is not another isolated conversion row; it should target a chunk-level dataflow/fusion move or the repeated FFN up/gate weight-reader.
 - caveat: Evidence is relaxed-host and not a public benchmark. The dual-output RMSNorm writes extra H16 bytes, so it can reduce conversion kernels without necessarily reducing wall time. Keep the knob default-off until quiet-host paired timing proves a robust win.
 - trust: {F:0.84,G:0.44,R:0.80}
+
+**LM-390 dual-output Q4_H16 FFN gate/up GEMM refutation [shared/ml]**
+- status: REFUTED and removed
+- claim tested: A dual-output Q4_H16 prefill kernel could speed the dominant FFN gate/up window by sharing the H16 input tile and one dispatch across the two independent Q4_K matrices.
+- evidence: A temporary `QWEN35_Q4K_PAIR_H16_DUAL=1` branch compiled and ran on local M2 Max Qwen3.5-9B. Relaxed paired A/B with `/tmp/qwen35_prefill_attribution_dual_q4 --prepare-state --compare-env=QWEN35_Q4K_PAIR_H16_DUAL=1` measured pp64 default p50 `145.27ms` vs dual `145.73ms`, pp256 default p50 `479.74ms` vs dual `493.09ms` with default wins `6/6`, and pp1024 default p50 `1912.05ms` vs dual `1975.05ms` with default wins `3/3`.
+- diagnosis: The legal WBA move reduced dispatch/input-tile duplication, but increased register pressure and threadgroup-memory footprint enough to dominate. The current two-kernel Q4_H16 route is faster for these shapes.
+- implication: Do not retest this exact dual-output FFN gate/up shape blindly. A future FFN breakthrough must either reduce weight reads/rows mathematically, use a different tiling/register allocation, or fuse at a larger dataflow level without doubling per-thread accumulators.
+- trust: {F:0.76,G:0.42,R:0.78}
