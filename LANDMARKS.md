@@ -14601,3 +14601,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Half-full B64 tiles waste too much threadgroup work/register pressure relative to the saved weight-tile reuse. The legal modulo-64 gate in LM-392 remains the correct boundary for the current B64 kernel.
 - implication: Do not widen the current B64 predicate to `64n+32`. Future irregular-tail work needs a distinct low-waste tail kernel, row-packing multiple tails, or a graph-level batching strategy that keeps the 64-row tile full.
 - trust: {F:0.80,G:0.48,R:0.78}
+
+**LM-395 Q4_B64 split-tail32 dispatch refuted [shared/ml]**
+- status: REFUTED and removed
+- claim tested: A split-tail route could keep B64 tiles full for the `64n` prefix and run only the final 32 rows through the old B32 kernel with buffer offsets, avoiding the half-full B64 waste seen in LM-394.
+- evidence: A temporary opt-in `QWEN35_Q4K_H16_B64_SPLIT_TAIL32=1` branch dispatched `simd_mm_q4k_h16_b64` for the prefix and `simd_mm_q4k_h16` for the tail using Metal buffer offsets. The focused build passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_q4_split_tail32_build crystal build --release bin/qwen35_prefill_attribution.cr -o /tmp/qwen35_prefill_attribution_q4split_tail32 --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"`.
+- relaxed A/B: pp96 regressed (`394.10ms` default vs `436.36ms` opt-in, default wins `6/6`). pp160 also regressed (`416.18ms` default vs `422.44ms` opt-in, default wins `5/6`). pp80, where the gate should be inactive, remained noisy/slightly negative (`527.77ms` vs `532.78ms`, wins `2/4`).
+- diagnosis: Even when the B64 tile stays full, the added dispatch/encoder work and extra pipeline switch erase the saved tile groups for current grouped prefill command buffers.
+- implication: Do not pursue split-tail dispatch for Q4_B64. A viable irregular-tail path needs one-dispatch low-waste row packing, a kernel that internally handles the prefix/tail without a second encoder pass, or a higher-level batching strategy.
+- trust: {F:0.80,G:0.48,R:0.78}
