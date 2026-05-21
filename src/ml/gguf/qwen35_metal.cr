@@ -54,6 +54,9 @@ module ML
       MM96_NR1   =    96
       MM96_TG    =   384 # threads per threadgroup (12 simdgroups × 32)
       MM96_SHMEM = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
+      MM112_NR1   =   112
+      MM112_TG    =   448 # threads per threadgroup (14 simdgroups × 32)
+      MM112_SHMEM = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
 
       # Above this batch, use GEMM. At or below, GEMV is faster.
       # The default is deliberately conservative; small speculative verifier
@@ -158,6 +161,7 @@ module ML
         @@mm_h16_b64_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b80_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b96_pipeline : ML::Metal::ComputePipeline?
+        @@mm_h16_b112_pipeline : ML::Metal::ComputePipeline?
         @@mm5_pipeline  : ML::Metal::ComputePipeline?
         @@mm6_pipeline  : ML::Metal::ComputePipeline?
         @@mm5_f32out_pipeline : ML::Metal::ComputePipeline?
@@ -809,6 +813,12 @@ module ML
         private def self.mm_h16_b96_pipeline : ML::Metal::ComputePipeline
           @@mm_h16_b96_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b96") {
             ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b96", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.mm_h16_b112_pipeline : ML::Metal::ComputePipeline
+          @@mm_h16_b112_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b112") {
+            ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b112", GEMM_Q4K_SOURCE)
           }
         end
 
@@ -1572,6 +1582,23 @@ module ML
             return
           end
 
+          if q4_h16_b112_gemm_enabled? && batch == MM112_NR1
+            enc.set_pipeline(mm_h16_b112_pipeline)
+            enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+            enc.set_buffer(x16_buf, 1)
+            enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+            enc.set_value(in_dim.to_u32, 3)
+            enc.set_value(out_dim.to_u32, 4)
+            enc.set_value(batch.to_u32, 5)
+            enc.set_threadgroup_memory(MM112_SHMEM, 0)
+            enc.dispatch_threadgroups({
+              1,
+              (out_dim + MM_NR0 - 1) // MM_NR0,
+              1,
+            }, {MM112_TG, 1, 1})
+            return
+          end
+
           if q4_h16_b64_gemm_enabled? && batch >= MM64_NR1 && (batch % MM64_NR1) == 0
             enc.set_pipeline(mm_h16_b64_pipeline)
             enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
@@ -2118,6 +2145,10 @@ module ML
 
         private def self.q4_h16_b96_gemm_enabled? : Bool
           ENV["QWEN35_Q4K_H16_B96_OFF"]? != "1"
+        end
+
+        private def self.q4_h16_b112_gemm_enabled? : Bool
+          ENV["QWEN35_Q4K_H16_B112_OFF"]? != "1"
         end
 
         private def self.q5_qkv_h16_conv_enabled? : Bool
