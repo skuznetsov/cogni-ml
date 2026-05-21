@@ -14500,3 +14500,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - implication: The LTP/WBA live-row corridor is now product-shaped: cold cache activation can transport only verified live KV rows, while exact fallback/default behavior remains unchanged.
 - caveat: The policy is still opt-in. Broader prompt/context matrix and direct Store manifest compatibility tests should run before making live-KV a default compressed artifact mode.
 - trust: {F:0.87,G:0.55,R:0.86}
+
+**LM-384 five-prompt live-KV BF16 matrix [shared/ml]**
+- status: VERIFIED local product-shaped timing matrix
+- claim: BF16 live-KV artifacts beat BF16 full-KV artifacts across the current five-prompt warm-request fast-forward suite on local Metal.
+- evidence: `QWEN35_MATRIX_REQUESTS=3 QWEN35_MATRIX_WARMUPS=1 QWEN35_MATRIX_CODECS='recurrent-bf16' QWEN35_MATRIX_LIVE_KV='0 1' scripts/qwen35_cache_artifact_matrix.sh` on M2 Max Qwen3.5-9B, `max_seq=256`, `gen=16`, no resident state. Full-KV p50 restore for `fact/code/json/repeat/cache`: `9.0/9.4/9.4/9.5/9.4ms`; live-KV p50 restore: `8.0/7.6/7.8/7.2/7.2ms`, winning `5/5`.
+- implementation: `scripts/qwen35_cache_artifact_matrix.sh` now emits a `live_kv` column, accepts `QWEN35_MATRIX_LIVE_KV='0 1'`, and supports `QWEN35_MATRIX_FORCE_BUILD=1` so the runner can rebuild after probe option changes.
+- implication: For cold persistent compressed artifacts, live-KV BF16 is now the stronger default candidate than full-KV BF16. The LTP/WBA potential decreases through fewer bytes read/copied while preserving exact cached output.
+- caveat: This is still short `gen=16`, `max_seq=256`, five prompts. Larger contexts, source replay, and resident-state interaction still need separate gates before changing defaults.
+- trust: {F:0.87,G:0.58,R:0.86}

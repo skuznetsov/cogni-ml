@@ -570,6 +570,7 @@ QWEN35_MATRIX_PROMPT_LIMIT=1 \
 QWEN35_MATRIX_REQUESTS=1 \
 QWEN35_MATRIX_WARMUPS=0 \
 QWEN35_MATRIX_CODECS="raw recurrent-bf16" \
+QWEN35_MATRIX_LIVE_KV="0 1" \
 scripts/qwen35_cache_artifact_matrix.sh
 ```
 

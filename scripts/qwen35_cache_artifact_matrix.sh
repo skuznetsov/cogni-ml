@@ -16,11 +16,13 @@ max_seq="${QWEN35_MATRIX_MAX_SEQ:-256}"
 resident_states="${QWEN35_MATRIX_RESIDENT_STATES:-0}"
 artifact_block="${QWEN35_MATRIX_ARTIFACT_BLOCK:-8}"
 codec_list="${QWEN35_MATRIX_CODECS:-raw recurrent-bf16}"
+live_kv_list="${QWEN35_MATRIX_LIVE_KV:-0}"
 prompt_limit="${QWEN35_MATRIX_PROMPT_LIMIT:-0}"
 mode="${QWEN35_MATRIX_MODE:---prompt-cache-fast-forward}"
 keep_logs="${QWEN35_MATRIX_KEEP_LOGS:-0}"
+force_build="${QWEN35_MATRIX_FORCE_BUILD:-0}"
 
-if [[ ! -x "${probe_bin}" ]]; then
+if [[ "${force_build}" == "1" || ! -x "${probe_bin}" ]]; then
   if [[ ! -f "${repo_root}/build/bridge.o" && "${link_flags}" == *"build/bridge.o"* ]]; then
     echo "missing ${repo_root}/build/bridge.o; build the bridge first or set QWEN35_MATRIX_LINK_FLAGS" >&2
     exit 2
@@ -93,7 +95,7 @@ extract_request_field() {
   ' "${file}" || true
 }
 
-printf "prompt_id\tcodec\tavg_total_ms\tp50_total_ms\tavg_ms_per_tok\tp50_restore_ms\tp50_prefill_ms\tp50_decode_ms\tprompt_tokens\toutput_tokens\tlog\n"
+printf "prompt_id\tcodec\tlive_kv\tavg_total_ms\tp50_total_ms\tavg_ms_per_tok\tp50_restore_ms\tp50_prefill_ms\tp50_decode_ms\tprompt_tokens\toutput_tokens\tlog\n"
 
 prompt_count="${#prompts[@]}"
 if [[ "${prompt_limit}" =~ ^[0-9]+$ && "${prompt_limit}" -gt 0 && "${prompt_limit}" -lt "${prompt_count}" ]]; then
@@ -104,44 +106,53 @@ for ((idx = 0; idx < prompt_count; idx++)); do
   prompt_id="${prompt_ids[$idx]}"
   prompt="${prompts[$idx]}"
   for codec in ${codec_list}; do
-    log_file="${tmp_dir}/${prompt_id}.${codec}.log"
-    cmd=(
-      "${probe_bin}"
-      "${mode}"
-      "--gen=${gen}"
-      "--requests=${requests}"
-      "--warmups=${warmups}"
-      "--max-seq=${max_seq}"
-      "--resident-states=${resident_states}"
-      "--quiet"
-    )
-    if [[ "${codec}" != "raw" ]]; then
-      cmd+=("--artifact-codec=${codec}" "--artifact-codec-block=${artifact_block}")
-    fi
-    cmd+=("${prompt}")
+    for live_kv in ${live_kv_list}; do
+      log_file="${tmp_dir}/${prompt_id}.${codec}.livekv${live_kv}.log"
+      cmd=(
+        "${probe_bin}"
+        "${mode}"
+        "--gen=${gen}"
+        "--requests=${requests}"
+        "--warmups=${warmups}"
+        "--max-seq=${max_seq}"
+        "--resident-states=${resident_states}"
+        "--quiet"
+      )
+      if [[ "${codec}" != "raw" ]]; then
+        cmd+=("--artifact-codec=${codec}" "--artifact-codec-block=${artifact_block}")
+      fi
+      if [[ "${live_kv}" == "1" ]]; then
+        cmd+=("--live-kv-artifacts")
+      elif [[ "${live_kv}" != "0" ]]; then
+        echo "invalid QWEN35_MATRIX_LIVE_KV value: ${live_kv}; expected 0 or 1" >&2
+        exit 2
+      fi
+      cmd+=("${prompt}")
 
-    "${cmd[@]}" >"${log_file}"
+      "${cmd[@]}" >"${log_file}"
 
-    avg_total="$(extract_field avg_total_ms "${log_file}")"
-    p50_total="$(extract_field p50_total_ms "${log_file}")"
-    avg_ms_per_tok="$(extract_field avg_ms_per_tok "${log_file}")"
-    p50_restore="$(extract_field p50_restore_ms "${log_file}")"
-    p50_prefill="$(extract_field p50_prefill_ms "${log_file}")"
-    p50_decode="$(extract_field p50_decode_ms "${log_file}")"
-    prompt_tokens="$(extract_request_field prompt_tokens "${log_file}")"
-    output_tokens="$(extract_request_field output_tokens "${log_file}")"
+      avg_total="$(extract_field avg_total_ms "${log_file}")"
+      p50_total="$(extract_field p50_total_ms "${log_file}")"
+      avg_ms_per_tok="$(extract_field avg_ms_per_tok "${log_file}")"
+      p50_restore="$(extract_field p50_restore_ms "${log_file}")"
+      p50_prefill="$(extract_field p50_prefill_ms "${log_file}")"
+      p50_decode="$(extract_field p50_decode_ms "${log_file}")"
+      prompt_tokens="$(extract_request_field prompt_tokens "${log_file}")"
+      output_tokens="$(extract_request_field output_tokens "${log_file}")"
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "${prompt_id}" \
-      "${codec}" \
-      "${avg_total}" \
-      "${p50_total}" \
-      "${avg_ms_per_tok}" \
-      "${p50_restore}" \
-      "${p50_prefill}" \
-      "${p50_decode}" \
-      "${prompt_tokens:-?}" \
-      "${output_tokens:-?}" \
-      "${log_file}"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "${prompt_id}" \
+        "${codec}" \
+        "${live_kv}" \
+        "${avg_total}" \
+        "${p50_total}" \
+        "${avg_ms_per_tok}" \
+        "${p50_restore}" \
+        "${p50_prefill}" \
+        "${p50_decode}" \
+        "${prompt_tokens:-?}" \
+        "${output_tokens:-?}" \
+        "${log_file}"
+    done
   done
 done
