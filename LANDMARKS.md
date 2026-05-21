@@ -14693,3 +14693,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The LTP/WBA window is real, but the effect is small because the fused route loses the original B64 direct simdgroup device store and has to stage the up accumulator through threadgroup memory before applying SwiGLU. The saved separate SwiGLU dispatch/memory traffic slightly wins on larger 64-multiple prompts, but not enough for default-on promotion without quiet-host proof.
 - implication: Keep this as a controlled exact fusion primitive and candidate for a future deeper FFN fusion. Do not present it as a public benchmark gain yet. A stronger follow-up would preserve direct-store-like behavior or fuse further into the down projection consumer.
 - trust: {F:0.82,G:0.44,R:0.78}
+
+**LM-406 native prefill benchmark top1 semantics checked [shared/ml]**
+- status: VERIFIED local diagnostic, not a public benchmark result
+- claim: The native matched-prefill benchmark is not unfairly slower because of a large final LM-head/top1 tax. `prefill_tokens_top1` uses the optimized final-layer last-row route for prompt chunks, so at pp256 it is slightly faster than body-only `prefill_tokens` on this host rather than slower.
+- evidence: A temporary diagnostic compared `prefill_tokens` and `prefill_tokens_top1` with prepared Metal state at prompt 256. Repeated local M2 Max run: `REPS=20 WARMUP=2 CRYSTAL_CACHE_DIR=/private/tmp/cogni_ml_body_vs_top1 crystal run .qwen35_prefill_body_vs_top1.cr --release --error-trace --link-flags=...` measured body-only p50 `499.50ms` (`512.51 tok/s`) and top1 p50 `491.59ms` (`520.76 tok/s`). Earlier short run was directionally the same: body-only p50 `488.13ms`, top1 p50 `479.10ms`.
+- diagnosis: The remaining pp256 native-vs-llama prefill gap is not explained by native benchmark measuring an extra final top1. The route difference is a legitimate optimized path: final prompt token still gets exact top1, while unnecessary final-layer rows are avoided.
+- implication: Continue with scheduler/operator attribution and graph-level pruning/fusion. Do not "fix" `bin/benchmark_qwen_vs_llama.cr` by switching native prepared prefill from `prefill_tokens_top1` to body-only; that would make the native path slower and less matched to llama-bench's last-token output semantics.
+- trust: {F:0.82,G:0.48,R:0.82}
