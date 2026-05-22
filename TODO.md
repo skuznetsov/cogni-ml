@@ -2192,3 +2192,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_439:** Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 stage=2 lazy`: `gamma=8 reject_offramp=1` speedup `0.969`; `gamma=8 hidden_resync+checkpoint+reject_offramp=1` speedup `0.981`; `gamma=4 reject_offramp=1` speedup `0.938`; `gamma=4 hidden_resync+checkpoint+reject_offramp=1` speedup `0.970`. Parity true in all rows.
 
 **next_update_439:** Treat reject off-ramp as production safety, not speed. Next speed work needs pre-submit routing: only enter MTP/spec when prompt/window features predict enough accepted tokens to amortize the probe, otherwise stay on exact decode immediately.
+
+**decision_update_440:** Added opt-in exact-first pass guard for MTP wall probing. `--mtp-spec-wall-exact-first` emits one exact target token at each pass boundary, then drafts/verifies the suffix from that exact hidden/token boundary.
+
+**evidence_update_440:** Build and focused Metal spec passed (`4 examples, 0 failures`). On Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`, exact-first improved work counters (`verifier_calls=7/verifier_tokens=15/replay_tokens=1`) and exact-first+hidden-resync+checkpoint further reduced verifier work (`verifier_calls=6/verifier_tokens=13/replay_tokens=0`), with parity true. Wall remained below plain (`0.733x` and `0.836x`), so exact-first is a diagnostic/controller primitive, not a default speed path.
+
+**next_update_440:** Use exact-first only in controller sweeps. The likely production policy is conditional: exact-first or off-ramp for uncertain windows, hidden-resync+checkpoint for high-acceptance windows, and plain exact when probe cost cannot amortize.
