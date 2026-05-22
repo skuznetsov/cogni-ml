@@ -2186,3 +2186,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_438:** Build and focused Metal spec passed (`4 examples, 0 failures`). On Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`, baseline speedup `0.604` with `replay_tokens=3`; checkpoint speedup `0.717` with `replay_tokens=0`; hidden-resync+checkpoint speedup `0.791` with `accepted=12/rejections=3/replay_tokens=0`, parity true. On `gamma=4 stage=2`, checkpoint removed replay but regressed speedup (`0.836 -> 0.776/0.765`), so it remains opt-in.
 
 **next_update_438:** Add a lightweight controller for checkpoint replay: enable it only when expected replay tax beats checkpoint overhead, likely `gamma>=8` or when recent passes show first-row rejects with replay. Do not default it for `gamma=4 stage=2`.
+
+**decision_update_439:** Measured reject-offramp composition with hidden-resync and recurrent checkpoint replay. `reject_offramp=1` is useful as a safety dual frame but remains near-neutral rather than faster.
+
+**evidence_update_439:** Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 stage=2 lazy`: `gamma=8 reject_offramp=1` speedup `0.969`; `gamma=8 hidden_resync+checkpoint+reject_offramp=1` speedup `0.981`; `gamma=4 reject_offramp=1` speedup `0.938`; `gamma=4 hidden_resync+checkpoint+reject_offramp=1` speedup `0.970`. Parity true in all rows.
+
+**next_update_439:** Treat reject off-ramp as production safety, not speed. Next speed work needs pre-submit routing: only enter MTP/spec when prompt/window features predict enough accepted tokens to amortize the probe, otherwise stay on exact decode immediately.
