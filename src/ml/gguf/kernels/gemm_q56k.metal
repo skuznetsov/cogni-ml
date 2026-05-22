@@ -15,6 +15,13 @@ using namespace metal;
 
 constant uint Q56K_QK_K = 256;
 constant uint Q8_0_QK = 32;
+constant uint IQ4_NL_QK = 32;
+
+// llama.cpp IQ4_NL non-linear codebook.
+constant int8_t kvalues_iq4nl[16] = {
+    -127, -104, -83, -65, -49, -35, -22, -10,
+       1,   13,  25,  38,  53,  69,  89, 113,
+};
 
 // ============================================================================
 // Q8_0
@@ -22,6 +29,11 @@ constant uint Q8_0_QK = 32;
 struct block_q8_0_56 {
     half   d;
     int8_t qs[32];
+};
+
+struct block_iq4_nl_56 {
+    half d;
+    uint8_t qs[16];
 };
 
 constant short MV8_NSG = 4;
@@ -55,6 +67,48 @@ kernel void simd_mv_q8_0_f32(
             device const block_q8_0_56 * blk =
                 (device const block_q8_0_56 *)(w_raw + row_id * row_bytes) + ib;
             sumf[row] += (float)blk->d * y * (float)blk->qs[tiisg];
+        }
+    }
+
+    for (short row = 0; row < MV8_NR0 && first_row + row < out_dim; ++row) {
+        float tot = simd_sum(sumf[row]);
+        if (tiisg == 0) {
+            output[n * out_dim + first_row + row] = tot;
+        }
+    }
+}
+
+kernel void simd_mv_iq4_nl_f32(
+    device const uint8_t* w_raw   [[buffer(0)]],
+    device const float*   x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint nb = in_dim / IQ4_NL_QK;
+    const uint first_row = (tgpig.x * MV8_NSG + sgitg) * MV8_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    const uint row_bytes = nb * 18;
+    device const float * y_base = x + n * in_dim;
+    float sumf[MV8_NR0] = {0.f};
+
+    for (uint ib = 0; ib < nb; ++ib) {
+        const uint lane = tiisg;
+        const float y = y_base[ib * IQ4_NL_QK + lane];
+        for (short row = 0; row < MV8_NR0; ++row) {
+            const uint row_id = first_row + row;
+            if (row_id >= out_dim) continue;
+            device const block_iq4_nl_56 * blk =
+                (device const block_iq4_nl_56 *)(w_raw + row_id * row_bytes) + ib;
+            const uint8_t packed = blk->qs[lane & 15];
+            const uint8_t q = (lane < 16) ? (packed & 0x0f) : (packed >> 4);
+            sumf[row] += (float)blk->d * y * (float)kvalues_iq4nl[q];
         }
     }
 

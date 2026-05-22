@@ -23,8 +23,10 @@ module ML
       Q5K_BLOCK_BYTES  = 176
       Q6K_BLOCK_BYTES  = 210
       Q8_0_BLOCK_BYTES =  34
+      IQ4_NL_BLOCK_BYTES = 18
       QK_K             = 256
       Q8_0_QK          =  32
+      IQ4_NL_QK        =  32
 
       # GEMV (decode) tiling — must match the quant-specific kernels.
       MV_Q4_NSG             =  2
@@ -35,6 +37,8 @@ module ML
       MV_Q6_NR0             =  1
       MV_Q8_NSG             =  4
       MV_Q8_NR0             =  1
+      MV_IQ4_NL_NSG         =  4
+      MV_IQ4_NL_NR0         =  1
       HEAD_TOP1_ROWS_PER_TG = 12
 
       # GEMM (prefill) tiling — Q4_K only for now.
@@ -175,6 +179,7 @@ module ML
         @@mv8_pipeline  : ML::Metal::ComputePipeline?
         @@mv8_add_pipeline : ML::Metal::ComputePipeline?
         @@mv8_dual_pipeline : ML::Metal::ComputePipeline?
+        @@mv_iq4_nl_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top2_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline?
@@ -904,6 +909,12 @@ module ML
           }
         end
 
+        private def self.mv_iq4_nl_pipeline : ML::Metal::ComputePipeline
+          @@mv_iq4_nl_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_iq4_nl_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_iq4_nl_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline
           @@mv6_top1_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_tiles_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_tiles_f32", GEMM_Q56K_SOURCE)
@@ -1358,6 +1369,8 @@ module ML
             MV_Q6_NSG * MV_Q6_NR0
           when .same?(mv8_pipeline), .same?(mv8_add_pipeline)
             MV_Q8_NSG * MV_Q8_NR0
+          when .same?(mv_iq4_nl_pipeline)
+            MV_IQ4_NL_NSG * MV_IQ4_NL_NR0
           else
             MV_Q4_NSG * MV_Q4_NR0
           end
@@ -1367,6 +1380,8 @@ module ML
           case pipeline
           when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline), .same?(mv8_top2_tiles_pipeline)
             MV_Q8_NSG * 32
+          when .same?(mv_iq4_nl_pipeline)
+            MV_IQ4_NL_NSG * 32
           else
             64
           end
@@ -1380,6 +1395,8 @@ module ML
             {"Q6_K", Q6K_BLOCK_BYTES, QK_K}
           when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline), .same?(mv8_top2_tiles_pipeline)
             {"Q8_0", Q8_0_BLOCK_BYTES, Q8_0_QK}
+          when .same?(mv_iq4_nl_pipeline)
+            {"IQ4_NL", IQ4_NL_BLOCK_BYTES, IQ4_NL_QK}
           else
             {"Q4_K", Q4K_BLOCK_BYTES, QK_K}
           end
@@ -8911,6 +8928,20 @@ module ML
           ML::Metal::Device.init!
           buf, off = weight_slot(w_raw)
           matmul_gemv_buf(mv8_pipeline, x, buf, off, in_dim, out_dim, batch)
+        end
+
+        def self.matmul_iq4_nl(x : Array(Float32),
+                               w_raw : Bytes,
+                               in_dim : Int32,
+                               out_dim : Int32,
+                               batch : Int32) : Array(Float32)
+          raise "in_dim must be multiple of #{IQ4_NL_QK}: got #{in_dim}" unless in_dim % IQ4_NL_QK == 0
+          raise "x size mismatch: expected #{batch * in_dim}, got #{x.size}" unless x.size == batch * in_dim
+          expected_w = (in_dim // IQ4_NL_QK) * IQ4_NL_BLOCK_BYTES * out_dim
+          raise "w_raw size mismatch: expected #{expected_w}, got #{w_raw.size}" unless w_raw.size == expected_w
+          ML::Metal::Device.init!
+          buf, off = weight_slot(w_raw)
+          matmul_gemv_buf(mv_iq4_nl_pipeline, x, buf, off, in_dim, out_dim, batch)
         end
 
         # Full-upload Q4_K matmul. Output row-major [batch, out_dim].
