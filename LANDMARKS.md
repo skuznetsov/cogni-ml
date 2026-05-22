@@ -14767,3 +14767,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - adversary: An ungated direct-gate route regressed/noised at pp64, so it is not used for short chunks by default. The matched llama.cpp run during this host-noisy window produced unusably slow absolute numbers and should not be used as a public benchmark claim.
 - LTP/WBA: Window is the SG4 attention output boundary. Transport removed: `gate` no longer travels through threadgroup memory before it is needed. Legal move preserves causal softmax and gate math; boundary safety is the long-prompt threshold plus OFF/PREGATE dual frame. Potential decreases as `(threadgroup bytes, preload stores, SG4 wait, wall)` only for the long-prompt corridor.
 - trust: {F:0.82,G:0.42,R:0.76}
+
+**LM-415 Qwen 3.5/3.6 chat-template and XML tool-call support [shared/ml]**
+- status: VERIFIED focused implementation gate, CLI smoke compile only
+- claim: Local Qwen 3.5/3.6 GGUF metadata carries `tokenizer.chat_template` with Qwen XML-style tool-call instructions. `Qwen35Tokenizer` now exposes that metadata, `Qwen35Chat` renders the supported chat/tool subset, and `qwen35_generate` can opt into rendered chat prompts with `QWEN35_CHAT=1` or `QWEN35_TOOLS_JSON`.
+- evidence: `crystal spec spec/qwen35_chat_spec.cr spec/qwen35_tokenizer_spec.cr --error-trace` passed (`7 examples, 0 failures`). `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed. The local 9B GGUF spec check loaded `tokenizer.chat_template` and found `<tool_call>` plus `tools`.
+- boundary: This is not constrained JSON-schema decoding. It implements the XML-ish function-call format in the Qwen chat template and parses generated `<tool_call>` blocks for host-side dispatch. Exact tool execution/looping remains an application layer responsibility.
+- LTP/WBA: Window is a prompt entering the CLI with chat/tools metadata. Transport is `user/system/tools -> rendered Qwen chat-token corridor -> tokenized prompt/cache key -> generated XML call block`. Legal move preserves model-token exactness by hashing/caching the rendered prompt, not the raw user string. Dual frame is the default raw prompt path when chat envs are absent.
+- trust: {F:0.86,G:0.52,R:0.84}

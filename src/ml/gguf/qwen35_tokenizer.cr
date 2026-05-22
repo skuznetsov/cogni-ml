@@ -14,6 +14,7 @@ module ML::GGUF
     getter eos_id : Int32
     getter pad_id : Int32
     getter? add_bos : Bool
+    getter chat_template : String?
     getter llama_tokenize_bin : String
     getter model_path : String
     getter token_to_id : Hash(String, Int32)
@@ -22,6 +23,7 @@ module ML::GGUF
     def initialize(@vocab : Array(String), @eos_id : Int32, @pad_id : Int32,
                    @add_bos : Bool, @model_path : String,
                    @llama_tokenize_bin : String = "",
+                   @chat_template : String? = nil,
                    @token_to_id : Hash(String, Int32) = {} of String => Int32,
                    @bpe_ranks : Hash(Tuple(String, String), Int32) = {} of Tuple(String, String) => Int32)
     end
@@ -56,7 +58,9 @@ module ML::GGUF
         end
       end
 
-      new(vocab, eos, pad, add_bos, model_path, llama_tokenize_bin, token_to_id, bpe_ranks)
+      chat_template = g.metadata["tokenizer.chat_template"]?.as?(String)
+
+      new(vocab, eos, pad, add_bos, model_path, llama_tokenize_bin, chat_template, token_to_id, bpe_ranks)
     end
 
     # Decode a list of token ids back into a UTF-8 string.

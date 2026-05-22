@@ -423,6 +423,22 @@ QWEN35_HEAD_FULL_ROWS_GUARDED=1 \
 ./build/qwen35_generate "The capital of France is" 64
 ```
 
+Enable Qwen chat-template prompting and XML-style function calls:
+
+```sh
+QWEN35_CHAT=1 \
+QWEN35_CHAT_SYSTEM="You are a tool-using assistant." \
+QWEN35_TOOLS_JSON='[{"type":"function","function":{"name":"get_weather","description":"Get weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]' \
+./build/qwen35_generate "Weather in Paris?" 64
+```
+
+`QWEN35_TOOLS_JSON` uses the tool schema shape embedded in the Qwen
+`tokenizer.chat_template`. Qwen 3.5/3.6 GGUFs use an XML-ish tool-call format,
+for example `<tool_call><function=...><parameter=...>...`, not a constrained
+JSON-schema decoder. The CLI renders the model prompt with the Qwen chat tokens,
+uses the rendered prompt for tokenization and prompt-cache keys, and prints a
+parsed JSON summary when generated text contains Qwen `<tool_call>` blocks.
+
 Enable exact prompt cache:
 
 ```sh
@@ -610,6 +626,9 @@ Useful Qwen environment switches:
 | `QWEN35_NATIVE_TOKENIZER_OFF=1` | Disable the native Crystal Qwen BPE encoder and use the external `llama-tokenize` bootstrap path. |
 | `QWEN35_PREPARE_STATE_OFF=1` | Disable eager Metal state-buffer preparation in `qwen35_generate`. By default the CLI prepares KV/DeltaNet buffers before timing prompt ingest. |
 | `QWEN35_METAL_PROFILE=1` | Enable Metal dispatch/profile attribution for the timed decode region in `qwen35_generate`. The report includes wave/group timings, prefill/source-replay phase traces, matmul logical traffic, conversion traffic, and CPU fallback counts. |
+| `QWEN35_CHAT=1` | Render the input through the minimal Qwen 3.5/3.6 chat-template path before tokenization. |
+| `QWEN35_CHAT_SYSTEM="..."` | Optional system message used by the chat-template renderer. |
+| `QWEN35_TOOLS_JSON='[...]'` | Enable Qwen XML-style function-calling prompt rendering and parsed `<tool_call>` output reporting. The value must be a JSON array of tool definitions. |
 | `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk gating; explicit policy overrides legacy mode envs. |
 | `QWEN35_TRACE_STEPS_OFF=1` | Suppress per-token/per-cycle trace lines in `qwen35_generate` while keeping summaries and final output. |
 | `QWEN35_QUIET=1` | Alias for suppressing per-step traces in `qwen35_generate`; useful for cleaner local timing. |

@@ -7,6 +7,7 @@
 # `QWEN35_DECODE_WAVE_OFF=1` for the slow CPU reference path.
 
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_weights"
@@ -30,6 +31,17 @@ token_cache_hit = false
 
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
+chat_tools = if tools_json = ENV["QWEN35_TOOLS_JSON"]?
+               ML::GGUF::Qwen35Chat.parse_tools_json(tools_json)
+             else
+               [] of JSON::Any
+             end
+chat_mode = ENV["QWEN35_CHAT"]? == "1" || !chat_tools.empty?
+model_prompt = chat_mode ? ML::GGUF::Qwen35Chat.render_user_prompt(
+  prompt,
+  system: ENV["QWEN35_CHAT_SYSTEM"]?,
+  tools: chat_tools,
+) : prompt
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
 prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]? == "1"
 prompt_cache_fast_forward_enabled = prompt_cache_enabled && prompt_cache_source_history_enabled && ENV["QWEN35_PROMPT_CACHE_FAST_FORWARD"]? == "1"
@@ -187,6 +199,16 @@ ensure
   end
 end
 
+def print_qwen_tool_calls_if_any(text : String, chat_mode : Bool) : Nil
+  return unless chat_mode
+
+  calls = ML::GGUF::Qwen35Chat.parse_tool_calls(text)
+  return if calls.empty?
+
+  puts "\n=== Parsed tool calls ==="
+  puts ML::GGUF::Qwen35Chat.tool_calls_to_json(calls)
+end
+
 def replay_target_state(weights : ML::GGUF::Qwen35Weights,
                         prompt_ids : Array(Int32),
                         generated_ids : Array(Int32),
@@ -215,7 +237,7 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
   cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
   cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
   cache_model = cache_model_id(MODEL_PATH)
-  if output_hit = cache_store.not_nil!.lookup_output_fast_forward(cache_model, session_id, prompt, n_gen, turn_id: turn_id)
+  if output_hit = cache_store.not_nil!.lookup_output_fast_forward(cache_model, session_id, model_prompt, n_gen, turn_id: turn_id)
     token_cache_hit = true
     cached_prompt_ids = output_hit.prompt_token_ids
     cache_tokenizer = output_hit.tokenizer_id
@@ -232,9 +254,10 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
     puts "\n=== Generated text ==="
     puts output_text
     puts "\n=== Full output ==="
-    puts prompt + output_text.not_nil!
+    puts model_prompt + output_text.not_nil!
+    print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode)
     exit
-  elsif tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt_for_model(cache_model, prompt)
+  elsif tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt_for_model(cache_model, model_prompt)
     token_cache_hit = true
     cached_prompt_ids = tokenized_hit.token_ids
     cache_tokenizer = tokenized_hit.tokenizer_id
@@ -272,7 +295,8 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
             puts "\n=== Generated text ==="
             puts output_text
             puts "\n=== Full output ==="
-            puts prompt + output_text.not_nil!
+            puts model_prompt + output_text.not_nil!
+            print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode)
             exit
           end
         end
@@ -288,6 +312,7 @@ tok = ML::GGUF::Qwen35Tokenizer.from_gguf(g, MODEL_PATH, LLAMA_TOKENIZE_BIN)
 g.close
 model_load_ms = (Time.instant - t0).total_milliseconds
 puts "Loaded tokenizer metadata in #{(model_load_ms / 1000.0).round(1)}s. vocab=#{tok.vocab.size}"
+puts "Qwen chat mode enabled: tools=#{chat_tools.size} rendered_prompt_chars=#{model_prompt.size}" if chat_mode
 
 if prompt_cache_enabled && cache_store.nil?
   cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
@@ -302,12 +327,12 @@ end
 tokenize_t0 = Time.instant
 ids = if cached = cached_prompt_ids
         cached
-      elsif prompt_token_cache_enabled && (tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt(cache_model, cache_tokenizer, prompt))
+      elsif prompt_token_cache_enabled && (tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt(cache_model, cache_tokenizer, model_prompt))
         token_cache_hit = true
         tokenized_hit.token_ids
       else
-        encoded = tok.encode(prompt)
-        cache_store.not_nil!.save_tokenized_prompt(cache_model, cache_tokenizer, prompt, encoded) if prompt_token_cache_enabled
+        encoded = tok.encode(model_prompt)
+        cache_store.not_nil!.save_tokenized_prompt(cache_model, cache_tokenizer, model_prompt, encoded) if prompt_token_cache_enabled
         encoded
       end
 tokenize_ms = (Time.instant - tokenize_t0).total_milliseconds
@@ -344,10 +369,12 @@ if prompt_cache_fast_forward_enabled && (source = source_history_hit)
 
         puts "\n=== Generated token ids ==="
         puts output_ids.inspect
+        generated_text = tok.decode(output_ids)
         puts "\n=== Generated text ==="
-        puts tok.decode(output_ids)
+        puts generated_text
         puts "\n=== Full output ==="
-        puts prompt + tok.decode(output_ids)
+        puts model_prompt + generated_text
+        print_qwen_tool_calls_if_any(generated_text, chat_mode)
         exit
       end
     end
@@ -1063,7 +1090,7 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
         turn_id: turn_id,
         model_id: cache_model,
         tokenizer_id: cache_tokenizer,
-        prompt_text: prompt,
+        prompt_text: model_prompt,
         prompt_token_ids: ids,
         output_token_ids: output_ids,
         generated_text: output_text.not_nil!,
@@ -1080,7 +1107,9 @@ STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{mode
 
 puts "\n=== Generated token ids ==="
 puts output_ids.inspect
+final_generated_text = output_text || tok.decode(output_ids)
 puts "\n=== Generated text ==="
-puts output_text || tok.decode(output_ids)
+puts final_generated_text
 puts "\n=== Full output ==="
-puts prompt + (output_text || tok.decode(output_ids))
+puts model_prompt + final_generated_text
+print_qwen_tool_calls_if_any(final_generated_text, chat_mode)
