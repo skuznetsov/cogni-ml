@@ -7,6 +7,7 @@ require "../src/ml/gguf/qwen35_meta"
 
 QWEN_9B_PATH  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 QWEN_27B_PATH = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf"
+QWEN_27B_MTP_IQ4_NL_PATH = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/Qwen3.6-27B-MTP-GGUF/Qwen3.6-27B-IQ4_NL.gguf"
 
 describe ML::GGUF::Qwen35Hparams do
   describe "Qwen 3.5 9B" do
@@ -18,7 +19,9 @@ describe ML::GGUF::Qwen35Hparams do
       g.close
 
       h.arch.should eq("qwen35")
+      h.raw_block_count.should eq(32)
       h.n_layer.should eq(32)
+      h.nextn_predict_layers.should eq(0)
       h.n_embd.should eq(4096)
       h.n_ff.should eq(12288)
       h.context_length.should eq(262144)
@@ -61,13 +64,31 @@ describe ML::GGUF::Qwen35Hparams do
       g.close
 
       h.arch.should eq("qwen35")
+      h.raw_block_count.should eq(64)
       h.n_layer.should eq(64)
+      h.nextn_predict_layers.should eq(0)
       h.n_embd.should eq(5120)
       h.head_dim.should eq(256)
       h.full_attention_interval.should eq(4)
       h.rope_sections.should eq([11, 11, 10, 0])
       h.full_attention_layers.size.should eq(16)
       h.recurrent_layers.size.should eq(48)
+    end
+
+    it "treats Qwen3.6 MTP nextn block as draft-side, not target layers" do
+      pending!("27B MTP IQ4_NL model not present") unless File.exists?(QWEN_27B_MTP_IQ4_NL_PATH)
+
+      g = ML::GGUF::GGUFFile.new(QWEN_27B_MTP_IQ4_NL_PATH)
+      h = ML::GGUF::Qwen35Hparams.new(g)
+
+      h.raw_block_count.should eq(65)
+      h.nextn_predict_layers.should eq(1)
+      h.n_layer.should eq(64)
+      h.full_attention_layers.last.should eq(63)
+      h.full_attention?(64).should be_false
+      g.tensor("blk.64.attn_q.weight").should_not be_nil
+      g.tensor("blk.64.attn_qkv.weight").should be_nil
+      g.close
     end
   end
 end

@@ -2126,3 +2126,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_423:** Focused Metal IQ4_NL spec passed with `2 examples, 0 failures`, covering direct GEMV vs CPU, generic `matmul` vs direct, `matmul_many` vs direct, and the prefill-batch `nil` fallback. `qwen35_generate` and `qwen36_iq4_nl_op_bench` no-codegen builds passed. Small op-bench smoke still returned `cos=1.0` on the top IQ4_NL shape.
 
 **next_update_423:** Before claiming full native Qwen3.6 IQ4_NL support, add a controlled decode-only model smoke or a partial layer forward that avoids prefill-sized IQ4_NL GEMM. The remaining speed-critical gap is IQ4_NL prefill/GEMM or a repack-to-supported-K-quant strategy.
+
+**decision_update_424:** Fixed Qwen3.6 MTP block-count handling. `Qwen35Hparams` now stores `raw_block_count` and `nextn_predict_layers`, and treats `n_layer` as base target layers (`raw_block_count - nextn_predict_layers`). This keeps the trailing MTP block out of exact target forward instead of trying to load `blk.64` as a normal recurrent layer.
+
+**evidence_update_424:** Before the fix, loading the Unsloth Qwen3.6 IQ4_NL MTP GGUF through `Qwen35Weights.from_gguf` failed on missing `blk.64.attn_qkv.weight`; metadata showed `blk.64` has full-attention/MTP-style tensors and no recurrent qkv. After the fix, `spec/qwen35_meta_spec.cr spec/qwen35_weights_spec.cr` passed (`8 examples, 0 failures`) with a regression for the MTP IQ4_NL file, and `qwen35_generate` / `qwen36_iq4_nl_op_bench` no-codegen builds passed.
+
+**next_update_424:** MTP draft support should be loaded explicitly as a sidecar from the trailing `blk.N.*` blocks. Do not fold nextn blocks into `Qwen35Weights.layers` or exact target layer loops.

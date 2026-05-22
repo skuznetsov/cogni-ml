@@ -16,7 +16,9 @@ module ML::GGUF
   struct Qwen35Hparams
     # Model topology
     getter arch : String
+    getter raw_block_count : Int32
     getter n_layer : Int32
+    getter nextn_predict_layers : Int32
     getter n_embd : Int32
     getter n_ff : Int32
     getter context_length : Int32
@@ -49,7 +51,13 @@ module ML::GGUF
 
       prefix = @arch
 
-      @n_layer        = req_int(g, "#{prefix}.block_count")
+      @raw_block_count = req_int(g, "#{prefix}.block_count")
+      @nextn_predict_layers = (g.get_int("#{prefix}.nextn_predict_layers") || 0_i64).to_i32
+      raise "qwen35: nextn_predict_layers cannot be negative" if @nextn_predict_layers < 0
+      raise "qwen35: nextn_predict_layers (#{@nextn_predict_layers}) >= block_count (#{@raw_block_count})" if @nextn_predict_layers >= @raw_block_count
+      # MTP GGUFs append next-token prediction blocks after the base model.
+      # They are draft-side weights, not part of exact target forward.
+      @n_layer        = @raw_block_count - @nextn_predict_layers
       @n_embd         = req_int(g, "#{prefix}.embedding_length")
       @n_ff           = req_int(g, "#{prefix}.feed_forward_length")
       @context_length = req_int(g, "#{prefix}.context_length")

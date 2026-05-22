@@ -4,6 +4,7 @@ require "../src/ml/gguf/qwen35_meta"
 require "../src/ml/gguf/qwen35_weights"
 
 QWEN_9B_WPATH = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_27B_MTP_IQ4_WPATH = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/Qwen3.6-27B-MTP-GGUF/Qwen3.6-27B-IQ4_NL.gguf"
 
 describe ML::GGUF::Qwen35Weights do
   it "loads Qwen 3.5 9B weights and dispatches layer types correctly" do
@@ -70,5 +71,33 @@ describe ML::GGUF::Qwen35Weights do
     w.output_norm.size.should eq(h.n_embd)
     w.output.in_dim.should eq(h.n_embd)
     w.token_embd.out_dim.should eq(w.output.out_dim)   # both vocab_size
+  end
+
+  it "loads Qwen 3.6 MTP IQ4_NL target weights without treating the nextn block as recurrent" do
+    pending!("27B MTP IQ4_NL model not present") unless File.exists?(QWEN_27B_MTP_IQ4_WPATH)
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_27B_MTP_IQ4_WPATH)
+    h = w.hparams
+
+    h.raw_block_count.should eq(65)
+    h.nextn_predict_layers.should eq(1)
+    h.n_layer.should eq(64)
+    w.layers.size.should eq(64)
+    w.layers[63].should be_a(ML::GGUF::Qwen35FullAttnWeights)
+
+    counts = Hash(String, Int32).new(0)
+    w.layers.each do |lw|
+      case lw
+      in ML::GGUF::Qwen35FullAttnWeights
+        [lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw, lw.attn_output_qw,
+         lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw].each { |qw| counts[qw.type.name] += 1 }
+      in ML::GGUF::Qwen35RecurrentWeights
+        [lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw, lw.ssm_out_qw,
+         lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw].each { |qw| counts[qw.type.name] += 1 }
+      end
+    end
+
+    counts["IQ4_NL"].should be > 0
+    counts.values.sum.should eq(496)
   end
 end
