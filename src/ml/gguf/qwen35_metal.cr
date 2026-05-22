@@ -4991,6 +4991,9 @@ module ML
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
+          phase_profile = prefill_phase_profile_enabled? && Profile.enabled?
+          full_detail_profile = prefill_full_detail_profile_enabled? && phase_profile
+          phase_t0 = Time.instant
 
           layers.each_with_index do |lw, local_i|
             tag = "rec_chunk_many_#{local_i}_#{lw.attn_qkv_qw.raw.to_unsafe.address}"
@@ -5068,6 +5071,11 @@ module ML
               encode_matmul(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, cur_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
               proj_enc.end_encoding
             end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.proj", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
             qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
@@ -5119,6 +5127,11 @@ module ML
             ab_enc.set_value(n_tokens.to_u32, 6)
             ab_enc.dispatch_1d(n_tokens * h_v, 64)
             ab_enc.end_encoding
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.prep", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             dn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_dn_rowwise = dn_chunk_rowwise_enabled?(s)
@@ -5145,6 +5158,11 @@ module ML
               dn_enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
             end
             dn_enc.end_encoding
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.dn", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             post_enc = ML::Metal::ComputeEncoder.new(cmd)
             o_proj_h16 = prefill_dn_post_h16_oproj_enabled? && h16_batch_gemm_candidate?(lw.ssm_out_qw, n_tokens)
@@ -5175,6 +5193,11 @@ module ML
                 encode_matmul(out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, lw.ssm_out_qw, attn_mid_buf, attn_out_buf, out_w_buf, out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
               end
               out_enc.end_encoding
+            end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.post_oproj", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
             end
 
             ffn_pair_h16 = prefill_addnorm_h16_ffn_enabled? && q4_pair_h16_gemm_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens)
@@ -5225,6 +5248,11 @@ module ML
               end
               ffn_proj_enc.end_encoding
             end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.ffn_upgate", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             unless up_swiglu_fused
               swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -5270,8 +5298,21 @@ module ML
               add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
               add_enc.end_encoding
             end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.ffn_down_add", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             src_buf, dst_buf = dst_buf, src_buf
+          end
+
+          if full_detail_profile
+            t_read0 = Time.instant
+            result = read_shared_f32(src_buf, n_tokens * hidden_dim)
+            t_read = Time.instant
+            Profile.bump_group("#{profile_label}.read", 0_i64, 0_i64, (t_read - t_read0).total_nanoseconds.to_i64)
+            return result
           end
 
           t_enc = Time.instant if Profile.enabled?
