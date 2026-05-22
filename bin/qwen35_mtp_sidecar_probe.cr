@@ -16,6 +16,7 @@ DEFAULT_LLAMA_TOKENIZE = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llam
 
 model_path = DEFAULT_MODEL
 mtp_path = DEFAULT_MTP
+mtp_from_gguf = false
 llama_tokenize = DEFAULT_LLAMA_TOKENIZE
 prompt = "The capital of France is"
 suite_prompts = [] of {String, String}
@@ -245,7 +246,7 @@ private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
 end
 
-private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k, next_hidden_raw, mtp_state)
+private def mtp_hidden_topk(weights, mtp : ML::GGUF::Qwen35MTPWeights, prev_hidden, token_id, pos, k, next_hidden_raw, mtp_state)
   start = Time.instant
   next_hidden = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos, normalized: !next_hidden_raw, mtp_state: mtp_state)
   project_hidden = if next_hidden_raw
@@ -263,6 +264,56 @@ private def mtp_hidden_topk(weights, mtp, prev_hidden, token_id, pos, k, next_hi
            ML::GGUF::Qwen35MTP.top_k(logits, k)
          end
   {next_hidden, topk, elapsed_ms(start)}
+end
+
+private def mtp_hidden_topk(weights, mtp : ML::GGUF::Qwen35GGUFMTPWeights, prev_hidden, token_id, pos, k, next_hidden_raw, mtp_state)
+  start = Time.instant
+  # GGUF MTP follows llama.cpp: keep h_pre_norm as the chain state and apply
+  # shared_head_norm only at the proposal head boundary.
+  next_hidden = ML::GGUF::Qwen35MTP.forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+  topk = case k
+         when 1
+           [ML::GGUF::Qwen35MTP.hidden_top1_gguf(weights, mtp, next_hidden)]
+         when 2
+           ML::GGUF::Qwen35MTP.hidden_top2_gguf(weights, mtp, next_hidden)
+         else
+           project_hidden = ML::GGUF::Qwen35MTP.rms_norm_gguf(next_hidden, mtp.shared_head_norm(weights.output_norm), weights.hparams.rms_eps)
+           logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(mtp.shared_head_qw(weights.output), project_hidden)
+           ML::GGUF::Qwen35MTP.top_k(logits, k)
+         end
+  {next_hidden, topk, elapsed_ms(start)}
+end
+
+private def mtp_forward_one_top1(weights, mtp : ML::GGUF::Qwen35MTPWeights, prev_hidden, token_id, pos)
+  ML::GGUF::Qwen35MTP.forward_one_top1(weights, mtp, prev_hidden, token_id, pos)
+end
+
+private def mtp_forward_one_top1(weights, mtp : ML::GGUF::Qwen35GGUFMTPWeights, prev_hidden, token_id, pos)
+  ML::GGUF::Qwen35MTP.forward_one_top1_gguf(weights, mtp, prev_hidden, token_id, pos)
+end
+
+private def mtp_forward_one_logits(weights, mtp : ML::GGUF::Qwen35MTPWeights, prev_hidden, token_id, pos)
+  ML::GGUF::Qwen35MTP.forward_one_logits(weights, mtp, prev_hidden, token_id, pos)
+end
+
+private def mtp_forward_one_logits(weights, mtp : ML::GGUF::Qwen35GGUFMTPWeights, prev_hidden, token_id, pos)
+  ML::GGUF::Qwen35MTP.forward_one_logits_gguf(weights, mtp, prev_hidden, token_id, pos)
+end
+
+private def mtp_forward_one_hidden_raw(weights, mtp : ML::GGUF::Qwen35MTPWeights, prev_hidden, token_id, pos)
+  ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, prev_hidden, token_id, pos, normalized: false)
+end
+
+private def mtp_forward_one_hidden_raw(weights, mtp : ML::GGUF::Qwen35GGUFMTPWeights, prev_hidden, token_id, pos)
+  ML::GGUF::Qwen35MTP.forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos)
+end
+
+private def mtp_hidden_top2_for_reject(weights, mtp : ML::GGUF::Qwen35MTPWeights, hidden)
+  ML::GGUF::Qwen35MTP.hidden_top2(weights, hidden)
+end
+
+private def mtp_hidden_top2_for_reject(weights, mtp : ML::GGUF::Qwen35GGUFMTPWeights, hidden)
+  ML::GGUF::Qwen35MTP.hidden_top2_gguf(weights, mtp, hidden)
 end
 
 private def rank_in_topk(topk : Array({Int32, Float32}), target : Int32) : Int32
@@ -396,7 +447,7 @@ private def train_diag_bridge(weights, mtp, token_ids : Array(Int32), max_seq : 
   pairs = token_ids.size - 1
 
   pairs.times do |i|
-    raw = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, hiddens[i], token_ids[i + 1], i + 1, normalized: false)
+    raw = mtp_forward_one_hidden_raw(weights, mtp, hiddens[i], token_ids[i + 1], i + 1)
     y = hiddens[i + 1]
     dim.times do |j|
       xj = raw[j].to_f64
@@ -434,6 +485,7 @@ OptionParser.parse do |p|
   p.banner = "Usage: qwen35_mtp_sidecar_probe [--model GGUF] [--mtp SIDE_SAFETENSORS] [--run-forward]"
   p.on("--model PATH", "Qwen3.6 GGUF target model path") { |v| model_path = v }
   p.on("--mtp PATH", "MTP-only safetensors sidecar path") { |v| mtp_path = v }
+  p.on("--mtp-gguf", "Load MTP weights from the appended nextn block in --model GGUF") { mtp_from_gguf = true }
   p.on("--llama-tokenize PATH", "llama.cpp llama-tokenize path") { |v| llama_tokenize = v }
   p.on("--prompt TEXT", "Prompt for the MTP acceptance smoke") { |v| prompt = v }
   p.on("--suite-prompt NAME::TEXT", "Add a prompt row to the first-step MTP acceptance suite") do |v|
@@ -492,21 +544,34 @@ abort "--mtp-spec-wall-top2-on-reject is incompatible with --mtp-spec-wall-promo
 mtp_spec_wall_top2_accounting = true if mtp_spec_wall_top2_miss_offramp || mtp_spec_wall_promote_top2_margin || mtp_spec_wall_top2_on_reject
 
 abort "model not found: #{model_path}" unless File.exists?(model_path)
-abort "MTP sidecar not found: #{mtp_path}" unless File.exists?(mtp_path)
+abort "MTP sidecar not found: #{mtp_path}" if !mtp_from_gguf && !File.exists?(mtp_path)
 
 gguf = ML::GGUF::GGUFFile.new(model_path)
 hparams = ML::GGUF::Qwen35Hparams.new(gguf)
-mtp = ML::GGUF::Qwen35MTPWeights.from_safetensors(mtp_path)
-mtp.validate_for_qwen35!(hparams)
+mtp = if mtp_from_gguf
+        ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(model_path, hparams)
+      else
+        sidecar = ML::GGUF::Qwen35MTPWeights.from_safetensors(mtp_path)
+        sidecar.validate_for_qwen35!(hparams)
+        sidecar
+      end
 
 puts "qwen35_mtp_sidecar_probe: ok"
 puts "model=#{model_path}"
-puts "mtp=#{mtp_path}"
-puts "hparams hidden=#{hparams.n_embd} layers=#{hparams.n_layer} heads=#{hparams.n_head} kv_heads=#{hparams.n_head_kv} head_dim=#{hparams.head_dim} ffn=#{hparams.n_ff}"
+puts "mtp=#{mtp_from_gguf ? model_path : mtp_path}"
+puts "mtp_source=#{mtp_from_gguf ? "gguf_nextn" : "safetensors"}"
+puts "hparams hidden=#{hparams.n_embd} layers=#{hparams.n_layer} raw_layers=#{hparams.raw_block_count} nextn_layers=#{hparams.nextn_predict_layers} heads=#{hparams.n_head} kv_heads=#{hparams.n_head_kv} head_dim=#{hparams.head_dim} ffn=#{hparams.n_ff}"
 puts "mtp_bytes=#{(mtp.total_raw_bytes / 1_048_576.0).round(2)} MiB"
-puts "fc=#{mtp.fc.out_dim}x#{mtp.fc.in_dim}"
-puts "attn q=#{mtp.q_proj.out_dim}x#{mtp.q_proj.in_dim} k=#{mtp.k_proj.out_dim}x#{mtp.k_proj.in_dim} v=#{mtp.v_proj.out_dim}x#{mtp.v_proj.in_dim} o=#{mtp.o_proj.out_dim}x#{mtp.o_proj.in_dim}"
-puts "ffn gate=#{mtp.ffn_gate.out_dim}x#{mtp.ffn_gate.in_dim} up=#{mtp.ffn_up.out_dim}x#{mtp.ffn_up.in_dim} down=#{mtp.ffn_down.out_dim}x#{mtp.ffn_down.in_dim}"
+case mtp
+when ML::GGUF::Qwen35MTPWeights
+  puts "fc=#{mtp.fc.out_dim}x#{mtp.fc.in_dim}"
+  puts "attn q=#{mtp.q_proj.out_dim}x#{mtp.q_proj.in_dim} k=#{mtp.k_proj.out_dim}x#{mtp.k_proj.in_dim} v=#{mtp.v_proj.out_dim}x#{mtp.v_proj.in_dim} o=#{mtp.o_proj.out_dim}x#{mtp.o_proj.in_dim}"
+  puts "ffn gate=#{mtp.ffn_gate.out_dim}x#{mtp.ffn_gate.in_dim} up=#{mtp.ffn_up.out_dim}x#{mtp.ffn_up.in_dim} down=#{mtp.ffn_down.out_dim}x#{mtp.ffn_down.in_dim}"
+when ML::GGUF::Qwen35GGUFMTPWeights
+  puts "eh_proj=#{mtp.nextn_eh_proj_qw.out_dim}x#{mtp.nextn_eh_proj_qw.in_dim} type=#{mtp.nextn_eh_proj_qw.type}"
+  puts "attn q=#{mtp.attn_q_qw.out_dim}x#{mtp.attn_q_qw.in_dim} #{mtp.attn_q_qw.type} k=#{mtp.attn_k_qw.out_dim}x#{mtp.attn_k_qw.in_dim} #{mtp.attn_k_qw.type} v=#{mtp.attn_v_qw.out_dim}x#{mtp.attn_v_qw.in_dim} #{mtp.attn_v_qw.type} o=#{mtp.attn_output_qw.out_dim}x#{mtp.attn_output_qw.in_dim} #{mtp.attn_output_qw.type}"
+  puts "ffn gate=#{mtp.ffn_gate_qw.out_dim}x#{mtp.ffn_gate_qw.in_dim} #{mtp.ffn_gate_qw.type} up=#{mtp.ffn_up_qw.out_dim}x#{mtp.ffn_up_qw.in_dim} #{mtp.ffn_up_qw.type} down=#{mtp.ffn_down_qw.out_dim}x#{mtp.ffn_down_qw.in_dim} #{mtp.ffn_down_qw.type}"
+end
 
 exit unless run_forward
 abort "llama-tokenize not found: #{llama_tokenize}" unless File.exists?(llama_tokenize)
@@ -556,7 +621,7 @@ weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
 tokenizer = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model_path, llama_tokenize)
 puts "load_weights_ms=#{elapsed_ms(load_start).round(3)}"
 
-mtp_backend = ML::GGUF::Qwen35MTP.bf16_backend_label
+mtp_backend = mtp_from_gguf ? "gguf" : ML::GGUF::Qwen35MTP.bf16_backend_label
 rows = suite_prompts.empty? ? [{"main", prompt}] : suite_prompts
 total_rows = 0
 top1_hits = 0
@@ -593,9 +658,9 @@ rows.each do |label, prompt_text|
 
   mtp_warmup.times do
     if top1_only
-      ML::GGUF::Qwen35MTP.forward_one_top1(weights, mtp, hidden, y1, token_ids.size)
+      mtp_forward_one_top1(weights, mtp, hidden, y1, token_ids.size)
     else
-      logits = ML::GGUF::Qwen35MTP.forward_one_logits(weights, mtp, hidden, y1, token_ids.size)
+      logits = mtp_forward_one_logits(weights, mtp, hidden, y1, token_ids.size)
       ML::GGUF::Qwen35MTP.top_k(logits, 5)
     end
   end
@@ -608,10 +673,10 @@ rows.each do |label, prompt_text|
   mtp_repeats.times do |repeat_i|
     mtp_start = Time.instant
     if top1_only
-      mtp_y2, mtp_y2_logit = ML::GGUF::Qwen35MTP.forward_one_top1(weights, mtp, hidden, y1, token_ids.size)
+      mtp_y2, mtp_y2_logit = mtp_forward_one_top1(weights, mtp, hidden, y1, token_ids.size)
       mtp_top5 = [] of {Int32, Float32}
     else
-      mtp_logits = ML::GGUF::Qwen35MTP.forward_one_logits(weights, mtp, hidden, y1, token_ids.size)
+      mtp_logits = mtp_forward_one_logits(weights, mtp, hidden, y1, token_ids.size)
       mtp_top5 = ML::GGUF::Qwen35MTP.top_k(mtp_logits, 5)
       mtp_y2, mtp_y2_logit = mtp_top5[0]
     end
@@ -1013,7 +1078,7 @@ rows.each do |label, prompt_text|
             second_candidate = accepted_stage < stage_second_candidates.size ? stage_second_candidates[accepted_stage] : -1
             if second_candidate < 0 && mtp_spec_wall_top2_on_reject && accepted_stage < stage_candidate_hiddens.size
               top2_start = Time.instant
-              top2 = ML::GGUF::Qwen35MTP.hidden_top2(weights, stage_candidate_hiddens[accepted_stage])
+              top2 = mtp_hidden_top2_for_reject(weights, mtp, stage_candidate_hiddens[accepted_stage])
               wall_mtp_ms += elapsed_ms(top2_start)
               if top2.size > 1
                 second_candidate = top2[1][0]
@@ -1247,7 +1312,7 @@ rows.each do |label, prompt_text|
     mtp_chain_tokens.times do |i|
       if mode == "recursive_diag"
         step_start = Time.instant
-        raw = ML::GGUF::Qwen35MTP.forward_one_hidden(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos, normalized: false)
+        raw = mtp_forward_one_hidden_raw(weights, mtp, chain_prev_hidden, chain_prev_token, chain_pos)
         mtp_hidden = diag_bridge.not_nil!.apply(raw)
         mtp_topk = target_hidden_topk(weights, mtp_hidden, mtp_chain_topk)
         step_ms = elapsed_ms(step_start)

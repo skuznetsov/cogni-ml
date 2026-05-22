@@ -594,6 +594,34 @@ module ML::GGUF
       )
     end
 
+    def hidden_top2_gguf(weights : Qwen35Weights,
+                         mtp : Qwen35GGUFMTPWeights,
+                         hidden_pre_norm : Array(Float32)) : Array({Int32, Float32})
+      project_hidden = rms_norm_gguf(hidden_pre_norm, mtp.shared_head_norm(weights.output_norm), weights.hparams.rms_eps)
+      head = mtp.shared_head_qw(weights.output)
+      {% unless flag?(:cpu_only) %}
+        if ENV["QWEN35_MTP_TOP2_METAL_OFF"]? != "1" && Qwen35Metal.available?
+          if top2 = Qwen35Metal.project_top2_no_norm(head, project_hidden)
+            return [{top2[0].to_i32, top2[1]}, {top2[2].to_i32, top2[3]}]
+          end
+        end
+      {% end %}
+
+      logits = Qwen35CPU.qmatvec_nobias(head, project_hidden)
+      top_k(logits, 2)
+    end
+
+    def forward_one_logits_gguf(weights : Qwen35Weights,
+                                mtp : Qwen35GGUFMTPWeights,
+                                prev_hidden : Array(Float32),
+                                token_id : Int32,
+                                pos : Int32,
+                                mtp_state : State? = nil) : Array(Float32)
+      hidden = forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+      project_hidden = rms_norm_gguf(hidden, mtp.shared_head_norm(weights.output_norm), weights.hparams.rms_eps)
+      Qwen35CPU.qmatvec_nobias(mtp.shared_head_qw(weights.output), project_hidden)
+    end
+
     def forward_one_top1_gguf(weights : Qwen35Weights,
                               mtp : Qwen35GGUFMTPWeights,
                               prev_hidden : Array(Float32),
