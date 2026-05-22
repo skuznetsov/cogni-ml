@@ -22,6 +22,10 @@ constant int8_t kvalues_iq4nl[16] = {
     -127, -104, -83, -65, -49, -35, -22, -10,
        1,   13,  25,  38,  53,  69,  89, 113,
 };
+constant float kvalues_iq4nl_f[16] = {
+    -127.0f, -104.0f, -83.0f, -65.0f, -49.0f, -35.0f, -22.0f, -10.0f,
+       1.0f,   13.0f,  25.0f,  38.0f,  53.0f,  69.0f,  89.0f, 113.0f,
+};
 
 // ============================================================================
 // Q8_0
@@ -127,29 +131,55 @@ kernel void simd_mv_iq4_nl_f32(
     ushort sgitg [[simdgroup_index_in_threadgroup]])
 {
     const uint nb = in_dim / IQ4_NL_QK;
-    const uint first_row = (tgpig.x * MV8_NSG + sgitg) * MV8_NR0;
+    const uint first_row = (tgpig.x * 2 + sgitg) * 2;
     const uint n = tgpig.y;
     if (first_row >= out_dim || n >= batch) return;
 
     const uint row_bytes = nb * 18;
     device const float * y_base = x + n * in_dim;
-    float sumf[MV8_NR0] = {0.f};
+    float sumf[2] = {0.f, 0.f};
 
-    for (uint ib = 0; ib < nb; ++ib) {
-        const uint lane = tiisg;
-        const float y = y_base[ib * IQ4_NL_QK + lane];
-        for (short row = 0; row < MV8_NR0; ++row) {
+    const ushort ix = tiisg / 2;
+    const ushort it = tiisg & 1;
+    device const float * yb = y_base + ix * IQ4_NL_QK + it * 8;
+
+    uint32_t aux32[2];
+    thread const uint8_t * q8 = (thread const uint8_t *)aux32;
+
+    for (uint ib = ix; ib < nb; ib += 16) {
+        device const float4 * y4 = (device const float4 *)yb;
+        const float4 yl0 = y4[0];
+        const float4 yl1 = y4[4];
+        const float4 yl2 = y4[1];
+        const float4 yl3 = y4[5];
+
+        for (short row = 0; row < 2; ++row) {
             const uint row_id = first_row + row;
             if (row_id >= out_dim) continue;
             device const block_iq4_nl_56 * blk =
                 (device const block_iq4_nl_56 *)(w_raw + row_id * row_bytes) + ib;
-            const uint8_t packed = blk->qs[lane & 15];
-            const uint8_t q = (lane < 16) ? (packed & 0x0f) : (packed >> 4);
-            sumf[row] += (float)blk->d * y * (float)kvalues_iq4nl[q];
+            device const uint16_t * q4 = (device const uint16_t *)(blk->qs + 8 * it);
+
+            aux32[0] = q4[0] | (q4[1] << 16);
+            aux32[1] = (aux32[0] >> 4) & 0x0f0f0f0f;
+            aux32[0] &= 0x0f0f0f0f;
+            const float4 qf10 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
+            const float4 qf11 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
+
+            aux32[0] = q4[2] | (q4[3] << 16);
+            aux32[1] = (aux32[0] >> 4) & 0x0f0f0f0f;
+            aux32[0] &= 0x0f0f0f0f;
+            const float4 qf20 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
+            const float4 qf21 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
+
+            const float4 acc = yl0 * qf10 + yl1 * qf11 + yl2 * qf20 + yl3 * qf21;
+            sumf[row] += (float)blk->d * (acc[0] + acc[1] + acc[2] + acc[3]);
         }
+
+        yb += 16 * IQ4_NL_QK;
     }
 
-    for (short row = 0; row < MV8_NR0 && first_row + row < out_dim; ++row) {
+    for (short row = 0; row < 2 && first_row + row < out_dim; ++row) {
         float tot = simd_sum(sumf[row]);
         if (tiisg == 0) {
             output[n * out_dim + first_row + row] = tot;
