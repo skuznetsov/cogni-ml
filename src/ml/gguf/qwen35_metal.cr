@@ -9000,6 +9000,7 @@ module ML
                        when .q5_k? then mv5_pipeline
                        when .q6_k? then mv6_pipeline
                        when .q8_0? then mv8_pipeline
+                       when .iq4_nl? then mv_iq4_nl_pipeline
                        else
                          return nil
                        end
@@ -9033,7 +9034,7 @@ module ML
             enc.set_value(1_u32,          5)
             rows_per_tg = gemv_rows_per_tg_for(pipeline)
             grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, 1, 1}
-            enc.dispatch_threadgroups(grid, {64, 1, 1})
+            enc.dispatch_threadgroups(grid, {gemv_threads_per_tg_for(pipeline), 1, 1})
           end
           enc.end_encoding
           t_enc = Time.instant if Profile.enabled?
@@ -9139,6 +9140,12 @@ module ML
             end
           when .q8_0?
             matmul_gemv_buf(mv8_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
+          when .iq4_nl?
+            if batch > GEMM_BATCH_THRESHOLD
+              nil
+            else
+              matmul_gemv_buf(mv_iq4_nl_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
+            end
           else
             nil
           end

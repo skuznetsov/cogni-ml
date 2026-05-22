@@ -410,7 +410,7 @@ module ML::GGUF
     METAL_QK_MIN_IN  = 256
 
     private def metal_qw_supported?(qw : QuantWeight) : Bool
-      qw.type.q4_k? || qw.type.q5_k? || qw.type.q6_k? || qw.type.q8_0?
+      qw.type.q4_k? || qw.type.q5_k? || qw.type.q6_k? || qw.type.q8_0? || qw.type.iq4_nl?
     end
 
     private def metal_qw_eligible?(qw : QuantWeight) : Bool

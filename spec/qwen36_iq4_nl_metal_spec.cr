@@ -60,4 +60,34 @@ describe ML::GGUF::Qwen35Metal do
     cos.should be >= 0.99999
     (diff / mag).should be <= 1.0e-5_f32
   end
+
+  it "routes IQ4_NL through generic Metal matmul and matmul_many for GEMV only" do
+    g = ML::GGUF::GGUFFile.new(QWEN36_IQ4_NL_METAL)
+    if region = g.mmap_region
+      base, size = region
+      ML::GGUF::Qwen35Metal.register_mmap(base, size)
+    end
+    info = g.tensor("blk.0.attn_gate.weight").not_nil!
+    in_dim = info.dims[0].to_i32
+    out_dim = 4
+    row_bytes = ((in_dim + 31) // 32) * 18
+    raw = g.read_tensor_raw(info)[0, row_bytes * out_dim].dup
+    g.close
+
+    qw = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::IQ4_NL, out_dim, in_dim)
+    x = Array(Float32).new(in_dim) { |i| (((i * 19) % 37) - 18).to_f32 / 17.0_f32 }
+
+    generic = ML::GGUF::Qwen35Metal.matmul(qw, x, 1).not_nil!
+    direct = ML::GGUF::Qwen35Metal.matmul_iq4_nl(x, raw, in_dim, out_dim, 1)
+    generic.should eq(direct)
+
+    many = ML::GGUF::Qwen35Metal.matmul_many([qw, qw], x).not_nil!
+    many.size.should eq(2)
+    many[0].should eq(direct)
+    many[1].should eq(direct)
+
+    batch = ML::GGUF::Qwen35Metal::GEMM_BATCH_THRESHOLD + 1
+    x_many = Array(Float32).new(batch * in_dim, 0.125_f32)
+    ML::GGUF::Qwen35Metal.matmul(qw, x_many, batch).should be_nil
+  end
 end

@@ -2120,3 +2120,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_422:** No-codegen build passed for the new bench, and the focused Metal IQ4_NL spec still passed. Smoke run with `--limit=2 --max-rows=16 --runs=3 --warmup=1 --cpu-check-rows=4` measured capped `5120x17408` p50 `0.371ms` and capped `17408x5120` p50 `0.709ms`, both with `cos=1.0` against CPU subset. Full-row smoke for the top shape measured `5120x17408` p50 `1.447ms`. Treat these as route-selection smoke timings, not quiet-host public benchmark evidence.
 
 **next_update_422:** Next IQ4_NL exact speed slice: add fail-closed generic `Qwen35Metal.matmul` and `Qwen35CPU` dispatch support for IQ4_NL only for decode/GEMV (`batch <= GEMM_BATCH_THRESHOLD`), then run a partial forward/operator gate. Keep prefill/GEMM unsupported until a separate IQ4_NL GEMM kernel or repack route exists.
+
+**decision_update_423:** Wired IQ4_NL into generic Metal decode dispatch. `Qwen35Metal.matmul` and `matmul_many` now route IQ4_NL through `simd_mv_iq4_nl_f32` for GEMV/decode-sized batches, while `Qwen35Metal.matmul` returns `nil` for `batch > GEMM_BATCH_THRESHOLD` to keep IQ4_NL prefill/GEMM fail-closed. `Qwen35CPU` now treats IQ4_NL as Metal-supported for eligible matvecs.
+
+**evidence_update_423:** Focused Metal IQ4_NL spec passed with `2 examples, 0 failures`, covering direct GEMV vs CPU, generic `matmul` vs direct, `matmul_many` vs direct, and the prefill-batch `nil` fallback. `qwen35_generate` and `qwen36_iq4_nl_op_bench` no-codegen builds passed. Small op-bench smoke still returned `cos=1.0` on the top IQ4_NL shape.
+
+**next_update_423:** Before claiming full native Qwen3.6 IQ4_NL support, add a controlled decode-only model smoke or a partial layer forward that avoids prefill-sized IQ4_NL GEMM. The remaining speed-critical gap is IQ4_NL prefill/GEMM or a repack-to-supported-K-quant strategy.
