@@ -53,6 +53,7 @@ mtp_spec_wall_router_thresholds = [] of Float64
 mtp_spec_wall_profile = false
 mtp_spec_wall_serial_early_verify = false
 mtp_spec_wall_snapshot_cost_probe = false
+mtp_wall_exact_warmup = 2_i32
 mtp_draft_state_off = false
 
 struct DiagBridge
@@ -544,6 +545,7 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-wall-profile", "Profile only target verifier calls inside the exact-resync MTP wall loop") { mtp_spec_wall_profile = true }
   p.on("--mtp-spec-wall-serial-early-verify", "Verify MTP wall stages token-by-token and stop at the first candidate mismatch") { mtp_spec_wall_serial_early_verify = true }
   p.on("--mtp-spec-wall-snapshot-cost-probe", "After MTP wall timing, simulate recurrent branch-state snapshot blit cost for every verified row") { mtp_spec_wall_snapshot_cost_probe = true }
+  p.on("--mtp-wall-exact-warmup N", "Untimed exact target warmup tokens before plain/spec wall timing; use 0 to measure cold-start") { |v| mtp_wall_exact_warmup = v.to_i32 }
   p.on("--mtp-draft-state-off", "Use stateless one-token MTP proposals inside wall/spec probes (proposal-only; target verifier remains exact)") { mtp_draft_state_off = true }
   p.on("-h", "--help", "Show help") do
     puts p
@@ -613,6 +615,7 @@ abort "--mtp-spec-wall-min-margin-offramp requires --mtp-spec-wall-min-margin" i
 abort "--mtp-spec-wall-min-margin must be non-negative" if mtp_spec_wall_min_margin && mtp_spec_wall_min_margin.not_nil! < 0.0
 abort "--mtp-spec-wall-stage-once requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_stage_once && mtp_spec_wall_stage <= 0
 abort "--mtp-spec-wall-reject-offramp must be non-negative" if mtp_spec_wall_reject_offramp < 0
+abort "--mtp-wall-exact-warmup must be non-negative" if mtp_wall_exact_warmup < 0
 mtp_spec_wall_router_thresholds = mtp_spec_wall_router_thresholds.sort.uniq
 abort "--mtp-spec-wall-router-thresholds requires --mtp-spec-wall-gammas" if !mtp_spec_wall_router_thresholds.empty? && mtp_spec_wall_gammas.empty?
 chain_modes = case mtp_chain_mode
@@ -739,6 +742,25 @@ rows.each do |label, prompt_text|
 
   next unless mtp_chain_tokens > 0
 
+  if mtp_wall_exact_warmup > 0
+    warm_tokens = Math.min(mtp_wall_exact_warmup, mtp_chain_tokens)
+
+    # Keep cold Metal pipeline/setup tax out of plain-vs-spec wall timings.
+    # Both warmup states are disposable and never affect measured decode state.
+    warm_state = state.fork
+    warm_prev = y1
+    warm_pos = token_ids.size
+    warm_tokens.times do
+      warm_next, _ = ML::GGUF::Qwen35CPU.forward_top1(weights, warm_prev, warm_pos, warm_state)
+      warm_prev = warm_next
+      warm_pos += 1
+    end
+
+    warm_verify_state = state.fork
+    warm_verify_tokens = Array(Int32).new(warm_tokens) { y1 }
+    ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, warm_verify_tokens, token_ids.size, warm_verify_state)
+  end
+
   exact_state = state.fork
   exact_hiddens = [] of Array(Float32)
   exact_nexts = [] of {Int32, Float32}
@@ -778,7 +800,7 @@ rows.each do |label, prompt_text|
   end
   exact_ids = exact_nexts.map(&.[0])
   raise "plain exact ids mismatch" unless plain_ids == exact_ids
-  puts "mtp_plain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} plain_exact_ms=#{plain_exact_ms.round(3)} ids=#{plain_ids.join(",")}"
+  puts "mtp_plain_exact label=#{label.inspect} tokens=#{mtp_chain_tokens} exact_warmup=#{mtp_wall_exact_warmup} plain_exact_ms=#{plain_exact_ms.round(3)} ids=#{plain_ids.join(",")}"
 
   mtp_spec_gammas.each do |gamma|
     spec_i = 0
@@ -1321,7 +1343,7 @@ rows.each do |label, prompt_text|
     agg.plain_exact_ms_sum += plain_exact_ms
 
     verifier_mode = mtp_spec_wall_serial_early_verify ? "serial_early" : "chunk"
-    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} snapshot_tokens=#{wall_snapshot_tokens} top2_checks=#{wall_top2_checks} top2_rescues=#{wall_top2_rescues} top2_wrong_tail_tokens=#{wall_top2_wrong_tail_tokens} top2_replay_tokens=#{wall_top2_replay_tokens} top2_replay_ms=#{wall_top2_replay_ms.round(3)} top2_offramp_hits=#{wall_top2_offramp_hits} top2_promotions=#{wall_top2_promotions} top2_promoted_accepted=#{wall_top2_promoted_accepted} margin_skips=#{wall_margin_skips} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} snapshot_sim_ms=#{wall_snapshot_ms.round(3)} snapshot_modeled_wall_ms=#{snapshot_modeled_wall_ms.round(3)} snapshot_modeled_speedup=#{(plain_exact_ms / snapshot_modeled_wall_ms).round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
+    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} exact_warmup=#{mtp_wall_exact_warmup} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} snapshot_tokens=#{wall_snapshot_tokens} top2_checks=#{wall_top2_checks} top2_rescues=#{wall_top2_rescues} top2_wrong_tail_tokens=#{wall_top2_wrong_tail_tokens} top2_replay_tokens=#{wall_top2_replay_tokens} top2_replay_ms=#{wall_top2_replay_ms.round(3)} top2_offramp_hits=#{wall_top2_offramp_hits} top2_promotions=#{wall_top2_promotions} top2_promoted_accepted=#{wall_top2_promoted_accepted} margin_skips=#{wall_margin_skips} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} snapshot_sim_ms=#{wall_snapshot_ms.round(3)} snapshot_modeled_wall_ms=#{snapshot_modeled_wall_ms.round(3)} snapshot_modeled_speedup=#{(plain_exact_ms / snapshot_modeled_wall_ms).round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
     if mtp_spec_wall_profile
       puts "mtp_spec_wall_profile label=#{label.inspect} gamma=#{gamma} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens}"
       puts ML::GGUF::Qwen35Metal::Profile.report_io
@@ -1556,7 +1578,7 @@ mtp_spec_wall_aggregates.keys.sort.each do |gamma|
   next if agg.tokens == 0
 
   verifier_mode = mtp_spec_wall_serial_early_verify ? "serial_early" : "chunk"
-  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} margin_skips=#{agg.margin_skips} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
+  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} exact_warmup=#{mtp_wall_exact_warmup} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} margin_skips=#{agg.margin_skips} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
 end
 router_trace_io.try(&.close)
 if ML::GGUF::Qwen35MTP.profile_enabled?
