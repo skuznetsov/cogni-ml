@@ -1,5 +1,7 @@
 require "./spec_helper"
 require "../src/ml/gguf/qwen35_metal"
+require "../src/ml/gguf/qwen35_meta"
+require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/quant_matmul"
 require "../src/ml/gguf/reader"
 
@@ -110,5 +112,25 @@ describe ML::GGUF::Qwen35Metal do
     )
 
     max_abs_diff_iq4(gpu, cpu).should be <= 2.0e-5_f32
+  end
+
+  it "loads the appended Qwen3.6 GGUF MTP block as a sidecar" do
+    g = ML::GGUF::GGUFFile.new(QWEN36_IQ4_NL_METAL)
+    hp = ML::GGUF::Qwen35Hparams.new(g)
+    g.close
+
+    hp.raw_block_count.should eq(65)
+    hp.n_layer.should eq(64)
+    hp.nextn_predict_layers.should eq(1)
+
+    mtp = ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(QWEN36_IQ4_NL_METAL, hp)
+    mtp.block_index.should eq(64)
+    mtp.nextn_eh_proj_qw.type.q8_0?.should be_true
+    mtp.attn_q_qw.type.q4_k?.should be_true
+    mtp.attn_v_qw.type.q5_k?.should be_true
+    mtp.ffn_gate_qw.type.q4_k?.should be_true
+    mtp.nextn_eh_proj_qw.out_dim.should eq(hp.n_embd)
+    mtp.nextn_eh_proj_qw.in_dim.should eq(hp.n_embd * 2)
+    mtp.shared_head_norm([] of Float32).size.should eq(hp.n_embd)
   end
 end

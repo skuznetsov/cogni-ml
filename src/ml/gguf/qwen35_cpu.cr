@@ -1698,6 +1698,24 @@ module ML::GGUF
       {logits.index(maxv).not_nil!.to_i32, maxv}
     end
 
+    # Project a pre-norm hidden through an explicit RMSNorm/head pair.
+    # Used by GGUF MTP, where the draft head can have its own shared norm/head
+    # while still reusing the target runtime's fused Q6/Q8 top1 kernels.
+    def hidden_top1_with_norm(hidden : Array(Float32),
+                              norm_weight : Array(Float32),
+                              out_qw : QuantWeight,
+                              eps : Float32) : {Int32, Float32}
+      x = hidden.dup
+      if top1 = output_project_top1_routed(x, norm_weight, out_qw, eps)
+        return top1
+      end
+
+      rms_norm!(x, norm_weight, eps)
+      logits = qmatvec_nobias(out_qw, x)
+      maxv = logits.max
+      {logits.index(maxv).not_nil!.to_i32, maxv}
+    end
+
     private def top2_from_logits(logits : Array(Float32)) : {Int32, Float32, Int32, Float32}
       best = -Float32::INFINITY
       second = -Float32::INFINITY

@@ -137,6 +137,161 @@ module ML::GGUF
     end
   end
 
+  # Qwen3.6 GGUF-native MTP block weights.
+  #
+  # Newer llama.cpp GGUFs keep the MTP predictor as an appended `blk.N` block
+  # plus `blk.N.nextn.*` tensors. This loader mirrors llama.cpp's graph_mtp
+  # naming and keeps the GGUF mmap alive for QuantWeight slices.
+  class Qwen35GGUFMTPWeights
+    getter block_index : Int32
+    getter nextn_eh_proj_qw : QuantWeight
+    getter nextn_enorm : Array(Float32)
+    getter nextn_hnorm : Array(Float32)
+    getter nextn_embed_tokens_qw : QuantWeight?
+    getter nextn_shared_head_qw : QuantWeight?
+    getter nextn_shared_head_norm : Array(Float32)?
+    getter attn_norm : Array(Float32)
+    getter attn_q_qw : QuantWeight
+    getter attn_q_norm : Array(Float32)
+    getter attn_k_qw : QuantWeight
+    getter attn_k_norm : Array(Float32)
+    getter attn_v_qw : QuantWeight
+    getter attn_output_qw : QuantWeight
+    getter post_attention_norm : Array(Float32)
+    getter ffn_gate_qw : QuantWeight
+    getter ffn_up_qw : QuantWeight
+    getter ffn_down_qw : QuantWeight
+
+    @gguf : GGUFFile
+
+    def initialize(@gguf : GGUFFile, hparams : Qwen35Hparams)
+      raise "qwen35_gguf_mtp: GGUF has no MTP blocks" unless hparams.nextn_predict_layers > 0
+      raise "qwen35_gguf_mtp: only one MTP block is supported, got #{hparams.nextn_predict_layers}" unless hparams.nextn_predict_layers == 1
+
+      @block_index = hparams.n_layer
+      p = "blk.#{@block_index}"
+      @nextn_eh_proj_qw = load_qw(@gguf, "#{p}.nextn.eh_proj.weight")
+      @nextn_enorm = load_f32(@gguf, "#{p}.nextn.enorm.weight")
+      @nextn_hnorm = load_f32(@gguf, "#{p}.nextn.hnorm.weight")
+      @nextn_embed_tokens_qw = load_qw?(@gguf, "#{p}.nextn.embed_tokens.weight")
+      @nextn_shared_head_qw = load_qw?(@gguf, "#{p}.nextn.shared_head_head.weight")
+      @nextn_shared_head_norm = load_f32?(@gguf, "#{p}.nextn.shared_head_norm.weight")
+      @attn_norm = load_f32(@gguf, "#{p}.attn_norm.weight")
+      @attn_q_qw = load_qw(@gguf, "#{p}.attn_q.weight")
+      @attn_q_norm = load_f32(@gguf, "#{p}.attn_q_norm.weight")
+      @attn_k_qw = load_qw(@gguf, "#{p}.attn_k.weight")
+      @attn_k_norm = load_f32(@gguf, "#{p}.attn_k_norm.weight")
+      @attn_v_qw = load_qw(@gguf, "#{p}.attn_v.weight")
+      @attn_output_qw = load_qw(@gguf, "#{p}.attn_output.weight")
+      @post_attention_norm = load_f32(@gguf, "#{p}.post_attention_norm.weight")
+      @ffn_gate_qw = load_qw(@gguf, "#{p}.ffn_gate.weight")
+      @ffn_up_qw = load_qw(@gguf, "#{p}.ffn_up.weight")
+      @ffn_down_qw = load_qw(@gguf, "#{p}.ffn_down.weight")
+
+      validate_for_qwen35!(hparams)
+
+      {% unless flag?(:cpu_only) %}
+        if Qwen35Metal.available?
+          if region = @gguf.mmap_region
+            base, size = region
+            Qwen35Metal.register_mmap(base, size)
+          end
+        end
+      {% end %}
+    end
+
+    def self.from_gguf(path : String, hparams : Qwen35Hparams) : Qwen35GGUFMTPWeights
+      Qwen35GGUFMTPWeights.new(GGUFFile.new(path), hparams)
+    end
+
+    def total_raw_bytes : Int64
+      qws = [
+        @nextn_eh_proj_qw, @attn_q_qw, @attn_k_qw, @attn_v_qw, @attn_output_qw,
+        @ffn_gate_qw, @ffn_up_qw, @ffn_down_qw,
+      ]
+      qws.sum { |qw| qw.raw.size.to_i64 } +
+        (@nextn_embed_tokens_qw.try(&.raw.size.to_i64) || 0_i64) +
+        (@nextn_shared_head_qw.try(&.raw.size.to_i64) || 0_i64)
+    end
+
+    def token_embd_qw(default_qw : QuantWeight) : QuantWeight
+      @nextn_embed_tokens_qw || default_qw
+    end
+
+    def shared_head_qw(default_qw : QuantWeight) : QuantWeight
+      @nextn_shared_head_qw || default_qw
+    end
+
+    def shared_head_norm(default_norm : Array(Float32)) : Array(Float32)
+      @nextn_shared_head_norm || default_norm
+    end
+
+    def validate_for_qwen35!(hparams : Qwen35Hparams) : Nil
+      hidden = hparams.n_embd
+      ff = hparams.n_ff
+      q_dim = 2 * hparams.head_dim * hparams.n_head
+      kv_dim = hparams.head_dim * hparams.n_head_kv
+      attn_out_dim = hparams.head_dim * hparams.n_head
+
+      expect_matrix(@nextn_eh_proj_qw, hidden, hidden * 2)
+      expect_matrix(@attn_q_qw, q_dim, hidden)
+      expect_matrix(@attn_k_qw, kv_dim, hidden)
+      expect_matrix(@attn_v_qw, kv_dim, hidden)
+      expect_matrix(@attn_output_qw, hidden, attn_out_dim)
+      expect_matrix(@ffn_gate_qw, ff, hidden)
+      expect_matrix(@ffn_up_qw, ff, hidden)
+      expect_matrix(@ffn_down_qw, hidden, ff)
+      expect_vector("nextn.enorm", @nextn_enorm, hidden)
+      expect_vector("nextn.hnorm", @nextn_hnorm, hidden)
+      expect_vector("attn_norm", @attn_norm, hidden)
+      expect_vector("post_attention_norm", @post_attention_norm, hidden)
+      expect_vector("attn_q_norm", @attn_q_norm, hparams.head_dim)
+      expect_vector("attn_k_norm", @attn_k_norm, hparams.head_dim)
+      if norm = @nextn_shared_head_norm
+        expect_vector("nextn.shared_head_norm", norm, hidden)
+      end
+      if emb = @nextn_embed_tokens_qw
+        expect_matrix(emb, hparams.vocab_size > 0 ? hparams.vocab_size : emb.out_dim, hidden)
+      end
+      if head = @nextn_shared_head_qw
+        expect_matrix(head, hparams.vocab_size > 0 ? hparams.vocab_size : head.out_dim, hidden)
+      end
+    end
+
+    private def load_qw(g : GGUFFile, name : String) : QuantWeight
+      info = g.tensor(name) || raise "qwen35_gguf_mtp: missing tensor #{name.inspect}"
+      raw = g.read_tensor_raw(info)
+      in_dim = info.dims[0].to_i32
+      out_dim = info.dims.size >= 2 ? info.dims[1].to_i32 : 1
+      QuantWeight.new(raw, info.type, out_dim, in_dim)
+    end
+
+    private def load_qw?(g : GGUFFile, name : String) : QuantWeight?
+      return nil unless g.tensor(name)
+      load_qw(g, name)
+    end
+
+    private def load_f32(g : GGUFFile, name : String) : Array(Float32)
+      info = g.tensor(name) || raise "qwen35_gguf_mtp: missing tensor #{name.inspect}"
+      g.read_tensor_f32(info)
+    end
+
+    private def load_f32?(g : GGUFFile, name : String) : Array(Float32)?
+      info = g.tensor(name)
+      info ? g.read_tensor_f32(info) : nil
+    end
+
+    private def expect_matrix(w : QuantWeight, out_dim : Int32, in_dim : Int32) : Nil
+      return if w.out_dim == out_dim && w.in_dim == in_dim
+      raise "qwen35_gguf_mtp: weight shape #{w.out_dim}x#{w.in_dim} != expected #{out_dim}x#{in_dim}"
+    end
+
+    private def expect_vector(name : String, values : Array(Float32), dim : Int32) : Nil
+      return if values.size == dim
+      raise "qwen35_gguf_mtp: #{name} size #{values.size} != expected #{dim}"
+    end
+  end
+
   module Qwen35MTP
     extend self
 
@@ -287,6 +442,166 @@ module ML::GGUF
       len.times { |j| ss += x[offset + j].to_f64 * x[offset + j].to_f64 }
       inv_rms = (1.0 / Math.sqrt(ss / len.to_f64 + eps.to_f64)).to_f32
       len.times { |j| x[offset + j] = x[offset + j] * inv_rms * (1.0_f32 + w[j]) }
+    end
+
+    def rms_norm_gguf(x : Array(Float32), w : Array(Float32), eps : Float32) : Array(Float32)
+      Qwen35CPU.rms_norm(x, w, eps)
+    end
+
+    def rms_norm_gguf_slice!(x : Array(Float32), offset : Int32, len : Int32,
+                             w : Array(Float32), eps : Float32) : Nil
+      Qwen35CPU.rms_norm_slice!(x, offset, len, w, eps)
+    end
+
+    # GGUF-native one-token MTP hidden. This is the correctness-first path for
+    # llama.cpp-style appended `blk.N.nextn.*` MTP blocks. It intentionally keeps
+    # the math explicit; once validated, the same operator sequence can be fused.
+    def forward_one_hidden_gguf(weights : Qwen35Weights,
+                                mtp : Qwen35GGUFMTPWeights,
+                                prev_hidden : Array(Float32),
+                                token_id : Int32,
+                                pos : Int32,
+                                mtp_state : State? = nil) : Array(Float32)
+      hp = weights.hparams
+      hidden = hp.n_embd
+      raise ArgumentError.new("prev_hidden size #{prev_hidden.size} != #{hidden}") unless prev_hidden.size == hidden
+
+      emb = Qwen35CPU.embedding_lookup(mtp.token_embd_qw(weights.token_embd), token_id)
+      emb_norm = rms_norm_gguf(emb, mtp.nextn_enorm, hp.rms_eps)
+      hidden_norm = rms_norm_gguf(prev_hidden, mtp.nextn_hnorm, hp.rms_eps)
+
+      fc_in = Array(Float32).new(hidden * 2, 0.0_f32)
+      hidden.times do |i|
+        fc_in[i] = emb_norm[i]
+        fc_in[hidden + i] = hidden_norm[i]
+      end
+
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv
+      head_dim = hp.head_dim
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      heads_per_group = n_head // n_head_kv
+
+      residual = Qwen35CPU.qmatvec_nobias(mtp.nextn_eh_proj_qw, fc_in)
+      cur = rms_norm_gguf(residual, mtp.attn_norm, hp.rms_eps)
+      attn_o = Array(Float32).new(q_dim, 0.0_f32)
+
+      if cache = mtp_state
+        raise "mtp state kv_dim #{cache.kv_dim} != expected #{kv_dim}" unless cache.kv_dim == kv_dim
+        qkv = Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_k_qw, mtp.attn_v_qw], cur)
+        q_full = qkv[0]
+        k = qkv[1]
+        v = qkv[2]
+        raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+        raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
+        raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+
+        q = Array(Float32).new(q_dim, 0.0_f32)
+        gate = Array(Float32).new(q_dim, 0.0_f32)
+        n_head.times do |h|
+          src_base = h * 2 * head_dim
+          dst_base = h * head_dim
+          head_dim.times do |d|
+            q[dst_base + d] = q_full[src_base + d]
+            gate[dst_base + d] = q_full[src_base + head_dim + d]
+          end
+        end
+
+        n_head.times do |h|
+          rms_norm_gguf_slice!(q, h * head_dim, head_dim, mtp.attn_q_norm, hp.rms_eps)
+          Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+        end
+        n_head_kv.times do |h|
+          rms_norm_gguf_slice!(k, h * head_dim, head_dim, mtp.attn_k_norm, hp.rms_eps)
+          Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+        end
+
+        cache.append!(k, v)
+        scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+        scores = Array(Float32).new(cache.length, 0.0_f32)
+        probs = Array(Float32).new(cache.length, 0.0_f32)
+
+        n_head.times do |h|
+          kvh = h // heads_per_group
+          q_base = h * head_dim
+          max_score = -Float32::INFINITY
+          cache.length.times do |t|
+            k_base = t * kv_dim + kvh * head_dim
+            dot = 0.0_f32
+            head_dim.times { |d| dot += q[q_base + d] * cache.k_cache[k_base + d] }
+            score = dot * scale
+            scores[t] = score
+            max_score = score if score > max_score
+          end
+
+          denom = 0.0_f32
+          cache.length.times do |t|
+            p = Math.exp((scores[t] - max_score).to_f64).to_f32
+            probs[t] = p
+            denom += p
+          end
+          inv_denom = 1.0_f32 / denom
+
+          head_dim.times do |d|
+            sum = 0.0_f32
+            cache.length.times do |t|
+              v_base = t * kv_dim + kvh * head_dim
+              sum += probs[t] * inv_denom * cache.v_cache[v_base + d]
+            end
+            attn_o[q_base + d] = sum * Qwen35CPU.sigmoid(gate[q_base + d])
+          end
+        end
+      else
+        qv = Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_v_qw], cur)
+        q_full = qv[0]
+        v = qv[1]
+        raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+        raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+
+        n_head.times do |h|
+          src_base = h * 2 * head_dim + head_dim
+          kvh = h // heads_per_group
+          q_base = h * head_dim
+          kv_base = kvh * head_dim
+          head_dim.times do |d|
+            attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(q_full[src_base + d])
+          end
+        end
+      end
+
+      attn_out = Qwen35CPU.qmatvec_nobias(mtp.attn_output_qw, attn_o)
+      after_attn = Array(Float32).new(hidden) { |i| residual[i] + attn_out[i] }
+      cur2 = rms_norm_gguf(after_attn, mtp.post_attention_norm, hp.rms_eps)
+
+      gu = Qwen35CPU.qmatvec_many([mtp.ffn_gate_qw, mtp.ffn_up_qw], cur2)
+      gate_ff = gu[0]
+      up_ff = gu[1]
+      Qwen35CPU.silu!(gate_ff)
+      combined = Array(Float32).new(gate_ff.size) { |i| gate_ff[i] * up_ff[i] }
+      ffn_out = Qwen35CPU.qmatvec_nobias(mtp.ffn_down_qw, combined)
+      Array(Float32).new(hidden) { |i| after_attn[i] + ffn_out[i] }
+    end
+
+    def hidden_top1_gguf(weights : Qwen35Weights,
+                         mtp : Qwen35GGUFMTPWeights,
+                         hidden_pre_norm : Array(Float32)) : {Int32, Float32}
+      Qwen35CPU.hidden_top1_with_norm(
+        hidden_pre_norm,
+        mtp.shared_head_norm(weights.output_norm),
+        mtp.shared_head_qw(weights.output),
+        weights.hparams.rms_eps,
+      )
+    end
+
+    def forward_one_top1_gguf(weights : Qwen35Weights,
+                              mtp : Qwen35GGUFMTPWeights,
+                              prev_hidden : Array(Float32),
+                              token_id : Int32,
+                              pos : Int32,
+                              mtp_state : State? = nil) : {Int32, Float32}
+      hidden = forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+      hidden_top1_gguf(weights, mtp, hidden)
     end
 
     # CPU/BF16 formula oracle for one Qwen3.6 MTP layer.
