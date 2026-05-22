@@ -2198,3 +2198,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_440:** Build and focused Metal spec passed (`4 examples, 0 failures`). On Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`, exact-first improved work counters (`verifier_calls=7/verifier_tokens=15/replay_tokens=1`) and exact-first+hidden-resync+checkpoint further reduced verifier work (`verifier_calls=6/verifier_tokens=13/replay_tokens=0`), with parity true. Wall remained below plain (`0.733x` and `0.836x`), so exact-first is a diagnostic/controller primitive, not a default speed path.
 
 **next_update_440:** Use exact-first only in controller sweeps. The likely production policy is conditional: exact-first or off-ramp for uncertain windows, hidden-resync+checkpoint for high-acceptance windows, and plain exact when probe cost cannot amortize.
+
+**decision_update_441:** Stage sweep keeps `stage=2` as the current best MTP verifier compromise for `gamma=8 hidden_resync rec_checkpoint`. `stage=1` improves acceptance but creates too many verifier calls; `stage=3/4` over-verify wrong tails.
+
+**evidence_update_441:** 3-prompt suite, Q4_K_M target + UD-Q4_K_XL sidecar, `tokens=16 gamma=8 lazy hidden_resync rec_checkpoint`: stage1 `accepted=37/rejections=8/verifier_calls=45/verifier_tokens=48/speedup=0.847`; stage2 `accepted=33/rejections=13/verifier_calls=27/verifier_tokens=55/speedup=0.948` in a noisy run; stage3 `accepted=31/rejections=16/verifier_calls=22/verifier_tokens=64/replay_tokens=8/speedup=0.778`; stage4 `accepted=31/rejections=17/verifier_calls=21/verifier_tokens=80/replay_tokens=23/speedup=0.593`.
+
+**next_update_441:** Stop widening verifier chunks. Next exact speed branch should reduce small-stage verifier overhead directly: specialize B1/B2 verifier paths, fuse verifier+top1 output where possible, or capture/replay command buffers for repeated verifier shapes.
