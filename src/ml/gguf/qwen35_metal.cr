@@ -19,14 +19,14 @@ require "./qwen35_weights"
 module ML
   module GGUF
     module Qwen35Metal
-      Q4K_BLOCK_BYTES  = 144
-      Q5K_BLOCK_BYTES  = 176
-      Q6K_BLOCK_BYTES  = 210
-      Q8_0_BLOCK_BYTES =  34
-      IQ4_NL_BLOCK_BYTES = 18
-      QK_K             = 256
-      Q8_0_QK          =  32
-      IQ4_NL_QK        =  32
+      Q4K_BLOCK_BYTES    = 144
+      Q5K_BLOCK_BYTES    = 176
+      Q6K_BLOCK_BYTES    = 210
+      Q8_0_BLOCK_BYTES   =  34
+      IQ4_NL_BLOCK_BYTES =  18
+      QK_K               = 256
+      Q8_0_QK            =  32
+      IQ4_NL_QK          =  32
 
       # GEMV (decode) tiling — must match the quant-specific kernels.
       MV_Q4_NSG             =  2
@@ -44,22 +44,22 @@ module ML
       HEAD_TOP1_ROWS_PER_TG = 12
 
       # GEMM (prefill) tiling — Q4_K only for now.
-      MM_NR0   =    64
-      MM_NR1   =    32
-      MM_TG    =   128 # threads per threadgroup (4 simdgroups × 32)
-      MM_SHMEM = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
-      MM48_NR1   =    48
-      MM48_TG    =   192 # threads per threadgroup (6 simdgroups × 32)
-      MM48_SHMEM = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
-      MM64_NR1   =    64
-      MM64_TG    =   256 # threads per threadgroup (8 simdgroups × 32)
-      MM64_SHMEM = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
-      MM80_NR1   =    80
-      MM80_TG    =   320 # threads per threadgroup (10 simdgroups × 32)
-      MM80_SHMEM = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
-      MM96_NR1   =    96
-      MM96_TG    =   384 # threads per threadgroup (12 simdgroups × 32)
-      MM96_SHMEM = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
+      MM_NR0      =    64
+      MM_NR1      =    32
+      MM_TG       =   128 # threads per threadgroup (4 simdgroups × 32)
+      MM_SHMEM    = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
+      MM48_NR1    =    48
+      MM48_TG     =   192 # threads per threadgroup (6 simdgroups × 32)
+      MM48_SHMEM  = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
+      MM64_NR1    =    64
+      MM64_TG     =   256 # threads per threadgroup (8 simdgroups × 32)
+      MM64_SHMEM  = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
+      MM80_NR1    =    80
+      MM80_TG     =   320 # threads per threadgroup (10 simdgroups × 32)
+      MM80_SHMEM  = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
+      MM96_NR1    =    96
+      MM96_TG     =   384 # threads per threadgroup (12 simdgroups × 32)
+      MM96_SHMEM  = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
       MM112_NR1   =   112
       MM112_TG    =   448 # threads per threadgroup (14 simdgroups × 32)
       MM112_SHMEM = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
@@ -6310,7 +6310,10 @@ module ML
                                                              h_v : Int32,
                                                              s : Int32,
                                                              conv_k : Int32,
-                                                             profile_label : String = "full_rec_chunk_many") : Array(Float32)?
+                                                             profile_label : String = "full_rec_chunk_many",
+                                                             checkpoint_index : Int32? = nil,
+                                                             checkpoint_conv_state_bufs : Array(ML::MetalBuffer)? = nil,
+                                                             checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -6323,6 +6326,16 @@ module ML
           return nil unless n_tokens > 0
           return nil if rec_layers.empty?
           return nil unless conv_state_bufs.size == rec_layers.size && ssm_state_bufs.size == rec_layers.size
+          checkpoint_requested = !checkpoint_index.nil?
+          if checkpoint_requested
+            cp = checkpoint_index.not_nil!
+            return nil unless cp >= 0 && cp < n_tokens
+            return nil unless conv_k > 1 && s == 128 && dn_chunk_rowwise_enabled?(s)
+            conv_chk = checkpoint_conv_state_bufs
+            ssm_chk = checkpoint_ssm_state_bufs
+            return nil if conv_chk.nil? || conv_chk.size != rec_layers.size
+            return nil if ssm_chk.nil? || ssm_chk.size != rec_layers.size
+          end
 
           rec_layers.each do |lw|
             qkv_pipe = gemv_pipeline_for(lw.attn_qkv_qw)
@@ -6745,7 +6758,7 @@ module ML
 
             Profile.trace("prefill.rec.proj") do
               rec_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-              qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+              qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
               shared_h16 = rec_proj_shared_h16_enabled? && qkv_h16 && q4_h16_gemm_enabled? &&
                            lw.attn_gate_qw.type.q4_k? && n_tokens > GEMM_BATCH_THRESHOLD
               if shared_h16 && rec_norm_h16_proj
@@ -6789,8 +6802,8 @@ module ML
             end
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
-            qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
-            conv_enc.set_pipeline(qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline)
+            qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
+            conv_enc.set_pipeline(checkpoint_requested ? recurrent_conv_shift_chunk_checkpoint_pipeline : (qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline))
             conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
             conv_enc.set_buffer(qkv_h16 ? rec_qkv_h16_buf : rec_qkv_buf, 1)
             conv_enc.set_buffer(conv_w_buf, 2)
@@ -6802,6 +6815,10 @@ module ML
             conv_enc.set_value(s.to_u32, 8)
             conv_enc.set_value(conv_k.to_u32, 9)
             conv_enc.set_value(n_tokens.to_u32, 10)
+            if checkpoint_requested
+              conv_enc.set_buffer(checkpoint_conv_state_bufs.not_nil![local_i], 11, ML::Metal::BufferAccess::Write)
+              conv_enc.set_value(checkpoint_index.not_nil!.to_u32, 12)
+            end
             conv_enc.dispatch_1d(rec_qkv_dim, 256)
             conv_enc.end_encoding
 
@@ -6842,7 +6859,7 @@ module ML
 
             dn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_dn_rowwise = dn_chunk_rowwise_enabled?(s)
-            dn_enc.set_pipeline(use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline)
+            dn_enc.set_pipeline(checkpoint_requested ? dn128_chunk_rowwise_checkpoint_pipeline : (use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline))
             dn_enc.set_buffer(ssm_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
             dn_enc.set_buffer(rec_q_buf, 1)
             dn_enc.set_buffer(rec_k_buf, 2)
@@ -6855,6 +6872,10 @@ module ML
             dn_enc.set_value(s.to_u32, 9)
             dn_enc.set_value(rec_scale, 10)
             dn_enc.set_value(n_tokens.to_u32, 11)
+            if checkpoint_requested
+              dn_enc.set_buffer(checkpoint_ssm_state_bufs.not_nil![local_i], 12, ML::Metal::BufferAccess::Write)
+              dn_enc.set_value(checkpoint_index.not_nil!.to_u32, 13)
+            end
             if use_dn_rowwise
               dn_enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
             else

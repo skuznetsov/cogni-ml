@@ -920,7 +920,9 @@ module ML::GGUF
                                                                    weights : Qwen35Weights,
                                                                    il : Int32,
                                                                    hp : Qwen35Hparams,
-                                                                   max_seq : Int32) : {Array(Float32), Int32}?
+                                                                   max_seq : Int32,
+                                                                   checkpoint_index : Int32? = nil,
+                                                                   checkpoint_state : State? = nil) : {Array(Float32), Int32}?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_PREFILL_FUSE_FULL_REC_OFF"]? == "1"
         return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
@@ -950,6 +952,12 @@ module ML::GGUF
         rec_layers = [] of Qwen35RecurrentWeights
         conv_bufs = [] of ML::MetalBuffer
         ssm_bufs = [] of ML::MetalBuffer
+        checkpoint_requested = !checkpoint_index.nil?
+        checkpoint_conv_bufs = [] of ML::MetalBuffer
+        checkpoint_ssm_bufs = [] of ML::MetalBuffer
+        if checkpoint_requested
+          return nil if checkpoint_state.nil?
+        end
         h_k = hp.ssm_group_count
         h_v = hp.ssm_time_step_rank
         s = hp.ssm_state_size
@@ -982,6 +990,9 @@ module ML::GGUF
             lstate.conv_state_buf = conv_buf
           end
           conv_bufs << conv_buf
+          if checkpoint_requested
+            checkpoint_conv_bufs << checkpoint_state.not_nil!.layers[j].conv_state_buf.not_nil!
+          end
 
           ssm_bytes = (h_v * s * s).to_i64 * sizeof(Float32)
           ssm_buf = lstate.ssm_state_buf
@@ -995,6 +1006,9 @@ module ML::GGUF
             lstate.ssm_state_buf = ssm_buf
           end
           ssm_bufs << ssm_buf
+          if checkpoint_requested
+            checkpoint_ssm_bufs << checkpoint_state.not_nil!.layers[j].ssm_state_buf.not_nil!
+          end
           j += 1
         end
         return nil unless supported
@@ -1026,7 +1040,10 @@ module ML::GGUF
           hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
           hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
           conv_bufs, ssm_bufs, rec_layers, h_k, h_v, s, conv_k,
-          "full#{il}+rec#{run_start}-#{run_end - 1}")
+          "full#{il}+rec#{run_start}-#{run_end - 1}",
+          checkpoint_index: checkpoint_index,
+          checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
+          checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil)
         out ? {out, run_end} : nil
       {% else %}
         nil
@@ -2366,12 +2383,12 @@ module ML::GGUF
         lw = weights.layers[il]
         case lw
         in Qwen35FullAttnWeights
-          unless checkpoint_requested
-            if fused = full_attn_then_recurrent_chunk_project_many_routed(x, n_tokens, start_pos, state, weights, il, hp, max_seq)
-              x = fused[0]
-              il = fused[1]
-              next
-            end
+          if fused = full_attn_then_recurrent_chunk_project_many_routed(
+               x, n_tokens, start_pos, state, weights, il, hp, max_seq,
+               checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state)
+            x = fused[0]
+            il = fused[1]
+            next
           end
 
           if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
