@@ -17,6 +17,7 @@ DEFAULT_LLAMA_TOKENIZE = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llam
 model_path = DEFAULT_MODEL
 mtp_path = DEFAULT_MTP
 mtp_from_gguf = false
+mtp_gguf_path = nil.as(String?)
 llama_tokenize = DEFAULT_LLAMA_TOKENIZE
 prompt = "The capital of France is"
 suite_prompts = [] of {String, String}
@@ -490,6 +491,10 @@ OptionParser.parse do |p|
   p.on("--model PATH", "Qwen3.6 GGUF target model path") { |v| model_path = v }
   p.on("--mtp PATH", "MTP-only safetensors sidecar path") { |v| mtp_path = v }
   p.on("--mtp-gguf", "Load MTP weights from the appended nextn block in --model GGUF") { mtp_from_gguf = true }
+  p.on("--mtp-gguf-path PATH", "Load GGUF MTP weights from PATH while keeping --model as the exact verifier target") do |v|
+    mtp_from_gguf = true
+    mtp_gguf_path = v
+  end
   p.on("--llama-tokenize PATH", "llama.cpp llama-tokenize path") { |v| llama_tokenize = v }
   p.on("--prompt TEXT", "Prompt for the MTP acceptance smoke") { |v| prompt = v }
   p.on("--suite-prompt NAME::TEXT", "Add a prompt row to the first-step MTP acceptance suite") do |v|
@@ -550,12 +555,17 @@ abort "--mtp-spec-wall-top2-on-reject is incompatible with --mtp-spec-wall-promo
 mtp_spec_wall_top2_accounting = true if mtp_spec_wall_top2_miss_offramp || mtp_spec_wall_promote_top2_margin || mtp_spec_wall_top2_on_reject
 
 abort "model not found: #{model_path}" unless File.exists?(model_path)
+mtp_source_path = mtp_from_gguf ? (mtp_gguf_path || model_path).not_nil! : mtp_path
 abort "MTP sidecar not found: #{mtp_path}" if !mtp_from_gguf && !File.exists?(mtp_path)
+abort "MTP GGUF not found: #{mtp_source_path}" if mtp_from_gguf && !File.exists?(mtp_source_path)
 
 gguf = ML::GGUF::GGUFFile.new(model_path)
 hparams = ML::GGUF::Qwen35Hparams.new(gguf)
 mtp = if mtp_from_gguf
-        ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(model_path, hparams)
+        mtp_hparams = mtp_source_path == model_path ? hparams : ML::GGUF::Qwen35Hparams.new(ML::GGUF::GGUFFile.new(mtp_source_path))
+        sidecar = ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(mtp_source_path, mtp_hparams)
+        sidecar.validate_for_qwen35!(hparams)
+        sidecar
       else
         sidecar = ML::GGUF::Qwen35MTPWeights.from_safetensors(mtp_path)
         sidecar.validate_for_qwen35!(hparams)
@@ -564,8 +574,9 @@ mtp = if mtp_from_gguf
 
 puts "qwen35_mtp_sidecar_probe: ok"
 puts "model=#{model_path}"
-puts "mtp=#{mtp_from_gguf ? model_path : mtp_path}"
+puts "mtp=#{mtp_source_path}"
 puts "mtp_source=#{mtp_from_gguf ? "gguf_nextn" : "safetensors"}"
+puts "mtp_external_gguf=#{mtp_from_gguf && mtp_source_path != model_path}"
 puts "hparams hidden=#{hparams.n_embd} layers=#{hparams.n_layer} raw_layers=#{hparams.raw_block_count} nextn_layers=#{hparams.nextn_predict_layers} heads=#{hparams.n_head} kv_heads=#{hparams.n_head_kv} head_dim=#{hparams.head_dim} ffn=#{hparams.n_ff}"
 puts "mtp_bytes=#{(mtp.total_raw_bytes / 1_048_576.0).round(2)} MiB"
 case mtp
