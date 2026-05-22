@@ -1094,17 +1094,20 @@ rows.each do |label, prompt_text|
 
         need_bonus = (final_stage || mtp_spec_wall_stage_bonus) && wall_ids.size + current_stage < mtp_chain_tokens
         verify_tokens = [stage_token] + (need_bonus ? stage_candidates : stage_candidates[0, Math.max(current_stage - 1, 0)])
-        backup_start = Time.instant
-        ML::GGUF::Qwen35CPU.copy_state_metal_used!(backup_state, wall_state, weights.hparams, used_tokens: stage_pos)
-        wall_backup_ms += elapsed_ms(backup_start)
+        use_rec_rollback_log = mtp_spec_wall_rec_rollback_log && !mtp_spec_wall_serial_early_verify && verify_tokens.size == 2
+        checkpoint_index = ((mtp_spec_wall_rec_checkpoint_replay || use_rec_rollback_log) && !mtp_spec_wall_serial_early_verify && verify_tokens.size > 1) ? 0 : nil
+        backup_needed = !use_rec_rollback_log
+        if backup_needed
+          backup_start = Time.instant
+          ML::GGUF::Qwen35CPU.copy_state_metal_used!(backup_state, wall_state, weights.hparams, used_tokens: stage_pos)
+          wall_backup_ms += elapsed_ms(backup_start)
+        end
 
         verifier_start = Time.instant
         if mtp_spec_wall_profile
           ML::GGUF::Qwen35Metal::Profile.enable!
         end
         checkpoint_state = nil.as(ML::GGUF::Qwen35CPU::State?)
-        use_rec_rollback_log = mtp_spec_wall_rec_rollback_log && !mtp_spec_wall_serial_early_verify && verify_tokens.size == 2
-        checkpoint_index = ((mtp_spec_wall_rec_checkpoint_replay || use_rec_rollback_log) && !mtp_spec_wall_serial_early_verify && verify_tokens.size > 1) ? 0 : nil
         verified = begin
           if mtp_spec_wall_serial_early_verify
             serial_hidden_rows = [] of Float32
@@ -1259,6 +1262,7 @@ rows.each do |label, prompt_text|
             wall_backup_ms += elapsed_ms(rec_restore_start)
             wall_hidden = hidden_rows[0, weights.hparams.n_embd]
           else
+            raise "internal error: rollback-log verifier needed skipped backup" unless backup_needed
             restore_start = Time.instant
             ML::GGUF::Qwen35CPU.copy_state_metal_used!(wall_state, backup_state, weights.hparams, used_tokens: stage_pos)
             wall_backup_ms += elapsed_ms(restore_start)
