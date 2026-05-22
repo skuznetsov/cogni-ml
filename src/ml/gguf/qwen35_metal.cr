@@ -39,6 +39,8 @@ module ML
       MV_Q8_NR0             =  1
       MV_IQ4_NL_NSG         =  4
       MV_IQ4_NL_NR0         =  1
+      MV_F32_NSG            =  4
+      MV_F32_NR0            =  1
       HEAD_TOP1_ROWS_PER_TG = 12
 
       # GEMM (prefill) tiling — Q4_K only for now.
@@ -180,6 +182,7 @@ module ML
         @@mv8_add_pipeline : ML::Metal::ComputePipeline?
         @@mv8_dual_pipeline : ML::Metal::ComputePipeline?
         @@mv_iq4_nl_pipeline : ML::Metal::ComputePipeline?
+        @@mv_f32_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top2_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline?
@@ -915,6 +918,12 @@ module ML
           }
         end
 
+        private def self.mv_f32_pipeline : ML::Metal::ComputePipeline
+          @@mv_f32_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_f32_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_f32_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline
           @@mv6_top1_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_tiles_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_tiles_f32", GEMM_Q56K_SOURCE)
@@ -1348,6 +1357,8 @@ module ML
           when .q5_k? then mv5_pipeline
           when .q6_k? then mv6_pipeline
           when .q8_0? then mv8_pipeline
+          when .iq4_nl? then mv_iq4_nl_pipeline
+          when .f32? then mv_f32_pipeline
           else             nil
           end
         end
@@ -1371,6 +1382,8 @@ module ML
             MV_Q8_NSG * MV_Q8_NR0
           when .same?(mv_iq4_nl_pipeline)
             MV_IQ4_NL_NSG * MV_IQ4_NL_NR0
+          when .same?(mv_f32_pipeline)
+            MV_F32_NSG * MV_F32_NR0
           else
             MV_Q4_NSG * MV_Q4_NR0
           end
@@ -1382,6 +1395,8 @@ module ML
             MV_Q8_NSG * 32
           when .same?(mv_iq4_nl_pipeline)
             MV_IQ4_NL_NSG * 32
+          when .same?(mv_f32_pipeline)
+            MV_F32_NSG * 32
           else
             64
           end
@@ -1397,6 +1412,8 @@ module ML
             {"Q8_0", Q8_0_BLOCK_BYTES, Q8_0_QK}
           when .same?(mv_iq4_nl_pipeline)
             {"IQ4_NL", IQ4_NL_BLOCK_BYTES, IQ4_NL_QK}
+          when .same?(mv_f32_pipeline)
+            {"F32", 4, 1}
           else
             {"Q4_K", Q4K_BLOCK_BYTES, QK_K}
           end
@@ -9001,6 +9018,7 @@ module ML
                        when .q6_k? then mv6_pipeline
                        when .q8_0? then mv8_pipeline
                        when .iq4_nl? then mv_iq4_nl_pipeline
+                       when .f32? then mv_f32_pipeline
                        else
                          return nil
                        end
@@ -9145,6 +9163,12 @@ module ML
               nil
             else
               matmul_gemv_buf(mv_iq4_nl_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
+            end
+          when .f32?
+            if batch > GEMM_BATCH_THRESHOLD
+              nil
+            else
+              matmul_gemv_buf(mv_f32_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
             end
           else
             nil

@@ -90,4 +90,25 @@ describe ML::GGUF::Qwen35Metal do
     x_many = Array(Float32).new(batch * in_dim, 0.125_f32)
     ML::GGUF::Qwen35Metal.matmul(qw, x_many, batch).should be_nil
   end
+
+  it "routes F32 weights through generic Metal GEMV" do
+    in_dim = 64
+    out_dim = 6
+    batch = 2
+    raw = Bytes.new(in_dim * out_dim * sizeof(Float32))
+    w = raw.to_unsafe.as(Pointer(Float32))
+    (in_dim * out_dim).times do |i|
+      w[i] = (((i * 7) % 23) - 11).to_f32 / 19.0_f32
+    end
+    qw = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::F32, out_dim, in_dim)
+    x = Array(Float32).new(batch * in_dim) { |i| (((i * 13) % 29) - 14).to_f32 / 11.0_f32 }
+    zero_bias = Array(Float32).new(out_dim, 0.0_f32)
+
+    gpu = ML::GGUF::Qwen35Metal.matmul(qw, x, batch).not_nil!
+    cpu = ML::GGUF::QuantMatmul.matmul_add(
+      x, batch, in_dim, raw, ML::GGUF::TensorType::F32, out_dim, zero_bias
+    )
+
+    max_abs_diff_iq4(gpu, cpu).should be <= 2.0e-5_f32
+  end
 end

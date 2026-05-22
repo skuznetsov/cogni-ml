@@ -38,6 +38,43 @@ struct block_iq4_nl_56 {
 
 constant short MV8_NSG = 4;
 constant short MV8_NR0 = 1;
+constant short MVF32_NSG = 4;
+constant short MVF32_NR0 = 1;
+
+kernel void simd_mv_f32_f32(
+    device const float*   w       [[buffer(0)]],
+    device const float*   x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint first_row = (tgpig.x * MVF32_NSG + sgitg) * MVF32_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    device const float * y_base = x + n * in_dim;
+    float sumf[MVF32_NR0] = {0.f};
+
+    for (uint col = tiisg; col < in_dim; col += 32) {
+        const float y = y_base[col];
+        for (short row = 0; row < MVF32_NR0; ++row) {
+            const uint row_id = first_row + row;
+            if (row_id >= out_dim) continue;
+            sumf[row] += w[row_id * in_dim + col] * y;
+        }
+    }
+
+    for (short row = 0; row < MVF32_NR0 && first_row + row < out_dim; ++row) {
+        float tot = simd_sum(sumf[row]);
+        if (tiisg == 0) {
+            output[n * out_dim + first_row + row] = tot;
+        }
+    }
+}
 
 kernel void simd_mv_q8_0_f32(
     device const uint8_t* w_raw   [[buffer(0)]],
