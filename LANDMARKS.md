@@ -14712,3 +14712,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the B64 FFN `gate/up -> SwiGLU -> down` producer-consumer boundary. Transport is the activation corridor from the up projection into FFN-down. Legal move fuses the up projection with half-rounded SwiGLU production without changing the downstream half input contract. Potential decreases as `(conversion_mib, activation_dispatches, boundary_bytes, wall)` while preserving quantized weight reads and exact fallback. Dual frame is `QWEN35_Q4K_B64_UP_SWIGLU_H16_OFF=1`.
 - caveat: Evidence is relaxed-host M2 Max. Keep quiet-host benchmark before public llama.cpp comparison claims.
 - trust: {F:0.86,G:0.50,R:0.82}
+
+**LM-408 remaining H16 staging after B64 H16-SwiGLU promotion [shared/ml]**
+- status: REVALIDATED weak/neutral, not a promotion
+- claim: After LM-407, the old H16 activation-staging knobs still do not form the next prefill breakthrough lever.
+- evidence: With the promoted B64 H16-SwiGLU route, `QWEN35_ADDNORM_H16_FFN=1` removed the fused route's remaining pair-input conversion and measured pp256 default p50 `504.27ms` vs opt-in p50 `503.62ms`, opt-in winning `6/8`; conversion traffic dropped from `654 MiB` to `468 MiB`. A stacked probe with `QWEN35_ADDNORM_H16_FFN=1 QWEN35_RMSNORM_H16_PROJ=1 QWEN35_DN_POST_H16_OPROJ=1` dropped pp256 conversion traffic to `54 MiB`, but toggling RMS on top of addnorm+dn-post was flat/slightly negative (`488.19ms` default vs `488.71ms` opt-in, wins `3/8`).
+- diagnosis: The traffic cleanup is real, but the remaining pp256 wall is governed by matmul and grouped-layer work, not residual f32-to-h16 staging. `ADDNORM_H16_FFN` may be kept as a future quiet-host candidate, but broad H16 staging should not be promoted from relaxed-host data.
+- LTP/WBA: The conversion corridor potential decreases, but the recomputed wall potential does not. Legal move exists; lexicographic objective fails at the wall component. Dual frame: keep the exact default from LM-407 and use the staging knobs as attribution/probe controls.
+- trust: {F:0.76,G:0.44,R:0.72}
