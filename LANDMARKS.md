@@ -14736,3 +14736,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: Profile-only upload instrumentation around `full_attn_then_recurrent_chunk_project_many` measured `.upload` rows around `0.50-0.57ms` each at pp1024, about `3.7ms` total; the grouped read component was about `13ms`. This is too small to explain the remaining long-prompt gap. `QWEN35_PREFILL_FFN_DOWN_ADD_FUSED=1` pp1024 A/B measured default `1860.09ms` vs fused `1865.65ms`, so the existing down+add fusion route did not improve wall time in this baseline.
 - implication: Do not prioritize a GPU-resident full+rec group chain or FFN-down-add promotion as the next breakthrough unless later evidence changes the bottleneck. The active exact path is attention-row scheduling / fuller FlashAttention-like reuse, then recurrent layer bulk.
 - trust: {F:0.78,G:0.50,R:0.76}
+
+**LM-411 SG8 full-attention row packing refuted after SG4 [shared/ml]**
+- status: REFUTED and removed
+- claim tested: Packing eight query rows per head into one 8-simdgroup / 256-thread Metal threadgroup might reduce full-attention row scheduling overhead further than SG4.
+- evidence: Temporary opt-in `QWEN35_PREFILL_ATTN_ROWS_SG8=1` built successfully, but pp1024 paired timing measured SG4 default p50 `1772.49ms` vs SG8 p50 `1777.46ms`. SG8 lost despite identical math and logical traffic.
+- diagnosis: The larger threadgroup likely loses occupancy/resource balance enough to erase scheduler-area savings. Keep SG4 as the current sweet spot; do not retry larger row-packing without a different K/V reuse design.
+- trust: {F:0.70,G:0.40,R:0.72}

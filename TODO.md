@@ -2054,3 +2054,5 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: Boundary-residency was the wrong primary frame for pp1024; detailed phase profiling shifted the active window to full-attention row-core scheduling.
 - maieutic: The legal move does not claim K/V reuse across query rows; it only lowers threadgroup/scheduler area while preserving each row's causal softmax boundary.
 - adversary: Keep the OFF rollback. Public benchmark claims still need quiet-host apples-vs-apples rerun against llama.cpp.
+
+**decision_update_411:** Refuted and removed SG8 full-attention row packing. A temporary `QWEN35_PREFILL_ATTN_ROWS_SG8=1` route built, but pp1024 measured SG4 p50 `1772.49ms` vs SG8 p50 `1777.46ms`. Keep SG4; larger row packing should wait for a true K/V reuse design rather than bigger threadgroups.
