@@ -2036,3 +2036,21 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - daedalus: Split cache layers explicitly: direct output certificate for exact repeated terminal spans; resident decoded state for same-process repeated continuation; mmap BF16 artifact for cold persistent activation; preuploaded encoded payload only for prewarm/many-artifact workloads.
 - maieutic: LTP corridors differ by trigger. Hot same-process trigger should transport decoded resident state; cold persistent trigger should transport mapped compressed bytes; preupload is a separate corridor only if activation work can be moved before the request.
 - adversary: Resident state cache costs memory. For large numbers of sessions, BF16 mmap remains the lower-memory fallback; do not replace one with the other globally.
+
+**decision_update_409:** Promoted exact SG4 full-attention row scheduling for Metal prefill. The new `qwen35_attn_decode_rows_sg4` kernel packs four consecutive token rows for one head into a single 4-simdgroup threadgroup while preserving the original per-row causal online-softmax math. Rollback: `QWEN35_PREFILL_ATTN_ROWS_SG4_OFF=1`.
+
+**evidence_update_409:**
+- claim: "SG4 full-attention rows are exact enough for current focused gates and improve pp1024 prefill wall."
+  source: release build `/private/tmp/qwen35_prefill_attribution_attn_sg4_default` passed; `crystal spec spec/qwen35_forward_spec.cr spec/qwen35_delta_net_spec.cr --error-trace --link-flags=...` passed (`18 examples, 0 failures`). pp1024 rollback A/B measured SG4 default p50 `1776.52ms` vs `QWEN35_PREFILL_ATTN_ROWS_SG4_OFF=1` p50 `1842.17ms`. pp64 and pp256 did not regress in short gates (`139.60ms` vs `139.79ms`, `462.16ms` vs `465.37ms`). Fresh matched `bin/benchmark_qwen_vs_llama.cr --prompt=1024 --gen=64 --reps=2 --warmup=1 --native-prefill-prepare-state` measured prefill gap `-4.86%` and decode gap `+4.27%` vs llama.cpp.
+  verified_at: 2026-05-21
+  decay_trigger: full-attention kernel, prefill chunk routing, Metal threadgroup occupancy, or benchmark harness changes
+- claim: "CPU/GPU group-boundary upload/readback is not the primary pp1024 gap after B64 H16-SwiGLU fusion."
+  source: profile-only upload markers measured about `0.5ms` per full+rec group and about `3.7ms` total upload at pp1024; grouped readback was about `13ms`, much smaller than the observed long-prompt gap.
+  verified_at: 2026-05-21
+  decay_trigger: prefill group routing, hidden buffer residency, or prompt size changes
+
+**quadrumvirate_update_409:**
+- cassandra: SG4 is a scheduling win, not full FlashAttention. Expect diminishing returns below pp256 and larger relevance for long prompts.
+- daedalus: Boundary-residency was the wrong primary frame for pp1024; detailed phase profiling shifted the active window to full-attention row-core scheduling.
+- maieutic: The legal move does not claim K/V reuse across query rows; it only lowers threadgroup/scheduler area while preserving each row's causal softmax boundary.
+- adversary: Keep the OFF rollback. Public benchmark claims still need quiet-host apples-vs-apples rerun against llama.cpp.

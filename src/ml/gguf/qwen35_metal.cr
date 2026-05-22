@@ -239,6 +239,7 @@ module ML
         @@kv_write_pipeline : ML::Metal::ComputePipeline?
         @@kv_write_rows_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_pipeline : ML::Metal::ComputePipeline?
+        @@attn_rows_sg4_pipeline : ML::Metal::ComputePipeline?
 
         # ── Phase 4.0 instrumentation ─────────────────────────────────
         # Counters and nanosecond timers broken down by dispatch type
@@ -1317,6 +1318,12 @@ module ML
           }
         end
 
+        private def self.attn_rows_sg4_pipeline : ML::Metal::ComputePipeline
+          @@attn_rows_sg4_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_rows_sg4") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", FULLATTN_SOURCE)
+          }
+        end
+
         private def self.gemv_pipeline_for(qw : QuantWeight) : ML::Metal::ComputePipeline?
           case qw.type
           when .q4_k? then mv_pipeline
@@ -2233,6 +2240,28 @@ module ML
 
         private def self.prefill_phase_profile_enabled? : Bool
           ENV["QWEN35_PREFILL_PHASE_PROFILE"]? == "1" || ENV["QWEN35_METAL_PROFILE"]? == "1"
+        end
+
+        private def self.prefill_full_detail_profile_enabled? : Bool
+          ENV["QWEN35_PREFILL_FULL_DETAIL_PROFILE"]? == "1"
+        end
+
+        private def self.prefill_attn_rows_sg4_enabled? : Bool
+          ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_OFF"]? != "1"
+        end
+
+        private def self.prefill_phase_checkpoint(cmd : ML::Metal::CommandBuffer,
+                                                  label : String,
+                                                  started_at : Time::Instant) : {ML::Metal::CommandBuffer, Time::Instant}
+          tenc = Time.instant
+          cmd.commit
+          cmd.wait
+          twait = Time.instant
+          Profile.bump_group(label,
+            (tenc - started_at).total_nanoseconds.to_i64,
+            (twait - tenc).total_nanoseconds.to_i64,
+            0_i64)
+          {ML::Metal::CommandBuffer.new, Time.instant}
         end
 
         private def self.small_q4_gemv_enabled? : Bool
@@ -6075,7 +6104,8 @@ module ML
           kvwrite_enc.end_encoding
 
           attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-          attn_enc.set_pipeline(attn_rows_pipeline)
+          use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
+          attn_enc.set_pipeline(use_attn_sg4 ? attn_rows_sg4_pipeline : attn_rows_pipeline)
           attn_enc.set_buffer(q_buf, 0)
           attn_enc.set_buffer(gate_buf, 1)
           attn_enc.set_buffer(k_cache_buf, 2)
@@ -6088,7 +6118,11 @@ module ML
           attn_enc.set_value(head_dim.to_u32, 9)
           attn_enc.set_value(heads_per_group.to_u32, 10)
           attn_enc.set_value(scale, 11)
-          attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
+          if use_attn_sg4
+            attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
+          else
+            attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
+          end
           attn_enc.end_encoding
 
           outproj_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -6268,7 +6302,15 @@ module ML
           rec_ffn_comb_h16_buf = Scratch.get(:frec_rec_ffn_comb_h16, (n_tokens * rec_ffn_dim).to_i64 * 2_i64)
           rec_ffn_out_buf = Scratch.get(:frec_rec_ffn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
 
+          t_upload0 = Time.instant if Profile.enabled?
           inp_buf.write(inp)
+          if Profile.enabled?
+            t_upload1 = Time.instant
+            Profile.bump_group("#{profile_label}.upload",
+              (t_upload1 - t_upload0.not_nil!).total_nanoseconds.to_i64,
+              0_i64,
+              0_i64)
+          end
           ConstCache.write_once("#{full_tag}_norm_w", full_norm_w_buf, attn_norm)
           ConstCache.write_once("#{full_tag}_qnorm", qnorm_buf, q_norm)
           ConstCache.write_once("#{full_tag}_knorm", knorm_buf, k_norm)
@@ -6285,6 +6327,7 @@ module ML
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
           phase_profile = prefill_phase_profile_enabled? && Profile.enabled?
+          full_detail_profile = prefill_full_detail_profile_enabled? && phase_profile
           phase_t0 = Time.instant
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -6314,6 +6357,11 @@ module ML
               encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, full_cur_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
             end
             proj_enc.end_encoding
+          end
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.qkv", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
           end
 
           split_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -6386,7 +6434,8 @@ module ML
           kvwrite_enc.end_encoding
 
           attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-          attn_enc.set_pipeline(attn_rows_pipeline)
+          use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
+          attn_enc.set_pipeline(use_attn_sg4 ? attn_rows_sg4_pipeline : attn_rows_pipeline)
           attn_enc.set_buffer(full_q_buf, 0)
           attn_enc.set_buffer(full_gate_buf, 1)
           attn_enc.set_buffer(k_cache_buf, 2)
@@ -6399,13 +6448,27 @@ module ML
           attn_enc.set_value(head_dim.to_u32, 9)
           attn_enc.set_value(heads_per_group.to_u32, 10)
           attn_enc.set_value(scale, 11)
-          attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
+          if use_attn_sg4
+            attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
+          else
+            attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
+          end
           attn_enc.end_encoding
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.attn_core", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
+          end
 
           Profile.trace("prefill.full.o_proj") do
             outproj_enc = ML::Metal::ComputeEncoder.new(cmd)
             encode_matmul(outproj_enc, out_pipe.not_nil!, out_qw, full_attn_buf, full_attn_out_buf, out_w_buf, out_w_off, out_qw.in_dim, out_qw.out_dim, n_tokens)
             outproj_enc.end_encoding
+          end
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.o_proj", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
           end
 
           full_ffn_pair_h16 = prefill_addnorm_h16_ffn_enabled? && q4_pair_h16_gemm_candidate?(ffn_gate_qw, ffn_up_qw, n_tokens)
@@ -6456,6 +6519,11 @@ module ML
             end
             full_ffn_proj_enc.end_encoding
           end
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.ffn_upgate", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
+          end
 
           unless full_up_swiglu_fused
             full_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -6501,8 +6569,13 @@ module ML
             full_add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
             full_add_enc.end_encoding
           end
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.ffn_down_add", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
+          end
 
-          if phase_profile
+          if phase_profile && !full_detail_profile
             phase_tenc = Time.instant
             cmd.commit
             cmd.wait
