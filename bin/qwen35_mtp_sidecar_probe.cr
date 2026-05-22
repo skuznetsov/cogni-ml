@@ -637,6 +637,7 @@ top1_hits = 0
 top5_hits = 0
 timed_calls = 0
 timed_ms = 0.0_f64
+ML::GGUF::Qwen35MTP.profile_reset if ML::GGUF::Qwen35MTP.profile_enabled?
 chain_aggregates = Hash(String, ChainAggregate).new { |hash, key| hash[key] = ChainAggregate.new }
 margin_router_aggregates = Hash(String, Array(MarginRouterAggregate)).new do |hash, key|
   hash[key] = Array(MarginRouterAggregate).new(mtp_chain_margin_thresholds.size) { MarginRouterAggregate.new }
@@ -1547,3 +1548,6 @@ mtp_spec_wall_aggregates.keys.sort.each do |gamma|
   puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} margin_skips=#{agg.margin_skips} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
 end
 router_trace_io.try(&.close)
+if ML::GGUF::Qwen35MTP.profile_enabled?
+  puts ML::GGUF::Qwen35MTP.profile_report
+end
