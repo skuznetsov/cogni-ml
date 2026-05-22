@@ -28,6 +28,9 @@
 - [x] Run first local llama.cpp MTP timing smokes on M2 Max with product KV cache (`-fa on -ctk q8_0 -ctv q4_0`, `--spec-type draft-mtp`, `--spec-draft-n-max 3`).
   - Evidence: `qwen36_mtp_baseline_matrix --gen=16 --run-available` reports `IQ4_NL` `23.9 tok/s` and `UD-Q4_K_XL` `20.1 tok/s`; `--gen=128 --run-available` reports `IQ4_NL` `18.2 tok/s` and `UD-Q4_K_XL` `17.9 tok/s`. These are local Metal/M2 Max numbers, not comparable to the RTX 3090 Reddit row.
   - Harness fix: llama.cpp `llama-cli` must use `--single-turn`; otherwise it completes the first turn then stays in interactive prompt mode on closed stdin. The matrix parser now handles the new compact `[ Prompt: ... | Generation: ... ]` timing line.
+- [x] Harden the MTP matrix against one-row and harness artifacts.
+  - Evidence: `qwen36_mtp_baseline_matrix` now supports `--repeats=N` and `--compare-plain`, prints min/median/max for llama-cli prompt/decode rates, uses the same `llama-cli --single-turn -fa on -ctk q8_0 -ctv q4_0` path for plain and MTP rows, and adds `--flash-attn` to native benchmark rows so llama-bench accepts quantized V cache. `crystal build --no-codegen bin/qwen36_mtp_baseline_matrix.cr --error-trace` passes.
+  - Boundary: first `gen=8` smoke was host-contaminated (`mediaanalysisd` around 168% CPU plus Crystal runner), so use it only as plumbing evidence, not promotion evidence.
 - [ ] Run apples-vs-apples native/plain Q4_K_M and MTP rows after choosing quiet-host settings and rebuilding any ignored benchmark artifacts as needed.
 - [ ] Decide the first native response branch after measurement: either add native IQ4_NL/UD quant support, repack MTP heads into a Q4_K_M-compatible sidecar path, or improve the existing MTP-on-self-top2-miss controller if baseline economics favor controller work over quant work.
 
