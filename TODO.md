@@ -23,7 +23,9 @@
   - Boundary: Native `cogni-ml` still cannot load IQ/UD quant GGUFs. Those are external llama.cpp baselines until native IQ/UD quant readers/kernels exist.
 - [x] Rebuild/update llama.cpp so local `llama-cli` / `llama-server` advertise `draft-mtp`.
   - Evidence: `/Users/sergey/SrcArchives/AI/llama.cpp` fast-forwarded to `1acee6bf8`, `cmake --build build --config Release -j 8` passed, and both `build/bin/llama-cli --help` plus `build/bin/llama-server --help` list `draft-mtp`. The local baseline matrix now reports `draft_mtp=true` for both binaries.
-- [ ] Download at least one Qwen3.6 MTP GGUF (`IQ4_NL` first, then `UD-Q4_K_XL` if space allows) and run the MTP baseline matrix. Do not claim speedup against MTP until this is measured locally.
+- [x] Download Qwen3.6 MTP GGUF baselines into LM Studio cache and verify local matrix detection.
+  - Evidence: `hf download unsloth/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-IQ4_NL.gguf --local-dir ~/.cache/lm-studio/models/unsloth/Qwen3.6-27B-MTP-GGUF` completed; same for `Qwen3.6-27B-UD-Q4_K_XL.gguf`. File sizes are `15G` and `17G`; free disk after download is `309GiB`. `qwen36_mtp_baseline_matrix --no-commands` now detects both local MTP files and reports `draft_mtp=true` for local llama.cpp binaries.
+- [ ] Run llama.cpp MTP timing on local `IQ4_NL` first, then `UD-Q4_K_XL`. Do not claim speedup against MTP until this is measured locally.
 - [ ] Decide the first native response branch after measurement: either add native IQ4_NL/UD quant support, repack MTP heads into a Q4_K_M-compatible sidecar path, or improve the existing MTP-on-self-top2-miss controller if baseline economics favor controller work over quant work.
 
 **Current LTP/WBA speed frontier (2026-05-20):**
