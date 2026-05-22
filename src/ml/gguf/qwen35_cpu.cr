@@ -271,13 +271,14 @@ module ML::GGUF
         h_k = hp.ssm_group_count
         h_v = hp.ssm_time_step_rank
         s = hp.ssm_state_size
+        state_bufs = [] of ML::MetalBuffer
+        log_bufs = [] of ML::MetalBuffer
         state.layers.each_with_index do |layer, il|
           next if hp.full_attention?(il)
-          Qwen35Metal.rollback_delta_net_state_from_log(
-            layer.ssm_state_buf.not_nil!,
-            log_state.layers[il].ssm_state_buf.not_nil!,
-            h_k, h_v, s)
+          state_bufs << layer.ssm_state_buf.not_nil!
+          log_bufs << log_state.layers[il].ssm_state_buf.not_nil!
         end
+        Qwen35Metal.rollback_delta_net_states_from_logs(state_bufs, log_bufs, h_k, h_v, s)
       {% end %}
     end
 

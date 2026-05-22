@@ -4961,19 +4961,31 @@ module ML
                                                    h_k : Int32,
                                                    h_v : Int32,
                                                    s : Int32) : Nil
+          rollback_delta_net_states_from_logs([state_buf], [log_buf], h_k, h_v, s)
+        end
+
+        def self.rollback_delta_net_states_from_logs(state_bufs : Array(ML::MetalBuffer),
+                                                     log_bufs : Array(ML::MetalBuffer),
+                                                     h_k : Int32,
+                                                     h_v : Int32,
+                                                     s : Int32) : Nil
           return unless s == 128 && dn_chunk_rowwise_enabled?(s)
+          raise ArgumentError.new("rollback state/log count mismatch") unless state_bufs.size == log_bufs.size
+          return if state_bufs.empty?
 
           ML::Metal::Device.init!
           cmd = ML::Metal::CommandBuffer.new
-          enc = ML::Metal::ComputeEncoder.new(cmd)
-          enc.set_pipeline(dn128_rollback_rowwise_pipeline)
-          enc.set_buffer(state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
-          enc.set_buffer(log_buf, 1)
-          enc.set_value(h_k.to_u32, 2)
-          enc.set_value(h_v.to_u32, 3)
-          enc.set_value(s.to_u32, 4)
-          enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
-          enc.end_encoding
+          state_bufs.each_with_index do |state_buf, i|
+            enc = ML::Metal::ComputeEncoder.new(cmd)
+            enc.set_pipeline(dn128_rollback_rowwise_pipeline)
+            enc.set_buffer(state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+            enc.set_buffer(log_bufs[i], 1)
+            enc.set_value(h_k.to_u32, 2)
+            enc.set_value(h_v.to_u32, 3)
+            enc.set_value(s.to_u32, 4)
+            enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
+            enc.end_encoding
+          end
           cmd.commit
           cmd.wait
         end
