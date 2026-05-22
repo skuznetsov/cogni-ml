@@ -45,6 +45,8 @@ mtp_spec_wall_top2_accounting = false
 mtp_spec_wall_top2_on_reject = false
 mtp_spec_wall_top2_miss_offramp = false
 mtp_spec_wall_promote_top2_margin = nil.as(Float64?)
+mtp_spec_wall_min_margin = nil.as(Float64?)
+mtp_spec_wall_min_margin_offramp = false
 mtp_spec_wall_router_trace_path = nil.as(String?)
 mtp_spec_wall_router_thresholds = [] of Float64
 mtp_spec_wall_profile = false
@@ -170,6 +172,7 @@ class MtpSpecWallAggregate
   property top2_offramp_hits : Int32
   property top2_promotions : Int32
   property top2_promoted_accepted : Int32
+  property margin_skips : Int32
   property mtp_ms_sum : Float64
   property verifier_ms_sum : Float64
   property replay_ms_sum : Float64
@@ -202,6 +205,7 @@ class MtpSpecWallAggregate
     @top2_offramp_hits = 0
     @top2_promotions = 0
     @top2_promoted_accepted = 0
+    @margin_skips = 0
     @mtp_ms_sum = 0.0
     @verifier_ms_sum = 0.0
     @replay_ms_sum = 0.0
@@ -524,6 +528,8 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-wall-top2-on-reject", "Draft MTP top1 only, then compute MTP top2 lazily only for rejected candidates") { mtp_spec_wall_top2_on_reject = true }
   p.on("--mtp-spec-wall-top2-miss-offramp", "After a reject whose correction is not MTP top2, finish remaining tokens with exact greedy target decode") { mtp_spec_wall_top2_miss_offramp = true }
   p.on("--mtp-spec-wall-promote-top2-margin F", "Use MTP top2 as the verifier candidate when top1-top2 margin is <= F") { |v| mtp_spec_wall_promote_top2_margin = v.to_f64 }
+  p.on("--mtp-spec-wall-min-margin F", "Skip MTP verifier and advance exact decode when MTP top1-top2 margin is below F; requires --mtp-spec-wall-lazy-draft") { |v| mtp_spec_wall_min_margin = v.to_f64 }
+  p.on("--mtp-spec-wall-min-margin-offramp", "After a low-MTP-margin skip, finish the remaining span with exact decode") { mtp_spec_wall_min_margin_offramp = true }
   p.on("--mtp-spec-wall-router-trace PATH", "Write JSONL pass records with target top2 margin and submit/skip oracle inputs") { |v| mtp_spec_wall_router_trace_path = v }
   p.on("--mtp-spec-wall-router-thresholds LIST", "Comma-separated target-margin thresholds for an offline skip-MTP oracle") do |v|
     mtp_spec_wall_router_thresholds = v.split(",").reject(&.empty?).map(&.to_f64)
@@ -591,6 +597,9 @@ abort "--mtp-spec-wall-gammas requires --mtp-chain-tokens > 0" if !mtp_spec_wall
 abort "--mtp-spec-wall-gammas values must be positive" if mtp_spec_wall_gammas.any? { |gamma| gamma <= 0 }
 abort "--mtp-spec-wall-stage must be non-negative" if mtp_spec_wall_stage < 0
 abort "--mtp-spec-wall-lazy-draft requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_lazy_draft && mtp_spec_wall_stage <= 0
+abort "--mtp-spec-wall-min-margin requires --mtp-spec-wall-lazy-draft" if mtp_spec_wall_min_margin && !mtp_spec_wall_lazy_draft
+abort "--mtp-spec-wall-min-margin-offramp requires --mtp-spec-wall-min-margin" if mtp_spec_wall_min_margin_offramp && !mtp_spec_wall_min_margin
+abort "--mtp-spec-wall-min-margin must be non-negative" if mtp_spec_wall_min_margin && mtp_spec_wall_min_margin.not_nil! < 0.0
 abort "--mtp-spec-wall-stage-once requires --mtp-spec-wall-stage > 0" if mtp_spec_wall_stage_once && mtp_spec_wall_stage <= 0
 abort "--mtp-spec-wall-reject-offramp must be non-negative" if mtp_spec_wall_reject_offramp < 0
 mtp_spec_wall_router_thresholds = mtp_spec_wall_router_thresholds.sort.uniq
@@ -850,6 +859,7 @@ rows.each do |label, prompt_text|
     wall_top2_offramp_hits = 0
     wall_top2_promotions = 0
     wall_top2_promoted_accepted = 0
+    wall_margin_skips = 0
     snapshot_cost_states = [] of ML::GGUF::Qwen35CPU::State
     if mtp_spec_wall_snapshot_cost_probe
       (gamma + 1).times do
@@ -890,7 +900,7 @@ rows.each do |label, prompt_text|
       candidate_seconds = [] of Int32
       candidate_promoted = [] of Bool
       candidate_hiddens = [] of Array(Float32)
-      draft_topk = (mtp_spec_wall_top2_accounting && !mtp_spec_wall_top2_on_reject) ? 2 : 1
+      draft_topk = ((mtp_spec_wall_top2_accounting && !mtp_spec_wall_top2_on_reject) || mtp_spec_wall_min_margin) ? 2 : 1
       draft_hidden = wall_hidden
       draft_token = wall_token
       draft_pos = wall_pos
@@ -936,6 +946,7 @@ rows.each do |label, prompt_text|
       stage_size = mtp_spec_wall_stage > 0 ? mtp_spec_wall_stage : draft_steps
 
       while !pass_rejected && !pass_finished
+        margin_skip_stage = false
         if mtp_spec_wall_lazy_draft
           break if draft_generated >= draft_steps
 
@@ -961,6 +972,15 @@ rows.each do |label, prompt_text|
                 pass_mtp_first_margin = margin
               end
               pass_mtp_min_margin = pass_mtp_min_margin ? Math.min(pass_mtp_min_margin.not_nil!, margin) : margin
+              if threshold = mtp_spec_wall_min_margin
+                if stage_candidates.empty? && margin < threshold
+                  margin_skip_stage = true
+                  wall_margin_skips += 1
+                  wall_draft_tokens += 1
+                  wall_mtp_ms += step_ms
+                  break
+                end
+              end
             end
             candidate, second_candidate, promoted = choose_mtp_wall_candidate(mtp_topk, mtp_spec_wall_promote_top2_margin)
             stage_candidates << candidate
@@ -990,6 +1010,31 @@ rows.each do |label, prompt_text|
           stage_candidate_hiddens = candidate_hiddens[candidate_offset, current_stage]
           final_stage = candidate_offset + current_stage >= candidates.size
         end
+        if margin_skip_stage
+          fallback_start = Time.instant
+          if mtp_spec_wall_min_margin_offramp
+            while wall_ids.size < mtp_chain_tokens
+              exact_next, _exact_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, wall_token, wall_pos, wall_state)
+              wall_ids << exact_next
+              wall_token = exact_next
+              wall_pos += 1
+              wall_fallback_tokens += 1
+            end
+          else
+            exact_hidden = ML::GGUF::Qwen35CPU.forward_hidden(weights, stage_token, stage_pos, wall_state)
+            exact_next, _exact_logit = ML::GGUF::Qwen35CPU.hidden_top1(weights, exact_hidden)
+            wall_ids << exact_next if wall_ids.size < mtp_chain_tokens
+            wall_hidden = exact_hidden
+            wall_token = exact_next
+            wall_pos = stage_pos + 1
+            wall_fallback_tokens += 1
+          end
+
+          wall_fallback_ms += elapsed_ms(fallback_start)
+          pass_finished = true
+          next
+        end
+
         need_bonus = (final_stage || mtp_spec_wall_stage_bonus) && wall_ids.size + current_stage < mtp_chain_tokens
         verify_tokens = [stage_token] + (need_bonus ? stage_candidates : stage_candidates[0, Math.max(current_stage - 1, 0)])
         backup_start = Time.instant
@@ -1251,6 +1296,7 @@ rows.each do |label, prompt_text|
     agg.top2_offramp_hits += wall_top2_offramp_hits
     agg.top2_promotions += wall_top2_promotions
     agg.top2_promoted_accepted += wall_top2_promoted_accepted
+    agg.margin_skips += wall_margin_skips
     agg.mtp_ms_sum += wall_mtp_ms
     agg.verifier_ms_sum += wall_verifier_ms
     agg.replay_ms_sum += wall_replay_ms
@@ -1263,7 +1309,7 @@ rows.each do |label, prompt_text|
     agg.plain_exact_ms_sum += plain_exact_ms
 
     verifier_mode = mtp_spec_wall_serial_early_verify ? "serial_early" : "chunk"
-    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} snapshot_tokens=#{wall_snapshot_tokens} top2_checks=#{wall_top2_checks} top2_rescues=#{wall_top2_rescues} top2_wrong_tail_tokens=#{wall_top2_wrong_tail_tokens} top2_replay_tokens=#{wall_top2_replay_tokens} top2_replay_ms=#{wall_top2_replay_ms.round(3)} top2_offramp_hits=#{wall_top2_offramp_hits} top2_promotions=#{wall_top2_promotions} top2_promoted_accepted=#{wall_top2_promoted_accepted} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} snapshot_sim_ms=#{wall_snapshot_ms.round(3)} snapshot_modeled_wall_ms=#{snapshot_modeled_wall_ms.round(3)} snapshot_modeled_speedup=#{(plain_exact_ms / snapshot_modeled_wall_ms).round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
+    puts "mtp_spec_wall_summary label=#{label.inspect} mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} tokens=#{mtp_chain_tokens} passes=#{wall_passes} emitted=#{wall_ids.size} draft_tokens=#{wall_draft_tokens} accepted=#{wall_accepted} rejections=#{wall_rejections} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens} replay_tokens=#{wall_replay_tokens} fallback_tokens=#{wall_fallback_tokens} snapshot_tokens=#{wall_snapshot_tokens} top2_checks=#{wall_top2_checks} top2_rescues=#{wall_top2_rescues} top2_wrong_tail_tokens=#{wall_top2_wrong_tail_tokens} top2_replay_tokens=#{wall_top2_replay_tokens} top2_replay_ms=#{wall_top2_replay_ms.round(3)} top2_offramp_hits=#{wall_top2_offramp_hits} top2_promotions=#{wall_top2_promotions} top2_promoted_accepted=#{wall_top2_promoted_accepted} margin_skips=#{wall_margin_skips} accept_rate=#{pct(wall_accepted, wall_draft_tokens).round(2)} tokens_per_pass=#{(wall_ids.size.to_f64 / wall_passes).round(3)} mtp_ms=#{wall_mtp_ms.round(3)} verifier_ms=#{wall_verifier_ms.round(3)} backup_ms=#{wall_backup_ms.round(3)} replay_ms=#{wall_replay_ms.round(3)} fallback_ms=#{wall_fallback_ms.round(3)} snapshot_sim_ms=#{wall_snapshot_ms.round(3)} snapshot_modeled_wall_ms=#{snapshot_modeled_wall_ms.round(3)} snapshot_modeled_speedup=#{(plain_exact_ms / snapshot_modeled_wall_ms).round(3)} wall_ms=#{wall_ms.round(3)} plain_exact_ms=#{plain_exact_ms.round(3)} plain_speedup=#{(plain_exact_ms / wall_ms).round(3)} parity=#{parity} ids=#{wall_ids.join(",")}"
     if mtp_spec_wall_profile
       puts "mtp_spec_wall_profile label=#{label.inspect} gamma=#{gamma} verifier_calls=#{wall_verifier_calls} verifier_tokens=#{wall_verifier_tokens}"
       puts ML::GGUF::Qwen35Metal::Profile.report_io
@@ -1498,6 +1544,6 @@ mtp_spec_wall_aggregates.keys.sort.each do |gamma|
   next if agg.tokens == 0
 
   verifier_mode = mtp_spec_wall_serial_early_verify ? "serial_early" : "chunk"
-  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
+  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} lazy_draft=#{mtp_spec_wall_lazy_draft} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} margin_skips=#{agg.margin_skips} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)}"
 end
 router_trace_io.try(&.close)

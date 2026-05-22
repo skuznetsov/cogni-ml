@@ -40,6 +40,9 @@
 - [x] Wire native GGUF MTP into the existing exact-resync wall/spec harness as an explicit `--mtp-gguf` mode.
   - Evidence: `bin/qwen35_mtp_sidecar_probe.cr --mtp-gguf --run-forward --top1-only ... --mtp-chain-tokens 4 --mtp-spec-wall-gammas 2 --mtp-spec-wall-stage 1 --mtp-spec-wall-lazy-draft` on the local Unsloth IQ4_NL MTP GGUF produced `parity=true`, first-step acceptance `true`, teacher-chain top1 `75%`, and steady MTP proposal p50 around `6.1-8.0ms`.
   - Boundary: this is a diagnostic harness integration, not a speed win. Exact wall mode was slower on the tiny prompt (`plain_speedup=0.528x`) because verifier/replay dominated (`verifier_ms=401.154`, `replay_ms=85.197`, `mtp_ms=28.407`).
+- [x] Add an opt-in exact MTP local-confidence controller to the wall harness: `--mtp-spec-wall-min-margin F` skips verifier submission when MTP top1/top2 margin is low, and `--mtp-spec-wall-min-margin-offramp` switches the rest of the span to exact decode.
+  - Evidence: with GGUF MTP, `gamma=4 stage=1 lazy min_margin=1.0 offramp` preserved `parity=true`, avoided verifier/replay entirely after the low-margin trigger, and measured `wall_ms=1166.229` vs plain exact `1136.564` (`plain_speedup=0.975x`). Earlier per-token skip remained slower (`~0.714x`) because it paid MTP on repeated skipped windows.
+  - Boundary: this is a safety/controller primitive, not a speed win. It proves the dual-frame fallback can avoid catastrophic speculative tails, but confidence gating alone cannot beat plain decode unless the accepted MTP branch is already net-positive.
 - [ ] Integrate the native GGUF MTP path into production speculative decode: preserve exact target verification, add resident MTP KV chain state, eliminate avoidable per-op syncs, then compare against llama.cpp `draft-mtp` on the same prompts.
 
 **Current LTP/WBA speed frontier (2026-05-20):**
