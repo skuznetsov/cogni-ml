@@ -805,6 +805,39 @@ Additional benchmark modes:
 ./build/benchmark_qwen_vs_llama --native-prefill-cache
 ```
 
+For Qwen3.6 MTP / quant baselines, first inspect the local/HF matrix:
+
+```sh
+crystal build --release bin/qwen36_mtp_baseline_matrix.cr \
+  -o build/qwen36_mtp_baseline_matrix
+
+./build/qwen36_mtp_baseline_matrix
+```
+
+The matrix prints local-path detection plus llama.cpp command lines for the
+current plain `Q4_K_M` target and external MTP GGUF baselines such as
+`unsloth/Qwen3.6-27B-MTP-GGUF:IQ4_NL`,
+`unsloth/Qwen3.6-27B-MTP-GGUF:UD-Q4_K_XL`, and
+`AtomicChat/Qwen3.6-27B-UDT-MTP-GGUF:Q4_K_XL_MTP`. Use `--run-available` only
+after the relevant files are local and the llama.cpp binary advertises
+`draft-mtp`.
+
+`benchmark_qwen_vs_llama` also accepts llama.cpp KV-cache options for matching
+long-context/product configurations:
+
+```sh
+./build/benchmark_qwen_vs_llama \
+  --model ~/.cache/lm-studio/models/lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf \
+  --prompt=512 \
+  --gen=128 \
+  --llama-cache-k=q8_0 \
+  --llama-cache-v=q4_0
+```
+
+Boundary: native `cogni-ml` currently supports the K-quants used by our
+Q4_K_M/Q5_K/Q6_K/Q8_0 paths. IQ/UD MTP GGUFs are external llama.cpp baselines
+until native IQ/UD quant loaders are implemented.
+
 Fresh local M2 Max 64GB relaxed-load snapshot after the shared-H16 recurrent projection cleanup, Qwen 3.5 9B Q4_K_M, llama.cpp `llama-bench`, `prompt=64`, `gen=64`, `reps=3`, `warmup=1`, flash-attention off:
 
 | Mode | cogni-ml | llama.cpp | Gap |

@@ -248,7 +248,17 @@ def measure_native_decode(w : ML::GGUF::Qwen35Weights, n_gen : Int32, reps : Int
   )
 end
 
-def run_llama_bench(llama_bench : String, model : String, n_prompt : Int32, n_gen : Int32, reps : Int32, n_gpu_layers : Int32, threads : Int32, flash_attn : Bool) : LlamaStats
+def run_llama_bench(llama_bench : String,
+                    model : String,
+                    n_prompt : Int32,
+                    n_gen : Int32,
+                    reps : Int32,
+                    n_gpu_layers : Int32,
+                    threads : Int32,
+                    flash_attn : Bool,
+                    cache_type_k : String?,
+                    cache_type_v : String?,
+                    extra_args : Array(String)) : LlamaStats
   output = IO::Memory.new
   error = IO::Memory.new
   args = [
@@ -261,9 +271,16 @@ def run_llama_bench(llama_bench : String, model : String, n_prompt : Int32, n_ge
     "-r", reps.to_s,
     "-o", "json",
   ]
+  if ctk = cache_type_k
+    args << "-ctk" << ctk
+  end
+  if ctv = cache_type_v
+    args << "-ctv" << ctv
+  end
+  args.concat(extra_args)
   status = Process.run(llama_bench, args: args, output: output, error: error)
   unless status.success?
-    raise "llama-bench failed: #{error.to_s}"
+    raise "llama-bench failed: #{error.to_s}\nargs=#{args.join(" ")}"
   end
 
   parsed = JSON.parse(output.to_s)
@@ -288,6 +305,9 @@ warmup = 2
 n_gpu_layers = 99
 threads = 8
 flash_attn = false
+llama_cache_type_k = nil.as(String?)
+llama_cache_type_v = nil.as(String?)
+llama_extra_args = [] of String
 native_decode_top1 = true
 native_prefill_cache = false
 native_prefill_prealloc = false
@@ -309,6 +329,9 @@ OptionParser.parse do |p|
   p.on("--ngl=N", "llama.cpp GPU layers (default: 99)") { |v| n_gpu_layers = v.to_i }
   p.on("--threads=N", "llama.cpp CPU threads (default: 8)") { |v| threads = v.to_i }
   p.on("--flash-attn", "Enable flash attention in llama.cpp") { flash_attn = true }
+  p.on("--llama-cache-k=TYPE", "llama.cpp KV cache K type for llama-bench, for example q8_0") { |v| llama_cache_type_k = v }
+  p.on("--llama-cache-v=TYPE", "llama.cpp KV cache V type for llama-bench, for example q4_0") { |v| llama_cache_type_v = v }
+  p.on("--llama-extra-arg=ARG", "Append one raw argument to llama-bench; repeat for flag/value pairs") { |v| llama_extra_args << v }
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
   p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
   p.on("--native-prefill-prealloc", "Measure native prefill with state buffers allocated outside the timed loop") { native_prefill_prealloc = true }
@@ -345,10 +368,10 @@ native_prefill = if native_prefill_cache
                  end
 native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_top1)
 
-llama_prefill = run_llama_bench(llama_bench, model, n_prompt, 0, reps, n_gpu_layers, threads, flash_attn)
-llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers, threads, flash_attn)
+llama_prefill = run_llama_bench(llama_bench, model, n_prompt, 0, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
+llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
 
-puts "Qwen 3.5 9B benchmark vs llama.cpp"
+puts "Qwen benchmark vs llama.cpp"
 puts "model: #{model}"
 puts "llama-bench: #{llama_bench}"
 native_prefill_mode = if native_prefill_cache
@@ -360,7 +383,7 @@ native_prefill_mode = if native_prefill_cache
                       else
                         "chunked_prompt_plus_final_top1"
                       end
-puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
+puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
 puts
 puts "Prefill"
 puts "  cogni-ml:  avg=#{native_prefill.avg_ms.round(2)} ms  p50=#{native_prefill.p50_ms.round(2)} ms  p95=#{native_prefill.p95_ms.round(2)} ms  avg=#{native_prefill.tok_s_avg.round(2)} tok/s  p50=#{native_prefill.tok_s_p50.round(2)} tok/s"
