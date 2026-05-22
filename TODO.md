@@ -2216,3 +2216,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_443:** Same patched binary and prompt, Q4_K_M target + UD-Q4_K_XL sidecar, `tokens=8 gamma=8 stage=2 lazy hidden_resync rec_checkpoint`: default `QWEN35_Q4K_PAIR_H16_MIN_BATCH=64` measured `verifier_ms=549.547`, `plain_speedup=0.729`, `parity=true`; `QWEN35_Q4K_PAIR_H16_MIN_BATCH=2` changed the top profile row to `prefill.rec.ffn_upgate q4_h16_gemm Q4_K 5120x17408 b2` but regressed to `verifier_ms=865.092`, `plain_speedup=0.501`, `parity=true`.
 
 **next_update_443:** Do not use existing q4 h16 GEMM-style kernels for `b2` verifier FFN. The next viable verifier route needs a true small-row streaming kernel or a fused verifier FFN schedule, not threshold retuning.
+
+**decision_update_444:** Refuted and removed a dual Q4_K gate/up GEMV experiment for the `b2` verifier FFN corridor. The tested kernel kept the streaming GEMV schedule and collapsed gate/up into one dispatch, but it increased GPU wait on the active MTP verifier route.
+
+**evidence_update_444:** Temporary opt-in `QWEN35_Q4K_DUAL_GEMV=1` built and passed the focused Metal spec. Same prompt/corridor, Q4_K_M target + UD-Q4_K_XL sidecar, `tokens=8 gamma=8 stage=2 lazy hidden_resync rec_checkpoint`: default measured `verifier_ms=607.486`, `plain_speedup=0.715`, top row `prefill.rec.ffn_upgate gemv Q4_K ... b2` with `480` calls; dual route changed the row to `gemv Q4_K dual ... b2` with `240` calls but regressed to `verifier_ms=635.338`, `plain_speedup=0.683`, parity true. Code was removed before commit.
+
+**next_update_444:** Avoid dual-output Q4 GEMV for verifier FFN unless a different register/occupancy schedule is designed. The remaining promising exact routes are higher-level LTP/WBA scheduling: avoid entering verifier chunks that will reject, or fuse verifier FFN-down/add/top1 boundaries so accepted rows amortize more work.

@@ -15008,3 +15008,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This narrower threshold falsifier agrees with LM-432/433: existing GEMM-style h16 kernels have too much fixed cost for `b2`. The legal move cannot be threshold retuning; it must be a true small-row streaming verifier kernel or a higher-level verifier FFN fusion that reduces launches/materialization without invoking the wide GEMM tile.
 - LTP/WBA: Window is the verifier `b2` FFN up/gate corridor. The tested legal move changed transport from GEMV to existing paired h16 GEMM, but after recomputation the potential increased in `(verifier wait, wall)` despite unchanged logical bytes and parity. Dual frame remains the default GEMV route.
 - trust: {F:0.84,G:0.34,R:0.80}
+
+**LM-444 Dual Q4 gate/up GEMV is refuted for current B2 verifier [shared/ml]**
+- status: REFUTED implementation branch; code removed
+- claim tested: A dual Q4_K gate/up GEMV should improve the `b2` verifier FFN corridor by sharing input loads and collapsing two gate/up dispatches into one while preserving the streaming GEMV schedule.
+- evidence: Temporary opt-in `QWEN35_Q4K_DUAL_GEMV=1` built and passed the focused Metal spec. Same prompt/corridor, Q4_K_M target + UD-Q4_K_XL sidecar, `tokens=8 gamma=8 stage=2 lazy hidden_resync rec_checkpoint`: default measured `verifier_ms=607.486`, `plain_speedup=0.715`, parity true, top row `prefill.rec.ffn_upgate gemv Q4_K 5120x17408 b2` with `480` calls. Dual route changed the row to `prefill.rec.ffn_upgate gemv Q4_K dual 5120x17408 b2` with `240` calls but regressed to `verifier_ms=635.338` and `plain_speedup=0.683`; parity stayed true. Code was removed before commit.
+- diagnosis: Dispatch reduction and input reuse are not enough; the dual kernel likely increased register pressure/occupancy cost, echoing LM-433. The next speed path should not be another local dual-accumulator GEMV variant unless it has an explicit occupancy/register plan.
+- LTP/WBA: Window is the same `b2` FFN gate/up corridor. The tested legal move reduced dispatch count but failed lexicographic descent because verifier wait increased after recomputation. Dual frame remains default streaming GEMV.
+- trust: {F:0.84,G:0.32,R:0.80}
