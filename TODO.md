@@ -2168,3 +2168,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_435:** Build and focused Metal spec passed (`4 examples, 0 failures`). On Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`, resync changed counters from `accepted=10/rejections=6/verifier_calls=10/verifier_tokens=20/replay_tokens=3` to `accepted=12/rejections=3/verifier_calls=9/verifier_tokens=18/replay_tokens=2`, parity true. `gamma=4 stage=2` did not improve counters, and wall timings were noisy, so this is not a promoted speed claim.
 
 **next_update_435:** Next exact proposal-quality branch: test a stronger llama-style draft-context resync that rebuilds/updates the MTP KV cache from accepted exact hidden rows at stage boundaries. The expected signal is improved acceptance at `gamma>=8` without extra verifier rows; reject if it increases proposal wall more than it reduces verifier/replay work.
+
+**decision_update_436:** Refuted and removed full MTP KV rebuild after exact-hidden resync. A temporary `--mtp-spec-wall-resync-rebuild-state` replayed accepted exact hidden rows into a fresh MTP state at accepted stage boundaries, but it did not improve acceptance beyond hidden-only resync and added too much MTP work.
+
+**evidence_update_436:** Same-binary Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`: baseline `accepted=10/rejections=6/verifier_calls=10/replay_tokens=3/plain_speedup=0.617`; hidden-only resync `accepted=12/rejections=3/verifier_calls=9/replay_tokens=2/mtp_ms=148.008/plain_speedup=0.722`; hidden+KV-rebuild same counters but `mtp_ms=214.124/plain_speedup=0.643`. Parity true in all rows.
+
+**next_update_436:** Keep hidden-only resync as the active proposal-quality move. Do not rebuild MTP KV by replaying full MTP steps unless a future K/V-only append/update primitive exists. Next speed branch should target verifier replay/state materialization or a cheaper K/V-only MTP state update.
