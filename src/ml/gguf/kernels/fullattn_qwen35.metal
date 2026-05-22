@@ -308,6 +308,104 @@ kernel void qwen35_attn_decode_rows_sg4(
     const uint cache_len = base_pos + t + 1;
 
     threadgroup float q_tg_all[4][256];
+    threadgroup float tile_scores_all[4][32];
+    threadgroup float* q_tg = q_tg_all[sgitg];
+    threadgroup float* tile_scores = tile_scores_all[sgitg];
+
+    for (uint d = lane; d < head_dim; d += 32) {
+        q_tg[d] = Q[(t * n_head + h) * head_dim + d];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m = -1e30f;
+    float l = 0.0f;
+    float o[8];
+    for (uint i = 0; i < 8; ++i) o[i] = 0.0f;
+
+    for (uint tile_start = 0; tile_start < cache_len; tile_start += 32) {
+        uint j = tile_start + lane;
+
+        float score = -1e30f;
+        if (j < cache_len) {
+            device const float4* kj4 = (device const float4*)(
+                k_cache + j * kv_dim + kv_h * head_dim);
+            threadgroup const float4* qv4 = (threadgroup const float4*)q_tg;
+            float dot = 0.0f;
+            for (uint d = 0; d < hd4; d++) {
+                float4 k4 = kj4[d];
+                float4 q4 = qv4[d];
+                dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
+            }
+            score = dot * scale;
+        }
+
+        float tile_max = simd_max(score);
+        float m_new = max(m, tile_max);
+        float correction = exp(m - m_new);
+        float p = (j < cache_len) ? exp(score - m_new) : 0.0f;
+        l = l * correction + simd_sum(p);
+
+        tile_scores[lane] = p;
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+
+        uint tile_len = min(tile_start + 32, cache_len) - tile_start;
+        for (uint dl = 0; dl < 8; dl++) {
+            uint d = lane + dl * 32;
+            if (d >= head_dim) break;
+            float acc = 0.0f;
+            for (uint s = 0; s < tile_len; s++) {
+                acc += tile_scores[s] *
+                    v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+            }
+            o[dl] = o[dl] * correction + acc;
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+
+        m = m_new;
+    }
+
+    const float inv_l = (l > 0.0f) ? 1.0f / l : 0.0f;
+    const uint out_base = (t * n_head + h) * head_dim;
+    for (uint dl = 0; dl < 8; dl++) {
+        uint d = lane + dl * 32;
+        if (d >= head_dim) break;
+        const float g = gate[out_base + d];
+        const float sig_g = 1.0f / (1.0f + exp(-g));
+        out[out_base + d] = o[dl] * inv_l * sig_g;
+    }
+}
+
+// Previous SG4 variant kept as an opt-in timing guard for the direct-gate Spike.
+// It preloads gate rows into threadgroup memory before attention and is selected
+// only with QWEN35_PREFILL_ATTN_ROWS_SG4_PREGATE=1.
+kernel void qwen35_attn_decode_rows_sg4_pregate(
+    device const float* Q         [[buffer(0)]],
+    device const float* gate      [[buffer(1)]],
+    device const float* k_cache   [[buffer(2)]],
+    device const float* v_cache   [[buffer(3)]],
+    device       float* out       [[buffer(4)]],
+    constant     uint&  base_pos       [[buffer(5)]],
+    constant     uint&  n_tokens       [[buffer(6)]],
+    constant     uint&  n_head         [[buffer(7)]],
+    constant     uint&  n_head_kv      [[buffer(8)]],
+    constant     uint&  head_dim       [[buffer(9)]],
+    constant     uint&  heads_per_group[[buffer(10)]],
+    constant     float& scale          [[buffer(11)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint h = tgpig.x;
+    const uint t = tgpig.y * 4 + sgitg;
+    if (h >= n_head || t >= n_tokens) return;
+
+    const uint kv_h = h / heads_per_group;
+    const uint kv_dim = n_head_kv * head_dim;
+    const uint hd4 = head_dim / 4;
+    const uint lane = tiisg;
+    const uint cache_len = base_pos + t + 1;
+
+    threadgroup float q_tg_all[4][256];
     threadgroup float gate_tg_all[4][256];
     threadgroup float tile_scores_all[4][32];
     threadgroup float* q_tg = q_tg_all[sgitg];

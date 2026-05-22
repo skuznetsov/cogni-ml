@@ -240,6 +240,7 @@ module ML
         @@kv_write_rows_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_sg4_pipeline : ML::Metal::ComputePipeline?
+        @@attn_rows_sg4_pregate_pipeline : ML::Metal::ComputePipeline?
 
         # ── Phase 4.0 instrumentation ─────────────────────────────────
         # Counters and nanosecond timers broken down by dispatch type
@@ -1324,6 +1325,12 @@ module ML
           }
         end
 
+        private def self.attn_rows_sg4_pregate_pipeline : ML::Metal::ComputePipeline
+          @@attn_rows_sg4_pregate_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_rows_sg4_pregate") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4_pregate", FULLATTN_SOURCE)
+          }
+        end
+
         private def self.gemv_pipeline_for(qw : QuantWeight) : ML::Metal::ComputePipeline?
           case qw.type
           when .q4_k? then mv_pipeline
@@ -2248,6 +2255,19 @@ module ML
 
         private def self.prefill_attn_rows_sg4_enabled? : Bool
           ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_OFF"]? != "1"
+        end
+
+        private def self.prefill_attn_rows_sg4_pregate_enabled? : Bool
+          ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_PREGATE"]? == "1"
+        end
+
+        private def self.prefill_attn_rows_sg4_direct_gate_min_tokens : Int32
+          (ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_MIN"]? || "1024").to_i32
+        end
+
+        private def self.prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens : Int32) : Bool
+          ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_OFF"]? != "1" &&
+            n_tokens >= prefill_attn_rows_sg4_direct_gate_min_tokens
         end
 
         private def self.prefill_phase_checkpoint(cmd : ML::Metal::CommandBuffer,
@@ -6105,7 +6125,9 @@ module ML
 
           attn_enc = ML::Metal::ComputeEncoder.new(cmd)
           use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
-          attn_enc.set_pipeline(use_attn_sg4 ? attn_rows_sg4_pipeline : attn_rows_pipeline)
+          use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
+          attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
+          attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
           attn_enc.set_buffer(q_buf, 0)
           attn_enc.set_buffer(gate_buf, 1)
           attn_enc.set_buffer(k_cache_buf, 2)
@@ -6455,7 +6477,9 @@ module ML
 
           attn_enc = ML::Metal::ComputeEncoder.new(cmd)
           use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
-          attn_enc.set_pipeline(use_attn_sg4 ? attn_rows_sg4_pipeline : attn_rows_pipeline)
+          use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
+          attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
+          attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
           attn_enc.set_buffer(full_q_buf, 0)
           attn_enc.set_buffer(full_gate_buf, 1)
           attn_enc.set_buffer(k_cache_buf, 2)
