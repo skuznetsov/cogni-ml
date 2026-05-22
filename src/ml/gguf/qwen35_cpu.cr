@@ -2202,6 +2202,34 @@ module ML::GGUF
       {hidden: hidden, top1s: top1s}
     end
 
+    def prefill_tokens_hidden_top1s_recurrent_checkpoint(weights : Qwen35Weights,
+                                                         token_ids : Array(Int32),
+                                                         start_pos : Int32,
+                                                         state : State,
+                                                         checkpoint_index : Int32,
+                                                         checkpoint_state : State) : NamedTuple(hidden: Array(Float32), top1s: Array({Int32, Float32}))
+      raise ArgumentError.new("prefill_tokens_hidden_top1s_recurrent_checkpoint token_ids must not be empty") if token_ids.empty?
+      raise ArgumentError.new("prefill_tokens_hidden_top1s_recurrent_checkpoint checkpoint index out of range") unless checkpoint_index >= 0 && checkpoint_index < token_ids.size
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard { prefill_tokens_hidden_top1s_recurrent_checkpoint(weights, token_ids, start_pos, state, checkpoint_index, checkpoint_state) }
+      end
+
+      hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state,
+        checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state)
+      hp = weights.hparams
+      top1s = if routed = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
+                routed
+              else
+                results = [] of {Int32, Float32}
+                token_ids.size.times do |i|
+                  row = hidden[i * hp.n_embd, hp.n_embd]
+                  results << hidden_top1(weights, row)
+                end
+                results
+              end
+      {hidden: hidden, top1s: top1s}
+    end
+
     # Exact known-span verifier with a recurrent-state checkpoint captured
     # after `checkpoint_index`. This is used by branch-guard experiments that
     # want one verifier pass for prefix+guard+suffix while still keeping an
