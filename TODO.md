@@ -2174,3 +2174,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_436:** Same-binary Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`: baseline `accepted=10/rejections=6/verifier_calls=10/replay_tokens=3/plain_speedup=0.617`; hidden-only resync `accepted=12/rejections=3/verifier_calls=9/replay_tokens=2/mtp_ms=148.008/plain_speedup=0.722`; hidden+KV-rebuild same counters but `mtp_ms=214.124/plain_speedup=0.643`. Parity true in all rows.
 
 **next_update_436:** Keep hidden-only resync as the active proposal-quality move. Do not rebuild MTP KV by replaying full MTP steps unless a future K/V-only append/update primitive exists. Next speed branch should target verifier replay/state materialization or a cheaper K/V-only MTP state update.
+
+**decision_update_437:** Refuted and removed MTP K/V-only rebuild after exact-hidden resync. A temporary `append_kv_one_gguf` + `--mtp-spec-wall-resync-rebuild-kv` avoided full MTP replay, but still did not improve acceptance beyond hidden-only resync and added proposal cost.
+
+**evidence_update_437:** Same-binary Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`: baseline `accepted=10/rejections=6/verifier_calls=10/replay_tokens=3/plain_speedup=0.613`; hidden-only resync `accepted=12/rejections=3/verifier_calls=9/replay_tokens=2/mtp_ms=167.035/plain_speedup=0.706`; hidden+K/V-only rebuild same counters but `mtp_ms=181.04/plain_speedup=0.688`. Parity true in all rows.
+
+**next_update_437:** Do not recompute MTP KV after accepted stages in the current harness. The next exact speed branch should target verifier replay/state materialization: keep the mutated verifier state when the verifier stops at the correction boundary, and investigate per-row or per-stage state snapshots to remove replay without recomputing target rows.

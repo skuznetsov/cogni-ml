@@ -14952,3 +14952,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Exact-hidden resync is the useful local move. Full KV rebuild is too expensive with the current one-token MTP replay primitive and does not improve acceptance beyond hidden-only resync on this prompt. Future work should avoid replaying whole MTP steps just to rebuild K/V; if KV correction is needed, expose a cheaper K/V-only append/update primitive or use state snapshots.
 - LTP/WBA: Window is the accepted verifier boundary. The tested legal move preserved exact output but failed the lexicographic potential because `(MTP replay work)` increased more than `(verifier/replay rows)` decreased. Dual frame is the committed hidden-only resync from LM-435.
 - trust: {F:0.82,G:0.28,R:0.78}
+
+**LM-437 MTP K/V-only rebuild after exact-hidden resync is refuted [shared/ml]**
+- status: REFUTED implementation branch; code removed
+- claim tested: A cheaper K/V-only MTP state rebuild after exact-hidden resync should preserve the acceptance benefit of hidden resync while avoiding the cost of full MTP replay.
+- evidence: Temporary `append_kv_one_gguf` plus `--mtp-spec-wall-resync-rebuild-kv` built and passed the focused Qwen3.6 IQ4_NL Metal spec. On Q4_K_M target + UD-Q4_K_XL external MTP sidecar, `tokens=16 gamma=8 stage=2 lazy`, three-way same-binary A/B measured: baseline `accepted=10`, `rejections=6`, `verifier_calls=10`, `replay_tokens=3`, `plain_speedup=0.613`; hidden-only resync `accepted=12`, `rejections=3`, `verifier_calls=9`, `replay_tokens=2`, `mtp_ms=167.035`, `plain_speedup=0.706`; hidden+K/V-only rebuild kept the same counters but increased `mtp_ms=181.04` and regressed `plain_speedup=0.688`. Parity stayed true.
+- diagnosis: Exact-hidden resync gives the proposal-quality benefit. Correcting MTP KV by recomputation does not add acceptance on this prompt and adds proposal cost. If this area is revisited, it should use cheap state snapshots/transport rather than recomputation.
+- LTP/WBA: The K/V-only rebuild preserved boundary safety but failed the potential test: `(MTP K/V recompute work)` increased while `(rejections, verifier rows, replay rows)` did not decrease versus hidden-only resync. Dual frame is LM-435 hidden-only resync.
+- trust: {F:0.82,G:0.28,R:0.78}
