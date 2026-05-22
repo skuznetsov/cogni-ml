@@ -14919,3 +14919,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The next exact speed lever is a dedicated B2 verifier kernel that lets one dequantized Q4/Q6 weight block feed two verifier rows. Reusing the B32 GEMM tile wastes occupancy/resources at `b2`; policy tuning cannot beat plain until verifier rows are cheaper.
 - LTP/WBA: Window is the speculative verifier `b2` row pair. Transport is a two-token verifier band through repeated Q4/Q6 projection corridors. Legal move is a B2-specific microkernel that preserves exact target state and emits the same `[2, out_dim]` results; dual frame is the current GEMV path. Potential is `(weight rereads per verifier pair, dispatch/wait count, replay tax, remaining tokens)`, with the intended Spike/Ladder move reducing the first component without increasing boundary state or rollback cost.
 - trust: {F:0.86,G:0.42,R:0.82}
+
+
+**LM-433 Naive Q4 B2 dual-accumulator GEMV is refuted [shared/ml]**
+- status: REFUTED implementation branch; code removed
+- claim tested: A Q4_K B2 verifier microkernel that loads one weight block and computes two verifier rows with duplicated accumulators should reduce `b2` verifier cost.
+- evidence: Temporary guarded kernel `simd_mv_q4k_f32_b2` plus route for `batch==2` preserved parity on Q4_K_M target + external IQ4_NL MTP sidecar, but regressed the `tokens=8 gamma=4 stage=2 lazy` wall smoke: default/off verifier `481.819ms`, B2 verifier `1326.327ms`; plain speedup fell `0.645x -> 0.297x`. The branch was removed before commit.
+- diagnosis: The simple duplicated-accumulator design likely increased register pressure and lowered occupancy enough to swamp weight-reuse savings. B2 remains the right window, but the legal move must be a different schedule: e.g. fewer output rows per threadgroup, split two rows across simdgroups with shared dequant, or a verifier-specific fused FFN projection rather than a generic dual-row GEMV.
+- LTP/WBA: Window remains the verifier `b2` corridor, but this attempted Spike was illegal in potential terms because after recomputation it increased the wait component even though it reduced theoretical weight rereads. Dual frame is the existing GEMV path, which was restored.
+- trust: {F:0.86,G:0.32,R:0.82}
