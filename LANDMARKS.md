@@ -14743,3 +14743,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - evidence: Temporary opt-in `QWEN35_PREFILL_ATTN_ROWS_SG8=1` built successfully, but pp1024 paired timing measured SG4 default p50 `1772.49ms` vs SG8 p50 `1777.46ms`. SG8 lost despite identical math and logical traffic.
 - diagnosis: The larger threadgroup likely loses occupancy/resource balance enough to erase scheduler-area savings. Keep SG4 as the current sweet spot; do not retry larger row-packing without a different K/V reuse design.
 - trust: {F:0.70,G:0.40,R:0.72}
+
+**LM-412 granular prefill subphase attribution after SG4 [shared/ml]**
+- status: VERIFIED diagnostic profile, not wall-speed evidence
+- claim: After SG4 attention row scheduling, pp1024 prefill is dominated by recurrent FFN/projection work and full-layer attention/FFN work; RoPE, Q/K norm, split, and KV-write are not primary long-prompt bottlenecks.
+- evidence: Release build `/private/tmp/qwen35_prefill_attribution_rec_subphase` passed. With `QWEN35_PREFILL_PHASE_PROFILE=1 QWEN35_PREFILL_FULL_DETAIL_PROFILE=1`, pp1024 prepared-state detailed profile reported aggregate full/rec subphase waits: `rec.ffn_upgate 526.28ms`, `rec.proj 309.11ms`, `rec.ffn_down_add 287.63ms`, `full.ffn_upgate 175.90ms`, `full.attn_rows 155.46ms`, `rec.post_oproj 104.27ms`, `full.ffn_down_add 91.55ms`, `full.qkv 85.18ms`, `rec.dn 51.13ms`, `rec.prep 40.01ms`, while `full.split_qgate 6.72ms`, `full.kvwrite 3.71ms`, `full.qknorm 2.76ms`, and `full.rope 1.73ms` were small.
+- diagnosis: The next exact prefill lever is not more RoPE/KV-write/split cleanup. The largest windows are recurrent FFN gate/up, recurrent projection, recurrent FFN-down/add, and full-attention rows. Existing H16 staging remains a useful attribution control but not a proven wall breakthrough: current pp1024 `QWEN35_ADDNORM_H16_FFN=1` A/B was flat (`default p50 1950.97ms`, opt-in `1950.32ms`, wins `2/4`).
+- LTP/WBA: Windows are now concrete subphases. For `rec.ffn_upgate`, transport is the FFN activation/weight corridor; for `full.attn_rows`, transport is the causal query-row/KV corridor. Legal moves must reduce recomputed wall potential, not just logical conversion bytes. Dual frame remains the exact SG4 default and profile-only checkpoints.
+- trust: {F:0.82,G:0.50,R:0.78}
+
+**LM-413 SG4 shared-K/V full-attention kernel refuted [shared/ml]**
+- status: REFUTED and removed
+- claim tested: A true SG4 K/V reuse kernel could share 32-key K/V tiles through threadgroup memory across four adjacent causal query rows and beat the default SG4 row scheduler.
+- evidence: Temporary opt-in `QWEN35_PREFILL_ATTN_ROWS_SG4_SHAREDKV=1` was implemented and corrected for uniform threadgroup barriers across partial causal groups. Focused specs then passed with the opt-in route (`18 examples, 0 failures`). Paired prepared-state timing regressed: pp256 default p50 `1126.83ms` vs shared-K/V `1134.35ms`, and pp1024 default p50 `1834.04ms` vs shared-K/V `2011.45ms`, with default winning `4/4` at pp1024. The branch was removed.
+- diagnosis: The saved K/V device reads are outweighed by extra threadgroup barriers and shared-memory transport on M2 Max for this head_dim/cache pattern. SG4's win comes from scheduler/threadgroup packing, not from K/V reuse. A future FlashAttention-like attempt needs a different tile shape or hardware primitive, not this shared-memory corridor.
+- LTP/WBA: The proposed transport corridor lowered K/V rereads but increased barrier/sticky-corridor potential after recomputation. Legal move failed the wall component, so the dual frame is the exact SG4 default from LM-409.
+- trust: {F:0.78,G:0.44,R:0.78}

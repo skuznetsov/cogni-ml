@@ -6374,6 +6374,11 @@ module ML
           split_enc.set_value(n_tokens.to_u32, 5)
           split_enc.dispatch_1d(n_tokens * q_dim, 256)
           split_enc.end_encoding
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.split_qgate", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
+          end
 
           qnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
           qnorm_enc.set_pipeline(rmsnorm_heads_rows_pipeline)
@@ -6396,6 +6401,11 @@ module ML
           knorm_enc.set_value(n_tokens.to_u32, 5)
           knorm_enc.dispatch_threadgroups({n_head_kv, n_tokens, 1}, {32, 1, 1})
           knorm_enc.end_encoding
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.qknorm", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
+          end
 
           qrope_enc = ML::Metal::ComputeEncoder.new(cmd)
           qrope_enc.set_pipeline(rope_partial_rows_pipeline)
@@ -6420,6 +6430,11 @@ module ML
           krope_enc.set_value(n_tokens.to_u32, 6)
           krope_enc.dispatch_threadgroups({n_head_kv, n_tokens, 1}, {32, 1, 1})
           krope_enc.end_encoding
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.rope", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
+          end
 
           kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
           kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
@@ -6432,6 +6447,11 @@ module ML
           kvwrite_enc.set_value(n_tokens.to_u32, 6)
           kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
           kvwrite_enc.end_encoding
+          if full_detail_profile
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.kvwrite", phase_t0)
+            cmd = checked[0]
+            phase_t0 = checked[1]
+          end
 
           attn_enc = ML::Metal::ComputeEncoder.new(cmd)
           use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
@@ -6455,7 +6475,7 @@ module ML
           end
           attn_enc.end_encoding
           if full_detail_profile
-            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.attn_core", phase_t0)
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.attn_rows", phase_t0)
             cmd = checked[0]
             phase_t0 = checked[1]
           end
@@ -6663,6 +6683,11 @@ module ML
               encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, rec_cur_buf, rec_beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
               rec_proj_enc.end_encoding
             end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.proj", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
             qkv_h16 = q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
@@ -6710,6 +6735,11 @@ module ML
             ab_enc.set_value(n_tokens.to_u32, 6)
             ab_enc.dispatch_1d(n_tokens * h_v, 64)
             ab_enc.end_encoding
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.prep", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             dn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_dn_rowwise = dn_chunk_rowwise_enabled?(s)
@@ -6732,6 +6762,11 @@ module ML
               dn_enc.dispatch_threadgroups({h_v, 1, 1}, {128, 1, 1})
             end
             dn_enc.end_encoding
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.dn", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             post_enc = ML::Metal::ComputeEncoder.new(cmd)
             rec_o_proj_h16 = prefill_dn_post_h16_oproj_enabled? && h16_batch_gemm_candidate?(lw.ssm_out_qw, n_tokens)
@@ -6762,6 +6797,11 @@ module ML
                 encode_matmul(rec_out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, lw.ssm_out_qw, rec_attn_mid_buf, rec_attn_out_buf, rec_out_w_buf, rec_out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, n_tokens)
               end
               rec_out_enc.end_encoding
+            end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.post_oproj", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
             end
 
             rec_ffn_pair_h16 = prefill_addnorm_h16_ffn_enabled? && q4_pair_h16_gemm_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens)
@@ -6812,6 +6852,11 @@ module ML
               end
               rec_ffn_proj_enc.end_encoding
             end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.ffn_upgate", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             unless rec_up_swiglu_fused
               rec_swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -6857,10 +6902,15 @@ module ML
               rec_add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
               rec_add_enc.end_encoding
             end
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.ffn_down_add", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             src_buf, dst_buf = dst_buf, src_buf
 
-            if phase_profile
+            if phase_profile && !full_detail_profile
               phase_tenc = Time.instant
               cmd.commit
               cmd.wait

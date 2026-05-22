@@ -2056,3 +2056,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 - adversary: Keep the OFF rollback. Public benchmark claims still need quiet-host apples-vs-apples rerun against llama.cpp.
 
 **decision_update_411:** Refuted and removed SG8 full-attention row packing. A temporary `QWEN35_PREFILL_ATTN_ROWS_SG8=1` route built, but pp1024 measured SG4 p50 `1772.49ms` vs SG8 p50 `1777.46ms`. Keep SG4; larger row packing should wait for a true K/V reuse design rather than bigger threadgroups.
+
+**decision_update_412:** Added granular prefill full/recurrent subphase profiling behind `QWEN35_PREFILL_FULL_DETAIL_PROFILE=1`. The profiler now splits full layers into `qkv`, `split_qgate`, `qknorm`, `rope`, `kvwrite`, `attn_rows`, `o_proj`, `ffn_upgate`, `ffn_down_add`, and recurrent layers into `proj`, `prep`, `dn`, `post_oproj`, `ffn_upgate`, `ffn_down_add`.
+
+**evidence_update_412:** pp1024 detailed profile after SG4 showed the real hot windows: `rec.ffn_upgate 526.28ms`, `rec.proj 309.11ms`, `rec.ffn_down_add 287.63ms`, `full.ffn_upgate 175.90ms`, `full.attn_rows 155.46ms`; tiny phases were `full.rope 1.73ms`, `full.qknorm 2.76ms`, `full.kvwrite 3.71ms`, `full.split_qgate 6.72ms`. Current `QWEN35_ADDNORM_H16_FFN=1` pp1024 A/B stayed flat (`1950.97ms` default vs `1950.32ms` opt-in, wins `2/4`), so conversion cleanup alone remains non-promotable.
+
+**decision_update_413:** Refuted and removed a temporary SG4 shared-K/V attention kernel. After fixing correctness for uniform threadgroup barriers, focused specs passed, but paired timing regressed (`pp256 1126.83ms -> 1134.35ms`, `pp1024 1834.04ms -> 2011.45ms`). Barrier/shared-memory overhead beats saved K/V rereads on M2 Max; keep exact SG4 row scheduling as default.
