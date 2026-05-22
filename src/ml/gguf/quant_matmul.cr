@@ -5,13 +5,14 @@
 # This matches llama.cpp's approach and gives higher precision than
 # bulk dequant→F32→matmul because intermediate values stay in registers.
 #
-# Supports: Q4_K, Q5_K, Q6_K, Q8_0, F32, F16
+# Supports: Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL, F32, F16
 
 require "./reader" # for TensorType
 
 module ML::GGUF
   module QuantMatmul
     QK_K = 256
+    QK4_NL = 32
 
     # Fused matmul: result[o] = Σ_j x[j] * dequant(W_raw[o, j]) + bias[o]
     # W_raw is quantized weight data as raw bytes, row-major [out_dim rows, in_dim cols].
@@ -26,6 +27,7 @@ module ML::GGUF
       when .q5_k? then matmul_add_q5k(x, rows, in_dim, w_raw, out_dim, bias)
       when .q6_k? then matmul_add_q6k(x, rows, in_dim, w_raw, out_dim, bias)
       when .q8_0? then matmul_add_q8_0(x, rows, in_dim, w_raw, out_dim, bias)
+      when .iq4_nl? then matmul_add_iq4_nl(x, rows, in_dim, w_raw, out_dim, bias)
       when .f32?  then matmul_add_f32(x, rows, in_dim, w_raw, out_dim, bias)
       when .f16?  then matmul_add_f16(x, rows, in_dim, w_raw, out_dim, bias)
       else
@@ -257,6 +259,55 @@ module ML::GGUF
             count = Math.min(block_elems, in_dim - base_j)
             count.times do |j|
               sum += x[x_off + base_j + j] * (d * qs_ptr[j].unsafe_as(Int8))
+            end
+          end
+
+          result[r_off + o] = sum.to_f32
+        end
+      end
+
+      result
+    end
+
+    # IQ4_NL fused matmul.
+    # Block layout: [d:f16][qs:u8[16]] = 18 B, 32 elements per block.
+    private def self.matmul_add_iq4_nl(
+      x : Array(Float32), rows : Int32, in_dim : Int32,
+      w_raw : Bytes, out_dim : Int32, bias : Array(Float32),
+    ) : Array(Float32)
+      block_size = 18
+      blocks_per_row = (in_dim + QK4_NL - 1) // QK4_NL
+      row_bytes = blocks_per_row * block_size
+      result = Array(Float32).new(rows * out_dim, 0.0_f32)
+      w_ptr = w_raw.to_unsafe
+
+      rows.times do |r|
+        x_off = r * in_dim
+        r_off = r * out_dim
+
+        out_dim.times do |o|
+          sum = bias[o].to_f64
+          w_row = w_ptr + o * row_bytes
+
+          blocks_per_row.times do |blk|
+            blk_ptr = w_row + blk * block_size
+            d = Dequant.fp16_to_f32(Bytes.new(blk_ptr, 2)).to_f64
+            qs_ptr = blk_ptr + 2
+            base_j = blk * QK4_NL
+
+            first_count = Math.min(QK4_NL // 2, in_dim - base_j)
+            first_count.times do |j|
+              q = qs_ptr[j] & 0x0F
+              val = d * Dequant::IQ4_NL_VALUES[q].to_f64
+              sum += x[x_off + base_j + j].to_f64 * val
+            end
+
+            second_base = base_j + QK4_NL // 2
+            second_count = Math.min(QK4_NL // 2, in_dim - second_base)
+            second_count.times do |j|
+              q = qs_ptr[j] >> 4
+              val = d * Dequant::IQ4_NL_VALUES[q].to_f64
+              sum += x[x_off + second_base + j].to_f64 * val
             end
           end
 

@@ -4,7 +4,7 @@
 #   [magic "GGUF"] [version u32] [n_tensors i64] [n_kv i64]
 #   [kv_pairs...] [tensor_infos...] [aligned tensor data blob]
 #
-# Supports quantized types: F32, F16, Q4_K, Q5_K, Q6_K, Q8_0
+# Supports quantized types: F32, F16, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL
 
 require "./dequant"
 
@@ -45,8 +45,9 @@ module ML::GGUF
     Q5_K = 13
     Q6_K = 14
     Q8_K = 15
+    IQ4_NL = 20
 
-    # Bytes per block of QK_K=256 elements
+    # Bytes per quantization block.
     def block_bytes : Int32
       case self
       in .f32?  then 4      # per element, not block
@@ -62,6 +63,7 @@ module ML::GGUF
       in .q5_k? then 176    # 2 + 2 + 12 + 32 + 128
       in .q6_k? then 210    # 128 + 64 + 16 + 2
       in .q8_k? then 292
+      in .iq4_nl? then 18   # 2 + 16, QK4_NL=32
       end
     end
 
@@ -71,6 +73,7 @@ module ML::GGUF
       in .f32?, .f16? then 1 # scalar, no blocking
       in .q4_0?, .q4_1?, .q5_0?, .q5_1?, .q8_0? then 32
       in .q2_k?, .q3_k?, .q4_k?, .q5_k?, .q6_k?, .q8_k? then 256 # QK_K
+      in .iq4_nl? then 32 # QK4_NL
       end
     end
 
@@ -89,6 +92,7 @@ module ML::GGUF
       in .q5_k? then "Q5_K"
       in .q6_k? then "Q6_K"
       in .q8_k? then "Q8_K"
+      in .iq4_nl? then "IQ4_NL"
       end
     end
   end
