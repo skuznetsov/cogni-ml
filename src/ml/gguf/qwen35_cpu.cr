@@ -242,6 +242,45 @@ module ML::GGUF
       {% end %}
     end
 
+    def copy_recurrent_conv_metal_used!(dst : State, src : State, hp : Qwen35Hparams) : Nil
+      {% if flag?(:cpu_only) %}
+        dst.copy_from!(src)
+      {% else %}
+        unless Qwen35Metal.available?
+          dst.copy_from!(src)
+          return
+        end
+
+        ML::Metal::Dispatch.execute_blit do |enc|
+          src.layers.each_with_index do |src_layer, il|
+            next if hp.full_attention?(il)
+            dst_layer = dst.layers[il]
+            src_conv = src_layer.conv_state_buf.not_nil!
+            dst_conv = dst_layer.conv_state_buf.not_nil!
+            enc.copy_buffer(src_conv, 0, dst_conv, 0, checked_blit_bytes(src_conv.size))
+          end
+        end
+      {% end %}
+    end
+
+    def rollback_recurrent_ssm_metal_from_log!(state : State, log_state : State, hp : Qwen35Hparams) : Nil
+      {% if flag?(:cpu_only) %}
+        raise "rollback_recurrent_ssm_metal_from_log requires Metal"
+      {% else %}
+        raise "rollback_recurrent_ssm_metal_from_log requires Metal" unless Qwen35Metal.available?
+        h_k = hp.ssm_group_count
+        h_v = hp.ssm_time_step_rank
+        s = hp.ssm_state_size
+        state.layers.each_with_index do |layer, il|
+          next if hp.full_attention?(il)
+          Qwen35Metal.rollback_delta_net_state_from_log(
+            layer.ssm_state_buf.not_nil!,
+            log_state.layers[il].ssm_state_buf.not_nil!,
+            h_k, h_v, s)
+        end
+      {% end %}
+    end
+
     def encode_state_metal_used_copy!(enc : ML::Metal::BlitEncoder,
                                       dst : State, src : State, hp : Qwen35Hparams,
                                       used_tokens : Int32? = nil,
@@ -922,7 +961,8 @@ module ML::GGUF
                                                                    hp : Qwen35Hparams,
                                                                    max_seq : Int32,
                                                                    checkpoint_index : Int32? = nil,
-                                                                   checkpoint_state : State? = nil) : {Array(Float32), Int32}?
+                                                                   checkpoint_state : State? = nil,
+                                                                   checkpoint_rollback_log : Bool = false) : {Array(Float32), Int32}?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_PREFILL_FUSE_FULL_REC_OFF"]? == "1"
         return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
@@ -1043,7 +1083,8 @@ module ML::GGUF
           "full#{il}+rec#{run_start}-#{run_end - 1}",
           checkpoint_index: checkpoint_index,
           checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
-          checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil)
+          checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil,
+          checkpoint_rollback_log: checkpoint_rollback_log)
         out ? {out, run_end} : nil
       {% else %}
         nil
@@ -2247,6 +2288,33 @@ module ML::GGUF
       {hidden: hidden, top1s: top1s}
     end
 
+    def prefill_tokens_hidden_top1s_recurrent_rollback_log(weights : Qwen35Weights,
+                                                           token_ids : Array(Int32),
+                                                           start_pos : Int32,
+                                                           state : State,
+                                                           checkpoint_index : Int32,
+                                                           log_state : State) : NamedTuple(hidden: Array(Float32), top1s: Array({Int32, Float32}))
+      raise ArgumentError.new("prefill_tokens_hidden_top1s_recurrent_rollback_log requires exactly one rollback token") unless checkpoint_index + 1 < token_ids.size
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard { prefill_tokens_hidden_top1s_recurrent_rollback_log(weights, token_ids, start_pos, state, checkpoint_index, log_state) }
+      end
+
+      hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state,
+        checkpoint_index: checkpoint_index, checkpoint_state: log_state, checkpoint_rollback_log: true)
+      hp = weights.hparams
+      top1s = if routed = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
+                routed
+              else
+                results = [] of {Int32, Float32}
+                token_ids.size.times do |i|
+                  row = hidden[i * hp.n_embd, hp.n_embd]
+                  results << hidden_top1(weights, row)
+                end
+                results
+              end
+      {hidden: hidden, top1s: top1s}
+    end
+
     # Exact known-span verifier with a recurrent-state checkpoint captured
     # after `checkpoint_index`. This is used by branch-guard experiments that
     # want one verifier pass for prefix+guard+suffix while still keeping an
@@ -2305,7 +2373,8 @@ module ML::GGUF
                                       state : State,
                                       stop_layer : Int32? = nil,
                                       checkpoint_index : Int32? = nil,
-                                      checkpoint_state : State? = nil) : Array(Float32)
+                                      checkpoint_state : State? = nil,
+                                      checkpoint_rollback_log : Bool = false) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
       checkpoint_requested = !checkpoint_index.nil? || !checkpoint_state.nil?
       if checkpoint_requested
@@ -2365,7 +2434,8 @@ module ML::GGUF
             end
           end
           x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state,
-            stop_layer: stop_layer, checkpoint_index: local_checkpoint_index, checkpoint_state: local_checkpoint_state)
+            stop_layer: stop_layer, checkpoint_index: local_checkpoint_index, checkpoint_state: local_checkpoint_state,
+            checkpoint_rollback_log: checkpoint_rollback_log)
           offset += len
         end
         return x.not_nil!
@@ -2385,7 +2455,8 @@ module ML::GGUF
         in Qwen35FullAttnWeights
           if fused = full_attn_then_recurrent_chunk_project_many_routed(
                x, n_tokens, start_pos, state, weights, il, hp, max_seq,
-               checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state)
+               checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state,
+               checkpoint_rollback_log: checkpoint_rollback_log)
             x = fused[0]
             il = fused[1]
             next
@@ -2479,7 +2550,8 @@ module ML::GGUF
                      "rec#{il}-#{run_end - 1}",
                      checkpoint_index: checkpoint_index,
                      checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
-                     checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil)
+                     checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil,
+                     checkpoint_rollback_log: checkpoint_rollback_log)
                   x = gpu_out
                   il = run_end
                   next

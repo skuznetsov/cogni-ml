@@ -203,6 +203,8 @@ module ML
         @@dn128_chunk_fused_pipeline : ML::Metal::ComputePipeline?
         @@dn128_chunk_rowwise_pipeline : ML::Metal::ComputePipeline?
         @@dn128_chunk_rowwise_checkpoint_pipeline : ML::Metal::ComputePipeline?
+        @@dn128_chunk_rowwise_rollback_log_pipeline : ML::Metal::ComputePipeline?
+        @@dn128_rollback_rowwise_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_chunk_pipeline : ML::Metal::ComputePipeline?
         @@dn_post_chunk_h16_pipeline : ML::Metal::ComputePipeline?
@@ -1041,6 +1043,18 @@ module ML
         private def self.dn128_chunk_rowwise_checkpoint_pipeline : ML::Metal::ComputePipeline
           @@dn128_chunk_rowwise_checkpoint_pipeline ||= ML::Metal::PipelineCache.get("delta_net_chunk_128_rowwise_checkpoint") {
             ML::Metal::ComputePipeline.new("delta_net_chunk_128_rowwise_checkpoint", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.dn128_chunk_rowwise_rollback_log_pipeline : ML::Metal::ComputePipeline
+          @@dn128_chunk_rowwise_rollback_log_pipeline ||= ML::Metal::PipelineCache.get("delta_net_chunk_128_rowwise_rollback_log") {
+            ML::Metal::ComputePipeline.new("delta_net_chunk_128_rowwise_rollback_log", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.dn128_rollback_rowwise_pipeline : ML::Metal::ComputePipeline
+          @@dn128_rollback_rowwise_pipeline ||= ML::Metal::PipelineCache.get("delta_net_rollback_128_rowwise_from_log") {
+            ML::Metal::ComputePipeline.new("delta_net_rollback_128_rowwise_from_log", DELTA_NET_SOURCE)
           }
         end
 
@@ -4942,6 +4956,28 @@ module ML
           result
         end
 
+        def self.rollback_delta_net_state_from_log(state_buf : ML::MetalBuffer,
+                                                   log_buf : ML::MetalBuffer,
+                                                   h_k : Int32,
+                                                   h_v : Int32,
+                                                   s : Int32) : Nil
+          return unless s == 128 && dn_chunk_rowwise_enabled?(s)
+
+          ML::Metal::Device.init!
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(dn128_rollback_rowwise_pipeline)
+          enc.set_buffer(state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          enc.set_buffer(log_buf, 1)
+          enc.set_value(h_k.to_u32, 2)
+          enc.set_value(h_v.to_u32, 3)
+          enc.set_value(s.to_u32, 4)
+          enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
+          enc.end_encoding
+          cmd.commit
+          cmd.wait
+        end
+
         # GPU-resident run of consecutive recurrent prefill layers.
         #
         # This keeps the token-major hidden matrix on Metal across recurrent
@@ -4959,13 +4995,15 @@ module ML
                                                     profile_label : String = "rec_chunk_many",
                                                     checkpoint_index : Int32? = nil,
                                                     checkpoint_conv_state_bufs : Array(ML::MetalBuffer)? = nil,
-                                                    checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil) : Array(Float32)?
+                                                    checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil,
+                                                    checkpoint_rollback_log : Bool = false) : Array(Float32)?
           return nil unless n_tokens > 0
           return nil if layers.empty?
           checkpoint_requested = !checkpoint_index.nil?
           if checkpoint_requested
             cp = checkpoint_index.not_nil!
             return nil unless cp >= 0 && cp < n_tokens
+            return nil if checkpoint_rollback_log && cp + 1 >= n_tokens
             return nil unless conv_k > 1 && s == 128 && dn_chunk_rowwise_enabled?(s)
             conv_chk = checkpoint_conv_state_bufs
             ssm_chk = checkpoint_ssm_state_bufs
@@ -5169,7 +5207,7 @@ module ML
 
             dn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_dn_rowwise = dn_chunk_rowwise_enabled?(s)
-            dn_enc.set_pipeline(checkpoint_requested ? dn128_chunk_rowwise_checkpoint_pipeline : (use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline))
+            dn_enc.set_pipeline(checkpoint_requested ? (checkpoint_rollback_log ? dn128_chunk_rowwise_rollback_log_pipeline : dn128_chunk_rowwise_checkpoint_pipeline) : (use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline))
             dn_enc.set_buffer(ssm_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
             dn_enc.set_buffer(q_buf, 1)
             dn_enc.set_buffer(k_buf, 2)
@@ -5184,7 +5222,8 @@ module ML
             dn_enc.set_value(n_tokens.to_u32, 11)
             if checkpoint_requested
               dn_enc.set_buffer(checkpoint_ssm_state_bufs.not_nil![local_i], 12, ML::Metal::BufferAccess::Write)
-              dn_enc.set_value(checkpoint_index.not_nil!.to_u32, 13)
+              log_index = checkpoint_rollback_log ? checkpoint_index.not_nil! + 1 : checkpoint_index.not_nil!
+              dn_enc.set_value(log_index.to_u32, 13)
             end
             if use_dn_rowwise
               dn_enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})
@@ -6313,7 +6352,8 @@ module ML
                                                              profile_label : String = "full_rec_chunk_many",
                                                              checkpoint_index : Int32? = nil,
                                                              checkpoint_conv_state_bufs : Array(ML::MetalBuffer)? = nil,
-                                                             checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil) : Array(Float32)?
+                                                             checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil,
+                                                             checkpoint_rollback_log : Bool = false) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -6330,6 +6370,7 @@ module ML
           if checkpoint_requested
             cp = checkpoint_index.not_nil!
             return nil unless cp >= 0 && cp < n_tokens
+            return nil if checkpoint_rollback_log && cp + 1 >= n_tokens
             return nil unless conv_k > 1 && s == 128 && dn_chunk_rowwise_enabled?(s)
             conv_chk = checkpoint_conv_state_bufs
             ssm_chk = checkpoint_ssm_state_bufs
@@ -6859,7 +6900,7 @@ module ML
 
             dn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_dn_rowwise = dn_chunk_rowwise_enabled?(s)
-            dn_enc.set_pipeline(checkpoint_requested ? dn128_chunk_rowwise_checkpoint_pipeline : (use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline))
+            dn_enc.set_pipeline(checkpoint_requested ? (checkpoint_rollback_log ? dn128_chunk_rowwise_rollback_log_pipeline : dn128_chunk_rowwise_checkpoint_pipeline) : (use_dn_rowwise ? dn128_chunk_rowwise_pipeline : dn128_chunk_fused_pipeline))
             dn_enc.set_buffer(ssm_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
             dn_enc.set_buffer(rec_q_buf, 1)
             dn_enc.set_buffer(rec_k_buf, 2)
@@ -6874,7 +6915,8 @@ module ML
             dn_enc.set_value(n_tokens.to_u32, 11)
             if checkpoint_requested
               dn_enc.set_buffer(checkpoint_ssm_state_bufs.not_nil![local_i], 12, ML::Metal::BufferAccess::Write)
-              dn_enc.set_value(checkpoint_index.not_nil!.to_u32, 13)
+              log_index = checkpoint_rollback_log ? checkpoint_index.not_nil! + 1 : checkpoint_index.not_nil!
+              dn_enc.set_value(log_index.to_u32, 13)
             end
             if use_dn_rowwise
               dn_enc.dispatch_threadgroups({(s + 3) // 4, h_v, 1}, {32, 4, 1})

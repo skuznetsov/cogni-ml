@@ -992,6 +992,116 @@ kernel void delta_net_chunk_128_rowwise_checkpoint(
     *((device float4*)(row + d1)) = rs;
 }
 
+
+// Row-resident chunk scan plus compact rollback log for one wrong-tail token.
+//
+// The log layout in rollback_log is:
+//   delta: [h_v, s]
+//   g:     [h_v]
+//   K:     [h_k, s]
+// It is enough to invert one token update exactly in the same arithmetic frame:
+//   row_prev = (row_next - K * delta) / g
+kernel void delta_net_chunk_128_rowwise_rollback_log(
+    device       float* state        [[buffer(0)]],
+    device const float* q_conv       [[buffer(1)]],
+    device const float* k_conv       [[buffer(2)]],
+    device const float* v_conv       [[buffer(3)]],
+    device const float* g            [[buffer(4)]],
+    device const float* beta         [[buffer(5)]],
+    device       float* out          [[buffer(6)]],
+    constant     uint&  h_k          [[buffer(7)]],
+    constant     uint&  h_v          [[buffer(8)]],
+    constant     uint&  s            [[buffer(9)]],
+    constant     float& scale        [[buffer(10)]],
+    constant     uint&  n_tokens     [[buffer(11)]],
+    device       float* rollback_log [[buffer(12)]],
+    constant     uint&  log_index    [[buffer(13)]],
+    uint2  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint d2 = tgpig.x * 4 + sgitg;
+    const uint h  = tgpig.y;
+    if (h >= h_v || d2 >= s) return;
+
+    const uint k_head = h % h_k;
+    const uint st_b   = h * s * s;
+    const uint d1     = tiisg * 4;
+    device float* delta_log = rollback_log;
+    device float* g_log = rollback_log + h_v * s;
+    device float* k_log = g_log + h_v;
+
+    device float* row = state + st_b + d2 * s;
+    float4 rs = *((device const float4*)(row + d1));
+
+    for (uint t = 0; t < n_tokens; ++t) {
+        const float ghead = g[t * h_v + h];
+        const float bhead = beta[t * h_v + h];
+
+        device const float* K = k_conv + (t * h_k + k_head) * s;
+        device const float* Q = q_conv + (t * h_k + k_head) * s;
+        device const float* V = v_conv + (t * h_v + h) * s;
+        device       float* O = out    + (t * h_v + h) * s;
+
+        const float4 kv = *((device const float4*)(K + d1));
+        const float4 qv = *((device const float4*)(Q + d1));
+
+        float sk_acc = rs.x * kv.x + rs.y * kv.y + rs.z * kv.z + rs.w * kv.w;
+        const float sk = simd_sum(sk_acc) * ghead;
+        const float delt = bhead * (V[d2] - sk);
+
+        rs = rs * ghead + kv * delt;
+
+        if (t == log_index) {
+            if (tiisg == 0) {
+                delta_log[h * s + d2] = delt;
+                if (d2 == 0) g_log[h] = ghead;
+            }
+            if (d2 == 0 && h < h_k) {
+                *((device float4*)(k_log + h * s + d1)) = kv;
+            }
+        }
+
+        float out_acc = rs.x * qv.x + rs.y * qv.y + rs.z * qv.z + rs.w * qv.w;
+        const float ov = simd_sum(out_acc);
+        if (tiisg == 0) O[d2] = ov * scale;
+    }
+
+    *((device float4*)(row + d1)) = rs;
+}
+
+// Roll back one logged DeltaNet token update in place.
+kernel void delta_net_rollback_128_rowwise_from_log(
+    device       float* state        [[buffer(0)]],
+    device const float* rollback_log [[buffer(1)]],
+    constant     uint&  h_k          [[buffer(2)]],
+    constant     uint&  h_v          [[buffer(3)]],
+    constant     uint&  s            [[buffer(4)]],
+    uint2  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint d2 = tgpig.x * 4 + sgitg;
+    const uint h  = tgpig.y;
+    if (h >= h_v || d2 >= s) return;
+
+    device const float* delta_log = rollback_log;
+    device const float* g_log = rollback_log + h_v * s;
+    device const float* k_log = g_log + h_v;
+
+    const uint k_head = h % h_k;
+    const uint st_b = h * s * s;
+    const uint d1 = tiisg * 4;
+    const float delt = delta_log[h * s + d2];
+    const float ghead = g_log[h];
+    const float4 kv = *((device const float4*)(k_log + k_head * s + d1));
+
+    device float* row = state + st_b + d2 * s;
+    float4 rs = *((device const float4*)(row + d1));
+    rs = (rs - kv * delt) / ghead;
+    *((device float4*)(row + d1)) = rs;
+}
+
 // In-place recurrent post-processing for Qwen35 after DeltaNet:
 //   y[h, d] = RMSNorm(y[h, :], ssm_norm) * silu(z[h, d])
 //
