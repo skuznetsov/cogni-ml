@@ -137,7 +137,10 @@ def parse_llama_cli_timing(output : String) : {Float64?, Float64?}
   prompt_ts = nil.as(Float64?)
   decode_ts = nil.as(Float64?)
   output.each_line do |line|
-    if line.includes?("prompt eval time") && line =~ /,\s*([0-9.]+)\s+tokens per second\)/
+    if line =~ /\[\s*Prompt:\s*([0-9.]+)\s*t\/s\s*\|\s*Generation:\s*([0-9.]+)\s*t\/s\s*\]/
+      prompt_ts = $1.to_f
+      decode_ts = $2.to_f
+    elsif line.includes?("prompt eval time") && line =~ /,\s*([0-9.]+)\s+tokens per second\)/
       prompt_ts = $1.to_f
     elsif line.includes?("eval time") && line =~ /,\s*([0-9.]+)\s+tokens per second\)/
       decode_ts = $1.to_f
@@ -152,6 +155,8 @@ llama_cli_has_spec_type = llama_cli_help.includes?("--spec-type")
 llama_server_has_spec_type = llama_server_help.includes?("--spec-type")
 llama_cli_has_draft_mtp = llama_cli_help.includes?("draft-mtp")
 llama_server_has_draft_mtp = llama_server_help.includes?("draft-mtp")
+native_bench_help = binary_help(native_bench)
+native_bench_has_cache_args = native_bench_help.includes?("--llama-cache-k") && native_bench_help.includes?("--llama-cache-v")
 
 puts "Qwen3.6 MTP baseline matrix"
 puts "llama_cli=#{llama_cli} spec_type=#{llama_cli_has_spec_type} draft_mtp=#{llama_cli_has_draft_mtp}"
@@ -179,8 +184,9 @@ CANDIDATES.each do |candidate|
         "-p", prompt,
         "--temp", "0",
         "--no-display-prompt",
-        "--simple-io",
+        "--single-turn",
         "--no-warmup",
+        "-fa", "on",
         "-ctk", cache_k,
         "-ctv", cache_v,
       ]
@@ -196,6 +202,7 @@ CANDIDATES.each do |candidate|
           "-ngl", ngl.to_s,
           "-c", ctx.to_s,
           "-np", "1",
+          "-fa", "on",
           "-ctk", cache_k,
           "-ctv", cache_v,
           "--spec-type", "draft-mtp",
@@ -233,8 +240,9 @@ CANDIDATES.each do |candidate|
         "-p", prompt,
         "--temp", "0",
         "--no-display-prompt",
-        "--simple-io",
+        "--single-turn",
         "--no-warmup",
+        "-fa", "on",
         "-ctk", cache_k,
         "-ctv", cache_v,
         "--spec-type", "draft-mtp",
@@ -244,6 +252,10 @@ CANDIDATES.each do |candidate|
       timing = parse_llama_cli_timing(output.to_s + "\n" + error.to_s)
       puts "  run: status=#{status.exit_code} prompt_tok_s=#{timing[0] || "?"} decode_tok_s=#{timing[1] || "?"}"
     elsif candidate.native_supported && local_path && executable_file?(native_bench)
+      unless native_bench_has_cache_args
+        puts "  run: skipped; native bench exists but does not advertise --llama-cache-k/--llama-cache-v. Rebuild build/benchmark_qwen_vs_llama first."
+        next
+      end
       status = Process.run(native_bench, ["--model", local_path, "--prompt=64", "--gen", gen.to_s, "--reps=3", "--warmup=1", "--llama-cache-k", cache_k, "--llama-cache-v", cache_v], output: STDOUT, error: STDERR)
       puts "  run: native bench exit=#{status.exit_code}"
     else

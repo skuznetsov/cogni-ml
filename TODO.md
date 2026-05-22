@@ -25,7 +25,10 @@
   - Evidence: `/Users/sergey/SrcArchives/AI/llama.cpp` fast-forwarded to `1acee6bf8`, `cmake --build build --config Release -j 8` passed, and both `build/bin/llama-cli --help` plus `build/bin/llama-server --help` list `draft-mtp`. The local baseline matrix now reports `draft_mtp=true` for both binaries.
 - [x] Download Qwen3.6 MTP GGUF baselines into LM Studio cache and verify local matrix detection.
   - Evidence: `hf download unsloth/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-IQ4_NL.gguf --local-dir ~/.cache/lm-studio/models/unsloth/Qwen3.6-27B-MTP-GGUF` completed; same for `Qwen3.6-27B-UD-Q4_K_XL.gguf`. File sizes are `15G` and `17G`; free disk after download is `309GiB`. `qwen36_mtp_baseline_matrix --no-commands` now detects both local MTP files and reports `draft_mtp=true` for local llama.cpp binaries.
-- [ ] Run llama.cpp MTP timing on local `IQ4_NL` first, then `UD-Q4_K_XL`. Do not claim speedup against MTP until this is measured locally.
+- [x] Run first local llama.cpp MTP timing smokes on M2 Max with product KV cache (`-fa on -ctk q8_0 -ctv q4_0`, `--spec-type draft-mtp`, `--spec-draft-n-max 3`).
+  - Evidence: `qwen36_mtp_baseline_matrix --gen=16 --run-available` reports `IQ4_NL` `23.9 tok/s` and `UD-Q4_K_XL` `20.1 tok/s`; `--gen=128 --run-available` reports `IQ4_NL` `18.2 tok/s` and `UD-Q4_K_XL` `17.9 tok/s`. These are local Metal/M2 Max numbers, not comparable to the RTX 3090 Reddit row.
+  - Harness fix: llama.cpp `llama-cli` must use `--single-turn`; otherwise it completes the first turn then stays in interactive prompt mode on closed stdin. The matrix parser now handles the new compact `[ Prompt: ... | Generation: ... ]` timing line.
+- [ ] Run apples-vs-apples native/plain Q4_K_M and MTP rows after choosing quiet-host settings and rebuilding any ignored benchmark artifacts as needed.
 - [ ] Decide the first native response branch after measurement: either add native IQ4_NL/UD quant support, repack MTP heads into a Q4_K_M-compatible sidecar path, or improve the existing MTP-on-self-top2-miss controller if baseline economics favor controller work over quant work.
 
 **Current LTP/WBA speed frontier (2026-05-20):**

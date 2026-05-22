@@ -341,6 +341,10 @@ OptionParser.parse do |p|
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
   p.on("--quiet-poll-ms=N", "Polling interval for --wait-quiet-ms (default: 1000)") { |v| quiet_poll_ms = v.to_i }
   p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
+  p.on("-h", "--help", "Show help") do
+    puts p
+    exit
+  end
 end
 
 raise "Model not found: #{model}" unless File.exists?(model)
