@@ -15064,3 +15064,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The allocation frame was plausible but not the live bottleneck. Moving scratch preparation out of verifier calls did not lower the recomputed wall potential and slightly worsened accounting in this gate. Future verifier work should focus on reducing verifier body/scheduling cost, not checkpoint-object reuse.
 - LTP/WBA: Window was checkpoint/log scratch setup inside verifier calls. Transport stayed within the verifier checkpoint corridor. Boundary safety held by parity and identical counters, but the lexicographic potential `(wall, verifier_ms, backup_ms)` failed to descend. Dual frame remains the per-call checkpoint scratch construction used by the current code.
 - trust: {F:0.84,G:0.30,R:0.80}
+
+**LM-451 Small-row LM-head routing is not a global verifier speed default [shared/ml]**
+- status: REFUTED global-default branch; env probes only
+- claim tested: The stage-2 verifier uses two hidden rows, while `output_project_top1s_routed` defaults to the row-batched head only at `rows >= 8`. Lowering/forcing the row-batched or full-row head path might remove per-row head overhead for speculative verifier chunks.
+- evidence: Env-only A/B on Q4_K_M target + UD-Q4_K_XL sidecar, prompt `The capital of France is`, `tokens=16 gamma=8 stage=2 lazy hidden_resync rec_rollback_log`. For the first-reject exact off-ramp gate, `QWEN35_HEAD_TOP1_ROWS=1` was only a small/noisy improvement (`verifier_ms=107.986 -> 106.537`, parity true). On the no-offramp verifier it regressed (`plain_speedup=0.828 -> 0.799`, parity true). `QWEN35_HEAD_FULL_ROWS=1` and `QWEN35_HEAD_FULL_ROWS_GUARDED=1` regressed the off-ramp gate hard (`speed=0.801` and `0.539` in adjacent rows, parity true).
+- diagnosis: The small-row head threshold is not the main bottleneck and should not be changed globally. The only plausible use is a controller-specific knob for short off-ramp gates, and even there the gain is too small/noisy to promote without a multi-prompt quiet-host gate.
+- LTP/WBA: Window was two-row verifier head projection. Transport stayed inside the LM-head reducer corridor. Boundary safety held, but recomputed global potential failed for the no-offramp and full-row frames. Dual frame remains the existing `rows_min=8` default.
+- trust: {F:0.78,G:0.28,R:0.74}
