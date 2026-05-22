@@ -8,6 +8,13 @@
 
 **Protocol:** v13.2. Quadrumvirate on each phase start. LOGBOOK in conversation, persistent state in LANDMARKS.md.
 
+**Current harness integration frontier (2026-05-21):**
+- [x] Add Qwen XML-to-JSON function-calling bridge for CrystalBall-style harnesses. The model still receives Qwen-native XML tool instructions, but host output can now be normalized as `{"content":...,"tool_calls":[{"name":...,"arguments":{...}}]}` via `QWEN35_TOOL_RESPONSE_JSON=simple`, or OpenAI wrappers via `openai`.
+  - Evidence: `crystal spec spec/qwen35_chat_spec.cr spec/qwen35_tokenizer_spec.cr --error-trace` passed (`10 examples, 0 failures`); `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; `crystal build --no-codegen bin/qwen35_tool_json_adapter.cr --error-trace` passed; adapter parse/render smokes passed.
+  - Boundary: This is not constrained JSON decoding inside the model. It is a boundary adapter: OpenAI/CrystalBall messages/tools render into Qwen chat/XML, generated Qwen XML tool calls normalize back to harness JSON.
+- [x] Add the CrystalBall-side provider adapter in `../crystal_ball`. `CrystalBall::LLM::CogniQwen` shells to a built `qwen35_generate` with `QWEN35_MESSAGES_JSON`, `QWEN35_TOOLS_JSON`, and `QWEN35_TOOL_RESPONSE_JSON=simple`, then parses the final `=== Tool response JSON ===` block into `CrystalBall::LLM::ToolResponse`.
+  - Evidence: `crystal build --no-codegen src/crystal_ball.cr --error-trace` passed in `../crystal_ball`; a fake `qwen35_generate` process smoke returned one parsed `read_file` tool call. Full `src/cli.cr` compile is currently blocked by an unrelated dirty `state_persistence.cr` type error in `../crystal_ball`.
+
 **Current LTP/WBA speed frontier (2026-05-20):**
 - [x] Add `scripts/qwen35_profile_atlas.cr`, a profile-log atlas that ranks Metal wait buckets, grouped command-buffer waits, logical matmul traffic, conversion traffic, and candidate LTP/WBA windows without claiming a speedup.
   - Evidence: `crystal build --no-codegen scripts/qwen35_profile_atlas.cr --error-trace` passed; sample-log smoke parsed grouped waits and dominant matmul traffic; real M2 Max pp64 prepared phase profile parsed from `/tmp/qwen35_prefill_atlas_pp64.log`.

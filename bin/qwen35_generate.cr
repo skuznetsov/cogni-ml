@@ -36,12 +36,23 @@ chat_tools = if tools_json = ENV["QWEN35_TOOLS_JSON"]?
              else
                [] of JSON::Any
              end
-chat_mode = ENV["QWEN35_CHAT"]? == "1" || !chat_tools.empty?
-model_prompt = chat_mode ? ML::GGUF::Qwen35Chat.render_user_prompt(
-  prompt,
-  system: ENV["QWEN35_CHAT_SYSTEM"]?,
-  tools: chat_tools,
-) : prompt
+chat_messages = ENV["QWEN35_MESSAGES_JSON"]?.try { |json| ML::GGUF::Qwen35Chat.messages_from_openai_json(json) }
+chat_mode = ENV["QWEN35_CHAT"]? == "1" || !chat_tools.empty? || !chat_messages.nil?
+tool_response_json_format = (ENV["QWEN35_TOOL_RESPONSE_JSON"]? || "").downcase
+unless tool_response_json_format.empty? || tool_response_json_format == "simple" || tool_response_json_format == "openai"
+  raise "QWEN35_TOOL_RESPONSE_JSON must be simple or openai"
+end
+model_prompt = if messages = chat_messages
+                 ML::GGUF::Qwen35Chat.render(messages, tools: chat_tools)
+               elsif chat_mode
+                 ML::GGUF::Qwen35Chat.render_user_prompt(
+                   prompt,
+                   system: ENV["QWEN35_CHAT_SYSTEM"]?,
+                   tools: chat_tools,
+                 )
+               else
+                 prompt
+               end
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
 prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]? == "1"
 prompt_cache_fast_forward_enabled = prompt_cache_enabled && prompt_cache_source_history_enabled && ENV["QWEN35_PROMPT_CACHE_FAST_FORWARD"]? == "1"
@@ -199,14 +210,25 @@ ensure
   end
 end
 
-def print_qwen_tool_calls_if_any(text : String, chat_mode : Bool) : Nil
-  return unless chat_mode
+def print_qwen_tool_calls_if_any(text : String, chat_mode : Bool, tool_response_json_format : String) : Nil
+  return unless chat_mode || !tool_response_json_format.empty?
 
   calls = ML::GGUF::Qwen35Chat.parse_tool_calls(text)
-  return if calls.empty?
+  content = ML::GGUF::Qwen35Chat.content_without_tool_calls(text)
 
-  puts "\n=== Parsed tool calls ==="
-  puts ML::GGUF::Qwen35Chat.tool_calls_to_json(calls)
+  unless calls.empty?
+    puts "\n=== Parsed tool calls ==="
+    puts ML::GGUF::Qwen35Chat.tool_calls_to_json(calls)
+  end
+
+  unless tool_response_json_format.empty?
+    puts "\n=== Tool response JSON ==="
+    if tool_response_json_format == "openai"
+      puts ML::GGUF::Qwen35Chat.tool_response_to_openai_json(calls, content)
+    else
+      puts ML::GGUF::Qwen35Chat.tool_response_to_json(calls, content)
+    end
+  end
 end
 
 def replay_target_state(weights : ML::GGUF::Qwen35Weights,
@@ -255,7 +277,7 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
     puts output_text
     puts "\n=== Full output ==="
     puts model_prompt + output_text.not_nil!
-    print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode)
+    print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode, tool_response_json_format)
     exit
   elsif tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt_for_model(cache_model, model_prompt)
     token_cache_hit = true
@@ -296,7 +318,7 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
             puts output_text
             puts "\n=== Full output ==="
             puts model_prompt + output_text.not_nil!
-            print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode)
+            print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode, tool_response_json_format)
             exit
           end
         end
@@ -374,7 +396,7 @@ if prompt_cache_fast_forward_enabled && (source = source_history_hit)
         puts generated_text
         puts "\n=== Full output ==="
         puts model_prompt + generated_text
-        print_qwen_tool_calls_if_any(generated_text, chat_mode)
+        print_qwen_tool_calls_if_any(generated_text, chat_mode, tool_response_json_format)
         exit
       end
     end
@@ -1112,4 +1134,4 @@ puts "\n=== Generated text ==="
 puts final_generated_text
 puts "\n=== Full output ==="
 puts model_prompt + final_generated_text
-print_qwen_tool_calls_if_any(final_generated_text, chat_mode)
+print_qwen_tool_calls_if_any(final_generated_text, chat_mode, tool_response_json_format)

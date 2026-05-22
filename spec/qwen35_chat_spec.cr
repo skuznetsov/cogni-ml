@@ -32,6 +32,70 @@ describe ML::GGUF::Qwen35Chat do
     ML::GGUF::Qwen35Chat.tool_calls_to_json(calls).should contain("get_weather")
   end
 
+  it "normalizes Qwen XML tool calls to CrystalBall-style JSON" do
+    text = "Checking.\n<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/foo.cr\n</parameter>\n<parameter=limit>\n3\n</parameter>\n<parameter=exact>\ntrue\n</parameter>\n</function>\n</tool_call>"
+    calls = ML::GGUF::Qwen35Chat.parse_tool_calls(text)
+    payload = JSON.parse(ML::GGUF::Qwen35Chat.tool_response_to_json(
+      calls,
+      ML::GGUF::Qwen35Chat.content_without_tool_calls(text),
+    ))
+
+    payload["content"].as_s.should eq("Checking.")
+    payload["tool_calls"].as_a.size.should eq(1)
+    call = payload["tool_calls"][0]
+    call["name"].as_s.should eq("read_file")
+    call["arguments"]["path"].as_s.should eq("src/foo.cr")
+    call["arguments"]["limit"].as_i.should eq(3)
+    call["arguments"]["exact"].as_bool.should be_true
+  end
+
+  it "can emit OpenAI-style tool call wrappers" do
+    calls = [ML::GGUF::Qwen35Chat::ToolCall.new("grep", {"pattern" => "class Foo"})]
+    payload = JSON.parse(ML::GGUF::Qwen35Chat.tool_response_to_openai_json(calls))
+    tool_call = payload["tool_calls"][0]
+
+    tool_call["id"].as_s.should eq("call_0")
+    tool_call["type"].as_s.should eq("function")
+    tool_call["function"]["name"].as_s.should eq("grep")
+    JSON.parse(tool_call["function"]["arguments"].as_s)["pattern"].as_s.should eq("class Foo")
+  end
+
+  it "converts OpenAI messages with assistant tool calls into Qwen chat messages" do
+    request_messages = [
+      JSON::Any.new({
+        "role"    => JSON::Any.new("user"),
+        "content" => JSON::Any.new("Read src/foo.cr"),
+      }),
+      JSON::Any.new({
+        "role"       => JSON::Any.new("assistant"),
+        "content"    => JSON::Any.new(nil),
+        "tool_calls" => JSON::Any.new([
+          JSON::Any.new({
+            "id"       => JSON::Any.new("call_0"),
+            "type"     => JSON::Any.new("function"),
+            "function" => JSON::Any.new({
+              "name"      => JSON::Any.new("read_file"),
+              "arguments" => JSON::Any.new({"path" => "src/foo.cr"}.to_json),
+            }),
+          }),
+        ]),
+      }),
+      JSON::Any.new({
+        "role"         => JSON::Any.new("tool"),
+        "tool_call_id" => JSON::Any.new("call_0"),
+        "content"      => JSON::Any.new("class Foo\nend"),
+      }),
+    ]
+    messages = ML::GGUF::Qwen35Chat.messages_from_openai_json(JSON::Any.new(request_messages).to_json)
+    rendered = ML::GGUF::Qwen35Chat.render(messages, add_generation_prompt: true)
+
+    rendered.should contain("<|im_start|>user\nRead src/foo.cr<|im_end|>")
+    rendered.should_not contain("<|im_start|>assistant\nnull")
+    rendered.should contain("<tool_call>\n<function=read_file>")
+    rendered.should contain("<parameter=path>\nsrc/foo.cr\n</parameter>")
+    rendered.should contain("<|im_start|>tool\nclass Foo\nend<|im_end|>")
+  end
+
   it "loads chat_template metadata from local Qwen GGUF when present" do
     pending!("9B model not present") unless File.exists?(QWEN_9B_CHAT)
     g = ML::GGUF::GGUFFile.new(QWEN_9B_CHAT)

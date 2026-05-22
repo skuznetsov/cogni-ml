@@ -62,6 +62,21 @@ module ML::GGUF
       render(messages, tools, add_generation_prompt)
     end
 
+    def self.messages_from_openai_json(json : String) : Array(Message)
+      any = JSON.parse(json)
+      arr = any.as_a?
+      raise ArgumentError.new("Qwen messages JSON must be an array") unless arr
+
+      arr.map do |message|
+        obj = message.as_h?
+        raise ArgumentError.new("Qwen message must be an object") unless obj
+        role = obj["role"]?.try(&.as_s?) || raise ArgumentError.new("Qwen message missing role")
+        content = openai_message_content(obj["content"]?)
+        tool_calls = parse_openai_tool_calls(obj["tool_calls"]?)
+        Message.new(role, content, tool_calls)
+      end
+    end
+
     def self.parse_tools_json(json : String) : Array(JSON::Any)
       any = JSON.parse(json)
       arr = any.as_a?
@@ -95,6 +110,51 @@ module ML::GGUF
         end
         io << ']'
       end
+    end
+
+    def self.tool_response_to_json(calls : Array(ToolCall), content : String? = nil) : String
+      payload = Hash(String, JSON::Any).new
+      payload["content"] = content && !content.empty? ? JSON::Any.new(content) : JSON::Any.new(nil)
+      payload["tool_calls"] = JSON::Any.new(calls.map do |call|
+        JSON::Any.new({
+          "name"      => JSON::Any.new(call.name),
+          "arguments" => JSON::Any.new(argument_json_hash(call)),
+        })
+      end)
+      payload.to_json
+    end
+
+    def self.tool_response_to_openai_json(calls : Array(ToolCall), content : String? = nil) : String
+      payload = Hash(String, JSON::Any).new
+      payload["content"] = content && !content.empty? ? JSON::Any.new(content) : JSON::Any.new(nil)
+      payload["tool_calls"] = JSON::Any.new(calls.map_with_index do |call, i|
+        JSON::Any.new({
+          "id"       => JSON::Any.new("call_#{i}"),
+          "type"     => JSON::Any.new("function"),
+          "function" => JSON::Any.new({
+            "name"      => JSON::Any.new(call.name),
+            "arguments" => JSON::Any.new(arguments_to_json(call)),
+          }),
+        })
+      end)
+      payload.to_json
+    end
+
+    def self.content_without_tool_calls(text : String) : String
+      String.build do |io|
+        cursor = 0
+        while start_idx = text.index("<tool_call>", cursor)
+          io << text[cursor...start_idx]
+          body_start = start_idx + "<tool_call>".size
+          close_idx = text.index("</tool_call>", body_start)
+          unless close_idx
+            cursor = text.size
+            break
+          end
+          cursor = close_idx + "</tool_call>".size
+        end
+        io << text[cursor..]? if cursor < text.size
+      end.strip
     end
 
     private def self.emit_message(io : IO, message : Message) : Nil
@@ -152,6 +212,82 @@ module ML::GGUF
       end
 
       ToolCall.new(name, args)
+    end
+
+    private def self.openai_message_content(raw : JSON::Any?) : String
+      return "" unless raw
+      return "" if raw.raw.nil?
+      if str = raw.as_s?
+        str
+      elsif arr = raw.as_a?
+        arr.compact_map do |part|
+          obj = part.as_h?
+          next unless obj
+          text = obj["text"]?.try(&.as_s?)
+          text || obj["content"]?.try(&.as_s?)
+        end.join("\n")
+      else
+        raw.to_json
+      end
+    end
+
+    private def self.parse_openai_tool_calls(raw : JSON::Any?) : Array(ToolCall)
+      return [] of ToolCall unless raw
+      arr = raw.as_a?
+      return [] of ToolCall unless arr
+
+      calls = [] of ToolCall
+      arr.each do |item|
+        obj = item.as_h?
+        next unless obj
+        fn = obj["function"]?.try(&.as_h?)
+        name = fn.try(&.["name"]?.try(&.as_s?)) || obj["name"]?.try(&.as_s?)
+        next unless name
+        args_raw = fn.try(&.["arguments"]?) || obj["arguments"]?
+        calls << ToolCall.new(name, openai_arguments_to_qwen(args_raw))
+      end
+      calls
+    end
+
+    private def self.openai_arguments_to_qwen(raw : JSON::Any?) : Hash(String, String)
+      args = Hash(String, String).new
+      return args unless raw
+
+      obj = if str = raw.as_s?
+              JSON.parse(str).as_h? rescue nil
+            else
+              raw.as_h?
+            end
+      return args unless obj
+
+      obj.each do |key, value|
+        args[key] = value.as_s? || value.to_json
+      end
+      args
+    end
+
+    private def self.argument_json_hash(call : ToolCall) : Hash(String, JSON::Any)
+      args = Hash(String, JSON::Any).new
+      call.arguments.each do |key, value|
+        args[key] = argument_value_to_json_any(value)
+      end
+      args
+    end
+
+    private def self.arguments_to_json(call : ToolCall) : String
+      JSON::Any.new(argument_json_hash(call)).to_json
+    end
+
+    private def self.argument_value_to_json_any(value : String) : JSON::Any
+      stripped = value.strip
+      unless stripped.empty?
+        begin
+          parsed = JSON.parse(stripped)
+          return parsed unless parsed.raw.is_a?(String)
+        rescue JSON::ParseException
+        end
+      end
+      JSON::Any.new(value)
     end
   end
 end

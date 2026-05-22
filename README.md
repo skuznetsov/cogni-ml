@@ -439,6 +439,50 @@ JSON-schema decoder. The CLI renders the model prompt with the Qwen chat tokens,
 uses the rendered prompt for tokenization and prompt-cache keys, and prints a
 parsed JSON summary when generated text contains Qwen `<tool_call>` blocks.
 
+For harnesses that expect normal JSON function-calling, keep the model-facing
+Qwen XML template and normalize only at the host boundary:
+
+```sh
+QWEN35_CHAT=1 \
+QWEN35_TOOL_RESPONSE_JSON=simple \
+QWEN35_TOOLS_JSON='[{"type":"function","function":{"name":"read_file","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]' \
+./build/qwen35_generate "Read src/foo.cr" 64
+```
+
+The emitted `=== Tool response JSON ===` block uses the CrystalBall-compatible
+shape:
+
+```json
+{"content":null,"tool_calls":[{"name":"read_file","arguments":{"path":"src/foo.cr"}}]}
+```
+
+Set `QWEN35_TOOL_RESPONSE_JSON=openai` to emit OpenAI-style wrappers with
+`id`, `type`, and `function.arguments` as a JSON string. Multi-turn harnesses
+can pass OpenAI-style messages through `QWEN35_MESSAGES_JSON`; assistant
+`tool_calls` are rendered back into Qwen XML blocks and `tool` messages are
+rendered as Qwen `tool` role messages.
+
+`../crystal_ball` can use this backend through its `CogniQwen` provider:
+
+```sh
+crystal build --release bin/qwen35_generate -o build/qwen35_generate
+cd ../crystal_ball
+CB_COGNI_QWEN=1 \
+CB_COGNI_QWEN_BIN=../cogni-ml/build/qwen35_generate \
+crystal run src/cli.cr
+```
+
+The lightweight adapter is useful for testing prompt/render and output parsing
+without loading the model:
+
+```sh
+printf '<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/foo.cr\n</parameter>\n</function>\n</tool_call>\n' \
+  | crystal run bin/qwen35_tool_json_adapter.cr -- --parse-output --format=simple
+
+printf '{"messages":[{"role":"user","content":"Read src/foo.cr"}],"tools":[]}' \
+  | crystal run bin/qwen35_tool_json_adapter.cr -- --render-request
+```
+
 Enable exact prompt cache:
 
 ```sh
@@ -629,6 +673,8 @@ Useful Qwen environment switches:
 | `QWEN35_CHAT=1` | Render the input through the minimal Qwen 3.5/3.6 chat-template path before tokenization. |
 | `QWEN35_CHAT_SYSTEM="..."` | Optional system message used by the chat-template renderer. |
 | `QWEN35_TOOLS_JSON='[...]'` | Enable Qwen XML-style function-calling prompt rendering and parsed `<tool_call>` output reporting. The value must be a JSON array of tool definitions. |
+| `QWEN35_MESSAGES_JSON='[...]'` | Render an OpenAI/CrystalBall-style message array through the Qwen chat-template path. Supports `user`, `system`, `assistant` with `tool_calls`, and `tool` messages. |
+| `QWEN35_TOOL_RESPONSE_JSON=simple\|openai` | Emit a machine-readable `=== Tool response JSON ===` block after generation. `simple` matches CrystalBall's local provider shape; `openai` wraps calls as OpenAI-style function tool calls. |
 | `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk gating; explicit policy overrides legacy mode envs. |
 | `QWEN35_TRACE_STEPS_OFF=1` | Suppress per-token/per-cycle trace lines in `qwen35_generate` while keeping summaries and final output. |
 | `QWEN35_QUIET=1` | Alias for suppressing per-step traces in `qwen35_generate`; useful for cleaner local timing. |
