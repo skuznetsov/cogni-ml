@@ -1,6 +1,7 @@
 #!/usr/bin/env crystal
 
 require "option_parser"
+require "../src/ml/bench_load_guard"
 
 record Candidate,
   name : String,
@@ -72,6 +73,11 @@ run_available = false
 show_commands = true
 repeats = 1
 compare_plain = false
+load_warning_threshold = 50.0
+load_total_warning_threshold = 100.0
+wait_quiet_ms = 0
+quiet_poll_ms = 1000
+require_quiet = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: qwen36_mtp_baseline_matrix [options]"
@@ -88,6 +94,11 @@ OptionParser.parse do |p|
   p.on("--run-available", "Run llama-cli timing smokes for local MTP files and native bench for supported local files") { run_available = true }
   p.on("--repeats=N", "Repeat each llama-cli timing row and print min/median/max (default: 1)") { |v| repeats = v.to_i }
   p.on("--compare-plain", "For MTP candidates, also time the same file without draft-mtp") { compare_plain = true }
+  p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before timing (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
+  p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before timing (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
+  p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below timing thresholds") { |v| wait_quiet_ms = v.to_i }
+  p.on("--quiet-poll-ms=N", "Polling interval for --wait-quiet-ms (default: 1000)") { |v| quiet_poll_ms = v.to_i }
+  p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
   p.on("--no-commands", "Only print the candidate table") { show_commands = false }
   p.on("-h", "--help", "Show help") do
     puts p
@@ -96,6 +107,15 @@ OptionParser.parse do |p|
 end
 
 raise "--repeats must be >= 1" if repeats < 1
+raise "--wait-quiet-ms must be non-negative" unless wait_quiet_ms >= 0
+raise "--quiet-poll-ms must be positive" unless quiet_poll_ms > 0
+
+ML::BenchLoadGuard.wait_until_quiet!(load_warning_threshold, load_total_warning_threshold, wait_quiet_ms, quiet_poll_ms)
+if require_quiet
+  ML::BenchLoadGuard.require_quiet!(load_warning_threshold, load_total_warning_threshold)
+else
+  ML::BenchLoadGuard.warn_if_busy(load_warning_threshold, load_total_warning_threshold)
+end
 
 def shell_quote(s : String) : String
   "'" + s.gsub("'", "'\"'\"'") + "'"
