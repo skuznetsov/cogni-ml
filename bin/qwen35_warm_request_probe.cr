@@ -10,6 +10,7 @@ require "option_parser"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_serving_route"
+require "../src/ml/gguf/qwen35_resident_session"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
@@ -153,11 +154,15 @@ struct PromptCacheServingRouteTemplate
 end
 
 struct PromptCacheActiveCursorTemplate
-  getter state : ML::GGUF::Qwen35CPU::State
+  getter session : ML::GGUF::Qwen35ResidentSession
+  getter entry : ML::GGUF::Qwen35PromptCache::Entry
+  getter full_history_tokens : Array(Int32)
   getter prompt_token_count : Int32
   getter output_ids : Array(Int32)
+  getter prompt : String
+  getter reuse_state : ML::GGUF::Qwen35CPU::State?
 
-  def initialize(@state, @prompt_token_count, @output_ids)
+  def initialize(@session, @entry, @full_history_tokens, @prompt_token_count, @output_ids, @prompt, @reuse_state)
   end
 end
 
@@ -517,34 +522,48 @@ def build_prompt_cache_active_cursor_template(weights : ML::GGUF::Qwen35Weights,
                                               prepare_state : Bool,
                                               reuse_state : ML::GGUF::Qwen35CPU::State? = nil) : PromptCacheActiveCursorTemplate
   fast_forward = replay.fast_forward
+  session = ML::GGUF::Qwen35ResidentSession.new(
+    fast_forward.store,
+    weights,
+    "warm-model",
+    "warm-request-probe",
+  )
   state = reuse_state || ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
   raise "active cursor state max_seq mismatch" if state.max_seq != max_seq
   if prepare_state && reuse_state.nil?
     ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams, clear: false)
   end
-  result = ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span(
-    fast_forward.store,
-    weights,
-    "warm-model",
-    "warm-request-probe",
+  result = session.prewarm_continuation_cursor(
     replay.prompt,
     fast_forward.output_ids,
     fast_forward.entry,
     fast_forward.full_history_tokens,
-    continuation_required: true,
     reuse_state: state,
   )
-  restored = result.replay.try(&.state)
-  raise "active cursor prewarm did not restore continuation state" unless restored
-  PromptCacheActiveCursorTemplate.new(restored, result.prompt_token_count, result.output_token_ids)
+  raise "active cursor prewarm did not leave a cursor" unless session.active_cursor?
+  PromptCacheActiveCursorTemplate.new(session, fast_forward.entry, fast_forward.full_history_tokens, result.prompt_token_count, result.output_token_ids, replay.prompt, state)
 end
 
 def run_prompt_cache_active_cursor_request(cursor : PromptCacheActiveCursorTemplate) : {RequestTiming, Array(Int32)}
+  cursor.session.prewarm_continuation_cursor(
+    cursor.prompt,
+    cursor.output_ids,
+    cursor.entry,
+    cursor.full_history_tokens,
+    reuse_state: cursor.reuse_state,
+  ) unless cursor.session.active_cursor?
+
   request_t0 = Time.instant
-  # The active cursor owns an already-restored continuation state. This probe
-  # measures the server-session handoff floor, not a reusable cache restore.
-  output_ids = cursor.output_ids.dup
+  result = cursor.session.serve_exact_cached_span(
+    cursor.prompt,
+    cursor.output_ids,
+    cursor.entry,
+    cursor.full_history_tokens,
+    continuation_required: true,
+  )
   total_ms = (Time.instant - request_t0).total_milliseconds
+  raise "active cursor route mismatch: #{result.route}" unless result.route == ML::GGUF::Qwen35ResidentSession::ACTIVE_CURSOR
+  output_ids = result.output_token_ids
   timing = RequestTiming.new(
     total_ms,
     0.0,
@@ -555,7 +574,7 @@ def run_prompt_cache_active_cursor_request(cursor : PromptCacheActiveCursorTempl
     cursor.prompt_token_count,
     output_ids.size,
     output_ids[0],
-    "state_fast_forward_active_cursor",
+    result.route,
   )
   {timing, output_ids}
 end

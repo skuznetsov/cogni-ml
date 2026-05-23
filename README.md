@@ -691,6 +691,9 @@ that need continuation state still use the validated state corridor.
 The route decision is also available to product code as
 `ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span` in
 `src/ml/gguf/qwen35_serving_route.cr`.
+For resident servers, `ML::GGUF::Qwen35ResidentSession` in
+`src/ml/gguf/qwen35_resident_session.cr` owns route counters and an optional
+active continuation cursor while keeping shared Store restores copy-safe.
 
 For a repeatable raw-vs-compressed cache-artifact gate, use the matrix runner:
 

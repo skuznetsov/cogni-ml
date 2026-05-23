@@ -15599,3 +15599,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Terminal cache serving is now effectively solved at this scale. Continuation cost is isolation/copy lifecycle, not model compute. The right next product object is a resident session that owns an active continuation cursor.
 - LTP/WBA: Window is route policy per cached request. Transport is either cached ids, source-history span, copied continuation state, or owned active state. Legal move chooses the lowest-cost route that preserves boundary requirements. Boundary safety requires state copy for shared cache and owned cursor for mutable continuation. Potential descends in `(unneeded_state_restore, shared_copy_bytes, request_wall)`.
 - trust: {F:0.90,G:0.62,R:0.84}
+
+**LM-518 ResidentSession owns route counters and active continuation cursor [shared/ml]**
+- status: IMPLEMENTED; product-shaped exact cache session facade
+- claim tested: A resident session API can safely expose the active-cursor speed path without aliasing mutable shared Store state.
+- evidence: Added `src/ml/gguf/qwen35_resident_session.cr` with `Qwen35ResidentSession`. It owns route counts and an optional active cursor. `prewarm_continuation_cursor` restores into the owned cursor, and `serve_exact_cached_span` consumes a matching cursor as `route=state_fast_forward_active_cursor`; non-active paths delegate to `Qwen35ServingRoute`. Verification passed: no-codegen builds for `bin/qwen35_warm_request_probe.cr` and `bin/qwen35_generate.cr`; `git diff --check`; release active-cursor smoke through the session measured p50 total `0.002ms`, restore/prefill/decode `0.0`, and `routes=state_fast_forward_active_cursor=5`.
+- diagnosis: This is the product boundary implied by the route policy gate: terminal paths emit ids, shared continuation restores copy for isolation, and only an owned active session cursor skips the copy.
+- LTP/WBA: Window is an exact continuation request for an active session. Transport is a session-owned cursor keyed by full-history/output hashes. Legal move consumes the cursor once; otherwise the route falls back to copy-safe shared Store restore. Boundary safety is no borrowed mutable Store state and route-count attribution. Potential descends in `(shared_copy_bytes, aliasing_risk, continuation_handoff_wall)`.
+- trust: {F:0.90,G:0.58,R:0.84}
