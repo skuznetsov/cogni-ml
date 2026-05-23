@@ -10842,6 +10842,49 @@ private def route_feature_value(row : RouteScoreRow, feature : String) : Float64
   end
 end
 
+private def prompt_route_selector_feature_value(residual_stats, value_stats, feature : String) : Float64?
+  case feature
+  when "residual_mean"
+    residual_stats[:mean]
+  when "residual_p90"
+    residual_stats[:p90]
+  when "residual_max"
+    residual_stats[:max]
+  when "repeat_rate"
+    value_stats[:repeat_rate]
+  when "bigram_repeat_rate"
+    value_stats[:bigram_repeat_rate]
+  when "unique_rate"
+    value_stats[:unique_rate]
+  else
+    nil
+  end
+end
+
+private def route_selector_match?(value : Float64?, op : String, threshold : Float64?) : Bool
+  return false unless value && threshold
+  case op
+  when "<="
+    value <= threshold
+  when ">="
+    value >= threshold
+  else
+    false
+  end
+end
+
+private def route_selector_note(route_name : String,
+                                feature : String,
+                                op : String,
+                                threshold : Float64?,
+                                value : Float64?,
+                                selected : Bool,
+                                selected_route : HybridRoute) : String
+  threshold_label = threshold.nil? ? "none" : threshold.not_nil!.round(6).to_s
+  value_label = value.nil? ? "none" : value.not_nil!.round(6).to_s
+  " route_selector=#{selected ? "select" : "pure"} route_selector_route=#{route_name} route_selector_selected_route=#{selected_route[:name]} route_selector_feature=#{feature} route_selector_op=#{op} route_selector_threshold=#{threshold_label} route_selector_value=#{value_label}"
+end
+
 private def print_route_selector_scoreboard(rows : Array(RouteScoreRow), limit : Int32 = 30)
   return if rows.empty?
   baselines = {} of String => RouteScoreRow
@@ -11081,6 +11124,10 @@ simulate_self_spec_gpu_pipeline_ffn_updown_route_features = false
 dump_ffn_updown_adapters_path : String? = nil
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 simulate_self_spec_gpu_pipeline_router_trace_path : String? = nil
+simulate_self_spec_gpu_pipeline_route_selector_route : String? = nil
+simulate_self_spec_gpu_pipeline_route_selector_feature : String? = nil
+simulate_self_spec_gpu_pipeline_route_selector_op = ">="
+simulate_self_spec_gpu_pipeline_route_selector_threshold : Float64? = nil
 simulate_self_spec_gpu_pipeline_residual_router_mean_max : Float64? = nil
 simulate_self_spec_gpu_pipeline_residual_router_pass_threshold : Float64? = nil
 simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min : Float64? = nil
@@ -11341,6 +11388,10 @@ OptionParser.parse(ARGV) do |p|
   p.on("--dump-ffn-updown-adapters=PATH", "Write trained FFN pca-updown adapters as JSON for CUDA runner probes") { |v| dump_ffn_updown_adapters_path = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-router-trace=PATH", "Write JSONL self-spec router/reject-risk rows without raw token ids") { |v| simulate_self_spec_gpu_pipeline_router_trace_path = v }
+  p.on("--simulate-self-spec-gpu-pipeline-route-selector-route=NAME", "Default-off prompt route selector candidate, e.g. noffn_0 or noffn_0_2; pure is used when the feature gate does not fire") { |v| simulate_self_spec_gpu_pipeline_route_selector_route = v }
+  p.on("--simulate-self-spec-gpu-pipeline-route-selector-feature=NAME", "Feature for route selector: residual_mean,residual_p90,residual_max,repeat_rate,bigram_repeat_rate,unique_rate") { |v| simulate_self_spec_gpu_pipeline_route_selector_feature = v }
+  p.on("--simulate-self-spec-gpu-pipeline-route-selector-op=OP", "Route selector comparison: <= or >=") { |v| simulate_self_spec_gpu_pipeline_route_selector_op = v }
+  p.on("--simulate-self-spec-gpu-pipeline-route-selector-threshold=F", "Threshold for --simulate-self-spec-gpu-pipeline-route-selector-feature") { |v| simulate_self_spec_gpu_pipeline_route_selector_threshold = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-suite-prompt=NAME::TEXT", "Additional eval prompt for GPU self-spec pipeline suite; main --prompt still runs first") do |v|
     add_self_spec_suite_prompt.call(v)
   end
@@ -11727,7 +11778,7 @@ if rank = simulate_logit_rank
         ffn_updown_adapters = updown
         puts "ffn_updown_pca_adapter layers=#{updown.keys.sort.join(',')} max_rank=#{max_updown_rank} samples=#{updown_samples.map { |il, s| "#{il}:#{s.size}" }.join(',')}"
         if dump_path = dump_ffn_updown_adapters_path
-          dump_ffn_updown_adapters(dump_path, updown, max_updown_rank, weights.hparams.n_embd, ffn_pca_calib_token_sets.empty? ? "eval_prompt_prefix" : "external_prompts:#{ffn_pca_calib_token_sets.size}")
+          dump_ffn_updown_adapters(dump_path.not_nil!, updown, max_updown_rank, weights.hparams.n_embd, ffn_pca_calib_token_sets.empty? ? "eval_prompt_prefix" : "external_prompts:#{ffn_pca_calib_token_sets.size}")
           puts "ffn_updown_pca_adapter_dump path=#{dump_path} layers=#{updown.keys.sort.join(',')} rank=#{max_updown_rank} hidden=#{weights.hparams.n_embd}"
         end
         if simulate_self_spec_gpu_pipeline_ffn_updown_route_features
@@ -12038,6 +12089,9 @@ if rank = simulate_logit_rank
     end
     pipeline_route_active = simulate_generate_tokens > 0 && (!pipeline_gammas.empty? || !simulate_self_spec_gpu_pipeline_schedules.empty?)
     if pipeline_route_active
+      route_selector_enabled = !simulate_self_spec_gpu_pipeline_route_selector_route.nil? ||
+                               !simulate_self_spec_gpu_pipeline_route_selector_feature.nil? ||
+                               !simulate_self_spec_gpu_pipeline_route_selector_threshold.nil?
       residual_router_enabled = !simulate_self_spec_gpu_pipeline_residual_router_mean_max.nil? ||
                                 !simulate_self_spec_gpu_pipeline_residual_router_pass_threshold.nil? ||
                                 !simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min.nil?
@@ -12048,6 +12102,23 @@ if rank = simulate_logit_rank
       if pre_submit_router_enabled
         raise "pre-submit routers currently support fixed-gamma pipeline rows; disable --simulate-self-spec-gpu-pipeline-schedule" unless simulate_self_spec_gpu_pipeline_schedules.empty?
         raise "pre-submit routers are not wired into hybrid route scoreboards; disable hybrid sweep" if simulate_self_spec_gpu_pipeline_hybrid_sweep || simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
+      end
+      selected_route_candidate = nil.as(HybridRoute?)
+      pure_route_candidate = nil.as(HybridRoute?)
+      if route_selector_enabled
+        raise "route selector requires --simulate-self-spec-gpu-pipeline-route-selector-route" if simulate_self_spec_gpu_pipeline_route_selector_route.nil?
+        raise "route selector requires --simulate-self-spec-gpu-pipeline-route-selector-feature" if simulate_self_spec_gpu_pipeline_route_selector_feature.nil?
+        raise "route selector requires --simulate-self-spec-gpu-pipeline-route-selector-threshold" if simulate_self_spec_gpu_pipeline_route_selector_threshold.nil?
+        raise "route selector op must be <= or >=" unless ["<=", ">="].includes?(simulate_self_spec_gpu_pipeline_route_selector_op)
+        route_selector_features = ["residual_mean", "residual_p90", "residual_max", "repeat_rate", "bigram_repeat_rate", "unique_rate"]
+        raise "route selector feature must be one of #{route_selector_features.join(',')}" unless route_selector_features.includes?(simulate_self_spec_gpu_pipeline_route_selector_feature.not_nil!)
+        raise "route selector currently supports fixed-gamma rows; disable --simulate-self-spec-gpu-pipeline-schedule" unless simulate_self_spec_gpu_pipeline_schedules.empty?
+        selector_routes = build_self_spec_hybrid_routes(simulate_logit_layers, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_hybrid_rich_sweep)
+        pure_route_candidate = selector_routes.find { |route| route[:name] == "pure" }
+        selected_route_candidate = selector_routes.find { |route| route[:name] == simulate_self_spec_gpu_pipeline_route_selector_route }
+        raise "route selector could not resolve pure route" if pure_route_candidate.nil?
+        raise "route selector could not resolve route #{simulate_self_spec_gpu_pipeline_route_selector_route}; run a hybrid sweep to inspect route names" if selected_route_candidate.nil?
+        raise "route selector currently supports no-FFN route candidates only" if selected_route_candidate.not_nil![:updown]
       end
       if residual_router_enabled
         pass_threshold_set = !simulate_self_spec_gpu_pipeline_residual_router_pass_threshold.nil?
@@ -12140,6 +12211,30 @@ if rank = simulate_logit_rank
       end
       main_pre_submit_router_note = "#{main_residual_router_note}#{main_value_router_note}"
       main_pre_submit_router_skip = main_residual_router_skip || main_value_router_skip
+      route_selector_route_name = simulate_self_spec_gpu_pipeline_route_selector_route || ""
+      route_selector_feature_name = simulate_self_spec_gpu_pipeline_route_selector_feature || ""
+      run_route_selector = ->(scope : String, prompt_name : String, prompt_text : String, prompt_token_ids : Array(Int32), prompt_layer_bases : LayerBasisMap, feature_value : Float64?) {
+        if route_selector_enabled
+          selected = route_selector_match?(feature_value, simulate_self_spec_gpu_pipeline_route_selector_op, simulate_self_spec_gpu_pipeline_route_selector_threshold)
+          route = selected ? selected_route_candidate.not_nil! : pure_route_candidate.not_nil!
+          pipeline_gammas.each do |pipeline_gamma|
+            pipeline_splits.each do |draft_split|
+              pipe = simulate_self_spec_gpu_pipeline_run(weights, prompt_token_ids, simulate_generate_tokens, pipeline_gamma, prompt_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, nil, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], nil, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+              accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
+              backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
+              split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
+              route_note = hybrid_route_note(route, nil)
+              selector_note = route_selector_note(route_selector_route_name.to_s, route_selector_feature_name.to_s, simulate_self_spec_gpu_pipeline_route_selector_op, simulate_self_spec_gpu_pipeline_route_selector_threshold, feature_value, selected, route)
+              tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !simulate_self_spec_gpu_pipeline_tree2_branch_guard.nil? || !simulate_self_spec_gpu_pipeline_risk_offramp_margin.nil? || simulate_self_spec_gpu_pipeline_mtp_k2_on_reject || simulate_self_spec_gpu_pipeline_reject_offramp_after > 0) ? self_spec_pipeline_tree2_note(pipe) : ""
+              attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
+              puts "self_spec_gpu_pipeline_route_selector scope=#{scope} name=#{prompt_name} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{selector_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+              if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
+                dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, prompt_name, prompt_text, "self_lowrank/gamma=#{pipeline_gamma}/route_selector=#{route[:name]}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
+              end
+            end
+          end
+        end
+      }
       raise "risk-offramp repeats must be >= 1" if simulate_self_spec_gpu_pipeline_risk_offramp_repeats < 1
       risk_offramp_base_options = [] of Float64?
       add_risk_offramp_option = ->(value : Float64?) {
@@ -12297,6 +12392,8 @@ if rank = simulate_logit_rank
       }
       ProbeRuntime.self_spec_router_trace_label = "main"
       run_noffn_fallback_abba.call("main", "main", token_ids, layer_bases)
+      main_route_selector_value = prompt_route_selector_feature_value(main_route_residual_stats, main_value_stats, route_selector_feature_name.to_s)
+      run_route_selector.call("main", "main", prompt, token_ids, layer_bases, main_route_selector_value)
       if simulate_self_spec_gpu_pipeline_hybrid_sweep
         pipeline_gammas.each do |pipeline_gamma|
           pipeline_splits.each do |draft_split|
@@ -12321,7 +12418,7 @@ if rank = simulate_logit_rank
                 puts "self_spec_gpu_pipeline_hybrid layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                 if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                   route_label = route_updown_rank ? "#{route[:name]}_updown#{route_updown_rank}" : route[:name]
-                  dump_self_spec_gpu_pipeline_cycles(dump_path, "main", prompt, "self_lowrank/gamma=#{pipeline_gamma}/route=#{route_label}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
+                  dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, "main", prompt, "self_lowrank/gamma=#{pipeline_gamma}/route=#{route_label}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
                 end
                 append_route_score(route_score_rows, "main", "gamma=#{pipeline_gamma}", route, draft_split, route_updown_rank, pipe, accept_rate,
                   main_route_residual_stats[:mean], main_route_residual_stats[:p90], main_route_residual_stats[:max],
@@ -12355,7 +12452,7 @@ if rank = simulate_logit_rank
                 if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                   route_label = route_updown_rank ? "#{route[:name]}_updown#{route_updown_rank}" : route[:name]
                   schedule_label = "schedule=#{pipeline_schedule.join(',')}"
-                  dump_self_spec_gpu_pipeline_cycles(dump_path, "main", prompt, "self_lowrank/#{schedule_label}/route=#{route_label}", simulate_logit_layers, rank, schedule_label, pipe)
+                  dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, "main", prompt, "self_lowrank/#{schedule_label}/route=#{route_label}", simulate_logit_layers, rank, schedule_label, pipe)
                 end
                 append_route_score(route_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", route, draft_split, route_updown_rank, pipe, accept_rate,
                   main_route_residual_stats[:mean], main_route_residual_stats[:p90], main_route_residual_stats[:max],
@@ -12408,7 +12505,7 @@ if rank = simulate_logit_rank
                   agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
                   puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{main_pre_submit_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                   if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
-                    dump_self_spec_gpu_pipeline_cycles(dump_path, "main", prompt, "self_lowrank/gamma=#{pipeline_gamma}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
+                    dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, "main", prompt, "self_lowrank/gamma=#{pipeline_gamma}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
                   end
                   append_draft_body_score(draft_body_score_rows, "main", "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                   append_risk_offramp_score(risk_offramp_score_rows, "main", "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, risk_offramp_margin, pipe, accept_rate)
@@ -12441,7 +12538,7 @@ if rank = simulate_logit_rank
                 puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                 if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                   schedule_label = "schedule=#{pipeline_schedule.join(',')}"
-                  dump_self_spec_gpu_pipeline_cycles(dump_path, "main", prompt, "self_lowrank/#{schedule_label}", simulate_logit_layers, rank, schedule_label, pipe)
+                  dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, "main", prompt, "self_lowrank/#{schedule_label}", simulate_logit_layers, rank, schedule_label, pipe)
                 end
                 append_draft_body_score(draft_body_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                 append_risk_offramp_score(risk_offramp_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", draft_split, risk_offramp_margin, pipe, accept_rate)
@@ -12514,6 +12611,8 @@ if rank = simulate_logit_rank
           suite_pre_submit_router_note = "#{suite_residual_router_note}#{suite_value_router_note}"
           suite_pre_submit_router_skip = suite_residual_router_skip || suite_value_router_skip
           run_noffn_fallback_abba.call("suite", suite_prompt[:name], suite_token_ids, suite_layer_bases)
+          suite_route_selector_value = prompt_route_selector_feature_value(suite_route_residual_stats, suite_value_stats, route_selector_feature_name.to_s)
+          run_route_selector.call("suite", suite_prompt[:name], suite_prompt[:text], suite_token_ids, suite_layer_bases, suite_route_selector_value)
           if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
             pipeline_gammas.each do |pipeline_gamma|
               pipeline_splits.each do |draft_split|
@@ -12538,7 +12637,7 @@ if rank = simulate_logit_rank
                     puts "self_spec_gpu_pipeline_suite_hybrid name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                     if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                       route_label = route_updown_rank ? "#{route[:name]}_updown#{route_updown_rank}" : route[:name]
-                      dump_self_spec_gpu_pipeline_cycles(dump_path, suite_prompt[:name], suite_prompt[:text], "self_lowrank/gamma=#{pipeline_gamma}/route=#{route_label}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
+                      dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, suite_prompt[:name], suite_prompt[:text], "self_lowrank/gamma=#{pipeline_gamma}/route=#{route_label}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
                     end
                     append_route_score(route_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}", route, draft_split, route_updown_rank, pipe, accept_rate,
                       suite_route_residual_stats[:mean], suite_route_residual_stats[:p90], suite_route_residual_stats[:max],
@@ -12572,7 +12671,7 @@ if rank = simulate_logit_rank
                     if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                       route_label = route_updown_rank ? "#{route[:name]}_updown#{route_updown_rank}" : route[:name]
                       schedule_label = "schedule=#{pipeline_schedule.join(',')}"
-                      dump_self_spec_gpu_pipeline_cycles(dump_path, suite_prompt[:name], suite_prompt[:text], "self_lowrank/#{schedule_label}/route=#{route_label}", simulate_logit_layers, rank, schedule_label, pipe)
+                      dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, suite_prompt[:name], suite_prompt[:text], "self_lowrank/#{schedule_label}/route=#{route_label}", simulate_logit_layers, rank, schedule_label, pipe)
                     end
                     append_route_score(route_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", route, draft_split, route_updown_rank, pipe, accept_rate,
                       suite_route_residual_stats[:mean], suite_route_residual_stats[:p90], suite_route_residual_stats[:max],
@@ -12626,7 +12725,7 @@ if rank = simulate_logit_rank
                   agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
                   puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{suite_pre_submit_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                   if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
-                    dump_self_spec_gpu_pipeline_cycles(dump_path, suite_prompt[:name], suite_prompt[:text], "self_lowrank/gamma=#{pipeline_gamma}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
+                    dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, suite_prompt[:name], suite_prompt[:text], "self_lowrank/gamma=#{pipeline_gamma}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
                   end
                   append_draft_body_score(draft_body_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                   append_risk_offramp_score(risk_offramp_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}#{branch_snapshot_mode_score_note}", draft_split, risk_offramp_margin, pipe, accept_rate)
@@ -12659,7 +12758,7 @@ if rank = simulate_logit_rank
                   puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
                   if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                     schedule_label = "schedule=#{pipeline_schedule.join(',')}"
-                    dump_self_spec_gpu_pipeline_cycles(dump_path, suite_prompt[:name], suite_prompt[:text], "self_lowrank/#{schedule_label}", simulate_logit_layers, rank, schedule_label, pipe)
+                    dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, suite_prompt[:name], suite_prompt[:text], "self_lowrank/#{schedule_label}", simulate_logit_layers, rank, schedule_label, pipe)
                   end
                   append_draft_body_score(draft_body_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", draft_split, pipeline_updown_rank, pipe, accept_rate)
                   append_risk_offramp_score(risk_offramp_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", draft_split, risk_offramp_margin, pipe, accept_rate)
