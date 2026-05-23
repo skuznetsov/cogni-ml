@@ -15431,3 +15431,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The controller plumbing works and is boundary-safe for exact output, but the first legal window is too broad and admits a bad no-FFN chunk. The margin guard prevents that entry on the smoke, but by requiring top2 it can spend overhead without taking the fast route. The next gate must be ABBA/margin sweep; do not promote a default.
 - LTP/WBA: Window is a fully accepted chunk plus optional margin certificate. Transport is the next draft block route. Legal move keeps exact verifier parity and resets to pure on reject; potential must descend in `(selected route loss, reject/replay area, top2 overhead, wall)`. In the smoke, the broad window increased the potential, while the margin window collapsed to pure.
 - trust: {F:0.88,G:0.34,R:0.84}
+
+**LM-497 External chunk no-FFN margin sweep does not justify promotion [shared/ml]**
+- status: MEASURED refutation/noise note; no default policy
+- claim tested: A chunk-local no-FFN gate with full-accept evidence plus top2 margin can recover chunk-oracle headroom without prompt-level selector failures.
+- evidence: Qwen3.5-9B Q4_K_M, 4-prompt suite, `rank32/gen16/gamma4/split1`, `draft_no_ffn_layers=0,2`. Pure baseline: `overlap_total=2502.630`, rejects `0`, no-FFN chunks `0`, parity all true. Naive `after_full_accepts=1`: `overlap_total=2773.359`, rejects `2`, no-FFN chunks `8`, parity all true. Margin `0.5/1/2` preserved parity but still admitted a bad `repeat_fact` no-FFN chunk and the host became too noisy for wall promotion. Margin `4.0` blocked JSON/repeat no-FFN entry (`draft_noffn_chunks=0` for both) but mostly collapsed to pure while paying top2 overhead. Logs under `/tmp/qwen35_noffn_chunk_gate_suite_gen16_*`.
+- diagnosis: The first chunk-local features are not sufficient. They can preserve exact output, but either enter bad no-FFN chunks or become a costly pure-equivalent. Before adding more ABBA plumbing, mine cycle dumps for a more discriminative local trigger or pivot to non-no-FFN mathematical reductions.
+- LTP/WBA: The window detector is still weak. Legal transport exists, but the potential does not descend: broad windows increase rejects/replay area, while strict windows collapse to pure and increase top2 overhead. Dual frame remains pure lowrank.
+- trust: {F:0.76,G:0.30,R:0.68}
