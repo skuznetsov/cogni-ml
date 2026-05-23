@@ -2254,3 +2254,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_456:** Temporary `QWEN35_MTP_DYNAMIC_STAGE_TOPK=1` preserved parity/counters, and profile confirmed `head_top2 count 2 -> 1`, but the speed signal was not robust: one 3-prompt suite improved `mtp_ms=47.642 -> 41.046`, the next regressed `50.974 -> 54.772`; focused reason profile only moved total profiled MTP stages `156.747ms -> 155.893ms`. Code was removed.
 
 **next_update_456:** Do not revisit standalone dynamic topK unless paired with a larger proposal-quality/resident-head change. Current bottleneck remains fallback/verifier area and low accepted-token density, not the second candidate's top2 call.
+
+**decision_update_457:** Refuted and removed fused MTP FFN+top2 margin-probe code. The branch added `QWEN35_MTP_FFN_HEAD_TOP2_FUSE=1` to fuse final MTP FFN/residual/head top2 for the first low-margin candidate, but the speed signal was too small for the added duplicated body logic.
+
+**evidence_update_457:** Temporary branch built and preserved `parity_ok=3/3` with identical counters on the 3-prompt Q4_K_M + UD-Q4_K_XL speed-mode gate. Paired suite results were mixed (`mtp_ms=51.202 -> 44.814`, then `49.275 -> 50.960`). Focused stage profile confirmed `head_top2 count 2 -> 0`, but total profiled MTP stages only moved `148.707ms -> 146.898ms`; wall stayed neutral/noisy.
+
+**next_update_457:** Do not add more tiny MTP tail fusions without first eliminating duplicated body logic or making the proposal path resident. The remaining speed lever is not mandatory top2; it is accepted-token density and fallback/verifier area.
