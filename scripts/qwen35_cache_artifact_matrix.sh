@@ -14,6 +14,7 @@ requests="${QWEN35_MATRIX_REQUESTS:-3}"
 warmups="${QWEN35_MATRIX_WARMUPS:-1}"
 max_seq="${QWEN35_MATRIX_MAX_SEQ:-256}"
 resident_states="${QWEN35_MATRIX_RESIDENT_STATES:-0}"
+reuse_request_state="${QWEN35_MATRIX_REUSE_REQUEST_STATE:-0}"
 artifact_block="${QWEN35_MATRIX_ARTIFACT_BLOCK:-8}"
 codec_list="${QWEN35_MATRIX_CODECS:-raw recurrent-bf16}"
 live_kv_list="${QWEN35_MATRIX_LIVE_KV:-0}"
@@ -125,6 +126,12 @@ for ((idx = 0; idx < prompt_count; idx++)); do
         cmd+=("--live-kv-artifacts")
       elif [[ "${live_kv}" != "0" ]]; then
         echo "invalid QWEN35_MATRIX_LIVE_KV value: ${live_kv}; expected 0 or 1" >&2
+        exit 2
+      fi
+      if [[ "${reuse_request_state}" == "1" ]]; then
+        cmd+=("--reuse-request-state")
+      elif [[ "${reuse_request_state}" != "0" ]]; then
+        echo "invalid QWEN35_MATRIX_REUSE_REQUEST_STATE value: ${reuse_request_state}; expected 0 or 1" >&2
         exit 2
       fi
       cmd+=("${prompt}")

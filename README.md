@@ -600,6 +600,7 @@ the verifier body:
 ./build/qwen35_warm_request_probe \
   --prompt-cache-fast-forward \
   --resident-states 1 \
+  --reuse-request-state \
   --gen 64 \
   --requests 3 \
   --warmups 1 \
@@ -610,9 +611,13 @@ the verifier body:
 This is a cache-hit/session fast-forward measurement, not generation
 throughput. It is exact only when the cached span and state artifact are
 validated for the same model, tokenizer, prompt/session tokens, and runtime
-contract. On a local M2 Max Qwen3.5 9B Q4_K_M smoke, resident fast-forward
-measured `~4.5 ms` total for 64 cached tokens (`~0.07 ms/tok`), while the same
-Store source replay path measured `~4.55 ms/tok` because it still runs the exact
+contract. `--reuse-request-state` models a daemon/server state pool: cached
+state restore overwrites the same prepared destination buffers each request
+instead of allocating a fresh destination state. On a local M2 Max Qwen3.5 9B
+Q4_K_M smoke, resident fast-forward measured `~4.5 ms` total for 64 cached
+tokens (`~0.07 ms/tok`) before request-state pooling; a later 16-token
+BF16/live-KV smoke measured p50 total `~0.6-1.0 ms` with request-state reuse.
+The same Store source replay path remains slower because it still runs the exact
 bulk verifier body.
 
 For a repeatable raw-vs-compressed cache-artifact gate, use the matrix runner:
@@ -631,6 +636,7 @@ QWEN35_MATRIX_REQUESTS=1 \
 QWEN35_MATRIX_WARMUPS=0 \
 QWEN35_MATRIX_CODECS="raw recurrent-bf16" \
 QWEN35_MATRIX_LIVE_KV="0 1" \
+QWEN35_MATRIX_REUSE_REQUEST_STATE=1 \
 scripts/qwen35_cache_artifact_matrix.sh
 ```
 
