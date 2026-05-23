@@ -15120,3 +15120,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The mandatory top2 boundary is measurable but too small. Keeping another duplicated fused MTP body path would add maintenance risk without robust wall or proposal gain. A future retry should first refactor MTP prefix/tail sharing or make the proposal body resident, then add top2 fusion as a small incremental tail optimization.
 - LTP/WBA: Window was the first candidate margin-probe top2 boundary. Transport was legal and preserved K/V/cache state plus verifier parity. The lexicographic potential descended locally in `head_top2` count but did not robustly descend in `(mtp_ms, wall_ms, maintenance area)`, so the dual frame remains LM-455 top1 fusion plus separate top2 head.
 - trust: {F:0.82,G:0.26,R:0.78}
+
+**LM-458 No-margin MTP speed-mode remains slower after stateful FFN+head fusion [shared/ml]**
+- status: REFUTED controller branch; no code change
+- claim tested: After LM-455 reduced stateful MTP proposal cost, the `min_margin=1.0` speed-mode guard may be too conservative; disabling it should increase accepted-token density enough to beat the guard.
+- evidence: Env/CLI A/B with `QWEN35_MTP_FFN_HEAD_FUSE=1`, Q4_K_M target + UD-Q4_K_XL sidecar, 3-prompt `tokens=16 gamma=8`. Speed-mode (`min_margin=1.0`, exact off-ramp) repeated around `plain_speedup=0.989/0.987`, `draft_tokens=4`, `accepted=1`, `verifier_calls=1`, `verifier_tokens=2`, `fallback_tokens=46`. Manual no-margin controller (`stage=2 lazy hidden_resync rec_rollback_log reject_offramp=1`) preserved parity but worsened to `plain_speedup=0.977/0.974`, with `draft_tokens=6`, `accepted=2`, `verifier_calls=3`, `verifier_tokens=6`, and fallback still high (`43`).
+- diagnosis: Proposal quality did not improve enough. The extra accepted token is not worth two additional verifier chunks. The low-margin guard is still a useful verifier-cost spike for this suite; threshold tuning may still matter, but fully disabling the guard is refuted.
+- LTP/WBA: Window was the low-margin MTP entry decision. Removing the guard increased transport area through verifier chunks but did not reduce global wall potential. Dual frame remains guarded speed-mode.
+- trust: {F:0.84,G:0.30,R:0.80}

@@ -2260,3 +2260,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_457:** Temporary branch built and preserved `parity_ok=3/3` with identical counters on the 3-prompt Q4_K_M + UD-Q4_K_XL speed-mode gate. Paired suite results were mixed (`mtp_ms=51.202 -> 44.814`, then `49.275 -> 50.960`). Focused stage profile confirmed `head_top2 count 2 -> 0`, but total profiled MTP stages only moved `148.707ms -> 146.898ms`; wall stayed neutral/noisy.
 
 **next_update_457:** Do not add more tiny MTP tail fusions without first eliminating duplicated body logic or making the proposal path resident. The remaining speed lever is not mandatory top2; it is accepted-token density and fallback/verifier area.
+
+**decision_update_458:** Retested no-margin MTP controller after stateful FFN+head fusion. Disabling the `min_margin=1.0` guard is still slower: it increases accepted tokens but pays too many verifier chunks.
+
+**evidence_update_458:** With `QWEN35_MTP_FFN_HEAD_FUSE=1`, 3-prompt Q4_K_M + UD-Q4_K_XL `tokens=16 gamma=8`: guarded speed-mode repeated around `plain_speedup=0.989/0.987`, `draft_tokens=4`, `accepted=1`, `verifier_calls=1`; no-margin preserved parity but worsened to `plain_speedup=0.977/0.974`, `draft_tokens=6`, `accepted=2`, `verifier_calls=3`.
+
+**next_update_458:** Sweep margin thresholds before changing the preset. Fully disabling the low-margin guard is refuted; the remaining question is whether `1.0` is the best cutoff after LM-455.
