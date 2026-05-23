@@ -15303,3 +15303,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This is the correct analyzer for the next LTP/WBA layer: local chunk windows rather than prompt-level route masks. Current cycle wall is proportional from aggregate pipe timings, so use it for ranking hypotheses, not final speed claims.
 - LTP/WBA: Window is prompt-position chunk. Transport is route choice through that chunk. Legal move chooses best available route or pure fallback. Boundary safety remains exact parity of source rows. Potential is chunk-level wall/replay loss.
 - trust: {F:0.86,G:0.40,R:0.82}
+
+**LM-481 Chunk-level route oracle beats prompt-level oracle on small gen16 gate [shared/ml]**
+- status: MEASURED; supports chunk-level selector branch
+- claim tested: After prompt-level route selection failed to generalize at `gen32`, chunk-level route selection may expose safer local wins.
+- evidence: Qwen3.5-9B Q4_K_M, 4-prompt small suite, `gen16`, schedule `4,4,8`, split1, tree2-first + `reject_offramp_after=1`, route-labeled cycle dump. Prompt-level route oracle from the same run was `2.77%` (`pure_overlap_total=2413.851`, `oracle_overlap_total=2347.029`). Chunk analyzer on `/tmp/qwen35_route_cycles_small_gen16.jsonl` reported `cycles=48`, `groups=12`, `pure_total=2413.851`, `oracle_total=2318.633`, `oracle_delta=3.94%`. Chunk picks: `manual` for 9 chunks, `pure` for 2, `noffn_0_2` for 1. The extra gain came from `code_fib` at position `8`, where chunk oracle picked `noffn_0_2` for `8.96%` while prompt-level oracle kept the whole prompt pure.
+- diagnosis: This is the clearest current evidence that prompt-level route masks are too coarse. The next runtime selector, if implemented, should operate per chunk/window and use pure as the dual frame. Need repeat and gen32 chunk dumps before promotion because cycle wall is proportional, not per-dispatch exact.
+- LTP/WBA: Window is the local chunk at generated position. Transport carries route choice only across that chunk, then recomputes. Legal move does not commit to route for future chunks. Potential descends from `2.77%` prompt oracle to `3.94%` chunk oracle in this gate.
+- trust: {F:0.84,G:0.30,R:0.78}

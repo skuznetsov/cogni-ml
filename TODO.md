@@ -2362,3 +2362,7 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_480:** Smoke on `/tmp/qwen35_hybrid_cycles_smoke.jsonl` produced `cycles=10`, `groups=4`, `oracle_delta=0.51%`, and route picks across `pure`, `manual`, and `noffn_0_2`. This is diagnostic only: cycle wall is proportional from aggregate pipe timings, not exact per-chunk timing.
 
 **next_update_480:** Run hybrid route sweeps with cycle dump on the mixed suite and analyze chunk-level oracle headroom. If chunk oracle is materially higher than prompt-level selector, implement a default-off chunk route selector; otherwise pivot away from no-FFN route masking.
+
+**evidence_update_481:** Ran route-labeled chunk dump on the 4-prompt Qwen3.5-9B `gen16` gate. Prompt-level oracle was `2.77%` (`pure_overlap_total=2413.851`, `oracle_overlap_total=2347.029`). Chunk analyzer reported `cycles=48`, `groups=12`, `pure_total=2413.851`, `oracle_total=2318.633`, `oracle_delta=3.94%`. The extra gain came from `code_fib` at generated position `8`: chunk oracle picked `noffn_0_2` for `8.96%` while prompt-level oracle kept the whole prompt pure.
+
+**next_update_481:** Continue with chunk-level route selection. Run the same cycle dump/analyzer on `gen32` and repeated gates; if chunk oracle stays above prompt oracle with bounded losses, implement a default-off chunk selector that recomputes the route window each chunk and falls back to pure.
