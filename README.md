@@ -620,6 +620,30 @@ BF16/live-KV smoke measured p50 total `~0.6-1.0 ms` with request-state reuse.
 The same Store source replay path remains slower because it still runs the exact
 bulk verifier body.
 
+To measure the terminal direct-output certificate path inside a resident
+process, use `--prompt-cache-direct-output`. This mode seeds the same exact span
+and certificate once, then times only `Store#lookup_output_fast_forward`
+validation and cached id emission; it intentionally performs no state restore,
+prefill, or decoder work:
+
+```sh
+./build/qwen35_warm_request_probe \
+  --prompt-cache-direct-output \
+  --gen 16 \
+  --requests 7 \
+  --warmups 2 \
+  --quiet \
+  "The capital of France is"
+```
+
+On a local M2 Max Qwen3.5 9B Q4_K_M smoke, this measured p50 `0.009 ms`
+total for a 16-token cached span after warmup. The same build measured hot
+BF16/live-KV state fast-forward with `--resident-states=1` and
+`--reuse-request-state` at p50 `0.587 ms` on the same prompt/settings. Treat
+direct-output certificate hits as the terminal repeated-output path; use state
+fast-forward only when the caller needs a continuation state after the cached
+span.
+
 For a repeatable raw-vs-compressed cache-artifact gate, use the matrix runner:
 
 ```sh

@@ -26,6 +26,7 @@ prepare_state = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 source_replay = false
 prompt_cache_replay = false
 prompt_cache_fast_forward = false
+prompt_cache_direct_output = false
 resident_states = (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
 metal_profile = ENV["QWEN35_METAL_PROFILE"]? == "1"
 artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?
@@ -46,6 +47,7 @@ parser = OptionParser.new do |p|
   p.on("--source-replay", "Measure resident exact source-history replay instead of plain greedy decode") { source_replay = true }
   p.on("--prompt-cache-replay", "Measure real Store restore + exact source replay in a resident process") { prompt_cache_replay = true }
   p.on("--prompt-cache-fast-forward", "Measure trusted Store state restore + cached output emission with no verifier body") { prompt_cache_fast_forward = true }
+  p.on("--prompt-cache-direct-output", "Measure resident direct output-certificate lookup + validation with no state restore") { prompt_cache_direct_output = true }
   p.on("--resident-states N", "Resident Store state-cache entries for --prompt-cache-replay") { |v| resident_states = v.to_i }
   p.on("--artifact-codec CODEC", "Prompt-cache artifact codec for cache modes (raw, recurrent-bf16, recurrent-int8)") { |v| artifact_codec = v == "raw" ? nil : v }
   p.on("--artifact-codec-block N", "Prompt-cache recurrent-int8 artifact block size (default: 8)") { |v| artifact_codec_block = v.to_i }
@@ -67,8 +69,8 @@ raise "--warmups must be non-negative" unless warmups >= 0
 raise "--max-seq must be positive" unless max_seq > 0
 raise "--resident-states must be non-negative" unless resident_states >= 0
 raise "--artifact-codec-block must be positive" unless artifact_codec_block > 0
-mode_count = (source_replay ? 1 : 0) + (prompt_cache_replay ? 1 : 0) + (prompt_cache_fast_forward ? 1 : 0)
-raise "--source-replay, --prompt-cache-replay, and --prompt-cache-fast-forward are mutually exclusive" if mode_count > 1
+mode_count = (source_replay ? 1 : 0) + (prompt_cache_replay ? 1 : 0) + (prompt_cache_fast_forward ? 1 : 0) + (prompt_cache_direct_output ? 1 : 0)
+raise "--source-replay, --prompt-cache-replay, --prompt-cache-fast-forward, and --prompt-cache-direct-output are mutually exclusive" if mode_count > 1
 
 struct RequestTiming
   getter total_ms : Float64
@@ -117,6 +119,15 @@ struct PromptCacheFastForwardTemplate
   getter output_ids : Array(Int32)
 
   def initialize(@store, @entry, @cached_prefix_tokens, @full_history_tokens, @output_ids)
+  end
+end
+
+struct PromptCacheDirectOutputTemplate
+  getter store : ML::GGUF::Qwen35PromptCache::Store
+  getter prompt : String
+  getter output_ids : Array(Int32)
+
+  def initialize(@store, @prompt, @output_ids)
   end
 end
 
@@ -284,6 +295,43 @@ def build_prompt_cache_fast_forward_template(weights : ML::GGUF::Qwen35Weights,
   PromptCacheFastForwardTemplate.new(store, entry, cached_prefix_tokens, full_history_tokens, output_ids)
 end
 
+def build_prompt_cache_direct_output_template(weights : ML::GGUF::Qwen35Weights,
+                                              tokenizer : ML::GGUF::Qwen35Tokenizer,
+                                              prompt : String,
+                                              n_gen : Int32,
+                                              max_seq : Int32,
+                                              prepare_state : Bool,
+                                              resident_states : Int32,
+                                              artifact_codec : String?,
+                                              artifact_codec_block : Int32,
+                                              artifact_live_kv : Bool) : PromptCacheDirectOutputTemplate
+  fast_forward = build_prompt_cache_fast_forward_template(
+    weights,
+    tokenizer,
+    prompt,
+    n_gen,
+    max_seq,
+    prepare_state,
+    resident_states,
+    artifact_codec,
+    artifact_codec_block,
+    artifact_live_kv,
+  )
+  prompt_tokens_len = fast_forward.full_history_tokens.size - fast_forward.output_ids.size
+  prompt_token_ids = fast_forward.full_history_tokens[0, prompt_tokens_len]
+  fast_forward.store.save_output_fast_forward(
+    session_id: "warm-request-probe",
+    model_id: "warm-model",
+    tokenizer_id: "warm-tokenizer",
+    prompt_text: prompt,
+    prompt_token_ids: prompt_token_ids,
+    output_token_ids: fast_forward.output_ids,
+    generated_text: tokenizer.decode(fast_forward.output_ids),
+    exact_entry: fast_forward.entry,
+  )
+  PromptCacheDirectOutputTemplate.new(fast_forward.store, prompt, fast_forward.output_ids)
+end
+
 def run_request(weights : ML::GGUF::Qwen35Weights,
                 tokenizer : ML::GGUF::Qwen35Tokenizer,
                 prompt : String,
@@ -333,6 +381,33 @@ def run_request(weights : ML::GGUF::Qwen35Weights,
     decode_ms,
     ids.size,
     output_ids.size,
+    output_ids[0],
+  )
+  {timing, output_ids}
+end
+
+def run_prompt_cache_direct_output_request(replay : PromptCacheDirectOutputTemplate) : {RequestTiming, Array(Int32)}
+  request_t0 = Time.instant
+  hit = replay.store.lookup_output_fast_forward(
+    "warm-model",
+    "warm-request-probe",
+    replay.prompt,
+    replay.output_ids.size,
+  )
+  raise "direct output fast-forward miss" unless hit
+  raise "direct output fast-forward token mismatch" unless hit.output_token_ids == replay.output_ids
+
+  total_ms = (Time.instant - request_t0).total_milliseconds
+  output_ids = hit.output_token_ids
+  timing = RequestTiming.new(
+    total_ms,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    hit.prompt_token_count,
+    hit.output_token_count,
     output_ids[0],
   )
   {timing, output_ids}
@@ -496,7 +571,9 @@ startup_ms = (Time.instant - startup_t0).total_milliseconds
 
 puts "qwen35_warm_request_probe"
 puts "  model=#{model_path}"
-mode = if prompt_cache_fast_forward
+mode = if prompt_cache_direct_output
+         "prompt_cache_direct_output"
+       elsif prompt_cache_fast_forward
          "prompt_cache_fast_forward"
        elsif prompt_cache_replay
          "prompt_cache_replay"
@@ -511,6 +588,7 @@ puts "  startup_ms=#{startup_ms.round(1)}"
 source_template = source_replay ? build_source_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state) : nil
 prompt_cache_template = prompt_cache_replay ? build_prompt_cache_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
+prompt_cache_direct_output_template = prompt_cache_direct_output ? build_prompt_cache_direct_output_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 reusable_request_state = nil.as(ML::GGUF::Qwen35CPU::State?)
 if reuse_request_state
   reusable_request_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -520,7 +598,9 @@ end
 warmup_ms = 0.0
 warmups.times do
   warm_t0 = Time.instant
-  if replay = prompt_cache_fast_forward_template
+  if replay = prompt_cache_direct_output_template
+    run_prompt_cache_direct_output_request(replay)
+  elsif replay = prompt_cache_fast_forward_template
     run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, reusable_request_state)
   elsif replay = prompt_cache_template
     run_prompt_cache_replay_request(weights, replay, max_seq, prepare_state, reusable_request_state)
@@ -542,7 +622,9 @@ timings = [] of RequestTiming
 {% end %}
 
 requests.times do |i|
-  timing, output_ids = if replay = prompt_cache_fast_forward_template
+  timing, output_ids = if replay = prompt_cache_direct_output_template
+                         run_prompt_cache_direct_output_request(replay)
+                       elsif replay = prompt_cache_fast_forward_template
                          run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, reusable_request_state)
                        elsif replay = prompt_cache_template
                          run_prompt_cache_replay_request(weights, replay, max_seq, prepare_state, reusable_request_state)
@@ -555,7 +637,7 @@ requests.times do |i|
   unless quiet
     puts "  request #{i + 1}: ids=#{output_ids.inspect}"
   end
-  puts "  request #{i + 1} summary: total_ms=#{timing.total_ms.round(1)} ms_per_tok=#{timing.ms_per_output.round(2)} tokenize_ms=#{timing.tokenize_ms.round(1)} state_prepare_ms=#{timing.state_prepare_ms.round(1)} restore_ms=#{timing.restore_ms.round(1)} prefill_ms=#{timing.prefill_ms.round(1)} decode_ms=#{timing.decode_ms.round(1)} prompt_tokens=#{timing.prompt_tokens} output_tokens=#{timing.output_tokens} first_token=#{timing.first_token}"
+  puts "  request #{i + 1} summary: total_ms=#{timing.total_ms.round(3)} ms_per_tok=#{timing.ms_per_output.round(4)} tokenize_ms=#{timing.tokenize_ms.round(3)} state_prepare_ms=#{timing.state_prepare_ms.round(3)} restore_ms=#{timing.restore_ms.round(3)} prefill_ms=#{timing.prefill_ms.round(3)} decode_ms=#{timing.decode_ms.round(3)} prompt_tokens=#{timing.prompt_tokens} output_tokens=#{timing.output_tokens} first_token=#{timing.first_token}"
 end
 
 {% unless flag?(:cpu_only) %}
@@ -574,4 +656,4 @@ avg_total = timings.sum(&.total_ms) / timings.size
 avg_tok = timings.sum(&.output_tokens).to_f
 avg_ms_per_tok = timings.sum(&.total_ms) / avg_tok
 
-puts "  aggregate: avg_total_ms=#{avg_total.round(1)} p50_total_ms=#{totals[mid].round(1)} avg_ms_per_tok=#{avg_ms_per_tok.round(2)} p50_restore_ms=#{restores[mid].round(1)} p50_prefill_ms=#{prefills[mid].round(1)} p50_decode_ms=#{decode_totals[mid].round(1)}"
+puts "  aggregate: avg_total_ms=#{avg_total.round(3)} p50_total_ms=#{totals[mid].round(3)} avg_ms_per_tok=#{avg_ms_per_tok.round(4)} p50_restore_ms=#{restores[mid].round(3)} p50_prefill_ms=#{prefills[mid].round(3)} p50_decode_ms=#{decode_totals[mid].round(3)}"
