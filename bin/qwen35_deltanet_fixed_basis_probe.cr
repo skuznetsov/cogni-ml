@@ -11045,6 +11045,7 @@ simulate_self_spec_gpu_pipeline_dump_cycles_path : String? = ENV["QWEN35_SELF_SP
 simulate_self_spec_gpu_pipeline_no_backup = false
 simulate_self_spec_gpu_pipeline_draft_no_ffn = false
 simulate_self_spec_gpu_pipeline_draft_no_ffn_layers = [] of Int32
+simulate_self_spec_gpu_pipeline_draft_no_ffn_fallback_abba = 0
 simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn = false
 simulate_self_spec_gpu_pipeline_draft_updown_rank : Int32? = nil
 simulate_self_spec_gpu_pipeline_draft_updown_ranks = [] of Int32
@@ -11287,6 +11288,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn", "Use the research lowrank-no-ffn draft route for GPU self-spec proposals; exact verifier still enforces parity") { simulate_self_spec_gpu_pipeline_draft_no_ffn = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn-layers=LIST", "Skip FFN only for the listed low-rank recurrent draft layers; enables hybrid draft bodies") { |v| simulate_self_spec_gpu_pipeline_draft_no_ffn_layers = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn-fallback-on-reject", "After the first no-FFN draft rejection, resync future draft blocks with baseline lowrank") { ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject = true }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn-fallback-abba=N", "Run an in-process ABBA diagnostic comparing no-FFN fallback-on-reject off/on for N cycles") { |v| simulate_self_spec_gpu_pipeline_draft_no_ffn_fallback_abba = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-skip-recurrent-ffn", "Research route: skip FFN on all recurrent draft layers; exact verifier still enforces parity") { simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown=R", "Use resident FFN pca-updown rank R on selected low-rank recurrent draft layers in the real GPU pipeline") { |v| simulate_self_spec_gpu_pipeline_draft_updown_rank = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updowns=LIST", "In-process A/B list for resident FFN pca-updown ranks in the real GPU pipeline; use 0 for lowrank baseline") { |v| simulate_self_spec_gpu_pipeline_draft_updown_ranks = parse_int_list(v) }
@@ -12251,7 +12253,50 @@ if rank = simulate_logit_rank
       if simulate_self_spec_gpu_pipeline_hybrid_sweep && simulate_self_spec_gpu_pipeline_draft_updown_repeats > 1
         raise "draft pca-updown repeats are not wired into hybrid route scoreboards yet; disable hybrid sweep or set repeats=1"
       end
+      raise "no-FFN fallback ABBA cycles must be non-negative" if simulate_self_spec_gpu_pipeline_draft_no_ffn_fallback_abba < 0
+      noffn_fallback_abba_modes = [] of Bool
+      if simulate_self_spec_gpu_pipeline_draft_no_ffn_fallback_abba > 0
+        raise "no-FFN fallback ABBA requires a no-FFN draft route" unless simulate_self_spec_gpu_pipeline_draft_no_ffn || draft_no_ffn_layer_set
+        raise "no-FFN fallback ABBA is wired only for fixed-gamma non-hybrid rows" if simulate_self_spec_gpu_pipeline_hybrid_sweep || !simulate_self_spec_gpu_pipeline_schedules.empty?
+        raise "no-FFN fallback ABBA is not wired with pca-updown draft options" if pipeline_updown_options.any? { |option| !option.nil? }
+        raise "no-FFN fallback ABBA is not wired with risk-offramp sweeps" if risk_offramp_options.any? { |option| !option.nil? }
+        raise "no-FFN fallback ABBA is not wired with branch snapshot sweeps" if branch_snapshot_mode_options.any? { |mode| !mode[:name].empty? }
+        simulate_self_spec_gpu_pipeline_draft_no_ffn_fallback_abba.times do
+          noffn_fallback_abba_modes.concat([false, true, true, false])
+        end
+      end
+      noffn_fallback_base_enabled = ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject
+      run_noffn_fallback_abba = ->(scope : String, prompt_name : String, prompt_token_ids : Array(Int32), prompt_layer_bases : LayerBasisMap) {
+        noffn_fallback_abba_modes.each_with_index do |fallback_enabled, abba_index|
+          ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject = fallback_enabled
+          pipeline_gammas.each do |pipeline_gamma|
+            pipeline_splits.each do |draft_split|
+              pipe = simulate_self_spec_gpu_pipeline_run(weights, prompt_token_ids, simulate_generate_tokens, pipeline_gamma, prompt_layer_bases, rank,
+                !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn,
+                simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, nil, ffn_updown_adapters,
+                simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts,
+                simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks,
+                simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate,
+                simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds,
+                !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set,
+                simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere,
+                simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard,
+                simulate_self_spec_gpu_pipeline_tree2_branch_guard, nil, pipeline_mtp_k2_on_reject,
+                simulate_self_spec_gpu_pipeline_reject_offramp_after)
+              accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
+              split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
+              fallback_mode = fallback_enabled ? "on" : "off"
+              fallback_note = fallback_enabled ? " draft_noffn_fallback=reject" : ""
+              draft_variant_note = simulate_self_spec_gpu_pipeline_draft_no_ffn ? " draft_no_ffn=1" : ""
+              draft_no_ffn_layers_note = draft_no_ffn_layer_set ? " draft_no_ffn_layers=#{draft_no_ffn_layer_set.not_nil!.to_a.sort.join(',')}" : ""
+              puts "self_spec_gpu_pipeline_noffn_fallback_abba scope=#{scope} name=#{prompt_name} abba_index=#{abba_index} mode=#{fallback_mode} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{fallback_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+            end
+          end
+        end
+        ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject = noffn_fallback_base_enabled
+      }
       ProbeRuntime.self_spec_router_trace_label = "main"
+      run_noffn_fallback_abba.call("main", "main", token_ids, layer_bases)
       if simulate_self_spec_gpu_pipeline_hybrid_sweep
         pipeline_gammas.each do |pipeline_gamma|
           pipeline_splits.each do |draft_split|
@@ -12468,6 +12513,7 @@ if rank = simulate_logit_rank
           end
           suite_pre_submit_router_note = "#{suite_residual_router_note}#{suite_value_router_note}"
           suite_pre_submit_router_skip = suite_residual_router_skip || suite_value_router_skip
+          run_noffn_fallback_abba.call("suite", suite_prompt[:name], suite_token_ids, suite_layer_bases)
           if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
             pipeline_gammas.each do |pipeline_gamma|
               pipeline_splits.each do |draft_split|
