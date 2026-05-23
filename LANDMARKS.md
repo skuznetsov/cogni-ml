@@ -15391,3 +15391,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The selector mechanism is useful and boundary-safe, but this first high-unique route policy is not. This is a clean refutation: selection semantics worked, exactness held, and the chosen local window increased work. Next candidates need repeated route-oracle evidence and ABBA/pairing before promotion.
 - LTP/WBA: Window is a prompt-local feature threshold; transport is the selected route through a fixed-gamma draft corridor; legal move is candidate route inside the certified window, otherwise pure. The high-unique window failed the potential test because selected-route wall increased versus pure, so the dual frame remains pure.
 - trust: {F:0.88,G:0.36,R:0.84}
+
+**LM-492 Route selector summary compares selected policy rows to same-run pure baselines [shared/ml]**
+- status: IMPLEMENTED diagnostic; supports future route policy gates
+- claim tested: Prompt-level route selector logs need a direct same-run pure comparison to avoid hand-reading policy deltas.
+- evidence: Added `scripts/qwen35_route_selector_summary.py`. On `/tmp/qwen35_route_selector_unique90_gen16.log`, it matched `4/4` selector rows with pure baselines and parity `4/4`. The selected main `noffn_0` row was `-14.73%` versus pure; aggregate policy delta was `-3.47%`. Unselected pure rows showed noise-level movement (`+3.47`, `-1.33`, `-1.46`). `python3 -m py_compile scripts/qwen35_route_selector_summary.py` and `git diff --check` passed.
+- diagnosis: This makes selector promotion harder and cleaner: a candidate must beat pure on rows it actually selects, not merely preserve parity or appear in an offline route oracle.
+- LTP/WBA: Window is the selector row keyed by `(scope,name,gamma,split)`. Dual frame is the same-run pure row. Legal promotion requires lexicographic descent in `(selected_loss, aggregate_wall, reject_count)` against that frame.
+- trust: {F:0.90,G:0.42,R:0.86}
