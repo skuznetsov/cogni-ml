@@ -16,12 +16,36 @@ max_seq="${QWEN35_MATRIX_MAX_SEQ:-256}"
 resident_states="${QWEN35_MATRIX_RESIDENT_STATES:-0}"
 reuse_request_state="${QWEN35_MATRIX_REUSE_REQUEST_STATE:-0}"
 artifact_block="${QWEN35_MATRIX_ARTIFACT_BLOCK:-8}"
-codec_list="${QWEN35_MATRIX_CODECS:-raw recurrent-bf16}"
-live_kv_list="${QWEN35_MATRIX_LIVE_KV:-0}"
 prompt_limit="${QWEN35_MATRIX_PROMPT_LIMIT:-0}"
-mode="${QWEN35_MATRIX_MODE:---prompt-cache-fast-forward}"
+matrix_mode="${QWEN35_MATRIX_MODE:---prompt-cache-fast-forward}"
 keep_logs="${QWEN35_MATRIX_KEEP_LOGS:-0}"
 force_build="${QWEN35_MATRIX_FORCE_BUILD:-0}"
+
+case "${matrix_mode}" in
+  --prompt-cache-fast-forward|prompt-cache-fast-forward|fast-forward)
+    mode_arg="--prompt-cache-fast-forward"
+    mode_label="fast_forward"
+    codec_list="${QWEN35_MATRIX_CODECS:-raw recurrent-bf16}"
+    live_kv_list="${QWEN35_MATRIX_LIVE_KV:-0}"
+    ;;
+  --prompt-cache-replay|prompt-cache-replay|replay)
+    mode_arg="--prompt-cache-replay"
+    mode_label="replay"
+    codec_list="${QWEN35_MATRIX_CODECS:-raw recurrent-bf16}"
+    live_kv_list="${QWEN35_MATRIX_LIVE_KV:-0}"
+    ;;
+  --prompt-cache-direct-output|prompt-cache-direct-output|direct-output|direct_output)
+    mode_arg="--prompt-cache-direct-output"
+    mode_label="direct_output"
+    codec_list="${QWEN35_MATRIX_CODECS:-direct}"
+    live_kv_list="${QWEN35_MATRIX_LIVE_KV:-na}"
+    ;;
+  *)
+    echo "invalid QWEN35_MATRIX_MODE: ${matrix_mode}" >&2
+    echo "expected fast-forward, replay, direct-output, or the matching --prompt-cache-* flag" >&2
+    exit 2
+    ;;
+esac
 
 if [[ "${force_build}" == "1" || ! -x "${probe_bin}" ]]; then
   if [[ ! -f "${repo_root}/build/bridge.o" && "${link_flags}" == *"build/bridge.o"* ]]; then
@@ -96,7 +120,7 @@ extract_request_field() {
   ' "${file}" || true
 }
 
-printf "prompt_id\tcodec\tlive_kv\tavg_total_ms\tp50_total_ms\tavg_ms_per_tok\tp50_restore_ms\tp50_prefill_ms\tp50_decode_ms\tprompt_tokens\toutput_tokens\tlog\n"
+printf "prompt_id\tmode\tcodec\tlive_kv\tavg_total_ms\tp50_total_ms\tavg_ms_per_tok\tp50_restore_ms\tp50_prefill_ms\tp50_decode_ms\tprompt_tokens\toutput_tokens\tlog\n"
 
 prompt_count="${#prompts[@]}"
 if [[ "${prompt_limit}" =~ ^[0-9]+$ && "${prompt_limit}" -gt 0 && "${prompt_limit}" -lt "${prompt_count}" ]]; then
@@ -108,10 +132,10 @@ for ((idx = 0; idx < prompt_count; idx++)); do
   prompt="${prompts[$idx]}"
   for codec in ${codec_list}; do
     for live_kv in ${live_kv_list}; do
-      log_file="${tmp_dir}/${prompt_id}.${codec}.livekv${live_kv}.log"
+      log_file="${tmp_dir}/${prompt_id}.${mode_label}.${codec}.livekv${live_kv}.log"
       cmd=(
         "${probe_bin}"
-        "${mode}"
+        "${mode_arg}"
         "--gen=${gen}"
         "--requests=${requests}"
         "--warmups=${warmups}"
@@ -119,10 +143,15 @@ for ((idx = 0; idx < prompt_count; idx++)); do
         "--resident-states=${resident_states}"
         "--quiet"
       )
-      if [[ "${codec}" != "raw" ]]; then
+      if [[ "${mode_label}" != "direct_output" && "${codec}" != "raw" ]]; then
         cmd+=("--artifact-codec=${codec}" "--artifact-codec-block=${artifact_block}")
       fi
-      if [[ "${live_kv}" == "1" ]]; then
+      if [[ "${mode_label}" == "direct_output" ]]; then
+        if [[ "${live_kv}" != "na" ]]; then
+          echo "invalid QWEN35_MATRIX_LIVE_KV for direct-output: ${live_kv}; expected na" >&2
+          exit 2
+        fi
+      elif [[ "${live_kv}" == "1" ]]; then
         cmd+=("--live-kv-artifacts")
       elif [[ "${live_kv}" != "0" ]]; then
         echo "invalid QWEN35_MATRIX_LIVE_KV value: ${live_kv}; expected 0 or 1" >&2
@@ -147,8 +176,9 @@ for ((idx = 0; idx < prompt_count; idx++)); do
       prompt_tokens="$(extract_request_field prompt_tokens "${log_file}")"
       output_tokens="$(extract_request_field output_tokens "${log_file}")"
 
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "${prompt_id}" \
+        "${mode_label}" \
         "${codec}" \
         "${live_kv}" \
         "${avg_total}" \

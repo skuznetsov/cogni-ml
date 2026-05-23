@@ -652,7 +652,8 @@ scripts/qwen35_cache_artifact_matrix.sh
 
 By default it builds/uses `/tmp/qwen35_warm_request_probe_matrix`, runs five
 prompt classes through `--prompt-cache-fast-forward`, and reports tab-separated
-rows for `raw` and `recurrent-bf16` artifacts. Useful overrides:
+rows with `mode`, artifact codec, live-KV policy, request totals, and phase
+timings. Useful overrides:
 
 ```sh
 QWEN35_MATRIX_PROMPT_LIMIT=1 \
@@ -662,7 +663,16 @@ QWEN35_MATRIX_CODECS="raw recurrent-bf16" \
 QWEN35_MATRIX_LIVE_KV="0 1" \
 QWEN35_MATRIX_REUSE_REQUEST_STATE=1 \
 scripts/qwen35_cache_artifact_matrix.sh
+
+QWEN35_MATRIX_MODE=direct-output \
+QWEN35_MATRIX_REQUESTS=7 \
+QWEN35_MATRIX_WARMUPS=2 \
+scripts/qwen35_cache_artifact_matrix.sh
 ```
+
+`QWEN35_MATRIX_MODE=direct-output` collapses the artifact axes to
+`codec=direct` and `live_kv=na`, because this mode measures only the resident
+direct output-certificate validator and cached id emission.
 
 Use the matrix for cache-artifact economics only. It does not measure first-run
 prefill or plain generation throughput.
