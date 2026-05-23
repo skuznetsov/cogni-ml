@@ -2338,3 +2338,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_476:** Repeated the same 13-prompt Qwen3.5-9B `gen16` selector gate. Oracle was `4.30%`. Static `manual` still had severe tail risk (`mean=-0.13%`, min `-36.92%`, `losses=3`); static `noffn_0_2` improved but still had one loss (`mean=+2.71%`, min `-4.54%`). Best selector shifted to `noffn_0_2` with broad residual gating (`residual_mean >= 0.0693`, equivalently `residual_max >= 0.4885`), selected `12/13`, `wins=12`, `losses=0`, total delta `+3.10%`, worst selected delta `+1.39%`. Log: `/tmp/qwen35_route_selector_suite12_gen16_repeat.log`.
 
 **next_update_476:** Do not hard-code the LM-475 `manual` threshold. Add or script a repeated selector aggregator that intersects/averages policies across logs. Current leading safe family is `noffn_0_2` with broad residual gating; `manual` needs a narrower window or multi-feature policy.
+
+**decision_update_477:** Added `scripts/qwen35_route_selector_aggregate.py` to aggregate `self_spec_route_selector_scoreboard` blocks across logs. It supports `--min-logs` so one-off threshold artifacts do not masquerade as repeated policies.
+
+**evidence_update_477:** Aggregating the two 13-prompt Qwen3.5-9B `gen16` selector logs with `--min-logs 2` identified `noffn_0_2 residual_max >= 0.5163` as the current safest recurring candidate: `logs=2`, `prompts=26`, `selected=22`, `wins=22`, `losses=0`, aggregate delta `+2.76%`, worst selected delta `+1.39%`. Narrow `manual` policies recurred safely only for `2/26` selected rows and `+0.42%` aggregate delta.
+
+**next_update_477:** Validate `noffn_0_2 residual_max >= 0.5163` at `gen32` and on a larger prompt suite. If it remains zero-loss, implement a default-off runtime selector that chooses `noffn_0_2` only inside that residual window and falls back to pure otherwise.
