@@ -488,7 +488,7 @@ if prompt_cache_enabled
             fast_hit,
             source.token_ids,
             full_history_len: full_history_len,
-            continuation_required: true,
+            continuation_required: false,
             turn_id: turn_id,
             reuse_state: reuse_state,
           )
@@ -496,16 +496,12 @@ if prompt_cache_enabled
           if replay = route.replay
             state = replay.state
             pos = cached_prefix_len
-            output_ids = route.output_token_ids
-            prompt_cache_reused = true
-            prompt_cache_fast_forward_used = true
-            cache_route = route.route
-            STDOUT << "\nPrompt cache fast-forward hit: emitted #{output_ids.size} cached tokens, route=#{route.route}, reused_state_prefix=#{cached_prefix_len}, restore took #{(cache_restore_ms / 1000.0).round(3)}s\n"
-          else
-            STDOUT << "\nPrompt cache fast-forward validation failed after restore; exact fallback remains active\n"
-            output_ids.clear
-            pos = 0
           end
+          output_ids = route.output_token_ids
+          prompt_cache_reused = true
+          prompt_cache_fast_forward_used = true
+          cache_route = route.route
+          STDOUT << "\nPrompt cache fast-forward hit: emitted #{output_ids.size} cached tokens, route=#{route.route}, reused_state_prefix=#{cached_prefix_len}, route took #{(cache_restore_ms / 1000.0).round(3)}s\n"
         else
           STDOUT << "\nPrompt cache fast-forward artifact failed validation; exact fallback remains active\n"
         end
