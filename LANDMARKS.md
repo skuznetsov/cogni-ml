@@ -15407,3 +15407,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The selector-local route mechanism is the right measurement plumbing. The tested low-unique repeat policy is not stable enough to promote; the observed one-run win is within host/timing variance. Need ABBA or stricter repeat/bigram gates before making a speed claim.
 - LTP/WBA: Window is now a custom route-local feature trigger independent of global draft flags. The legal move preserves the pure dual frame, but the selected-row potential did not descend reproducibly across repeats.
 - trust: {F:0.88,G:0.38,R:0.84}
+
+**LM-494 Route-selector ABBA refutes the repeat no-FFN prompt policy [shared/ml]**
+- status: IMPLEMENTED ABBA harness; prompt-level repeat policy refuted
+- claim tested: The selector-local `noffn_0_2` route may be useful on low-unique/repetitive prompts if measured in a stable in-process ABBA frame.
+- evidence: Added `--simulate-self-spec-gpu-pipeline-route-selector-abba=N`, emitting `self_spec_gpu_pipeline_route_selector_abba` rows in pure/selector/selector/pure order. `scripts/qwen35_route_selector_summary.py` now summarizes ABBA median deltas. Build passed with `python3 -m py_compile scripts/qwen35_route_selector_summary.py`, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_route_selector_abba_build crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`, and a Metal-linked build to `/tmp/qwen35_route_selector_abba_probe`. On Qwen3.5-9B `rank32/gen16/gamma4`, `selector_noffn_0_2 when unique_rate<=20` selected only `repeat_fact`, preserved parity `4/4`, but selected median delta was `-4.10%` versus pure. Log: `/tmp/qwen35_route_selector_abba_unique20_gen16.log`.
+- diagnosis: The prior one-run selected-row gain was host/timing noise. Prompt-level no-FFN route selection is not currently a speed path at this shape. Keep the ABBA harness for future policies, but pivot route work toward chunk-level selectors or different mathematical reductions.
+- LTP/WBA: ABBA provides the compatible dual frame for the same selector window. The legal move failed because selected-route median wall increased against pure, so the potential `(selected_loss, wall, rejects)` did not descend.
+- trust: {F:0.90,G:0.40,R:0.86}

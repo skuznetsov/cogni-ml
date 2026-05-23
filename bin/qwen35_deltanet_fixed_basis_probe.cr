@@ -11129,6 +11129,7 @@ simulate_self_spec_gpu_pipeline_route_selector_no_ffn_layers = [] of Int32
 simulate_self_spec_gpu_pipeline_route_selector_feature : String? = nil
 simulate_self_spec_gpu_pipeline_route_selector_op = ">="
 simulate_self_spec_gpu_pipeline_route_selector_threshold : Float64? = nil
+simulate_self_spec_gpu_pipeline_route_selector_abba = 0
 simulate_self_spec_gpu_pipeline_residual_router_mean_max : Float64? = nil
 simulate_self_spec_gpu_pipeline_residual_router_pass_threshold : Float64? = nil
 simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min : Float64? = nil
@@ -11394,6 +11395,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-route-selector-feature=NAME", "Feature for route selector: residual_mean,residual_p90,residual_max,repeat_rate,bigram_repeat_rate,unique_rate") { |v| simulate_self_spec_gpu_pipeline_route_selector_feature = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-selector-op=OP", "Route selector comparison: <= or >=") { |v| simulate_self_spec_gpu_pipeline_route_selector_op = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-selector-threshold=F", "Threshold for --simulate-self-spec-gpu-pipeline-route-selector-feature") { |v| simulate_self_spec_gpu_pipeline_route_selector_threshold = v.to_f64 }
+  p.on("--simulate-self-spec-gpu-pipeline-route-selector-abba=N", "Run route-selector pure/selector/selector/pure in-process ABBA cycles for N repeats") { |v| simulate_self_spec_gpu_pipeline_route_selector_abba = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-suite-prompt=NAME::TEXT", "Additional eval prompt for GPU self-spec pipeline suite; main --prompt still runs first") do |v|
     add_self_spec_suite_prompt.call(v)
   end
@@ -12129,6 +12131,11 @@ if rank = simulate_logit_rank
         raise "route selector could not resolve route #{simulate_self_spec_gpu_pipeline_route_selector_route}; run a hybrid sweep to inspect route names" if selected_route_candidate.nil?
         raise "route selector currently supports no-FFN route candidates only" if selected_route_candidate.not_nil![:updown]
       end
+      raise "route selector ABBA cycles must be non-negative" if simulate_self_spec_gpu_pipeline_route_selector_abba < 0
+      if simulate_self_spec_gpu_pipeline_route_selector_abba > 0
+        raise "route selector ABBA requires route selector flags" unless route_selector_enabled
+        raise "route selector ABBA is wired only for fixed-gamma non-hybrid rows" if simulate_self_spec_gpu_pipeline_hybrid_sweep || !simulate_self_spec_gpu_pipeline_schedules.empty?
+      end
       if residual_router_enabled
         pass_threshold_set = !simulate_self_spec_gpu_pipeline_residual_router_pass_threshold.nil?
         pass_rate_set = !simulate_self_spec_gpu_pipeline_residual_router_pass_rate_min.nil?
@@ -12181,6 +12188,9 @@ if rank = simulate_logit_rank
       if !simulate_self_spec_gpu_pipeline_suite_prompts.empty? && pipeline_updown_options.any? { |option| !option.nil? }
         raise "GPU pipeline suite with pca-updown requires external --ffn-pca-calib-prompt so FFN adapters are not tied to the main prompt" if ffn_pca_calib_token_sets.empty?
       end
+      if simulate_self_spec_gpu_pipeline_route_selector_abba > 0
+        raise "route selector ABBA is not wired with pca-updown draft options" if pipeline_updown_options.any? { |option| !option.nil? }
+      end
       state_backup_note = simulate_self_spec_gpu_pipeline_legacy_full_state_backup ? " state_backup=legacy_full" : " state_backup=live_blit"
       exact_refresh_note = ProbeRuntime.gpu_draft_exact_refresh_interval > 0 ? " draft_exact_refresh=#{ProbeRuntime.gpu_draft_exact_refresh_interval}" : ""
       exact_refresh_note += " draft_exact_refresh_prefix=#{ProbeRuntime.gpu_draft_exact_refresh_prefix}" if ProbeRuntime.gpu_draft_exact_refresh_prefix > 0
@@ -12222,10 +12232,13 @@ if rank = simulate_logit_rank
       main_pre_submit_router_skip = main_residual_router_skip || main_value_router_skip
       route_selector_route_name = route_selector_enabled ? selected_route_candidate.not_nil![:name] : (simulate_self_spec_gpu_pipeline_route_selector_route || "")
       route_selector_feature_name = simulate_self_spec_gpu_pipeline_route_selector_feature || ""
-      run_route_selector = ->(scope : String, prompt_name : String, prompt_text : String, prompt_token_ids : Array(Int32), prompt_layer_bases : LayerBasisMap, feature_value : Float64?) {
+      run_route_selector = ->(scope : String, prompt_name : String, prompt_text : String, prompt_token_ids : Array(Int32), prompt_layer_bases : LayerBasisMap, feature_value : Float64?, force_pure : Bool, abba_index : Int32) {
         if route_selector_enabled
-          selected = route_selector_match?(feature_value, simulate_self_spec_gpu_pipeline_route_selector_op, simulate_self_spec_gpu_pipeline_route_selector_threshold)
+          selector_would_select = route_selector_match?(feature_value, simulate_self_spec_gpu_pipeline_route_selector_op, simulate_self_spec_gpu_pipeline_route_selector_threshold)
+          selected = !force_pure && selector_would_select
           route = selected ? selected_route_candidate.not_nil! : pure_route_candidate.not_nil!
+          row_prefix = abba_index >= 0 ? "self_spec_gpu_pipeline_route_selector_abba" : "self_spec_gpu_pipeline_route_selector"
+          abba_note = abba_index >= 0 ? " abba_index=#{abba_index} mode=#{force_pure ? "pure" : "selector"} route_selector_would_select=#{selector_would_select}" : ""
           pipeline_gammas.each do |pipeline_gamma|
             pipeline_splits.each do |draft_split|
               pipe = simulate_self_spec_gpu_pipeline_run(weights, prompt_token_ids, simulate_generate_tokens, pipeline_gamma, prompt_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, nil, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], nil, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
@@ -12236,7 +12249,7 @@ if rank = simulate_logit_rank
               selector_note = route_selector_note(route_selector_route_name.to_s, route_selector_feature_name.to_s, simulate_self_spec_gpu_pipeline_route_selector_op, simulate_self_spec_gpu_pipeline_route_selector_threshold, feature_value, selected, route)
               tree2_note = (simulate_self_spec_gpu_pipeline_tree2_first || simulate_self_spec_gpu_pipeline_tree2_anywhere || simulate_self_spec_gpu_pipeline_tree2_staged_tokens > 0 || !simulate_self_spec_gpu_pipeline_tree2_margin_guard.nil? || !simulate_self_spec_gpu_pipeline_tree2_branch_guard.nil? || !simulate_self_spec_gpu_pipeline_risk_offramp_margin.nil? || simulate_self_spec_gpu_pipeline_mtp_k2_on_reject || simulate_self_spec_gpu_pipeline_reject_offramp_after > 0) ? self_spec_pipeline_tree2_note(pipe) : ""
               attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
-              puts "self_spec_gpu_pipeline_route_selector scope=#{scope} name=#{prompt_name} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{selector_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+              puts "#{row_prefix} scope=#{scope} name=#{prompt_name}#{abba_note} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{selector_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
               if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                 dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, prompt_name, prompt_text, "self_lowrank/gamma=#{pipeline_gamma}/route_selector=#{route[:name]}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
               end
@@ -12399,10 +12412,23 @@ if rank = simulate_logit_rank
         end
         ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject = noffn_fallback_base_enabled
       }
+      route_selector_abba_modes = [] of Bool
+      simulate_self_spec_gpu_pipeline_route_selector_abba.times do
+        route_selector_abba_modes.concat([true, false, false, true])
+      end
+      run_route_selector_abba = ->(scope : String, prompt_name : String, prompt_text : String, prompt_token_ids : Array(Int32), prompt_layer_bases : LayerBasisMap, feature_value : Float64?) {
+        route_selector_abba_modes.each_with_index do |force_pure, abba_index|
+          run_route_selector.call(scope, prompt_name, prompt_text, prompt_token_ids, prompt_layer_bases, feature_value, force_pure, abba_index)
+        end
+      }
       ProbeRuntime.self_spec_router_trace_label = "main"
       run_noffn_fallback_abba.call("main", "main", token_ids, layer_bases)
       main_route_selector_value = prompt_route_selector_feature_value(main_route_residual_stats, main_value_stats, route_selector_feature_name.to_s)
-      run_route_selector.call("main", "main", prompt, token_ids, layer_bases, main_route_selector_value)
+      if simulate_self_spec_gpu_pipeline_route_selector_abba > 0
+        run_route_selector_abba.call("main", "main", prompt, token_ids, layer_bases, main_route_selector_value)
+      else
+        run_route_selector.call("main", "main", prompt, token_ids, layer_bases, main_route_selector_value, false, -1)
+      end
       if simulate_self_spec_gpu_pipeline_hybrid_sweep
         pipeline_gammas.each do |pipeline_gamma|
           pipeline_splits.each do |draft_split|
@@ -12621,7 +12647,11 @@ if rank = simulate_logit_rank
           suite_pre_submit_router_skip = suite_residual_router_skip || suite_value_router_skip
           run_noffn_fallback_abba.call("suite", suite_prompt[:name], suite_token_ids, suite_layer_bases)
           suite_route_selector_value = prompt_route_selector_feature_value(suite_route_residual_stats, suite_value_stats, route_selector_feature_name.to_s)
-          run_route_selector.call("suite", suite_prompt[:name], suite_prompt[:text], suite_token_ids, suite_layer_bases, suite_route_selector_value)
+          if simulate_self_spec_gpu_pipeline_route_selector_abba > 0
+            run_route_selector_abba.call("suite", suite_prompt[:name], suite_prompt[:text], suite_token_ids, suite_layer_bases, suite_route_selector_value)
+          else
+            run_route_selector.call("suite", suite_prompt[:name], suite_prompt[:text], suite_token_ids, suite_layer_bases, suite_route_selector_value, false, -1)
+          end
           if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
             pipeline_gammas.each do |pipeline_gamma|
               pipeline_splits.each do |draft_split|
