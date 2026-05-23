@@ -7639,6 +7639,7 @@ private def dump_self_spec_gpu_pipeline_cycles(path : String,
   proposed_total = Math.max(pipe[:proposed_tokens], 1)
   plain_ms_per_token = generated_total > 0 ? pipe[:plain_exact_ms] / generated_total : 0.0
   emitted_before = 0
+  assigned_wall_ms = 0.0
 
   File.open(path, "a") do |io|
     proposed_history.each_with_index do |proposed_count, i|
@@ -7651,6 +7652,7 @@ private def dump_self_spec_gpu_pipeline_cycles(path : String,
       gen_share = generated_total > 0 ? generated_count.to_f64 / generated_total : 0.0
       prop_share = proposed_count.to_f64 / proposed_total
       wall_ms = pipe[:overlap_ms] * gen_share
+      assigned_wall_ms += wall_ms
       candidate_fingerprint = "#{prompt_hash}:#{mode}:#{gamma_label}:#{i}:#{proposed_count}:#{accepted_count}:#{reject_index}"
 
       JSON.build(io) do |json|
@@ -7700,6 +7702,57 @@ private def dump_self_spec_gpu_pipeline_cycles(path : String,
       end
       io << '\n'
       emitted_before += generated_count
+    end
+    if emitted_before < generated_total
+      generated_count = generated_total - emitted_before
+      wall_ms = [pipe[:overlap_ms] - assigned_wall_ms, 0.0].max
+      candidate_fingerprint = "#{prompt_hash}:#{mode}:#{gamma_label}:suffix:#{emitted_before}:#{generated_count}"
+      JSON.build(io) do |json|
+        json.object do
+          json.field "prompt_hash", prompt_hash
+          json.field "target_model", "qwen35"
+          json.field "draft_model", "qwen35_self_lowrank"
+          json.field "kind", "self_lowrank_exact_suffix"
+          json.field "policy", mode
+          json.field "verify_mode", "exact_self_verify"
+          json.field "prompt_category", prompt_category
+          json.field "prompt_name", prompt_name
+          json.field "position", emitted_before
+          json.field "generated_before", emitted_before
+          json.field "generated_count", generated_count
+          json.field "gamma", 0
+          json.field "gamma_label", gamma_label
+          json.field "proposed_count", 0
+          json.field "accepted_count", generated_count
+          json.field "reject_index", -1
+          json.field "ngram_match_len", 0
+          json.field "ngram_min", 0
+          json.field "ngram_max", 0
+          json.field "ngram_recursive", false
+          json.field "ngram_disabled_before", false
+          json.field "ngram_disabled_after", false
+          json.field "candidate_hash", fnv1a64_hex(candidate_fingerprint.to_slice)
+          json.field "proposal_ms", 0.0
+          json.field "accept_scan_ms", 0.0
+          json.field "commit_ms", 0.0
+          json.field "target_replay_ms", 0.0
+          json.field "draft_ms", 0.0
+          json.field "target_verify_ms", wall_ms
+          json.field "target_backup_ms", 0.0
+          json.field "draft_backup_ms", 0.0
+          json.field "draft_resync_ms", 0.0
+          json.field "wall_ms", wall_ms
+          json.field "expected_gain_ms", generated_count * plain_ms_per_token - wall_ms
+          json.field "plain_exact_ms", pipe[:plain_exact_ms]
+          json.field "serial_ms", pipe[:serial_ms]
+          json.field "plain_speedup", pipe[:plain_speedup]
+          json.field "parity", pipe[:parity]
+          json.field "rank", rank
+          json.field "layers", layers.join(",")
+          json.field "atlas_scope", "exact_suffix"
+        end
+      end
+      io << '\n'
     end
   end
 end

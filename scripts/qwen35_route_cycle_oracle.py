@@ -13,6 +13,7 @@ from pathlib import Path
 @dataclass
 class Cycle:
     prompt: str
+    gamma_label: str
     position: int
     route: str
     wall_ms: float
@@ -39,6 +40,7 @@ def read_cycles(paths: list[Path]) -> list[Cycle]:
             cycles.append(
                 Cycle(
                     prompt=row["prompt_name"],
+                    gamma_label=str(row.get("gamma_label", row.get("gamma", ""))),
                     position=int(row["position"]),
                     route=route_from_policy(row["policy"]),
                     wall_ms=float(row["wall_ms"]),
@@ -58,16 +60,16 @@ def main() -> int:
     args = parser.parse_args()
 
     cycles = read_cycles(args.jsonl)
-    groups: dict[tuple[str, int], list[Cycle]] = defaultdict(list)
+    groups: dict[tuple[str, str, int], list[Cycle]] = defaultdict(list)
     for cycle in cycles:
-        groups[(cycle.prompt, cycle.position)].append(cycle)
+        groups[(cycle.prompt, cycle.gamma_label, cycle.position)].append(cycle)
 
     pure_total = 0.0
     oracle_total = 0.0
     route_stats: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    picks: list[tuple[str, int, str, float, float, float, int, int, int]] = []
+    picks: list[tuple[str, str, int, str, float, float, float, int, int, int]] = []
     usable = 0
-    for (prompt, position), rows in groups.items():
+    for (prompt, gamma_label, position), rows in groups.items():
         pure_rows = [row for row in rows if row.route == "pure"]
         if not pure_rows:
             continue
@@ -86,7 +88,7 @@ def main() -> int:
         stat["proposed"] += best.proposed
         stat["rejects"] += 1 if best.reject_index >= 0 else 0
         stat["delta_sum"] += delta
-        picks.append((prompt, position, best.route, pure.wall_ms, best.wall_ms, delta, best.accepted, best.proposed, best.reject_index))
+        picks.append((prompt, gamma_label, position, best.route, pure.wall_ms, best.wall_ms, delta, best.accepted, best.proposed, best.reject_index))
 
     total_delta = (pure_total - oracle_total) * 100.0 / pure_total if pure_total > 0.0 else 0.0
     print(f"route_cycle_oracle cycles={len(cycles)} groups={len(groups)} usable={usable} pure_total={pure_total:.3f} oracle_total={oracle_total:.3f} oracle_delta%={total_delta:.2f}")
@@ -95,10 +97,10 @@ def main() -> int:
         picks_count = int(stat["picks"])
         mean_delta = stat["delta_sum"] / picks_count if picks_count else 0.0
         print(f"{route} {picks_count} {int(stat['accepted'])} {int(stat['proposed'])} {int(stat['rejects'])} {mean_delta:.2f}")
-    print("rank prompt position best_route pure_ms best_ms delta% accepted proposed reject_index")
-    for i, row in enumerate(sorted(picks, key=lambda item: item[5], reverse=True)[: args.limit], start=1):
-        prompt, position, route, pure_ms, best_ms, delta, accepted, proposed, reject_index = row
-        print(f"{i} {prompt} {position} {route} {pure_ms:.3f} {best_ms:.3f} {delta:.2f} {accepted} {proposed} {reject_index}")
+    print("rank prompt gamma position best_route pure_ms best_ms delta% accepted proposed reject_index")
+    for i, row in enumerate(sorted(picks, key=lambda item: item[6], reverse=True)[: args.limit], start=1):
+        prompt, gamma_label, position, route, pure_ms, best_ms, delta, accepted, proposed, reject_index = row
+        print(f"{i} {prompt} {gamma_label} {position} {route} {pure_ms:.3f} {best_ms:.3f} {delta:.2f} {accepted} {proposed} {reject_index}")
     return 0
 
 
