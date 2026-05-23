@@ -73,6 +73,8 @@ def main() -> int:
         for row in rows:
             key = (row["scope"], row["name"], row["gamma"], row["split"])
             grouped[key].setdefault(row["mode"], []).append(row)
+        changed_pairs = []
+        unchanged_pairs = []
         print("pair scope name gamma split off_median on_median delta% off_rejects on_rejects counter_changed")
         for key, modes in sorted(grouped.items()):
             if "off" not in modes or "on" not in modes:
@@ -84,7 +86,27 @@ def main() -> int:
             on_rej = sum(row["rejections"] for row in modes["on"])
             off_counts = (off_rej, sum(row["accepted"] for row in modes["off"]), sum(row["proposed"] for row in modes["off"]))
             on_counts = (on_rej, sum(row["accepted"] for row in modes["on"]), sum(row["proposed"] for row in modes["on"]))
-            print(f"pair {key[0]} {key[1]} {key[2]} {key[3]} {off_med:.3f} {on_med:.3f} {pair_delta:.2f} {off_rej} {on_rej} {off_counts != on_counts}")
+            counter_changed = off_counts != on_counts
+            pair_record = (off_med, on_med, pair_delta)
+            if counter_changed:
+                changed_pairs.append(pair_record)
+            else:
+                unchanged_pairs.append(pair_record)
+            print(f"pair {key[0]} {key[1]} {key[2]} {key[3]} {off_med:.3f} {on_med:.3f} {pair_delta:.2f} {off_rej} {on_rej} {counter_changed}")
+
+        def print_pair_bucket(label: str, pairs: list[tuple[float, float, float]]) -> None:
+            off_sum = sum(pair[0] for pair in pairs)
+            on_sum = sum(pair[1] for pair in pairs)
+            delta_sum = (off_sum - on_sum) * 100.0 / off_sum if off_sum else 0.0
+            median_delta = statistics.median(pair[2] for pair in pairs) if pairs else 0.0
+            print(
+                f"{label} pairs={len(pairs)} off_median_sum={off_sum:.3f} "
+                f"on_median_sum={on_sum:.3f} total_delta%={delta_sum:.2f} "
+                f"median_delta%={median_delta:.2f}"
+            )
+
+        print_pair_bucket("changed_counter", changed_pairs)
+        print_pair_bucket("unchanged_counter", unchanged_pairs)
     return 0
 
 

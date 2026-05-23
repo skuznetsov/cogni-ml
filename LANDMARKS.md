@@ -15359,3 +15359,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Fallback-on-reject is useful as a collapse move for prompts where no-FFN actually enters a reject tail. It is not a broad speed knob for already-clean chunks. A route selector should combine this with a no-FFN entry gate and judge speed only on changed-counter windows.
 - LTP/WBA: Window is the first no-FFN reject in `json_db`; legal collapse reduces future no-FFN transport area and proposal count (`19 -> 16` per run) while preserving exact verifier parity. For no-reject prompts the window never opens, so any wall delta is not legal evidence of this move.
 - trust: {F:0.88,G:0.34,R:0.84}
+
+**LM-488 Changed-counter ABBA confirms no-FFN fallback-on-reject on a longer JSON corridor [shared/ml]**
+- status: MEASURED; supports fallback-on-reject as a causal collapse move for rejecting windows
+- claim tested: The `gen16` localized fallback-on-reject win should survive a longer `gen32` transport on the prompt class that actually rejects.
+- evidence: Qwen3.5-9B Q4_K_M, JSON prompt, `gen32/gamma4`, layers `0,2,4`, rank32, `draft_no_ffn_layers=0,2`, in-process `--simulate-self-spec-gpu-pipeline-draft-no-ffn-fallback-abba=1`. Summary on `/tmp/qwen35_noffn_abba_json_gen32.log`: parity `4/4`; off rows rejects/proposed `10/78`, on rows `4/70`; overlap total `4522.997 -> 3625.777`; changed-counter aggregate `+19.84%`.
+- diagnosis: This is stronger evidence than the separate-process gen32 run because behavior counters changed in the expected direction inside one warm process. It validates the LTP/WBA collapse move for a rejecting no-FFN route. It still does not justify broad no-FFN entry: the route must first be selected by a certified local window.
+- LTP/WBA: Window is the first verified reject in the JSON no-FFN corridor. Legal move collapses future draft transport to baseline lowrank from the exact correction boundary. Potential descends in `(rejects, proposed_tokens, replay_area, wall)` while preserving exact parity. Dual frame is pure/baseline lowrank outside the certified window.
+- trust: {F:0.88,G:0.32,R:0.84}
+
+**LM-489 Fallback-on-reject does not make static no-FFN route selection safe [shared/ml]**
+- status: MEASURED; blocks static no-FFN promotion
+- claim tested: Enabling fallback-on-reject may be enough to use static no-FFN/manual routes across a mixed prompt suite.
+- evidence: Qwen3.5-9B Q4_K_M, 4-prompt hybrid route sweep, `gen16/gamma4`, layers `0,2,4`, rank32, split1, `draft_noffn_fallback=reject`. Route oracle was small: `pure_overlap_total=2500.636`, `oracle_overlap_total=2479.568`, `oracle_delta=0.84%`. Static route rows still had severe losses on `json_db`: manual `-34.26%`, `noffn_0` `-42.46%`. Positive rows were narrow no-reject cases: `repeat_fact` manual `+1.85%`, main `noffn_0` `+1.48%`. Log: `/tmp/qwen35_route_selector_fallback_hybrid_gen16.log`.
+- diagnosis: Fallback-on-reject is a collapse move after a defect, not an entry policy. Static no-FFN remains unsafe because entering the wrong route can still pay replay/rebuild tax before the collapse. The controller must combine a feature-selected entry window with reject-boundary collapse and pure fallback.
+- LTP/WBA: Entry window and collapse window are distinct. Fallback only handles the collapse window; it does not certify the initial transport corridor. Legal routing requires both: a local entry trigger that lowers expected work and a reject-triggered collapse whose potential strictly descends after defect detection.
+- trust: {F:0.86,G:0.34,R:0.82}
