@@ -29,6 +29,7 @@ prefill_ms = 0.0
 decode_ms = 0.0
 source_history_save_ms = 0.0
 token_cache_hit = false
+cache_route = "none"
 
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
@@ -267,11 +268,12 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled
     cache_tokenizer = output_hit.tokenizer_id
     output_ids = output_hit.output_token_ids
     output_text = output_hit.generated_text
+    cache_route = ML::GGUF::Qwen35ServingRoute::DIRECT_OUTPUT
     source_history_lookup_ms = (Time.instant - preflight_t0).total_milliseconds
     tokenize_ms = source_history_lookup_ms
     STDOUT << "\nPrompt cache direct output fast-forward hit before tokenizer/weight load: emitted #{output_ids.size} cached tokens\n"
     total_ms = (Time.instant - request_t0).total_milliseconds
-    STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{cached_prompt_ids.not_nil!.size} output_tokens=#{output_ids.size}\n"
+    STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{cached_prompt_ids.not_nil!.size} output_tokens=#{output_ids.size}\n"
 
     puts "\n=== Generated token ids ==="
     puts output_ids.inspect
@@ -306,10 +308,11 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled
           if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, source.token_ids, n_gen, full_history_len)
             output_ids = source.token_ids[ids.size, n_gen]
             output_text = cached_text
+            cache_route = "source_history_direct_output"
             tokenize_ms = source_history_lookup_ms
             STDOUT << "\nPrompt cache output fast-forward hit before tokenizer/weight load: emitted #{output_ids.size} cached tokens\n"
             total_ms = (Time.instant - request_t0).total_milliseconds
-            STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
+            STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
             puts "\n=== Generated token ids ==="
             puts output_ids.inspect
@@ -381,9 +384,10 @@ if prompt_cache_preweight_fast_forward_enabled && (source = source_history_hit)
          cached_prefix_len)
       if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, source.token_ids, n_gen, full_history_len)
         output_ids = source.token_ids[ids.size, n_gen]
+        cache_route = "source_history_direct_output"
         STDOUT << "\nPrompt cache output fast-forward hit before weight load: emitted #{output_ids.size} cached tokens\n"
         total_ms = (Time.instant - request_t0).total_milliseconds
-        STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
+        STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
         puts "\n=== Generated token ids ==="
         puts output_ids.inspect
@@ -495,6 +499,7 @@ if prompt_cache_enabled
             output_ids = route.output_token_ids
             prompt_cache_reused = true
             prompt_cache_fast_forward_used = true
+            cache_route = route.route
             STDOUT << "\nPrompt cache fast-forward hit: emitted #{output_ids.size} cached tokens, route=#{route.route}, reused_state_prefix=#{cached_prefix_len}, restore took #{(cache_restore_ms / 1000.0).round(3)}s\n"
           else
             STDOUT << "\nPrompt cache fast-forward validation failed after restore; exact fallback remains active\n"
@@ -524,6 +529,7 @@ if prompt_cache_enabled
       if top = replay.next_token_id
         output_ids << top
         prompt_cache_reused = true
+        cache_route = "prompt_state_restore"
         STDOUT << "\nPrompt cache hit: reused #{replay.reused_prefix_len}/#{ids.size} prompt tokens, replayed #{replay.replayed_tokens}, restore+replay took #{dt.round(3)}s\n"
       else
         STDOUT << "\nPrompt cache hit had no suffix logits; falling back to normal prefill\n"
@@ -1132,7 +1138,7 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
 end
 
 total_ms = (Time.instant - request_t0).total_milliseconds
-STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
+STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
 puts "\n=== Generated token ids ==="
 puts output_ids.inspect

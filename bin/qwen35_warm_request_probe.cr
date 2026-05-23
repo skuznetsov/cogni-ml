@@ -779,5 +779,8 @@ mid = totals.size // 2
 avg_total = timings.sum(&.total_ms) / timings.size
 avg_tok = timings.sum(&.output_tokens).to_f
 avg_ms_per_tok = timings.sum(&.total_ms) / avg_tok
+route_counts = Hash(String, Int32).new(0)
+timings.each { |timing| route_counts[timing.route] += 1 }
+route_summary = route_counts.keys.sort.map { |route| "#{route}=#{route_counts[route]}" }.join(",")
 
-puts "  aggregate: avg_total_ms=#{avg_total.round(3)} p50_total_ms=#{totals[mid].round(3)} avg_ms_per_tok=#{avg_ms_per_tok.round(4)} p50_restore_ms=#{restores[mid].round(3)} p50_prefill_ms=#{prefills[mid].round(3)} p50_decode_ms=#{decode_totals[mid].round(3)}"
+puts "  aggregate: avg_total_ms=#{avg_total.round(3)} p50_total_ms=#{totals[mid].round(3)} avg_ms_per_tok=#{avg_ms_per_tok.round(4)} p50_restore_ms=#{restores[mid].round(3)} p50_prefill_ms=#{prefills[mid].round(3)} p50_decode_ms=#{decode_totals[mid].round(3)} routes=#{route_summary}"

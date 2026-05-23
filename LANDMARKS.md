@@ -15551,3 +15551,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The route helper's dual frame is fail-closed: missing direct terminal certificate increases latency by restoring state, but preserves exactness and avoids unchecked cached id emission. This is the intended LTP/WBA fallback behavior.
 - LTP/WBA: Window is a terminal serving-route request whose direct certificate window is absent. Transport switches from certificate ids to the exact-known-span state corridor. Legal move is state fast-forward fallback after exact artifact validation. Boundary safety is restored-prefix/next-token checks and zero verifier/prefill/decode work only after restore succeeds. Potential descends in `(unchecked_id_risk, invalid_boundary_risk)` at the cost of higher restore wall.
 - trust: {F:0.90,G:0.52,R:0.86}
+
+**LM-512 Cache route attribution is visible in product and warm-probe summaries [shared/ml]**
+- status: IMPLEMENTED; observability hook for exact session-cache routing
+- claim tested: Product and benchmark summaries should expose the chosen cache route so direct hits, state continuation, fallback, and ordinary generation are distinguishable in logs and matrix rows.
+- evidence: `bin/qwen35_generate.cr` now emits `cache_route=...` in request summaries. `bin/qwen35_warm_request_probe.cr` aggregate rows now emit route counts as `routes=...`. Verification passed: no-codegen builds for `bin/qwen35_generate.cr` and `bin/qwen35_warm_request_probe.cr`; `git diff --check`; release warm-probe smoke produced aggregate `routes=direct_output=3`, p50 `0.012ms`.
+- diagnosis: This is not a speed change by itself. It is a WBA measurement hook: route policy can now be optimized by observed route mix instead of inferred from wall time alone.
+- LTP/WBA: Window is each exact cache-serving decision. Transport is the route label through request and aggregate summaries. Legal move records attribution without changing inference state. Boundary safety is unchanged because only logging fields are added. Potential descends in `(route_ambiguity, attribution_work, policy_misclassification_risk)`.
+- trust: {F:0.88,G:0.62,R:0.84}
