@@ -2314,3 +2314,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_471:** Build gate passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_route_stability_cols2 crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`. Tiny 9B route-scoreboard smoke printed the new columns and preserved parity. The longer 9B `gen32` suite with tree2-first + `reject_offramp_after=1` measured route-oracle headroom of `24.33%` (`pure_overlap_total=12066.821`, `oracle_overlap_total=9131.047`), but static route masks had severe prompt-specific losses: `manual` min `-89.59%`, `noffn_0_2` min `-46.51%`, `noffn_0` min `-52.70%`.
 
 **next_update_471:** Do not promote a static no-FFN route. Next exact self-draft speed work should implement a pre-submit/block-level route selector using already available route features: prompt class, low-rank residuals, top1/top2 margin, reject-margin history, acceptance streaks, and replay risk. The router must fail closed to `pure` or exact fallback and be judged by oracle-gap capture with zero parity failures.
+
+**decision_update_472:** Joined route-oracle winners with cheap prompt features. `RouteScoreRow` now carries residual mean/p90/max and token repeat/bigram/unique rates; `self_spec_route_oracle` prints those fields next to each best route.
+
+**evidence_update_472:** Build gate passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_route_oracle_features_build2 crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`. Tiny Qwen3.5-9B route-oracle smoke printed non-`na` feature columns for main and suite prompts and preserved parity.
+
+**next_update_472:** Use the oracle+feature table to test route-selector hypotheses. Required metric: captured oracle gap with zero parity failures and bounded worst-case loss versus pure. Do not promote residual-only or repeat-only thresholds until they beat static routes on a mixed suite.

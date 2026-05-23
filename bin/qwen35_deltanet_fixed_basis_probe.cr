@@ -220,7 +220,7 @@ private alias PromptTokenSet = NamedTuple(name: String, token_ids: Array(Int32))
 private alias BlockSurrogateSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, parity: Bool, verifier_parity: Bool, accept_rate: Float64, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, chunks: Int32, full_accept_chunks: Int32, correction_steps: Int32, draft_top2_hit_rate: Float64, draft_top5_hit_rate: Float64, draft_margin_min: Float64, baseline_decode_ms: Float64, draft_ms: Float64, verifier_ms: Float64, self_seq_decode_ms: Float64, ideal_overlap_decode_ms: Float64, cpu_seq_speedup: Float64, ideal_overlap_speedup: Float64, hidden_cos_mean: Float64, hidden_cos_min: Float64, rel_rmse: Float64, delta_rel_rmse: Float64)
 private alias BlockSurrogateTreeSuiteRow = NamedTuple(prompt: String, block: String, mode: String, rank: Int32, gamma: Int32, top_k: Int32, prefill_seed: Bool, branch_verify: Bool, select_advance: Bool, warmup_tokens: Int32, prefill_seed_tokens: Int32, tree_tokens: Int32, parity: Bool, full_rescue_chunks: Int32, chunks: Int32, misses: Int32, draft_steps: Int32, top1_rate: Float64, topk_rate: Float64, avg_rank_branch_tokens: Float64, avg_full_branch_tokens: Float64, avg_rank_branch_tokens_total: Float64, avg_full_branch_tokens_total: Float64, branch_tokens_rank: Int32, branch_tokens_full: Int32, branch_verify_attempts: Int32, branch_verify_wasted_attempts: Int32, branch_verify_corrections: Int32, branch_verify_ms: Float64, branch_verify_fork_ms: Float64, branch_verify_forward_ms: Float64, correction_steps: Int32, hidden_cos_mean: Float64, rel_rmse: Float64)
 private alias HybridRoute = NamedTuple(name: String, noffn: Set(Int32)?, updown: Set(Int32)?)
-private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64)
+private alias RouteScoreRow = NamedTuple(prompt: String, mode: String, split: String, route: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, tree2_margin_min: Float64, tree2_reject_margin_min: Float64, residual_mean: Float64?, residual_p90: Float64?, residual_max: Float64?, repeat_rate: Float64?, bigram_repeat_rate: Float64?, unique_rate: Float64?)
 private alias DraftBodyScoreRow = NamedTuple(prompt: String, mode: String, split: String, body: String, updown_rank: Int32?, parity: Bool, accept_rate: Float64, rejections: Int32, draft_updown_chunks: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64)
 private alias RiskOfframpScoreRow = NamedTuple(prompt: String, mode: String, split: String, threshold: String, parity: Bool, accept_rate: Float64, rejections: Int32, plain_speedup: Float64, overlap_ms: Float64, plain_exact_ms: Float64, draft_wait_ms: Float64, replay_ms: Float64, risk_hits: Int32, delayed_blocks: Int32, delayed_tokens: Int32, margin_min: Float64, reject_margin_min: Float64)
 private alias MtpSelfDraftFusionRow = NamedTuple(index: Int32, exact: Int32, self_id: Int32, self_second_id: Int32, mtp_rank: Int32, self_hit: Bool, self_top2_hit: Bool, mtp_hit: Bool, mtp_k2_hit: Bool, union_hit: Bool, union_k2_hit: Bool, agreement: Bool, union_size: Int32, union_k2_size: Int32, mtp_first_attempts: Int32, self_first_attempts: Int32)
@@ -10158,7 +10158,13 @@ private def append_route_score(rows : Array(RouteScoreRow),
                                draft_split : Int32?,
                                updown_rank : Int32?,
                                pipe,
-                               accept_rate : Float64)
+                               accept_rate : Float64,
+                               residual_mean : Float64? = nil,
+                               residual_p90 : Float64? = nil,
+                               residual_max : Float64? = nil,
+                               repeat_rate : Float64? = nil,
+                               bigram_repeat_rate : Float64? = nil,
+                               unique_rate : Float64? = nil)
   rows << {
     prompt:                  prompt_name,
     mode:                    mode,
@@ -10175,6 +10181,12 @@ private def append_route_score(rows : Array(RouteScoreRow),
     replay_ms:               pipe[:replay_ms],
     tree2_margin_min:        pipe[:tree2_margin_min],
     tree2_reject_margin_min: pipe[:tree2_reject_margin_min],
+    residual_mean:           residual_mean,
+    residual_p90:            residual_p90,
+    residual_max:            residual_max,
+    repeat_rate:             repeat_rate,
+    bigram_repeat_rate:      bigram_repeat_rate,
+    unique_rate:             unique_rate,
   }
 end
 
@@ -10554,6 +10566,10 @@ private def route_score(row : RouteScoreRow, baseline_overlap : Float64?) : Floa
   speed_component + (row[:accept_rate] / 1000.0) - (row[:replay_ms] / 10000.0)
 end
 
+private def optional_route_float(value : Float64?) : String
+  value.nil? ? "na" : value.not_nil!.round(4).to_s
+end
+
 private def print_route_scoreboard(rows : Array(RouteScoreRow), limit : Int32 = 30)
   return if rows.empty?
   baselines = {} of String => Float64
@@ -10681,7 +10697,7 @@ private def print_route_oracle_scoreboard(rows : Array(RouteScoreRow), limit : I
     groups[key] << row
   end
 
-  picks = [] of NamedTuple(prompt: String, mode: String, split: String, route: String, updown: String, accept_rate: Float64, baseline_ms: Float64, best_ms: Float64, delta: Float64, replay_ms: Float64, margin_min: Float64, reject_margin_min: Float64, rejections: Int32)
+  picks = [] of NamedTuple(prompt: String, mode: String, split: String, route: String, updown: String, accept_rate: Float64, baseline_ms: Float64, best_ms: Float64, delta: Float64, replay_ms: Float64, margin_min: Float64, reject_margin_min: Float64, rejections: Int32, residual_mean: Float64?, residual_p90: Float64?, residual_max: Float64?, repeat_rate: Float64?, bigram_repeat_rate: Float64?, unique_rate: Float64?)
   pure_total = 0.0
   best_total = 0.0
   groups.each do |key, group|
@@ -10705,14 +10721,20 @@ private def print_route_oracle_scoreboard(rows : Array(RouteScoreRow), limit : I
       margin_min:        best[:tree2_margin_min],
       reject_margin_min: best[:tree2_reject_margin_min],
       rejections:        best[:rejections],
+      residual_mean:     best[:residual_mean],
+      residual_p90:      best[:residual_p90],
+      residual_max:      best[:residual_max],
+      repeat_rate:       best[:repeat_rate],
+      bigram_repeat_rate: best[:bigram_repeat_rate],
+      unique_rate:       best[:unique_rate],
     }
   end
 
   total_delta = pure_total > 0.0 ? (pure_total - best_total) * 100.0 / pure_total : 0.0
   puts "self_spec_route_oracle prompts=#{picks.size} pure_overlap_total=#{pure_total.round(3)} oracle_overlap_total=#{best_total.round(3)} oracle_delta%=#{total_delta.round(2)} limit=#{limit}"
-  puts "rank prompt mode split best_route updown accept% baseline_ms best_ms delta% replay_ms margin_min reject_margin_min rejections"
+  puts "rank prompt mode split best_route updown accept% baseline_ms best_ms delta% replay_ms margin_min reject_margin_min rejections residual_mean residual_p90 residual_max repeat_rate bigram_repeat_rate unique_rate"
   picks.sort_by { |row| -row[:delta] }.first(limit).each_with_index do |row, i|
-    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:route]} #{row[:updown]} #{row[:accept_rate].round(2)} #{row[:baseline_ms].round(3)} #{row[:best_ms].round(3)} #{row[:delta].round(2)} #{row[:replay_ms].round(3)} #{row[:margin_min].round(4)} #{row[:reject_margin_min].round(4)} #{row[:rejections]}"
+    puts "#{i + 1} #{row[:prompt]} #{row[:mode]} #{row[:split]} #{row[:route]} #{row[:updown]} #{row[:accept_rate].round(2)} #{row[:baseline_ms].round(3)} #{row[:best_ms].round(3)} #{row[:delta].round(2)} #{row[:replay_ms].round(3)} #{row[:margin_min].round(4)} #{row[:reject_margin_min].round(4)} #{row[:rejections]} #{optional_route_float(row[:residual_mean])} #{optional_route_float(row[:residual_p90])} #{optional_route_float(row[:residual_max])} #{optional_route_float(row[:repeat_rate])} #{optional_route_float(row[:bigram_repeat_rate])} #{optional_route_float(row[:unique_rate])}"
   end
 end
 
@@ -11875,6 +11897,8 @@ if rank = simulate_logit_rank
       exact_refresh_note += " draft_exact_refresh_prefix=#{ProbeRuntime.gpu_draft_exact_refresh_prefix}" if ProbeRuntime.gpu_draft_exact_refresh_prefix > 0
       exact_refresh_note += " draft_exact_refresh_offsets=#{ProbeRuntime.gpu_draft_exact_refresh_offsets.join(',')}" unless ProbeRuntime.gpu_draft_exact_refresh_offsets.empty?
       residual_router_thresholds = self_spec_residual_router_thresholds(thresholds, simulate_self_spec_gpu_pipeline_residual_router_pass_threshold)
+      main_route_residual_stats = route_residual_stats(layer_vectors, layer_bases, rank, calib_count, thresholds)
+      main_value_stats = self_spec_prompt_value_stats(token_ids, calib_count)
       main_residual_router_note = ""
       main_residual_router_skip = false
       if residual_router_enabled
@@ -12041,7 +12065,9 @@ if rank = simulate_logit_rank
                 attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
                 puts "self_spec_gpu_pipeline_hybrid layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
-                append_route_score(route_score_rows, "main", "gamma=#{pipeline_gamma}", route, draft_split, route_updown_rank, pipe, accept_rate)
+                append_route_score(route_score_rows, "main", "gamma=#{pipeline_gamma}", route, draft_split, route_updown_rank, pipe, accept_rate,
+                  main_route_residual_stats[:mean], main_route_residual_stats[:p90], main_route_residual_stats[:max],
+                  main_value_stats[:repeat_rate], main_value_stats[:bigram_repeat_rate], main_value_stats[:unique_rate])
               end
             end
           end
@@ -12068,7 +12094,9 @@ if rank = simulate_logit_rank
                 attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
                 puts "self_spec_gpu_pipeline_hybrid layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
-                append_route_score(route_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", route, draft_split, route_updown_rank, pipe, accept_rate)
+                append_route_score(route_score_rows, "main", "schedule=#{pipeline_schedule.join(',')}", route, draft_split, route_updown_rank, pipe, accept_rate,
+                  main_route_residual_stats[:mean], main_route_residual_stats[:p90], main_route_residual_stats[:max],
+                  main_value_stats[:repeat_rate], main_value_stats[:bigram_repeat_rate], main_value_stats[:unique_rate])
               end
             end
           end
@@ -12178,6 +12206,8 @@ if rank = simulate_logit_rank
             "#{il}:#{basis_rank_note(suite_layer_bases[il], rank)}"
           end
           puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} token_vectors=#{suite_token_ids.size} calib_tokens=#{suite_calib_count} heldout_tokens=#{suite_token_ids.size - suite_calib_count} layer_basis_effective_ranks=#{suite_rank_notes.join(' ')}"
+          suite_route_residual_stats = route_residual_stats(suite_layer_vectors, suite_layer_bases, rank, suite_calib_count, thresholds)
+          suite_value_stats = self_spec_prompt_value_stats(suite_token_ids, suite_calib_count)
           if simulate_self_spec_gpu_pipeline_route_features
             puts prompt_route_feature_note(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds)
             prompt_route_layer_feature_notes(suite_prompt[:name], sorted_simulate_logit_layers, rank, suite_token_ids.size, suite_calib_count, suite_layer_vectors, suite_layer_bases, thresholds).each { |line| puts line }
@@ -12242,7 +12272,9 @@ if rank = simulate_logit_rank
                     attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
                     puts "self_spec_gpu_pipeline_suite_hybrid name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
-                    append_route_score(route_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}", route, draft_split, route_updown_rank, pipe, accept_rate)
+                    append_route_score(route_score_rows, suite_prompt[:name], "gamma=#{pipeline_gamma}", route, draft_split, route_updown_rank, pipe, accept_rate,
+                      suite_route_residual_stats[:mean], suite_route_residual_stats[:p90], suite_route_residual_stats[:max],
+                      suite_value_stats[:repeat_rate], suite_value_stats[:bigram_repeat_rate], suite_value_stats[:unique_rate])
                   end
                 end
               end
@@ -12269,7 +12301,9 @@ if rank = simulate_logit_rank
                     attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                 agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
                     puts "self_spec_gpu_pipeline_suite_hybrid name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} schedule=#{pipeline_schedule.join(',')}#{split_note}#{route_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
-                    append_route_score(route_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", route, draft_split, route_updown_rank, pipe, accept_rate)
+                    append_route_score(route_score_rows, suite_prompt[:name], "schedule=#{pipeline_schedule.join(',')}", route, draft_split, route_updown_rank, pipe, accept_rate,
+                      suite_route_residual_stats[:mean], suite_route_residual_stats[:p90], suite_route_residual_stats[:max],
+                      suite_value_stats[:repeat_rate], suite_value_stats[:bigram_repeat_rate], suite_value_stats[:unique_rate])
                   end
                 end
               end
