@@ -738,6 +738,7 @@ Useful Qwen environment switches:
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
 | `QWEN35_PROMPT_TOKEN_CACHE_OFF=1` | Disable tokenized-prompt cache lookup/save while keeping prompt-state cache enabled. |
 | `QWEN35_PROMPT_CACHE_FAST_FORWARD=1` | With prompt cache and source-history enabled, save and use validated post-span state artifacts so exact session-cache hits can emit cached spans without verifier recompute. Default off; falls back when source prefix, token hash, or artifact validation fails. |
+| `QWEN35_PROMPT_CACHE_PREWEIGHT_FAST_FORWARD_OFF=1` | Diagnostic switch: disable pre-weight terminal fast-forward exits so `qwen35_generate` can exercise the post-weight serving-route/state-restore path. Default off; normal product routing still tries zero-GGUF/zero-weight terminal hits first. |
 | `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC=recurrent-bf16` | Store validated fast-forward state artifacts in compressed v2 BF16 recurrent format. KV rows remain raw. Default is raw; `recurrent-int8` is available only with the explicit Metal INT8 gate. |
 | `QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK=8` | Block size for `recurrent-int8` prompt-cache artifacts. Ignored for raw/BF16. |
 | `QWEN35_PROMPT_CACHE_LIVE_KV_ARTIFACTS=1` | Store prompt-cache artifacts in v3 live-KV format: full recurrent state plus only live full-attention KV rows. This is opt-in while broader validation continues. |

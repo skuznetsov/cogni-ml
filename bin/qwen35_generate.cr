@@ -10,6 +10,7 @@ require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_prompt_cache"
+require "../src/ml/gguf/qwen35_serving_route"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
 
@@ -56,6 +57,7 @@ model_prompt = if messages = chat_messages
 prompt_cache_enabled = ENV["QWEN35_PROMPT_CACHE"]? == "1"
 prompt_cache_source_history_enabled = ENV["QWEN35_PROMPT_CACHE_SOURCE_HISTORY"]? == "1"
 prompt_cache_fast_forward_enabled = prompt_cache_enabled && prompt_cache_source_history_enabled && ENV["QWEN35_PROMPT_CACHE_FAST_FORWARD"]? == "1"
+prompt_cache_preweight_fast_forward_enabled = prompt_cache_fast_forward_enabled && ENV["QWEN35_PROMPT_CACHE_PREWEIGHT_FAST_FORWARD_OFF"]? != "1"
 prompt_token_cache_enabled = prompt_cache_enabled && ENV["QWEN35_PROMPT_TOKEN_CACHE_OFF"]? != "1"
 prompt_cache_full_hit_min_gen = (ENV["QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN"]? || "64").to_i
 prompt_cache_artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?.try(&.downcase)
@@ -254,7 +256,7 @@ output_ids = [] of Int32
 output_text = nil.as(String?)
 cached_prompt_ids = nil.as(Array(Int32)?)
 
-if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
+if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled
   preflight_t0 = Time.instant
   cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
   cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
@@ -364,7 +366,7 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && source_history
   source_history_lookup_ms = (Time.instant - source_lookup_t0).total_milliseconds
 end
 
-if prompt_cache_fast_forward_enabled && (source = source_history_hit)
+if prompt_cache_preweight_fast_forward_enabled && (source = source_history_hit)
   replay_start = ids.size
   source_remaining = source.token_ids.size - replay_start
   if source.token_ids.size > replay_start &&
@@ -469,18 +471,31 @@ if prompt_cache_enabled
            source.token_ids,
            cached_prefix_len)
         if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, source.token_ids, n_gen, full_history_len)
-          cached_prefix = source.token_ids[0, cached_prefix_len]
           tstart = Time.instant
           reuse_state = fast_hit.max_seq == state.max_seq ? state : nil
-          replay = cache_store.not_nil!.restore_and_replay_suffix(fast_hit, w, cached_prefix, reuse_state: reuse_state)
+          cached_output_ids = source.token_ids[ids.size, n_gen]
+          route = ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span(
+            cache_store.not_nil!,
+            w,
+            cache_model,
+            session_id,
+            model_prompt,
+            cached_output_ids,
+            fast_hit,
+            source.token_ids,
+            full_history_len: full_history_len,
+            continuation_required: true,
+            turn_id: turn_id,
+            reuse_state: reuse_state,
+          )
           cache_restore_ms = (Time.instant - tstart).total_milliseconds
-          if replay.replayed_tokens == 0 && replay.next_token_id == source.token_ids[full_history_len - 1]
+          if replay = route.replay
             state = replay.state
             pos = cached_prefix_len
-            output_ids = source.token_ids[ids.size, n_gen]
+            output_ids = route.output_token_ids
             prompt_cache_reused = true
             prompt_cache_fast_forward_used = true
-            STDOUT << "\nPrompt cache fast-forward hit: emitted #{output_ids.size} cached tokens, reused_state_prefix=#{cached_prefix_len}, restore took #{(cache_restore_ms / 1000.0).round(3)}s\n"
+            STDOUT << "\nPrompt cache fast-forward hit: emitted #{output_ids.size} cached tokens, route=#{route.route}, reused_state_prefix=#{cached_prefix_len}, restore took #{(cache_restore_ms / 1000.0).round(3)}s\n"
           else
             STDOUT << "\nPrompt cache fast-forward validation failed after restore; exact fallback remains active\n"
             output_ids.clear

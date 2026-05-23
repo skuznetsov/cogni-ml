@@ -28,11 +28,13 @@ module ML::GGUF
                                 output_token_ids : Array(Int32),
                                 exact_entry : Qwen35PromptCache::Entry,
                                 full_history_tokens : Array(Int32),
+                                full_history_len : Int32 = full_history_tokens.size,
                                 continuation_required : Bool = false,
                                 turn_id : String? = nil,
                                 prefer_metal : Bool = Qwen35Metal.available?,
                                 reuse_state : Qwen35CPU::State? = nil) : Result
       raise ArgumentError.new("output_token_ids must not be empty") if output_token_ids.empty?
+      raise ArgumentError.new("full_history_len out of range") if full_history_len <= 0 || full_history_len > full_history_tokens.size
 
       unless continuation_required
         hit = store.lookup_output_fast_forward(
@@ -48,7 +50,7 @@ module ML::GGUF
         end
       end
 
-      unless Qwen35PromptCache.exact_known_span_entry_valid?(exact_entry, full_history_tokens, output_token_ids.size)
+      unless Qwen35PromptCache.exact_known_span_entry_valid?(exact_entry, full_history_tokens, output_token_ids.size, full_history_len)
         raise "exact cached span validation mismatch"
       end
 
