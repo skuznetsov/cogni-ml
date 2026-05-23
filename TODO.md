@@ -2568,3 +2568,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_518:** Gates passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_resident_session_use_build crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_resident_session_use_generate_build crystal build --no-codegen bin/qwen35_generate.cr --error-trace`; `git diff --check`; release build of `bin/qwen35_warm_request_probe.cr`. Active-cursor smoke through `Qwen35ResidentSession` measured p50 total `0.002ms`, p50 restore/prefill/decode `0.0`, and `routes=state_fast_forward_active_cursor=5`.
 
 **next_update_518:** Next product step: expose a small resident server/CLI harness around `Qwen35ResidentSession` so real requests can reuse Store/tokenizer/weights and hold active cursors across turns. Keep the existing one-shot CLI terminal direct-output route as the fast path for non-resident use.
+
+**decision_update_519:** Added `Qwen35ResidentSession#route_count(route)` and `#route_summary` so resident server/harness code can expose route counters without duplicating formatting logic.
+
+**evidence_update_519:** Gates passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_resident_session_summary_build crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace`; `git diff --check`.
+
+**next_update_519:** Build the resident session harness around this API next: load model/tokenizer/store once, process repeated cached requests through `Qwen35ResidentSession`, and print `route_summary` plus per-request wall timing.

@@ -38,6 +38,14 @@ module ML::GGUF
       @route_counts.dup
     end
 
+    def route_count(route : String) : Int64
+      @route_counts[route]
+    end
+
+    def route_summary : String
+      @route_counts.keys.sort.map { |route| "#{route}=#{@route_counts[route]}" }.join(",")
+    end
+
     def active_cursor? : Bool
       !@active_cursor.nil?
     end

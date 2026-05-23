@@ -15607,3 +15607,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This is the product boundary implied by the route policy gate: terminal paths emit ids, shared continuation restores copy for isolation, and only an owned active session cursor skips the copy.
 - LTP/WBA: Window is an exact continuation request for an active session. Transport is a session-owned cursor keyed by full-history/output hashes. Legal move consumes the cursor once; otherwise the route falls back to copy-safe shared Store restore. Boundary safety is no borrowed mutable Store state and route-count attribution. Potential descends in `(shared_copy_bytes, aliasing_risk, continuation_handoff_wall)`.
 - trust: {F:0.90,G:0.58,R:0.84}
+
+**LM-519 ResidentSession route counters have stable accessors [shared/ml]**
+- status: IMPLEMENTED; API polish for resident harnesses
+- claim tested: Resident serving code should not duplicate route-counter formatting.
+- evidence: Added `route_count(route)` and `route_summary` to `Qwen35ResidentSession`. Verification passed: no-codegen build of `bin/qwen35_warm_request_probe.cr`; `git diff --check`.
+- diagnosis: Small API cleanup, but it reduces benchmark/product drift when exposing route attribution.
+- LTP/WBA: Window is route-count reporting in resident callers. Transport is the session-owned counter map. Legal move exposes copy-safe count access and sorted summary formatting. Boundary safety is unchanged because no serving state is exposed.
+- trust: {F:0.82,G:0.54,R:0.78}
