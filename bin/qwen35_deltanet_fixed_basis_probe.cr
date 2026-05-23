@@ -8041,9 +8041,19 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   read_block = ->(block : GpuDraftBlock, limit : Int32, label : String) {
     active = block.submissions[0, limit]
     t_wait = Time.instant
+    waited_cmds = Set(UInt64).new
     active.each do |sub|
-      sub.pending_cmds.each(&.wait)
-      sub.cmd.wait
+      sub.pending_cmds.each do |cmd|
+        id = cmd.object_id
+        next if waited_cmds.includes?(id)
+        cmd.wait
+        waited_cmds << id
+      end
+      id = sub.cmd.object_id
+      unless waited_cmds.includes?(id)
+        sub.cmd.wait
+        waited_cmds << id
+      end
     end
     draft_wait_block_ms += (Time.instant - t_wait).total_milliseconds if attr_collect
     wba.try(&.mark("draft", "wait_block_#{label}", t_wait, Time.instant))
@@ -8135,9 +8145,19 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
   drain_block = ->(block : GpuDraftBlock?) {
     if b = block
+      waited_cmds = Set(UInt64).new
       b.submissions.each do |sub|
-        sub.pending_cmds.each(&.wait)
-        sub.cmd.wait
+        sub.pending_cmds.each do |cmd|
+          id = cmd.object_id
+          next if waited_cmds.includes?(id)
+          cmd.wait
+          waited_cmds << id
+        end
+        id = sub.cmd.object_id
+        unless waited_cmds.includes?(id)
+          sub.cmd.wait
+          waited_cmds << id
+        end
       end
     end
   }
