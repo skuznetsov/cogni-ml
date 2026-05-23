@@ -9,6 +9,7 @@ require "option_parser"
 
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_prompt_cache"
+require "../src/ml/gguf/qwen35_serving_route"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
@@ -445,46 +446,49 @@ def run_prompt_cache_serving_route_request(weights : ML::GGUF::Qwen35Weights,
                                            continuation_required : Bool,
                                            reuse_state : ML::GGUF::Qwen35CPU::State? = nil) : {RequestTiming, Array(Int32)}
   fast_forward = replay.fast_forward
+  request_t0 = Time.instant
+
+  state_prepare_ms = 0.0
+  route_reuse_state = nil.as(ML::GGUF::Qwen35CPU::State?)
   unless continuation_required
-    request_t0 = Time.instant
-    hit = fast_forward.store.lookup_output_fast_forward(
-      "warm-model",
-      "warm-request-probe",
-      replay.prompt,
-      fast_forward.output_ids.size,
-    )
-    if hit
-      raise "serving route direct-output token mismatch" unless hit.output_token_ids == fast_forward.output_ids
-      total_ms = (Time.instant - request_t0).total_milliseconds
-      output_ids = hit.output_token_ids
-      timing = RequestTiming.new(
-        total_ms,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        hit.prompt_token_count,
-        hit.output_token_count,
-        output_ids[0],
-        "direct_output",
-      )
-      return {timing, output_ids}
+    route_reuse_state = reuse_state
+  else
+    state = reuse_state || ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
+    raise "reused request state max_seq mismatch" if state.max_seq != max_seq
+    if prepare_state && reuse_state.nil?
+      prepare_t0 = Time.instant
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams, clear: false)
+      state_prepare_ms = (Time.instant - prepare_t0).total_milliseconds
     end
+    route_reuse_state = state
   end
 
-  timing, output_ids = run_prompt_cache_fast_forward_request(weights, fast_forward, max_seq, prepare_state, reuse_state)
+  result = ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span(
+    fast_forward.store,
+    weights,
+    "warm-model",
+    "warm-request-probe",
+    replay.prompt,
+    fast_forward.output_ids,
+    fast_forward.entry,
+    fast_forward.full_history_tokens,
+    continuation_required: continuation_required,
+    reuse_state: route_reuse_state,
+  )
+  total_ms = (Time.instant - request_t0).total_milliseconds
+  restore_ms = result.replay ? total_ms - state_prepare_ms : 0.0
+  output_ids = result.output_token_ids
   timing = RequestTiming.new(
-    timing.total_ms,
-    timing.tokenize_ms,
-    timing.state_prepare_ms,
-    timing.restore_ms,
-    timing.prefill_ms,
-    timing.decode_ms,
-    timing.prompt_tokens,
-    timing.output_tokens,
-    timing.first_token,
-    continuation_required ? "state_fast_forward_continuation" : "state_fast_forward_fallback",
+    total_ms,
+    0.0,
+    state_prepare_ms,
+    restore_ms,
+    0.0,
+    0.0,
+    result.prompt_token_count,
+    output_ids.size,
+    output_ids[0],
+    result.route,
   )
   {timing, output_ids}
 end
