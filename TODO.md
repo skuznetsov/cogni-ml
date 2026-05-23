@@ -2248,3 +2248,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_455:** Build and focused Metal spec passed. Stateful 3-prompt Q4_K_M target + UD-Q4_K_XL sidecar gate, `tokens=16 gamma=8 --mtp-spec-wall-speed-mode`, preserved `parity_ok=3/3` and the same counters (`draft_tokens=4/accepted=1/rejections=1/verifier_calls=1/verifier_tokens=2/fallback_tokens=46/margin_skips=2`). Suite `mtp_ms` improved from `51.416` to `39.224`; total wall stayed neutral because most tokens still fell back to exact decode.
 
 **next_update_455:** The fused proposal body is no longer the main blocker in speed-mode. Next exact branches should reduce fallback/verifier area: improve pre-submit routing so low-margin windows skip MTP entirely earlier, raise accepted-token density with better proposal quality, or fuse verifier/fallback boundaries. Keep `QWEN35_MTP_FFN_HEAD_FUSE` opt-in until a multi-prompt wall gate shows a net win.
+
+**decision_update_456:** Retested dynamic lazy-stage MTP topK after stateful FFN+head fusion and removed the branch. The branch used top2 only for the first low-margin candidate in a lazy stage and top1 for later candidates when top2 accounting/rescue/promotion was disabled.
+
+**evidence_update_456:** Temporary `QWEN35_MTP_DYNAMIC_STAGE_TOPK=1` preserved parity/counters, and profile confirmed `head_top2 count 2 -> 1`, but the speed signal was not robust: one 3-prompt suite improved `mtp_ms=47.642 -> 41.046`, the next regressed `50.974 -> 54.772`; focused reason profile only moved total profiled MTP stages `156.747ms -> 155.893ms`. Code was removed.
+
+**next_update_456:** Do not revisit standalone dynamic topK unless paired with a larger proposal-quality/resident-head change. Current bottleneck remains fallback/verifier area and low accepted-token density, not the second candidate's top2 call.
