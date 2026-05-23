@@ -678,8 +678,10 @@ The request summaries include `route=direct_output` or
 `0.010 ms` for the terminal direct route and p50 `0.661 ms` for the
 continuation-state route on the same 16-token cached span.
 For fail-closed diagnostics, `--serving-route-direct-miss` omits the direct
-output certificate while keeping the state artifact, so terminal requests must
-fall back to `route=state_fast_forward_fallback`.
+output certificate while keeping the exact-known-span artifact. Terminal
+requests then fall back to
+`route=source_history_direct_output_fallback` without restoring state; requests
+that need continuation state still use the validated state corridor.
 The route decision is also available to product code as
 `ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span` in
 `src/ml/gguf/qwen35_serving_route.cr`.

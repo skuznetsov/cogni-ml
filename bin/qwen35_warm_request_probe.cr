@@ -54,7 +54,7 @@ parser = OptionParser.new do |p|
   p.on("--prompt-cache-direct-output", "Measure resident direct output-certificate lookup + validation with no state restore") { prompt_cache_direct_output = true }
   p.on("--prompt-cache-serving-route", "Measure resident serving route: direct terminal hit, or state fast-forward when continuation state is required") { prompt_cache_serving_route = true }
   p.on("--serving-route-continuation", "With --prompt-cache-serving-route, require continuation state and bypass terminal direct-output emission") { serving_route_continuation = true }
-  p.on("--serving-route-direct-miss", "With --prompt-cache-serving-route, omit the direct output certificate so terminal requests exercise state fallback") { serving_route_direct_miss = true }
+  p.on("--serving-route-direct-miss", "With --prompt-cache-serving-route, omit the direct output certificate so terminal requests exercise exact source-span fallback") { serving_route_direct_miss = true }
   p.on("--resident-states N", "Resident Store state-cache entries for --prompt-cache-replay") { |v| resident_states = v.to_i }
   p.on("--artifact-codec CODEC", "Prompt-cache artifact codec for cache modes (raw, recurrent-bf16, recurrent-int8)") { |v| artifact_codec = v == "raw" ? nil : v }
   p.on("--artifact-codec-block N", "Prompt-cache recurrent-int8 artifact block size (default: 8)") { |v| artifact_codec_block = v.to_i }

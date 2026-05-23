@@ -11,6 +11,7 @@ module ML::GGUF
     extend self
 
     DIRECT_OUTPUT                    = "direct_output"
+    SOURCE_HISTORY_DIRECT_FALLBACK   = "source_history_direct_output_fallback"
     STATE_FAST_FORWARD_CONTINUATION  = "state_fast_forward_continuation"
     STATE_FAST_FORWARD_FALLBACK      = "state_fast_forward_fallback"
 
@@ -54,6 +55,15 @@ module ML::GGUF
         raise "exact cached span validation mismatch"
       end
 
+      prompt_token_count = full_history_len - output_token_ids.size
+      raise "serving route output span underflows full history" if prompt_token_count < 0
+      expected_output_ids = full_history_tokens[prompt_token_count, output_token_ids.size]
+      raise "serving route source-history output mismatch" unless expected_output_ids == output_token_ids
+
+      unless continuation_required
+        return Result.new(SOURCE_HISTORY_DIRECT_FALLBACK, output_token_ids.dup, prompt_token_count, nil)
+      end
+
       cached_prefix_tokens = full_history_tokens[0, exact_entry.prefix_len]
       replay = store.restore_and_replay_suffix(
         exact_entry,
@@ -67,7 +77,7 @@ module ML::GGUF
       raise "serving route restored next token mismatch" unless replay.next_token_id == output_token_ids[-1]
 
       route = continuation_required ? STATE_FAST_FORWARD_CONTINUATION : STATE_FAST_FORWARD_FALLBACK
-      Result.new(route, output_token_ids.dup, full_history_tokens.size - output_token_ids.size, replay)
+      Result.new(route, output_token_ids.dup, prompt_token_count, replay)
     end
   end
 end
