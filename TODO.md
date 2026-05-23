@@ -2356,3 +2356,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_479:** Build gate passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_hybrid_cycle_dump_build crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`. Tiny Qwen3.5-9B smoke wrote `/tmp/qwen35_hybrid_cycles_smoke.jsonl` with `10` route-labeled chunk rows and policies for `pure`, `manual`, and `noffn_0_2`.
 
 **next_update_479:** Add a chunk-level route-oracle/selector analyzer over cycle dumps. The prompt-level broad route was refuted at `gen32`; the next viable route selector must choose per chunk/block and collapse to pure outside certified windows.
+
+**decision_update_480:** Added `scripts/qwen35_route_cycle_oracle.py`, a chunk-level analyzer for route-labeled cycle dumps. It groups cycles by prompt and generated position, keeps `pure` as fallback, and reports route picks plus pure-vs-oracle aggregate delta.
+
+**evidence_update_480:** Smoke on `/tmp/qwen35_hybrid_cycles_smoke.jsonl` produced `cycles=10`, `groups=4`, `oracle_delta=0.51%`, and route picks across `pure`, `manual`, and `noffn_0_2`. This is diagnostic only: cycle wall is proportional from aggregate pipe timings, not exact per-chunk timing.
+
+**next_update_480:** Run hybrid route sweeps with cycle dump on the mixed suite and analyze chunk-level oracle headroom. If chunk oracle is materially higher than prompt-level selector, implement a default-off chunk route selector; otherwise pivot away from no-FFN route masking.

@@ -15295,3 +15295,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This unlocks the next selector frame: chunk/block-level route oracle and controller diagnostics. It does not itself change speed or policy.
 - LTP/WBA: Window is each emitted chunk cycle. Transport records route, accepted count, reject index, and proportional work estimates along the chunk corridor. Boundary safety is unchanged exact verifier parity. Potential target is now chunk-level losses/replay rather than prompt-level mean delta.
 - trust: {F:0.88,G:0.42,R:0.84}
+
+**LM-480 Chunk-level route-cycle oracle analyzer added [shared/ml]**
+- status: IMPLEMENTED diagnostic; no runtime policy change
+- claim tested: After prompt-level broad routing failed at `gen32`, the next measurable frame is chunk-level route selection over route-labeled cycle dumps.
+- evidence: Added `scripts/qwen35_route_cycle_oracle.py`. It reads route-labeled JSONL cycle dumps, groups by prompt and generated position, keeps `pure` as the fallback candidate, and reports best route per cycle plus pure-vs-oracle aggregate delta. Smoke on `/tmp/qwen35_hybrid_cycles_smoke.jsonl` produced `cycles=10`, `groups=4`, `oracle_delta=0.51%`, with picks across `pure`, `manual`, and `noffn_0_2`.
+- diagnosis: This is the correct analyzer for the next LTP/WBA layer: local chunk windows rather than prompt-level route masks. Current cycle wall is proportional from aggregate pipe timings, so use it for ranking hypotheses, not final speed claims.
+- LTP/WBA: Window is prompt-position chunk. Transport is route choice through that chunk. Legal move chooses best available route or pure fallback. Boundary safety remains exact parity of source rows. Potential is chunk-level wall/replay loss.
+- trust: {F:0.86,G:0.40,R:0.82}
