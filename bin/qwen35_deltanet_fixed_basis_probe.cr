@@ -7749,8 +7749,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   raise "GPU pipeline risk offramp margin must be non-negative" if (guard = risk_offramp_margin) && guard < 0.0
   raise "GPU pipeline reject offramp threshold must be non-negative" if reject_offramp_after < 0
   raise "GPU pipeline risk offramp currently cannot combine with tree2_anywhere/tree2_staged" if risk_offramp_margin && (tree2_anywhere || tree2_staged_tokens > 0)
-  if reject_offramp_after > 0 && (tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || mtp_k2_on_reject)
-    raise "GPU pipeline reject offramp is currently a plain-route experiment and cannot combine with tree2/risk/MTP routes"
+  if reject_offramp_after > 0 && (tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || mtp_k2_on_reject)
+    raise "GPU pipeline reject offramp currently supports only the plain route and tree2-first, not tree2-anywhere/staged/risk/MTP routes"
   end
   raise "GPU pipeline tree2 branch guard currently cannot combine with tree2_anywhere/tree2_staged/tree2_margin_guard" if tree2_branch_guard && (tree2_anywhere || tree2_staged_tokens > 0 || tree2_margin_guard)
   raise "GPU pipeline tree2 branch guard requires verifier backup" if tree2_branch_guard && !use_verifier_backup
@@ -8781,6 +8781,14 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           verifier_tokens_count += 1
         end
 
+        if finish_reject_offramp.call("tree2_first_#{chunks}")
+          overlap_ms += (Time.instant - t_tree2).total_milliseconds
+          wba.try(&.mark("pipeline", "tree2_first_#{chunks}", t_tree2, Time.instant))
+          accept_history << (accepted_draft_tokens - chunk_accepted_start)
+          reject_index_history << chunk_reject_index
+          next
+        end
+
         current_schedule_index = 0
         t_resync = Time.instant
         draft_resyncs += 1
@@ -9602,6 +9610,20 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       if serial_emitted_tokens < gen_tokens
         serial_resync_base = copy_owned_resync_base.call(serial_verifier_state, cycle_start_pos, "serial_tree2_first_#{serial_chunks}")
         serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, expected, cycle_start_pos, serial_verifier_state)[0]
+        if reject_offramp_after > 0 && serial_rejections >= reject_offramp_after
+          while serial_emitted_tokens < gen_tokens
+            serial_expected = serial_target_next_id
+            serial_exact_ids << serial_expected
+            serial_emitted_ids << serial_expected
+            serial_last_token = serial_expected
+            serial_pos_last = prompt_ids.size + serial_emitted_tokens
+            serial_emitted_tokens += 1
+            if serial_emitted_tokens < gen_tokens
+              serial_target_next_id = ML::GGUF::Qwen35CPU.forward_top1(weights, serial_last_token, serial_pos_last, serial_verifier_state)[0]
+            end
+          end
+          next
+        end
         serial_schedule_index = 0
         serial_current_block = submit_seed_owned.call(serial_resync_base, serial_last_token, serial_pos_last, "self_spec_serial_tree2_first_#{serial_chunks}", Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
         serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_tree2_first_#{serial_chunks}")
