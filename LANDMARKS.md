@@ -15287,3 +15287,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Feature-gated routing remains valid, but broad `noffn_0_2` is a short-generation artifact. Longer generation needs narrower windows or a chunk-level/multi-feature selector. Do not implement the broad `noffn_0_2 residual_max` runtime policy.
 - LTP/WBA: The gen16 window was not recompute-safe under longer transport; after extending the corridor to `gen32`, earlier potential components increased sharply through losses/replay. Dual frame must collapse to pure unless a narrower certified window fires.
 - trust: {F:0.86,G:0.34,R:0.82}
+
+**LM-479 Hybrid route sweeps now emit route-labeled chunk cycle dumps [shared/ml]**
+- status: IMPLEMENTED diagnostic; no runtime policy change
+- claim tested: Chunk-level route selection needs per-route cycle records, not only aggregate prompt-level route rows.
+- evidence: Hybrid sweep loops now call `dump_self_spec_gpu_pipeline_cycles` when `--simulate-self-spec-gpu-pipeline-dump-cycles=PATH` is set, labeling policies as `self_lowrank/<gamma-or-schedule>/route=<route>`. Build passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_hybrid_cycle_dump_build crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`. Tiny Qwen3.5-9B smoke wrote `/tmp/qwen35_hybrid_cycles_smoke.jsonl` with `10` JSONL rows and route-labeled policies for `pure`, `manual`, and `noffn_0_2`.
+- diagnosis: This unlocks the next selector frame: chunk/block-level route oracle and controller diagnostics. It does not itself change speed or policy.
+- LTP/WBA: Window is each emitted chunk cycle. Transport records route, accepted count, reject index, and proportional work estimates along the chunk corridor. Boundary safety is unchanged exact verifier parity. Potential target is now chunk-level losses/replay rather than prompt-level mean delta.
+- trust: {F:0.88,G:0.42,R:0.84}

@@ -2350,3 +2350,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_478:** The `gen32` mixed-suite gate refutes the broad `gen16` candidate. Static `noffn_0_2` had `losses=7`, mean `-16.34%`, min `-55.94%`. Direct raw check of `noffn_0_2 residual_max >= 0.5163` selected `10/13` but had `wins=4`, `losses=6`, total `-14.35%`. Best gen32 zero-loss rows were narrow `manual` windows, e.g. `manual residual_max >= 0.8018` selected `2/13`, total `+1.97%`. Raw aggregation over both `gen16` repeats plus `gen32` (`39` prompt-runs) shows the best recurring zero-loss policy is `manual residual_mean >= 0.1504` / `bigram_repeat_rate <= 53.1915`, selected `9/39`, aggregate `+1.75%`, worst selected delta `+1.67%`.
 
 **next_update_478:** Do not implement broad `noffn_0_2 residual_max >= 0.5163`. Next selector work should be either multi-feature narrow windows or chunk-level dynamic routing, with pure as the dual frame. Runtime selector promotion requires surviving `gen32` without losses and capturing more than the current narrow `+1.75%` aggregate.
+
+**decision_update_479:** Wired hybrid route sweeps into `--simulate-self-spec-gpu-pipeline-dump-cycles`. Cycle dump policies now include `route=<route>` for `pure`, `manual`, `noffn_*`, and updown variants.
+
+**evidence_update_479:** Build gate passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_hybrid_cycle_dump_build crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`. Tiny Qwen3.5-9B smoke wrote `/tmp/qwen35_hybrid_cycles_smoke.jsonl` with `10` route-labeled chunk rows and policies for `pure`, `manual`, and `noffn_0_2`.
+
+**next_update_479:** Add a chunk-level route-oracle/selector analyzer over cycle dumps. The prompt-level broad route was refuted at `gen32`; the next viable route selector must choose per chunk/block and collapse to pure outside certified windows.
