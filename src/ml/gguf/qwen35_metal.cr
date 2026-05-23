@@ -193,6 +193,7 @@ module ML
         @@top1_reduce_tiles_batch_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
         @@top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline?
+        @@store_top1_token_id_pipeline : ML::Metal::ComputePipeline?
         @@bf16_gemv_pipeline : ML::Metal::ComputePipeline?
         @@bf16_q_gate_gemv_pipeline : ML::Metal::ComputePipeline?
         @@mtp_attn_gate_pipeline : ML::Metal::ComputePipeline?
@@ -983,6 +984,12 @@ module ML
         private def self.top2_reduce_f16_rows_pipeline : ML::Metal::ComputePipeline
           @@top2_reduce_f16_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_top2_reduce_f16_rows") {
             ML::Metal::ComputePipeline.new("qwen35_top2_reduce_f16_rows", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.store_top1_token_id_pipeline : ML::Metal::ComputePipeline
+          @@store_top1_token_id_pipeline ||= ML::Metal::PipelineCache.get("qwen35_store_top1_token_id") {
+            ML::Metal::ComputePipeline.new("qwen35_store_top1_token_id", GEMM_Q56K_SOURCE)
           }
         end
 
@@ -7847,6 +7854,8 @@ module ML
                                            token_embd_qw : QuantWeight? = nil,
                                            token_ids_buf : ML::MetalBuffer? = nil,
                                            token_index : Int32 = 0,
+                                           top1_store_token_ids_buf : ML::MetalBuffer? = nil,
+                                           top1_store_index : Int32 = -1,
                                            command_queue_name : String? = nil,
                                            append_command_buffer : ML::Metal::CommandBuffer? = nil) : DecodeWaveSubmission?
           # Two-lane callers can request fresh scratch so multiple submitted waves
@@ -7874,6 +7883,8 @@ module ML
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
+                top1_store_token_ids_buf: top1_store_token_ids_buf,
+                top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
                 append_command_buffer: append_command_buffer)
             end
@@ -7901,6 +7912,8 @@ module ML
                 token_embd_qw: token_embd_qw,
                 token_ids_buf: token_ids_buf,
                 token_index: token_index,
+                top1_store_token_ids_buf: top1_store_token_ids_buf,
+                top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
                 append_command_buffer: append_command_buffer)
             end
@@ -7909,6 +7922,8 @@ module ML
           top1 = true if top2
           out_pipe = gemv_pipeline_for(output_qw)
           return nil if emit_head && out_pipe.nil?
+          return nil if top1_store_token_ids_buf && (!emit_head || !top1)
+          return nil if top1_store_token_ids_buf && top1_store_index < 0
 
           ML::Metal::Device.init!
 
@@ -8636,6 +8651,18 @@ module ML
                   end
                   reduce_top1_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
                   reduce_top1_enc.end_encoding
+                end
+
+                if store_buf = top1_store_token_ids_buf
+                  Profile.trace("head.store_top1_token") do
+                    store_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    store_enc.set_pipeline(store_top1_token_id_pipeline)
+                    store_enc.set_buffer(top1_id_buf.not_nil!, 0)
+                    store_enc.set_buffer(store_buf, 1, ML::Metal::BufferAccess::Write)
+                    store_enc.set_value(top1_store_index.to_u32, 2)
+                    store_enc.dispatch_threadgroups({1, 1, 1}, {1, 1, 1})
+                    store_enc.end_encoding
+                  end
                 end
               else
                 Profile.trace("head.full") do

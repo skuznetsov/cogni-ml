@@ -1814,6 +1814,46 @@ module ML::GGUF
       {logits.index(maxv).not_nil!.to_i32, maxv}
     end
 
+    # Greedy exact decode suffix with token handoff kept on the GPU.
+    # Each wave writes its top1 id into `token_ids[i + 1]`; the next wave reads
+    # that id as its embedding input. This is exact greedy decoding, but avoids
+    # a CPU readback/wait between suffix tokens.
+    def forward_top1_chain_gpu(weights : Qwen35Weights,
+                               token_id : Int32,
+                               pos : Int32,
+                               state : State,
+                               steps : Int32) : Array(Int32)?
+      return [] of Int32 if steps <= 0
+      {% unless flag?(:cpu_only) %}
+        return nil unless Qwen35Metal.available?
+
+        token_ids_buf = ML::MetalBuffer.new((steps + 1).to_i64 * sizeof(UInt32))
+        token_ptr = token_ids_buf.contents.as(Pointer(UInt32))
+        token_ptr[0] = token_id.to_u32
+
+        submissions = [] of Qwen35Metal::DecodeWaveSubmission
+        steps.times do |i|
+          submission = forward_decode_wave_routed_async(weights, 0, pos + i, state,
+            top1: true,
+            fresh_scratch: true,
+            token_ids_buf: token_ids_buf,
+            token_index: i,
+            top1_store_token_ids_buf: token_ids_buf,
+            top1_store_index: i + 1)
+          return nil if submission.nil?
+          submissions << submission
+        end
+        submissions.each do |submission|
+          submission.pending_cmds.each(&.wait)
+          submission.cmd.wait
+        end
+
+        Array(Int32).new(steps) { |i| token_ptr[i + 1].to_i32 }
+      {% else %}
+        nil
+      {% end %}
+    end
+
     def forward_top2(weights : Qwen35Weights, token_id : Int32, pos : Int32,
                      state : State) : {Int32, Float32, Int32, Float32}
       if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top2: true)
@@ -2642,6 +2682,8 @@ module ML::GGUF
                                                  lowrank_updown_layer_indices : Set(Int32)? = nil,
                                                  token_ids_buf : ML::MetalBuffer? = nil,
                                                  token_index : Int32 = 0,
+                                                 top1_store_token_ids_buf : ML::MetalBuffer? = nil,
+                                                 top1_store_index : Int32 = -1,
                                                  command_queue_name : String? = nil,
                                                  append_command_buffer : ML::Metal::CommandBuffer? = nil)
       {% unless flag?(:cpu_only) %}
@@ -2743,6 +2785,8 @@ module ML::GGUF
           token_embd_qw: weights.token_embd,
           token_ids_buf: token_ids_buf,
           token_index: token_index,
+          top1_store_token_ids_buf: top1_store_token_ids_buf,
+          top1_store_index: top1_store_index,
           command_queue_name: command_queue_name,
           append_command_buffer: append_command_buffer)
       {% else %}

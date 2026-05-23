@@ -1273,3 +1273,11 @@ kernel void qwen35_top2_reduce_f16_rows(
         second_value[row] = group_second;
     }
 }
+
+kernel void qwen35_store_top1_token_id(
+    device const uint* top_id    [[buffer(0)]],
+    device       uint* token_ids [[buffer(1)]],
+    constant     uint& index     [[buffer(2)]])
+{
+    token_ids[index] = top_id[0];
+}
