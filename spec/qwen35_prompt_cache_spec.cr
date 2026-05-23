@@ -147,6 +147,46 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "reuses parsed manifests without exposing mutable cache state" do
+    root = File.tempname("qwen35-manifest-cache")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      first = store.save_tokenized_prompt(
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text: "first",
+        token_ids: [1_i32],
+      )
+
+      cached = store.tokenized_prompt_entries
+      cached.size.should eq(1)
+      cached[0].token_ids << 99_i32
+      cached.clear
+      store.tokenized_prompt_entries[0].token_ids.should eq([1_i32])
+
+      second = ML::GGUF::Qwen35PromptCache::TokenizedPromptEntry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::TOKENIZED_PROMPT_RUNTIME_ID,
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text_hash: ML::GGUF::Qwen35PromptCache.prompt_text_hash("second"),
+        token_hash: ML::GGUF::Qwen35PromptCache.token_hash([2_i32]),
+        token_count: 1,
+        token_ids: [2_i32],
+        created_at_unix: first.created_at_unix + 1,
+      )
+      File.open(store.tokenized_prompt_manifest_path, "a") do |file|
+        second.to_json(file)
+        file << '\n'
+      end
+
+      store.lookup_tokenized_prompt("model-a", "tok-a", "second").try(&.token_ids).should eq([2_i32])
+      store.tokenized_prompt_entries.size.should eq(2)
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "stores direct output fast-forward certificates with hash validation" do
     root = File.tempname("qwen35-output-fast-forward")
     Dir.mkdir_p(root)

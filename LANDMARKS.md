@@ -15439,3 +15439,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The first chunk-local features are not sufficient. They can preserve exact output, but either enter bad no-FFN chunks or become a costly pure-equivalent. Before adding more ABBA plumbing, mine cycle dumps for a more discriminative local trigger or pivot to non-no-FFN mathematical reductions.
 - LTP/WBA: The window detector is still weak. Legal transport exists, but the potential does not descend: broad windows increase rejects/replay area, while strict windows collapse to pure and increase top2 overhead. Dual frame remains pure lowrank.
 - trust: {F:0.76,G:0.30,R:0.68}
+
+**LM-498 Prompt-cache manifest parse cache removes repeated JSONL scans without changing exact cache semantics [shared/ml]**
+- status: IMPLEMENTED; exact session/cache replay speed cleanup
+- claim tested: Repeated same-process prompt/session cache lookups should not rescan and reparse unchanged JSONL manifests, but cache hits must remain fail-closed on file changes and must not expose mutable resident entries.
+- evidence: Added per-manifest fingerprint caches in `Qwen35PromptCache::Store` for state entries, source histories, and tokenized prompts. Fingerprint is `(byte_size, mtime_unix, mtime_nanosecond)`, store writes invalidate, and external manifest changes reparse. Returned entries are cloned. Verification: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_manifest_cache_spec crystal spec spec/qwen35_prompt_cache_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `19 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_prompt_cache_manifest_build crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace` passed. Synthetic 5k tokenized-manifest timing: cold parse `70.744ms`; warm cached reads `0.391/1.578/0.281/0.280/0.306ms`.
+- diagnosis: This is a small exact request-level speedup, not a decode-kernel breakthrough. It matters for long-lived servers and repeated session/cache hits because manifest lookup overhead becomes a pure control-plane tax once artifacts and tokenized prompts are hot.
+- LTP/WBA: Window is an unchanged manifest fingerprint. Transport is parsed manifest entries across repeated lookup calls. Legal move is cache reuse with cloned return values. Boundary safety is file fingerprint invalidation plus write-side cache reset. Potential descends in `(manifest_bytes_parsed, JSON_objects_parsed, lookup_wall, mutation_risk)`. Dual frame is full JSONL reparse when the fingerprint changes or file disappears.
+- trust: {F:0.90,G:0.52,R:0.88}
+
+**LM-499 Conservative chunk-route selector mining finds no simple no-loss no-FFN trigger [shared/ml]**
+- status: DIAGNOSTIC; supports no-FFN selector refutation
+- claim tested: Existing self-spec cycle dumps may contain a simple runtime-available feature that safely selects no-FFN chunk routes without losses.
+- evidence: Added `scripts/qwen35_route_cycle_selector_mine.py`. It mines only pre-route features available to a live controller: prompt/category/gamma/position and previous pure-route chunk outcome. On `/tmp/qwen35_route_cycles_small_gen32_suffix.jsonl`, no zero-loss policy was emitted. With `--allow-losses`, the best simple `noffn_0_2` condition selected `12` chunks, had `1` loss, total delta `+1.97%`, median `+8.31%`, min `-22.25%`.
+- diagnosis: The apparent chunk-oracle headroom is too brittle for scalar/simple no-FFN triggers. Continue using no-FFN as diagnostic substrate only; promotion needs a stronger trigger or same-run ABBA evidence.
+- LTP/WBA: The candidate local windows do not certify safe transport. Because at least one selected window increases wall substantially, the lexicographic potential fails the no-loss gate and the dual frame remains pure lowrank.
+- trust: {F:0.72,G:0.30,R:0.70}

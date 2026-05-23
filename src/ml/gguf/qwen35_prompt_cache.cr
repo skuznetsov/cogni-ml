@@ -201,6 +201,11 @@ module ML::GGUF
         mtime_unix : Int64,
         mtime_nanosecond : Int32
 
+      private record ManifestFingerprint,
+        file_byte_size : Int64,
+        mtime_unix : Int64,
+        mtime_nanosecond : Int32
+
       def initialize(@root : String = Qwen35PromptCache.default_root,
                      resident_state_cache_entries : Int32? = nil)
         @manifest_path = File.join(@root, "manifest.jsonl")
@@ -212,6 +217,12 @@ module ML::GGUF
         @resident_state_cache = {} of String => Qwen35CPU::State
         @resident_state_cache_order = [] of String
         @validated_artifacts = {} of String => ArtifactFingerprint
+        @entry_manifest_fingerprint = nil.as(ManifestFingerprint?)
+        @entry_manifest_cache = [] of Entry
+        @source_history_manifest_fingerprint = nil.as(ManifestFingerprint?)
+        @source_history_manifest_cache = [] of SourceHistoryEntry
+        @tokenized_prompt_manifest_fingerprint = nil.as(ManifestFingerprint?)
+        @tokenized_prompt_manifest_cache = [] of TokenizedPromptEntry
       end
 
       def save(session_id : String,
@@ -429,20 +440,30 @@ module ML::GGUF
       end
 
       def entries : Array(Entry)
-        return [] of Entry unless File.exists?(@manifest_path)
+        fingerprint = manifest_fingerprint(@manifest_path)
+        unless fingerprint
+          @entry_manifest_fingerprint = nil
+          @entry_manifest_cache = [] of Entry
+          return [] of Entry
+        end
+        if @entry_manifest_fingerprint == fingerprint
+          return clone_entries(@entry_manifest_cache)
+        end
 
-        out = [] of Entry
+        parsed = [] of Entry
         File.each_line(@manifest_path) do |line|
           stripped = line.strip
           next if stripped.empty?
 
           begin
-            out << Entry.from_json(stripped)
+            parsed << Entry.from_json(stripped)
           rescue JSON::ParseException | KeyError
             # A corrupt manifest line must not produce a cache hit.
           end
         end
-        out
+        @entry_manifest_fingerprint = fingerprint
+        @entry_manifest_cache = parsed
+        clone_entries(parsed)
       end
 
       def save_source_history(session_id : String,
@@ -472,6 +493,7 @@ module ML::GGUF
           entry.to_json(file)
           file << '\n'
         end
+        @source_history_manifest_fingerprint = nil
         entry
       end
 
@@ -492,20 +514,30 @@ module ML::GGUF
       end
 
       def source_history_entries : Array(SourceHistoryEntry)
-        return [] of SourceHistoryEntry unless File.exists?(@source_history_manifest_path)
+        fingerprint = manifest_fingerprint(@source_history_manifest_path)
+        unless fingerprint
+          @source_history_manifest_fingerprint = nil
+          @source_history_manifest_cache = [] of SourceHistoryEntry
+          return [] of SourceHistoryEntry
+        end
+        if @source_history_manifest_fingerprint == fingerprint
+          return clone_source_history_entries(@source_history_manifest_cache)
+        end
 
-        out = [] of SourceHistoryEntry
+        parsed = [] of SourceHistoryEntry
         File.each_line(@source_history_manifest_path) do |line|
           stripped = line.strip
           next if stripped.empty?
 
           begin
-            out << SourceHistoryEntry.from_json(stripped)
+            parsed << SourceHistoryEntry.from_json(stripped)
           rescue JSON::ParseException | KeyError
             # A corrupt source-history line must not produce a replay source.
           end
         end
-        out
+        @source_history_manifest_fingerprint = fingerprint
+        @source_history_manifest_cache = parsed
+        clone_source_history_entries(parsed)
       end
 
       def save_tokenized_prompt(model_id : String,
@@ -527,6 +559,7 @@ module ML::GGUF
           entry.to_json(file)
           file << '\n'
         end
+        @tokenized_prompt_manifest_fingerprint = nil
         entry
       end
 
@@ -559,20 +592,30 @@ module ML::GGUF
       end
 
       def tokenized_prompt_entries : Array(TokenizedPromptEntry)
-        return [] of TokenizedPromptEntry unless File.exists?(@tokenized_prompt_manifest_path)
+        fingerprint = manifest_fingerprint(@tokenized_prompt_manifest_path)
+        unless fingerprint
+          @tokenized_prompt_manifest_fingerprint = nil
+          @tokenized_prompt_manifest_cache = [] of TokenizedPromptEntry
+          return [] of TokenizedPromptEntry
+        end
+        if @tokenized_prompt_manifest_fingerprint == fingerprint
+          return clone_tokenized_prompt_entries(@tokenized_prompt_manifest_cache)
+        end
 
-        out = [] of TokenizedPromptEntry
+        parsed = [] of TokenizedPromptEntry
         File.each_line(@tokenized_prompt_manifest_path) do |line|
           stripped = line.strip
           next if stripped.empty?
 
           begin
-            out << TokenizedPromptEntry.from_json(stripped)
+            parsed << TokenizedPromptEntry.from_json(stripped)
           rescue JSON::ParseException | KeyError
             # A corrupt tokenized-prompt line must not produce a token cache hit.
           end
         end
-        out
+        @tokenized_prompt_manifest_fingerprint = fingerprint
+        @tokenized_prompt_manifest_cache = parsed
+        clone_tokenized_prompt_entries(parsed)
       end
 
       def save_output_fast_forward(session_id : String,
@@ -671,6 +714,78 @@ module ML::GGUF
           entry.to_json(file)
           file << '\n'
         end
+        @entry_manifest_fingerprint = nil
+      end
+
+      private def clone_entries(entries : Array(Entry)) : Array(Entry)
+        entries.map { |entry| clone_entry(entry) }
+      end
+
+      private def clone_entry(entry : Entry) : Entry
+        Entry.new(
+          runtime_id: entry.runtime_id,
+          session_id: entry.session_id,
+          turn_id: entry.turn_id,
+          model_id: entry.model_id,
+          tokenizer_id: entry.tokenizer_id,
+          prompt_hash: entry.prompt_hash,
+          prefix_len: entry.prefix_len,
+          max_seq: entry.max_seq,
+          layer_count: entry.layer_count,
+          artifact_path: entry.artifact_path,
+          artifact_sha256: entry.artifact_sha256,
+          artifact_byte_size: entry.artifact_byte_size,
+          state_byte_size: entry.state_byte_size,
+          created_at_unix: entry.created_at_unix,
+          prompt_preview: entry.prompt_preview,
+          token_hash: entry.token_hash,
+          artifact_codec: entry.artifact_codec,
+          artifact_codec_block: entry.artifact_codec_block,
+          artifact_live_kv_tokens: entry.artifact_live_kv_tokens,
+          artifact_validation_kind: entry.artifact_validation_kind,
+          artifact_validation_steps: entry.artifact_validation_steps,
+          artifact_validation_hash: entry.artifact_validation_hash,
+          next_token_id: entry.next_token_id,
+          next_token_logit: entry.next_token_logit,
+        )
+      end
+
+      private def clone_source_history_entries(entries : Array(SourceHistoryEntry)) : Array(SourceHistoryEntry)
+        entries.map { |entry| clone_source_history_entry(entry) }
+      end
+
+      private def clone_source_history_entry(entry : SourceHistoryEntry) : SourceHistoryEntry
+        SourceHistoryEntry.new(
+          runtime_id: entry.runtime_id,
+          session_id: entry.session_id,
+          turn_id: entry.turn_id,
+          model_id: entry.model_id,
+          tokenizer_id: entry.tokenizer_id,
+          token_hash: entry.token_hash,
+          token_count: entry.token_count,
+          token_ids: entry.token_ids.dup,
+          created_at_unix: entry.created_at_unix,
+          generated_token_count: entry.generated_token_count,
+          generated_text: entry.generated_text,
+          generated_text_hash: entry.generated_text_hash,
+        )
+      end
+
+      private def clone_tokenized_prompt_entries(entries : Array(TokenizedPromptEntry)) : Array(TokenizedPromptEntry)
+        entries.map { |entry| clone_tokenized_prompt_entry(entry) }
+      end
+
+      private def clone_tokenized_prompt_entry(entry : TokenizedPromptEntry) : TokenizedPromptEntry
+        TokenizedPromptEntry.new(
+          runtime_id: entry.runtime_id,
+          model_id: entry.model_id,
+          tokenizer_id: entry.tokenizer_id,
+          prompt_text_hash: entry.prompt_text_hash,
+          token_hash: entry.token_hash,
+          token_count: entry.token_count,
+          token_ids: entry.token_ids.dup,
+          created_at_unix: entry.created_at_unix,
+        )
       end
 
       private def compatible?(entry : Entry,
@@ -696,6 +811,14 @@ module ML::GGUF
                                 prefix_len : Int32) : String
         bucket = Qwen35PromptCache.short_hash("#{model_id}\0#{tokenizer_id}")
         File.join(@root, "artifacts", bucket, "#{prefix_len}-#{prompt_hash.downcase}.qkv")
+      end
+
+      private def manifest_fingerprint(path : String) : ManifestFingerprint?
+        return nil unless File.exists?(path)
+
+        info = File.info(path)
+        mtime = info.modification_time
+        ManifestFingerprint.new(info.size, mtime.to_unix, mtime.nanosecond)
       end
 
       private def restore_resident_state(entry : Entry,
