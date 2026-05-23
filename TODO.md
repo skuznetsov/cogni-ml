@@ -2284,3 +2284,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_461:** Build and focused Metal spec passed. Chain probe showed raw blend is a real proposal-quality lever (`recursive top1/top2 2.08%/6.25%` -> `raw_blend0.25 7.29%/12.5%`). Wall probes preserved parity, and `promote0.5 + raw_blend0.25` raised accepted tokens from `3` to `10`, but speed regressed (`plain_speedup=0.930`) because verifier/replay cost dominated. Stage sweep did not rescue it (`stage1/2/3/4/8` all below plain).
 
 **next_update_461:** Keep raw-blend as a research knob, not speed-mode. The useful insight is that proposal quality can move; the next exact speed work must make verifier chunks cheaper or find a way to predict long accepted spans before paying verifier.
+
+**decision_update_462:** Retested recovery modes for raw-blend + top2-promotion. Rollback-log remains the least bad recovery frame; checkpoint replay does not rescue the branch.
+
+**evidence_update_462:** On the raw-blend policy (`accepted=10`, `verifier_calls=7`, `verifier_tokens=15`), rollback-log measured `plain_speedup=0.932`, checkpoint replay `0.924`, both `0.932`, and no recovery `0.913`. The branch is dominated by verifier area, not checkpoint/replay mode.
+
+**next_update_462:** Do not tune checkpoint recovery for raw-blend. If raw-blend is revisited, first reduce verifier submissions or build cheaper verifier chunks; otherwise it remains a proposal-quality research knob.

@@ -15152,3 +15152,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The hidden-transport trick is real for proposal quality, but the current exact verifier corridor cannot monetize the extra accepted tokens. Keep the flag as a default-off research knob. It becomes interesting again only with cheaper verifier chunks, resident proposal chains, or a controller that predicts long accepted spans before entering verifier.
 - LTP/WBA: Window is recursive MTP drift after the first accepted token. Transport blends along the hidden-state corridor without touching exact target state. Boundary safety is exact verifier parity. Potential descends in proposal mismatch count but increases verifier/replay area, so no wall promotion.
 - trust: {F:0.86,G:0.34,R:0.82}
+
+**LM-462 Raw-blend recovery bottleneck is verifier area, not checkpoint mode [shared/ml]**
+- status: REFUTED recovery retune; no code change
+- claim tested: The raw-blend + top2-promotion policy creates longer accepted prefixes, so recurrent checkpoint replay might compose better than rollback-log and recover enough replay cost to make the quality gain useful.
+- evidence: Q4_K_M target + UD-Q4_K_XL sidecar, `QWEN35_MTP_FFN_HEAD_FUSE=1`, `tokens=16 gamma=8 stage=2 lazy hidden_resync reject_offramp=1 top2_promote=0.5 raw_blend=0.25`, parity stayed true across recovery modes. Rollback-log: `plain_speedup=0.932`, `verifier_ms=729.157`, `backup_ms=7.892`, `replay_ms=92.131`. Checkpoint replay: `0.924`, `backup_ms=21.935`, `replay_ms=91.769`. Both: `0.932`. No recovery: `0.913`, `replay_ms=166.124`. Rollback-log remains least bad, but all modes are dominated by verifier work (`verifier_calls=7`, `verifier_tokens=15`) and fallback area.
+- diagnosis: Recovery mode is not the limiting factor for raw-blend. The quality branch needs cheaper verifier chunks or fewer verifier submissions; checkpoint retuning will not make it a speed path.
+- LTP/WBA: Window was reject recovery after a blended accepted prefix. Transport alternatives (rollback-log/checkpoint/replay) preserve exact state, but the verifier-area component of the potential dominates and does not descend. Dual frame remains rollback-log for this corridor.
+- trust: {F:0.84,G:0.30,R:0.80}
