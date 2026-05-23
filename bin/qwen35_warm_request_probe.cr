@@ -27,6 +27,8 @@ source_replay = false
 prompt_cache_replay = false
 prompt_cache_fast_forward = false
 prompt_cache_direct_output = false
+prompt_cache_serving_route = false
+serving_route_continuation = ENV["QWEN35_SERVING_ROUTE_CONTINUATION"]? == "1"
 resident_states = (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
 metal_profile = ENV["QWEN35_METAL_PROFILE"]? == "1"
 artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?
@@ -48,6 +50,8 @@ parser = OptionParser.new do |p|
   p.on("--prompt-cache-replay", "Measure real Store restore + exact source replay in a resident process") { prompt_cache_replay = true }
   p.on("--prompt-cache-fast-forward", "Measure trusted Store state restore + cached output emission with no verifier body") { prompt_cache_fast_forward = true }
   p.on("--prompt-cache-direct-output", "Measure resident direct output-certificate lookup + validation with no state restore") { prompt_cache_direct_output = true }
+  p.on("--prompt-cache-serving-route", "Measure resident serving route: direct terminal hit, or state fast-forward when continuation state is required") { prompt_cache_serving_route = true }
+  p.on("--serving-route-continuation", "With --prompt-cache-serving-route, require continuation state and bypass terminal direct-output emission") { serving_route_continuation = true }
   p.on("--resident-states N", "Resident Store state-cache entries for --prompt-cache-replay") { |v| resident_states = v.to_i }
   p.on("--artifact-codec CODEC", "Prompt-cache artifact codec for cache modes (raw, recurrent-bf16, recurrent-int8)") { |v| artifact_codec = v == "raw" ? nil : v }
   p.on("--artifact-codec-block N", "Prompt-cache recurrent-int8 artifact block size (default: 8)") { |v| artifact_codec_block = v.to_i }
@@ -69,8 +73,9 @@ raise "--warmups must be non-negative" unless warmups >= 0
 raise "--max-seq must be positive" unless max_seq > 0
 raise "--resident-states must be non-negative" unless resident_states >= 0
 raise "--artifact-codec-block must be positive" unless artifact_codec_block > 0
-mode_count = (source_replay ? 1 : 0) + (prompt_cache_replay ? 1 : 0) + (prompt_cache_fast_forward ? 1 : 0) + (prompt_cache_direct_output ? 1 : 0)
-raise "--source-replay, --prompt-cache-replay, --prompt-cache-fast-forward, and --prompt-cache-direct-output are mutually exclusive" if mode_count > 1
+mode_count = (source_replay ? 1 : 0) + (prompt_cache_replay ? 1 : 0) + (prompt_cache_fast_forward ? 1 : 0) + (prompt_cache_direct_output ? 1 : 0) + (prompt_cache_serving_route ? 1 : 0)
+raise "--source-replay, --prompt-cache-replay, --prompt-cache-fast-forward, --prompt-cache-direct-output, and --prompt-cache-serving-route are mutually exclusive" if mode_count > 1
+raise "--serving-route-continuation requires --prompt-cache-serving-route" if serving_route_continuation && !prompt_cache_serving_route
 
 struct RequestTiming
   getter total_ms : Float64
@@ -82,9 +87,10 @@ struct RequestTiming
   getter prompt_tokens : Int32
   getter output_tokens : Int32
   getter first_token : Int32
+  getter route : String
 
   def initialize(@total_ms, @tokenize_ms, @state_prepare_ms, @restore_ms, @prefill_ms, @decode_ms,
-                 @prompt_tokens, @output_tokens, @first_token)
+                 @prompt_tokens, @output_tokens, @first_token, @route = "")
   end
 
   def ms_per_output : Float64
@@ -128,6 +134,14 @@ struct PromptCacheDirectOutputTemplate
   getter output_ids : Array(Int32)
 
   def initialize(@store, @prompt, @output_ids)
+  end
+end
+
+struct PromptCacheServingRouteTemplate
+  getter fast_forward : PromptCacheFastForwardTemplate
+  getter prompt : String
+
+  def initialize(@fast_forward, @prompt)
   end
 end
 
@@ -332,6 +346,43 @@ def build_prompt_cache_direct_output_template(weights : ML::GGUF::Qwen35Weights,
   PromptCacheDirectOutputTemplate.new(fast_forward.store, prompt, fast_forward.output_ids)
 end
 
+def build_prompt_cache_serving_route_template(weights : ML::GGUF::Qwen35Weights,
+                                              tokenizer : ML::GGUF::Qwen35Tokenizer,
+                                              prompt : String,
+                                              n_gen : Int32,
+                                              max_seq : Int32,
+                                              prepare_state : Bool,
+                                              resident_states : Int32,
+                                              artifact_codec : String?,
+                                              artifact_codec_block : Int32,
+                                              artifact_live_kv : Bool) : PromptCacheServingRouteTemplate
+  fast_forward = build_prompt_cache_fast_forward_template(
+    weights,
+    tokenizer,
+    prompt,
+    n_gen,
+    max_seq,
+    prepare_state,
+    resident_states,
+    artifact_codec,
+    artifact_codec_block,
+    artifact_live_kv,
+  )
+  prompt_tokens_len = fast_forward.full_history_tokens.size - fast_forward.output_ids.size
+  prompt_token_ids = fast_forward.full_history_tokens[0, prompt_tokens_len]
+  fast_forward.store.save_output_fast_forward(
+    session_id: "warm-request-probe",
+    model_id: "warm-model",
+    tokenizer_id: "warm-tokenizer",
+    prompt_text: prompt,
+    prompt_token_ids: prompt_token_ids,
+    output_token_ids: fast_forward.output_ids,
+    generated_text: tokenizer.decode(fast_forward.output_ids),
+    exact_entry: fast_forward.entry,
+  )
+  PromptCacheServingRouteTemplate.new(fast_forward, prompt)
+end
+
 def run_request(weights : ML::GGUF::Qwen35Weights,
                 tokenizer : ML::GGUF::Qwen35Tokenizer,
                 prompt : String,
@@ -382,6 +433,58 @@ def run_request(weights : ML::GGUF::Qwen35Weights,
     ids.size,
     output_ids.size,
     output_ids[0],
+    "greedy",
+  )
+  {timing, output_ids}
+end
+
+def run_prompt_cache_serving_route_request(weights : ML::GGUF::Qwen35Weights,
+                                           replay : PromptCacheServingRouteTemplate,
+                                           max_seq : Int32,
+                                           prepare_state : Bool,
+                                           continuation_required : Bool,
+                                           reuse_state : ML::GGUF::Qwen35CPU::State? = nil) : {RequestTiming, Array(Int32)}
+  fast_forward = replay.fast_forward
+  unless continuation_required
+    request_t0 = Time.instant
+    hit = fast_forward.store.lookup_output_fast_forward(
+      "warm-model",
+      "warm-request-probe",
+      replay.prompt,
+      fast_forward.output_ids.size,
+    )
+    if hit
+      raise "serving route direct-output token mismatch" unless hit.output_token_ids == fast_forward.output_ids
+      total_ms = (Time.instant - request_t0).total_milliseconds
+      output_ids = hit.output_token_ids
+      timing = RequestTiming.new(
+        total_ms,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        hit.prompt_token_count,
+        hit.output_token_count,
+        output_ids[0],
+        "direct_output",
+      )
+      return {timing, output_ids}
+    end
+  end
+
+  timing, output_ids = run_prompt_cache_fast_forward_request(weights, fast_forward, max_seq, prepare_state, reuse_state)
+  timing = RequestTiming.new(
+    timing.total_ms,
+    timing.tokenize_ms,
+    timing.state_prepare_ms,
+    timing.restore_ms,
+    timing.prefill_ms,
+    timing.decode_ms,
+    timing.prompt_tokens,
+    timing.output_tokens,
+    timing.first_token,
+    continuation_required ? "state_fast_forward_continuation" : "state_fast_forward_fallback",
   )
   {timing, output_ids}
 end
@@ -409,6 +512,7 @@ def run_prompt_cache_direct_output_request(replay : PromptCacheDirectOutputTempl
     hit.prompt_token_count,
     hit.output_token_count,
     output_ids[0],
+    "direct_output",
   )
   {timing, output_ids}
 end
@@ -462,6 +566,7 @@ def run_source_replay_request(weights : ML::GGUF::Qwen35Weights,
     replay.prompt_tokens,
     source.size,
     source[0],
+    "source_replay",
   )
   {timing, source}
 end
@@ -515,6 +620,7 @@ def run_prompt_cache_replay_request(weights : ML::GGUF::Qwen35Weights,
     replay.prompt_tokens.size,
     source.size,
     source[0],
+    "prompt_cache_replay",
   )
   {timing, source}
 end
@@ -559,6 +665,7 @@ def run_prompt_cache_fast_forward_request(weights : ML::GGUF::Qwen35Weights,
     replay.full_history_tokens.size - output_ids.size,
     output_ids.size,
     output_ids[0],
+    "state_fast_forward",
   )
   {timing, output_ids}
 end
@@ -571,7 +678,9 @@ startup_ms = (Time.instant - startup_t0).total_milliseconds
 
 puts "qwen35_warm_request_probe"
 puts "  model=#{model_path}"
-mode = if prompt_cache_direct_output
+mode = if prompt_cache_serving_route
+         "prompt_cache_serving_route"
+       elsif prompt_cache_direct_output
          "prompt_cache_direct_output"
        elsif prompt_cache_fast_forward
          "prompt_cache_fast_forward"
@@ -582,13 +691,14 @@ mode = if prompt_cache_direct_output
        else
          "greedy"
        end
-puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
+puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} serving_route_continuation=#{serving_route_continuation} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
 puts "  startup_ms=#{startup_ms.round(1)}"
 
 source_template = source_replay ? build_source_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state) : nil
 prompt_cache_template = prompt_cache_replay ? build_prompt_cache_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 prompt_cache_direct_output_template = prompt_cache_direct_output ? build_prompt_cache_direct_output_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
+prompt_cache_serving_route_template = prompt_cache_serving_route ? build_prompt_cache_serving_route_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 reusable_request_state = nil.as(ML::GGUF::Qwen35CPU::State?)
 if reuse_request_state
   reusable_request_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -598,7 +708,9 @@ end
 warmup_ms = 0.0
 warmups.times do
   warm_t0 = Time.instant
-  if replay = prompt_cache_direct_output_template
+  if replay = prompt_cache_serving_route_template
+    run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, reusable_request_state)
+  elsif replay = prompt_cache_direct_output_template
     run_prompt_cache_direct_output_request(replay)
   elsif replay = prompt_cache_fast_forward_template
     run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, reusable_request_state)
@@ -622,7 +734,9 @@ timings = [] of RequestTiming
 {% end %}
 
 requests.times do |i|
-  timing, output_ids = if replay = prompt_cache_direct_output_template
+  timing, output_ids = if replay = prompt_cache_serving_route_template
+                         run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, reusable_request_state)
+                       elsif replay = prompt_cache_direct_output_template
                          run_prompt_cache_direct_output_request(replay)
                        elsif replay = prompt_cache_fast_forward_template
                          run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, reusable_request_state)
@@ -637,7 +751,7 @@ requests.times do |i|
   unless quiet
     puts "  request #{i + 1}: ids=#{output_ids.inspect}"
   end
-  puts "  request #{i + 1} summary: total_ms=#{timing.total_ms.round(3)} ms_per_tok=#{timing.ms_per_output.round(4)} tokenize_ms=#{timing.tokenize_ms.round(3)} state_prepare_ms=#{timing.state_prepare_ms.round(3)} restore_ms=#{timing.restore_ms.round(3)} prefill_ms=#{timing.prefill_ms.round(3)} decode_ms=#{timing.decode_ms.round(3)} prompt_tokens=#{timing.prompt_tokens} output_tokens=#{timing.output_tokens} first_token=#{timing.first_token}"
+  puts "  request #{i + 1} summary: total_ms=#{timing.total_ms.round(3)} ms_per_tok=#{timing.ms_per_output.round(4)} tokenize_ms=#{timing.tokenize_ms.round(3)} state_prepare_ms=#{timing.state_prepare_ms.round(3)} restore_ms=#{timing.restore_ms.round(3)} prefill_ms=#{timing.prefill_ms.round(3)} decode_ms=#{timing.decode_ms.round(3)} prompt_tokens=#{timing.prompt_tokens} output_tokens=#{timing.output_tokens} first_token=#{timing.first_token} route=#{timing.route}"
 end
 
 {% unless flag?(:cpu_only) %}

@@ -644,6 +644,40 @@ direct-output certificate hits as the terminal repeated-output path; use state
 fast-forward only when the caller needs a continuation state after the cached
 span.
 
+To exercise the resident serving route order directly, use
+`--prompt-cache-serving-route`. Terminal requests try the direct output
+certificate first. If the caller requires continuation state after the cached
+span, add `--serving-route-continuation`; this bypasses terminal id emission and
+uses the validated state fast-forward corridor instead:
+
+```sh
+./build/qwen35_warm_request_probe \
+  --prompt-cache-serving-route \
+  --gen 16 \
+  --requests 7 \
+  --warmups 2 \
+  --quiet \
+  "The capital of France is"
+
+./build/qwen35_warm_request_probe \
+  --prompt-cache-serving-route \
+  --serving-route-continuation \
+  --resident-states 1 \
+  --reuse-request-state \
+  --artifact-codec recurrent-bf16 \
+  --live-kv-artifacts \
+  --gen 16 \
+  --requests 7 \
+  --warmups 2 \
+  --quiet \
+  "The capital of France is"
+```
+
+The request summaries include `route=direct_output` or
+`route=state_fast_forward_continuation`. A local M2 Max smoke measured p50
+`0.010 ms` for the terminal direct route and p50 `0.661 ms` for the
+continuation-state route on the same 16-token cached span.
+
 For a repeatable raw-vs-compressed cache-artifact gate, use the matrix runner:
 
 ```sh
