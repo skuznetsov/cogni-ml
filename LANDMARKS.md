@@ -15136,3 +15136,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The threshold is not the main blocker. Lowering it increases accepted-token density but also verifier area, and the trade does not robustly improve wall. Do not retune the speed preset from `1.0` on this evidence.
 - LTP/WBA: Window was the MTP margin threshold. Lower thresholds widen the verifier transport corridor. Boundary safety held, but lexicographic potential did not robustly descend because verifier rows increased faster than fallback area decreased. Dual frame remains `min_margin=1.0` guarded speed-mode.
 - trust: {F:0.82,G:0.28,R:0.78}
+
+**LM-460 Top2 promotion improves short-suite acceptance but does not beat guarded speed-mode at gen32 [shared/ml]**
+- status: REFUTED default-preset change; no code change
+- claim tested: With stateful FFN+head fusion, using MTP top2 as the verifier candidate when `top1-top2 <= 0.5` should improve proposal quality enough to replace the guarded `min_margin=1.0` speed-mode preset.
+- evidence: Manual controller with `--mtp-spec-wall-top2-accounting --mtp-spec-wall-promote-top2-margin 0.5`, `stage=2 lazy hidden_resync rec_rollback_log reject_offramp=1`, Q4_K_M target + UD-Q4_K_XL sidecar, `QWEN35_MTP_FFN_HEAD_FUSE=1`, preserved parity. At `gen16`, top2 promotion improved acceptance (`accepted=3` vs speed-mode `accepted=1`) and measured near plain (`plain_speedup=0.998` vs speed-mode `0.990/0.991` in interleaved rows). At `gen32`, the same policy lost to guarded speed-mode: speed-mode `plain_speedup=0.990`, `accepted=1`, `verifier_calls=1`; top2 promotion `plain_speedup=0.988`, `accepted=3`, `verifier_calls=3`, `fallback_tokens=90`.
+- diagnosis: Top2 promotion can fix one low-margin candidate, but it also disables the cheap exact off-ramp and keeps paying verifier chunks. The longer generation falsifier shows the extra accepted tokens do not amortize verifier cost enough. Keep as diagnostic/research, not preset.
+- LTP/WBA: Window is low MTP margin with top2 as an alternate local proposal. The legal move is exact because verifier checks the promoted candidate, but it widens verifier transport. Potential descends in accepted tokens but not in verifier/wall area at gen32. Dual frame remains guarded speed-mode.
+- trust: {F:0.84,G:0.32,R:0.80}

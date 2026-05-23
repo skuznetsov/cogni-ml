@@ -2272,3 +2272,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_459:** With `QWEN35_MTP_FFN_HEAD_FUSE=1`, threshold sweep on the 3-prompt Q4_K_M + UD-Q4_K_XL gate stayed parity true. `0.5` had `draft_tokens=5/accepted=2/verifier_calls=2`; `1.0` had `draft_tokens=4/accepted=1/verifier_calls=1`. Interleaved runs showed `0.5` paying roughly `+110ms` verifier per suite for one extra accepted token and no stable wall gain.
 
 **next_update_459:** Stop threshold micro-tuning for now. The next useful branch should target proposal quality or verifier/fallback structure, not the scalar margin cutoff.
+
+**decision_update_460:** Retested top2 promotion after stateful FFN+head fusion. It improves short `gen16` acceptance but does not replace guarded speed-mode: at `gen32`, verifier cost outweighs the extra accepted tokens.
+
+**evidence_update_460:** With `QWEN35_MTP_FFN_HEAD_FUSE=1`, `--mtp-spec-wall-promote-top2-margin 0.5` plus top2 accounting preserved parity. `gen16` reached `accepted=3` and near-plain speed (`~0.998x`), but `gen32` measured `plain_speedup=0.988` versus guarded speed-mode `0.990`, with promotion paying `verifier_calls=3` instead of `1`.
+
+**next_update_460:** Do not change the speed-mode preset to top2 promotion. Top2 promotion remains a proposal-quality diagnostic; the next useful branch needs either cheaper verifier chunks or a proposal-quality improvement that increases accepted spans by more than one token.
