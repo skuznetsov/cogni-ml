@@ -30,6 +30,7 @@ prompt_cache_fast_forward = false
 prompt_cache_direct_output = false
 prompt_cache_serving_route = false
 serving_route_continuation = ENV["QWEN35_SERVING_ROUTE_CONTINUATION"]? == "1"
+serving_route_direct_miss = ENV["QWEN35_SERVING_ROUTE_DIRECT_MISS"]? == "1"
 resident_states = (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
 metal_profile = ENV["QWEN35_METAL_PROFILE"]? == "1"
 artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?
@@ -53,6 +54,7 @@ parser = OptionParser.new do |p|
   p.on("--prompt-cache-direct-output", "Measure resident direct output-certificate lookup + validation with no state restore") { prompt_cache_direct_output = true }
   p.on("--prompt-cache-serving-route", "Measure resident serving route: direct terminal hit, or state fast-forward when continuation state is required") { prompt_cache_serving_route = true }
   p.on("--serving-route-continuation", "With --prompt-cache-serving-route, require continuation state and bypass terminal direct-output emission") { serving_route_continuation = true }
+  p.on("--serving-route-direct-miss", "With --prompt-cache-serving-route, omit the direct output certificate so terminal requests exercise state fallback") { serving_route_direct_miss = true }
   p.on("--resident-states N", "Resident Store state-cache entries for --prompt-cache-replay") { |v| resident_states = v.to_i }
   p.on("--artifact-codec CODEC", "Prompt-cache artifact codec for cache modes (raw, recurrent-bf16, recurrent-int8)") { |v| artifact_codec = v == "raw" ? nil : v }
   p.on("--artifact-codec-block N", "Prompt-cache recurrent-int8 artifact block size (default: 8)") { |v| artifact_codec_block = v.to_i }
@@ -77,6 +79,7 @@ raise "--artifact-codec-block must be positive" unless artifact_codec_block > 0
 mode_count = (source_replay ? 1 : 0) + (prompt_cache_replay ? 1 : 0) + (prompt_cache_fast_forward ? 1 : 0) + (prompt_cache_direct_output ? 1 : 0) + (prompt_cache_serving_route ? 1 : 0)
 raise "--source-replay, --prompt-cache-replay, --prompt-cache-fast-forward, --prompt-cache-direct-output, and --prompt-cache-serving-route are mutually exclusive" if mode_count > 1
 raise "--serving-route-continuation requires --prompt-cache-serving-route" if serving_route_continuation && !prompt_cache_serving_route
+raise "--serving-route-direct-miss requires --prompt-cache-serving-route" if serving_route_direct_miss && !prompt_cache_serving_route
 
 struct RequestTiming
   getter total_ms : Float64
@@ -356,7 +359,8 @@ def build_prompt_cache_serving_route_template(weights : ML::GGUF::Qwen35Weights,
                                               resident_states : Int32,
                                               artifact_codec : String?,
                                               artifact_codec_block : Int32,
-                                              artifact_live_kv : Bool) : PromptCacheServingRouteTemplate
+                                              artifact_live_kv : Bool,
+                                              direct_miss : Bool = false) : PromptCacheServingRouteTemplate
   fast_forward = build_prompt_cache_fast_forward_template(
     weights,
     tokenizer,
@@ -369,18 +373,20 @@ def build_prompt_cache_serving_route_template(weights : ML::GGUF::Qwen35Weights,
     artifact_codec_block,
     artifact_live_kv,
   )
-  prompt_tokens_len = fast_forward.full_history_tokens.size - fast_forward.output_ids.size
-  prompt_token_ids = fast_forward.full_history_tokens[0, prompt_tokens_len]
-  fast_forward.store.save_output_fast_forward(
-    session_id: "warm-request-probe",
-    model_id: "warm-model",
-    tokenizer_id: "warm-tokenizer",
-    prompt_text: prompt,
-    prompt_token_ids: prompt_token_ids,
-    output_token_ids: fast_forward.output_ids,
-    generated_text: tokenizer.decode(fast_forward.output_ids),
-    exact_entry: fast_forward.entry,
-  )
+  unless direct_miss
+    prompt_tokens_len = fast_forward.full_history_tokens.size - fast_forward.output_ids.size
+    prompt_token_ids = fast_forward.full_history_tokens[0, prompt_tokens_len]
+    fast_forward.store.save_output_fast_forward(
+      session_id: "warm-request-probe",
+      model_id: "warm-model",
+      tokenizer_id: "warm-tokenizer",
+      prompt_text: prompt,
+      prompt_token_ids: prompt_token_ids,
+      output_token_ids: fast_forward.output_ids,
+      generated_text: tokenizer.decode(fast_forward.output_ids),
+      exact_entry: fast_forward.entry,
+    )
+  end
   PromptCacheServingRouteTemplate.new(fast_forward, prompt)
 end
 
@@ -695,14 +701,14 @@ mode = if prompt_cache_serving_route
        else
          "greedy"
        end
-puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} serving_route_continuation=#{serving_route_continuation} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
+puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} serving_route_continuation=#{serving_route_continuation} serving_route_direct_miss=#{serving_route_direct_miss} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
 puts "  startup_ms=#{startup_ms.round(1)}"
 
 source_template = source_replay ? build_source_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state) : nil
 prompt_cache_template = prompt_cache_replay ? build_prompt_cache_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 prompt_cache_direct_output_template = prompt_cache_direct_output ? build_prompt_cache_direct_output_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
-prompt_cache_serving_route_template = prompt_cache_serving_route ? build_prompt_cache_serving_route_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
+prompt_cache_serving_route_template = prompt_cache_serving_route ? build_prompt_cache_serving_route_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv, serving_route_direct_miss) : nil
 reusable_request_state = nil.as(ML::GGUF::Qwen35CPU::State?)
 if reuse_request_state
   reusable_request_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)

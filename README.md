@@ -677,6 +677,9 @@ The request summaries include `route=direct_output` or
 `route=state_fast_forward_continuation`. A local M2 Max smoke measured p50
 `0.010 ms` for the terminal direct route and p50 `0.661 ms` for the
 continuation-state route on the same 16-token cached span.
+For fail-closed diagnostics, `--serving-route-direct-miss` omits the direct
+output certificate while keeping the state artifact, so terminal requests must
+fall back to `route=state_fast_forward_fallback`.
 The route decision is also available to product code as
 `ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span` in
 `src/ml/gguf/qwen35_serving_route.cr`.
