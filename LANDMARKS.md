@@ -15128,3 +15128,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Proposal quality did not improve enough. The extra accepted token is not worth two additional verifier chunks. The low-margin guard is still a useful verifier-cost spike for this suite; threshold tuning may still matter, but fully disabling the guard is refuted.
 - LTP/WBA: Window was the low-margin MTP entry decision. Removing the guard increased transport area through verifier chunks but did not reduce global wall potential. Dual frame remains guarded speed-mode.
 - trust: {F:0.84,G:0.30,R:0.80}
+
+**LM-459 Lower MTP margin thresholds do not beat the 1.0 guarded preset [shared/ml]**
+- status: REFUTED controller retune; no code change
+- claim tested: After LM-455, lowering speed-mode `min_margin` below `1.0` should allow more accepted MTP tokens and improve wall.
+- evidence: With `QWEN35_MTP_FFN_HEAD_FUSE=1`, Q4_K_M target + UD-Q4_K_XL sidecar, 3-prompt `tokens=16 gamma=8 stage=2 lazy hidden_resync rec_rollback_log reject_offramp=1 min_margin_offramp`, threshold sweep preserved `parity_ok=3/3`. `0.25/0.5/0.75` produced `draft_tokens=5`, `accepted=2`, `verifier_calls=2`, `verifier_tokens=4`, `margin_skips=1`, with suite speed near neutral in one run (`0.994/0.998/0.997`). `1.0/1.5` produced `draft_tokens=4`, `accepted=1`, `verifier_calls=1`, `verifier_tokens=2`, `margin_skips=2`. Interleaved quietness-degraded A/B confirmed the cost shape: `1.0` speed `0.848/0.898`, `0.5` speed `0.897/0.889`; lower threshold paid roughly `+110ms` verifier per suite for one extra accepted token.
+- diagnosis: The threshold is not the main blocker. Lowering it increases accepted-token density but also verifier area, and the trade does not robustly improve wall. Do not retune the speed preset from `1.0` on this evidence.
+- LTP/WBA: Window was the MTP margin threshold. Lower thresholds widen the verifier transport corridor. Boundary safety held, but lexicographic potential did not robustly descend because verifier rows increased faster than fallback area decreased. Dual frame remains `min_margin=1.0` guarded speed-mode.
+- trust: {F:0.82,G:0.28,R:0.78}

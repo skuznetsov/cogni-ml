@@ -2266,3 +2266,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_458:** With `QWEN35_MTP_FFN_HEAD_FUSE=1`, 3-prompt Q4_K_M + UD-Q4_K_XL `tokens=16 gamma=8`: guarded speed-mode repeated around `plain_speedup=0.989/0.987`, `draft_tokens=4`, `accepted=1`, `verifier_calls=1`; no-margin preserved parity but worsened to `plain_speedup=0.977/0.974`, `draft_tokens=6`, `accepted=2`, `verifier_calls=3`.
 
 **next_update_458:** Sweep margin thresholds before changing the preset. Fully disabling the low-margin guard is refuted; the remaining question is whether `1.0` is the best cutoff after LM-455.
+
+**decision_update_459:** Refuted lowering speed-mode `min_margin` below `1.0` after stateful FFN+head fusion. Thresholds `0.25/0.5/0.75` accept one extra token but add one extra verifier call; interleaved `0.5 vs 1.0` did not show a robust wall win.
+
+**evidence_update_459:** With `QWEN35_MTP_FFN_HEAD_FUSE=1`, threshold sweep on the 3-prompt Q4_K_M + UD-Q4_K_XL gate stayed parity true. `0.5` had `draft_tokens=5/accepted=2/verifier_calls=2`; `1.0` had `draft_tokens=4/accepted=1/verifier_calls=1`. Interleaved runs showed `0.5` paying roughly `+110ms` verifier per suite for one extra accepted token and no stable wall gain.
+
+**next_update_459:** Stop threshold micro-tuning for now. The next useful branch should target proposal quality or verifier/fallback structure, not the scalar margin cutoff.
