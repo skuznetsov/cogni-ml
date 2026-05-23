@@ -11125,6 +11125,7 @@ dump_ffn_updown_adapters_path : String? = nil
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 simulate_self_spec_gpu_pipeline_router_trace_path : String? = nil
 simulate_self_spec_gpu_pipeline_route_selector_route : String? = nil
+simulate_self_spec_gpu_pipeline_route_selector_no_ffn_layers = [] of Int32
 simulate_self_spec_gpu_pipeline_route_selector_feature : String? = nil
 simulate_self_spec_gpu_pipeline_route_selector_op = ">="
 simulate_self_spec_gpu_pipeline_route_selector_threshold : Float64? = nil
@@ -11389,6 +11390,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-router-trace=PATH", "Write JSONL self-spec router/reject-risk rows without raw token ids") { |v| simulate_self_spec_gpu_pipeline_router_trace_path = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-selector-route=NAME", "Default-off prompt route selector candidate, e.g. noffn_0 or noffn_0_2; pure is used when the feature gate does not fire") { |v| simulate_self_spec_gpu_pipeline_route_selector_route = v }
+  p.on("--simulate-self-spec-gpu-pipeline-route-selector-no-ffn-layers=LIST", "Selector-local no-FFN layers for a custom route; does not affect the ordinary pure baseline row") { |v| simulate_self_spec_gpu_pipeline_route_selector_no_ffn_layers = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-route-selector-feature=NAME", "Feature for route selector: residual_mean,residual_p90,residual_max,repeat_rate,bigram_repeat_rate,unique_rate") { |v| simulate_self_spec_gpu_pipeline_route_selector_feature = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-selector-op=OP", "Route selector comparison: <= or >=") { |v| simulate_self_spec_gpu_pipeline_route_selector_op = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-selector-threshold=F", "Threshold for --simulate-self-spec-gpu-pipeline-route-selector-feature") { |v| simulate_self_spec_gpu_pipeline_route_selector_threshold = v.to_f64 }
@@ -12090,6 +12092,7 @@ if rank = simulate_logit_rank
     pipeline_route_active = simulate_generate_tokens > 0 && (!pipeline_gammas.empty? || !simulate_self_spec_gpu_pipeline_schedules.empty?)
     if pipeline_route_active
       route_selector_enabled = !simulate_self_spec_gpu_pipeline_route_selector_route.nil? ||
+                               !simulate_self_spec_gpu_pipeline_route_selector_no_ffn_layers.empty? ||
                                !simulate_self_spec_gpu_pipeline_route_selector_feature.nil? ||
                                !simulate_self_spec_gpu_pipeline_route_selector_threshold.nil?
       residual_router_enabled = !simulate_self_spec_gpu_pipeline_residual_router_mean_max.nil? ||
@@ -12106,7 +12109,7 @@ if rank = simulate_logit_rank
       selected_route_candidate = nil.as(HybridRoute?)
       pure_route_candidate = nil.as(HybridRoute?)
       if route_selector_enabled
-        raise "route selector requires --simulate-self-spec-gpu-pipeline-route-selector-route" if simulate_self_spec_gpu_pipeline_route_selector_route.nil?
+        raise "route selector requires --simulate-self-spec-gpu-pipeline-route-selector-route or --simulate-self-spec-gpu-pipeline-route-selector-no-ffn-layers" if simulate_self_spec_gpu_pipeline_route_selector_route.nil? && simulate_self_spec_gpu_pipeline_route_selector_no_ffn_layers.empty?
         raise "route selector requires --simulate-self-spec-gpu-pipeline-route-selector-feature" if simulate_self_spec_gpu_pipeline_route_selector_feature.nil?
         raise "route selector requires --simulate-self-spec-gpu-pipeline-route-selector-threshold" if simulate_self_spec_gpu_pipeline_route_selector_threshold.nil?
         raise "route selector op must be <= or >=" unless ["<=", ">="].includes?(simulate_self_spec_gpu_pipeline_route_selector_op)
@@ -12115,7 +12118,13 @@ if rank = simulate_logit_rank
         raise "route selector currently supports fixed-gamma rows; disable --simulate-self-spec-gpu-pipeline-schedule" unless simulate_self_spec_gpu_pipeline_schedules.empty?
         selector_routes = build_self_spec_hybrid_routes(simulate_logit_layers, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_hybrid_rich_sweep)
         pure_route_candidate = selector_routes.find { |route| route[:name] == "pure" }
-        selected_route_candidate = selector_routes.find { |route| route[:name] == simulate_self_spec_gpu_pipeline_route_selector_route }
+        if simulate_self_spec_gpu_pipeline_route_selector_no_ffn_layers.empty?
+          selected_route_candidate = selector_routes.find { |route| route[:name] == simulate_self_spec_gpu_pipeline_route_selector_route }
+        else
+          custom_noffn = simulate_self_spec_gpu_pipeline_route_selector_no_ffn_layers.uniq.sort
+          custom_name = (simulate_self_spec_gpu_pipeline_route_selector_route || "selector_noffn_#{custom_noffn.join('_')}").to_s
+          selected_route_candidate = {name: custom_name.gsub(/[^A-Za-z0-9_.-]/, "_"), noffn: Set(Int32).new(custom_noffn).as(Set(Int32)?), updown: nil.as(Set(Int32)?)}
+        end
         raise "route selector could not resolve pure route" if pure_route_candidate.nil?
         raise "route selector could not resolve route #{simulate_self_spec_gpu_pipeline_route_selector_route}; run a hybrid sweep to inspect route names" if selected_route_candidate.nil?
         raise "route selector currently supports no-FFN route candidates only" if selected_route_candidate.not_nil![:updown]
@@ -12211,7 +12220,7 @@ if rank = simulate_logit_rank
       end
       main_pre_submit_router_note = "#{main_residual_router_note}#{main_value_router_note}"
       main_pre_submit_router_skip = main_residual_router_skip || main_value_router_skip
-      route_selector_route_name = simulate_self_spec_gpu_pipeline_route_selector_route || ""
+      route_selector_route_name = route_selector_enabled ? selected_route_candidate.not_nil![:name] : (simulate_self_spec_gpu_pipeline_route_selector_route || "")
       route_selector_feature_name = simulate_self_spec_gpu_pipeline_route_selector_feature || ""
       run_route_selector = ->(scope : String, prompt_name : String, prompt_text : String, prompt_token_ids : Array(Int32), prompt_layer_bases : LayerBasisMap, feature_value : Float64?) {
         if route_selector_enabled

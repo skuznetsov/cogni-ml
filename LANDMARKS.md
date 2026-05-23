@@ -15399,3 +15399,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This makes selector promotion harder and cleaner: a candidate must beat pure on rows it actually selects, not merely preserve parity or appear in an offline route oracle.
 - LTP/WBA: Window is the selector row keyed by `(scope,name,gamma,split)`. Dual frame is the same-run pure row. Legal promotion requires lexicographic descent in `(selected_loss, aggregate_wall, reject_count)` against that frame.
 - trust: {F:0.90,G:0.42,R:0.86}
+
+**LM-493 Selector-local no-FFN layer masks are implemented; repeat unique-rate policy is inconclusive [shared/ml]**
+- status: IMPLEMENTED diagnostic; candidate not promoted
+- claim tested: The prompt route selector should support manual no-FFN layer masks without contaminating the same-run pure baseline.
+- evidence: Added `--simulate-self-spec-gpu-pipeline-route-selector-no-ffn-layers=LIST`, which creates a selector-local no-FFN route and leaves ordinary pipeline rows pure. Build passed with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_route_selector_custom_build crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`, plus a Metal-linked build to `/tmp/qwen35_route_selector_probe`. Candidate `selector_noffn_0_2 when unique_rate<=20` selected only `repeat_fact`, parity true. First `gen16/gamma4` run showed selected-row delta `+5.61%`; immediate repeat showed `-0.28%`. Aggregate deltas were `-0.95%` and `+0.17%`.
+- diagnosis: The selector-local route mechanism is the right measurement plumbing. The tested low-unique repeat policy is not stable enough to promote; the observed one-run win is within host/timing variance. Need ABBA or stricter repeat/bigram gates before making a speed claim.
+- LTP/WBA: Window is now a custom route-local feature trigger independent of global draft flags. The legal move preserves the pure dual frame, but the selected-row potential did not descend reproducibly across repeats.
+- trust: {F:0.88,G:0.38,R:0.84}
