@@ -15375,3 +15375,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Fallback-on-reject is a collapse move after a defect, not an entry policy. Static no-FFN remains unsafe because entering the wrong route can still pay replay/rebuild tax before the collapse. The controller must combine a feature-selected entry window with reject-boundary collapse and pure fallback.
 - LTP/WBA: Entry window and collapse window are distinct. Fallback only handles the collapse window; it does not certify the initial transport corridor. Legal routing requires both: a local entry trigger that lowers expected work and a reject-triggered collapse whose potential strictly descends after defect detection.
 - trust: {F:0.86,G:0.34,R:0.82}
+
+**LM-490 Mixed-suite gen32 ABBA confirms fallback-on-reject is causal only on changed-counter windows [shared/ml]**
+- status: MEASURED; strengthens route-entry gating requirement
+- claim tested: The no-FFN fallback-on-reject controller should remain useful on a mixed longer suite if measured with changed-counter buckets.
+- evidence: Qwen3.5-9B Q4_K_M, 4-prompt suite, `gen32/gamma4`, layers `0,2,4`, rank32, `draft_no_ffn_layers=0,2`, in-process ABBA. Summary on `/tmp/qwen35_noffn_abba_suite_gen32_causal.log`: parity `16/16`; aggregate off/on overlap `11332.345 -> 10233.310` (`+9.70%`). Changed-counter bucket had one prompt, `json_db`, with rejects `10 -> 4`, median overlap `2094.434 -> 1619.996` (`+22.65%`). Unchanged-counter bucket was small/noisy (`+2.10%` aggregate median-sum; `code_fib -1.21%`).
+- diagnosis: The collapse move is real where behavior changes, but mixed-prompt aggregate gains are not enough to justify broad entry. The next controller must predict or cheaply detect JSON-like/reject-prone corridors before entering no-FFN, then collapse on first reject.
+- LTP/WBA: The legal move reduces potential only when the reject-trigger window opens. For unchanged-counter prompts no local defect was transported/collapsed, so wall changes are not valid evidence for the move. Entry gating and reject collapse must be modeled as two separate windows with pure as dual frame.
+- trust: {F:0.88,G:0.36,R:0.84}
