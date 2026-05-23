@@ -677,6 +677,10 @@ The request summaries include `route=direct_output` or
 `route=state_fast_forward_continuation`. A local M2 Max smoke measured p50
 `0.010 ms` for the terminal direct route and p50 `0.661 ms` for the
 continuation-state route on the same 16-token cached span.
+`--serving-route-active-cursor` is an upper-bound server-shape probe: it
+prewarms the continuation state once and then measures the already-owned
+active-session handoff, avoiding the reusable-cache copy that a shared Store
+must perform for isolation.
 For fail-closed diagnostics, `--serving-route-direct-miss` omits the direct
 output certificate while keeping the exact-known-span artifact. Terminal
 requests then fall back to

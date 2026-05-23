@@ -31,6 +31,7 @@ prompt_cache_direct_output = false
 prompt_cache_serving_route = false
 serving_route_continuation = ENV["QWEN35_SERVING_ROUTE_CONTINUATION"]? == "1"
 serving_route_direct_miss = ENV["QWEN35_SERVING_ROUTE_DIRECT_MISS"]? == "1"
+serving_route_active_cursor = ENV["QWEN35_SERVING_ROUTE_ACTIVE_CURSOR"]? == "1"
 resident_states = (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
 metal_profile = ENV["QWEN35_METAL_PROFILE"]? == "1"
 artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?
@@ -55,6 +56,7 @@ parser = OptionParser.new do |p|
   p.on("--prompt-cache-serving-route", "Measure resident serving route: direct terminal hit, or state fast-forward when continuation state is required") { prompt_cache_serving_route = true }
   p.on("--serving-route-continuation", "With --prompt-cache-serving-route, require continuation state and bypass terminal direct-output emission") { serving_route_continuation = true }
   p.on("--serving-route-direct-miss", "With --prompt-cache-serving-route, omit the direct output certificate so terminal requests exercise exact source-span fallback") { serving_route_direct_miss = true }
+  p.on("--serving-route-active-cursor", "With --prompt-cache-serving-route --serving-route-continuation, prewarm continuation state once and measure active-session cursor handoff") { serving_route_active_cursor = true }
   p.on("--resident-states N", "Resident Store state-cache entries for --prompt-cache-replay") { |v| resident_states = v.to_i }
   p.on("--artifact-codec CODEC", "Prompt-cache artifact codec for cache modes (raw, recurrent-bf16, recurrent-int8)") { |v| artifact_codec = v == "raw" ? nil : v }
   p.on("--artifact-codec-block N", "Prompt-cache recurrent-int8 artifact block size (default: 8)") { |v| artifact_codec_block = v.to_i }
@@ -80,6 +82,7 @@ mode_count = (source_replay ? 1 : 0) + (prompt_cache_replay ? 1 : 0) + (prompt_c
 raise "--source-replay, --prompt-cache-replay, --prompt-cache-fast-forward, --prompt-cache-direct-output, and --prompt-cache-serving-route are mutually exclusive" if mode_count > 1
 raise "--serving-route-continuation requires --prompt-cache-serving-route" if serving_route_continuation && !prompt_cache_serving_route
 raise "--serving-route-direct-miss requires --prompt-cache-serving-route" if serving_route_direct_miss && !prompt_cache_serving_route
+raise "--serving-route-active-cursor requires --prompt-cache-serving-route --serving-route-continuation" if serving_route_active_cursor && !(prompt_cache_serving_route && serving_route_continuation)
 
 struct RequestTiming
   getter total_ms : Float64
@@ -146,6 +149,15 @@ struct PromptCacheServingRouteTemplate
   getter prompt : String
 
   def initialize(@fast_forward, @prompt)
+  end
+end
+
+struct PromptCacheActiveCursorTemplate
+  getter state : ML::GGUF::Qwen35CPU::State
+  getter prompt_token_count : Int32
+  getter output_ids : Array(Int32)
+
+  def initialize(@state, @prompt_token_count, @output_ids)
   end
 end
 
@@ -499,6 +511,55 @@ def run_prompt_cache_serving_route_request(weights : ML::GGUF::Qwen35Weights,
   {timing, output_ids}
 end
 
+def build_prompt_cache_active_cursor_template(weights : ML::GGUF::Qwen35Weights,
+                                              replay : PromptCacheServingRouteTemplate,
+                                              max_seq : Int32,
+                                              prepare_state : Bool,
+                                              reuse_state : ML::GGUF::Qwen35CPU::State? = nil) : PromptCacheActiveCursorTemplate
+  fast_forward = replay.fast_forward
+  state = reuse_state || ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
+  raise "active cursor state max_seq mismatch" if state.max_seq != max_seq
+  if prepare_state && reuse_state.nil?
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams, clear: false)
+  end
+  result = ML::GGUF::Qwen35ServingRoute.serve_exact_cached_span(
+    fast_forward.store,
+    weights,
+    "warm-model",
+    "warm-request-probe",
+    replay.prompt,
+    fast_forward.output_ids,
+    fast_forward.entry,
+    fast_forward.full_history_tokens,
+    continuation_required: true,
+    reuse_state: state,
+  )
+  restored = result.replay.try(&.state)
+  raise "active cursor prewarm did not restore continuation state" unless restored
+  PromptCacheActiveCursorTemplate.new(restored, result.prompt_token_count, result.output_token_ids)
+end
+
+def run_prompt_cache_active_cursor_request(cursor : PromptCacheActiveCursorTemplate) : {RequestTiming, Array(Int32)}
+  request_t0 = Time.instant
+  # The active cursor owns an already-restored continuation state. This probe
+  # measures the server-session handoff floor, not a reusable cache restore.
+  output_ids = cursor.output_ids.dup
+  total_ms = (Time.instant - request_t0).total_milliseconds
+  timing = RequestTiming.new(
+    total_ms,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    cursor.prompt_token_count,
+    output_ids.size,
+    output_ids[0],
+    "state_fast_forward_active_cursor",
+  )
+  {timing, output_ids}
+end
+
 def run_prompt_cache_direct_output_request(replay : PromptCacheDirectOutputTemplate) : {RequestTiming, Array(Int32)}
   request_t0 = Time.instant
   hit = replay.store.lookup_output_fast_forward(
@@ -701,7 +762,7 @@ mode = if prompt_cache_serving_route
        else
          "greedy"
        end
-puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} serving_route_continuation=#{serving_route_continuation} serving_route_direct_miss=#{serving_route_direct_miss} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
+puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} serving_route_continuation=#{serving_route_continuation} serving_route_direct_miss=#{serving_route_direct_miss} serving_route_active_cursor=#{serving_route_active_cursor} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
 puts "  startup_ms=#{startup_ms.round(1)}"
 
 source_template = source_replay ? build_source_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state) : nil
@@ -714,11 +775,18 @@ if reuse_request_state
   reusable_request_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(reusable_request_state.not_nil!, weights.hparams, clear: false) if prepare_state
 end
+prompt_cache_active_cursor_template = if serving_route_active_cursor && (replay = prompt_cache_serving_route_template)
+                                        build_prompt_cache_active_cursor_template(weights, replay, max_seq, prepare_state, reusable_request_state)
+                                      else
+                                        nil
+                                      end
 
 warmup_ms = 0.0
 warmups.times do
   warm_t0 = Time.instant
-  if replay = prompt_cache_serving_route_template
+  if cursor = prompt_cache_active_cursor_template
+    run_prompt_cache_active_cursor_request(cursor)
+  elsif replay = prompt_cache_serving_route_template
     run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, reusable_request_state)
   elsif replay = prompt_cache_direct_output_template
     run_prompt_cache_direct_output_request(replay)
@@ -744,7 +812,9 @@ timings = [] of RequestTiming
 {% end %}
 
 requests.times do |i|
-  timing, output_ids = if replay = prompt_cache_serving_route_template
+  timing, output_ids = if cursor = prompt_cache_active_cursor_template
+                         run_prompt_cache_active_cursor_request(cursor)
+                       elsif replay = prompt_cache_serving_route_template
                          run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, reusable_request_state)
                        elsif replay = prompt_cache_direct_output_template
                          run_prompt_cache_direct_output_request(replay)
