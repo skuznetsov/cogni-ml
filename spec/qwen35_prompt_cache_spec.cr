@@ -70,6 +70,7 @@ describe ML::GGUF::Qwen35PromptCache do
       store.lookup_exact("model-a", "tok-a", prompt_hash, 1).should_not be_nil
       store.lookup_prompt("model-a", "tok-a", "x", [42_i32]).should_not be_nil
       store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32]).try(&.prefix_len).should eq(1)
+      store.lookup_token_prefix("model-a", "tok-a", [42_i32, 99_i32], 1).try(&.prefix_len).should eq(1)
       store.lookup_session("s1", turn_id: "t1").should_not be_nil
       store.lookup_exact("model-b", "tok-a", prompt_hash, 1).should be_nil
     ensure

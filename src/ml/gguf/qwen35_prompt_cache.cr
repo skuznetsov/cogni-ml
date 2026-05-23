@@ -342,6 +342,23 @@ module ML::GGUF
         nil
       end
 
+      def lookup_token_prefix(model_id : String,
+                              tokenizer_id : String,
+                              token_ids : Array(Int32),
+                              prefix_len : Int32) : Entry?
+        raise ArgumentError.new("prefix_len out of range: #{prefix_len}") if prefix_len < 0 || prefix_len > token_ids.size
+
+        ensure_entry_indices
+        expected = Qwen35PromptCache.token_hash(token_ids, prefix_len)
+        candidates = @entry_prefix_index[{model_id, tokenizer_id, prefix_len, expected}]?
+        return nil unless candidates
+
+        valid_candidates = candidates.select { |entry| usable_entry?(entry) }
+        if hit = valid_candidates.max_by? { |entry| entry.created_at_unix }
+          clone_entry(hit)
+        end
+      end
+
       def lookup_session(session_id : String,
                          turn_id : String? = nil,
                          prefix_len : Int32? = nil) : Entry?
@@ -1148,16 +1165,18 @@ module ML::GGUF
 
     def exact_known_span_entry_valid?(entry : Entry,
                                       full_history : Array(Int32),
-                                      emitted_steps : Int32) : Bool
-      return false if full_history.empty?
+                                      emitted_steps : Int32,
+                                      full_history_len : Int32 = full_history.size) : Bool
+      return false if full_history_len <= 0
+      return false if full_history_len > full_history.size
       return false unless emitted_steps > 0
-      return false unless full_history.size >= emitted_steps
+      return false unless full_history_len >= emitted_steps
       return false unless entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
       return false unless entry.artifact_validation_steps == emitted_steps
-      return false unless entry.artifact_validation_hash == token_hash(full_history)
-      return false unless entry.prefix_len == full_history.size - 1
+      return false unless entry.artifact_validation_hash == token_hash(full_history, full_history_len)
+      return false unless entry.prefix_len == full_history_len - 1
       return false unless entry.token_hash == token_hash(full_history, entry.prefix_len)
-      return false unless entry.next_token_id == full_history[-1]
+      return false unless entry.next_token_id == full_history[full_history_len - 1]
 
       true
     end

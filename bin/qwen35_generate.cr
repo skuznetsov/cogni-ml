@@ -293,19 +293,16 @@ if prompt_cache_fast_forward_enabled && prompt_token_cache_enabled
          source_remaining >= n_gen &&
          ML::GGUF::Qwen35PromptCache.generated_text_metadata_valid?(source, n_gen) &&
          (cached_text = source.generated_text) &&
-         ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
+        ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
         full_history_len = ids.size + n_gen
-        full_history = source.token_ids[0, full_history_len]
         cached_prefix_len = full_history_len - 1
-        cached_prefix = full_history[0, cached_prefix_len]
-        if fast_hit = cache_store.not_nil!.lookup_longest_prefix(
+        if fast_hit = cache_store.not_nil!.lookup_token_prefix(
              cache_model,
              cache_tokenizer,
-             cached_prefix,
-             min_prefix_len: cached_prefix_len,
-             max_prefix_len: cached_prefix_len)
-          if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, full_history, n_gen)
-            output_ids = full_history[ids.size, n_gen]
+             source.token_ids,
+             cached_prefix_len)
+          if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, source.token_ids, n_gen, full_history_len)
+            output_ids = source.token_ids[ids.size, n_gen]
             output_text = cached_text
             tokenize_ms = source_history_lookup_ms
             STDOUT << "\nPrompt cache output fast-forward hit before tokenizer/weight load: emitted #{output_ids.size} cached tokens\n"
@@ -374,17 +371,14 @@ if prompt_cache_fast_forward_enabled && (source = source_history_hit)
      source_remaining >= n_gen &&
      ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
     full_history_len = ids.size + n_gen
-    full_history = source.token_ids[0, full_history_len]
     cached_prefix_len = full_history_len - 1
-    cached_prefix = full_history[0, cached_prefix_len]
-    if fast_hit = cache_store.not_nil!.lookup_longest_prefix(
+    if fast_hit = cache_store.not_nil!.lookup_token_prefix(
          cache_model,
          cache_tokenizer,
-         cached_prefix,
-         min_prefix_len: cached_prefix_len,
-         max_prefix_len: cached_prefix_len)
-      if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, full_history, n_gen)
-        output_ids = full_history[ids.size, n_gen]
+         source.token_ids,
+         cached_prefix_len)
+      if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, source.token_ids, n_gen, full_history_len)
+        output_ids = source.token_ids[ids.size, n_gen]
         STDOUT << "\nPrompt cache output fast-forward hit before weight load: emitted #{output_ids.size} cached tokens\n"
         total_ms = (Time.instant - request_t0).total_milliseconds
         STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
@@ -465,27 +459,25 @@ if prompt_cache_enabled
   end
 
   if prompt_cache_fast_forward_enabled && output_ids.empty? && (source = source_history_hit)
-    source_remaining = source.token_ids.size - ids.size
+      source_remaining = source.token_ids.size - ids.size
     if source_remaining >= n_gen
       full_history_len = ids.size + n_gen
-      full_history = source.token_ids[0, full_history_len]
       cached_prefix_len = full_history_len - 1
-      cached_prefix = full_history[0, cached_prefix_len]
-      if fast_hit = cache_store.not_nil!.lookup_longest_prefix(
+      if fast_hit = cache_store.not_nil!.lookup_token_prefix(
            cache_model,
            cache_tokenizer,
-           cached_prefix,
-           min_prefix_len: cached_prefix_len,
-           max_prefix_len: cached_prefix_len)
-        if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, full_history, n_gen)
+           source.token_ids,
+           cached_prefix_len)
+        if ML::GGUF::Qwen35PromptCache.exact_known_span_entry_valid?(fast_hit, source.token_ids, n_gen, full_history_len)
+          cached_prefix = source.token_ids[0, cached_prefix_len]
           tstart = Time.instant
           reuse_state = fast_hit.max_seq == state.max_seq ? state : nil
           replay = cache_store.not_nil!.restore_and_replay_suffix(fast_hit, w, cached_prefix, reuse_state: reuse_state)
           cache_restore_ms = (Time.instant - tstart).total_milliseconds
-          if replay.replayed_tokens == 0 && replay.next_token_id == full_history[-1]
+          if replay.replayed_tokens == 0 && replay.next_token_id == source.token_ids[full_history_len - 1]
             state = replay.state
             pos = cached_prefix_len
-            output_ids = full_history[ids.size, n_gen]
+            output_ids = source.token_ids[ids.size, n_gen]
             prompt_cache_reused = true
             prompt_cache_fast_forward_used = true
             STDOUT << "\nPrompt cache fast-forward hit: emitted #{output_ids.size} cached tokens, reused_state_prefix=#{cached_prefix_len}, restore took #{(cache_restore_ms / 1000.0).round(3)}s\n"
