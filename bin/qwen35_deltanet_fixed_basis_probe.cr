@@ -36,6 +36,7 @@ module ProbeRuntime
   @@self_spec_branch_guard_snapshot_prefix_suffix_thresholds = [] of Tuple(Int32, Float64)
   @@self_spec_branch_guard_no_snapshot_threshold : Float64? = nil
   @@self_spec_draft_refresh_on_accept = false
+  @@self_spec_draft_no_ffn_fallback_on_reject = false
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -119,6 +120,14 @@ module ProbeRuntime
 
   def self.self_spec_draft_refresh_on_accept=(enabled : Bool)
     @@self_spec_draft_refresh_on_accept = enabled
+  end
+
+  def self.self_spec_draft_no_ffn_fallback_on_reject : Bool
+    @@self_spec_draft_no_ffn_fallback_on_reject
+  end
+
+  def self.self_spec_draft_no_ffn_fallback_on_reject=(enabled : Bool)
+    @@self_spec_draft_no_ffn_fallback_on_reject = enabled
   end
 
   def self.self_spec_branch_guard_snapshot : Bool
@@ -7844,6 +7853,9 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   exact_refresh_layer_offsets = {} of Int32 => Set(Int32)
   exact_refresh_prefix = ProbeRuntime.gpu_draft_exact_refresh_prefix
   draft_refresh_on_accept = ProbeRuntime.self_spec_draft_refresh_on_accept
+  draft_no_ffn_fallback_on_reject = ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject
+  active_draft_no_ffn = draft_no_ffn
+  active_draft_no_ffn_layer_indices = draft_no_ffn_layer_indices
   max_gamma = schedule.max
   router_trace_enabled = !ProbeRuntime.self_spec_router_trace_io.nil?
   tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || draft_updown_agreement_gate || mtp_k2_on_reject_enabled || router_trace_enabled
@@ -8056,9 +8068,9 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       sub = if tree2_enabled
               ML::GGUF::Qwen35CPU.forward_self_draft_top2_from_token_buf_async(weights, cur_token_buf, 0, pos_start + j, state,
                 active_lowrank_set, lr_bufs, shared_basis_bufs, rank,
-                lowrank_skip_ffn: draft_no_ffn,
+                lowrank_skip_ffn: active_draft_no_ffn,
                 skip_recurrent_ffn: draft_skip_recurrent_ffn,
-                lowrank_skip_ffn_layer_indices: draft_no_ffn_layer_indices,
+                lowrank_skip_ffn_layer_indices: active_draft_no_ffn_layer_indices,
                 lowrank_updown_x_mean_bufs: updown_x_mean_bufs,
                 lowrank_updown_c_mean_bufs: updown_c_mean_bufs,
                 lowrank_updown_coeff_w_bufs: updown_coeff_w_bufs,
@@ -8070,9 +8082,9 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
             else
               ML::GGUF::Qwen35CPU.forward_self_draft_top1_from_token_buf_async(weights, cur_token_buf, 0, pos_start + j, state,
                 active_lowrank_set, lr_bufs, shared_basis_bufs, rank,
-                lowrank_skip_ffn: draft_no_ffn,
+                lowrank_skip_ffn: active_draft_no_ffn,
                 skip_recurrent_ffn: draft_skip_recurrent_ffn,
-                lowrank_skip_ffn_layer_indices: draft_no_ffn_layer_indices,
+                lowrank_skip_ffn_layer_indices: active_draft_no_ffn_layer_indices,
                 lowrank_updown_x_mean_bufs: updown_x_mean_bufs,
                 lowrank_updown_c_mean_bufs: updown_c_mean_bufs,
                 lowrank_updown_coeff_w_bufs: updown_coeff_w_bufs,
@@ -8514,6 +8526,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     draft_updown_full_accept_streak = 0
     if (draft_updown_fallback_on_reject || draft_updown_after_full_accepts > 0 || !draft_updown_min_margin.nil?) && draft_updown_enabled
       draft_updown_enabled = false
+    end
+    if draft_no_ffn_fallback_on_reject
+      active_draft_no_ffn = false
+      active_draft_no_ffn_layer_indices = nil
     end
   }
   exact_ids = [] of Int32
@@ -9457,6 +9473,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   wba.try(&.mark("pipeline", "plain_exact", t_plain, Time.instant))
 
   attr_collect = false
+  active_draft_no_ffn = draft_no_ffn
+  active_draft_no_ffn_layer_indices = draft_no_ffn_layer_indices
   serial_state_before_last = state_before_last
   serial_verifier_state = state_before_last.fork
   serial_backup = if use_verifier_backup
@@ -9502,6 +9520,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     serial_draft_updown_full_accept_streak = 0
     if (draft_updown_fallback_on_reject || draft_updown_after_full_accepts > 0 || !draft_updown_min_margin.nil?) && serial_draft_updown_enabled
       serial_draft_updown_enabled = false
+    end
+    if draft_no_ffn_fallback_on_reject
+      active_draft_no_ffn = false
+      active_draft_no_ffn_layer_indices = nil
     end
   }
   serial_current_block = submit_seed.call(serial_state_before_last, serial_last_token, serial_pos_last, "self_spec_serial_seed", Math.min(schedule[serial_schedule_index], gen_tokens), serial_draft_updown_enabled)
@@ -11264,6 +11286,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-no-backup", "Skip verifier rollback backup on the hot full-accept path; rebuild exact state from emitted ids on reject") { simulate_self_spec_gpu_pipeline_no_backup = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn", "Use the research lowrank-no-ffn draft route for GPU self-spec proposals; exact verifier still enforces parity") { simulate_self_spec_gpu_pipeline_draft_no_ffn = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn-layers=LIST", "Skip FFN only for the listed low-rank recurrent draft layers; enables hybrid draft bodies") { |v| simulate_self_spec_gpu_pipeline_draft_no_ffn_layers = parse_int_list(v) }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-no-ffn-fallback-on-reject", "After the first no-FFN draft rejection, resync future draft blocks with baseline lowrank") { ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-skip-recurrent-ffn", "Research route: skip FFN on all recurrent draft layers; exact verifier still enforces parity") { simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown=R", "Use resident FFN pca-updown rank R on selected low-rank recurrent draft layers in the real GPU pipeline") { |v| simulate_self_spec_gpu_pipeline_draft_updown_rank = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updowns=LIST", "In-process A/B list for resident FFN pca-updown ranks in the real GPU pipeline; use 0 for lowrank baseline") { |v| simulate_self_spec_gpu_pipeline_draft_updown_ranks = parse_int_list(v) }
@@ -12081,6 +12104,7 @@ if rank = simulate_logit_rank
       exact_refresh_note += " draft_exact_refresh_prefix=#{ProbeRuntime.gpu_draft_exact_refresh_prefix}" if ProbeRuntime.gpu_draft_exact_refresh_prefix > 0
       exact_refresh_note += " draft_exact_refresh_offsets=#{ProbeRuntime.gpu_draft_exact_refresh_offsets.join(',')}" unless ProbeRuntime.gpu_draft_exact_refresh_offsets.empty?
       exact_refresh_note += " draft_refresh_on_accept=1" if ProbeRuntime.self_spec_draft_refresh_on_accept
+      exact_refresh_note += " draft_noffn_fallback=reject" if ProbeRuntime.self_spec_draft_no_ffn_fallback_on_reject
       residual_router_thresholds = self_spec_residual_router_thresholds(thresholds, simulate_self_spec_gpu_pipeline_residual_router_pass_threshold)
       main_route_residual_stats = route_residual_stats(layer_vectors, layer_bases, rank, calib_count, thresholds)
       main_value_stats = self_spec_prompt_value_stats(token_ids, calib_count)
