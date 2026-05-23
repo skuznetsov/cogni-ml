@@ -20,6 +20,10 @@ describe ML::GGUF::Qwen35PromptCache do
     token_prefix = ML::GGUF::Qwen35PromptCache.token_hash([1_i32, 2_i32, 3_i32], 2)
     token_prefix.should eq(ML::GGUF::Qwen35PromptCache.token_hash([1_i32, 2_i32], 2))
     token_full.should_not eq(token_prefix)
+    ML::GGUF::Qwen35PromptCache.token_hash_concat([1_i32, 2_i32], [3_i32, 4_i32])
+      .should eq(ML::GGUF::Qwen35PromptCache.token_hash([1_i32, 2_i32, 3_i32, 4_i32]))
+    ML::GGUF::Qwen35PromptCache.token_hash_concat([1_i32, 2_i32], [3_i32, 4_i32], 3)
+      .should eq(ML::GGUF::Qwen35PromptCache.token_hash([1_i32, 2_i32, 3_i32, 4_i32], 3))
   end
 
   it "indexes entries by exact prompt hash and session" do

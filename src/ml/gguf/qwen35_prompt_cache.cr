@@ -652,17 +652,16 @@ module ML::GGUF
         raise ArgumentError.new("output_token_ids must not be empty") if output_token_ids.empty?
         tmp = nil.as(String?)
 
-        full_history = prompt_token_ids.dup
-        full_history.concat(output_token_ids)
-        full_history_hash = Qwen35PromptCache.token_hash(full_history)
+        full_history_len = prompt_token_ids.size + output_token_ids.size
+        full_history_hash = Qwen35PromptCache.token_hash_concat(prompt_token_ids, output_token_ids)
         artifact_steps = exact_entry.artifact_validation_steps
         artifact_hash = exact_entry.artifact_validation_hash
         artifact_next = exact_entry.next_token_id
         raise ArgumentError.new("exact_entry is not an exact-known-span artifact") unless exact_entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
         raise ArgumentError.new("exact_entry validation steps mismatch") unless artifact_steps == output_token_ids.size
         raise ArgumentError.new("exact_entry validation hash mismatch") unless artifact_hash == full_history_hash
-        raise ArgumentError.new("exact_entry prefix mismatch") unless exact_entry.prefix_len == full_history.size - 1
-        raise ArgumentError.new("exact_entry prefix token hash mismatch") unless exact_entry.token_hash == Qwen35PromptCache.token_hash(full_history, exact_entry.prefix_len)
+        raise ArgumentError.new("exact_entry prefix mismatch") unless exact_entry.prefix_len == full_history_len - 1
+        raise ArgumentError.new("exact_entry prefix token hash mismatch") unless exact_entry.token_hash == Qwen35PromptCache.token_hash_concat(prompt_token_ids, output_token_ids, exact_entry.prefix_len)
         raise ArgumentError.new("exact_entry next token mismatch") unless artifact_next == output_token_ids[-1]
 
         entry = OutputFastForwardEntry.new(
@@ -1046,6 +1045,26 @@ module ML::GGUF
       Digest::SHA256.hexdigest(io.to_slice)
     end
 
+    def token_hash_concat(left_ids : Array(Int32),
+                          right_ids : Array(Int32),
+                          prefix_len : Int32 = left_ids.size + right_ids.size) : String
+      total = left_ids.size + right_ids.size
+      raise ArgumentError.new("prefix_len out of range: #{prefix_len}") if prefix_len < 0 || prefix_len > total
+
+      io = IO::Memory.new
+      io.write("qwen35-token-v1\0".to_slice)
+      io.write_bytes(prefix_len.to_u32, IO::ByteFormat::LittleEndian)
+      left_count = prefix_len < left_ids.size ? prefix_len : left_ids.size
+      left_count.times do |i|
+        io.write_bytes(left_ids[i], IO::ByteFormat::LittleEndian)
+      end
+      right_count = prefix_len - left_count
+      right_count.times do |i|
+        io.write_bytes(right_ids[i], IO::ByteFormat::LittleEndian)
+      end
+      Digest::SHA256.hexdigest(io.to_slice)
+    end
+
     def prompt_text_hash(prompt_text : String) : String
       Digest::SHA256.hexdigest("qwen35-prompt-text-v1\0#{prompt_text}")
     end
@@ -1103,15 +1122,14 @@ module ML::GGUF
       return false unless entry.output_token_hash == token_hash(entry.output_token_ids)
       return false unless entry.generated_text_hash == generated_text_hash(entry.generated_text)
 
-      full_history = entry.prompt_token_ids.dup
-      full_history.concat(entry.output_token_ids)
-      full_hash = token_hash(full_history)
+      full_history_len = entry.prompt_token_ids.size + entry.output_token_ids.size
+      full_hash = token_hash_concat(entry.prompt_token_ids, entry.output_token_ids)
       return false unless entry.full_history_hash == full_hash
       return false unless entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
       return false unless entry.artifact_validation_steps == entry.output_token_count
       return false unless entry.artifact_validation_hash == full_hash
-      return false unless entry.artifact_prefix_len == full_history.size - 1
-      return false unless entry.artifact_token_hash == token_hash(full_history, entry.artifact_prefix_len)
+      return false unless entry.artifact_prefix_len == full_history_len - 1
+      return false unless entry.artifact_token_hash == token_hash_concat(entry.prompt_token_ids, entry.output_token_ids, entry.artifact_prefix_len)
       return false unless entry.artifact_next_token_id == entry.output_token_ids[-1]
 
       true
