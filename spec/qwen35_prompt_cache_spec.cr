@@ -159,6 +159,7 @@ describe ML::GGUF::Qwen35PromptCache do
         token_ids: [1_i32],
       )
 
+      store.lookup_tokenized_prompt("model-a", "tok-a", "first").try(&.token_ids).should eq([1_i32])
       cached = store.tokenized_prompt_entries
       cached.size.should eq(1)
       cached[0].token_ids << 99_i32

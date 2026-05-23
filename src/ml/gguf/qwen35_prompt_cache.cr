@@ -223,6 +223,15 @@ module ML::GGUF
         @source_history_manifest_cache = [] of SourceHistoryEntry
         @tokenized_prompt_manifest_fingerprint = nil.as(ManifestFingerprint?)
         @tokenized_prompt_manifest_cache = [] of TokenizedPromptEntry
+        @entry_index_fingerprint = nil.as(ManifestFingerprint?)
+        @entry_exact_index = {} of Tuple(String, String, String, Int32) => Array(Entry)
+        @entry_prefix_index = {} of Tuple(String, String, Int32, String) => Array(Entry)
+        @source_history_index_fingerprint = nil.as(ManifestFingerprint?)
+        @source_history_base_index = {} of Tuple(String, String, String) => Array(SourceHistoryEntry)
+        @source_history_turn_index = {} of Tuple(String, String, String, String) => Array(SourceHistoryEntry)
+        @tokenized_prompt_index_fingerprint = nil.as(ManifestFingerprint?)
+        @tokenized_prompt_exact_index = {} of Tuple(String, String, String) => Array(TokenizedPromptEntry)
+        @tokenized_prompt_model_index = {} of Tuple(String, String) => Array(TokenizedPromptEntry)
       end
 
       def save(session_id : String,
@@ -288,9 +297,13 @@ module ML::GGUF
                        tokenizer_id : String,
                        prompt_hash : String,
                        prefix_len : Int32) : Entry?
-        entries.reverse_each.find do |entry|
-          compatible?(entry, model_id, tokenizer_id, prompt_hash, prefix_len) &&
-            usable_entry?(entry)
+        ensure_entry_indices
+        key = {model_id, tokenizer_id, prompt_hash.downcase, prefix_len}
+        candidates = @entry_exact_index[key]?
+        return nil unless candidates
+
+        if hit = candidates.reverse_each.find { |entry| usable_entry?(entry) }
+          clone_entry(hit)
         end
       end
 
@@ -314,31 +327,25 @@ module ML::GGUF
         raise ArgumentError.new("min_prefix_len must be non-negative") if min_prefix_len < 0
         raise ArgumentError.new("max_prefix_len out of range: #{max_prefix_len}") if max_prefix_len < 0 || max_prefix_len > token_ids.size
 
-        hash_by_len = {} of Int32 => String
-        candidates = entries.select do |entry|
-          next false unless entry.runtime_id == RUNTIME_ID
-          next false unless entry.model_id == model_id
-          next false unless entry.tokenizer_id == tokenizer_id
-          next false if entry.prefix_len < min_prefix_len
-          next false if entry.prefix_len > max_prefix_len
-          next false if entry.prefix_len > token_ids.size
-          next false unless stored_token_hash = entry.token_hash
-          next false unless usable_entry?(entry)
+        ensure_entry_indices
+        upper = max_prefix_len < token_ids.size ? max_prefix_len : token_ids.size
+        upper.downto(min_prefix_len) do |prefix_len|
+          expected = Qwen35PromptCache.token_hash(token_ids, prefix_len)
+        candidates = @entry_prefix_index[{model_id, tokenizer_id, prefix_len, expected}]?
+        next unless candidates
 
-          expected = hash_by_len[entry.prefix_len]?
-          unless expected
-            expected = Qwen35PromptCache.token_hash(token_ids, entry.prefix_len)
-            hash_by_len[entry.prefix_len] = expected
+          valid_candidates = candidates.select { |entry| usable_entry?(entry) }
+          if hit = valid_candidates.max_by? { |entry| entry.created_at_unix }
+            return clone_entry(hit)
           end
-          stored_token_hash == expected
         end
-        candidates.max_by? { |entry| {entry.prefix_len, entry.created_at_unix} }
+        nil
       end
 
       def lookup_session(session_id : String,
                          turn_id : String? = nil,
                          prefix_len : Int32? = nil) : Entry?
-        candidates = entries.select do |entry|
+        candidates = manifest_entries.select do |entry|
           next false unless entry.runtime_id == RUNTIME_ID
           next false unless entry.session_id == session_id
           next false if turn_id && entry.turn_id != turn_id
@@ -346,7 +353,9 @@ module ML::GGUF
 
           usable_entry?(entry)
         end
-        candidates.max_by? { |entry| {entry.created_at_unix, entry.prefix_len} }
+        if hit = candidates.max_by? { |entry| {entry.created_at_unix, entry.prefix_len} }
+          clone_entry(hit)
+        end
       end
 
       def restore(entry : Entry,
@@ -440,6 +449,10 @@ module ML::GGUF
       end
 
       def entries : Array(Entry)
+        clone_entries(manifest_entries)
+      end
+
+      private def manifest_entries : Array(Entry)
         fingerprint = manifest_fingerprint(@manifest_path)
         unless fingerprint
           @entry_manifest_fingerprint = nil
@@ -447,7 +460,7 @@ module ML::GGUF
           return [] of Entry
         end
         if @entry_manifest_fingerprint == fingerprint
-          return clone_entries(@entry_manifest_cache)
+          return @entry_manifest_cache
         end
 
         parsed = [] of Entry
@@ -463,7 +476,7 @@ module ML::GGUF
         end
         @entry_manifest_fingerprint = fingerprint
         @entry_manifest_cache = parsed
-        clone_entries(parsed)
+        parsed
       end
 
       def save_source_history(session_id : String,
@@ -501,19 +514,25 @@ module ML::GGUF
                                 model_id : String,
                                 tokenizer_id : String,
                                 turn_id : String? = nil) : SourceHistoryEntry?
-        source_history_entries.select do |entry|
-          next false unless entry.runtime_id == SOURCE_HISTORY_RUNTIME_ID
-          next false unless entry.session_id == session_id
-          next false unless entry.model_id == model_id
-          next false unless entry.tokenizer_id == tokenizer_id
-          next false if turn_id && entry.turn_id != turn_id
+        ensure_source_history_indices
+        candidates = if turn = turn_id
+                       @source_history_turn_index[{session_id, model_id, tokenizer_id, turn}]?
+                     else
+                       @source_history_base_index[{session_id, model_id, tokenizer_id}]?
+        end
+        return nil unless candidates
 
-          entry.token_count == entry.token_ids.size &&
-            entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
-        end.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+        valid_candidates = candidates.select { |entry| source_history_entry_valid?(entry) }
+        if hit = valid_candidates.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+          clone_source_history_entry(hit)
+        end
       end
 
       def source_history_entries : Array(SourceHistoryEntry)
+        clone_source_history_entries(source_history_manifest_entries)
+      end
+
+      private def source_history_manifest_entries : Array(SourceHistoryEntry)
         fingerprint = manifest_fingerprint(@source_history_manifest_path)
         unless fingerprint
           @source_history_manifest_fingerprint = nil
@@ -521,7 +540,7 @@ module ML::GGUF
           return [] of SourceHistoryEntry
         end
         if @source_history_manifest_fingerprint == fingerprint
-          return clone_source_history_entries(@source_history_manifest_cache)
+          return @source_history_manifest_cache
         end
 
         parsed = [] of SourceHistoryEntry
@@ -537,7 +556,7 @@ module ML::GGUF
         end
         @source_history_manifest_fingerprint = fingerprint
         @source_history_manifest_cache = parsed
-        clone_source_history_entries(parsed)
+        parsed
       end
 
       def save_tokenized_prompt(model_id : String,
@@ -567,31 +586,34 @@ module ML::GGUF
                                   tokenizer_id : String,
                                   prompt_text : String) : TokenizedPromptEntry?
         prompt_text_hash = Qwen35PromptCache.prompt_text_hash(prompt_text)
-        tokenized_prompt_entries.select do |entry|
-          next false unless entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID
-          next false unless entry.model_id == model_id
-          next false unless entry.tokenizer_id == tokenizer_id
-          next false unless entry.prompt_text_hash == prompt_text_hash
+        ensure_tokenized_prompt_indices
+        candidates = @tokenized_prompt_exact_index[{model_id, tokenizer_id, prompt_text_hash}]?
+        return nil unless candidates
 
-          entry.token_count == entry.token_ids.size &&
-            entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
-        end.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+        valid_candidates = candidates.select { |entry| tokenized_prompt_entry_valid?(entry) }
+        if hit = valid_candidates.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+          clone_tokenized_prompt_entry(hit)
+        end
       end
 
       def lookup_tokenized_prompt_for_model(model_id : String,
                                             prompt_text : String) : TokenizedPromptEntry?
         prompt_text_hash = Qwen35PromptCache.prompt_text_hash(prompt_text)
-        tokenized_prompt_entries.select do |entry|
-          next false unless entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID
-          next false unless entry.model_id == model_id
-          next false unless entry.prompt_text_hash == prompt_text_hash
+        ensure_tokenized_prompt_indices
+        candidates = @tokenized_prompt_model_index[{model_id, prompt_text_hash}]?
+        return nil unless candidates
 
-          entry.token_count == entry.token_ids.size &&
-            entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
-        end.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+        valid_candidates = candidates.select { |entry| tokenized_prompt_entry_valid?(entry) }
+        if hit = valid_candidates.max_by? { |entry| {entry.created_at_unix, entry.token_count} }
+          clone_tokenized_prompt_entry(hit)
+        end
       end
 
       def tokenized_prompt_entries : Array(TokenizedPromptEntry)
+        clone_tokenized_prompt_entries(tokenized_prompt_manifest_entries)
+      end
+
+      private def tokenized_prompt_manifest_entries : Array(TokenizedPromptEntry)
         fingerprint = manifest_fingerprint(@tokenized_prompt_manifest_path)
         unless fingerprint
           @tokenized_prompt_manifest_fingerprint = nil
@@ -599,7 +621,7 @@ module ML::GGUF
           return [] of TokenizedPromptEntry
         end
         if @tokenized_prompt_manifest_fingerprint == fingerprint
-          return clone_tokenized_prompt_entries(@tokenized_prompt_manifest_cache)
+          return @tokenized_prompt_manifest_cache
         end
 
         parsed = [] of TokenizedPromptEntry
@@ -615,7 +637,7 @@ module ML::GGUF
         end
         @tokenized_prompt_manifest_fingerprint = fingerprint
         @tokenized_prompt_manifest_cache = parsed
-        clone_tokenized_prompt_entries(parsed)
+        parsed
       end
 
       def save_output_fast_forward(session_id : String,
@@ -715,6 +737,82 @@ module ML::GGUF
           file << '\n'
         end
         @entry_manifest_fingerprint = nil
+      end
+
+      private def ensure_entry_indices : Nil
+        manifest_entries
+        fingerprint = @entry_manifest_fingerprint
+        return if @entry_index_fingerprint == fingerprint
+
+        exact_index = {} of Tuple(String, String, String, Int32) => Array(Entry)
+        prefix_index = {} of Tuple(String, String, Int32, String) => Array(Entry)
+        @entry_manifest_cache.each do |entry|
+          next unless entry.runtime_id == RUNTIME_ID
+
+          exact_key = {entry.model_id, entry.tokenizer_id, entry.prompt_hash.downcase, entry.prefix_len}
+          (exact_index[exact_key] ||= [] of Entry) << entry
+          if token_hash = entry.token_hash
+            prefix_key = {entry.model_id, entry.tokenizer_id, entry.prefix_len, token_hash}
+            (prefix_index[prefix_key] ||= [] of Entry) << entry
+          end
+        end
+        @entry_exact_index = exact_index
+        @entry_prefix_index = prefix_index
+        @entry_index_fingerprint = fingerprint
+      end
+
+      private def ensure_source_history_indices : Nil
+        source_history_manifest_entries
+        fingerprint = @source_history_manifest_fingerprint
+        return if @source_history_index_fingerprint == fingerprint
+
+        base_index = {} of Tuple(String, String, String) => Array(SourceHistoryEntry)
+        turn_index = {} of Tuple(String, String, String, String) => Array(SourceHistoryEntry)
+        @source_history_manifest_cache.each do |entry|
+          next unless entry.runtime_id == SOURCE_HISTORY_RUNTIME_ID
+
+          base_key = {entry.session_id, entry.model_id, entry.tokenizer_id}
+          (base_index[base_key] ||= [] of SourceHistoryEntry) << entry
+          if turn = entry.turn_id
+            turn_key = {entry.session_id, entry.model_id, entry.tokenizer_id, turn}
+            (turn_index[turn_key] ||= [] of SourceHistoryEntry) << entry
+          end
+        end
+        @source_history_base_index = base_index
+        @source_history_turn_index = turn_index
+        @source_history_index_fingerprint = fingerprint
+      end
+
+      private def ensure_tokenized_prompt_indices : Nil
+        tokenized_prompt_manifest_entries
+        fingerprint = @tokenized_prompt_manifest_fingerprint
+        return if @tokenized_prompt_index_fingerprint == fingerprint
+
+        exact_index = {} of Tuple(String, String, String) => Array(TokenizedPromptEntry)
+        model_index = {} of Tuple(String, String) => Array(TokenizedPromptEntry)
+        @tokenized_prompt_manifest_cache.each do |entry|
+          next unless entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID
+
+          exact_key = {entry.model_id, entry.tokenizer_id, entry.prompt_text_hash}
+          (exact_index[exact_key] ||= [] of TokenizedPromptEntry) << entry
+          model_key = {entry.model_id, entry.prompt_text_hash}
+          (model_index[model_key] ||= [] of TokenizedPromptEntry) << entry
+        end
+        @tokenized_prompt_exact_index = exact_index
+        @tokenized_prompt_model_index = model_index
+        @tokenized_prompt_index_fingerprint = fingerprint
+      end
+
+      private def source_history_entry_valid?(entry : SourceHistoryEntry) : Bool
+        entry.runtime_id == SOURCE_HISTORY_RUNTIME_ID &&
+          entry.token_count == entry.token_ids.size &&
+          entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
+      end
+
+      private def tokenized_prompt_entry_valid?(entry : TokenizedPromptEntry) : Bool
+        entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID &&
+          entry.token_count == entry.token_ids.size &&
+          entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
       end
 
       private def clone_entries(entries : Array(Entry)) : Array(Entry)
