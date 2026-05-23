@@ -35,6 +35,7 @@ module ProbeRuntime
   @@self_spec_branch_guard_snapshot_suffix_min_threshold : Float64? = nil
   @@self_spec_branch_guard_snapshot_prefix_suffix_thresholds = [] of Tuple(Int32, Float64)
   @@self_spec_branch_guard_no_snapshot_threshold : Float64? = nil
+  @@self_spec_draft_refresh_on_accept = false
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -110,6 +111,14 @@ module ProbeRuntime
 
   def self.self_spec_router_trace_label=(label : String)
     @@self_spec_router_trace_label = label
+  end
+
+  def self.self_spec_draft_refresh_on_accept : Bool
+    @@self_spec_draft_refresh_on_accept
+  end
+
+  def self.self_spec_draft_refresh_on_accept=(enabled : Bool)
+    @@self_spec_draft_refresh_on_accept = enabled
   end
 
   def self.self_spec_branch_guard_snapshot : Bool
@@ -7834,6 +7843,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   exact_refresh_offsets = ProbeRuntime.gpu_draft_exact_refresh_offsets.dup
   exact_refresh_layer_offsets = {} of Int32 => Set(Int32)
   exact_refresh_prefix = ProbeRuntime.gpu_draft_exact_refresh_prefix
+  draft_refresh_on_accept = ProbeRuntime.self_spec_draft_refresh_on_accept
   max_gamma = schedule.max
   router_trace_enabled = !ProbeRuntime.self_spec_router_trace_io.nil?
   tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || draft_updown_agreement_gate || mtp_k2_on_reject_enabled || router_trace_enabled
@@ -8892,9 +8902,9 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         end
       end
     end
-    refresh_current_updown = draft_updown_refresh_on_accept && current_block.use_updown
+    refresh_current_draft = draft_refresh_on_accept || (draft_updown_refresh_on_accept && current_block.use_updown)
     can_overlap_next_after_branch_guard = branch_guard_index.nil? || branch_guard_overlap_next
-    if emitted_tokens + proposal.size < gen_tokens && !risk_offramp && !refresh_current_updown && can_overlap_next_after_branch_guard
+    if emitted_tokens + proposal.size < gen_tokens && !risk_offramp && !refresh_current_draft && can_overlap_next_after_branch_guard
       t_next = Time.instant
       last_proposed_buf = current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
       next_schedule_index = (current_schedule_index + 1) % schedule.size
@@ -9392,7 +9402,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           draft_next_ms += chunk_draft_next_ms
           current_block = block
           current_proposal = next_proposal
-        elsif refresh_current_updown
+        elsif refresh_current_draft
           t_next = Time.instant
           next_steps = Math.min(schedule[next_schedule_index], gen_tokens - emitted_tokens)
           exact_base = if use_verifier_backup
@@ -9860,13 +9870,13 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_resync_#{serial_chunks}")
       end
     else
-      serial_refresh_current_updown = draft_updown_refresh_on_accept && serial_current_block.use_updown
+      serial_refresh_current_draft = draft_refresh_on_accept || (draft_updown_refresh_on_accept && serial_current_block.use_updown)
       serial_update_updown_after_accept.call(serial_proposal_margin_min, serial_proposal_margin_checks)
       if serial_emitted_tokens < gen_tokens
         serial_target_next_id = target_nexts[proposal.size - 1][0]
         serial_schedule_index = (serial_schedule_index + 1) % schedule.size
         serial_next_steps = Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens)
-        if serial_refresh_current_updown
+        if serial_refresh_current_draft
           exact_base = if use_verifier_backup
                          backup = serial_backup.not_nil!
                          base = copy_owned_resync_base.call(backup, cycle_start_pos, "serial_refresh_accept_#{serial_chunks}")
@@ -11264,6 +11274,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-min-margin=F", "Only enable pca-updown for future draft blocks after a full-accept chunk whose draft top2 min-margin is at least F; combines with --simulate-self-spec-gpu-pipeline-draft-updown-after-full-accepts") { |v| simulate_self_spec_gpu_pipeline_draft_updown_min_margin = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-max-chunks=N", "Use pca-updown for at most N draft chunks in a run; N=0 keeps the pca route closed and is useful for drift/burst falsifiers") { |v| simulate_self_spec_gpu_pipeline_draft_updown_max_chunks = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-refresh-on-accept", "After a fully accepted pca-updown chunk, discard approximate draft state and seed the next chunk from exact verifier state") { simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept = true }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-refresh-on-accept", "After every fully accepted draft chunk, discard approximate draft state and seed the next chunk from exact verifier state") { ProbeRuntime.self_spec_draft_refresh_on_accept = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-agreement-gate", "Probe lowrank vs pca-updown at the same boundary and use pca-updown only when its next top1 matches lowrank top1/top2") { simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-agreement-steps=N", "Compare N lowrank/pca-updown draft steps before allowing pca-updown; steps after the first must match lowrank top1 exactly") { |v| simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-agreement-margin-thresholds=LIST", "When agreement gate is enabled, score lowrank same-boundary margin thresholds as candidate cheap pca-updown predictors; reports selected/pass/fail/false-negative counts") { |v| simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds = parse_float_list(v) }
@@ -12069,6 +12080,7 @@ if rank = simulate_logit_rank
       exact_refresh_note = ProbeRuntime.gpu_draft_exact_refresh_interval > 0 ? " draft_exact_refresh=#{ProbeRuntime.gpu_draft_exact_refresh_interval}" : ""
       exact_refresh_note += " draft_exact_refresh_prefix=#{ProbeRuntime.gpu_draft_exact_refresh_prefix}" if ProbeRuntime.gpu_draft_exact_refresh_prefix > 0
       exact_refresh_note += " draft_exact_refresh_offsets=#{ProbeRuntime.gpu_draft_exact_refresh_offsets.join(',')}" unless ProbeRuntime.gpu_draft_exact_refresh_offsets.empty?
+      exact_refresh_note += " draft_refresh_on_accept=1" if ProbeRuntime.self_spec_draft_refresh_on_accept
       residual_router_thresholds = self_spec_residual_router_thresholds(thresholds, simulate_self_spec_gpu_pipeline_residual_router_pass_threshold)
       main_route_residual_stats = route_residual_stats(layer_vectors, layer_bases, rank, calib_count, thresholds)
       main_value_stats = self_spec_prompt_value_stats(token_ids, calib_count)
