@@ -15495,3 +15495,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This is a targeted exact cleanup for legacy cache entries lacking direct output certificates. It reduces fallback CPU overhead but does not supersede direct output certificates, which should remain the primary terminal cache hit path.
 - LTP/WBA: Window is a validated source-history span with known requested output length. Transport is a bounded prefix corridor inside `source.token_ids`. Legal move hashes and validates by `(token_ids, prefix_len/full_history_len)` instead of materializing slice arrays. Boundary safety is exact token-hash equivalence and unchanged artifact/session checks. Potential descends in `(slice_arrays, copied_token_count, validation_wall)`.
 - trust: {F:0.88,G:0.46,R:0.84}
+
+**LM-505 Direct output certificate memoization removes repeated JSON parse in resident Store [shared/ml]**
+- status: IMPLEMENTED; exact terminal-cache resident cleanup
+- claim tested: Repeated same-process terminal cache hits should not reread and reparse the direct output certificate JSON when the certificate file is unchanged.
+- evidence: `Qwen35PromptCache::Store#lookup_output_fast_forward` now caches parsed certificates by path fingerprint, invalidates on file disappearance/corruption/rewrite, returns cloned entries, and still runs `output_fast_forward_entry_valid?` on every lookup. Verification: prompt-cache spec passed (`19 examples, 0 failures`), `bin/qwen35_generate.cr --no-codegen` passed, and `git diff --check` passed. Synthetic 128+256 token certificate bench: old read+parse+validate `138.569ms/2000` (`69.284us` each), memoized lookup+validate `44.191ms/2000` (`22.096us` each), both `ok=true`.
+- diagnosis: This completes the resident direct-certificate fast path at the Store layer. Terminal repeated spans are now mostly validation/hash and caller overhead; product-scale gains require a resident API/service path rather than more file parsing tweaks.
+- LTP/WBA: Window is unchanged certificate file fingerprint. Transport is the parsed certificate object. Legal move is cloned cached entry reuse followed by the same validation boundary. Boundary safety is fingerprint invalidation plus per-lookup hash validation. Potential descends in `(file_reads, JSON_parse_work, temporary_objects, lookup_wall)`.
+- trust: {F:0.90,G:0.52,R:0.86}

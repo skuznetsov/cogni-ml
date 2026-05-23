@@ -249,6 +249,8 @@ describe ML::GGUF::Qwen35PromptCache do
       hit.not_nil!.prompt_token_ids.should eq(prompt_ids)
       hit.not_nil!.output_token_ids.should eq(output_ids)
       hit.not_nil!.generated_text.should eq(" generated text")
+      hit.not_nil!.output_token_ids << 999_i32
+      store.lookup_output_fast_forward("model-a", "s1", "prompt text", output_ids.size, turn_id: "t1").try(&.output_token_ids).should eq(output_ids)
 
       saved.generated_text_hash = "bad"
       ML::GGUF::Qwen35PromptCache.output_fast_forward_entry_valid?(
@@ -260,6 +262,47 @@ describe ML::GGUF::Qwen35PromptCache do
         turn_id: "t1",
       ).should be_false
       store.lookup_output_fast_forward("model-a", "s1", "other prompt", output_ids.size, turn_id: "t1").should be_nil
+
+      replacement_ids = [60_i32, 70_i32, 80_i32]
+      replacement_history = prompt_ids + replacement_ids
+      replacement_entry = ML::GGUF::Qwen35PromptCache::OutputFastForwardEntry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::OUTPUT_FAST_FORWARD_RUNTIME_ID,
+        session_id: "s1",
+        turn_id: "t1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text_hash: ML::GGUF::Qwen35PromptCache.prompt_text_hash("prompt text"),
+        prompt_token_hash: ML::GGUF::Qwen35PromptCache.token_hash(prompt_ids),
+        prompt_token_count: prompt_ids.size,
+        prompt_token_ids: prompt_ids,
+        output_token_hash: ML::GGUF::Qwen35PromptCache.token_hash(replacement_ids),
+        output_token_count: replacement_ids.size,
+        output_token_ids: replacement_ids,
+        full_history_hash: ML::GGUF::Qwen35PromptCache.token_hash(replacement_history),
+        generated_text: " replacement text",
+        generated_text_hash: ML::GGUF::Qwen35PromptCache.generated_text_hash(" replacement text"),
+        artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+        artifact_validation_steps: replacement_ids.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(replacement_history),
+        artifact_prefix_len: replacement_history.size - 1,
+        artifact_token_hash: ML::GGUF::Qwen35PromptCache.token_hash(replacement_history, replacement_history.size - 1),
+        artifact_next_token_id: replacement_ids[-1],
+        created_at_unix: Time.utc.to_unix + 1,
+      )
+      key = ML::GGUF::Qwen35PromptCache.output_fast_forward_key(
+        "model-a",
+        "s1",
+        "t1",
+        ML::GGUF::Qwen35PromptCache.prompt_text_hash("prompt text"),
+        replacement_ids.size,
+      )
+      bucket = File.join(store.output_fast_forward_dir, key[0, 2], key[2, 2])
+      FileUtils.mkdir_p(bucket)
+      File.open(File.join(bucket, "#{key}.json"), "w") do |file|
+        replacement_entry.to_json(file)
+        file << '\n'
+      end
+      store.lookup_output_fast_forward("model-a", "s1", "prompt text", replacement_ids.size, turn_id: "t1").try(&.output_token_ids).should eq(replacement_ids)
 
       exact_entry.artifact_validation_steps = output_ids.size - 1
       expect_raises(ArgumentError, /validation steps mismatch/) do

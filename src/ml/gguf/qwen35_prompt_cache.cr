@@ -232,6 +232,7 @@ module ML::GGUF
         @tokenized_prompt_index_fingerprint = nil.as(ManifestFingerprint?)
         @tokenized_prompt_exact_index = {} of Tuple(String, String, String) => Array(TokenizedPromptEntry)
         @tokenized_prompt_model_index = {} of Tuple(String, String) => Array(TokenizedPromptEntry)
+        @output_fast_forward_cache = {} of String => Tuple(ManifestFingerprint, OutputFastForwardEntry)
       end
 
       def save(session_id : String,
@@ -713,6 +714,7 @@ module ML::GGUF
           file << '\n'
         end
         File.rename(tmp, path)
+        @output_fast_forward_cache.delete(path)
         entry
       ensure
         File.delete(tmp) if tmp && File.exists?(tmp)
@@ -727,23 +729,37 @@ module ML::GGUF
 
         prompt_text_hash = Qwen35PromptCache.prompt_text_hash(prompt_text)
         path = output_fast_forward_path(model_id, session_id, turn_id, prompt_text_hash, output_token_count)
-        return nil unless File.exists?(path)
-
-        begin
-          entry = OutputFastForwardEntry.from_json(File.read(path))
-        rescue JSON::ParseException | KeyError
+        unless fingerprint = manifest_fingerprint(path)
+          @output_fast_forward_cache.delete(path)
           return nil
         end
-        return nil unless Qwen35PromptCache.output_fast_forward_entry_valid?(
-                            entry,
-                            model_id,
-                            session_id,
-                            prompt_text,
-                            output_token_count,
-                            turn_id: turn_id,
-                          )
 
-        entry
+        cached = @output_fast_forward_cache[path]?
+        entry = if cached && cached[0] == fingerprint
+                  cached[1]
+                else
+                  begin
+                    parsed = OutputFastForwardEntry.from_json(File.read(path))
+                    @output_fast_forward_cache[path] = {fingerprint, parsed}
+                    parsed
+                  rescue JSON::ParseException | KeyError
+                    @output_fast_forward_cache.delete(path)
+                    return nil
+                  end
+                end
+        valid = Qwen35PromptCache.output_fast_forward_entry_valid?(
+          entry,
+          model_id,
+          session_id,
+          prompt_text,
+          output_token_count,
+          turn_id: turn_id,
+        )
+        unless valid
+          return nil
+        end
+
+        clone_output_fast_forward_entry(entry)
       end
 
       private def append_manifest(entry : Entry) : Nil
@@ -898,6 +914,33 @@ module ML::GGUF
           token_hash: entry.token_hash,
           token_count: entry.token_count,
           token_ids: entry.token_ids.dup,
+          created_at_unix: entry.created_at_unix,
+        )
+      end
+
+      private def clone_output_fast_forward_entry(entry : OutputFastForwardEntry) : OutputFastForwardEntry
+        OutputFastForwardEntry.new(
+          runtime_id: entry.runtime_id,
+          session_id: entry.session_id,
+          turn_id: entry.turn_id,
+          model_id: entry.model_id,
+          tokenizer_id: entry.tokenizer_id,
+          prompt_text_hash: entry.prompt_text_hash,
+          prompt_token_hash: entry.prompt_token_hash,
+          prompt_token_count: entry.prompt_token_count,
+          prompt_token_ids: entry.prompt_token_ids.dup,
+          output_token_hash: entry.output_token_hash,
+          output_token_count: entry.output_token_count,
+          output_token_ids: entry.output_token_ids.dup,
+          full_history_hash: entry.full_history_hash,
+          generated_text: entry.generated_text,
+          generated_text_hash: entry.generated_text_hash,
+          artifact_validation_kind: entry.artifact_validation_kind,
+          artifact_validation_steps: entry.artifact_validation_steps,
+          artifact_validation_hash: entry.artifact_validation_hash,
+          artifact_prefix_len: entry.artifact_prefix_len,
+          artifact_token_hash: entry.artifact_token_hash,
+          artifact_next_token_id: entry.artifact_next_token_id,
           created_at_unix: entry.created_at_unix,
         )
       end
