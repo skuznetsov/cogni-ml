@@ -4249,6 +4249,135 @@ module ML
           result
         end
 
+        def self.ffn_project_residual_top1(x : Array(Float32),
+                                           residual : Array(Float32),
+                                           gate_qw : QuantWeight,
+                                           up_qw : QuantWeight,
+                                           down_qw : QuantWeight,
+                                           norm_weight : Array(Float32),
+                                           head_qw : QuantWeight,
+                                           eps : Float32) : NamedTuple(hidden: Array(Float32), top1: {Int32, Float32})?
+          return nil unless ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1"
+          gate_pipe = gemv_pipeline_for(gate_qw)
+          up_pipe = gemv_pipeline_for(up_qw)
+          down_pipe = gemv_pipeline_for(down_qw)
+          return nil if gate_pipe.nil? || up_pipe.nil? || down_pipe.nil?
+          return nil unless can_use_head_top1_fused?(head_qw)
+
+          ML::Metal::Device.init!
+
+          hidden_dim = x.size
+          ffn_dim = gate_qw.out_dim
+          raise "ffn/head residual size mismatch" unless residual.size == hidden_dim
+          raise "ffn/head norm size mismatch" unless norm_weight.size == hidden_dim
+          raise "ffn gate in_dim mismatch: expected #{hidden_dim}, got #{gate_qw.in_dim}" unless gate_qw.in_dim == hidden_dim
+          raise "ffn up shape mismatch" unless up_qw.in_dim == hidden_dim && up_qw.out_dim == ffn_dim
+          raise "ffn down shape mismatch" unless down_qw.in_dim == ffn_dim && down_qw.out_dim == hidden_dim
+          raise "ffn/head shape mismatch" unless head_qw.in_dim == hidden_dim
+
+          t0 = Time.instant if Profile.enabled?
+          x_buf = Scratch.get(:ffn_head_x, hidden_dim.to_i64 * sizeof(Float32))
+          residual_buf = Scratch.get(:ffn_head_residual, hidden_dim.to_i64 * sizeof(Float32))
+          norm_w_buf = Scratch.get(:ffn_head_norm_w, hidden_dim.to_i64 * sizeof(Float32))
+          gate_buf = Scratch.get(:ffn_head_gate, ffn_dim.to_i64 * sizeof(Float32))
+          up_buf = Scratch.get(:ffn_head_up, ffn_dim.to_i64 * sizeof(Float32))
+          comb_buf = Scratch.get(:ffn_head_comb, ffn_dim.to_i64 * sizeof(Float32))
+          ffn_out_buf = Scratch.get(:ffn_head_ffn_out, hidden_dim.to_i64 * sizeof(Float32))
+          after_ffn_buf = Scratch.get(:ffn_head_after_ffn, hidden_dim.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:ffn_head_normed, hidden_dim.to_i64 * sizeof(Float32))
+          tile_count = (head_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+          tile_values_buf = Scratch.get(:ffn_head_tile_values, tile_count.to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:ffn_head_tile_ids, tile_count.to_i64 * sizeof(UInt32))
+          top1_id_buf = Scratch.get(:ffn_head_top1_id, sizeof(UInt32).to_i64)
+          top1_value_buf = Scratch.get(:ffn_head_top1_value, sizeof(Float32).to_i64)
+
+          x_buf.write(x)
+          residual_buf.write(residual)
+          norm_w_buf.write(norm_weight)
+
+          gate_w_buf, gate_w_off = if slot = mmap_slot_for(gate_qw.raw)
+                                     slot
+                                   else
+                                     {gate_qw.fallback_metal_buffer, 0_i64}
+                                   end
+          up_w_buf, up_w_off = if slot = mmap_slot_for(up_qw.raw)
+                                 slot
+                               else
+                                 {up_qw.fallback_metal_buffer, 0_i64}
+                               end
+          down_w_buf, down_w_off = if slot = mmap_slot_for(down_qw.raw)
+                                     slot
+                                   else
+                                     {down_qw.fallback_metal_buffer, 0_i64}
+                                   end
+          head_w_buf, head_w_off = if slot = mmap_slot_for(head_qw.raw)
+                                     slot
+                                   else
+                                     {head_qw.fallback_metal_buffer, 0_i64}
+                                   end
+
+          cmd = ML::Metal::CommandBuffer.new
+
+          proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_gemv(proj_enc, gate_pipe.not_nil!, x_buf, gate_buf, gate_w_buf, gate_w_off, gate_qw.in_dim, gate_qw.out_dim)
+          encode_gemv(proj_enc, up_pipe.not_nil!, x_buf, up_buf, up_w_buf, up_w_off, up_qw.in_dim, up_qw.out_dim)
+          proj_enc.end_encoding
+
+          swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
+          swiglu_enc.set_pipeline(ffn_swiglu_pipeline)
+          swiglu_enc.set_buffer(gate_buf, 0)
+          swiglu_enc.set_buffer(up_buf, 1)
+          swiglu_enc.set_buffer(comb_buf, 2, ML::Metal::BufferAccess::Write)
+          swiglu_enc.set_value(ffn_dim.to_u32, 3)
+          swiglu_enc.dispatch_1d(ffn_dim, 256)
+          swiglu_enc.end_encoding
+
+          down_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_gemv(down_enc, down_pipe.not_nil!, comb_buf, ffn_out_buf, down_w_buf, down_w_off, down_qw.in_dim, down_qw.out_dim)
+          down_enc.end_encoding
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_add_rmsnorm(norm_enc, residual_buf, ffn_out_buf, norm_w_buf, after_ffn_buf, normed_buf, hidden_dim, eps)
+          norm_enc.end_encoding
+
+          head_enc = ML::Metal::ComputeEncoder.new(cmd)
+          head_enc.set_pipeline(head_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
+          head_enc.set_buffer(head_w_buf, 0, ML::Metal::BufferAccess::Read, offset: head_w_off)
+          head_enc.set_buffer(normed_buf, 1)
+          head_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
+          head_enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
+          head_enc.set_value(head_qw.in_dim.to_u32, 4)
+          head_enc.set_value(head_qw.out_dim.to_u32, 5)
+          head_enc.dispatch_threadgroups({tile_count, 1, 1}, {head_qw.type.q8_0? ? MV_Q8_NSG * 32 : 64, 1, 1})
+          head_enc.end_encoding
+
+          reduce_enc = ML::Metal::ComputeEncoder.new(cmd)
+          reduce_enc.set_pipeline(top1_reduce_tiles_pipeline)
+          reduce_enc.set_buffer(tile_values_buf, 0)
+          reduce_enc.set_buffer(tile_ids_buf, 1)
+          reduce_enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+          reduce_enc.set_value(tile_count.to_u32, 4)
+          reduce_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          reduce_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          hidden = read_shared_f32(after_ffn_buf, hidden_dim)
+          top1_raw = read_shared_top1(top1_id_buf, top1_value_buf)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          {hidden: hidden, top1: {top1_raw[0].to_i32, top1_raw[1]}}
+        end
+
         # Full recurrent attention projection on GPU:
         #   qkv/z/alpha/beta GEMVs -> alpha/beta transform -> conv -> L2 ->
         #   DeltaNet/post-norm/out projection.

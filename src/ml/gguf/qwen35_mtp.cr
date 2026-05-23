@@ -663,6 +663,84 @@ module ML::GGUF
       end
     end
 
+    def forward_one_hidden_top1_gguf(weights : Qwen35Weights,
+                                     mtp : Qwen35GGUFMTPWeights,
+                                     prev_hidden : Array(Float32),
+                                     token_id : Int32,
+                                     pos : Int32,
+                                     mtp_state : State? = nil) : NamedTuple(hidden: Array(Float32), top1: {Int32, Float32})
+      # Safe only for stateless one-token proposals. The fused Metal helper does
+      # not append MTP attention K/V state for subsequent stateful draft tokens.
+      unless ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1" && mtp_state.nil?
+        hidden = forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+        return {hidden: hidden, top1: hidden_top1_gguf(weights, mtp, hidden)}
+      end
+
+      hp = weights.hparams
+      hidden = hp.n_embd
+      raise ArgumentError.new("prev_hidden size #{prev_hidden.size} != #{hidden}") unless prev_hidden.size == hidden
+
+      emb = profile_stage("gguf.embed_lookup") { Qwen35CPU.embedding_lookup(mtp.token_embd_qw(weights.token_embd), token_id) }
+      emb_norm = profile_stage("gguf.nextn_enorm") { rms_norm_gguf(emb, mtp.nextn_enorm, hp.rms_eps) }
+      hidden_norm = profile_stage("gguf.nextn_hnorm") { rms_norm_gguf(prev_hidden, mtp.nextn_hnorm, hp.rms_eps) }
+
+      fc_in = Array(Float32).new(hidden * 2, 0.0_f32)
+      hidden.times do |i|
+        fc_in[i] = emb_norm[i]
+        fc_in[hidden + i] = hidden_norm[i]
+      end
+
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv
+      head_dim = hp.head_dim
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      heads_per_group = n_head // n_head_kv
+
+      residual = profile_stage("gguf.eh_proj") { Qwen35CPU.qmatvec_nobias(mtp.nextn_eh_proj_qw, fc_in) }
+      cur = profile_stage("gguf.attn_norm") { rms_norm_gguf(residual, mtp.attn_norm, hp.rms_eps) }
+      attn_o = Array(Float32).new(q_dim, 0.0_f32)
+
+      qv = profile_stage("gguf.attn_qv") { Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_v_qw], cur) }
+      q_full = qv[0]
+      v = qv[1]
+      raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+      raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+
+      profile_stage("gguf.attn_one_token_cpu") do
+        n_head.times do |h|
+          src_base = h * 2 * head_dim + head_dim
+          kvh = h // heads_per_group
+          q_base = h * head_dim
+          kv_base = kvh * head_dim
+          head_dim.times do |d|
+            attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(q_full[src_base + d])
+          end
+        end
+      end
+
+      attn_out = profile_stage("gguf.attn_output") { Qwen35CPU.qmatvec_nobias(mtp.attn_output_qw, attn_o) }
+      after_attn = profile_stage("gguf.attn_residual") { Array(Float32).new(hidden) { |i| residual[i] + attn_out[i] } }
+      cur2 = profile_stage("gguf.post_attn_norm") { rms_norm_gguf(after_attn, mtp.post_attention_norm, hp.rms_eps) }
+
+      if fused = profile_stage("gguf.ffn_head_fused") {
+           Qwen35Metal.ffn_project_residual_top1(
+             cur2,
+             after_attn,
+             mtp.ffn_gate_qw,
+             mtp.ffn_up_qw,
+             mtp.ffn_down_qw,
+             mtp.shared_head_norm(weights.output_norm),
+             mtp.shared_head_qw(weights.output),
+             hp.rms_eps)
+         }
+        return fused
+      end
+
+      hidden_pre_norm = forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+      {hidden: hidden_pre_norm, top1: hidden_top1_gguf(weights, mtp, hidden_pre_norm)}
+    end
+
     def hidden_top2_gguf(weights : Qwen35Weights,
                          mtp : Qwen35GGUFMTPWeights,
                          hidden_pre_norm : Array(Float32)) : Array({Int32, Float32})
