@@ -15591,3 +15591,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This prevents route-policy regressions from hiding behind aggregate wall time. A speed number without route mix can compare different work.
 - LTP/WBA: Window is a matrix row over a cache-serving policy. Transport is aggregate route counts into the TSV. Legal move threads route labels through the benchmark harness without changing model execution. Boundary safety is explicit mode/flag validation. Potential descends in `(benchmark_ambiguity, apples_to_oranges_risk, route_regression_detection_work)`.
 - trust: {F:0.88,G:0.66,R:0.84}
+
+**LM-517 Serving-route policy gate separates terminal, fallback, continuation, and active cursor costs [shared/ml]**
+- status: VERIFIED benchmark snapshot; local M2 Max Qwen3.5-9B, 5 prompt classes, `gen=16`, `requests=5`
+- claim tested: Route policy, not prompt class, dominates exact cache-hit serving latency once route semantics are correct.
+- evidence: Matrix gate showed terminal direct p50 `0.009-0.011ms`, direct-miss source-span fallback p50 `0.006-0.020ms`, continuation restore p50 `0.660-1.012ms`, and active-cursor handoff below printed timer resolution (`0.0ms`). Route columns were stable: `direct_output=5`, `source_history_direct_output_fallback=5`, `state_fast_forward_continuation=5`, and `state_fast_forward_active_cursor=5` respectively.
+- diagnosis: Terminal cache serving is now effectively solved at this scale. Continuation cost is isolation/copy lifecycle, not model compute. The right next product object is a resident session that owns an active continuation cursor.
+- LTP/WBA: Window is route policy per cached request. Transport is either cached ids, source-history span, copied continuation state, or owned active state. Legal move chooses the lowest-cost route that preserves boundary requirements. Boundary safety requires state copy for shared cache and owned cursor for mutable continuation. Potential descends in `(unneeded_state_restore, shared_copy_bytes, request_wall)`.
+- trust: {F:0.90,G:0.62,R:0.84}
