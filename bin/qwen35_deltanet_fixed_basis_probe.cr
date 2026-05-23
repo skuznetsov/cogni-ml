@@ -10738,6 +10738,126 @@ private def print_route_oracle_scoreboard(rows : Array(RouteScoreRow), limit : I
   end
 end
 
+private def route_feature_value(row : RouteScoreRow, feature : String) : Float64?
+  case feature
+  when "residual_mean"
+    row[:residual_mean]
+  when "residual_p90"
+    row[:residual_p90]
+  when "residual_max"
+    row[:residual_max]
+  when "repeat_rate"
+    row[:repeat_rate]
+  when "bigram_repeat_rate"
+    row[:bigram_repeat_rate]
+  when "unique_rate"
+    row[:unique_rate]
+  else
+    nil
+  end
+end
+
+private def print_route_selector_scoreboard(rows : Array(RouteScoreRow), limit : Int32 = 30)
+  return if rows.empty?
+  baselines = {} of String => RouteScoreRow
+  rows.each do |row|
+    next unless row[:parity]
+    next unless row[:route] == "pure" && row[:updown_rank].nil?
+    baselines[route_baseline_key(row)] = row
+  end
+  return if baselines.empty?
+
+  groups = Hash(String, Array(RouteScoreRow)).new { |h, k| h[k] = [] of RouteScoreRow }
+  rows.each do |row|
+    next unless row[:parity]
+    next if row[:route] == "pure" && row[:updown_rank].nil?
+    next unless baselines.has_key?(route_baseline_key(row))
+    groups[route_stability_key(row)] << row
+  end
+  return if groups.empty?
+
+  features = ["residual_mean", "residual_p90", "residual_max", "repeat_rate", "bigram_repeat_rate", "unique_rate"]
+  policies = [] of NamedTuple(key: String, feature: String, op: String, threshold: Float64, prompts: Int32, selected: Int32, wins: Int32, losses: Int32, ties: Int32, baseline_total: Float64, policy_total: Float64, delta: Float64, worst_delta: Float64, max_loss: Float64, score: Float64)
+  groups.each do |key, group|
+    row_by_baseline = {} of String => RouteScoreRow
+    group.each { |row| row_by_baseline[route_baseline_key(row)] = row }
+    mode, split, _route, _updown = key.split('|')
+    candidate_baselines = baselines.select { |_base_key, base| base[:mode] == mode && base[:split] == split }
+    next if candidate_baselines.empty?
+
+    features.each do |feature|
+      thresholds = group.compact_map { |row| route_feature_value(row, feature) }.uniq.sort
+      thresholds.each do |threshold|
+        {"<=", ">="}.each do |op|
+          baseline_total = 0.0
+          policy_total = 0.0
+          selected = 0
+          wins = 0
+          losses = 0
+          ties = 0
+          selected_deltas = [] of Float64
+          candidate_baselines.each do |base_key, baseline|
+            baseline_total += baseline[:overlap_ms]
+            candidate = row_by_baseline[base_key]?
+            feature_value = candidate ? route_feature_value(candidate, feature) : nil
+            use_candidate = false
+            if candidate && feature_value
+              use_candidate = op == "<=" ? feature_value <= threshold : feature_value >= threshold
+            end
+            if use_candidate && candidate
+              selected += 1
+              policy_total += candidate[:overlap_ms]
+              if baseline[:overlap_ms] > 0.0
+                delta = (baseline[:overlap_ms] - candidate[:overlap_ms]) * 100.0 / baseline[:overlap_ms]
+                selected_deltas << delta
+                if delta > 0.5
+                  wins += 1
+                elsif delta < -0.5
+                  losses += 1
+                else
+                  ties += 1
+                end
+              end
+            else
+              policy_total += baseline[:overlap_ms]
+            end
+          end
+          next if selected == 0 || baseline_total <= 0.0
+          delta_total = (baseline_total - policy_total) * 100.0 / baseline_total
+          worst_delta = selected_deltas.empty? ? 0.0 : selected_deltas.min
+          max_loss = [0.0, -worst_delta].max
+          score = delta_total + worst_delta * 0.5 - losses * 10.0 - max_loss * 0.25
+          policies << {
+            key:            key,
+            feature:        feature,
+            op:             op,
+            threshold:      threshold,
+            prompts:        candidate_baselines.size,
+            selected:       selected,
+            wins:           wins,
+            losses:         losses,
+            ties:           ties,
+            baseline_total: baseline_total,
+            policy_total:   policy_total,
+            delta:          delta_total,
+            worst_delta:    worst_delta,
+            max_loss:       max_loss,
+            score:          score,
+          }
+        end
+      end
+    end
+  end
+
+  return if policies.empty?
+  puts "self_spec_route_selector_scoreboard policies=#{policies.size} baselines=#{baselines.size} limit=#{limit}"
+  puts "rank mode split route updown feature op threshold prompts selected wins losses ties baseline_total policy_total delta% worst_delta% max_loss% score"
+  policies.sort { |a, b| b[:score] <=> a[:score] }.first(limit).each_with_index do |row, i|
+    mode, split, route, updown = row[:key].split('|')
+    puts "#{i + 1} #{mode} #{split} #{route} #{updown} #{row[:feature]} #{row[:op]} #{row[:threshold].round(4)} #{row[:prompts]} #{row[:selected]} #{row[:wins]} #{row[:losses]} #{row[:ties]} #{row[:baseline_total].round(3)} #{row[:policy_total].round(3)} #{row[:delta].round(2)} #{row[:worst_delta].round(2)} #{row[:max_loss].round(2)} #{row[:score].round(4)}"
+  end
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 mtp_path = ENV["QWEN35_MTP"]? || DEFAULT_MTP
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
@@ -12401,6 +12521,7 @@ if rank = simulate_logit_rank
         if simulate_self_spec_gpu_pipeline_suite_hybrid_sweep
           print_route_stability_scoreboard(route_score_rows)
           print_route_oracle_scoreboard(route_score_rows)
+          print_route_selector_scoreboard(route_score_rows)
         end
       end
       if !draft_body_score_rows.empty? && (simulate_self_spec_gpu_pipeline_draft_updown_rank || !simulate_self_spec_gpu_pipeline_draft_updown_ranks.empty?)

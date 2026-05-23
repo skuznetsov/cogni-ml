@@ -2320,3 +2320,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_472:** Build gate passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_route_oracle_features_build2 crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`. Tiny Qwen3.5-9B route-oracle smoke printed non-`na` feature columns for main and suite prompts and preserved parity.
 
 **next_update_472:** Use the oracle+feature table to test route-selector hypotheses. Required metric: captured oracle gap with zero parity failures and bounded worst-case loss versus pure. Do not promote residual-only or repeat-only thresholds until they beat static routes on a mixed suite.
+
+**decision_update_473:** Added `self_spec_route_selector_scoreboard` for suite hybrid sweeps. It enumerates fail-closed single-feature threshold policies: choose a candidate route only when a cheap feature threshold fires, otherwise use pure.
+
+**evidence_update_473:** Build gate passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_route_selector_build crystal build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace`. Tiny Qwen3.5-9B smoke printed `self_spec_route_selector_scoreboard policies=72 baselines=3`; top rows selected `manual` only for the high-residual/low-repeat main prompt, with `wins=1`, `losses=0`, and `delta=24.16%` in that tiny set.
+
+**next_update_473:** Run the selector scoreboard on the larger `gen32/gen64` mixed suite. Promote nothing from the tiny smoke. Candidate promotion criteria: zero parity failures, zero or bounded losses, positive total delta versus pure, and clear separation from static route masks.
