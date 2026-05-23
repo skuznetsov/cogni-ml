@@ -10600,6 +10600,11 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
     overlap_total: Float64,
     delta_mean: Float64,
     delta_min: Float64,
+    delta_max: Float64,
+    wins: Int32,
+    losses: Int32,
+    ties: Int32,
+    max_loss: Float64,
     replay_max: Float64,
     margin_min: Float64,
     score: Float64)
@@ -10620,8 +10625,14 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
     baseline_count = deltas.size
     delta_mean = deltas.empty? ? 0.0 : deltas.sum / deltas.size
     delta_min = deltas.empty? ? 0.0 : deltas.min
+    delta_max = deltas.empty? ? 0.0 : deltas.max
+    wins = deltas.count { |delta| delta > 0.5 }
+    losses = deltas.count { |delta| delta < -0.5 }
+    ties = deltas.size - wins - losses
+    max_loss = deltas.empty? ? 0.0 : [0.0, -delta_min].max
     speed_score = baseline_count > 0 ? delta_mean : (plain_speedup_mean * 100.0)
-    score = parity_all ? (speed_score + accept_mean / 100.0 - replay_max / 1000.0) : -1.0e9
+    # Penalize unsafe tails explicitly: route selection needs stable wins, not just a good mean.
+    score = parity_all ? (speed_score + delta_min * 0.5 + accept_mean / 100.0 - replay_max / 1000.0 - losses * 10.0 - max_loss * 0.25) : -1.0e9
     summaries << {
       key:                key,
       prompts:            prompts,
@@ -10632,6 +10643,11 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
       overlap_total:      overlap_total,
       delta_mean:         delta_mean,
       delta_min:          delta_min,
+      delta_max:          delta_max,
+      wins:               wins,
+      losses:             losses,
+      ties:               ties,
+      max_loss:           max_loss,
       replay_max:         replay_max,
       margin_min:         margin_min,
       score:              score,
@@ -10640,10 +10656,10 @@ private def print_route_stability_scoreboard(rows : Array(RouteScoreRow), limit 
 
   ranked = summaries.sort { |a, b| b[:score] <=> a[:score] }
   puts "self_spec_route_stability_scoreboard groups=#{summaries.size} baselines=#{baselines.size} limit=#{limit}"
-  puts "rank mode split route updown prompts baselines parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% replay_max margin_min score"
+  puts "rank mode split route updown prompts baselines parity_all accept_mean plain_speedup_mean overlap_total baseline_delta_mean% baseline_delta_min% baseline_delta_max% wins losses ties max_loss% replay_max margin_min score"
   ranked.first(limit).each_with_index do |row, i|
     mode, split, route, updown = row[:key].split('|')
-    puts "#{i + 1} #{mode} #{split} #{route} #{updown} #{row[:prompts]} #{row[:baseline_count]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:replay_max].round(3)} #{row[:margin_min].round(4)} #{row[:score].round(4)}"
+    puts "#{i + 1} #{mode} #{split} #{route} #{updown} #{row[:prompts]} #{row[:baseline_count]} #{row[:parity_all]} #{row[:accept_mean].round(2)} #{row[:plain_speedup_mean].round(4)} #{row[:overlap_total].round(3)} #{row[:delta_mean].round(2)} #{row[:delta_min].round(2)} #{row[:delta_max].round(2)} #{row[:wins]} #{row[:losses]} #{row[:ties]} #{row[:max_loss].round(2)} #{row[:replay_max].round(3)} #{row[:margin_min].round(4)} #{row[:score].round(4)}"
   end
 end
 
