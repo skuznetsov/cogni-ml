@@ -669,9 +669,7 @@ module ML::GGUF
                                      token_id : Int32,
                                      pos : Int32,
                                      mtp_state : State? = nil) : NamedTuple(hidden: Array(Float32), top1: {Int32, Float32})
-      # Safe only for stateless one-token proposals. The fused Metal helper does
-      # not append MTP attention K/V state for subsequent stateful draft tokens.
-      unless ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1" && mtp_state.nil?
+      unless ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1"
         hidden = forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
         return {hidden: hidden, top1: hidden_top1_gguf(weights, mtp, hidden)}
       end
@@ -701,20 +699,94 @@ module ML::GGUF
       cur = profile_stage("gguf.attn_norm") { rms_norm_gguf(residual, mtp.attn_norm, hp.rms_eps) }
       attn_o = Array(Float32).new(q_dim, 0.0_f32)
 
-      qv = profile_stage("gguf.attn_qv") { Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_v_qw], cur) }
-      q_full = qv[0]
-      v = qv[1]
-      raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
-      raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+      if cache = mtp_state
+        raise "mtp state kv_dim #{cache.kv_dim} != expected #{kv_dim}" unless cache.kv_dim == kv_dim
+        qkv = profile_stage("gguf.attn_qkv") { Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_k_qw, mtp.attn_v_qw], cur) }
+        q_full = qkv[0]
+        k = qkv[1]
+        v = qkv[2]
+        raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+        raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
+        raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
 
-      profile_stage("gguf.attn_one_token_cpu") do
+        q = Array(Float32).new(q_dim, 0.0_f32)
+        gate = Array(Float32).new(q_dim, 0.0_f32)
         n_head.times do |h|
-          src_base = h * 2 * head_dim + head_dim
-          kvh = h // heads_per_group
-          q_base = h * head_dim
-          kv_base = kvh * head_dim
+          src_base = h * 2 * head_dim
+          dst_base = h * head_dim
           head_dim.times do |d|
-            attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(q_full[src_base + d])
+            q[dst_base + d] = q_full[src_base + d]
+            gate[dst_base + d] = q_full[src_base + head_dim + d]
+          end
+        end
+
+        profile_stage("gguf.attn_qk_norm_rope") do
+          n_head.times do |h|
+            rms_norm_gguf_slice!(q, h * head_dim, head_dim, mtp.attn_q_norm, hp.rms_eps)
+            Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+          end
+          n_head_kv.times do |h|
+            rms_norm_gguf_slice!(k, h * head_dim, head_dim, mtp.attn_k_norm, hp.rms_eps)
+            Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+          end
+        end
+
+        profile_stage("gguf.attn_cache_append") do
+          cache.append!(k, v)
+          nil
+        end
+        scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+        scores = Array(Float32).new(cache.length, 0.0_f32)
+        probs = Array(Float32).new(cache.length, 0.0_f32)
+
+        profile_stage("gguf.attn_softmax_cpu") do
+          n_head.times do |h|
+            kvh = h // heads_per_group
+            q_base = h * head_dim
+            max_score = -Float32::INFINITY
+            cache.length.times do |t|
+              k_base = t * kv_dim + kvh * head_dim
+              dot = 0.0_f32
+              head_dim.times { |d| dot += q[q_base + d] * cache.k_cache[k_base + d] }
+              score = dot * scale
+              scores[t] = score
+              max_score = score if score > max_score
+            end
+
+            denom = 0.0_f32
+            cache.length.times do |t|
+              p = Math.exp((scores[t] - max_score).to_f64).to_f32
+              probs[t] = p
+              denom += p
+            end
+            inv_denom = 1.0_f32 / denom
+
+            head_dim.times do |d|
+              sum = 0.0_f32
+              cache.length.times do |t|
+                v_base = t * kv_dim + kvh * head_dim
+                sum += probs[t] * inv_denom * cache.v_cache[v_base + d]
+              end
+              attn_o[q_base + d] = sum * Qwen35CPU.sigmoid(gate[q_base + d])
+            end
+          end
+        end
+      else
+        qv = profile_stage("gguf.attn_qv") { Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_v_qw], cur) }
+        q_full = qv[0]
+        v = qv[1]
+        raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+        raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+
+        profile_stage("gguf.attn_one_token_cpu") do
+          n_head.times do |h|
+            src_base = h * 2 * head_dim + head_dim
+            kvh = h // heads_per_group
+            q_base = h * head_dim
+            kv_base = kvh * head_dim
+            head_dim.times do |d|
+              attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(q_full[src_base + d])
+            end
           end
         end
       end
@@ -737,7 +809,20 @@ module ML::GGUF
         return fused
       end
 
-      hidden_pre_norm = forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+      ffn_out = profile_stage("gguf.ffn_project_fused") do
+        ffn_project_gguf_metal(cur2, mtp.ffn_gate_qw, mtp.ffn_up_qw, mtp.ffn_down_qw)
+      end
+      unless ffn_out
+        gu = profile_stage("gguf.ffn_upgate") { Qwen35CPU.qmatvec_many([mtp.ffn_gate_qw, mtp.ffn_up_qw], cur2) }
+        gate_ff = gu[0]
+        up_ff = gu[1]
+        combined = profile_stage("gguf.ffn_swiglu_cpu") do
+          Qwen35CPU.silu!(gate_ff)
+          Array(Float32).new(gate_ff.size) { |i| gate_ff[i] * up_ff[i] }
+        end
+        ffn_out = profile_stage("gguf.ffn_down") { Qwen35CPU.qmatvec_nobias(mtp.ffn_down_qw, combined) }
+      end
+      hidden_pre_norm = profile_stage("gguf.ffn_residual") { Array(Float32).new(hidden) { |i| after_attn[i] + ffn_out[i] } }
       {hidden: hidden_pre_norm, top1: hidden_top1_gguf(weights, mtp, hidden_pre_norm)}
     end
 

@@ -281,9 +281,9 @@ private def mtp_hidden_topk(weights, mtp : ML::GGUF::Qwen35GGUFMTPWeights, prev_
   start = Time.instant
   # GGUF MTP follows llama.cpp: keep h_pre_norm as the chain state and apply
   # shared_head_norm only at the proposal head boundary.
-  # This route is intentionally limited to stateless top1 proposals: stateful
-  # MTP chains still need K/V cache updates from the normal body path.
-  if k == 1 && ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1" && mtp_state.nil?
+  # The fused helper preserves MTP K/V append when a state is present and falls
+  # back to the normal body path for unsupported kernels.
+  if k == 1 && ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1"
     fused = ML::GGUF::Qwen35MTP.forward_one_hidden_top1_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
     return {fused[:hidden], [fused[:top1]], elapsed_ms(start)}
   end
