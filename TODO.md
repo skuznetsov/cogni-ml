@@ -2552,3 +2552,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_515:** Gates passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_active_cursor_build crystal build --no-codegen bin/qwen35_warm_request_probe.cr --error-trace`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_active_cursor_generate_build crystal build --no-codegen bin/qwen35_generate.cr --error-trace`; `git diff --check`; release build of `bin/qwen35_warm_request_probe.cr`. Local M2 Max Qwen3.5-9B continuation baseline with BF16/live-KV + resident reuse measured p50 total/restore `0.576ms`, all `route=state_fast_forward_continuation`. Active-cursor probe measured below current printed timer resolution (`p50_total_ms=0.0`) with `routes=state_fast_forward_active_cursor=7`.
 
 **next_update_515:** Productize this only as an owned session cursor: terminal routes emit ids; continuation routes either hand off an already-owned active state for the current session or perform an isolated copy/restore from the shared Store. Do not expose a borrowed resident Store state that can be mutated by callers.
+
+**decision_update_516:** Extended `scripts/qwen35_cache_artifact_matrix.sh` for serving-route policy gates. `QWEN35_MATRIX_MODE=serving-route` now maps to `--prompt-cache-serving-route`, supports `QWEN35_MATRIX_SERVING_CONTINUATION`, `QWEN35_MATRIX_SERVING_DIRECT_MISS`, and `QWEN35_MATRIX_SERVING_ACTIVE_CURSOR`, and emits a `routes` column from warm-probe aggregate route counts.
+
+**evidence_update_516:** Gates passed: `bash -n scripts/qwen35_cache_artifact_matrix.sh`; `git diff --check`. Serving-route smoke with one prompt emitted `routes=direct_output=2`. Active-cursor serving-route smoke with BF16/live-KV + resident reuse emitted `routes=state_fast_forward_active_cursor=2`.
+
+**next_update_516:** Use this matrix route column for apples-to-apples route policy gates across prompt classes: terminal direct, direct-miss source-span fallback, continuation state restore, and active-cursor upper bound.

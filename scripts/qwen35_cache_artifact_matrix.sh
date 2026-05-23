@@ -16,6 +16,9 @@ max_seq="${QWEN35_MATRIX_MAX_SEQ:-256}"
 resident_states="${QWEN35_MATRIX_RESIDENT_STATES:-0}"
 reuse_request_state="${QWEN35_MATRIX_REUSE_REQUEST_STATE:-0}"
 artifact_block="${QWEN35_MATRIX_ARTIFACT_BLOCK:-8}"
+serving_continuation="${QWEN35_MATRIX_SERVING_CONTINUATION:-0}"
+serving_direct_miss="${QWEN35_MATRIX_SERVING_DIRECT_MISS:-0}"
+serving_active_cursor="${QWEN35_MATRIX_SERVING_ACTIVE_CURSOR:-0}"
 prompt_limit="${QWEN35_MATRIX_PROMPT_LIMIT:-0}"
 matrix_mode="${QWEN35_MATRIX_MODE:---prompt-cache-fast-forward}"
 keep_logs="${QWEN35_MATRIX_KEEP_LOGS:-0}"
@@ -40,12 +43,23 @@ case "${matrix_mode}" in
     codec_list="${QWEN35_MATRIX_CODECS:-direct}"
     live_kv_list="${QWEN35_MATRIX_LIVE_KV:-na}"
     ;;
+  --prompt-cache-serving-route|prompt-cache-serving-route|serving-route|serving_route)
+    mode_arg="--prompt-cache-serving-route"
+    mode_label="serving_route"
+    codec_list="${QWEN35_MATRIX_CODECS:-raw recurrent-bf16}"
+    live_kv_list="${QWEN35_MATRIX_LIVE_KV:-0}"
+    ;;
   *)
     echo "invalid QWEN35_MATRIX_MODE: ${matrix_mode}" >&2
-    echo "expected fast-forward, replay, direct-output, or the matching --prompt-cache-* flag" >&2
+    echo "expected fast-forward, replay, direct-output, serving-route, or the matching --prompt-cache-* flag" >&2
     exit 2
     ;;
 esac
+
+if [[ "${serving_active_cursor}" == "1" && "${serving_continuation}" != "1" ]]; then
+  echo "QWEN35_MATRIX_SERVING_ACTIVE_CURSOR=1 requires QWEN35_MATRIX_SERVING_CONTINUATION=1" >&2
+  exit 2
+fi
 
 if [[ "${force_build}" == "1" || ! -x "${probe_bin}" ]]; then
   if [[ ! -f "${repo_root}/build/bridge.o" && "${link_flags}" == *"build/bridge.o"* ]]; then
@@ -91,9 +105,9 @@ extract_field() {
   awk -v wanted="${field}" '
     /aggregate:/ {
       for (i = 1; i <= NF; i++) {
-        split($i, pair, "=")
-        if (pair[1] == wanted) {
-          print pair[2]
+        prefix = wanted "="
+        if (index($i, prefix) == 1) {
+          print substr($i, length(prefix) + 1)
           found = 1
         }
       }
@@ -108,9 +122,9 @@ extract_request_field() {
   awk -v wanted="${field}" '
     /request [0-9]+ summary:/ {
       for (i = 1; i <= NF; i++) {
-        split($i, pair, "=")
-        if (pair[1] == wanted) {
-          print pair[2]
+        prefix = wanted "="
+        if (index($i, prefix) == 1) {
+          print substr($i, length(prefix) + 1)
           found = 1
           exit
         }
@@ -120,7 +134,7 @@ extract_request_field() {
   ' "${file}" || true
 }
 
-printf "prompt_id\tmode\tcodec\tlive_kv\tavg_total_ms\tp50_total_ms\tavg_ms_per_tok\tp50_restore_ms\tp50_prefill_ms\tp50_decode_ms\tprompt_tokens\toutput_tokens\tlog\n"
+printf "prompt_id\tmode\tcodec\tlive_kv\tavg_total_ms\tp50_total_ms\tavg_ms_per_tok\tp50_restore_ms\tp50_prefill_ms\tp50_decode_ms\tprompt_tokens\toutput_tokens\troutes\tlog\n"
 
 prompt_count="${#prompts[@]}"
 if [[ "${prompt_limit}" =~ ^[0-9]+$ && "${prompt_limit}" -gt 0 && "${prompt_limit}" -lt "${prompt_count}" ]]; then
@@ -163,6 +177,26 @@ for ((idx = 0; idx < prompt_count; idx++)); do
         echo "invalid QWEN35_MATRIX_REUSE_REQUEST_STATE value: ${reuse_request_state}; expected 0 or 1" >&2
         exit 2
       fi
+      if [[ "${mode_label}" == "serving_route" ]]; then
+        if [[ "${serving_continuation}" == "1" ]]; then
+          cmd+=("--serving-route-continuation")
+        elif [[ "${serving_continuation}" != "0" ]]; then
+          echo "invalid QWEN35_MATRIX_SERVING_CONTINUATION value: ${serving_continuation}; expected 0 or 1" >&2
+          exit 2
+        fi
+        if [[ "${serving_direct_miss}" == "1" ]]; then
+          cmd+=("--serving-route-direct-miss")
+        elif [[ "${serving_direct_miss}" != "0" ]]; then
+          echo "invalid QWEN35_MATRIX_SERVING_DIRECT_MISS value: ${serving_direct_miss}; expected 0 or 1" >&2
+          exit 2
+        fi
+        if [[ "${serving_active_cursor}" == "1" ]]; then
+          cmd+=("--serving-route-active-cursor")
+        elif [[ "${serving_active_cursor}" != "0" ]]; then
+          echo "invalid QWEN35_MATRIX_SERVING_ACTIVE_CURSOR value: ${serving_active_cursor}; expected 0 or 1" >&2
+          exit 2
+        fi
+      fi
       cmd+=("${prompt}")
 
       "${cmd[@]}" >"${log_file}"
@@ -173,10 +207,11 @@ for ((idx = 0; idx < prompt_count; idx++)); do
       p50_restore="$(extract_field p50_restore_ms "${log_file}")"
       p50_prefill="$(extract_field p50_prefill_ms "${log_file}")"
       p50_decode="$(extract_field p50_decode_ms "${log_file}")"
+      routes="$(extract_field routes "${log_file}")"
       prompt_tokens="$(extract_request_field prompt_tokens "${log_file}")"
       output_tokens="$(extract_request_field output_tokens "${log_file}")"
 
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "${prompt_id}" \
         "${mode_label}" \
         "${codec}" \
@@ -189,6 +224,7 @@ for ((idx = 0; idx < prompt_count; idx++)); do
         "${p50_decode}" \
         "${prompt_tokens:-?}" \
         "${output_tokens:-?}" \
+        "${routes:-?}" \
         "${log_file}"
     done
   done

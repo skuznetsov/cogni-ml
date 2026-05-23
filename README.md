@@ -681,6 +681,8 @@ continuation-state route on the same 16-token cached span.
 prewarms the continuation state once and then measures the already-owned
 active-session handoff, avoiding the reusable-cache copy that a shared Store
 must perform for isolation.
+For matrix gates, set `QWEN35_MATRIX_MODE=serving-route`; the TSV includes a
+`routes` column so policy changes are visible in apples-to-apples comparisons.
 For fail-closed diagnostics, `--serving-route-direct-miss` omits the direct
 output certificate while keeping the exact-known-span artifact. Terminal
 requests then fall back to

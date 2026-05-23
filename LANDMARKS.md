@@ -15583,3 +15583,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The safe optimization is ownership-aware. Shared resident Store entries must still copy/fork before mutation; active sessions can hold a mutable state cursor and skip the reusable-cache copy on subsequent handoff.
 - LTP/WBA: Window is a continuation-required exact cache hit for an active session. Transport is the already-restored state cursor owned by that session. Legal move consumes/hands off the owned cursor instead of copying from shared resident cache. Boundary safety forbids exposing mutable resident Store state by alias; reusable shared cache still copies. Potential descends in `(shared_copy_bytes, blit_work, continuation_handoff_wall)`.
 - trust: {F:0.86,G:0.50,R:0.82}
+
+**LM-516 Serving-route matrix preserves route mix [shared/ml]**
+- status: IMPLEMENTED; benchmark hygiene for route policy gates
+- claim tested: The cache-artifact matrix should carry route attribution so serving-route policy changes are visible in tabular benchmark output.
+- evidence: `scripts/qwen35_cache_artifact_matrix.sh` now supports `QWEN35_MATRIX_MODE=serving-route` and serving-route flags for continuation, direct miss, and active cursor. It also emits a `routes` column. Verification passed: `bash -n scripts/qwen35_cache_artifact_matrix.sh`; `git diff --check`; one-prompt smokes produced `routes=direct_output=2` and `routes=state_fast_forward_active_cursor=2`.
+- diagnosis: This prevents route-policy regressions from hiding behind aggregate wall time. A speed number without route mix can compare different work.
+- LTP/WBA: Window is a matrix row over a cache-serving policy. Transport is aggregate route counts into the TSV. Legal move threads route labels through the benchmark harness without changing model execution. Boundary safety is explicit mode/flag validation. Potential descends in `(benchmark_ambiguity, apples_to_oranges_risk, route_regression_detection_work)`.
+- trust: {F:0.88,G:0.66,R:0.84}
