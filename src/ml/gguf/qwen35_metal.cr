@@ -284,6 +284,8 @@ module ML
           @@group_encode_ns = Hash(String, Int64).new(0_i64)
           @@group_wait_ns = Hash(String, Int64).new(0_i64)
           @@group_read_ns = Hash(String, Int64).new(0_i64)
+          @@group_upload_bytes = Hash(String, Int64).new(0_i64)
+          @@group_read_bytes = Hash(String, Int64).new(0_i64)
           @@matmul_counts = Hash(String, Int64).new(0_i64)
           @@matmul_weight_bytes = Hash(String, Int64).new(0_i64)
           @@conversion_counts = Hash(String, Int64).new(0_i64)
@@ -309,6 +311,8 @@ module ML
             @@group_encode_ns.clear
             @@group_wait_ns.clear
             @@group_read_ns.clear
+            @@group_upload_bytes.clear
+            @@group_read_bytes.clear
             @@matmul_counts.clear
             @@matmul_weight_bytes.clear
             @@conversion_counts.clear
@@ -373,6 +377,12 @@ module ML
             @@group_encode_ns[label] += encode_ns
             @@group_wait_ns[label] += wait_ns
             @@group_read_ns[label] += read_ns
+          end
+
+          def self.bump_group_transfer(label : String, upload_bytes : Int64, read_bytes : Int64) : Nil
+            return unless @@enabled
+            @@group_upload_bytes[label] += upload_bytes
+            @@group_read_bytes[label] += read_bytes
           end
 
           def self.bump_cpu_fallback : Nil
@@ -444,14 +454,25 @@ module ML
                                name, @@trace_counts[name], @@trace_ns[name] / 1_000_000.0)
                 end
               end
-              unless @@group_counts.empty?
+              group_labels = Set(String).new
+              @@group_counts.keys.each { |name| group_labels << name }
+              @@group_upload_bytes.keys.each { |name| group_labels << name }
+              @@group_read_bytes.keys.each { |name| group_labels << name }
+              unless group_labels.empty?
+                total_group_upload = @@group_upload_bytes.values.sum
+                total_group_read = @@group_read_bytes.values.sum
+                s << sprintf("  group boundary transfer: upload %.2f MiB  readback %.2f MiB\n",
+                             total_group_upload / 1_048_576.0,
+                             total_group_read / 1_048_576.0)
                 s << "  grouped command buffers:\n"
-                @@group_counts.keys.sort_by { |name| {-@@group_wait_ns[name], name} }.each do |name|
-                  s << sprintf("    %-18s %4d calls  encode %.2f ms  wait %.2f ms  read %.2f ms\n",
+                group_labels.to_a.sort_by { |name| {-@@group_wait_ns[name], name} }.each do |name|
+                  s << sprintf("    %-18s %4d calls  encode %.2f ms  wait %.2f ms  read %.2f ms  upload %.2f MiB  readback %.2f MiB\n",
                                name, @@group_counts[name],
                                @@group_encode_ns[name] / 1_000_000.0,
                                @@group_wait_ns[name] / 1_000_000.0,
-                               @@group_read_ns[name] / 1_000_000.0)
+                               @@group_read_ns[name] / 1_000_000.0,
+                               @@group_upload_bytes[name] / 1_048_576.0,
+                               @@group_read_bytes[name] / 1_048_576.0)
                 end
               end
               unless @@matmul_counts.empty?
@@ -5207,7 +5228,9 @@ module ML
           ffn_comb_h16_buf = Scratch.get(:rec_chunk_many_ffn_comb_h16, (n_tokens * ffn_dim).to_i64 * 2_i64)
           ffn_out_buf = Scratch.get(:rec_chunk_many_ffn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
 
+          input_bytes = inp.size.to_i64 * sizeof(Float32)
           src_buf.write(inp)
+          Profile.bump_group_transfer("#{profile_label}.boundary", input_bytes, 0_i64)
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -5532,6 +5555,7 @@ module ML
             t_read0 = Time.instant
             result = read_shared_f32(src_buf, n_tokens * hidden_dim)
             t_read = Time.instant
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
             Profile.bump_group("#{profile_label}.read", 0_i64, 0_i64, (t_read - t_read0).total_nanoseconds.to_i64)
             return result
           end
@@ -5546,6 +5570,7 @@ module ML
             encode_ns = (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64
             wait_ns = (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64
             read_ns = (t_read - t_wait.not_nil!).total_nanoseconds.to_i64
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
             Profile.bump_dn(encode_ns, wait_ns, read_ns)
             Profile.bump_group(profile_label, encode_ns, wait_ns, read_ns)
           end
@@ -6601,10 +6626,12 @@ module ML
           rec_ffn_comb_h16_buf = Scratch.get(:frec_rec_ffn_comb_h16, (n_tokens * rec_ffn_dim).to_i64 * 2_i64)
           rec_ffn_out_buf = Scratch.get(:frec_rec_ffn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
 
+          boundary_bytes = inp.size.to_i64 * sizeof(Float32)
           t_upload0 = Time.instant if Profile.enabled?
           inp_buf.write(inp)
           if Profile.enabled?
             t_upload1 = Time.instant
+            Profile.bump_group_transfer("#{profile_label}.boundary", boundary_bytes, 0_i64)
             Profile.bump_group("#{profile_label}.upload",
               (t_upload1 - t_upload0.not_nil!).total_nanoseconds.to_i64,
               0_i64,
@@ -7238,6 +7265,7 @@ module ML
             t_read0 = Time.instant
             result = read_shared_f32(src_buf, n_tokens * hidden_dim)
             t_read = Time.instant
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
             Profile.bump_group("#{profile_label}.read", 0_i64, 0_i64, (t_read - t_read0).total_nanoseconds.to_i64)
             return result
           end
@@ -7252,6 +7280,7 @@ module ML
             encode_ns = (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64
             wait_ns = (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64
             read_ns = (t_read - t_wait.not_nil!).total_nanoseconds.to_i64
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
             Profile.bump_dn(encode_ns, wait_ns, read_ns)
             Profile.bump_group(profile_label, encode_ns, wait_ns, read_ns)
           end
