@@ -2278,3 +2278,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_460:** With `QWEN35_MTP_FFN_HEAD_FUSE=1`, `--mtp-spec-wall-promote-top2-margin 0.5` plus top2 accounting preserved parity. `gen16` reached `accepted=3` and near-plain speed (`~0.998x`), but `gen32` measured `plain_speedup=0.988` versus guarded speed-mode `0.990`, with promotion paying `verifier_calls=3` instead of `1`.
 
 **next_update_460:** Do not change the speed-mode preset to top2 promotion. Top2 promotion remains a proposal-quality diagnostic; the next useful branch needs either cheaper verifier chunks or a proposal-quality improvement that increases accepted spans by more than one token.
+
+**decision_update_461:** Added default-off wall raw-blend diagnostic: `--mtp-spec-wall-raw-blend F`. It blends previous draft hidden toward raw MTP hidden before drafting the next token. This ports the chain-probe raw-blend idea into the exact wall controller without changing default behavior.
+
+**evidence_update_461:** Build and focused Metal spec passed. Chain probe showed raw blend is a real proposal-quality lever (`recursive top1/top2 2.08%/6.25%` -> `raw_blend0.25 7.29%/12.5%`). Wall probes preserved parity, and `promote0.5 + raw_blend0.25` raised accepted tokens from `3` to `10`, but speed regressed (`plain_speedup=0.930`) because verifier/replay cost dominated. Stage sweep did not rescue it (`stage1/2/3/4/8` all below plain).
+
+**next_update_461:** Keep raw-blend as a research knob, not speed-mode. The useful insight is that proposal quality can move; the next exact speed work must make verifier chunks cheaper or find a way to predict long accepted spans before paying verifier.
