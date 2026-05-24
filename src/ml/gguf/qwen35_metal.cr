@@ -6852,6 +6852,145 @@ module ML
           result
         end
 
+        # Final full-attention body-only prefill specialization.
+        #
+        # When no logits or downstream hidden rows are requested, the last
+        # decoder layer only has to populate its K/V cache for future decode.
+        # Q/attention/FFN output is semantically dead and can be skipped.
+        def self.full_attn_layer_chunk_kv_cache_only(inp : Array(Float32),
+                                                     k_qw : QuantWeight,
+                                                     v_qw : QuantWeight,
+                                                     attn_norm : Array(Float32),
+                                                     k_norm : Array(Float32),
+                                                     k_cache_buf : ML::MetalBuffer,
+                                                     v_cache_buf : ML::MetalBuffer,
+                                                     start_pos : Int32,
+                                                     n_tokens : Int32,
+                                                     n_head_kv : Int32,
+                                                     head_dim : Int32,
+                                                     rope_dim_count : Int32,
+                                                     rope_freq_base : Float32,
+                                                     eps : Float32,
+                                                     input_buf : ML::MetalBuffer? = nil,
+                                                     append_command_buffer : ML::Metal::CommandBuffer? = nil) : Bool
+          k_pipe = gemv_pipeline_for(k_qw)
+          v_pipe = gemv_pipeline_for(v_qw)
+          return false if k_pipe.nil? || v_pipe.nil?
+          return false unless n_tokens > 0
+
+          ML::Metal::Device.init!
+
+          hidden_dim = k_qw.in_dim
+          kv_dim = n_head_kv * head_dim
+          hidden_elems = n_tokens * hidden_dim
+          hidden_bytes = hidden_elems.to_i64 * sizeof(Float32)
+          if ib = input_buf
+            raise "full-attn kv-cache input buffer too small" if ib.size < hidden_bytes
+          else
+            raise "full-attn kv-cache input size mismatch" unless inp.size == hidden_elems
+          end
+
+          inp_buf = input_buf || Scratch.get(:full_kv_only_inp, hidden_bytes)
+          norm_w_buf = Scratch.get(:full_kv_only_norm_w, attn_norm.size.to_i64 * sizeof(Float32))
+          cur_buf = Scratch.get(:full_kv_only_cur, hidden_bytes)
+          cur_h16_buf = Scratch.get(:full_kv_only_cur_h16, hidden_elems.to_i64 * 2_i64)
+          k_buf = Scratch.get(:full_kv_only_k, (n_tokens * kv_dim).to_i64 * sizeof(Float32))
+          v_buf = Scratch.get(:full_kv_only_v, (n_tokens * kv_dim).to_i64 * sizeof(Float32))
+          knorm_buf = Scratch.get(:full_kv_only_knorm, k_norm.size.to_i64 * sizeof(Float32))
+
+          unless input_buf
+            inp_buf.write(inp)
+            Profile.bump_group_transfer("full_kv_only.boundary", hidden_bytes, 0_i64) if Profile.enabled?
+          end
+          ConstCache.write_once("full_kv_only_norm_w_#{attn_norm.object_id}", norm_w_buf, attn_norm)
+          ConstCache.write_once("full_kv_only_knorm_#{k_norm.object_id}", knorm_buf, k_norm)
+
+          k_w_buf, k_w_off = weight_slot(k_qw)
+          v_w_buf, v_w_off = weight_slot(v_qw)
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = append_command_buffer || ML::Metal::CommandBuffer.new
+          appended = !append_command_buffer.nil?
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          norm_h16_proj = prefill_rmsnorm_h16_proj_enabled? && n_tokens > GEMM_BATCH_THRESHOLD
+          if norm_h16_proj
+            encode_rmsnorm_rows_f32_h16(norm_enc, inp_buf, norm_w_buf, cur_buf, cur_h16_buf, hidden_dim, n_tokens, eps)
+          else
+            encode_rmsnorm_rows(norm_enc, inp_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)
+          end
+          norm_enc.end_encoding
+
+          Profile.trace("prefill.full.kv_cache") do
+            proj_enc = ML::Metal::ComputeEncoder.new(cmd)
+            if norm_h16_proj && h16_batch_gemm_candidate?(k_qw, n_tokens)
+              raise "unsupported h16 final k-cache route" unless encode_matmul_from_h16(proj_enc, k_qw, cur_h16_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+            else
+              encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, cur_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+            end
+            if norm_h16_proj && h16_batch_gemm_candidate?(v_qw, n_tokens)
+              raise "unsupported h16 final v-cache route" unless encode_matmul_from_h16(proj_enc, v_qw, cur_h16_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+            else
+              encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, cur_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+            end
+            proj_enc.end_encoding
+          end
+
+          knorm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          knorm_enc.set_pipeline(rmsnorm_heads_rows_pipeline)
+          knorm_enc.set_buffer(k_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          knorm_enc.set_buffer(knorm_buf, 1)
+          knorm_enc.set_value(head_dim.to_u32, 2)
+          knorm_enc.set_value(eps, 3)
+          knorm_enc.set_value(n_head_kv.to_u32, 4)
+          knorm_enc.set_value(n_tokens.to_u32, 5)
+          knorm_enc.dispatch_threadgroups({n_head_kv, n_tokens, 1}, {32, 1, 1})
+          knorm_enc.end_encoding
+
+          krope_enc = ML::Metal::ComputeEncoder.new(cmd)
+          krope_enc.set_pipeline(rope_partial_rows_pipeline)
+          krope_enc.set_buffer(k_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          krope_enc.set_value(head_dim.to_u32, 1)
+          krope_enc.set_value(rope_dim_count.to_u32, 2)
+          krope_enc.set_value(start_pos.to_u32, 3)
+          krope_enc.set_value(rope_freq_base, 4)
+          krope_enc.set_value(n_head_kv.to_u32, 5)
+          krope_enc.set_value(n_tokens.to_u32, 6)
+          krope_enc.dispatch_threadgroups({n_head_kv, n_tokens, 1}, {32, 1, 1})
+          krope_enc.end_encoding
+
+          kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
+          kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+          kvwrite_enc.set_buffer(k_buf, 0)
+          kvwrite_enc.set_buffer(v_buf, 1)
+          kvwrite_enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
+          kvwrite_enc.set_buffer(v_cache_buf, 3, ML::Metal::BufferAccess::ReadWrite)
+          kvwrite_enc.set_value(start_pos.to_u32, 4)
+          kvwrite_enc.set_value(kv_dim.to_u32, 5)
+          kvwrite_enc.set_value(n_tokens.to_u32, 6)
+          kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
+          kvwrite_enc.end_encoding
+
+          return true if appended
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          if Profile.enabled?
+            Profile.bump_attn(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              0_i64,
+            )
+            Profile.bump_group("full_kv_only",
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              0_i64)
+          end
+          true
+        end
+
         # Exact prefill boundary fusion for the Qwen35 cadence:
         # one full-attention chunk followed by the next consecutive recurrent
         # run in a single command buffer. This removes the CPU read/write and

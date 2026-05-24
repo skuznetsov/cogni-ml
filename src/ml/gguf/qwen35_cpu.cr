@@ -1013,6 +1013,55 @@ module ML::GGUF
       {% end %}
     end
 
+    private def final_full_attn_layer_chunk_kv_cache_only_routed(inp : Array(Float32),
+                                                                 n_tokens : Int32,
+                                                                 start_pos : Int32,
+                                                                 lstate : LayerState,
+                                                                 lw : Qwen35FullAttnWeights,
+                                                                 hp : Qwen35Hparams,
+                                                                 max_seq : Int32,
+                                                                 input_buf : ML::MetalBuffer? = nil,
+                                                                 append_command_buffer : ML::Metal::CommandBuffer? = nil) : Bool
+      {% unless flag?(:cpu_only) %}
+        return false if ENV["QWEN35_PREFILL_FINAL_KV_ONLY_OFF"]? == "1"
+        return false if ENV["QWEN35_FINAL_FULL_LAST_OFF"]? == "1"
+        return false if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
+        return false unless Qwen35Metal.available?
+        supported = metal_qw_supported?(lw.attn_k_qw) &&
+                    metal_qw_supported?(lw.attn_v_qw)
+        return false unless supported
+
+        kv_dim = hp.head_dim * hp.n_head_kv
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        k_buf = lstate.k_cache_buf
+        v_buf = lstate.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.v_cache_buf = v_buf
+        end
+
+        Qwen35Metal.full_attn_layer_chunk_kv_cache_only(
+          inp,
+          lw.attn_k_qw, lw.attn_v_qw,
+          lw.attn_norm, lw.attn_k_norm,
+          k_buf, v_buf,
+          start_pos, n_tokens,
+          hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
+          hp.rope_freq_base, hp.rms_eps,
+          input_buf: input_buf,
+          append_command_buffer: append_command_buffer,
+        )
+      {% else %}
+        false
+      {% end %}
+    end
+
     private def full_attn_then_recurrent_chunk_project_many_routed(inp : Array(Float32),
                                                                    n_tokens : Int32,
                                                                    start_pos : Int32,
@@ -2670,9 +2719,23 @@ module ML::GGUF
           end
 
           if gb = gpu_hidden
+            if !need_output && il + 1 >= layer_limit && !checkpoint_requested &&
+               final_full_attn_layer_chunk_kv_cache_only_routed([] of Float32, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
+                 input_buf: gb, append_command_buffer: append_prefill_cmd)
+              x = [] of Float32
+              gpu_hidden = nil
+              il += 1
+              next
+            end
             flush_prefill_cmd.call
             x = gb.read(n_tokens * hp.n_embd)
             gpu_hidden = nil
+          elsif !need_output && il + 1 >= layer_limit && !checkpoint_requested &&
+                final_full_attn_layer_chunk_kv_cache_only_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
+                  append_command_buffer: append_prefill_cmd)
+            x = [] of Float32
+            il += 1
+            next
           end
 
           read_output = need_output || il + 1 < layer_limit
