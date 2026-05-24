@@ -15705,3 +15705,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The measurement is dominated by host/GPU noise and does not prove a robust scheduling win. Since group kernels still serialize on the same queue and total GPU work is unchanged, deferred waits can only hide CPU encoding/submit overhead; that effect is too small/noisy relative to recurrent FFN body traffic.
 - LTP/WBA: Window was a resident hidden-buffer corridor with no host read required between groups. Transport carried command buffers through the same queue order. Legal move preserved exact state order, but the potential `(sync_wait_tax, pp_wall)` did not robustly descend after recomputation. Dual frame returns to the synchronous resident corridor and pivots to FFN body economics or a true single-command-buffer/chunk-major rewrite.
 - trust: {F:0.78,G:0.48,R:0.62}
+
+**LM-531 Q4 FFN gate-H16 producer is refuted [shared/ml]**
+- status: REFUTED approximate kernel probe; code reverted before commit
+- claim tested: In the recurrent FFN upgate path, materializing the gate projection as half and feeding a half-gate H16 SwiGLU consumer might reduce intermediate traffic enough to improve prefill.
+- evidence: Temporary opt-in `QWEN35_Q4K_B64_GATE_H16=1` added B64 Q4_H16 gate-half and half-gate SwiGLU kernels. No-codegen build passed and the opt-in Metal kernels compiled in a pp64 attribution smoke, but performance regressed badly: pp64 body-only wall p50 `165.59ms` / `386.50 tok/s` versus the resident baseline around `145-150ms` / `426-438 tok/s`. The temporary code was reverted.
+- diagnosis: The traffic saved by halving the gate activation is too small compared with Q4 weight traffic, and the half-output producer lost the direct B64 device-store fast path by spilling through threadgroup temp. This is a local optimization trap unless a future kernel can produce half gate without sacrificing the fast store path or fuses both gate/up computation more deeply.
+- LTP/WBA: Window was the materialized f32 gate buffer between gate GEMM and up+SwiGLU. Transport tried to carry a half gate through the FFN activation corridor. Legal move was opt-in and approximate, but potential `(intermediate_bytes, ffn_upgate_wall)` increased after recomputation. Dual frame returns to the existing f32-gate/H16-activation route.
+- trust: {F:0.78,G:0.46,R:0.68}
