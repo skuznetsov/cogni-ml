@@ -1724,7 +1724,9 @@ module ML
             return
           end
 
-          if q4_h16_b64_gemm_enabled? && batch >= MM64_NR1 && (batch % MM64_NR1) == 0
+          b64_tail_min = q4_h16_b64_tail_min_batch
+          use_b64_tail = b64_tail_min > 0 && batch >= b64_tail_min
+          if q4_h16_b64_gemm_enabled? && batch >= MM64_NR1 && ((batch % MM64_NR1) == 0 || use_b64_tail)
             enc.set_pipeline(mm_h16_b64_pipeline)
             enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
             enc.set_buffer(x16_buf, 1)
@@ -2391,6 +2393,10 @@ module ML
 
         private def self.q4_h16_b64_gemm_enabled? : Bool
           ENV["QWEN35_Q4K_H16_B64_OFF"]? != "1"
+        end
+
+        private def self.q4_h16_b64_tail_min_batch : Int32
+          (ENV["QWEN35_Q4K_H16_B64_TAIL_MIN"]? || "0").to_i32
         end
 
         private def self.q4_h16_b48_gemm_enabled? : Bool
