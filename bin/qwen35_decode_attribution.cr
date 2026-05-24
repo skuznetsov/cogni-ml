@@ -21,9 +21,10 @@ quiet_poll_ms = 1000
 require_quiet = false
 greedy_chain = false
 gpu_token_chain = false
+decode_mode = "top1"
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_decode_attribution [--model PATH] [--prompt N] [--gen N] [--warmup N] [--reps N] [--compare-env NAME] [--gpu-token-chain]"
+  p.banner = "Usage: qwen35_decode_attribution [--model PATH] [--prompt N] [--gen N] [--warmup N] [--reps N] [--compare-env NAME] [--body-only] [--gpu-token-chain]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--prompt=N", "Prompt tokens to prefill before timed decode; 0 matches benchmark synthetic decode state (default: 0)") { |v| prompt_len = v.to_i }
   p.on("--gen=N", "Decode tokens for attribution (default: 64)") { |v| gen_len = v.to_i }
@@ -31,6 +32,8 @@ OptionParser.parse do |p|
   p.on("--reps=N", "Measured repetitions for wall timing (default: 3)") { |v| reps = v.to_i }
   p.on("--compare-env=NAME", "Also run A/B with NAME unset vs NAME=VALUE; NAME=VALUE is accepted") { |v| compare_env = v }
   p.on("--compare-off=VALUE", "Off value for --compare-env (default: 1)") { |v| compare_off = v; compare_off_set = true }
+  p.on("--body-only", "Measure decoder body/state update only, matching llama-bench tg logits=nullptr") { decode_mode = "body" }
+  p.on("--top1", "Measure product-shaped greedy top1 decode (default)") { decode_mode = "top1" }
   p.on("--greedy-chain", "Feed each generated top1 token into the next step instead of benchmark synthetic input tokens") { greedy_chain = true }
   p.on("--gpu-token-chain", "Use GPU-resident exact greedy token handoff for the timed decode suffix") { gpu_token_chain = true }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
@@ -48,6 +51,7 @@ raise "--warmup must be non-negative" unless warmup >= 0
 raise "--reps must be positive" unless reps > 0
 raise "--wait-quiet-ms must be non-negative" unless wait_quiet_ms >= 0
 raise "--quiet-poll-ms must be positive" unless quiet_poll_ms > 0
+raise "--gpu-token-chain requires top1 mode" if gpu_token_chain && decode_mode != "top1"
 if env = compare_env
   if env.includes?("=")
     name, value = env.split("=", 2)
@@ -84,7 +88,8 @@ def run_decode_once(w : ML::GGUF::Qwen35Weights,
                     gen_len : Int32,
                     profile : Bool,
                     greedy_chain : Bool,
-                    gpu_token_chain : Bool) : Float64
+                    gpu_token_chain : Bool,
+                    decode_mode : String) : Float64
   state = prepare_state(w, prompt, gen_len)
   token = prompt.empty? ? 11751_i32 : prompt[-1]
   synthetic = synthetic_decode_tokens(gen_len)
@@ -103,8 +108,12 @@ def run_decode_once(w : ML::GGUF::Qwen35Weights,
               else
                 synthetic[i]
               end
-      top1, _logit = ML::GGUF::Qwen35CPU.forward_top1(w, input, (start_pos + i).to_i32, state)
-      token = top1
+      if decode_mode == "body"
+        ML::GGUF::Qwen35CPU.prefill_token(w, input, (start_pos + i).to_i32, state)
+      else
+        top1, _logit = ML::GGUF::Qwen35CPU.forward_top1(w, input, (start_pos + i).to_i32, state)
+        token = top1
+      end
     end
   end
   wall_ms = (Time.instant - t0).total_milliseconds
@@ -137,28 +146,29 @@ def measure_paired_env(w,
                        warmup : Int32,
                        reps : Int32,
                        greedy_chain : Bool,
-                       gpu_token_chain : Bool) : {Array(Float64), Array(Float64)}
+                       gpu_token_chain : Bool,
+                       decode_mode : String) : {Array(Float64), Array(Float64)}
   default = [] of Float64
   alternate = [] of Float64
 
   warmup.times do
     set_env(env, nil)
-    run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain)
+    run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
     set_env(env, alternate_value)
-    run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain)
+    run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
   end
 
   reps.times do |i|
     if i.even?
       set_env(env, nil)
-      a = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain)
+      a = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
       set_env(env, alternate_value)
-      b = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain)
+      b = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
     else
       set_env(env, alternate_value)
-      b = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain)
+      b = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
       set_env(env, nil)
-      a = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain)
+      a = run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
     end
     default << a
     alternate << b
@@ -176,20 +186,22 @@ puts "Qwen35 decode attribution"
 puts "model=#{model}"
 mode = if gpu_token_chain
          "gpu_token_chain"
+       elsif decode_mode == "body"
+         "body_only"
        elsif greedy_chain || prompt_len > 0
          "greedy_chain"
        else
-         "benchmark_synthetic_inputs"
+         "top1_synthetic_inputs"
        end
 puts "prompt=#{prompt_len} gen=#{gen_len} warmup=#{warmup} reps=#{reps} mode=#{mode}"
 
-warmup.times { run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain) }
-profile_ms = run_decode_once(w, prompt, gen_len, profile: true, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain)
+warmup.times { run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode) }
+profile_ms = run_decode_once(w, prompt, gen_len, profile: true, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
 puts
 print ML::GGUF::Qwen35Metal::Profile.report_io
 printf "  profiled wall: %.2f ms  %.2f tok/s\n", profile_ms, gen_len * 1000.0 / profile_ms
 
-times = Array(Float64).new(reps) { run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain) }
+times = Array(Float64).new(reps) { run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode) }
 printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
   mean(times), percentile(times, 50), percentile(times, 90),
   gen_len * 1000.0 / percentile(times, 50)
@@ -197,7 +209,7 @@ printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
 if env = compare_env
   old = ENV[env]?
   begin
-    on, off = measure_paired_env(w, prompt, gen_len, env, compare_off, warmup, reps, greedy_chain, gpu_token_chain)
+    on, off = measure_paired_env(w, prompt, gen_len, env, compare_off, warmup, reps, greedy_chain, gpu_token_chain, decode_mode)
     wins = on.zip(off).count { |a, b| a < b }
     puts
     puts "A/B #{env}: default vs #{compare_off.inspect} (paired interleaved)"
