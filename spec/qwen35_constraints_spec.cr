@@ -81,4 +81,17 @@ describe ML::GGUF::Qwen35Constraints do
     required["read_file"].should eq(["path", "limit"])
     options.should eq(["<parameter=path>\n", "<parameter=limit>\n"])
   end
+
+  it "renders single-parameter close options" do
+    ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options.should eq([
+      "</parameter>\n</function>\n</tool_call>",
+    ])
+  end
+
+  it "advances a partially emitted single-parameter close literal" do
+    options = ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options
+    ML::GGUF::Qwen35Constraints.advance_literal_options(options, "</par").should eq([
+      "ameter>\n</function>\n</tool_call>",
+    ])
+  end
 end

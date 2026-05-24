@@ -139,5 +139,9 @@ module ML::GGUF
         "<parameter=#{name}>\n"
       end
     end
+
+    def self.qwen_single_parameter_close_options : Array(String)
+      ["</parameter>\n</function>\n</tool_call>"]
+    end
   end
 end

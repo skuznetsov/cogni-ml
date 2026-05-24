@@ -234,6 +234,14 @@ end
 def advance_tool_literal_stage(stage : String,
                                emitted : String,
                                required_by_function : Hash(String, Array(String))) : {String, Array(String)}
+  if stage == "first_parameter"
+    return {"value", [] of String}
+  end
+
+  if stage == "closing_parameter"
+    return {"done", [] of String}
+  end
+
   return {stage, [] of String} unless stage == "function_prefix"
 
   required_by_function.each do |function_name, required|
@@ -245,6 +253,24 @@ def advance_tool_literal_stage(stage : String,
   end
 
   {"done", [] of String}
+end
+
+def maybe_start_tool_value_close(stage : String,
+                                 value_text : String) : {String, Array(String)}
+  return {stage, [] of String} unless stage == "value"
+  newline_index = value_text.index('\n')
+  return {stage, [] of String} unless newline_index
+  return {stage, [] of String} if value_text[0...newline_index].strip.empty?
+
+  close_options = ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options
+  emitted_after_newline = value_text[(newline_index + 1)..]
+  return {"closing_parameter", close_options} if emitted_after_newline.empty?
+
+  remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(close_options, emitted_after_newline)
+  return {"done", [] of String} if literal_constraint_complete?(remaining)
+  return {stage, [] of String} if remaining.empty?
+
+  {"closing_parameter", remaining}
 end
 
 def resync_draft!(weights : ML::GGUF::Qwen35Weights,
@@ -501,6 +527,7 @@ literal_remaining = if prefix = constrained_literal_prefix
                     end
 literal_constrained_steps = 0
 literal_emitted = ""
+tool_value_text = ""
 tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
 unless literal_remaining.empty?
   label = constrained_tool_call_prefix_enabled ? "tool-call prefix options=#{literal_remaining.size}" : constrained_literal_prefix.not_nil!.inspect
@@ -660,11 +687,13 @@ if output_ids.empty?
 
   if output_ids.empty? && (final_id = ids.last?)
     tstart = Time.instant
+    constrained_generated = false
     if literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
     else
       top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, final_id, pos, state, literal_remaining)
+      constrained_generated = constrained
       if constrained
         literal_constrained_steps += 1
         literal_emitted += emitted_piece
@@ -675,6 +704,15 @@ if output_ids.empty?
       end
     end
     output_ids << top.to_i32
+    generated_piece = tok.decode_single(top)
+    if !constrained_generated && constrained_tool_call_prefix_enabled && literal_remaining.empty? && tool_literal_stage == "value"
+      tool_value_text += generated_piece
+      next_stage, next_literals = maybe_start_tool_value_close(tool_literal_stage, tool_value_text)
+      unless next_literals.empty?
+        tool_literal_stage = next_stage
+        literal_remaining = next_literals
+      end
+    end
     dt = (Time.instant - tstart).total_seconds
     prefill_ms += dt * 1000.0
     STDOUT << "  final token #{ids.size}/#{ids.size} id=#{final_id} took #{dt.round(2)}s\n"
@@ -1146,11 +1184,13 @@ else
   (n_gen - 1).times do |g_i|
     prev = output_ids.last
     tstart = Time.instant
+    constrained_generated = false
     if literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     else
       top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, prev, pos, state, literal_remaining)
+      constrained_generated = constrained
       if constrained
         literal_constrained_steps += 1
         literal_emitted += emitted_piece
@@ -1162,6 +1202,14 @@ else
     end
     dt = (Time.instant - tstart).total_seconds
     piece = tok.decode_single(top)
+    if !constrained_generated && constrained_tool_call_prefix_enabled && literal_remaining.empty? && tool_literal_stage == "value"
+      tool_value_text += piece
+      next_stage, next_literals = maybe_start_tool_value_close(tool_literal_stage, tool_value_text)
+      unless next_literals.empty?
+        tool_literal_stage = next_stage
+        literal_remaining = next_literals
+      end
+    end
     if trace_steps
       STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos} id=#{top} piece=#{piece.inspect} took #{dt.round(2)}s\n"
       STDOUT.flush
