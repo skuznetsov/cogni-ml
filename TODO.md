@@ -2638,3 +2638,7 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **decision_update_539:** Added an opt-in in-process RSS guard for specs. `spec/support/rss_guard.cr` is loaded from `spec/spec_helper.cr` and activates only when `COGNI_SPEC_MAX_RSS_MB=N` is set. It checks RSS before/after examples and starts an async `/bin/sh` watchdog inside `crystal-run-spec.tmp`, so heavy Metal specs can self-terminate before freezing the machine. This complements, not replaces, `scripts/run_safe.sh`.
 
 **evidence_update_539:** Verification via `scripts/run_safe.sh`: `COGNI_SPEC_MAX_RSS_MB=4096 ... spec/qwen35_cpu_primitives_spec.cr` completed `7 examples, 0 failures`; forced kill check `COGNI_SPEC_MAX_RSS_MB=1 ...` emitted `[SPEC_RSS_GUARD] before_suite: RSS ... > 1MB; exiting 99` and exited `99`.
+
+**decision_update_540:** Extended `scripts/run_safe.sh` with a macOS system memory-pressure guard. Set `COGNI_RUN_SAFE_MIN_FREE_PCT=N` to kill the child process tree when `memory_pressure -Q` reports free memory at or below `N%`. This covers unified-memory/Metal/compressor pressure that may not show up in child RSS alone.
+
+**evidence_update_540:** Verification passed: `bash -n scripts/run_safe.sh`; normal smoke with `COGNI_RUN_SAFE_MIN_FREE_PCT=1` exited `0`; forced threshold smoke with `COGNI_RUN_SAFE_MIN_FREE_PCT=99` killed `/bin/sleep` and emitted the expected `[KILL] System memory pressure...` message.

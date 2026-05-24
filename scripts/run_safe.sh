@@ -6,6 +6,12 @@
 # addition for `crystal spec`: monitor and kill the child process tree too,
 # because Crystal may spawn a `crystal-run-spec.tmp` process that can survive
 # parent interruption and keep consuming memory/GPU.
+#
+# Optional system-pressure guard:
+#   COGNI_RUN_SAFE_MIN_FREE_PCT=10
+# kills the process tree if `memory_pressure -Q` reports free memory at or
+# below the threshold. This catches unified-memory/Metal/compressor pressure
+# that is not always visible in the child RSS alone.
 set -u
 
 BINARY="${1:-}"
@@ -26,6 +32,7 @@ STDOUT_TMP=$(mktemp /tmp/run_safe_stdout.XXXXXX)
 STDERR_TMP=$(mktemp /tmp/run_safe_stderr.XXXXXX)
 WATCHDOG_PID=""
 PASSTHROUGH_STDIO="${RUN_SAFE_PASSTHROUGH_STDIO:-0}"
+MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-0}"
 PID=""
 
 log_line() {
@@ -96,6 +103,14 @@ rss_tree_kb() {
     fi
   done
   echo "$total"
+}
+
+system_free_pct() {
+  if ! command -v memory_pressure >/dev/null 2>&1; then
+    echo ""
+    return 0
+  fi
+  memory_pressure -Q 2>/dev/null | awk -F': ' '/System-wide memory free percentage/ {gsub(/%/, "", $2); print $2; exit}'
 }
 
 fd_count_for_pid() {
@@ -180,6 +195,7 @@ while [ $HALF_SECS -lt $MAX_HALF_SECS ]; do
 
   FD_COUNT=$(fd_tree_count)
   RSS=$(rss_tree_kb)
+  FREE_PCT=$(system_free_pct)
 
   if [ -n "$FD_COUNT" ] && [ "$FD_COUNT" -gt 1000 ]; then
     SECS=$((HALF_SECS / 2))
@@ -192,6 +208,14 @@ while [ $HALF_SECS -lt $MAX_HALF_SECS ]; do
   if [ -n "$RSS" ] && [ "$RSS" -gt $((MAX_MEM * 1024)) ]; then
     SECS=$((HALF_SECS / 2))
     log_line "[KILL] Memory limit for process tree: ${RSS}KB > ${MAX_MEM}MB after ~${SECS}s"
+    kill_tree_briefly
+    dump_captured_output
+    exit 1
+  fi
+
+  if [ -n "$FREE_PCT" ] && [ "$MIN_FREE_PCT" -gt 0 ] && [ "$FREE_PCT" -le "$MIN_FREE_PCT" ]; then
+    SECS=$((HALF_SECS / 2))
+    log_line "[KILL] System memory pressure: free ${FREE_PCT}% <= ${MIN_FREE_PCT}% after ~${SECS}s (tree RSS: ${RSS:-?}KB)"
     kill_tree_briefly
     dump_captured_output
     exit 1
