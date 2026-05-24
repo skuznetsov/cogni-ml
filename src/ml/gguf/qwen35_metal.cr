@@ -126,6 +126,14 @@ module ML
           nil
         end
 
+        def self.rmsnorm_project_top1_allowed_ids(x : Array(Float32),
+                                                  norm_weight : Array(Float32),
+                                                  out_qw : QuantWeight,
+                                                  eps : Float32,
+                                                  allowed_ids : Array(Int32)) : Array(Float32)?
+          nil
+        end
+
         def self.mtp_one_token_hidden_from_fc_in(fc_in : Array(Float32),
                                                  fc_raw : Bytes,
                                                  v_raw : Bytes,
@@ -186,6 +194,7 @@ module ML
         @@mv8_top1_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv8_top2_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline?
+        @@mv6_top1_allowed_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top2_tiles_pipeline : ML::Metal::ComputePipeline?
         @@mv6_top1_tiles_batch_pipeline : ML::Metal::ComputePipeline?
         @@top1_reduce_tiles_pipeline : ML::Metal::ComputePipeline?
@@ -954,6 +963,12 @@ module ML
         private def self.mv6_top1_tiles_pipeline : ML::Metal::ComputePipeline
           @@mv6_top1_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_tiles_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_tiles_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.mv6_top1_allowed_tiles_pipeline : ML::Metal::ComputePipeline
+          @@mv6_top1_allowed_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_allowed_tiles_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_allowed_tiles_f32", GEMM_Q56K_SOURCE)
           }
         end
 
@@ -7914,6 +7929,85 @@ module ML
           head_top1_enc.set_value(out_qw.in_dim.to_u32, 4)
           head_top1_enc.set_value(out_qw.out_dim.to_u32, 5)
           head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {out_qw.type.q8_0? ? MV_Q8_NSG * 32 : 64, 1, 1})
+          head_top1_enc.end_encoding
+
+          reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          reduce_top1_enc.set_pipeline(top1_reduce_tiles_pipeline)
+          reduce_top1_enc.set_buffer(tile_values_buf, 0)
+          reduce_top1_enc.set_buffer(tile_ids_buf, 1)
+          reduce_top1_enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_value(tile_count.to_u32, 4)
+          reduce_top1_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          reduce_top1_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_top1(top1_id_buf, top1_value_buf)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          result
+        end
+
+        def self.rmsnorm_project_top1_allowed_ids(x : Array(Float32),
+                                                  norm_weight : Array(Float32),
+                                                  out_qw : QuantWeight,
+                                                  eps : Float32,
+                                                  allowed_ids : Array(Int32)) : Array(Float32)?
+          return nil unless head_top1_fused_enabled? && out_qw.type.q6_k? && out_qw.in_dim % QK_K == 0
+          return nil if allowed_ids.empty?
+          raise "rmsnorm_project_top1_allowed_ids input mismatch: expected #{out_qw.in_dim}, got #{x.size}" unless x.size == out_qw.in_dim
+          raise "rmsnorm_project_top1_allowed_ids norm mismatch: expected #{out_qw.in_dim}, got #{norm_weight.size}" unless norm_weight.size == out_qw.in_dim
+          allowed_ids.each do |id|
+            raise "allowed token id #{id} out of range 0...#{out_qw.out_dim}" if id < 0 || id >= out_qw.out_dim
+          end
+
+          ML::Metal::Device.init!
+
+          hidden_dim = x.size
+          allowed_n = allowed_ids.size
+          tile_count = (allowed_n + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+          x_buf = Scratch.get(:head_top1_allowed_x, hidden_dim.to_i64 * sizeof(Float32))
+          norm_w_buf = Scratch.get(:head_top1_allowed_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:head_top1_allowed_normed, hidden_dim.to_i64 * sizeof(Float32))
+          allowed_ids_buf = Scratch.get(:head_top1_allowed_ids, allowed_n.to_i64 * sizeof(UInt32))
+          tile_values_buf = Scratch.get(:head_top1_allowed_tile_values, tile_count.to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:head_top1_allowed_tile_ids, tile_count.to_i64 * sizeof(UInt32))
+          top1_id_buf = Scratch.get(:head_top1_allowed_id, sizeof(UInt32).to_i64)
+          top1_value_buf = Scratch.get(:head_top1_allowed_value, sizeof(Float32).to_i64)
+          x_buf.write(x)
+          norm_w_buf.write(norm_weight)
+          allowed_ptr = allowed_ids_buf.contents.as(Pointer(UInt32))
+          allowed_ids.each_with_index { |id, i| allowed_ptr[i] = id.to_u32 }
+
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_rmsnorm_vec(norm_enc, x_buf, norm_w_buf, normed_buf, hidden_dim, eps)
+          norm_enc.end_encoding
+
+          head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          head_top1_enc.set_pipeline(mv6_top1_allowed_tiles_pipeline)
+          head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          head_top1_enc.set_buffer(normed_buf, 1)
+          head_top1_enc.set_buffer(allowed_ids_buf, 2)
+          head_top1_enc.set_buffer(tile_values_buf, 3, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_buffer(tile_ids_buf, 4, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_value(out_qw.in_dim.to_u32, 5)
+          head_top1_enc.set_value(out_qw.out_dim.to_u32, 6)
+          head_top1_enc.set_value(allowed_n.to_u32, 7)
+          head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {64, 1, 1})
           head_top1_enc.end_encoding
 
           reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
