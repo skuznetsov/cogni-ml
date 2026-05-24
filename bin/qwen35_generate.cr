@@ -212,23 +212,39 @@ def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
                                            token_id : Int32,
                                            pos : Int32,
                                            state : ML::GGUF::Qwen35CPU::State,
-                                           remaining : Array(String)) : {Int32, Float32, Array(String), Bool}
+                                           remaining : Array(String)) : {Int32, Float32, Array(String), String, Bool}
   if literal_constraint_complete?(remaining)
     top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
-    return {top.to_i32, logit, [] of String, false}
+    return {top.to_i32, logit, [] of String, "", false}
   end
 
   allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(token_index, remaining)
   if allowed.empty?
     top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
-    return {top.to_i32, logit, [] of String, false}
+    return {top.to_i32, logit, [] of String, "", false}
   end
 
   top, logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(weights, token_id, pos, state, allowed)
   piece = token_index.text_for_id(top)
   next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(remaining, piece)
   next_remaining = [] of String if literal_constraint_complete?(next_remaining)
-  {top.to_i32, logit, next_remaining, true}
+  {top.to_i32, logit, next_remaining, piece, true}
+end
+
+def advance_tool_literal_stage(stage : String,
+                               emitted : String,
+                               required_by_function : Hash(String, Array(String))) : {String, Array(String)}
+  return {stage, [] of String} unless stage == "function_prefix"
+
+  required_by_function.each do |function_name, required|
+    next unless emitted.ends_with?("<function=#{function_name}>\n")
+    next if required.empty?
+
+    options = ML::GGUF::Qwen35Constraints.qwen_parameter_open_options([required[0]])
+    return {"first_parameter", options}
+  end
+
+  {"done", [] of String}
 end
 
 def resync_draft!(weights : ML::GGUF::Qwen35Weights,
@@ -473,6 +489,7 @@ ngram_source_history = [] of Int32
 ngram_replay_cursor = nil.as(Int32?)
 prompt_cache_reused = false
 prompt_cache_fast_forward_used = false
+tool_required_parameters = constrained_tool_call_prefix_enabled ? ML::GGUF::Qwen35Constraints.tool_required_parameters(chat_tools) : {} of String => Array(String)
 literal_remaining = if prefix = constrained_literal_prefix
                       prefix.empty? ? [] of String : [prefix]
                     elsif constrained_tool_call_prefix_enabled
@@ -483,6 +500,8 @@ literal_remaining = if prefix = constrained_literal_prefix
                       [] of String
                     end
 literal_constrained_steps = 0
+literal_emitted = ""
+tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
 unless literal_remaining.empty?
   label = constrained_tool_call_prefix_enabled ? "tool-call prefix options=#{literal_remaining.size}" : constrained_literal_prefix.not_nil!.inspect
   STDOUT << "Constrained literal prefix enabled: #{label}\n"
@@ -644,9 +663,16 @@ if output_ids.empty?
     if literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
     else
-      top, top_logit, literal_remaining, constrained = advance_next_maybe_literal_constrained(
+      top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, final_id, pos, state, literal_remaining)
-      literal_constrained_steps += 1 if constrained
+      if constrained
+        literal_constrained_steps += 1
+        literal_emitted += emitted_piece
+        if literal_remaining.empty? && constrained_tool_call_prefix_enabled
+          tool_literal_stage, literal_remaining = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters)
+        end
+      end
     end
     output_ids << top.to_i32
     dt = (Time.instant - tstart).total_seconds
@@ -1123,9 +1149,16 @@ else
     if literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     else
-      top, top_logit, literal_remaining, constrained = advance_next_maybe_literal_constrained(
+      top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, prev, pos, state, literal_remaining)
-      literal_constrained_steps += 1 if constrained
+      if constrained
+        literal_constrained_steps += 1
+        literal_emitted += emitted_piece
+        if literal_remaining.empty? && constrained_tool_call_prefix_enabled
+          tool_literal_stage, literal_remaining = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters)
+        end
+      end
     end
     dt = (Time.instant - tstart).total_seconds
     piece = tok.decode_single(top)

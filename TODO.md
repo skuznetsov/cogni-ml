@@ -2708,3 +2708,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_550:** Verification passed: guarded `spec/qwen35_constraints_spec.cr` -> `4 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with one `read_file` tool generated `<tool_call>`, reported `literal_constrained_steps=4`, and reduced the 4-token constrained decode wall from the earlier full-vocab frontier scan smoke `1184.9ms` to `62.7ms` after indexing.
 
 **next_update_550:** Extend the structured controller beyond the prefix: constrain `<function=...>` completion across multiple tools, then parameter tag names for required schema fields, then closing tags. Keep free-form parameter values as fallback until schema-specific value grammars are implemented.
+
+**decision_update_551:** Extended the opt-in Qwen XML tool-call controller from function prefix to the first required parameter tag. After the constrained `<function=<name>>\n` literal completes, `qwen35_generate` derives the selected function, constrains `<parameter=<first-required>>\n`, and then returns to normal greedy decode for the free-form parameter value.
+
+**evidence_update_551:** Verification passed: guarded `spec/qwen35_constraints_spec.cr` -> `5 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with one `read_file(path)` tool generated `<tool_call>\n<function=read_file>\n<parameter=path>\nREADME.md`, reported `literal_constrained_steps=16`, and demonstrated fallback for the free-form value.
+
+**next_update_551:** Add the next finite corridors after a free-form value: detect/encourage `</parameter>`, constrain remaining required parameter tags if any, then constrain `</function>\n</tool_call>`. Keep value contents unconstrained until schema-specific string/number/enum grammars exist.

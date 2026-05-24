@@ -107,9 +107,36 @@ module ML::GGUF
       names.uniq
     end
 
+    def self.tool_required_parameters(tools : Array(JSON::Any)) : Hash(String, Array(String))
+      required_by_name = {} of String => Array(String)
+      tools.each do |tool|
+        obj = tool.as_h?
+        next unless obj
+        function = obj["function"]?.try(&.as_h?)
+        next unless function
+        name = function["name"]?.try(&.as_s?)
+        next unless name && !name.empty?
+
+        parameters = function["parameters"]?.try(&.as_h?)
+        required = parameters.try { |p| p["required"]?.try(&.as_a?) }
+        required_by_name[name] = if required
+                                   required.compact_map(&.as_s?)
+                                 else
+                                   [] of String
+                                 end
+      end
+      required_by_name
+    end
+
     def self.qwen_tool_call_prefix_options(function_names : Array(String)) : Array(String)
       function_names.reject(&.empty?).uniq.map do |name|
         "<tool_call>\n<function=#{name}>\n"
+      end
+    end
+
+    def self.qwen_parameter_open_options(parameter_names : Array(String)) : Array(String)
+      parameter_names.reject(&.empty?).uniq.map do |name|
+        "<parameter=#{name}>\n"
       end
     end
   end

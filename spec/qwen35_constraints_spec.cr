@@ -59,12 +59,26 @@ describe ML::GGUF::Qwen35Constraints do
     ]))
 
     names = ML::GGUF::Qwen35Constraints.tool_function_names(tools)
+    required = ML::GGUF::Qwen35Constraints.tool_required_parameters(tools)
     prefixes = ML::GGUF::Qwen35Constraints.qwen_tool_call_prefix_options(names)
 
     names.should eq(["read_file", "grep"])
+    required["read_file"].should be_empty
     prefixes.should eq([
       "<tool_call>\n<function=read_file>\n",
       "<tool_call>\n<function=grep>\n",
     ])
+  end
+
+  it "extracts required parameters and renders parameter-open options" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object","required":["path","limit"]}}}
+    ]))
+
+    required = ML::GGUF::Qwen35Constraints.tool_required_parameters(tools)
+    options = ML::GGUF::Qwen35Constraints.qwen_parameter_open_options(required["read_file"])
+
+    required["read_file"].should eq(["path", "limit"])
+    options.should eq(["<parameter=path>\n", "<parameter=limit>\n"])
   end
 end
