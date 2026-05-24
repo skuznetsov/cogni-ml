@@ -130,6 +130,29 @@ module ML::GGUF
       required_by_name
     end
 
+    def self.tool_optional_parameters(tools : Array(JSON::Any)) : Hash(String, Array(String))
+      optional_by_name = {} of String => Array(String)
+      tools.each do |tool|
+        obj = tool.as_h?
+        next unless obj
+        function = obj["function"]?.try(&.as_h?)
+        next unless function
+        name = function["name"]?.try(&.as_s?)
+        next unless name && !name.empty?
+
+        parameters = function["parameters"]?.try(&.as_h?)
+        properties = parameters.try { |p| p["properties"]?.try(&.as_h?) }
+        required = parameters.try { |p| p["required"]?.try(&.as_a?) }
+        required_names = Set(String).new((required || [] of JSON::Any).compact_map(&.as_s?))
+        optional_by_name[name] = if properties
+                                   properties.keys.reject { |key| required_names.includes?(key) }
+                                 else
+                                   [] of String
+                                 end
+      end
+      optional_by_name
+    end
+
     def self.tool_finite_parameter_value_options(tools : Array(JSON::Any)) : Hash(String, Hash(String, Array(String)))
       by_function = {} of String => Hash(String, Array(String))
       tools.each do |tool|

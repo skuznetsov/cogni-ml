@@ -125,6 +125,18 @@ describe ML::GGUF::Qwen35Constraints do
     options["read_file"]["limit"].should eq(["1\n", "2\n", "3\n"])
   end
 
+  it "extracts optional parameters in schema property order" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{
+        "path":{"type":"string"},
+        "limit":{"type":"integer"},
+        "exact":{"type":"boolean"}
+      },"required":["path"]}}}
+    ]))
+
+    ML::GGUF::Qwen35Constraints.tool_optional_parameters(tools)["read_file"].should eq(["limit", "exact"])
+  end
+
   it "does not enumerate overly wide integer ranges" do
     tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
       {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{

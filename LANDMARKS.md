@@ -15932,3 +15932,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the host serialization boundary after a parsed Qwen XML call. Transport carries parameter values through the tool schema frame into JSON types. Legal move is schema-local scalar coercion; dual frame is the old heuristic parser when no schema exists. Potential descends in `(type_mismatch_risk, harness_adapter_work, invalid_function_call_surface)` without touching model state.
 - adversary: Only basic scalar `type` values are handled. Full JSON Schema constructs (`oneOf`, nullable unions, arrays, objects, formats) remain fallback or require explicit adapter logic.
 - trust: {F:0.88,G:0.56,R:0.82}
+
+
+**LM-558 Optional tool parameters are an exact branch, not a forced corridor [shared/ml]**
+- status: IMPLEMENTED opt-in optional-parameter grammar branch
+- claim tested: After all required parameters are present, constrained Qwen XML decoding can expose a finite legal choice between final close and optional parameter tags, letting model logits choose optional args without breaking XML/schema boundaries.
+- evidence: Added `tool_optional_parameters` and an `optional_or_close` stage in `qwen35_generate`. Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `12 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with optional `limit integer 1..5` and prompt `Read README.md with limit 3` emitted `<parameter=limit>3</parameter>` plus typed JSON `limit:3`; adversary smoke with prompt `Read README.md` emitted only required `path` and chose final close.
+- diagnosis: This is the correct LTP/WBA frame for optional args: the local window is branchy but finite, so the legal move is to present all valid branch literals and let top1 choose. It avoids the two bad alternatives: forcing all optionals or forbidding useful optional args.
+- LTP/WBA: Window is the boundary after required-parameter completion. Transport carries competing close/optional-tag literals through tokenizer frontiers. Legal move preserves XML parseability and schema validity; selected optional tags become part of the active parameter sequence and reuse value/final-close corridors. Potential descends in `(missing_useful_optional_args, invalid_optional_tag_risk, head_rows_scanned)` while boundary safety keeps final close available.
+- adversary: Optional selection is still greedy top1 over legal tags, not semantic planning. Multiple optional args are supported sequentially, but arrays/objects and complex schema dependencies remain unsupported.
+- trust: {F:0.88,G:0.54,R:0.80}

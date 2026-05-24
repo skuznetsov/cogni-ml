@@ -2755,3 +2755,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_557:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_chat_spec.cr` -> `8 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with `read_file(path string, limit integer 1..5)` and `QWEN35_TOOL_RESPONSE_JSON=simple` generated a parsed call where `path` remained `"README.md"` and `limit` emitted as numeric `3` in both `=== Parsed tool calls ===` and `=== Tool response JSON ===`.
 
 **next_update_557:** Next structured function-calling work: optional parameter policy and schema-aware OpenAI/CrystalBall harness tests in `../crystal_ball`. Keep model-facing XML unchanged; continue improving the host boundary and exact constrained corridors.
+
+
+**decision_update_558:** Added an exact optional-parameter branch to the opt-in Qwen XML tool-call controller. After required parameters are complete, the finite grammar state now allows either final close or one of the schema optional `<parameter=...>` tags. If the model selects an optional tag, it is appended to the active parameter sequence and uses the same finite-value/free-form/final-close machinery as required parameters.
+
+**evidence_update_558:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `12 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with optional `limit integer 1..5` and prompt `Read README.md with limit 3` selected the optional `limit` branch and emitted typed JSON `limit:3`; adversary smoke with prompt `Read README.md` selected final close and emitted only `path`, proving the optional branch is not forced.
+
+**next_update_558:** Next integration step is to exercise this through `../crystal_ball` text harness with `CogniQwen`, using tools that include optional typed parameters and checking both selected and omitted optional arguments.

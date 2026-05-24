@@ -234,42 +234,73 @@ end
 def advance_tool_literal_stage(stage : String,
                                emitted : String,
                                required_by_function : Hash(String, Array(String)),
+                               optional_by_function : Hash(String, Array(String)),
                                required_parameters : Array(String),
+                               optional_parameters : Array(String),
                                parameter_index : Int32,
                                value_options_by_function : Hash(String, Hash(String, Array(String))),
-                               value_options_by_parameter : Hash(String, Array(String))) : {String, Array(String), Array(String), Int32, Hash(String, Array(String)), Bool}
+                               value_options_by_parameter : Hash(String, Array(String))) : {String, Array(String), Array(String), Array(String), Int32, Hash(String, Array(String)), Bool}
   if stage == "parameter_open"
     next_stage, next_literals = next_tool_value_corridor(required_parameters, parameter_index, value_options_by_parameter)
-    return {next_stage, next_literals, required_parameters, parameter_index, value_options_by_parameter, true}
+    return {next_stage, next_literals, required_parameters, optional_parameters, parameter_index, value_options_by_parameter, true}
   end
 
   if stage == "parameter_separator"
     next_index = parameter_index + 1
     next_stage, next_literals = next_tool_value_corridor(required_parameters, next_index, value_options_by_parameter)
-    return {next_stage, next_literals, required_parameters, next_index, value_options_by_parameter, true}
+    return {next_stage, next_literals, required_parameters, optional_parameters, next_index, value_options_by_parameter, true}
   end
 
   if stage == "value_literal"
-    next_stage, next_literals = next_tool_value_close_corridor(required_parameters, parameter_index)
-    return {next_stage, next_literals, required_parameters, parameter_index, value_options_by_parameter, false}
+    next_stage, next_literals = next_tool_value_close_corridor(required_parameters, parameter_index, optional_parameters)
+    return {next_stage, next_literals, required_parameters, optional_parameters, parameter_index, value_options_by_parameter, false}
+  end
+
+  if stage == "optional_or_close"
+    if emitted.ends_with?("</parameter>\n</function>\n</tool_call>")
+      return {"done", [] of String, required_parameters, optional_parameters, parameter_index, value_options_by_parameter, false}
+    end
+
+    optional_parameters.each_with_index do |name, i|
+      next unless emitted.ends_with?("</parameter>\n<parameter=#{name}>\n")
+
+      next_required = required_parameters.dup
+      next_required << name
+      next_optional = optional_parameters.dup
+      next_optional.delete_at(i)
+      next_index = next_required.size - 1
+      next_stage, next_literals = next_tool_value_corridor(next_required, next_index, value_options_by_parameter)
+      return {next_stage, next_literals, next_required, next_optional, next_index, value_options_by_parameter, true}
+    end
+
+    return {stage, [] of String, required_parameters, optional_parameters, parameter_index, value_options_by_parameter, false}
   end
 
   if stage == "closing_parameter"
-    return {"done", [] of String, required_parameters, parameter_index, value_options_by_parameter, false}
+    return {"done", [] of String, required_parameters, optional_parameters, parameter_index, value_options_by_parameter, false}
   end
 
-  return {stage, [] of String, required_parameters, parameter_index, value_options_by_parameter, false} unless stage == "function_prefix"
+  return {stage, [] of String, required_parameters, optional_parameters, parameter_index, value_options_by_parameter, false} unless stage == "function_prefix"
 
   required_by_function.each do |function_name, required|
     next unless emitted.ends_with?("<function=#{function_name}>\n")
-    next if required.empty?
+
+    selected_optional = optional_by_function[function_name]? || [] of String
+    selected_value_options = value_options_by_function[function_name]? || {} of String => Array(String)
+    if required.empty?
+      if selected_optional.empty?
+        return {"closing_parameter", ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options, required, selected_optional, 0, selected_value_options, false}
+      end
+
+      options = ML::GGUF::Qwen35Constraints.qwen_parameter_open_options(selected_optional)
+      return {"optional_or_close", options + ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options, required, selected_optional, 0, selected_value_options, false}
+    end
 
     options = ML::GGUF::Qwen35Constraints.qwen_parameter_open_options([required[0]])
-    selected_value_options = value_options_by_function[function_name]? || {} of String => Array(String)
-    return {"parameter_open", options, required, 0, selected_value_options, false}
+    return {"parameter_open", options, required, selected_optional, 0, selected_value_options, false}
   end
 
-  {"done", [] of String, required_parameters, parameter_index, value_options_by_parameter, false}
+  {"done", [] of String, required_parameters, optional_parameters, parameter_index, value_options_by_parameter, false}
 end
 
 def next_tool_value_corridor(required_parameters : Array(String),
@@ -285,10 +316,17 @@ def next_tool_value_corridor(required_parameters : Array(String),
 end
 
 def next_tool_value_close_corridor(required_parameters : Array(String),
-                                   parameter_index : Int32) : {String, Array(String)}
+                                   parameter_index : Int32,
+                                   optional_parameters : Array(String)) : {String, Array(String)}
   next_parameter_index = parameter_index + 1
   if next_parameter_index < required_parameters.size
     return {"parameter_separator", ML::GGUF::Qwen35Constraints.qwen_parameter_continue_options([required_parameters[next_parameter_index]])}
+  end
+
+  unless optional_parameters.empty?
+    options = ML::GGUF::Qwen35Constraints.qwen_parameter_continue_options(optional_parameters)
+    options.concat(ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options)
+    return {"optional_or_close", options}
   end
 
   {"closing_parameter", ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options}
@@ -297,6 +335,7 @@ end
 def maybe_start_tool_value_close(stage : String,
                                  value_text : String,
                                  required_parameters : Array(String),
+                                 optional_parameters : Array(String),
                                  parameter_index : Int32) : {String, Array(String), Int32, String}
   return {stage, [] of String, parameter_index, value_text} unless stage == "value"
   newline_index = value_text.index('\n')
@@ -305,7 +344,7 @@ def maybe_start_tool_value_close(stage : String,
 
   next_parameter_index = parameter_index + 1
   has_next_parameter = next_parameter_index < required_parameters.size
-  close_stage, close_options = next_tool_value_close_corridor(required_parameters, parameter_index)
+  close_stage, close_options = next_tool_value_close_corridor(required_parameters, parameter_index, optional_parameters)
   emitted_after_newline = value_text[(newline_index + 1)..]
   return {close_stage, close_options, parameter_index, value_text} if emitted_after_newline.empty?
 
@@ -568,6 +607,7 @@ ngram_replay_cursor = nil.as(Int32?)
 prompt_cache_reused = false
 prompt_cache_fast_forward_used = false
 tool_required_parameters = constrained_tool_call_prefix_enabled ? ML::GGUF::Qwen35Constraints.tool_required_parameters(chat_tools) : {} of String => Array(String)
+tool_optional_parameters = constrained_tool_call_prefix_enabled ? ML::GGUF::Qwen35Constraints.tool_optional_parameters(chat_tools) : {} of String => Array(String)
 tool_finite_value_options = constrained_tool_call_prefix_enabled ? ML::GGUF::Qwen35Constraints.tool_finite_parameter_value_options(chat_tools) : {} of String => Hash(String, Array(String))
 literal_remaining = if prefix = constrained_literal_prefix
                       prefix.empty? ? [] of String : [prefix]
@@ -583,6 +623,7 @@ literal_emitted = ""
 tool_value_text = ""
 tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
 tool_required_sequence = [] of String
+tool_optional_sequence = [] of String
 tool_value_options_by_parameter = {} of String => Array(String)
 tool_parameter_index = 0
 tool_literal_stage_counts = Hash(String, Int32).new(0)
@@ -759,8 +800,8 @@ if output_ids.empty?
         tool_literal_stage_counts[constrained_stage] += 1 if constrained_tool_call_prefix_enabled
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
-          tool_literal_stage, literal_remaining, tool_required_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
-            tool_literal_stage, literal_emitted, tool_required_parameters, tool_required_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
           tool_value_text = "" if reset_tool_value
         end
       end
@@ -771,7 +812,7 @@ if output_ids.empty?
       tool_freeform_value_steps += 1
       tool_value_text += generated_piece
       next_stage, next_literals, next_parameter_index, next_value_text = maybe_start_tool_value_close(
-        tool_literal_stage, tool_value_text, tool_required_sequence, tool_parameter_index)
+        tool_literal_stage, tool_value_text, tool_required_sequence, tool_optional_sequence, tool_parameter_index)
       if next_stage != tool_literal_stage || !next_literals.empty?
         tool_value_boundary_hits += 1
         tool_literal_stage = next_stage
@@ -1266,8 +1307,8 @@ else
         tool_literal_stage_counts[constrained_stage] += 1 if constrained_tool_call_prefix_enabled
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
-          tool_literal_stage, literal_remaining, tool_required_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
-            tool_literal_stage, literal_emitted, tool_required_parameters, tool_required_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
           tool_value_text = "" if reset_tool_value
         end
       end
@@ -1278,7 +1319,7 @@ else
       tool_freeform_value_steps += 1
       tool_value_text += piece
       next_stage, next_literals, next_parameter_index, next_value_text = maybe_start_tool_value_close(
-        tool_literal_stage, tool_value_text, tool_required_sequence, tool_parameter_index)
+        tool_literal_stage, tool_value_text, tool_required_sequence, tool_optional_sequence, tool_parameter_index)
       if next_stage != tool_literal_stage || !next_literals.empty?
         tool_value_boundary_hits += 1
         tool_literal_stage = next_stage
