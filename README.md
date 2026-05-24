@@ -885,6 +885,10 @@ For publishable measurements, wait for a quiet host:
 Additional benchmark modes:
 
 ```sh
+# Default native decode now matches llama-bench `tg`: decoder body only,
+# with no output logits/head readback. Product-shaped greedy decode is:
+./build/benchmark_qwen_vs_llama --native-decode-top1
+
 # Fresh State per repetition, but Metal state buffers are prepared before
 # the timed prefill. This measures prompt ingest without first-touch buffer
 # allocation/zeroing in the timed region.
@@ -896,6 +900,18 @@ Additional benchmark modes:
 # Exact prompt-cache restore after one seeded native prefill.
 ./build/benchmark_qwen_vs_llama --native-prefill-cache
 ```
+
+Latest guarded relaxed-host Qwen3.5-9B Q4_K_M body-only rows on M2 Max:
+
+| prompt/gen | cogni-ml pp | llama.cpp pp | pp gap | cogni-ml tg | llama.cpp tg | tg gap |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64/64 | 480.06 tok/s | 458.85 tok/s | +4.62% | 53.75 tok/s | 48.15 tok/s | +11.63% |
+| 256/64 | 567.60 tok/s | 566.21 tok/s | +0.25% | 53.43 tok/s | 48.26 tok/s | +10.72% |
+| 1024/64 | 582.74 tok/s | 574.77 tok/s | +1.39% | 53.14 tok/s | 48.24 tok/s | +10.16% |
+
+These rows use `--native-prefill-prealloc`, `--threads=8`, and disabled load
+warnings. Treat them as guarded relaxed measurements, not publishable quiet-host
+ABBA evidence.
 
 For Qwen3.6 MTP / quant baselines, first inspect the local/HF matrix:
 

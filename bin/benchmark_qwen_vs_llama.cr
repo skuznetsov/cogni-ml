@@ -218,28 +218,33 @@ def run_native_prefill(w : ML::GGUF::Qwen35Weights,
 end
 
 def forward_decode_token(w : ML::GGUF::Qwen35Weights, tok : Int32, pos : Int32,
-                         state : ML::GGUF::Qwen35CPU::State, top1 : Bool) : Nil
-  if top1
+                         state : ML::GGUF::Qwen35CPU::State, mode : String) : Nil
+  case mode
+  when "body"
+    ML::GGUF::Qwen35CPU.prefill_token(w, tok, pos, state)
+  when "top1"
     ML::GGUF::Qwen35CPU.forward_top1(w, tok, pos, state)
-  else
+  when "full"
     ML::GGUF::Qwen35CPU.forward(w, tok, pos, state)
+  else
+    raise "unknown native decode mode: #{mode}"
   end
 end
 
-def measure_native_decode(w : ML::GGUF::Qwen35Weights, n_gen : Int32, reps : Int32, warmup : Int32, top1 : Bool) : NativeStats
+def measure_native_decode(w : ML::GGUF::Qwen35Weights, n_gen : Int32, reps : Int32, warmup : Int32, mode : String) : NativeStats
   hp = w.hparams
   decode_tokens = Array(Int32).new(n_gen) { |i| ((i * 13 + 11751) % 32000).to_i32 }
 
   warmup.times do
     state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_gen + 4)
-    decode_tokens.each_with_index { |tok, pos| forward_decode_token(w, tok, pos.to_i32, state, top1) }
+    decode_tokens.each_with_index { |tok, pos| forward_decode_token(w, tok, pos.to_i32, state, mode) }
   end
 
   times = Array(Float64).new(reps)
   reps.times do
     state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_gen + 4)
     t0 = Time.instant
-    decode_tokens.each_with_index { |tok, pos| forward_decode_token(w, tok, pos.to_i32, state, top1) }
+    decode_tokens.each_with_index { |tok, pos| forward_decode_token(w, tok, pos.to_i32, state, mode) }
     times << (Time.instant - t0).total_milliseconds
   end
 
@@ -316,7 +321,7 @@ flash_attn = false
 llama_cache_type_k = nil.as(String?)
 llama_cache_type_v = nil.as(String?)
 llama_extra_args = [] of String
-native_decode_top1 = true
+native_decode_mode = "body"
 native_prefill_cache = false
 native_prefill_prealloc = false
 native_prefill_prepare_state = false
@@ -341,7 +346,9 @@ OptionParser.parse do |p|
   p.on("--llama-cache-k=TYPE", "llama.cpp KV cache K type for llama-bench, for example q8_0") { |v| llama_cache_type_k = v }
   p.on("--llama-cache-v=TYPE", "llama.cpp KV cache V type for llama-bench, for example q4_0") { |v| llama_cache_type_v = v }
   p.on("--llama-extra-arg=ARG", "Append one raw argument to llama-bench; repeat for flag/value pairs") { |v| llama_extra_args << v }
-  p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
+  p.on("--native-decode-body-only", "Measure native decode like llama-bench tg with logits=nullptr (default)") { native_decode_mode = "body" }
+  p.on("--native-decode-top1", "Measure product-shaped native decode with greedy fused top1") { native_decode_mode = "top1" }
+  p.on("--native-full-logits", "Measure native decode with full lm-head logits") { native_decode_mode = "full" }
   p.on("--native-prefill-body-only", "Deprecated no-op: native prefill defaults to llama-bench-compatible body-only pp") { native_prefill_final_top1 = false }
   p.on("--native-prefill-final-top1", "Measure product-shaped prompt processing plus final output-head top1") { native_prefill_final_top1 = true }
   p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
@@ -381,7 +388,7 @@ native_prefill = if native_prefill_cache
                  else
                    measure_native_prefill(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
                  end
-native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_top1)
+native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_mode)
 
 llama_prefill = run_llama_bench(llama_bench, model, n_prompt, 0, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
 llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
@@ -398,7 +405,13 @@ native_prefill_mode = if native_prefill_cache
                       else
                         native_prefill_final_top1 ? "chunked_prompt_plus_final_top1" : "chunked_prompt_body_only"
                       end
-puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
+native_decode_label = case native_decode_mode
+                      when "body" then "body_only"
+                      when "top1" then "top1"
+                      when "full" then "full_logits"
+                      else native_decode_mode
+                      end
+puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_label}"
 puts
 puts "Prefill"
 puts "  cogni-ml:  avg=#{native_prefill.avg_ms.round(2)} ms  p50=#{native_prefill.p50_ms.round(2)} ms  p95=#{native_prefill.p95_ms.round(2)} ms  avg=#{native_prefill.tok_s_avg.round(2)} tok/s  p50=#{native_prefill.tok_s_p50.round(2)} tok/s"
