@@ -2650,12 +2650,16 @@ module ML
         end
 
         private def self.attn_splitk_min_context : Int32
-          (ENV["QWEN35_ATTN_SPLITK_MIN_CTX"]? || "512").to_i32
+          (ENV["QWEN35_ATTN_SPLITK_MIN_CTX"]? || "128").to_i32
         end
 
         private def self.attn_splitk_chunk_size : Int32
-          value = (ENV["QWEN35_ATTN_SPLITK_CHUNK"]? || "128").to_i32
-          value > 0 ? value : 128
+          value = (ENV["QWEN35_ATTN_SPLITK_CHUNK"]? || "64").to_i32
+          value > 0 ? value : 64
+        end
+
+        private def self.attn_gqa4_enabled? : Bool
+          ENV["QWEN35_ATTN_GQA4"]? == "1" && ENV["QWEN35_ATTN_GQA4_OFF"]? != "1"
         end
 
         private def self.can_use_head_top1_fused?(output_qw : QuantWeight) : Bool
@@ -8292,7 +8296,7 @@ module ML
                   split2_enc.end_encoding
                 else
                   attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  use_gqa4_attn = hp.n_head // hp.n_head_kv == 4 && hp.head_dim <= 128 && ENV["QWEN35_ATTN_GQA4_OFF"]? != "1"
+                  use_gqa4_attn = hp.n_head // hp.n_head_kv == 4 && hp.head_dim <= 128 && attn_gqa4_enabled?
                   attn_enc.set_pipeline(use_gqa4_attn ? attn_gqa4_pipeline : attn_pipeline)
                   attn_enc.set_buffer(q_buf, 0)
                   attn_enc.set_buffer(gate_buf, 1)
