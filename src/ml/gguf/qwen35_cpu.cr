@@ -1912,6 +1912,20 @@ module ML::GGUF
       {best_id, best, second_id, second}
     end
 
+    private def top1_from_allowed_logits(logits : Array(Float32),
+                                         allowed_ids : Array(Int32)) : {Int32, Float32}
+      best = -Float32::INFINITY
+      best_id = allowed_ids[0]
+      allowed_ids.each do |id|
+        value = logits[id]
+        if value > best || (value == best && id < best_id)
+          best = value
+          best_id = id
+        end
+      end
+      {best_id, best}
+    end
+
     # Greedy decode helper. By default, the Metal wave path avoids
     # materializing full lm-head logits and returns only top-1. Set
     # `QWEN35_HEAD_TOP1_FUSED=0` to force the full-logit fallback.
@@ -1929,6 +1943,27 @@ module ML::GGUF
       logits = forward(weights, token_id, pos, state)
       maxv = logits.max
       {logits.index(maxv).not_nil!.to_i32, maxv}
+    end
+
+    # Constrained greedy helper. The returned token is the maximum-logit token
+    # inside `allowed_ids`; callers must only pass grammar-certified ids.
+    def forward_top1_allowed(weights : Qwen35Weights,
+                             token_id : Int32,
+                             pos : Int32,
+                             state : State,
+                             allowed_ids : Array(Int32)) : {Int32, Float32}
+      raise ArgumentError.new("forward_top1_allowed requires at least one allowed id") if allowed_ids.empty?
+      allowed_ids.each do |id|
+        raise ArgumentError.new("allowed token id #{id} out of range 0...#{weights.output.out_dim}") if id < 0 || id >= weights.output.out_dim
+      end
+
+      if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top1_allowed_ids: allowed_ids)
+        return {packed[0].to_i32, packed[1]} if packed.size == 2
+        return top1_from_allowed_logits(packed, allowed_ids)
+      end
+
+      logits = forward(weights, token_id, pos, state)
+      top1_from_allowed_logits(logits, allowed_ids)
     end
 
     # Greedy exact decode suffix with token handoff kept on the GPU.
@@ -2939,9 +2974,10 @@ module ML::GGUF
                                            state : State,
                                            top1 : Bool = false,
                                            top2 : Bool = false,
-                                           emit_head : Bool = true) : Array(Float32)?
+                                           emit_head : Bool = true,
+                                           top1_allowed_ids : Array(Int32)? = nil) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
-        if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, top2: top2, emit_head: emit_head)
+        if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, top2: top2, emit_head: emit_head, top1_allowed_ids: top1_allowed_ids)
           return Qwen35Metal.wait_forward_decode_wave(submission)
         end
       {% end %}
@@ -2955,6 +2991,7 @@ module ML::GGUF
                                                  top1 : Bool = false,
                                                  top2 : Bool = false,
                                                  emit_head : Bool = true,
+                                                 top1_allowed_ids : Array(Int32)? = nil,
                                                  fresh_scratch : Bool = false,
                                                  scratch_namespace : String? = nil,
                                                  lowrank_layer_indices : Set(Int32)? = nil,
@@ -3058,6 +3095,7 @@ module ML::GGUF
           k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
           weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head,
           top2: top2,
+          top1_allowed_ids: top1_allowed_ids,
           fresh_scratch: fresh_scratch, scratch_namespace: scratch_namespace,
           lowrank_layer_indices: lowrank_layer_indices,
           lowrank_state_bufs: lowrank_state_bufs,

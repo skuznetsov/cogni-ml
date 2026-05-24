@@ -8459,6 +8459,7 @@ module ML
                                      pos : Int32,
                                      top1 : Bool = false,
                                      emit_head : Bool = true,
+                                     top1_allowed_ids : Array(Int32)? = nil,
                                      lowrank_layer_indices : Set(Int32)? = nil,
                                      lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                      lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
@@ -8467,6 +8468,7 @@ module ML
                emb, layers,
                k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                output_norm, output_qw, hp, pos, top1: top1, emit_head: emit_head,
+               top1_allowed_ids: top1_allowed_ids,
                lowrank_layer_indices: lowrank_layer_indices,
                lowrank_state_bufs: lowrank_state_bufs,
                lowrank_basis_bufs: lowrank_basis_bufs,
@@ -8488,6 +8490,7 @@ module ML
                                            top1 : Bool = false,
                                            top2 : Bool = false,
                                            emit_head : Bool = true,
+                                           top1_allowed_ids : Array(Int32)? = nil,
                                            fresh_scratch : Bool = false,
                                            scratch_namespace : String? = nil,
                                            retained_scratch : Array(ML::MetalBuffer)? = nil,
@@ -8519,7 +8522,8 @@ module ML
                 emb, layers,
                 k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                 output_norm, output_qw, hp, pos,
-                top1: top1, top2: top2, emit_head: emit_head, fresh_scratch: false, retained_scratch: retained,
+                top1: top1, top2: top2, emit_head: emit_head, top1_allowed_ids: top1_allowed_ids,
+                fresh_scratch: false, retained_scratch: retained,
                 lowrank_layer_indices: lowrank_layer_indices,
                 lowrank_state_bufs: lowrank_state_bufs,
                 lowrank_basis_bufs: lowrank_basis_bufs,
@@ -8548,7 +8552,8 @@ module ML
                 emb, layers,
                 k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                 output_norm, output_qw, hp, pos,
-                top1: top1, top2: top2, emit_head: emit_head, scratch_namespace: nil, retained_scratch: retained_scratch,
+                top1: top1, top2: top2, emit_head: emit_head, top1_allowed_ids: top1_allowed_ids,
+                scratch_namespace: nil, retained_scratch: retained_scratch,
                 lowrank_layer_indices: lowrank_layer_indices,
                 lowrank_state_bufs: lowrank_state_bufs,
                 lowrank_basis_bufs: lowrank_basis_bufs,
@@ -8577,6 +8582,13 @@ module ML
           return nil if emit_head && out_pipe.nil?
           return nil if top1_store_token_ids_buf && (!emit_head || !top1)
           return nil if top1_store_token_ids_buf && top1_store_index < 0
+          use_allowed_top1 = emit_head && top1 && !top2 && top1_allowed_ids && !top1_allowed_ids.not_nil!.empty? && output_qw.type.q6_k?
+          allowed_ids = use_allowed_top1 ? top1_allowed_ids.not_nil! : nil
+          if ids = allowed_ids
+            ids.each do |id|
+              return nil if id < 0 || id >= output_qw.out_dim
+            end
+          end
 
           ML::Metal::Device.init!
 
@@ -8602,7 +8614,10 @@ module ML
           residual_buf = Scratch.get(:wave_residual, hidden_dim.to_i64 * sizeof(Float32))
           output_norm_buf = emit_head ? Scratch.get(:wave_output_norm, output_norm.size.to_i64 * sizeof(Float32)) : nil
           logits_buf = emit_head ? Scratch.get(:wave_logits, output_qw.out_dim.to_i64 * sizeof(Float32)) : nil
-          tile_count = emit_head ? ((output_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG) : 0
+          allowed_n = allowed_ids.try(&.size) || 0
+          tile_rows = use_allowed_top1 ? allowed_n : output_qw.out_dim
+          tile_count = emit_head ? ((tile_rows + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG) : 0
+          allowed_ids_buf = use_allowed_top1 ? Scratch.get(:wave_top1_allowed_ids, allowed_n.to_i64 * sizeof(UInt32)) : nil
           top1_tile_values_buf = emit_head ? Scratch.get(:wave_top1_tile_values, tile_count.to_i64 * sizeof(Float32)) : nil
           top1_tile_ids_buf = emit_head ? Scratch.get(:wave_top1_tile_ids, tile_count.to_i64 * sizeof(UInt32)) : nil
           second_tile_values_buf = (emit_head && top2) ? Scratch.get(:wave_top2_tile_values, tile_count.to_i64 * sizeof(Float32)) : nil
@@ -8651,6 +8666,10 @@ module ML
           end
           if emit_head
             ConstCache.write_once("wave_output_norm", output_norm_buf.not_nil!, output_norm)
+            if ids = allowed_ids
+              ptr = allowed_ids_buf.not_nil!.contents.as(Pointer(UInt32))
+              ids.each_with_index { |id, i| ptr[i] = id.to_u32 }
+            end
           end
 
           layer_norm_bufs = Array(ML::MetalBuffer?).new(layers.size, nil)
@@ -9307,10 +9326,12 @@ module ML
               use_head_top1 = top1 && can_use_head_top1_fused?(output_qw)
               use_head_top2 = top2 && can_use_head_top1_fused?(output_qw)
               if use_head_top1
-                Profile.trace(use_head_top2 ? "head.top2" : "head.top1") do
+                Profile.trace(use_allowed_top1 ? "head.top1_allowed" : (use_head_top2 ? "head.top2" : "head.top1")) do
                   head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
                   head_top1_enc.set_pipeline(
-                    if use_head_top2
+                    if use_allowed_top1
+                      mv6_top1_allowed_tiles_pipeline
+                    elsif use_head_top2
                       output_qw.type.q8_0? ? mv8_top2_tiles_pipeline : mv6_top2_tiles_pipeline
                     else
                       output_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline
@@ -9318,14 +9339,23 @@ module ML
                   )
                   head_top1_enc.set_buffer(out_w_buf.not_nil!, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
                   head_top1_enc.set_buffer(pre_norm_buf, 1)
-                  head_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
-                  head_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
+                  if use_allowed_top1
+                    head_top1_enc.set_buffer(allowed_ids_buf.not_nil!, 2)
+                    head_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
+                    head_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 4, ML::Metal::BufferAccess::Write)
+                    head_top1_enc.set_value(output_qw.in_dim.to_u32, 5)
+                    head_top1_enc.set_value(output_qw.out_dim.to_u32, 6)
+                    head_top1_enc.set_value(allowed_n.to_u32, 7)
+                  else
+                    head_top1_enc.set_buffer(top1_tile_values_buf.not_nil!, 2, ML::Metal::BufferAccess::Write)
+                    head_top1_enc.set_buffer(top1_tile_ids_buf.not_nil!, 3, ML::Metal::BufferAccess::Write)
+                  end
                   if use_head_top2
                     head_top1_enc.set_buffer(second_tile_values_buf.not_nil!, 4, ML::Metal::BufferAccess::Write)
                     head_top1_enc.set_buffer(second_tile_ids_buf.not_nil!, 5, ML::Metal::BufferAccess::Write)
                     head_top1_enc.set_value(output_qw.in_dim.to_u32, 6)
                     head_top1_enc.set_value(output_qw.out_dim.to_u32, 7)
-                  else
+                  elsif !use_allowed_top1
                     head_top1_enc.set_value(output_qw.in_dim.to_u32, 4)
                     head_top1_enc.set_value(output_qw.out_dim.to_u32, 5)
                   end
