@@ -15849,3 +15849,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This is intentionally a narrow exact bridge. It can accelerate structural/literal parts of tool calling by feeding `forward_top1_allowed`, but must fall back for free-form strings, numbers, or grammar states where a token may legally cross into a non-literal continuation that this helper cannot certify.
 - LTP/WBA: Window is a finite literal grammar state. Transport carries the set of remaining literal suffixes through tokenizer pieces into allowed ids. Legal move accepts only tokens whose decoded text is a prefix of at least one remaining literal. Boundary safety is fallback at completed/invalid/free-form states. Potential descends in `(grammar_frontier_size, invalid_literal_work, head_rows_scanned)`.
 - trust: {F:0.86,G:0.42,R:0.82}
+
+**LM-549 Experimental literal-prefix constrained decode is wired into qwen35_generate [shared/ml]**
+- status: IMPLEMENTED opt-in product-loop probe; not default JSON mode
+- claim tested: `qwen35_generate` can use tokenizer-derived literal frontiers plus `forward_top1_allowed` in the real greedy loop, including the first generated token after prompt prefill.
+- evidence: Added `QWEN35_CONSTRAINED_LITERAL_PREFIX`. Verification passed: guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke `QWEN35_QUIET=1 QWEN35_CONSTRAINED_LITERAL_PREFIX='{' crystal run bin/qwen35_generate.cr -- 'Return JSON only:' 2 ...` emitted generated ids `[90, 198]`, generated text `"{\n"`, and `literal_constrained_steps=1`.
+- diagnosis: This proves the product-loop corridor and gives us a benchmark/prototyping switch. It is not a full structured JSON/function-calling decoder: it only handles a finite forced literal prefix and intentionally rejects prompt-cache/speculative/n-gram fast paths for now.
+- LTP/WBA: Window is a finite literal prefix active at the next-token boundary. Transport carries remaining literal suffixes into allowed token ids and then through the hot decode-wave Q6 head. Legal move is enabled only in greedy/no-cache mode and collapses to normal greedy after completion. Potential descends in `(forced_literal_remaining, head_rows_scanned, invalid_prefix_risk)`.
+- trust: {F:0.86,G:0.40,R:0.78}

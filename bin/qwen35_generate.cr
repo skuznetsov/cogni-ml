@@ -8,6 +8,7 @@
 
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_chat"
+require "../src/ml/gguf/qwen35_constraints"
 require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_serving_route"
@@ -130,6 +131,7 @@ ngram_index_enabled = ENV["QWEN35_NGRAM_INDEX_OFF"]? != "1"
 ngram_cache_min_remaining = (ENV["QWEN35_NGRAM_CACHE_MIN_REMAINING"]? || (decode_policy == "auto" ? "64" : "0")).to_i
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 metal_profile_enabled = ENV["QWEN35_METAL_PROFILE"]? == "1"
+constrained_literal_prefix = ENV["QWEN35_CONSTRAINED_LITERAL_PREFIX"]?
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -162,6 +164,10 @@ raise "QWEN35_SPEC_BOOTSTRAP_STREAK must be positive" unless spec_bootstrap_stre
 unless spec_verify_mode == "chunk-inplace" || spec_verify_mode == "hybrid" || spec_verify_mode == "serial"
   raise "QWEN35_SPEC_VERIFY must be chunk-inplace, hybrid, or serial"
 end
+if constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty?
+  raise "QWEN35_CONSTRAINED_LITERAL_PREFIX is currently supported only with greedy decode" if speculative_decode_enabled || ngram_decode_enabled
+  raise "QWEN35_CONSTRAINED_LITERAL_PREFIX is currently incompatible with prompt cache fast paths" if prompt_cache_enabled
+end
 spec_max_gamma = Math.max(spec_max_gamma, spec_gamma)
 
 def cache_model_id(path : String) : String
@@ -186,6 +192,34 @@ def advance_next(weights : ML::GGUF::Qwen35Weights,
                  state : ML::GGUF::Qwen35CPU::State) : Int32
   top, _logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
   top.to_i32
+end
+
+def literal_constraint_complete?(remaining : Array(String)) : Bool
+  remaining.empty? || remaining.any?(&.empty?)
+end
+
+def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
+                                           tokenizer : ML::GGUF::Qwen35Tokenizer,
+                                           token_id : Int32,
+                                           pos : Int32,
+                                           state : ML::GGUF::Qwen35CPU::State,
+                                           remaining : Array(String)) : {Int32, Float32, Array(String), Bool}
+  if literal_constraint_complete?(remaining)
+    top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
+    return {top.to_i32, logit, [] of String, false}
+  end
+
+  allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(tokenizer, remaining)
+  if allowed.empty?
+    top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
+    return {top.to_i32, logit, [] of String, false}
+  end
+
+  top, logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(weights, token_id, pos, state, allowed)
+  piece = tokenizer.decode_single(top)
+  next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(remaining, piece)
+  next_remaining = [] of String if literal_constraint_complete?(next_remaining)
+  {top.to_i32, logit, next_remaining, true}
 end
 
 def resync_draft!(weights : ML::GGUF::Qwen35Weights,
@@ -429,6 +463,13 @@ ngram_source_history = [] of Int32
 ngram_replay_cursor = nil.as(Int32?)
 prompt_cache_reused = false
 prompt_cache_fast_forward_used = false
+literal_remaining = if prefix = constrained_literal_prefix
+                      prefix.empty? ? [] of String : [prefix]
+                    else
+                      [] of String
+                    end
+literal_constrained_steps = 0
+STDOUT << "Constrained literal prefix enabled: #{constrained_literal_prefix.not_nil!.inspect}\n" unless literal_remaining.empty?
 
 pos = 0
 
@@ -546,7 +587,7 @@ end
 # set `QWEN35_PREFILL_CHUNK_OFF=1` to force the older whole-token prefill loop.
 if output_ids.empty?
   puts "\nPrefilling #{ids.size} tokens..."
-  if !prompt_cache_enabled && ids.size > 1
+  if !prompt_cache_enabled && ids.size > 1 && literal_remaining.empty?
     tstart = Time.instant
     top, top_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, ids, pos, state)
     output_ids << top.to_i32
@@ -583,7 +624,13 @@ if output_ids.empty?
 
   if output_ids.empty? && (final_id = ids.last?)
     tstart = Time.instant
-    top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
+    if literal_remaining.empty?
+      top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
+    else
+      top, top_logit, literal_remaining, constrained = advance_next_maybe_literal_constrained(
+        w, tok, final_id, pos, state, literal_remaining)
+      literal_constrained_steps += 1 if constrained
+    end
     output_ids << top.to_i32
     dt = (Time.instant - tstart).total_seconds
     prefill_ms += dt * 1000.0
@@ -1056,7 +1103,13 @@ else
   (n_gen - 1).times do |g_i|
     prev = output_ids.last
     tstart = Time.instant
-    top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
+    if literal_remaining.empty?
+      top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
+    else
+      top, top_logit, literal_remaining, constrained = advance_next_maybe_literal_constrained(
+        w, tok, prev, pos, state, literal_remaining)
+      literal_constrained_steps += 1 if constrained
+    end
     dt = (Time.instant - tstart).total_seconds
     piece = tok.decode_single(top)
     if trace_steps
@@ -1068,7 +1121,7 @@ else
     break if top == tok.eos_id
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
-  STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)}\n"
+  STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} literal_constrained_steps=#{literal_constrained_steps}\n"
 end
 
 {% unless flag?(:cpu_only) %}

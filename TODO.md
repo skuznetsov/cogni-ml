@@ -2696,3 +2696,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_548:** Targeted guarded spec passed: `COGNI_RUN_SAFE_MIN_FREE_PCT=12 COGNI_SPEC_MAX_RSS_MB=4096 scripts/run_safe.sh /opt/homebrew/bin/crystal 120 4096 spec spec/qwen35_constraints_spec.cr --no-color --error-trace` -> `3 examples, 0 failures`.
 
 **next_update_548:** Connect literal frontiers to `qwen35_generate` behind an experimental structured-decode switch. Use constrained `forward_top1_allowed` only while the current grammar state is finite-literal; fall back immediately for free-form text/value spans or if the frontier is empty/broad.
+
+**decision_update_549:** Wired the literal-frontier constrained decode path into `qwen35_generate` behind `QWEN35_CONSTRAINED_LITERAL_PREFIX`. The first generated token and subsequent greedy tokens can now use `forward_top1_allowed` while a finite literal prefix remains active. The route is experimental, greedy-only, and incompatible with prompt-cache/speculative/n-gram fast paths for now.
+
+**evidence_update_549:** Verification passed: guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with `QWEN35_QUIET=1 QWEN35_CONSTRAINED_LITERAL_PREFIX='{'` generated ids `[90, 198]`, generated text `"{\n"`, and reported `literal_constrained_steps=1`.
+
+**next_update_549:** Replace the forced-literal probe with a real structured grammar controller: JSON object punctuation/string-key states and Qwen XML tool-call tag/function-name states should use literal frontiers; free-form parameter values should fall back to normal greedy or a schema-specific value grammar.
