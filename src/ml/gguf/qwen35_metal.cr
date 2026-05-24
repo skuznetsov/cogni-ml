@@ -5208,9 +5208,11 @@ module ML
                                                     checkpoint_rollback_log : Bool = false,
                                                     input_buf : ML::MetalBuffer? = nil,
                                                     output_buf : ML::MetalBuffer? = nil,
-                                                    read_output : Bool = true) : Array(Float32)?
+                                                    read_output : Bool = true,
+                                                    append_command_buffer : ML::Metal::CommandBuffer? = nil) : Array(Float32)?
           return nil unless n_tokens > 0
           return nil if layers.empty?
+          return nil if append_command_buffer && read_output
           checkpoint_requested = !checkpoint_index.nil?
           if checkpoint_requested
             cp = checkpoint_index.not_nil!
@@ -5286,8 +5288,9 @@ module ML
           end
 
           t0 = Time.instant if Profile.enabled?
-          cmd = ML::Metal::CommandBuffer.new
-          phase_profile = prefill_phase_profile_enabled? && Profile.enabled?
+          cmd = append_command_buffer || ML::Metal::CommandBuffer.new
+          appended = !append_command_buffer.nil?
+          phase_profile = !appended && prefill_phase_profile_enabled? && Profile.enabled?
           full_detail_profile = prefill_full_detail_profile_enabled? && phase_profile
           phase_t0 = Time.instant
 
@@ -5621,6 +5624,7 @@ module ML
             blit.copy_buffer(src_buf, 0, ob, 0, hidden_bytes.to_i32)
             blit.end_encoding
           end
+          return [] of Float32 if appended
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
           cmd.wait
@@ -6591,7 +6595,8 @@ module ML
                                                              checkpoint_rollback_log : Bool = false,
                                                              input_buf : ML::MetalBuffer? = nil,
                                                              output_buf : ML::MetalBuffer? = nil,
-                                                             read_output : Bool = true) : Array(Float32)?
+                                                             read_output : Bool = true,
+                                                             append_command_buffer : ML::Metal::CommandBuffer? = nil) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -6603,6 +6608,7 @@ module ML
                         full_ffn_gate_pipe.nil? || full_ffn_up_pipe.nil? || full_ffn_down_pipe.nil?
           return nil unless n_tokens > 0
           return nil if rec_layers.empty?
+          return nil if append_command_buffer && read_output
           return nil unless conv_state_bufs.size == rec_layers.size && ssm_state_bufs.size == rec_layers.size
           checkpoint_requested = !checkpoint_index.nil?
           if checkpoint_requested
@@ -6726,8 +6732,9 @@ module ML
           full_ffn_down_w_buf, full_ffn_down_w_off = weight_slot(ffn_down_qw)
 
           t0 = Time.instant if Profile.enabled?
-          cmd = ML::Metal::CommandBuffer.new
-          phase_profile = prefill_phase_profile_enabled? && Profile.enabled?
+          cmd = append_command_buffer || ML::Metal::CommandBuffer.new
+          appended = !append_command_buffer.nil?
+          phase_profile = !appended && prefill_phase_profile_enabled? && Profile.enabled?
           full_detail_profile = prefill_full_detail_profile_enabled? && phase_profile
           phase_t0 = Time.instant
 
@@ -7353,6 +7360,7 @@ module ML
             blit.copy_buffer(src_buf, 0, ob, 0, hidden_bytes.to_i32)
             blit.end_encoding
           end
+          return [] of Float32 if appended
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
           cmd.wait

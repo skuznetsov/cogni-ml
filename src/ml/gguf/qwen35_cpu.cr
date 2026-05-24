@@ -968,7 +968,8 @@ module ML::GGUF
                                                                    checkpoint_rollback_log : Bool = false,
                                                                    input_buf : ML::MetalBuffer? = nil,
                                                                    output_buf : ML::MetalBuffer? = nil,
-                                                                   read_output : Bool = true) : {Array(Float32), Int32}?
+                                                                   read_output : Bool = true,
+                                                                   append_command_buffer : ML::Metal::CommandBuffer? = nil) : {Array(Float32), Int32}?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_PREFILL_FUSE_FULL_REC_OFF"]? == "1"
         return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
@@ -1093,7 +1094,8 @@ module ML::GGUF
           checkpoint_rollback_log: checkpoint_rollback_log,
           input_buf: input_buf,
           output_buf: output_buf,
-          read_output: read_output)
+          read_output: read_output,
+          append_command_buffer: append_command_buffer)
         out ? {out, run_end} : nil
       {% else %}
         nil
@@ -2506,6 +2508,19 @@ module ML::GGUF
       handoff_b = nil.as(ML::MetalBuffer?)
       handoff_flip = false
       handoff_bytes = (n_tokens * hp.n_embd).to_i64 * sizeof(Float32)
+      append_prefill_cmd = nil.as(ML::Metal::CommandBuffer?)
+      if ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
+         ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" &&
+         !checkpoint_requested && !need_output && Qwen35Metal.available?
+        append_prefill_cmd = ML::Metal::CommandBuffer.new
+      end
+      flush_prefill_cmd = ->{
+        if cmd = append_prefill_cmd
+          cmd.commit
+          cmd.wait
+          append_prefill_cmd = nil
+        end
+      }
       while il < layer_limit
         lw = weights.layers[il]
         case lw
@@ -2539,7 +2554,8 @@ module ML::GGUF
                checkpoint_rollback_log: checkpoint_rollback_log,
                input_buf: gpu_hidden,
                output_buf: fused_output_buf,
-               read_output: fused_read_output)
+               read_output: fused_read_output,
+               append_command_buffer: fused_read_output ? nil : append_prefill_cmd)
             il = fused[1]
             if fused_read_output
               x = fused[0]
@@ -2548,6 +2564,7 @@ module ML::GGUF
               x = [] of Float32
               gpu_hidden = ob
             else
+              flush_prefill_cmd.call
               return [] of Float32 unless need_output
               x = fused[0]
               gpu_hidden = nil
@@ -2556,12 +2573,14 @@ module ML::GGUF
           end
 
           if gb = gpu_hidden
+            flush_prefill_cmd.call
             x = gb.read(n_tokens * hp.n_embd)
             gpu_hidden = nil
           end
 
           read_output = need_output || il + 1 < layer_limit
           if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output)
+            flush_prefill_cmd.call unless read_output
             return [] of Float32 unless read_output
             x = gpu_out
           else
@@ -2571,6 +2590,7 @@ module ML::GGUF
               y = forward_full_attn_layer(row, start_pos + t, lw, state.layers[il], hp, max_seq)
               hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
             end
+            flush_prefill_cmd.call unless read_output
             return [] of Float32 unless read_output
             x = out
           end
@@ -2670,7 +2690,8 @@ module ML::GGUF
                      checkpoint_rollback_log: checkpoint_rollback_log,
                      input_buf: gpu_hidden,
                      output_buf: rec_output_buf,
-                     read_output: rec_read_output)
+                     read_output: rec_read_output,
+                     append_command_buffer: rec_read_output ? nil : append_prefill_cmd)
                   il = run_end
                   if rec_read_output
                     x = gpu_out
@@ -2679,6 +2700,7 @@ module ML::GGUF
                     x = [] of Float32
                     gpu_hidden = ob
                   else
+                    flush_prefill_cmd.call
                     return [] of Float32 unless need_output
                     x = gpu_out
                     gpu_hidden = nil
@@ -2696,6 +2718,7 @@ module ML::GGUF
           end
 
           if gb = gpu_hidden
+            flush_prefill_cmd.call
             x = gb.read(n_tokens * hp.n_embd)
             gpu_hidden = nil
           end
@@ -2704,9 +2727,11 @@ module ML::GGUF
         end
       end
       if gb = gpu_hidden
+        flush_prefill_cmd.call
         return [] of Float32 unless need_output
         x = gb.read(n_tokens * hp.n_embd)
       end
+      flush_prefill_cmd.call
       x
     end
 
