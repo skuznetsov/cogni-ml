@@ -957,6 +957,62 @@ module ML::GGUF
       {% end %}
     end
 
+    private def final_full_attn_layer_chunk_last_top1_routed(inp : Array(Float32),
+                                                             n_tokens : Int32,
+                                                             start_pos : Int32,
+                                                             lstate : LayerState,
+                                                             lw : Qwen35FullAttnWeights,
+                                                             output_norm : Array(Float32),
+                                                             output_qw : QuantWeight,
+                                                             hp : Qwen35Hparams,
+                                                             max_seq : Int32,
+                                                             input_buf : ML::MetalBuffer? = nil) : {Int32, Float32}?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_FINAL_FULL_LAST_OFF"]? == "1"
+        return nil unless Qwen35Metal.available?
+        supported = metal_qw_supported?(lw.attn_q_qw) &&
+                    metal_qw_supported?(lw.attn_k_qw) &&
+                    metal_qw_supported?(lw.attn_v_qw) &&
+                    metal_qw_supported?(lw.attn_output_qw) &&
+                    metal_qw_supported?(lw.ffn_gate_qw) &&
+                    metal_qw_supported?(lw.ffn_up_qw) &&
+                    metal_qw_supported?(lw.ffn_down_qw) &&
+                    metal_qw_supported?(output_qw)
+        return nil unless supported
+
+        kv_dim = hp.head_dim * hp.n_head_kv
+        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        k_buf = lstate.k_cache_buf
+        v_buf = lstate.v_cache_buf
+        if k_buf.nil?
+          k_buf = ML::MetalBuffer.new(bytes)
+          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.k_cache_buf = k_buf
+        end
+        if v_buf.nil?
+          v_buf = ML::MetalBuffer.new(bytes)
+          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+          lstate.v_cache_buf = v_buf
+        end
+
+        scale = (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32
+        Qwen35Metal.full_attn_layer_chunk_project_last_top1(
+          inp,
+          lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw,
+          lw.attn_norm, lw.attn_q_norm, lw.attn_k_norm, lw.attn_output_qw,
+          k_buf, v_buf,
+          lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+          start_pos, n_tokens,
+          hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
+          hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
+          output_norm, output_qw,
+          input_buf: input_buf,
+        )
+      {% else %}
+        nil
+      {% end %}
+    end
+
     private def full_attn_then_recurrent_chunk_project_many_routed(inp : Array(Float32),
                                                                    n_tokens : Int32,
                                                                    start_pos : Int32,
@@ -2201,6 +2257,12 @@ module ML::GGUF
               resident_output_buf: prefix_buf,
               resident_output_written: resident_written)
             raise "resident final-prefix prefill did not produce a GPU buffer" unless resident_written[0]
+            if ENV["QWEN35_PREFILL_TOP1_FUSED_LAST"]? == "1"
+              if top1 = final_full_attn_layer_chunk_last_top1_routed([] of Float32, token_ids.size, start_pos, state.layers[-1], last_layer, weights.output_norm, weights.output, hp, state.max_seq, input_buf: prefix_buf)
+                return top1
+              end
+              raise "resident fused final-prefix top1 route failed after prefix state mutation"
+            end
             if last = final_full_attn_layer_chunk_last_routed([] of Float32, token_ids.size, start_pos, state.layers[-1], last_layer, hp, state.max_seq, input_buf: prefix_buf)
               if top1 = output_project_top1_routed(last, weights.output_norm, weights.output, hp.rms_eps)
                 return top1
@@ -2541,7 +2603,7 @@ module ML::GGUF
          !checkpoint_requested && Qwen35Metal.available?
         append_prefill_cmd = ML::Metal::CommandBuffer.new
       end
-      flush_prefill_cmd = ->{
+      flush_prefill_cmd = -> {
         if cmd = append_prefill_cmd
           cmd.commit
           cmd.wait
