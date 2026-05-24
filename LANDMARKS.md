@@ -15640,3 +15640,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The premise is different from the refuted small-tail branches and remains plausible, but current evidence is not robust enough for a default. The next gate must be quiet-host ABBA/repeats on real and synthetic long prompts, with generated-token parity checked.
 - LTP/WBA: Window is a large Q4_H16 prefill GEMM where `batch >= N` and `batch % 64 != 0`. Transport carries full 64-row groups plus one bounded tail through the existing B64 kernel. Legal move is opt-in and exact because the B64 kernel already has a boundary path. Potential is expected to descend in `(repeated weight-tile work, prefill wall)` only when the tail fraction is small; noisy counter-evidence blocks promotion.
 - trust: {F:0.70,G:0.45,R:0.55}
+
+**LM-523 Q4 split256 graph-level row packing loses despite fewer batch groups [shared/ml]**
+- status: REFUTED exact graph-level split; code removed
+- claim tested: `batch == 256` Q4_H16 prefill might benefit from splitting one B64 dispatch into proven tiles `112+80+64`, reducing batch groups from four to three while staying below the B128/B144 resource cliff.
+- evidence: Temporary opt-in `QWEN35_Q4K_H16_SPLIT256=1` built and ran. Paired pp256 A/B via `qwen35_prefill_attribution --prompt=256 --warmup=1 --reps=8 --compare-env=QWEN35_Q4K_H16_SPLIT256=1` measured default `503.01ms` avg / `502.69ms` p50 vs split `511.30ms` avg / `511.48ms` p50; default won `8/8`. The temporary code was removed.
+- diagnosis: Extra dispatch/offset scheduling still outweighs reduced Q4 weight-tile reuse, even at pp256. This confirms the split160 refutation at a larger shape. Future pp256 work should not be another graph-level split; it needs a different Q4_H16 inner algorithm, offline repack, or a larger algebraic fusion that removes work without extra dispatches.
+- LTP/WBA: Window was pp256 Q4_H16 GEMM. Transport tried to carry the row corridor through certified subframes B112/B80/B64. Legal move preserved exact output with buffer-offset boundaries, but the lexicographic potential failed because dispatch/encoder work increased wall time. Dual frame reverts to default B64.
+- trust: {F:0.84,G:0.58,R:0.80}
