@@ -15713,3 +15713,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The traffic saved by halving the gate activation is too small compared with Q4 weight traffic, and the half-output producer lost the direct B64 device-store fast path by spilling through threadgroup temp. This is a local optimization trap unless a future kernel can produce half gate without sacrificing the fast store path or fuses both gate/up computation more deeply.
 - LTP/WBA: Window was the materialized f32 gate buffer between gate GEMM and up+SwiGLU. Transport tried to carry a half gate through the FFN activation corridor. Legal move was opt-in and approximate, but potential `(intermediate_bytes, ffn_upgate_wall)` increased after recomputation. Dual frame returns to the existing f32-gate/H16-activation route.
 - trust: {F:0.78,G:0.46,R:0.68}
+
+**LM-532 B64 tail remains non-promotable after resident prefill [shared/ml]**
+- status: REFUTED/NOISY exact route promotion; default remains off
+- claim tested: After LM-529 resident hidden-buffer boundaries, the old exact `QWEN35_Q4K_H16_B64_TAIL_MIN=512` route might become robustly positive for arbitrary long prompts.
+- evidence: Re-ran relaxed paired attribution on M2 Max Qwen3.5-9B body-only prefill. At pp572, the tail route was only weak/noisy positive: default p50 `1253.61ms`, tail p50 `1247.15ms`, tail wins `2/6`. At pp1434, it strongly regressed: default p50 `4161.74ms`, tail p50 `4456.83ms`, default wins `4/4`. No code changes were kept.
+- diagnosis: The exact tail corridor is still shape-sensitive. It may help some mid-size non-multiple batches, but the large-prompt regression means it cannot be a default policy. The likely failure is underfilled B64 tail work increasing wasted tile lanes and scheduling pressure once batch is far past the threshold.
+- LTP/WBA: Window is a Q4_H16 batch where `batch % 64 != 0`. Transport carries the tail through an existing B64 frame. Legal move is exact and opt-in, but recomputed potential `(wasted_tail_lanes, pp_wall)` increases for pp1434. Dual frame stays on the generic non-tail route unless a future controller has a shape-specific proof.
+- trust: {F:0.82,G:0.55,R:0.72}
