@@ -2511,7 +2511,7 @@ module ML::GGUF
       append_prefill_cmd = nil.as(ML::Metal::CommandBuffer?)
       if ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
          ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" &&
-         !checkpoint_requested && !need_output && Qwen35Metal.available?
+         !checkpoint_requested && Qwen35Metal.available?
         append_prefill_cmd = ML::Metal::CommandBuffer.new
       end
       flush_prefill_cmd = ->{
@@ -2547,6 +2547,7 @@ module ML::GGUF
               handoff_flip = !handoff_flip
             end
           end
+          flush_prefill_cmd.call if fused_read_output
 
           if fused = full_attn_then_recurrent_chunk_project_many_routed(
                x, n_tokens, start_pos, state, weights, il, hp, max_seq,
@@ -2579,6 +2580,7 @@ module ML::GGUF
           end
 
           read_output = need_output || il + 1 < layer_limit
+          flush_prefill_cmd.call if read_output
           if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output)
             flush_prefill_cmd.call unless read_output
             return [] of Float32 unless read_output
@@ -2680,6 +2682,7 @@ module ML::GGUF
                     handoff_flip = !handoff_flip
                   end
                 end
+                flush_prefill_cmd.call if rec_read_output
                 if gpu_out = Qwen35Metal.recurrent_layer_chunk_project_many(
                      x, conv_bufs, ssm_bufs, rec_layers,
                      h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
