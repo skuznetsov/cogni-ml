@@ -15681,3 +15681,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The corrected pp bottleneck is not output-head top1. The remaining exact levers are recurrent FFN body economics and graph/lifecycle boundaries between layer groups. The strongest LTP/WBA candidate remains carrying hidden activations through a GPU-resident layer-band corridor.
 - LTP/WBA: Window is body-only prompt processing with hidden rows crossing CPU-visible group boundaries. Transport is the `[tokens, hidden]` buffer between consecutive layer groups. Legal future moves must preserve exact state updates and fallback on unsupported/checkpoint routes. Potential is `(group_sync_count, boundary_upload_readback, recurrent_ffn_wall, pp_wall)`.
 - trust: {F:0.86,G:0.60,R:0.76}
+
+**LM-528 Body-only prefill skips unused final hidden readback [shared/ml]**
+- status: VERIFIED exact local elimination; relaxed-host speed signal
+- claim tested: `prefill_tokens` does not need final hidden rows, so the last full-attention chunk can execute for state/KV side effects without reading its output back to CPU.
+- evidence: Added `read_output` to the full-attention chunk route and passed `need_output: false` from public `prefill_tokens`. Verification passed: no-codegen build; `spec/qwen35_forward_spec.cr` -> `15 examples, 0 failures`. Body-only pp64 attribution showed final full-attn read `0.00ms`, total syncs `9`, and p50 wall `148.06ms` / `432.25 tok/s`. Relaxed matched benchmark with preallocated state measured pp64 body-only native `456.11 tok/s` p50 vs llama `459.27 tok/s` (`-0.69%`), pp256 body-only native `543.98 tok/s` p50 vs llama `567.67 tok/s` (`-4.17%`).
+- diagnosis: This is a correct Spike, but not enough for pp256. Remaining larger potential is still the hidden-buffer corridor across layer groups and recurrent FFN Q4 work.
+- LTP/WBA: Window is body-only prompt processing where the final hidden output is dead. Transport is only state/KV side effects through the last full-attention layer. Legal move commits/waits for the Metal command buffer but skips CPU hidden readback when `need_output=false`. Boundary safety keeps all hidden/top1 callers on `read_output=true`. Potential descends in `(dead_final_readback, body_pp_wall)`.
+- trust: {F:0.90,G:0.62,R:0.82}

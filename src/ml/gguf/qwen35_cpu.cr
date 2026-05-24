@@ -859,7 +859,8 @@ module ML::GGUF
                                                      lstate : LayerState,
                                                      lw : Qwen35FullAttnWeights,
                                                      hp : Qwen35Hparams,
-                                                     max_seq : Int32) : Array(Float32)?
+                                                     max_seq : Int32,
+                                                     read_output : Bool = true) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -897,6 +898,7 @@ module ML::GGUF
           start_pos, n_tokens,
           hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
           hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
+          read_output: read_output,
         )
       {% else %}
         nil
@@ -2141,7 +2143,7 @@ module ML::GGUF
         return
       end
 
-      prefill_tokens_hidden(weights, token_ids, start_pos, state)
+      prefill_tokens_hidden(weights, token_ids, start_pos, state, need_output: false)
     end
 
     def prefill_tokens_top1(weights : Qwen35Weights,
@@ -2415,7 +2417,8 @@ module ML::GGUF
                                       stop_layer : Int32? = nil,
                                       checkpoint_index : Int32? = nil,
                                       checkpoint_state : State? = nil,
-                                      checkpoint_rollback_log : Bool = false) : Array(Float32)
+                                      checkpoint_rollback_log : Bool = false,
+                                      need_output : Bool = true) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
       checkpoint_requested = !checkpoint_index.nil? || !checkpoint_state.nil?
       if checkpoint_requested
@@ -2448,7 +2451,7 @@ module ML::GGUF
             copy_state_metal_used!(checkpoint_state.not_nil!, state, hp, used_tokens: pos + 1, rec_only: true)
           end
         end
-        return hidden
+        return need_output ? hidden : [] of Float32
       end
 
       hp = weights.hparams
@@ -2474,12 +2477,14 @@ module ML::GGUF
               local_checkpoint_state = checkpoint_state
             end
           end
+          chunk_need_output = need_output && offset + len >= n_tokens
           x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state,
             stop_layer: stop_layer, checkpoint_index: local_checkpoint_index, checkpoint_state: local_checkpoint_state,
-            checkpoint_rollback_log: checkpoint_rollback_log)
+            checkpoint_rollback_log: checkpoint_rollback_log,
+            need_output: chunk_need_output)
           offset += len
         end
-        return x.not_nil!
+        return need_output ? x.not_nil! : [] of Float32
       end
 
       x = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
@@ -2503,7 +2508,9 @@ module ML::GGUF
             next
           end
 
-          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq)
+          read_output = need_output || il + 1 < layer_limit
+          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output)
+            return [] of Float32 unless read_output
             x = gpu_out
           else
             out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
@@ -2512,6 +2519,7 @@ module ML::GGUF
               y = forward_full_attn_layer(row, start_pos + t, lw, state.layers[il], hp, max_seq)
               hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
             end
+            return [] of Float32 unless read_output
             x = out
           end
           il += 1

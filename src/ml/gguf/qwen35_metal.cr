@@ -6313,7 +6313,8 @@ module ML
                                                heads_per_group : Int32,
                                                rope_freq_base : Float32,
                                                eps : Float32,
-                                               scale : Float32) : Array(Float32)?
+                                               scale : Float32,
+                                               read_output : Bool = true) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -6514,13 +6515,13 @@ module ML
           cmd.commit
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
-          result = read_shared_f32(out_buf, n_tokens * hidden_dim)
+          result = read_output ? read_shared_f32(out_buf, n_tokens * hidden_dim) : [] of Float32
           if Profile.enabled?
             t_read = Time.instant
             Profile.bump_attn(
               (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
               (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
-              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+              read_output ? (t_read - t_wait.not_nil!).total_nanoseconds.to_i64 : 0_i64,
             )
           end
           result
