@@ -2741,3 +2741,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_555:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `9 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; enum/boolean smoke generated the same parsed `edit_mode(mode=safe,dry_run=true)` call and reported `stage_steps=closing_parameter:12,function_prefix:12,parameter_open:6,parameter_separator:11,value_literal:4 freeform_value_steps=0 value_boundary_hits=0 finite_value_params=2`; free-form `read_file(path,limit)` smoke parsed both values and reported `freeform_value_steps=5 value_boundary_hits=2 finite_value_params=0`.
 
 **next_update_555:** Use the telemetry to prioritize the next exact grammar corridor. Highest-value next candidates are bounded integer grammars for numeric schema fields and typed host-side argument normalization; arbitrary strings should remain fallback until a certified value grammar exists.
+
+
+**decision_update_556:** Added bounded integer value frontiers to the opt-in Qwen XML tool-call controller. `type: integer` parameters with inclusive `minimum` and `maximum` are enumerated only when the range is small (`< 256` values), then constrained as finite `value\n` alternatives. Wider or unbounded integer schemas remain on the greedy fallback path.
+
+**evidence_update_556:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `11 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with `read_file(path string, limit integer 1..5)` generated and parsed `path=README.md`, `limit=3`, and reported `stage_steps=...value_literal:2 freeform_value_steps=3 value_boundary_hits=1 finite_value_params=1`, showing only the string path remained free-form.
+
+**next_update_556:** Next exact structured-decode targets: typed host-side argument normalization, optional-parameter selection policy, and bounded pattern/string grammars for common filename/path constraints. Keep wide numeric ranges and arbitrary strings as fallback unless the grammar frontier is compact.

@@ -15912,3 +15912,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the active structured-decode stage at each token boundary. Transport is the telemetry stream carrying stage counts and fallback boundaries across the decode corridor. Legal move is observation-only; potential for future work descends by identifying which component of `(freeform_value_steps, unsupported_value_grammar, head_rows_scanned)` dominates.
 - adversary: Counts are runtime probes, not benchmark claims. They should guide grammar work but must not be used as standalone speed evidence without paired wall timing.
 - trust: {F:0.86,G:0.54,R:0.80}
+
+
+**LM-556 Bounded integer schemas become finite value corridors [shared/ml]**
+- status: IMPLEMENTED conservative exact finite-value corridor
+- claim tested: Small inclusive integer ranges can be safely converted into finite literal value options for constrained Qwen XML tool calls, while wide ranges should stay fallback to avoid exploding the tokenizer frontier.
+- evidence: Added bounded integer enumeration in `Qwen35Constraints.finite_schema_values` with `MAX_ENUMERATED_INTEGER_VALUES = 256`. Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `11 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with `read_file(path string, limit integer 1..5)` generated `limit=3`, parsed the complete tool call, and reported `value_literal:2`, `freeform_value_steps=3`, `finite_value_params=1`.
+- diagnosis: This reduces free-form greedy spans for common bounded numeric parameters without adding a general regex/number parser. It is exact relative to schemas where all valid integer values in the range are enumerated.
+- LTP/WBA: Window is a required integer parameter with compact inclusive bounds. Transport carries enumerated `n\n` literals through tokenizer frontiers into constrained Q6 top1. Legal move is enabled only when `(maximum - minimum) < 256`; dual frame is greedy fallback for wide, exclusive, unbounded, or unsupported numeric schemas. Potential descends in `(numeric_value_entropy, freeform_value_steps, head_rows_scanned)` while keeping frontier size bounded.
+- adversary: This does not implement full JSON Schema numeric semantics (`exclusiveMinimum`, `multipleOf`, floats, unions). It also leaves parsed host values as strings until typed normalization is added.
+- trust: {F:0.88,G:0.52,R:0.80}

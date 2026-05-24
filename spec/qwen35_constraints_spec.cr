@@ -113,4 +113,25 @@ describe ML::GGUF::Qwen35Constraints do
     options["edit_mode"]["mode"].should eq(["fast\n", "safe\n"])
     options["edit_mode"]["dry_run"].should eq(["true\n", "false\n"])
   end
+
+  it "extracts bounded integer parameter value options" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{
+        "limit":{"type":"integer","minimum":1,"maximum":3}
+      },"required":["limit"]}}}
+    ]))
+
+    options = ML::GGUF::Qwen35Constraints.tool_finite_parameter_value_options(tools)
+    options["read_file"]["limit"].should eq(["1\n", "2\n", "3\n"])
+  end
+
+  it "does not enumerate overly wide integer ranges" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{
+        "limit":{"type":"integer","minimum":1,"maximum":10000}
+      },"required":["limit"]}}}
+    ]))
+
+    ML::GGUF::Qwen35Constraints.tool_finite_parameter_value_options(tools).should be_empty
+  end
 end

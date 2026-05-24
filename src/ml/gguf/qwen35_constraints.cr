@@ -9,6 +9,8 @@ module ML::GGUF
   # tool/function names, then fall back to unconstrained decode for free-form
   # string/value spans.
   module Qwen35Constraints
+    MAX_ENUMERATED_INTEGER_VALUES = 256
+
     class TokenTextIndex
       @texts : Array(String)
       @by_first : Hash(Char, Array({Int32, String}))
@@ -192,7 +194,28 @@ module ML::GGUF
       type_name = schema["type"]?.try(&.as_s?)
       return ["true", "false"] if type_name == "boolean"
 
+      if type_name == "integer"
+        minimum = json_integer(schema["minimum"]?)
+        maximum = json_integer(schema["maximum"]?)
+        if minimum && maximum && maximum >= minimum && (maximum - minimum) < MAX_ENUMERATED_INTEGER_VALUES
+          return (minimum..maximum).map(&.to_s)
+        end
+      end
+
       [] of String
+    end
+
+    private def self.json_integer(value : JSON::Any?) : Int64?
+      return nil unless value
+
+      case raw = value.raw
+      when Int64
+        raw
+      when Float64
+        raw.to_i64 if raw.finite? && raw == raw.trunc
+      else
+        nil
+      end
     end
 
     private def self.json_scalar_to_text(value : JSON::Any) : String?
