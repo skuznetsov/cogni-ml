@@ -2690,3 +2690,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_547:** Verification through `scripts/run_safe.sh`: no-codegen builds of `bin/qwen35_decode_attribution.cr` and `bin/qwen35_generate.cr` passed. Runtime hot-path probe on local Qwen3.5-9B Q4_K_M passed: constrained decode-wave top1 matched full decode-wave top1 when the full winner was present in a 14-id allowed set, and single-candidate constrained decode returned the supplied token id.
 
 **next_update_547:** Build the tokenizer/grammar state machine for structured function calling. Start with a narrow exact XML-tool-call or JSON object grammar that can emit an allowed token-id frontier for the next byte/text prefix. Use `forward_top1_allowed` only when the frontier is certified and small; otherwise use normal `forward_top1`.
+
+**decision_update_548:** Added the first tokenizer-aware constrained-decode grammar helper: `Qwen35Constraints.literal_frontier_ids` maps finite remaining literal strings to allowed token ids, and `advance_literal_options` advances those literal corridors after emitted text. This targets exact structural spans in JSON/XML tool calling.
+
+**evidence_update_548:** Targeted guarded spec passed: `COGNI_RUN_SAFE_MIN_FREE_PCT=12 COGNI_SPEC_MAX_RSS_MB=4096 scripts/run_safe.sh /opt/homebrew/bin/crystal 120 4096 spec spec/qwen35_constraints_spec.cr --no-color --error-trace` -> `3 examples, 0 failures`.
+
+**next_update_548:** Connect literal frontiers to `qwen35_generate` behind an experimental structured-decode switch. Use constrained `forward_top1_allowed` only while the current grammar state is finite-literal; fall back immediately for free-form text/value spans or if the frontier is empty/broad.

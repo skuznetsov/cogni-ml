@@ -15841,3 +15841,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This closes the gap between the microkernel and product decode body. The remaining work is not Metal plumbing; it is a tokenizer/grammar state machine that can safely produce allowed ids for JSON/function-calling spans.
 - LTP/WBA: Window is the final decode-wave head after exact model body execution, when a grammar state has a certified allowed-id frontier. Transport carries the frontier through the same command-buffer corridor as the normal head. Legal move swaps full-vocab top1 tiles for allowed-id tiles only for Q6/non-top2 requests; invalid ids fail closed and non-fused cases use full logits plus allowed-set reduction. Potential descends in `(head_rows_scanned, logits_materialized, product_top1_wall)` while preserving state/KV boundaries.
 - trust: {F:0.90,G:0.52,R:0.80}
+
+**LM-548 Literal grammar frontiers provide the first exact constrained-decode bridge [shared/ml]**
+- status: IMPLEMENTED narrow grammar helper; not yet connected to `qwen35_generate`
+- claim tested: Finite grammar corridors such as JSON/XML punctuation, fixed tool-call tags, and function names can be converted into tokenizer-level allowed-id frontiers without model-specific training or approximate filtering.
+- evidence: Added `ML::GGUF::Qwen35Constraints.literal_frontier_ids` and `advance_literal_options`, with targeted specs. Verification through `scripts/run_safe.sh`: `COGNI_SPEC_MAX_RSS_MB=4096 crystal spec spec/qwen35_constraints_spec.cr --no-color --error-trace` -> `3 examples, 0 failures`.
+- diagnosis: This is intentionally a narrow exact bridge. It can accelerate structural/literal parts of tool calling by feeding `forward_top1_allowed`, but must fall back for free-form strings, numbers, or grammar states where a token may legally cross into a non-literal continuation that this helper cannot certify.
+- LTP/WBA: Window is a finite literal grammar state. Transport carries the set of remaining literal suffixes through tokenizer pieces into allowed ids. Legal move accepts only tokens whose decoded text is a prefix of at least one remaining literal. Boundary safety is fallback at completed/invalid/free-form states. Potential descends in `(grammar_frontier_size, invalid_literal_work, head_rows_scanned)`.
+- trust: {F:0.86,G:0.42,R:0.82}
