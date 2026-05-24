@@ -20,9 +20,10 @@ quiet_poll_ms = 1000
 require_quiet = false
 prepare_state = false
 breakdown_state_overhead = false
+final_top1 = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_prefill_attribution [--model PATH] [--prompt N] [--warmup N] [--reps N] [--compare-env NAME] [--prepare-state] [--breakdown-state-overhead]"
+  p.banner = "Usage: qwen35_prefill_attribution [--model PATH] [--prompt N] [--warmup N] [--reps N] [--compare-env NAME] [--prepare-state] [--breakdown-state-overhead] [--final-top1]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--prompt=N", "Prompt tokens for prefill attribution (default: 64)") { |v| prompt_len = v.to_i }
   p.on("--warmup=N", "Warmup runs before profiling (default: 1)") { |v| warmup = v.to_i }
@@ -36,6 +37,7 @@ OptionParser.parse do |p|
   p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
   p.on("--prepare-state", "Prepare fresh Metal state buffers before each timed prefill") { prepare_state = true }
   p.on("--breakdown-state-overhead", "Measure State.new, optional prepare_state_metal!, and prefill timing separately") { breakdown_state_overhead = true }
+  p.on("--final-top1", "Measure product-shaped prompt processing plus final output-head top1; default is body-only pp") { final_top1 = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -69,13 +71,18 @@ end
 def run_prefill_once(w : ML::GGUF::Qwen35Weights,
                      prompt : Array(Int32),
                      profile : Bool,
-                     prepare_state : Bool) : Float64
+                     prepare_state : Bool,
+                     final_top1 : Bool) : Float64
   state = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: prompt.size + 4)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(state, w.hparams) if prepare_state
   ML::GGUF::Qwen35Metal::Profile.reset if profile
   ML::GGUF::Qwen35Metal::Profile.enable! if profile
   t0 = Time.instant
-  ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+  if final_top1
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+  else
+    ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
+  end
   wall_ms = (Time.instant - t0).total_milliseconds
   ML::GGUF::Qwen35Metal::Profile.disable! if profile
   wall_ms
@@ -89,7 +96,8 @@ record LifecycleTiming,
 
 def run_prefill_lifecycle_once(w : ML::GGUF::Qwen35Weights,
                                prompt : Array(Int32),
-                               prepare_state : Bool) : LifecycleTiming
+                               prepare_state : Bool,
+                               final_top1 : Bool) : LifecycleTiming
   hp = w.hparams
   t0 = Time.instant
   state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: prompt.size + 4)
@@ -100,7 +108,11 @@ def run_prefill_lifecycle_once(w : ML::GGUF::Qwen35Weights,
   end
   t2 = Time.instant
 
-  ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+  if final_top1
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+  else
+    ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
+  end
   t3 = Time.instant
 
   LifecycleTiming.new(
@@ -145,9 +157,9 @@ def set_env(name : String, value : String?) : Nil
   end
 end
 
-def measure_wall(w, prompt, warmup : Int32, reps : Int32, prepare_state : Bool) : Array(Float64)
-  warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
-  Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
+def measure_wall(w, prompt, warmup : Int32, reps : Int32, prepare_state : Bool, final_top1 : Bool) : Array(Float64)
+  warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
+  Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
 end
 
 def measure_paired_env(w,
@@ -156,28 +168,29 @@ def measure_paired_env(w,
                        alternate_value : String,
                        warmup : Int32,
                        reps : Int32,
-                       prepare_state : Bool) : {Array(Float64), Array(Float64)}
+                       prepare_state : Bool,
+                       final_top1 : Bool) : {Array(Float64), Array(Float64)}
   default = [] of Float64
   alternate = [] of Float64
 
   warmup.times do
     set_env(env, nil)
-    run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
+    run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
     set_env(env, alternate_value)
-    run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
+    run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
   end
 
   reps.times do |i|
     if i.even?
       set_env(env, nil)
-      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
+      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
       set_env(env, alternate_value)
-      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
+      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
     else
       set_env(env, alternate_value)
-      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
+      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
       set_env(env, nil)
-      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state)
+      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
     end
     default << a
     alternate << b
@@ -193,29 +206,29 @@ prompt = prompt_tokens(prompt_len)
 
 puts "Qwen35 prefill attribution"
 puts "model=#{model}"
-puts "prompt=#{prompt_len} warmup=#{warmup} reps=#{reps} prepare_state=#{prepare_state} breakdown_state_overhead=#{breakdown_state_overhead}"
+puts "prompt=#{prompt_len} warmup=#{warmup} reps=#{reps} mode=#{final_top1 ? "prompt_plus_final_top1" : "body_only"} prepare_state=#{prepare_state} breakdown_state_overhead=#{breakdown_state_overhead}"
 
-warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
-profile_ms = run_prefill_once(w, prompt, profile: true, prepare_state: prepare_state)
+warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
+profile_ms = run_prefill_once(w, prompt, profile: true, prepare_state: prepare_state, final_top1: final_top1)
 puts
 print ML::GGUF::Qwen35Metal::Profile.report_io
 printf "  profiled wall: %.2f ms  %.2f tok/s\n", profile_ms, prompt_len * 1000.0 / profile_ms
 
-times = Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state) }
+times = Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
 printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
   mean(times), percentile(times, 50), percentile(times, 90),
   prompt_len * 1000.0 / percentile(times, 50)
 
 if breakdown_state_overhead
-  warmup.times { run_prefill_lifecycle_once(w, prompt, prepare_state) }
-  lifecycle = Array(LifecycleTiming).new(reps) { run_prefill_lifecycle_once(w, prompt, prepare_state) }
+  warmup.times { run_prefill_lifecycle_once(w, prompt, prepare_state, final_top1) }
+  lifecycle = Array(LifecycleTiming).new(reps) { run_prefill_lifecycle_once(w, prompt, prepare_state, final_top1) }
   print_lifecycle(prepare_state ? "prepared fresh state" : "lazy fresh state", lifecycle, prompt_len)
 end
 
 if env = compare_env
   old = ENV[env]?
   begin
-    on, off = measure_paired_env(w, prompt, env, compare_off, warmup, reps, prepare_state)
+    on, off = measure_paired_env(w, prompt, env, compare_off, warmup, reps, prepare_state, final_top1)
     wins = on.zip(off).count { |a, b| a < b }
     puts
     puts "A/B #{env}: default vs #{compare_off.inspect} (paired interleaved)"

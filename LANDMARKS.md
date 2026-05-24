@@ -15673,3 +15673,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This prevents future speed work from optimizing or reporting against the wrong metric by default.
 - LTP/WBA: Window is benchmark invocation without explicit prefill semantics. Transport is the prefill mode flag into route selection and printed settings. Legal move changes only benchmark accounting defaults, not inference kernels. Potential descends in `(default_metric_mismatch, apples_to_oranges_risk, repeated_analysis_cost)`.
 - trust: {F:0.88,G:0.70,R:0.84}
+
+**LM-527 Body-only prefill attribution confirms recurrent FFN plus group boundaries [shared/ml]**
+- status: VERIFIED relaxed-host attribution; diagnostic, not quiet-host speed evidence
+- claim tested: After correcting pp semantics, attribution should profile body-only prompt processing rather than prompt+top1.
+- evidence: `bin/qwen35_prefill_attribution.cr` defaults to body-only and accepts `--final-top1`; no-codegen and release builds passed. Body-only pp64 attribution measured `total metal syncs=9`, profiled wall `150.05ms`, boundary transfer `8.00 MiB` upload + `8.00 MiB` readback, logical traffic `4010.53 MiB` matmul / `174.00 MiB` conversion, and dominant `prefill.rec.ffn_upgate q4_h16_gemm Q4_K 4096x12288 b64` at `32.31%`. Body-only pp256 measured profiled wall `476.64ms`, boundary transfer `32.00 MiB` upload + `32.00 MiB` readback, same dominant shape.
+- diagnosis: The corrected pp bottleneck is not output-head top1. The remaining exact levers are recurrent FFN body economics and graph/lifecycle boundaries between layer groups. The strongest LTP/WBA candidate remains carrying hidden activations through a GPU-resident layer-band corridor.
+- LTP/WBA: Window is body-only prompt processing with hidden rows crossing CPU-visible group boundaries. Transport is the `[tokens, hidden]` buffer between consecutive layer groups. Legal future moves must preserve exact state updates and fallback on unsupported/checkpoint routes. Potential is `(group_sync_count, boundary_upload_readback, recurrent_ffn_wall, pp_wall)`.
+- trust: {F:0.86,G:0.60,R:0.76}
