@@ -320,7 +320,7 @@ native_decode_top1 = true
 native_prefill_cache = false
 native_prefill_prealloc = false
 native_prefill_prepare_state = false
-native_prefill_body_only = false
+native_prefill_final_top1 = false
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
@@ -342,7 +342,8 @@ OptionParser.parse do |p|
   p.on("--llama-cache-v=TYPE", "llama.cpp KV cache V type for llama-bench, for example q4_0") { |v| llama_cache_type_v = v }
   p.on("--llama-extra-arg=ARG", "Append one raw argument to llama-bench; repeat for flag/value pairs") { |v| llama_extra_args << v }
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
-  p.on("--native-prefill-body-only", "Measure native prompt processing without the final output-head top1, matching llama-bench pp") { native_prefill_body_only = true }
+  p.on("--native-prefill-body-only", "Deprecated no-op: native prefill defaults to llama-bench-compatible body-only pp") { native_prefill_final_top1 = false }
+  p.on("--native-prefill-final-top1", "Measure product-shaped prompt processing plus final output-head top1") { native_prefill_final_top1 = true }
   p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
   p.on("--native-prefill-prealloc", "Measure native prefill with state buffers allocated outside the timed loop") { native_prefill_prealloc = true }
   p.on("--native-prefill-prepare-state", "Prepare a fresh state's Metal buffers before each timed native prefill") { native_prefill_prepare_state = true }
@@ -374,11 +375,11 @@ w = ML::GGUF::Qwen35Weights.from_gguf(model)
 native_prefill = if native_prefill_cache
                    measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
                  elsif native_prefill_prealloc
-                   measure_native_prefill_preallocated(w, n_prompt, reps, warmup, final_top1: !native_prefill_body_only)
+                   measure_native_prefill_preallocated(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
                  elsif native_prefill_prepare_state
-                   measure_native_prefill_prepared_state(w, n_prompt, reps, warmup, final_top1: !native_prefill_body_only)
+                   measure_native_prefill_prepared_state(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
                  else
-                   measure_native_prefill(w, n_prompt, reps, warmup, final_top1: !native_prefill_body_only)
+                   measure_native_prefill(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
                  end
 native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_top1)
 
@@ -391,11 +392,11 @@ puts "llama-bench: #{llama_bench}"
 native_prefill_mode = if native_prefill_cache
                         "prompt_cache_restore_after_seed"
                       elsif native_prefill_prealloc
-                        native_prefill_body_only ? "preallocated_state_chunked_prompt_body_only" : "preallocated_state_chunked_prompt_plus_final_top1"
+                        native_prefill_final_top1 ? "preallocated_state_chunked_prompt_plus_final_top1" : "preallocated_state_chunked_prompt_body_only"
                       elsif native_prefill_prepare_state
-                        native_prefill_body_only ? "prepared_state_chunked_prompt_body_only" : "prepared_state_chunked_prompt_plus_final_top1"
+                        native_prefill_final_top1 ? "prepared_state_chunked_prompt_plus_final_top1" : "prepared_state_chunked_prompt_body_only"
                       else
-                        native_prefill_body_only ? "chunked_prompt_body_only" : "chunked_prompt_plus_final_top1"
+                        native_prefill_final_top1 ? "chunked_prompt_plus_final_top1" : "chunked_prompt_body_only"
                       end
 puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
 puts

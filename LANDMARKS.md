@@ -15665,3 +15665,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Product prompt latency and llama-bench pp are different metrics. The optimized native `prompt_plus_final_top1` route is useful for generation latency because it computes only the last final-layer row before top1. The true pp body-only route must process the final full-attention layer for all prompt rows, which exposes a larger remaining gap.
 - LTP/WBA: Window is benchmark classification for a prompt-processing run. Transport is the `final_top1` flag through native prefill measurement. Legal move labels and measures either body-only pp or product prompt+top1 without changing model execution. Boundary safety is explicit mode reporting in benchmark settings. Potential descends in `(apples_to_oranges_risk, benchmark_ambiguity, wrong_optimization_target)`.
 - trust: {F:0.90,G:0.66,R:0.82}
+
+**LM-526 benchmark_qwen_vs_llama defaults to body-only pp [shared/ml]**
+- status: IMPLEMENTED; benchmark default corrected
+- claim tested: The benchmark default should be apples-to-apples with llama-bench pp, while product prompt+top1 should be opt-in.
+- evidence: `bin/benchmark_qwen_vs_llama.cr` now defaults native prefill to `*_chunked_prompt_body_only`; `--native-prefill-final-top1` enables the product-shaped row. `--native-prefill-body-only` remains accepted as a no-op for older scripts. Verification passed: no-codegen build and `git diff --check`.
+- diagnosis: This prevents future speed work from optimizing or reporting against the wrong metric by default.
+- LTP/WBA: Window is benchmark invocation without explicit prefill semantics. Transport is the prefill mode flag into route selection and printed settings. Legal move changes only benchmark accounting defaults, not inference kernels. Potential descends in `(default_metric_mismatch, apples_to_oranges_risk, repeated_analysis_cost)`.
+- trust: {F:0.88,G:0.70,R:0.84}
