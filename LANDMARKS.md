@@ -15902,3 +15902,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a required parameter whose schema gives a finite value set. Transport carries `value\n` alternatives through tokenizer frontiers into constrained Q6 top1, then resumes the XML boundary corridor. Legal move only applies to enum/boolean scalar fields; dual frame is free-form greedy for unbounded strings, numbers, arrays, objects, or unsupported schemas. Potential descends in `(invalid_schema_value_risk, value_frontier_size, head_rows_scanned)`.
 - adversary: Parsed values are still strings at the host boundary today (`dry_run` parses as `"true"`), so typed argument normalization is a separate adapter concern. Numeric bounded grammars and optional-parameter selection remain open.
 - trust: {F:0.88,G:0.50,R:0.80}
+
+
+**LM-555 Structured tool-call telemetry exposes exact-vs-fallback corridors [shared/ml]**
+- status: IMPLEMENTED observation-only telemetry for constrained tool calls
+- claim tested: We can measure where the structured decoder uses certified literal/value corridors versus free-form greedy spans without changing model output.
+- evidence: Added a `tool constraint summary` line in `qwen35_generate` with `final_stage`, per-stage constrained token counts, `freeform_value_steps`, `value_boundary_hits`, and `finite_value_params`. Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `9 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; enum/boolean smoke parsed `edit_mode(mode=safe,dry_run=true)` with `value_literal:4`, `freeform_value_steps=0`, `finite_value_params=2`; free-form `read_file(path,limit)` smoke parsed both values with `freeform_value_steps=5`, `value_boundary_hits=2`, `finite_value_params=0`.
+- diagnosis: The telemetry makes the remaining speed/quality opportunity visible: finite schema fields are fully constrained, while path/limit-style free-form values still spend real tokens in full greedy mode.
+- LTP/WBA: Window is the active structured-decode stage at each token boundary. Transport is the telemetry stream carrying stage counts and fallback boundaries across the decode corridor. Legal move is observation-only; potential for future work descends by identifying which component of `(freeform_value_steps, unsupported_value_grammar, head_rows_scanned)` dominates.
+- adversary: Counts are runtime probes, not benchmark claims. They should guide grammar work but must not be used as standalone speed evidence without paired wall timing.
+- trust: {F:0.86,G:0.54,R:0.80}

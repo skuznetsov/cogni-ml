@@ -582,6 +582,9 @@ tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : 
 tool_required_sequence = [] of String
 tool_value_options_by_parameter = {} of String => Array(String)
 tool_parameter_index = 0
+tool_literal_stage_counts = Hash(String, Int32).new(0)
+tool_freeform_value_steps = 0
+tool_value_boundary_hits = 0
 unless literal_remaining.empty?
   label = constrained_tool_call_prefix_enabled ? "tool-call prefix options=#{literal_remaining.size}" : constrained_literal_prefix.not_nil!.inspect
   STDOUT << "Constrained literal prefix enabled: #{label}\n"
@@ -744,11 +747,13 @@ if output_ids.empty?
     if literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
     else
+      constrained_stage = tool_literal_stage
       top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, final_id, pos, state, literal_remaining)
       constrained_generated = constrained
       if constrained
         literal_constrained_steps += 1
+        tool_literal_stage_counts[constrained_stage] += 1 if constrained_tool_call_prefix_enabled
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
           tool_literal_stage, literal_remaining, tool_required_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
@@ -760,10 +765,12 @@ if output_ids.empty?
     output_ids << top.to_i32
     generated_piece = tok.decode_single(top)
     if !constrained_generated && constrained_tool_call_prefix_enabled && literal_remaining.empty? && tool_literal_stage == "value"
+      tool_freeform_value_steps += 1
       tool_value_text += generated_piece
       next_stage, next_literals, next_parameter_index, next_value_text = maybe_start_tool_value_close(
         tool_literal_stage, tool_value_text, tool_required_sequence, tool_parameter_index)
       if next_stage != tool_literal_stage || !next_literals.empty?
+        tool_value_boundary_hits += 1
         tool_literal_stage = next_stage
         literal_remaining = next_literals
         tool_parameter_index = next_parameter_index
@@ -1247,11 +1254,13 @@ else
     if literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     else
+      constrained_stage = tool_literal_stage
       top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, prev, pos, state, literal_remaining)
       constrained_generated = constrained
       if constrained
         literal_constrained_steps += 1
+        tool_literal_stage_counts[constrained_stage] += 1 if constrained_tool_call_prefix_enabled
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
           tool_literal_stage, literal_remaining, tool_required_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
@@ -1263,10 +1272,12 @@ else
     dt = (Time.instant - tstart).total_seconds
     piece = tok.decode_single(top)
     if !constrained_generated && constrained_tool_call_prefix_enabled && literal_remaining.empty? && tool_literal_stage == "value"
+      tool_freeform_value_steps += 1
       tool_value_text += piece
       next_stage, next_literals, next_parameter_index, next_value_text = maybe_start_tool_value_close(
         tool_literal_stage, tool_value_text, tool_required_sequence, tool_parameter_index)
       if next_stage != tool_literal_stage || !next_literals.empty?
+        tool_value_boundary_hits += 1
         tool_literal_stage = next_stage
         literal_remaining = next_literals
         tool_parameter_index = next_parameter_index
@@ -1349,6 +1360,12 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
 end
 
 total_ms = (Time.instant - request_t0).total_milliseconds
+if constrained_tool_call_prefix_enabled
+  stage_steps = tool_literal_stage_counts.to_a.sort_by { |entry| entry[0] }.map { |stage, count| "#{stage}:#{count}" }.join(",")
+  stage_steps = "none" if stage_steps.empty?
+  finite_value_params = tool_value_options_by_parameter.size
+  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
+end
 STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
 puts "\n=== Generated token ids ==="

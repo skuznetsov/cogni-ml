@@ -2734,3 +2734,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_554:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `9 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with `edit_mode(mode enum [fast,safe], dry_run boolean)` generated and parsed `mode=safe` and `dry_run=true` with `literal_constrained_steps=45`. A regression smoke for free-form `read_file(path,limit)` still parsed both values and stopped at the complete tool call.
 
 **next_update_554:** Add structured fallback telemetry and then bounded numeric value grammars. Do not constrain arbitrary strings or arrays/objects until a certified JSON/XML value grammar exists; those remain dual-frame unconstrained spans.
+
+
+**decision_update_555:** Added compact structured-decode telemetry for the opt-in Qwen XML tool-call controller. `qwen35_generate` now reports `tool constraint summary` with final stage, constrained token counts by stage, free-form value token count, value-boundary hits, and number of finite-value parameters selected for the current function. This is observation-only and does not alter grammar decisions.
+
+**evidence_update_555:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `9 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; enum/boolean smoke generated the same parsed `edit_mode(mode=safe,dry_run=true)` call and reported `stage_steps=closing_parameter:12,function_prefix:12,parameter_open:6,parameter_separator:11,value_literal:4 freeform_value_steps=0 value_boundary_hits=0 finite_value_params=2`; free-form `read_file(path,limit)` smoke parsed both values and reported `freeform_value_steps=5 value_boundary_hits=2 finite_value_params=0`.
+
+**next_update_555:** Use the telemetry to prioritize the next exact grammar corridor. Highest-value next candidates are bounded integer grammars for numeric schema fields and typed host-side argument normalization; arbitrary strings should remain fallback until a certified value grammar exists.
