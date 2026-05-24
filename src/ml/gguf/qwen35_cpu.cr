@@ -965,7 +965,10 @@ module ML::GGUF
                                                                    max_seq : Int32,
                                                                    checkpoint_index : Int32? = nil,
                                                                    checkpoint_state : State? = nil,
-                                                                   checkpoint_rollback_log : Bool = false) : {Array(Float32), Int32}?
+                                                                   checkpoint_rollback_log : Bool = false,
+                                                                   input_buf : ML::MetalBuffer? = nil,
+                                                                   output_buf : ML::MetalBuffer? = nil,
+                                                                   read_output : Bool = true) : {Array(Float32), Int32}?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_PREFILL_FUSE_FULL_REC_OFF"]? == "1"
         return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
@@ -1087,7 +1090,10 @@ module ML::GGUF
           checkpoint_index: checkpoint_index,
           checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
           checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil,
-          checkpoint_rollback_log: checkpoint_rollback_log)
+          checkpoint_rollback_log: checkpoint_rollback_log,
+          input_buf: input_buf,
+          output_buf: output_buf,
+          read_output: read_output)
         out ? {out, run_end} : nil
       {% else %}
         nil
@@ -2495,17 +2501,63 @@ module ML::GGUF
 
       il = 0
       layer_limit = stop_layer || weights.layers.size
+      gpu_hidden = nil.as(ML::MetalBuffer?)
+      handoff_a = nil.as(ML::MetalBuffer?)
+      handoff_b = nil.as(ML::MetalBuffer?)
+      handoff_flip = false
+      handoff_bytes = (n_tokens * hp.n_embd).to_i64 * sizeof(Float32)
       while il < layer_limit
         lw = weights.layers[il]
         case lw
         in Qwen35FullAttnWeights
+          fused_read_output = true
+          fused_output_buf = nil.as(ML::MetalBuffer?)
+          # LTP/WBA corridor: carry hidden rows across supported prefill groups
+          # without exposing them to the host unless this is the final requested output.
+          if ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" && !checkpoint_requested
+            predicted_run_end = il + 1
+            while predicted_run_end < weights.layers.size
+              break unless weights.layers[predicted_run_end].is_a?(Qwen35RecurrentWeights)
+              predicted_run_end += 1
+            end
+            fused_read_output = need_output && predicted_run_end >= layer_limit
+            if !fused_read_output && predicted_run_end < layer_limit
+              if handoff_flip
+                handoff_a ||= ML::MetalBuffer.new(handoff_bytes)
+                fused_output_buf = handoff_a
+              else
+                handoff_b ||= ML::MetalBuffer.new(handoff_bytes)
+                fused_output_buf = handoff_b
+              end
+              handoff_flip = !handoff_flip
+            end
+          end
+
           if fused = full_attn_then_recurrent_chunk_project_many_routed(
                x, n_tokens, start_pos, state, weights, il, hp, max_seq,
                checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state,
-               checkpoint_rollback_log: checkpoint_rollback_log)
-            x = fused[0]
+               checkpoint_rollback_log: checkpoint_rollback_log,
+               input_buf: gpu_hidden,
+               output_buf: fused_output_buf,
+               read_output: fused_read_output)
             il = fused[1]
+            if fused_read_output
+              x = fused[0]
+              gpu_hidden = nil
+            elsif ob = fused_output_buf
+              x = [] of Float32
+              gpu_hidden = ob
+            else
+              return [] of Float32 unless need_output
+              x = fused[0]
+              gpu_hidden = nil
+            end
             next
+          end
+
+          if gb = gpu_hidden
+            x = gb.read(n_tokens * hp.n_embd)
+            gpu_hidden = nil
           end
 
           read_output = need_output || il + 1 < layer_limit
@@ -2593,6 +2645,21 @@ module ML::GGUF
               end
 
               if supported
+                rec_read_output = true
+                rec_output_buf = nil.as(ML::MetalBuffer?)
+                if ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" && !checkpoint_requested
+                  rec_read_output = need_output && run_end >= layer_limit
+                  if !rec_read_output && run_end < layer_limit
+                    if handoff_flip
+                      handoff_a ||= ML::MetalBuffer.new(handoff_bytes)
+                      rec_output_buf = handoff_a
+                    else
+                      handoff_b ||= ML::MetalBuffer.new(handoff_bytes)
+                      rec_output_buf = handoff_b
+                    end
+                    handoff_flip = !handoff_flip
+                  end
+                end
                 if gpu_out = Qwen35Metal.recurrent_layer_chunk_project_many(
                      x, conv_bufs, ssm_bufs, rec_layers,
                      h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
@@ -2600,9 +2667,22 @@ module ML::GGUF
                      checkpoint_index: checkpoint_index,
                      checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
                      checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil,
-                     checkpoint_rollback_log: checkpoint_rollback_log)
-                  x = gpu_out
+                     checkpoint_rollback_log: checkpoint_rollback_log,
+                     input_buf: gpu_hidden,
+                     output_buf: rec_output_buf,
+                     read_output: rec_read_output)
                   il = run_end
+                  if rec_read_output
+                    x = gpu_out
+                    gpu_hidden = nil
+                  elsif ob = rec_output_buf
+                    x = [] of Float32
+                    gpu_hidden = ob
+                  else
+                    return [] of Float32 unless need_output
+                    x = gpu_out
+                    gpu_hidden = nil
+                  end
                   next
                 elsif checkpoint_requested
                   raise "prefill recurrent checkpoint unsupported for recurrent run #{il}..#{run_end - 1}"
@@ -2615,9 +2695,17 @@ module ML::GGUF
             raise "prefill recurrent checkpoint requires QWEN35_PREFILL_REC_RUN_OFF != 1"
           end
 
+          if gb = gpu_hidden
+            x = gb.read(n_tokens * hp.n_embd)
+            gpu_hidden = nil
+          end
           x = forward_recurrent_layer_chunk(x, n_tokens, lw, state.layers[il], hp, max_seq)
           il += 1
         end
+      end
+      if gb = gpu_hidden
+        return [] of Float32 unless need_output
+        x = gb.read(n_tokens * hp.n_embd)
       end
       x
     end

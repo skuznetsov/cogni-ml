@@ -5205,7 +5205,10 @@ module ML
                                                     checkpoint_index : Int32? = nil,
                                                     checkpoint_conv_state_bufs : Array(ML::MetalBuffer)? = nil,
                                                     checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil,
-                                                    checkpoint_rollback_log : Bool = false) : Array(Float32)?
+                                                    checkpoint_rollback_log : Bool = false,
+                                                    input_buf : ML::MetalBuffer? = nil,
+                                                    output_buf : ML::MetalBuffer? = nil,
+                                                    read_output : Bool = true) : Array(Float32)?
           return nil unless n_tokens > 0
           return nil if layers.empty?
           checkpoint_requested = !checkpoint_index.nil?
@@ -5240,13 +5243,22 @@ module ML
           d_inner = h_v * s
           ffn_dim = layers.first.ffn_gate_qw.out_dim
           scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
-          raise "recurrent_layer_chunk_many input size mismatch" unless inp.size == n_tokens * hidden_dim
+          hidden_elems = n_tokens * hidden_dim
+          hidden_bytes = hidden_elems.to_i64 * sizeof(Float32)
+          if ib = input_buf
+            raise "recurrent_layer_chunk_many input buffer too small" if ib.size < hidden_bytes
+          else
+            raise "recurrent_layer_chunk_many input size mismatch" unless inp.size == hidden_elems
+          end
+          if ob = output_buf
+            raise "recurrent_layer_chunk_many output buffer too small" if ob.size < hidden_bytes
+          end
           raise "recurrent_layer_chunk_many state size mismatch" unless conv_state_bufs.size == layers.size && ssm_state_bufs.size == layers.size
 
-          src_buf = Scratch.get(:rec_chunk_many_hidden_a, inp.size.to_i64 * sizeof(Float32))
-          dst_buf = Scratch.get(:rec_chunk_many_hidden_b, inp.size.to_i64 * sizeof(Float32))
-          cur_buf = Scratch.get(:rec_chunk_many_cur, inp.size.to_i64 * sizeof(Float32))
-          cur_h16_buf = Scratch.get(:rec_chunk_many_cur_h16, inp.size.to_i64 * 2_i64)
+          src_buf = input_buf || Scratch.get(:rec_chunk_many_hidden_a, hidden_bytes)
+          dst_buf = Scratch.get(:rec_chunk_many_hidden_b, hidden_bytes)
+          cur_buf = Scratch.get(:rec_chunk_many_cur, hidden_bytes)
+          cur_h16_buf = Scratch.get(:rec_chunk_many_cur_h16, hidden_elems.to_i64 * 2_i64)
           qkv_buf = Scratch.get(:rec_chunk_many_qkv, (n_tokens * qkv_dim).to_i64 * sizeof(Float32))
           qkv_h16_buf = Scratch.get(:rec_chunk_many_qkv_h16, (n_tokens * qkv_dim).to_i64 * 2_i64)
           z_buf = Scratch.get(:rec_chunk_many_z, (n_tokens * d_inner).to_i64 * sizeof(Float32))
@@ -5258,19 +5270,20 @@ module ML
           v_buf = Scratch.get(:rec_chunk_many_v, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           attn_mid_buf = Scratch.get(:rec_chunk_many_mid, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           attn_mid_h16_buf = Scratch.get(:rec_chunk_many_mid_h16, (n_tokens * d_inner).to_i64 * 2_i64)
-          attn_out_buf = Scratch.get(:rec_chunk_many_attn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
-          residual_buf = Scratch.get(:rec_chunk_many_residual, inp.size.to_i64 * sizeof(Float32))
-          normed_buf = Scratch.get(:rec_chunk_many_normed, inp.size.to_i64 * sizeof(Float32))
-          normed_h16_buf = Scratch.get(:rec_chunk_many_normed_h16, inp.size.to_i64 * 2_i64)
+          attn_out_buf = Scratch.get(:rec_chunk_many_attn_out, hidden_bytes)
+          residual_buf = Scratch.get(:rec_chunk_many_residual, hidden_bytes)
+          normed_buf = Scratch.get(:rec_chunk_many_normed, hidden_bytes)
+          normed_h16_buf = Scratch.get(:rec_chunk_many_normed_h16, hidden_elems.to_i64 * 2_i64)
           ffn_gate_buf = Scratch.get(:rec_chunk_many_ffn_gate, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           ffn_up_buf = Scratch.get(:rec_chunk_many_ffn_up, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           ffn_comb_buf = Scratch.get(:rec_chunk_many_ffn_comb, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           ffn_comb_h16_buf = Scratch.get(:rec_chunk_many_ffn_comb_h16, (n_tokens * ffn_dim).to_i64 * 2_i64)
-          ffn_out_buf = Scratch.get(:rec_chunk_many_ffn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+          ffn_out_buf = Scratch.get(:rec_chunk_many_ffn_out, hidden_bytes)
 
-          input_bytes = inp.size.to_i64 * sizeof(Float32)
-          src_buf.write(inp)
-          Profile.bump_group_transfer("#{profile_label}.boundary", input_bytes, 0_i64)
+          unless input_buf
+            src_buf.write(inp)
+            Profile.bump_group_transfer("#{profile_label}.boundary", hidden_bytes, 0_i64)
+          end
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
@@ -5592,25 +5605,33 @@ module ML
           end
 
           if full_detail_profile
+            if ob = output_buf
+              ob.copy_from(src_buf, hidden_bytes)
+            end
             t_read0 = Time.instant
-            result = read_shared_f32(src_buf, n_tokens * hidden_dim)
+            result = read_output ? read_shared_f32(src_buf, hidden_elems) : [] of Float32
             t_read = Time.instant
-            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, hidden_bytes) if read_output
             Profile.bump_group("#{profile_label}.read", 0_i64, 0_i64, (t_read - t_read0).total_nanoseconds.to_i64)
             return result
           end
 
+          if ob = output_buf
+            blit = ML::Metal::BlitEncoder.new(cmd)
+            blit.copy_buffer(src_buf, 0, ob, 0, hidden_bytes.to_i32)
+            blit.end_encoding
+          end
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
-          result = read_shared_f32(src_buf, n_tokens * hidden_dim)
+          result = read_output ? read_shared_f32(src_buf, hidden_elems) : [] of Float32
           if Profile.enabled?
             t_read = Time.instant
             encode_ns = (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64
             wait_ns = (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64
-            read_ns = (t_read - t_wait.not_nil!).total_nanoseconds.to_i64
-            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+            read_ns = read_output ? (t_read - t_wait.not_nil!).total_nanoseconds.to_i64 : 0_i64
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, hidden_bytes) if read_output
             Profile.bump_dn(encode_ns, wait_ns, read_ns)
             Profile.bump_group(profile_label, encode_ns, wait_ns, read_ns)
           end
@@ -6567,7 +6588,10 @@ module ML
                                                              checkpoint_index : Int32? = nil,
                                                              checkpoint_conv_state_bufs : Array(ML::MetalBuffer)? = nil,
                                                              checkpoint_ssm_state_bufs : Array(ML::MetalBuffer)? = nil,
-                                                             checkpoint_rollback_log : Bool = false) : Array(Float32)?
+                                                             checkpoint_rollback_log : Bool = false,
+                                                             input_buf : ML::MetalBuffer? = nil,
+                                                             output_buf : ML::MetalBuffer? = nil,
+                                                             read_output : Bool = true) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -6616,13 +6640,22 @@ module ML
           d_inner = h_v * s
           rec_ffn_dim = rec_layers.first.ffn_gate_qw.out_dim
           rec_scale = (1.0 / Math.sqrt(s.to_f64)).to_f32
-          raise "full+recurrent chunk input size mismatch" unless inp.size == n_tokens * hidden_dim
+          hidden_elems = n_tokens * hidden_dim
+          hidden_bytes = hidden_elems.to_i64 * sizeof(Float32)
+          if ib = input_buf
+            raise "full+recurrent chunk input buffer too small" if ib.size < hidden_bytes
+          else
+            raise "full+recurrent chunk input size mismatch" unless inp.size == hidden_elems
+          end
+          if ob = output_buf
+            raise "full+recurrent chunk output buffer too small" if ob.size < hidden_bytes
+          end
 
           full_tag = "frec_full_#{q_qw.raw.to_unsafe.address}"
-          inp_buf = Scratch.get(:frec_inp, inp.size.to_i64 * sizeof(Float32))
+          inp_buf = input_buf || Scratch.get(:frec_inp, hidden_bytes)
           full_norm_w_buf = Scratch.get("#{full_tag}_norm_w", attn_norm.size.to_i64 * sizeof(Float32))
-          full_cur_buf = Scratch.get(:frec_full_cur, inp.size.to_i64 * sizeof(Float32))
-          full_cur_h16_buf = Scratch.get(:frec_full_cur_h16, inp.size.to_i64 * 2_i64)
+          full_cur_buf = Scratch.get(:frec_full_cur, hidden_bytes)
+          full_cur_h16_buf = Scratch.get(:frec_full_cur_h16, hidden_elems.to_i64 * 2_i64)
           full_qfull_buf = Scratch.get(:frec_full_qfull, (n_tokens * q_qw.out_dim).to_i64 * sizeof(Float32))
           full_q_buf = Scratch.get(:frec_full_q, (n_tokens * q_dim).to_i64 * sizeof(Float32))
           full_gate_buf = Scratch.get(:frec_full_gate, (n_tokens * q_dim).to_i64 * sizeof(Float32))
@@ -6633,19 +6666,19 @@ module ML
           qnorm_buf = Scratch.get("#{full_tag}_qnorm", q_norm.size.to_i64 * sizeof(Float32))
           knorm_buf = Scratch.get("#{full_tag}_knorm", k_norm.size.to_i64 * sizeof(Float32))
           full_post_norm_buf = Scratch.get("#{full_tag}_postnorm", post_attention_norm.size.to_i64 * sizeof(Float32))
-          full_residual_buf = Scratch.get(:frec_full_residual, inp.size.to_i64 * sizeof(Float32))
-          full_normed_buf = Scratch.get(:frec_full_normed, inp.size.to_i64 * sizeof(Float32))
-          full_normed_h16_buf = Scratch.get(:frec_full_normed_h16, inp.size.to_i64 * 2_i64)
+          full_residual_buf = Scratch.get(:frec_full_residual, hidden_bytes)
+          full_normed_buf = Scratch.get(:frec_full_normed, hidden_bytes)
+          full_normed_h16_buf = Scratch.get(:frec_full_normed_h16, hidden_elems.to_i64 * 2_i64)
           full_ffn_gate_buf = Scratch.get(:frec_full_ffn_gate, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
           full_ffn_up_buf = Scratch.get(:frec_full_ffn_up, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
           full_ffn_comb_buf = Scratch.get(:frec_full_ffn_comb, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
           full_ffn_comb_h16_buf = Scratch.get(:frec_full_ffn_comb_h16, (n_tokens * full_ffn_dim).to_i64 * 2_i64)
           full_ffn_out_buf = Scratch.get(:frec_full_ffn_out, (n_tokens * ffn_down_qw.out_dim).to_i64 * sizeof(Float32))
-          full_out_buf = Scratch.get(:frec_full_out, inp.size.to_i64 * sizeof(Float32))
+          full_out_buf = Scratch.get(:frec_full_out, hidden_bytes)
 
-          rec_dst_buf = Scratch.get(:frec_rec_hidden_b, inp.size.to_i64 * sizeof(Float32))
-          rec_cur_buf = Scratch.get(:frec_rec_cur, inp.size.to_i64 * sizeof(Float32))
-          rec_cur_h16_buf = Scratch.get(:frec_rec_cur_h16, inp.size.to_i64 * 2_i64)
+          rec_dst_buf = Scratch.get(:frec_rec_hidden_b, hidden_bytes)
+          rec_cur_buf = Scratch.get(:frec_rec_cur, hidden_bytes)
+          rec_cur_h16_buf = Scratch.get(:frec_rec_cur_h16, hidden_elems.to_i64 * 2_i64)
           rec_qkv_buf = Scratch.get(:frec_rec_qkv, (n_tokens * rec_qkv_dim).to_i64 * sizeof(Float32))
           rec_qkv_h16_buf = Scratch.get(:frec_rec_qkv_h16, (n_tokens * rec_qkv_dim).to_i64 * 2_i64)
           rec_z_buf = Scratch.get(:frec_rec_z, (n_tokens * d_inner).to_i64 * sizeof(Float32))
@@ -6657,26 +6690,27 @@ module ML
           rec_v_buf = Scratch.get(:frec_rec_v, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           rec_attn_mid_buf = Scratch.get(:frec_rec_mid, (n_tokens * d_inner).to_i64 * sizeof(Float32))
           rec_attn_mid_h16_buf = Scratch.get(:frec_rec_mid_h16, (n_tokens * d_inner).to_i64 * 2_i64)
-          rec_attn_out_buf = Scratch.get(:frec_rec_attn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
-          rec_residual_buf = Scratch.get(:frec_rec_residual, inp.size.to_i64 * sizeof(Float32))
-          rec_normed_buf = Scratch.get(:frec_rec_normed, inp.size.to_i64 * sizeof(Float32))
-          rec_normed_h16_buf = Scratch.get(:frec_rec_normed_h16, inp.size.to_i64 * 2_i64)
+          rec_attn_out_buf = Scratch.get(:frec_rec_attn_out, hidden_bytes)
+          rec_residual_buf = Scratch.get(:frec_rec_residual, hidden_bytes)
+          rec_normed_buf = Scratch.get(:frec_rec_normed, hidden_bytes)
+          rec_normed_h16_buf = Scratch.get(:frec_rec_normed_h16, hidden_elems.to_i64 * 2_i64)
           rec_ffn_gate_buf = Scratch.get(:frec_rec_ffn_gate, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
           rec_ffn_up_buf = Scratch.get(:frec_rec_ffn_up, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
           rec_ffn_comb_buf = Scratch.get(:frec_rec_ffn_comb, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
           rec_ffn_comb_h16_buf = Scratch.get(:frec_rec_ffn_comb_h16, (n_tokens * rec_ffn_dim).to_i64 * 2_i64)
-          rec_ffn_out_buf = Scratch.get(:frec_rec_ffn_out, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+          rec_ffn_out_buf = Scratch.get(:frec_rec_ffn_out, hidden_bytes)
 
-          boundary_bytes = inp.size.to_i64 * sizeof(Float32)
-          t_upload0 = Time.instant if Profile.enabled?
-          inp_buf.write(inp)
-          if Profile.enabled?
-            t_upload1 = Time.instant
-            Profile.bump_group_transfer("#{profile_label}.boundary", boundary_bytes, 0_i64)
-            Profile.bump_group("#{profile_label}.upload",
-              (t_upload1 - t_upload0.not_nil!).total_nanoseconds.to_i64,
-              0_i64,
-              0_i64)
+          unless input_buf
+            t_upload0 = Time.instant if Profile.enabled?
+            inp_buf.write(inp)
+            if Profile.enabled?
+              t_upload1 = Time.instant
+              Profile.bump_group_transfer("#{profile_label}.boundary", hidden_bytes, 0_i64)
+              Profile.bump_group("#{profile_label}.upload",
+                (t_upload1 - t_upload0.not_nil!).total_nanoseconds.to_i64,
+                0_i64,
+                0_i64)
+            end
           end
           ConstCache.write_once("#{full_tag}_norm_w", full_norm_w_buf, attn_norm)
           ConstCache.write_once("#{full_tag}_qnorm", qnorm_buf, q_norm)
@@ -7303,25 +7337,33 @@ module ML
           end
 
           if phase_profile
+            if ob = output_buf
+              ob.copy_from(src_buf, hidden_bytes)
+            end
             t_read0 = Time.instant
-            result = read_shared_f32(src_buf, n_tokens * hidden_dim)
+            result = read_output ? read_shared_f32(src_buf, hidden_elems) : [] of Float32
             t_read = Time.instant
-            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, hidden_bytes) if read_output
             Profile.bump_group("#{profile_label}.read", 0_i64, 0_i64, (t_read - t_read0).total_nanoseconds.to_i64)
             return result
           end
 
+          if ob = output_buf
+            blit = ML::Metal::BlitEncoder.new(cmd)
+            blit.copy_buffer(src_buf, 0, ob, 0, hidden_bytes.to_i32)
+            blit.end_encoding
+          end
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
           cmd.wait
           t_wait = Time.instant if Profile.enabled?
-          result = read_shared_f32(src_buf, n_tokens * hidden_dim)
+          result = read_output ? read_shared_f32(src_buf, hidden_elems) : [] of Float32
           if Profile.enabled?
             t_read = Time.instant
             encode_ns = (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64
             wait_ns = (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64
-            read_ns = (t_read - t_wait.not_nil!).total_nanoseconds.to_i64
-            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, (n_tokens * hidden_dim).to_i64 * sizeof(Float32))
+            read_ns = read_output ? (t_read - t_wait.not_nil!).total_nanoseconds.to_i64 : 0_i64
+            Profile.bump_group_transfer("#{profile_label}.boundary", 0_i64, hidden_bytes) if read_output
             Profile.bump_dn(encode_ns, wait_ns, read_ns)
             Profile.bump_group(profile_label, encode_ns, wait_ns, read_ns)
           end
