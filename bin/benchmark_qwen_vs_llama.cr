@@ -25,20 +25,21 @@ def percentile(sorted : Array(Float64), pct : Int32) : Float64
   sorted[idx]
 end
 
-def measure_native_prefill(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32) : NativeStats
+def measure_native_prefill(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32,
+                           final_top1 : Bool = true) : NativeStats
   hp = w.hparams
   prompt = Array(Int32).new(n_prompt) { |i| ((i * 7 + 11) % 1000).to_i32 }
 
   warmup.times do
     state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
-    run_native_prefill(w, prompt, state)
+    run_native_prefill(w, prompt, state, final_top1: final_top1)
   end
 
   times = Array(Float64).new(reps)
   reps.times do
     state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
     t0 = Time.instant
-    run_native_prefill(w, prompt, state)
+    run_native_prefill(w, prompt, state, final_top1: final_top1)
     times << (Time.instant - t0).total_milliseconds
   end
 
@@ -55,14 +56,15 @@ def measure_native_prefill(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps :
   )
 end
 
-def measure_native_prefill_prepared_state(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32) : NativeStats
+def measure_native_prefill_prepared_state(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32,
+                                          final_top1 : Bool = true) : NativeStats
   hp = w.hparams
   prompt = Array(Int32).new(n_prompt) { |i| ((i * 7 + 11) % 1000).to_i32 }
 
   warmup.times do
     state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
     ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
-    run_native_prefill(w, prompt, state)
+    run_native_prefill(w, prompt, state, final_top1: final_top1)
   end
 
   times = Array(Float64).new(reps)
@@ -70,7 +72,7 @@ def measure_native_prefill_prepared_state(w : ML::GGUF::Qwen35Weights, n_prompt 
     state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
     ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
     t0 = Time.instant
-    run_native_prefill(w, prompt, state)
+    run_native_prefill(w, prompt, state, final_top1: final_top1)
     times << (Time.instant - t0).total_milliseconds
   end
 
@@ -112,24 +114,25 @@ def reset_prefill_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
   end
 end
 
-def measure_native_prefill_preallocated(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32) : NativeStats
+def measure_native_prefill_preallocated(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32,
+                                        final_top1 : Bool = true) : NativeStats
   hp = w.hparams
   prompt = Array(Int32).new(n_prompt) { |i| ((i * 7 + 11) % 1000).to_i32 }
   state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
 
   # Allocate the backing GPU state buffers once, outside the timed section.
-  run_native_prefill(w, prompt, state)
+  run_native_prefill(w, prompt, state, final_top1: final_top1)
   reset_prefill_state!(state)
 
   warmup.times do
-    run_native_prefill(w, prompt, state)
+    run_native_prefill(w, prompt, state, final_top1: final_top1)
     reset_prefill_state!(state)
   end
 
   times = Array(Float64).new(reps)
   reps.times do
     t0 = Time.instant
-    run_native_prefill(w, prompt, state)
+    run_native_prefill(w, prompt, state, final_top1: final_top1)
     times << (Time.instant - t0).total_milliseconds
     reset_prefill_state!(state)
   end
@@ -203,10 +206,15 @@ end
 
 def run_native_prefill(w : ML::GGUF::Qwen35Weights,
                        prompt : Array(Int32),
-                       state : ML::GGUF::Qwen35CPU::State) : Nil
+                       state : ML::GGUF::Qwen35CPU::State,
+                       final_top1 : Bool = true) : Nil
   return if prompt.empty?
 
-  ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+  if final_top1
+    ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+  else
+    ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
+  end
 end
 
 def forward_decode_token(w : ML::GGUF::Qwen35Weights, tok : Int32, pos : Int32,
@@ -312,6 +320,7 @@ native_decode_top1 = true
 native_prefill_cache = false
 native_prefill_prealloc = false
 native_prefill_prepare_state = false
+native_prefill_body_only = false
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
@@ -333,6 +342,7 @@ OptionParser.parse do |p|
   p.on("--llama-cache-v=TYPE", "llama.cpp KV cache V type for llama-bench, for example q4_0") { |v| llama_cache_type_v = v }
   p.on("--llama-extra-arg=ARG", "Append one raw argument to llama-bench; repeat for flag/value pairs") { |v| llama_extra_args << v }
   p.on("--native-full-logits", "Measure native decode with full lm-head logits instead of greedy top1") { native_decode_top1 = false }
+  p.on("--native-prefill-body-only", "Measure native prompt processing without the final output-head top1, matching llama-bench pp") { native_prefill_body_only = true }
   p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
   p.on("--native-prefill-prealloc", "Measure native prefill with state buffers allocated outside the timed loop") { native_prefill_prealloc = true }
   p.on("--native-prefill-prepare-state", "Prepare a fresh state's Metal buffers before each timed native prefill") { native_prefill_prepare_state = true }
@@ -364,11 +374,11 @@ w = ML::GGUF::Qwen35Weights.from_gguf(model)
 native_prefill = if native_prefill_cache
                    measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
                  elsif native_prefill_prealloc
-                   measure_native_prefill_preallocated(w, n_prompt, reps, warmup)
+                   measure_native_prefill_preallocated(w, n_prompt, reps, warmup, final_top1: !native_prefill_body_only)
                  elsif native_prefill_prepare_state
-                   measure_native_prefill_prepared_state(w, n_prompt, reps, warmup)
+                   measure_native_prefill_prepared_state(w, n_prompt, reps, warmup, final_top1: !native_prefill_body_only)
                  else
-                   measure_native_prefill(w, n_prompt, reps, warmup)
+                   measure_native_prefill(w, n_prompt, reps, warmup, final_top1: !native_prefill_body_only)
                  end
 native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_top1)
 
@@ -381,11 +391,11 @@ puts "llama-bench: #{llama_bench}"
 native_prefill_mode = if native_prefill_cache
                         "prompt_cache_restore_after_seed"
                       elsif native_prefill_prealloc
-                        "preallocated_state_chunked_prompt_plus_final_top1"
+                        native_prefill_body_only ? "preallocated_state_chunked_prompt_body_only" : "preallocated_state_chunked_prompt_plus_final_top1"
                       elsif native_prefill_prepare_state
-                        "prepared_state_chunked_prompt_plus_final_top1"
+                        native_prefill_body_only ? "prepared_state_chunked_prompt_body_only" : "prepared_state_chunked_prompt_plus_final_top1"
                       else
-                        "chunked_prompt_plus_final_top1"
+                        native_prefill_body_only ? "chunked_prompt_body_only" : "chunked_prompt_plus_final_top1"
                       end
 puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_top1 ? "top1" : "full_logits"}"
 puts
