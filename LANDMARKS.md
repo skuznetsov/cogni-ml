@@ -15922,3 +15922,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a required integer parameter with compact inclusive bounds. Transport carries enumerated `n\n` literals through tokenizer frontiers into constrained Q6 top1. Legal move is enabled only when `(maximum - minimum) < 256`; dual frame is greedy fallback for wide, exclusive, unbounded, or unsupported numeric schemas. Potential descends in `(numeric_value_entropy, freeform_value_steps, head_rows_scanned)` while keeping frontier size bounded.
 - adversary: This does not implement full JSON Schema numeric semantics (`exclusiveMinimum`, `multipleOf`, floats, unions). It also leaves parsed host values as strings until typed normalization is added.
 - trust: {F:0.88,G:0.52,R:0.80}
+
+
+**LM-557 Tool-call JSON normalization is schema-aware at the host boundary [shared/ml]**
+- status: IMPLEMENTED host-side typed normalization; model-facing XML unchanged
+- claim tested: Schema-aware normalization avoids the prior heuristic pitfall where string fields containing JSON-looking scalars could be coerced to numbers/bools incorrectly, while still emitting typed JSON for declared scalar parameters.
+- evidence: Added schema-aware overloads for `Qwen35Chat.tool_calls_to_json`, `tool_response_to_json`, and `tool_response_to_openai_json`; `qwen35_generate` passes `chat_tools` into all tool-call printers. Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_chat_spec.cr` -> `8 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with `read_file(path string, limit integer 1..5)` plus `QWEN35_TOOL_RESPONSE_JSON=simple` emitted `{"path":"README.md","limit":3}` in parsed/tool-response JSON.
+- diagnosis: This completes the current structured-decode loop from constrained schema value generation to typed host JSON. It does not alter model logits or Qwen XML syntax; it repairs the integration boundary for CrystalBall/OpenAI-style callers.
+- LTP/WBA: Window is the host serialization boundary after a parsed Qwen XML call. Transport carries parameter values through the tool schema frame into JSON types. Legal move is schema-local scalar coercion; dual frame is the old heuristic parser when no schema exists. Potential descends in `(type_mismatch_risk, harness_adapter_work, invalid_function_call_surface)` without touching model state.
+- adversary: Only basic scalar `type` values are handled. Full JSON Schema constructs (`oneOf`, nullable unions, arrays, objects, formats) remain fallback or require explicit adapter logic.
+- trust: {F:0.88,G:0.56,R:0.82}

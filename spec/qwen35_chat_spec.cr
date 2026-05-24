@@ -49,6 +49,37 @@ describe ML::GGUF::Qwen35Chat do
     call["arguments"]["exact"].as_bool.should be_true
   end
 
+  it "uses tool schema when normalizing typed arguments" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{
+        "path":{"type":"string"},
+        "limit":{"type":"integer"},
+        "exact":{"type":"boolean"}
+      },"required":["path"]}}}
+    ]))
+    text = "<tool_call>\n<function=read_file>\n<parameter=path>\n3\n</parameter>\n<parameter=limit>\n3\n</parameter>\n<parameter=exact>\ntrue\n</parameter>\n</function>\n</tool_call>"
+    calls = ML::GGUF::Qwen35Chat.parse_tool_calls(text)
+    payload = JSON.parse(ML::GGUF::Qwen35Chat.tool_response_to_json(calls, nil, tools))
+    args = payload["tool_calls"][0]["arguments"]
+
+    args["path"].as_s.should eq("3")
+    args["limit"].as_i.should eq(3)
+    args["exact"].as_bool.should be_true
+  end
+
+  it "uses tool schema for OpenAI-style function arguments" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"set_limit","parameters":{"type":"object","properties":{
+        "limit":{"type":"integer"}
+      },"required":["limit"]}}}
+    ]))
+    calls = [ML::GGUF::Qwen35Chat::ToolCall.new("set_limit", {"limit" => "3"})]
+    payload = JSON.parse(ML::GGUF::Qwen35Chat.tool_response_to_openai_json(calls, nil, tools))
+    args = JSON.parse(payload["tool_calls"][0]["function"]["arguments"].as_s)
+
+    args["limit"].as_i.should eq(3)
+  end
+
   it "can emit OpenAI-style tool call wrappers" do
     calls = [ML::GGUF::Qwen35Chat::ToolCall.new("grep", {"pattern" => "class Foo"})]
     payload = JSON.parse(ML::GGUF::Qwen35Chat.tool_response_to_openai_json(calls))

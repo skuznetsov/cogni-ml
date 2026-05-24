@@ -347,7 +347,10 @@ ensure
   end
 end
 
-def print_qwen_tool_calls_if_any(text : String, chat_mode : Bool, tool_response_json_format : String) : Nil
+def print_qwen_tool_calls_if_any(text : String,
+                                 chat_mode : Bool,
+                                 tool_response_json_format : String,
+                                 tools : Array(JSON::Any) = [] of JSON::Any) : Nil
   return unless chat_mode || !tool_response_json_format.empty?
 
   calls = ML::GGUF::Qwen35Chat.parse_tool_calls(text)
@@ -355,15 +358,15 @@ def print_qwen_tool_calls_if_any(text : String, chat_mode : Bool, tool_response_
 
   unless calls.empty?
     puts "\n=== Parsed tool calls ==="
-    puts ML::GGUF::Qwen35Chat.tool_calls_to_json(calls)
+    puts ML::GGUF::Qwen35Chat.tool_calls_to_json(calls, tools)
   end
 
   unless tool_response_json_format.empty?
     puts "\n=== Tool response JSON ==="
     if tool_response_json_format == "openai"
-      puts ML::GGUF::Qwen35Chat.tool_response_to_openai_json(calls, content)
+      puts ML::GGUF::Qwen35Chat.tool_response_to_openai_json(calls, content, tools)
     else
-      puts ML::GGUF::Qwen35Chat.tool_response_to_json(calls, content)
+      puts ML::GGUF::Qwen35Chat.tool_response_to_json(calls, content, tools)
     end
   end
 end
@@ -415,7 +418,7 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled
     puts output_text
     puts "\n=== Full output ==="
     puts model_prompt + output_text.not_nil!
-    print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode, tool_response_json_format)
+    print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode, tool_response_json_format, chat_tools)
     exit
   elsif tokenized_hit = cache_store.not_nil!.lookup_tokenized_prompt_for_model(cache_model, model_prompt)
     token_cache_hit = true
@@ -454,7 +457,7 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled
             puts output_text
             puts "\n=== Full output ==="
             puts model_prompt + output_text.not_nil!
-            print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode, tool_response_json_format)
+            print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode, tool_response_json_format, chat_tools)
             exit
           end
         end
@@ -531,7 +534,7 @@ if prompt_cache_preweight_fast_forward_enabled && (source = source_history_hit)
         puts generated_text
         puts "\n=== Full output ==="
         puts model_prompt + generated_text
-        print_qwen_tool_calls_if_any(generated_text, chat_mode, tool_response_json_format)
+        print_qwen_tool_calls_if_any(generated_text, chat_mode, tool_response_json_format, chat_tools)
         exit
       end
     end
@@ -1375,4 +1378,4 @@ puts "\n=== Generated text ==="
 puts final_generated_text
 puts "\n=== Full output ==="
 puts model_prompt + final_generated_text
-print_qwen_tool_calls_if_any(final_generated_text, chat_mode, tool_response_json_format)
+print_qwen_tool_calls_if_any(final_generated_text, chat_mode, tool_response_json_format, chat_tools)

@@ -2748,3 +2748,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_556:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `11 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with `read_file(path string, limit integer 1..5)` generated and parsed `path=README.md`, `limit=3`, and reported `stage_steps=...value_literal:2 freeform_value_steps=3 value_boundary_hits=1 finite_value_params=1`, showing only the string path remained free-form.
 
 **next_update_556:** Next exact structured-decode targets: typed host-side argument normalization, optional-parameter selection policy, and bounded pattern/string grammars for common filename/path constraints. Keep wide numeric ranges and arbitrary strings as fallback unless the grammar frontier is compact.
+
+
+**decision_update_557:** Added schema-aware host-side tool argument normalization. `Qwen35Chat.tool_calls_to_json`, `tool_response_to_json`, and `tool_response_to_openai_json` now accept the tool schema and coerce basic scalar parameters according to `type` (`string`, `boolean`, `integer`, `number`) instead of relying only on heuristic JSON parsing. `qwen35_generate` passes `QWEN35_TOOLS_JSON` into these serializers, so string fields like `path="3"` stay strings while bounded integer fields like `limit="3"` become JSON numbers.
+
+**evidence_update_557:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_chat_spec.cr` -> `8 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with `read_file(path string, limit integer 1..5)` and `QWEN35_TOOL_RESPONSE_JSON=simple` generated a parsed call where `path` remained `"README.md"` and `limit` emitted as numeric `3` in both `=== Parsed tool calls ===` and `=== Tool response JSON ===`.
+
+**next_update_557:** Next structured function-calling work: optional parameter policy and schema-aware OpenAI/CrystalBall harness tests in `../crystal_ball`. Keep model-facing XML unchanged; continue improving the host boundary and exact constrained corridors.

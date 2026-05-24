@@ -450,7 +450,9 @@ QWEN35_TOOLS_JSON='[{"type":"function","function":{"name":"read_file","descripti
 ```
 
 The emitted `=== Tool response JSON ===` block uses the CrystalBall-compatible
-shape:
+shape. When `QWEN35_TOOLS_JSON` is available, argument normalization is
+schema-aware for basic scalar types, so string fields stay strings while
+integer/number/boolean fields are emitted as typed JSON values:
 
 ```json
 {"content":null,"tool_calls":[{"name":"read_file","arguments":{"path":"src/foo.cr"}}]}
@@ -766,7 +768,7 @@ Useful Qwen environment switches:
 | `QWEN35_CHAT_SYSTEM="..."` | Optional system message used by the chat-template renderer. |
 | `QWEN35_TOOLS_JSON='[...]'` | Enable Qwen XML-style function-calling prompt rendering and parsed `<tool_call>` output reporting. The value must be a JSON array of tool definitions. |
 | `QWEN35_MESSAGES_JSON='[...]'` | Render an OpenAI/CrystalBall-style message array through the Qwen chat-template path. Supports `user`, `system`, `assistant` with `tool_calls`, and `tool` messages. |
-| `QWEN35_TOOL_RESPONSE_JSON=simple\|openai` | Emit a machine-readable `=== Tool response JSON ===` block after generation. `simple` matches CrystalBall's local provider shape; `openai` wraps calls as OpenAI-style function tool calls. |
+| `QWEN35_TOOL_RESPONSE_JSON=simple\|openai` | Emit a machine-readable `=== Tool response JSON ===` block after generation. `simple` matches CrystalBall's local provider shape; `openai` wraps calls as OpenAI-style function tool calls. With `QWEN35_TOOLS_JSON`, scalar arguments are normalized using the tool schema where possible. |
 | `QWEN35_CONSTRAINED_LITERAL_PREFIX='...'` | Experimental greedy-only constrained decoding probe. Forces an exact literal prefix using tokenizer-derived allowed-token frontiers and the constrained Q6 head path, then falls back to normal greedy decode after the literal completes. Currently incompatible with prompt-cache/speculative/n-gram fast paths. |
 | `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1` | Experimental greedy-only structured tool-call mode. Requires `QWEN35_TOOLS_JSON`; constrains Qwen XML `<tool_call>\n<function=...>\n` prefixes over the available function names, required `<parameter=...>\n` tags in schema order, constrains finite enum/boolean values and small bounded integer ranges, falls back for free-form single-line values, constrains the inter-parameter and final closing tags after value newlines, stops generation after a complete constrained tool call, and emits a `tool constraint summary` line with constrained-stage and free-form fallback counts. |
 | `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk gating; explicit policy overrides legacy mode envs. |

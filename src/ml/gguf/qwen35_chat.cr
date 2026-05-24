@@ -102,29 +102,39 @@ module ML::GGUF
     end
 
     def self.tool_calls_to_json(calls : Array(ToolCall)) : String
+      tool_calls_to_json(calls, [] of JSON::Any)
+    end
+
+    def self.tool_calls_to_json(calls : Array(ToolCall), tools : Array(JSON::Any)) : String
+      schemas = tool_argument_schemas(tools)
       String.build do |io|
         io << '['
         calls.each_with_index do |call, i|
           io << ',' if i > 0
-          io << {"name" => call.name, "arguments" => call.arguments}.to_json
+          io << JSON::Any.new({
+            "name"      => JSON::Any.new(call.name),
+            "arguments" => JSON::Any.new(argument_json_hash(call, schemas[call.name]?)),
+          }).to_json
         end
         io << ']'
       end
     end
 
-    def self.tool_response_to_json(calls : Array(ToolCall), content : String? = nil) : String
+    def self.tool_response_to_json(calls : Array(ToolCall), content : String? = nil, tools : Array(JSON::Any) = [] of JSON::Any) : String
+      schemas = tool_argument_schemas(tools)
       payload = Hash(String, JSON::Any).new
       payload["content"] = content && !content.empty? ? JSON::Any.new(content) : JSON::Any.new(nil)
       payload["tool_calls"] = JSON::Any.new(calls.map do |call|
         JSON::Any.new({
           "name"      => JSON::Any.new(call.name),
-          "arguments" => JSON::Any.new(argument_json_hash(call)),
+          "arguments" => JSON::Any.new(argument_json_hash(call, schemas[call.name]?)),
         })
       end)
       payload.to_json
     end
 
-    def self.tool_response_to_openai_json(calls : Array(ToolCall), content : String? = nil) : String
+    def self.tool_response_to_openai_json(calls : Array(ToolCall), content : String? = nil, tools : Array(JSON::Any) = [] of JSON::Any) : String
+      schemas = tool_argument_schemas(tools)
       payload = Hash(String, JSON::Any).new
       payload["content"] = content && !content.empty? ? JSON::Any.new(content) : JSON::Any.new(nil)
       payload["tool_calls"] = JSON::Any.new(calls.map_with_index do |call, i|
@@ -133,7 +143,7 @@ module ML::GGUF
           "type"     => JSON::Any.new("function"),
           "function" => JSON::Any.new({
             "name"      => JSON::Any.new(call.name),
-            "arguments" => JSON::Any.new(arguments_to_json(call)),
+            "arguments" => JSON::Any.new(arguments_to_json(call, schemas[call.name]?)),
           }),
         })
       end)
@@ -266,19 +276,48 @@ module ML::GGUF
       args
     end
 
-    private def self.argument_json_hash(call : ToolCall) : Hash(String, JSON::Any)
+    private def self.tool_argument_schemas(tools : Array(JSON::Any)) : Hash(String, Hash(String, Hash(String, JSON::Any)))
+      schemas = {} of String => Hash(String, Hash(String, JSON::Any))
+      tools.each do |tool|
+        obj = tool.as_h?
+        next unless obj
+        function = obj["function"]?.try(&.as_h?)
+        next unless function
+        name = function["name"]?.try(&.as_s?)
+        next unless name && !name.empty?
+
+        parameters = function["parameters"]?.try(&.as_h?)
+        properties = parameters.try { |p| p["properties"]?.try(&.as_h?) }
+        next unless properties
+
+        by_parameter = {} of String => Hash(String, JSON::Any)
+        properties.each do |parameter_name, raw_schema|
+          schema = raw_schema.as_h?
+          by_parameter[parameter_name] = schema if schema
+        end
+        schemas[name] = by_parameter unless by_parameter.empty?
+      end
+      schemas
+    end
+
+    private def self.argument_json_hash(call : ToolCall, schemas : Hash(String, Hash(String, JSON::Any))? = nil) : Hash(String, JSON::Any)
       args = Hash(String, JSON::Any).new
       call.arguments.each do |key, value|
-        args[key] = argument_value_to_json_any(value)
+        args[key] = argument_value_to_json_any(value, schemas.try(&.[key]?))
       end
       args
     end
 
-    private def self.arguments_to_json(call : ToolCall) : String
-      JSON::Any.new(argument_json_hash(call)).to_json
+    private def self.arguments_to_json(call : ToolCall, schemas : Hash(String, Hash(String, JSON::Any))? = nil) : String
+      JSON::Any.new(argument_json_hash(call, schemas)).to_json
     end
 
-    private def self.argument_value_to_json_any(value : String) : JSON::Any
+    private def self.argument_value_to_json_any(value : String, schema : Hash(String, JSON::Any)? = nil) : JSON::Any
+      if schema
+        typed = schema_argument_value_to_json_any(value, schema)
+        return typed if typed
+      end
+
       stripped = value.strip
       unless stripped.empty?
         begin
@@ -288,6 +327,29 @@ module ML::GGUF
         end
       end
       JSON::Any.new(value)
+    end
+
+    private def self.schema_argument_value_to_json_any(value : String, schema : Hash(String, JSON::Any)) : JSON::Any?
+      stripped = value.strip
+      type_name = schema["type"]?.try(&.as_s?)
+
+      case type_name
+      when "string"
+        JSON::Any.new(value)
+      when "boolean"
+        return JSON::Any.new(true) if stripped == "true"
+        return JSON::Any.new(false) if stripped == "false"
+        nil
+      when "integer"
+        return nil unless stripped.matches?(/\A-?\d+\z/)
+        JSON::Any.new(stripped.to_i64)
+      when "number"
+        parsed = JSON.parse(stripped) rescue nil
+        return parsed if parsed && (parsed.raw.is_a?(Int64) || parsed.raw.is_a?(Float64))
+        nil
+      else
+        nil
+      end
     end
   end
 end
