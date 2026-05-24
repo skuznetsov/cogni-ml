@@ -143,5 +143,11 @@ module ML::GGUF
     def self.qwen_single_parameter_close_options : Array(String)
       ["</parameter>\n</function>\n</tool_call>"]
     end
+
+    def self.qwen_parameter_continue_options(parameter_names : Array(String)) : Array(String)
+      parameter_names.reject(&.empty?).uniq.map do |name|
+        "</parameter>\n<parameter=#{name}>\n"
+      end
+    end
   end
 end

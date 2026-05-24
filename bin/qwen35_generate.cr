@@ -233,44 +233,65 @@ end
 
 def advance_tool_literal_stage(stage : String,
                                emitted : String,
-                               required_by_function : Hash(String, Array(String))) : {String, Array(String)}
-  if stage == "first_parameter"
-    return {"value", [] of String}
+                               required_by_function : Hash(String, Array(String)),
+                               required_parameters : Array(String),
+                               parameter_index : Int32) : {String, Array(String), Array(String), Int32, Bool}
+  if stage == "parameter_open"
+    return {"value", [] of String, required_parameters, parameter_index, true}
+  end
+
+  if stage == "parameter_separator"
+    return {"value", [] of String, required_parameters, parameter_index + 1, true}
   end
 
   if stage == "closing_parameter"
-    return {"done", [] of String}
+    return {"done", [] of String, required_parameters, parameter_index, false}
   end
 
-  return {stage, [] of String} unless stage == "function_prefix"
+  return {stage, [] of String, required_parameters, parameter_index, false} unless stage == "function_prefix"
 
   required_by_function.each do |function_name, required|
     next unless emitted.ends_with?("<function=#{function_name}>\n")
     next if required.empty?
 
     options = ML::GGUF::Qwen35Constraints.qwen_parameter_open_options([required[0]])
-    return {"first_parameter", options}
+    return {"parameter_open", options, required, 0, false}
   end
 
-  {"done", [] of String}
+  {"done", [] of String, required_parameters, parameter_index, false}
 end
 
 def maybe_start_tool_value_close(stage : String,
-                                 value_text : String) : {String, Array(String)}
-  return {stage, [] of String} unless stage == "value"
+                                 value_text : String,
+                                 required_parameters : Array(String),
+                                 parameter_index : Int32) : {String, Array(String), Int32, String}
+  return {stage, [] of String, parameter_index, value_text} unless stage == "value"
   newline_index = value_text.index('\n')
-  return {stage, [] of String} unless newline_index
-  return {stage, [] of String} if value_text[0...newline_index].strip.empty?
+  return {stage, [] of String, parameter_index, value_text} unless newline_index
+  return {stage, [] of String, parameter_index, value_text} if value_text[0...newline_index].strip.empty?
 
-  close_options = ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options
+  next_parameter_index = parameter_index + 1
+  has_next_parameter = next_parameter_index < required_parameters.size
+  close_stage = has_next_parameter ? "parameter_separator" : "closing_parameter"
+  close_options = if has_next_parameter
+                    ML::GGUF::Qwen35Constraints.qwen_parameter_continue_options([required_parameters[next_parameter_index]])
+                  else
+                    ML::GGUF::Qwen35Constraints.qwen_single_parameter_close_options
+                  end
   emitted_after_newline = value_text[(newline_index + 1)..]
-  return {"closing_parameter", close_options} if emitted_after_newline.empty?
+  return {close_stage, close_options, parameter_index, value_text} if emitted_after_newline.empty?
 
   remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(close_options, emitted_after_newline)
-  return {"done", [] of String} if literal_constraint_complete?(remaining)
-  return {stage, [] of String} if remaining.empty?
+  if literal_constraint_complete?(remaining)
+    if has_next_parameter
+      return {"value", [] of String, next_parameter_index, ""}
+    else
+      return {"done", [] of String, parameter_index, value_text}
+    end
+  end
+  return {stage, [] of String, parameter_index, value_text} if remaining.empty?
 
-  {"closing_parameter", remaining}
+  {close_stage, remaining, parameter_index, value_text}
 end
 
 def resync_draft!(weights : ML::GGUF::Qwen35Weights,
@@ -529,6 +550,8 @@ literal_constrained_steps = 0
 literal_emitted = ""
 tool_value_text = ""
 tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
+tool_required_sequence = [] of String
+tool_parameter_index = 0
 unless literal_remaining.empty?
   label = constrained_tool_call_prefix_enabled ? "tool-call prefix options=#{literal_remaining.size}" : constrained_literal_prefix.not_nil!.inspect
   STDOUT << "Constrained literal prefix enabled: #{label}\n"
@@ -698,8 +721,9 @@ if output_ids.empty?
         literal_constrained_steps += 1
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
-          tool_literal_stage, literal_remaining = advance_tool_literal_stage(
-            tool_literal_stage, literal_emitted, tool_required_parameters)
+          tool_literal_stage, literal_remaining, tool_required_sequence, tool_parameter_index, reset_tool_value = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters, tool_required_sequence, tool_parameter_index)
+          tool_value_text = "" if reset_tool_value
         end
       end
     end
@@ -707,10 +731,13 @@ if output_ids.empty?
     generated_piece = tok.decode_single(top)
     if !constrained_generated && constrained_tool_call_prefix_enabled && literal_remaining.empty? && tool_literal_stage == "value"
       tool_value_text += generated_piece
-      next_stage, next_literals = maybe_start_tool_value_close(tool_literal_stage, tool_value_text)
-      unless next_literals.empty?
+      next_stage, next_literals, next_parameter_index, next_value_text = maybe_start_tool_value_close(
+        tool_literal_stage, tool_value_text, tool_required_sequence, tool_parameter_index)
+      if next_stage != tool_literal_stage || !next_literals.empty?
         tool_literal_stage = next_stage
         literal_remaining = next_literals
+        tool_parameter_index = next_parameter_index
+        tool_value_text = next_value_text
       end
     end
     dt = (Time.instant - tstart).total_seconds
@@ -1182,6 +1209,8 @@ else
   puts "\nGenerating #{n_gen} tokens greedily..."
   decode_t0 = Time.instant
   (n_gen - 1).times do |g_i|
+    break if constrained_tool_call_prefix_enabled && tool_literal_stage == "done"
+
     prev = output_ids.last
     tstart = Time.instant
     constrained_generated = false
@@ -1195,8 +1224,9 @@ else
         literal_constrained_steps += 1
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
-          tool_literal_stage, literal_remaining = advance_tool_literal_stage(
-            tool_literal_stage, literal_emitted, tool_required_parameters)
+          tool_literal_stage, literal_remaining, tool_required_sequence, tool_parameter_index, reset_tool_value = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters, tool_required_sequence, tool_parameter_index)
+          tool_value_text = "" if reset_tool_value
         end
       end
     end
@@ -1204,10 +1234,13 @@ else
     piece = tok.decode_single(top)
     if !constrained_generated && constrained_tool_call_prefix_enabled && literal_remaining.empty? && tool_literal_stage == "value"
       tool_value_text += piece
-      next_stage, next_literals = maybe_start_tool_value_close(tool_literal_stage, tool_value_text)
-      unless next_literals.empty?
+      next_stage, next_literals, next_parameter_index, next_value_text = maybe_start_tool_value_close(
+        tool_literal_stage, tool_value_text, tool_required_sequence, tool_parameter_index)
+      if next_stage != tool_literal_stage || !next_literals.empty?
         tool_literal_stage = next_stage
         literal_remaining = next_literals
+        tool_parameter_index = next_parameter_index
+        tool_value_text = next_value_text
       end
     end
     if trace_steps
@@ -1216,6 +1249,7 @@ else
     end
     output_ids << top
     pos += 1
+    break if constrained_tool_call_prefix_enabled && tool_literal_stage == "done"
     break if top == tok.eos_id
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds

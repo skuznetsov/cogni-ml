@@ -2720,3 +2720,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_552:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `7 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with one `read_file(path)` tool generated a complete parsed Qwen XML tool call ending in `</parameter>\n</function>\n</tool_call>`, emitted parsed JSON `[{"name":"read_file","arguments":{"path":"README.md"}}]`, and reported `literal_constrained_steps=28` for 31 generated tokens.
 
 **next_update_552:** Generalize the structured controller beyond the single-parameter happy path: remaining required parameters, schema-specific value grammars for strings/numbers/enums, multi-tool ambiguity, and fallback telemetry for states where the grammar cannot certify a small allowed-token frontier.
+
+
+**decision_update_553:** Generalized the opt-in Qwen XML tool-call controller from one required parameter to ordered multi-required-parameter corridors. After each non-empty single-line value newline, the controller either constrains `</parameter>\n<parameter=<next>>\n` for the next required field or the final `</parameter>\n</function>\n</tool_call>` close. Greedy generation now stops once the constrained tool call reaches the `done` stage, avoiding suffix drift after a complete XML call.
+
+**evidence_update_553:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `8 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with `read_file(path,limit)` generated a complete two-parameter tool call, stopped at 43 output tokens despite a 64-token request, parsed JSON `[{"name":"read_file","arguments":{"path":"README.md","limit":"3"}}]`, and reported `literal_constrained_steps=38`.
+
+**next_update_553:** Add schema-specific value frontiers for low-risk scalar cases: enums first, then booleans/integers with bounded textual regex, while preserving fallback for free-form or multiline values. Add telemetry for why a constrained state falls back.

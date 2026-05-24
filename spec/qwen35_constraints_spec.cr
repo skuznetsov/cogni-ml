@@ -94,4 +94,10 @@ describe ML::GGUF::Qwen35Constraints do
       "ameter>\n</function>\n</tool_call>",
     ])
   end
+
+  it "renders parameter continuation options" do
+    ML::GGUF::Qwen35Constraints.qwen_parameter_continue_options(["limit"]).should eq([
+      "</parameter>\n<parameter=limit>\n",
+    ])
+  end
 end
