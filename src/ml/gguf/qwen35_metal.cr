@@ -6100,7 +6100,8 @@ module ML
                                                     heads_per_group : Int32,
                                                     rope_freq_base : Float32,
                                                     eps : Float32,
-                                                    scale : Float32) : Array(Float32)?
+                                                    scale : Float32,
+                                                    input_buf : ML::MetalBuffer? = nil) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -6118,17 +6119,22 @@ module ML
           q_dim = n_head * head_dim
           kv_dim = n_head_kv * head_dim
           ffn_dim = ffn_gate_qw.out_dim
-          raise "final full-attn input size mismatch" unless inp.size == n_tokens * hidden_dim
+          hidden_bytes = (n_tokens * hidden_dim).to_i64 * sizeof(Float32)
+          if ib = input_buf
+            raise "final full-attn input buffer too small" if ib.size < hidden_bytes
+          else
+            raise "final full-attn input size mismatch" unless inp.size == n_tokens * hidden_dim
+          end
 
           final_pos = start_pos + n_tokens - 1
           last_offset = (n_tokens - 1) * hidden_dim
-          last_x = inp[last_offset, hidden_dim]
           last_byte_offset = last_offset.to_i64 * sizeof(Float32)
+          last_x = input_buf ? nil : inp[last_offset, hidden_dim]
 
-          inp_buf = Scratch.get(:full_last_inp, inp.size.to_i64 * sizeof(Float32))
+          inp_buf = input_buf || Scratch.get(:full_last_inp, hidden_bytes)
           last_inp_buf = Scratch.get(:full_last_last_inp, hidden_dim.to_i64 * sizeof(Float32))
           norm_w_buf = Scratch.get(:full_last_norm_w, attn_norm.size.to_i64 * sizeof(Float32))
-          cur_buf = Scratch.get(:full_last_cur, inp.size.to_i64 * sizeof(Float32))
+          cur_buf = Scratch.get(:full_last_cur, hidden_bytes)
           qfull_buf = Scratch.get(:full_last_qfull, q_qw.out_dim.to_i64 * sizeof(Float32))
           q_buf = Scratch.get(:full_last_q, q_dim.to_i64 * sizeof(Float32))
           gate_buf = Scratch.get(:full_last_gate, q_dim.to_i64 * sizeof(Float32))
@@ -6147,8 +6153,8 @@ module ML
           ffn_out_buf = Scratch.get(:full_last_ffn_out, ffn_down_qw.out_dim.to_i64 * sizeof(Float32))
           out_buf = Scratch.get(:full_last_out, hidden_dim.to_i64 * sizeof(Float32))
 
-          inp_buf.write(inp)
-          last_inp_buf.write(last_x)
+          inp_buf.write(inp) unless input_buf
+          last_inp_buf.write(last_x.not_nil!) unless input_buf
           norm_w_buf.write(attn_norm)
           qnorm_buf.write(q_norm)
           knorm_buf.write(k_norm)
@@ -6164,6 +6170,12 @@ module ML
 
           t0 = Time.instant if Profile.enabled?
           cmd = ML::Metal::CommandBuffer.new
+
+          if input_buf
+            blit = ML::Metal::BlitEncoder.new(cmd)
+            blit.copy_buffer(inp_buf, last_byte_offset.to_i32, last_inp_buf, 0, (hidden_dim * sizeof(Float32)).to_i32)
+            blit.end_encoding
+          end
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_rmsnorm_rows(norm_enc, inp_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)

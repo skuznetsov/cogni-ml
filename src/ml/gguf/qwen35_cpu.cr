@@ -911,7 +911,8 @@ module ML::GGUF
                                                         lstate : LayerState,
                                                         lw : Qwen35FullAttnWeights,
                                                         hp : Qwen35Hparams,
-                                                        max_seq : Int32) : Array(Float32)?
+                                                        max_seq : Int32,
+                                                        input_buf : ML::MetalBuffer? = nil) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_FINAL_FULL_LAST_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -949,6 +950,7 @@ module ML::GGUF
           start_pos, n_tokens,
           hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
           hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
+          input_buf: input_buf,
         )
       {% else %}
         nil
@@ -2188,6 +2190,29 @@ module ML::GGUF
            metal_qw_supported?(last_layer.ffn_gate_qw) &&
            metal_qw_supported?(last_layer.ffn_up_qw) &&
            metal_qw_supported?(last_layer.ffn_down_qw)
+          if ENV["QWEN35_PREFILL_TOP1_RESIDENT_LAST"]? == "1" &&
+             ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1"
+            hp = weights.hparams
+            prefix_buf = ML::MetalBuffer.new((token_ids.size * hp.n_embd).to_i64 * sizeof(Float32))
+            resident_written = [false]
+            prefill_tokens_hidden(weights, token_ids, start_pos, state,
+              stop_layer: weights.layers.size - 1,
+              need_output: false,
+              resident_output_buf: prefix_buf,
+              resident_output_written: resident_written)
+            raise "resident final-prefix prefill did not produce a GPU buffer" unless resident_written[0]
+            if last = final_full_attn_layer_chunk_last_routed([] of Float32, token_ids.size, start_pos, state.layers[-1], last_layer, hp, state.max_seq, input_buf: prefix_buf)
+              if top1 = output_project_top1_routed(last, weights.output_norm, weights.output, hp.rms_eps)
+                return top1
+              end
+              rms_norm!(last, weights.output_norm, hp.rms_eps)
+              logits = qmatvec_nobias(weights.output, last)
+              maxv = logits.max
+              return {logits.index(maxv).not_nil!.to_i32, maxv}
+            end
+            raise "resident final-prefix route failed after state mutation"
+          end
+
           x_before_last = prefill_tokens_hidden(weights, token_ids, start_pos, state, stop_layer: weights.layers.size - 1)
           if last = final_full_attn_layer_chunk_last_routed(x_before_last, token_ids.size, start_pos, state.layers[-1], last_layer, weights.hparams, state.max_seq)
             hp = weights.hparams
@@ -2426,7 +2451,9 @@ module ML::GGUF
                                       checkpoint_index : Int32? = nil,
                                       checkpoint_state : State? = nil,
                                       checkpoint_rollback_log : Bool = false,
-                                      need_output : Bool = true) : Array(Float32)
+                                      need_output : Bool = true,
+                                      resident_output_buf : ML::MetalBuffer? = nil,
+                                      resident_output_written : Array(Bool)? = nil) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
       checkpoint_requested = !checkpoint_index.nil? || !checkpoint_state.nil?
       if checkpoint_requested
@@ -2527,6 +2554,7 @@ module ML::GGUF
         in Qwen35FullAttnWeights
           fused_read_output = true
           fused_output_buf = nil.as(ML::MetalBuffer?)
+          fused_resident_final = false
           # LTP/WBA corridor: carry hidden rows across supported prefill groups
           # without exposing them to the host unless this is the final requested output.
           if ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" && !checkpoint_requested
@@ -2545,6 +2573,11 @@ module ML::GGUF
                 fused_output_buf = handoff_b
               end
               handoff_flip = !handoff_flip
+            elsif !fused_read_output && predicted_run_end >= layer_limit
+              if rb = resident_output_buf
+                fused_output_buf = rb
+                fused_resident_final = true
+              end
             end
           end
           flush_prefill_cmd.call if fused_read_output
@@ -2564,6 +2597,7 @@ module ML::GGUF
             elsif ob = fused_output_buf
               x = [] of Float32
               gpu_hidden = ob
+              resident_output_written.try { |flag| flag[0] = true } if fused_resident_final
             else
               flush_prefill_cmd.call
               return [] of Float32 unless need_output
@@ -2669,6 +2703,7 @@ module ML::GGUF
               if supported
                 rec_read_output = true
                 rec_output_buf = nil.as(ML::MetalBuffer?)
+                rec_resident_final = false
                 if ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" && !checkpoint_requested
                   rec_read_output = need_output && run_end >= layer_limit
                   if !rec_read_output && run_end < layer_limit
@@ -2680,6 +2715,11 @@ module ML::GGUF
                       rec_output_buf = handoff_b
                     end
                     handoff_flip = !handoff_flip
+                  elsif !rec_read_output && run_end >= layer_limit
+                    if rb = resident_output_buf
+                      rec_output_buf = rb
+                      rec_resident_final = true
+                    end
                   end
                 end
                 flush_prefill_cmd.call if rec_read_output
@@ -2702,6 +2742,7 @@ module ML::GGUF
                   elsif ob = rec_output_buf
                     x = [] of Float32
                     gpu_hidden = ob
+                    resident_output_written.try { |flag| flag[0] = true } if rec_resident_final
                   else
                     flush_prefill_cmd.call
                     return [] of Float32 unless need_output
