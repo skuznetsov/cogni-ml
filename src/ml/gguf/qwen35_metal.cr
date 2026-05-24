@@ -220,6 +220,9 @@ module ML
         @@ffn_pca_updown_fused_pipeline : ML::Metal::ComputePipeline?
         @@ffn_pca_updown_fused_rows_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
+        @@attn_gqa4_pipeline : ML::Metal::ComputePipeline?
+        @@attn_splitk_stage1_pipeline : ML::Metal::ComputePipeline?
+        @@attn_splitk_stage2_pipeline : ML::Metal::ComputePipeline?
         @@f32_to_f16_pipeline : ML::Metal::ComputePipeline?
         @@f16_to_f32_pipeline : ML::Metal::ComputePipeline?
         @@ffn_swiglu_pipeline : ML::Metal::ComputePipeline?
@@ -1198,6 +1201,24 @@ module ML
         private def self.attn_pipeline : ML::Metal::ComputePipeline
           @@attn_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode") {
             ML::Metal::ComputePipeline.new("qwen35_attn_decode", ATTN_DECODE_SOURCE)
+          }
+        end
+
+        private def self.attn_gqa4_pipeline : ML::Metal::ComputePipeline
+          @@attn_gqa4_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_gqa4") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_gqa4", ATTN_DECODE_SOURCE)
+          }
+        end
+
+        private def self.attn_splitk_stage1_pipeline : ML::Metal::ComputePipeline
+          @@attn_splitk_stage1_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_splitk_stage1") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_splitk_stage1", ATTN_DECODE_SOURCE)
+          }
+        end
+
+        private def self.attn_splitk_stage2_pipeline : ML::Metal::ComputePipeline
+          @@attn_splitk_stage2_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_splitk_stage2") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_splitk_stage2", ATTN_DECODE_SOURCE)
           }
         end
 
@@ -2626,6 +2647,15 @@ module ML
           return 2 unless raw
           value = raw.to_i? || 0
           value > 0 ? value : 0
+        end
+
+        private def self.attn_splitk_min_context : Int32
+          (ENV["QWEN35_ATTN_SPLITK_MIN_CTX"]? || "512").to_i32
+        end
+
+        private def self.attn_splitk_chunk_size : Int32
+          value = (ENV["QWEN35_ATTN_SPLITK_CHUNK"]? || "128").to_i32
+          value > 0 ? value : 128
         end
 
         private def self.can_use_head_top1_fused?(output_qw : QuantWeight) : Bool
@@ -7996,6 +8026,11 @@ module ML
           v_buf = Scratch.get(:wave_v, kv_dim.to_i64 * sizeof(Float32))
           attn_buf = Scratch.get(:wave_attn, q_dim.to_i64 * sizeof(Float32))
           attn_out_buf = Scratch.get(:wave_attn_out, hidden_dim.to_i64 * sizeof(Float32))
+          splitk_chunk = attn_splitk_chunk_size
+          splitk_blocks = ((pos + 1) + splitk_chunk - 1) // splitk_chunk
+          splitk_partial_o_buf = Scratch.get(:wave_attn_splitk_o, (hp.n_head * splitk_blocks * hp.head_dim).to_i64 * sizeof(Float32))
+          splitk_partial_m_buf = Scratch.get(:wave_attn_splitk_m, (hp.n_head * splitk_blocks).to_i64 * sizeof(Float32))
+          splitk_partial_l_buf = Scratch.get(:wave_attn_splitk_l, (hp.n_head * splitk_blocks).to_i64 * sizeof(Float32))
 
           # Recurrent scratch.
           rec_qkv_buf = Scratch.get(:wave_rec_qkv, rec_qkv_dim.to_i64 * sizeof(Float32))
@@ -8220,21 +8255,63 @@ module ML
                 kvwrite_enc.dispatch_1d(kv_dim, 256)
                 kvwrite_enc.end_encoding
 
-                attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-                attn_enc.set_pipeline(attn_pipeline)
-                attn_enc.set_buffer(q_buf, 0)
-                attn_enc.set_buffer(gate_buf, 1)
-                attn_enc.set_buffer(k_cache_buf, 2)
-                attn_enc.set_buffer(v_cache_buf, 3)
-                attn_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
-                attn_enc.set_value((pos + 1).to_u32, 5)
-                attn_enc.set_value(hp.n_head.to_u32, 6)
-                attn_enc.set_value(hp.n_head_kv.to_u32, 7)
-                attn_enc.set_value(hp.head_dim.to_u32, 8)
-                attn_enc.set_value((hp.n_head // hp.n_head_kv).to_u32, 9)
-                attn_enc.set_value(attn_scale, 10)
-                attn_enc.dispatch_threadgroups({hp.n_head, 1, 1}, {32, 1, 1})
-                attn_enc.end_encoding
+                use_splitk_attn = ENV["QWEN35_ATTN_SPLITK_OFF"]? != "1" &&
+                                  pos + 1 >= attn_splitk_min_context &&
+                                  hp.head_dim <= 256
+                if use_splitk_attn
+                  split1_enc = ML::Metal::ComputeEncoder.new(cmd)
+                  split1_enc.set_pipeline(attn_splitk_stage1_pipeline)
+                  split1_enc.set_buffer(q_buf, 0)
+                  split1_enc.set_buffer(k_cache_buf, 1)
+                  split1_enc.set_buffer(v_cache_buf, 2)
+                  split1_enc.set_buffer(splitk_partial_o_buf, 3, ML::Metal::BufferAccess::Write)
+                  split1_enc.set_buffer(splitk_partial_m_buf, 4, ML::Metal::BufferAccess::Write)
+                  split1_enc.set_buffer(splitk_partial_l_buf, 5, ML::Metal::BufferAccess::Write)
+                  split1_enc.set_value((pos + 1).to_u32, 6)
+                  split1_enc.set_value(hp.n_head.to_u32, 7)
+                  split1_enc.set_value(hp.n_head_kv.to_u32, 8)
+                  split1_enc.set_value(hp.head_dim.to_u32, 9)
+                  split1_enc.set_value((hp.n_head // hp.n_head_kv).to_u32, 10)
+                  split1_enc.set_value(attn_scale, 11)
+                  split1_enc.set_value(splitk_chunk.to_u32, 12)
+                  split1_enc.set_value(splitk_blocks.to_u32, 13)
+                  split1_enc.dispatch_threadgroups({hp.n_head, splitk_blocks, 1}, {32, 1, 1})
+                  split1_enc.end_encoding
+
+                  split2_enc = ML::Metal::ComputeEncoder.new(cmd)
+                  split2_enc.set_pipeline(attn_splitk_stage2_pipeline)
+                  split2_enc.set_buffer(gate_buf, 0)
+                  split2_enc.set_buffer(splitk_partial_o_buf, 1)
+                  split2_enc.set_buffer(splitk_partial_m_buf, 2)
+                  split2_enc.set_buffer(splitk_partial_l_buf, 3)
+                  split2_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
+                  split2_enc.set_value(hp.n_head.to_u32, 5)
+                  split2_enc.set_value(hp.head_dim.to_u32, 6)
+                  split2_enc.set_value(splitk_blocks.to_u32, 7)
+                  split2_enc.dispatch_threadgroups({hp.n_head, 1, 1}, {32, 1, 1})
+                  split2_enc.end_encoding
+                else
+                  attn_enc = ML::Metal::ComputeEncoder.new(cmd)
+                  use_gqa4_attn = hp.n_head // hp.n_head_kv == 4 && hp.head_dim <= 128 && ENV["QWEN35_ATTN_GQA4_OFF"]? != "1"
+                  attn_enc.set_pipeline(use_gqa4_attn ? attn_gqa4_pipeline : attn_pipeline)
+                  attn_enc.set_buffer(q_buf, 0)
+                  attn_enc.set_buffer(gate_buf, 1)
+                  attn_enc.set_buffer(k_cache_buf, 2)
+                  attn_enc.set_buffer(v_cache_buf, 3)
+                  attn_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
+                  attn_enc.set_value((pos + 1).to_u32, 5)
+                  attn_enc.set_value(hp.n_head.to_u32, 6)
+                  attn_enc.set_value(hp.n_head_kv.to_u32, 7)
+                  attn_enc.set_value(hp.head_dim.to_u32, 8)
+                  attn_enc.set_value((hp.n_head // hp.n_head_kv).to_u32, 9)
+                  attn_enc.set_value(attn_scale, 10)
+                  if use_gqa4_attn
+                    attn_enc.dispatch_threadgroups({hp.n_head_kv, 1, 1}, {128, 1, 1})
+                  else
+                    attn_enc.dispatch_threadgroups({hp.n_head, 1, 1}, {32, 1, 1})
+                  end
+                  attn_enc.end_encoding
+                end
               end
 
               Profile.trace("full.o_proj") do
