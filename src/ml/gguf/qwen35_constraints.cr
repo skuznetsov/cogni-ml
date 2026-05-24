@@ -128,6 +128,35 @@ module ML::GGUF
       required_by_name
     end
 
+    def self.tool_finite_parameter_value_options(tools : Array(JSON::Any)) : Hash(String, Hash(String, Array(String)))
+      by_function = {} of String => Hash(String, Array(String))
+      tools.each do |tool|
+        obj = tool.as_h?
+        next unless obj
+        function = obj["function"]?.try(&.as_h?)
+        next unless function
+        name = function["name"]?.try(&.as_s?)
+        next unless name && !name.empty?
+
+        parameters = function["parameters"]?.try(&.as_h?)
+        properties = parameters.try { |p| p["properties"]?.try(&.as_h?) }
+        next unless properties
+
+        by_parameter = {} of String => Array(String)
+        properties.each do |parameter_name, raw_schema|
+          schema = raw_schema.as_h?
+          next unless schema
+
+          values = finite_schema_values(schema)
+          next if values.empty?
+
+          by_parameter[parameter_name] = qwen_parameter_value_options(values)
+        end
+        by_function[name] = by_parameter unless by_parameter.empty?
+      end
+      by_function
+    end
+
     def self.qwen_tool_call_prefix_options(function_names : Array(String)) : Array(String)
       function_names.reject(&.empty?).uniq.map do |name|
         "<tool_call>\n<function=#{name}>\n"
@@ -147,6 +176,35 @@ module ML::GGUF
     def self.qwen_parameter_continue_options(parameter_names : Array(String)) : Array(String)
       parameter_names.reject(&.empty?).uniq.map do |name|
         "</parameter>\n<parameter=#{name}>\n"
+      end
+    end
+
+    def self.qwen_parameter_value_options(values : Array(String)) : Array(String)
+      values.reject(&.empty?).uniq.map { |value| "#{value}\n" }
+    end
+
+    private def self.finite_schema_values(schema : Hash(String, JSON::Any)) : Array(String)
+      enum_values = schema["enum"]?.try(&.as_a?)
+      if enum_values
+        return enum_values.compact_map { |value| json_scalar_to_text(value) }
+      end
+
+      type_name = schema["type"]?.try(&.as_s?)
+      return ["true", "false"] if type_name == "boolean"
+
+      [] of String
+    end
+
+    private def self.json_scalar_to_text(value : JSON::Any) : String?
+      case raw = value.raw
+      when String
+        raw
+      when Bool
+        raw ? "true" : "false"
+      when Int64, Float64
+        raw.to_s
+      else
+        nil
       end
     end
   end

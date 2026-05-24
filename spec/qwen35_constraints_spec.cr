@@ -100,4 +100,17 @@ describe ML::GGUF::Qwen35Constraints do
       "</parameter>\n<parameter=limit>\n",
     ])
   end
+
+  it "extracts finite enum and boolean parameter value options" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"edit_mode","parameters":{"type":"object","properties":{
+        "mode":{"type":"string","enum":["fast","safe"]},
+        "dry_run":{"type":"boolean"}
+      },"required":["mode","dry_run"]}}}
+    ]))
+
+    options = ML::GGUF::Qwen35Constraints.tool_finite_parameter_value_options(tools)
+    options["edit_mode"]["mode"].should eq(["fast\n", "safe\n"])
+    options["edit_mode"]["dry_run"].should eq(["true\n", "false\n"])
+  end
 end

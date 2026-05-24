@@ -2727,3 +2727,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_553:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `8 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with `read_file(path,limit)` generated a complete two-parameter tool call, stopped at 43 output tokens despite a 64-token request, parsed JSON `[{"name":"read_file","arguments":{"path":"README.md","limit":"3"}}]`, and reported `literal_constrained_steps=38`.
 
 **next_update_553:** Add schema-specific value frontiers for low-risk scalar cases: enums first, then booleans/integers with bounded textual regex, while preserving fallback for free-form or multiline values. Add telemetry for why a constrained state falls back.
+
+
+**decision_update_554:** Added finite schema-value frontiers to the opt-in Qwen XML tool-call controller. For required parameters whose JSON schema has `enum` values or `type: boolean`, `qwen35_generate` now constrains the value text itself (`value\n`) with tokenizer frontiers before continuing to the next parameter or final close corridor. Free-form strings and unbounded numeric values still use normal greedy decode until a newline boundary.
+
+**evidence_update_554:** Verification passed through `scripts/run_safe.sh`: guarded `spec/qwen35_constraints_spec.cr` -> `9 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with `edit_mode(mode enum [fast,safe], dry_run boolean)` generated and parsed `mode=safe` and `dry_run=true` with `literal_constrained_steps=45`. A regression smoke for free-form `read_file(path,limit)` still parsed both values and stopped at the complete tool call.
+
+**next_update_554:** Add structured fallback telemetry and then bounded numeric value grammars. Do not constrain arbitrary strings or arrays/objects until a certified JSON/XML value grammar exists; those remain dual-frame unconstrained spans.
