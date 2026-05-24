@@ -1,4 +1,5 @@
 require "./spec_helper"
+require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_constraints"
 
 module Qwen35ConstraintsSpecHelper
@@ -21,8 +22,12 @@ describe ML::GGUF::Qwen35Constraints do
     tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["<", "<tool", "<tool_call>", "_call", "_call>", "tool", ">"])
 
     ids = ML::GGUF::Qwen35Constraints.literal_frontier_ids(tok, ["<tool_call>"])
+    indexed_ids = ML::GGUF::Qwen35Constraints.literal_frontier_ids(
+      ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok),
+      ["<tool_call>"])
     pieces = ids.map { |id| tok.decode_single(id) }
 
+    indexed_ids.should eq(ids)
     pieces.should contain("<")
     pieces.should contain("<tool")
     pieces.should contain("<tool_call>")
@@ -44,5 +49,22 @@ describe ML::GGUF::Qwen35Constraints do
 
     ML::GGUF::Qwen35Constraints.literal_frontier_ids(tok, [] of String).should be_empty
     ML::GGUF::Qwen35Constraints.advance_literal_options(["<tool_call>"], "nope").should be_empty
+  end
+
+  it "extracts Qwen tool-call prefix options from OpenAI-style tools" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}},
+      {"type":"function","function":{"name":"grep","parameters":{"type":"object"}}},
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}
+    ]))
+
+    names = ML::GGUF::Qwen35Constraints.tool_function_names(tools)
+    prefixes = ML::GGUF::Qwen35Constraints.qwen_tool_call_prefix_options(names)
+
+    names.should eq(["read_file", "grep"])
+    prefixes.should eq([
+      "<tool_call>\n<function=read_file>\n",
+      "<tool_call>\n<function=grep>\n",
+    ])
   end
 end

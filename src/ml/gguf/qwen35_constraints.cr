@@ -1,3 +1,4 @@
+require "json"
 require "./qwen35_tokenizer"
 
 module ML::GGUF
@@ -8,6 +9,55 @@ module ML::GGUF
   # tool/function names, then fall back to unconstrained decode for free-form
   # string/value spans.
   module Qwen35Constraints
+    class TokenTextIndex
+      @texts : Array(String)
+      @by_first : Hash(Char, Array({Int32, String}))
+
+      def initialize(tokenizer : Qwen35Tokenizer)
+        @texts = Array(String).new(tokenizer.vocab.size, "")
+        @by_first = Hash(Char, Array({Int32, String})).new { |h, k| h[k] = [] of {Int32, String} }
+        tokenizer.vocab.each_index do |id|
+          text = begin
+            tokenizer.decode_single(id.to_i32)
+          rescue
+            ""
+          end
+          @texts[id] = text
+          next if text.empty?
+
+          @by_first[text[0]] << {id.to_i32, text}
+        end
+      end
+
+      def text_for_id(id : Int32) : String
+        return "" if id < 0 || id >= @texts.size
+
+        @texts[id]
+      end
+
+      def literal_frontier_ids(remaining_literals : Array(String)) : Array(Int32)
+        return [] of Int32 if remaining_literals.empty?
+
+        allowed = [] of Int32
+        seen = Set(Int32).new
+        remaining_literals.each do |literal|
+          next if literal.empty?
+
+          bucket = @by_first[literal[0]]?
+          next unless bucket
+
+          bucket.each do |id, decoded|
+            next if seen.includes?(id)
+            next unless literal.starts_with?(decoded)
+
+            allowed << id
+            seen << id
+          end
+        end
+        allowed
+      end
+    end
+
     def self.literal_frontier_ids(tokenizer : Qwen35Tokenizer,
                                   remaining_literals : Array(String)) : Array(Int32)
       return [] of Int32 if remaining_literals.empty?
@@ -27,6 +77,11 @@ module ML::GGUF
       allowed
     end
 
+    def self.literal_frontier_ids(index : TokenTextIndex,
+                                  remaining_literals : Array(String)) : Array(Int32)
+      index.literal_frontier_ids(remaining_literals)
+    end
+
     def self.advance_literal_options(remaining_literals : Array(String),
                                      emitted : String) : Array(String)
       return remaining_literals if emitted.empty?
@@ -38,6 +93,24 @@ module ML::GGUF
         next_literals << literal[emitted.size..]
       end
       next_literals
+    end
+
+    def self.tool_function_names(tools : Array(JSON::Any)) : Array(String)
+      names = [] of String
+      tools.each do |tool|
+        obj = tool.as_h?
+        next unless obj
+        function = obj["function"]?.try(&.as_h?)
+        name = function.try { |f| f["name"]?.try(&.as_s?) }
+        names << name.not_nil! if name && !name.empty?
+      end
+      names.uniq
+    end
+
+    def self.qwen_tool_call_prefix_options(function_names : Array(String)) : Array(String)
+      function_names.reject(&.empty?).uniq.map do |name|
+        "<tool_call>\n<function=#{name}>\n"
+      end
     end
   end
 end

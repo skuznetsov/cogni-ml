@@ -132,6 +132,8 @@ ngram_cache_min_remaining = (ENV["QWEN35_NGRAM_CACHE_MIN_REMAINING"]? || (decode
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 metal_profile_enabled = ENV["QWEN35_METAL_PROFILE"]? == "1"
 constrained_literal_prefix = ENV["QWEN35_CONSTRAINED_LITERAL_PREFIX"]?
+constrained_tool_call_prefix_enabled = ENV["QWEN35_CONSTRAINED_TOOL_CALL_PREFIX"]? == "1"
+structured_constraint_enabled = (constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty?) || constrained_tool_call_prefix_enabled
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -164,9 +166,15 @@ raise "QWEN35_SPEC_BOOTSTRAP_STREAK must be positive" unless spec_bootstrap_stre
 unless spec_verify_mode == "chunk-inplace" || spec_verify_mode == "hybrid" || spec_verify_mode == "serial"
   raise "QWEN35_SPEC_VERIFY must be chunk-inplace, hybrid, or serial"
 end
-if constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty?
-  raise "QWEN35_CONSTRAINED_LITERAL_PREFIX is currently supported only with greedy decode" if speculative_decode_enabled || ngram_decode_enabled
-  raise "QWEN35_CONSTRAINED_LITERAL_PREFIX is currently incompatible with prompt cache fast paths" if prompt_cache_enabled
+if constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty? && constrained_tool_call_prefix_enabled
+  raise "QWEN35_CONSTRAINED_LITERAL_PREFIX and QWEN35_CONSTRAINED_TOOL_CALL_PREFIX are mutually exclusive"
+end
+if structured_constraint_enabled
+  raise "constrained structured decoding is currently supported only with greedy decode" if speculative_decode_enabled || ngram_decode_enabled
+  raise "constrained structured decoding is currently incompatible with prompt cache fast paths" if prompt_cache_enabled
+end
+if constrained_tool_call_prefix_enabled && chat_tools.empty?
+  raise "QWEN35_CONSTRAINED_TOOL_CALL_PREFIX requires QWEN35_TOOLS_JSON with at least one function tool"
 end
 spec_max_gamma = Math.max(spec_max_gamma, spec_gamma)
 
@@ -200,6 +208,7 @@ end
 
 def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
                                            tokenizer : ML::GGUF::Qwen35Tokenizer,
+                                           token_index : ML::GGUF::Qwen35Constraints::TokenTextIndex,
                                            token_id : Int32,
                                            pos : Int32,
                                            state : ML::GGUF::Qwen35CPU::State,
@@ -209,14 +218,14 @@ def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
     return {top.to_i32, logit, [] of String, false}
   end
 
-  allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(tokenizer, remaining)
+  allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(token_index, remaining)
   if allowed.empty?
     top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
     return {top.to_i32, logit, [] of String, false}
   end
 
   top, logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(weights, token_id, pos, state, allowed)
-  piece = tokenizer.decode_single(top)
+  piece = token_index.text_for_id(top)
   next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(remaining, piece)
   next_remaining = [] of String if literal_constraint_complete?(next_remaining)
   {top.to_i32, logit, next_remaining, true}
@@ -396,6 +405,7 @@ ids = if cached = cached_prompt_ids
 tokenize_ms = (Time.instant - tokenize_t0).total_milliseconds
 puts "Prompt tokens (#{ids.size}): #{ids.inspect}"
 puts "Prompt decoded: #{tok.decode(ids).inspect}"
+constraint_token_index = structured_constraint_enabled ? ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok) : nil
 
 if prompt_cache_enabled && prompt_cache_source_history_enabled && source_history_hit.nil?
   source_lookup_t0 = Time.instant
@@ -465,11 +475,18 @@ prompt_cache_reused = false
 prompt_cache_fast_forward_used = false
 literal_remaining = if prefix = constrained_literal_prefix
                       prefix.empty? ? [] of String : [prefix]
+                    elsif constrained_tool_call_prefix_enabled
+                      names = ML::GGUF::Qwen35Constraints.tool_function_names(chat_tools)
+                      raise "QWEN35_CONSTRAINED_TOOL_CALL_PREFIX found no function names in QWEN35_TOOLS_JSON" if names.empty?
+                      ML::GGUF::Qwen35Constraints.qwen_tool_call_prefix_options(names)
                     else
                       [] of String
                     end
 literal_constrained_steps = 0
-STDOUT << "Constrained literal prefix enabled: #{constrained_literal_prefix.not_nil!.inspect}\n" unless literal_remaining.empty?
+unless literal_remaining.empty?
+  label = constrained_tool_call_prefix_enabled ? "tool-call prefix options=#{literal_remaining.size}" : constrained_literal_prefix.not_nil!.inspect
+  STDOUT << "Constrained literal prefix enabled: #{label}\n"
+end
 
 pos = 0
 
@@ -628,7 +645,7 @@ if output_ids.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
     else
       top, top_logit, literal_remaining, constrained = advance_next_maybe_literal_constrained(
-        w, tok, final_id, pos, state, literal_remaining)
+        w, tok, constraint_token_index.not_nil!, final_id, pos, state, literal_remaining)
       literal_constrained_steps += 1 if constrained
     end
     output_ids << top.to_i32
@@ -1107,7 +1124,7 @@ else
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     else
       top, top_logit, literal_remaining, constrained = advance_next_maybe_literal_constrained(
-        w, tok, prev, pos, state, literal_remaining)
+        w, tok, constraint_token_index.not_nil!, prev, pos, state, literal_remaining)
       literal_constrained_steps += 1 if constrained
     end
     dt = (Time.instant - tstart).total_seconds

@@ -2702,3 +2702,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_549:** Verification passed: guarded no-codegen build of `bin/qwen35_generate.cr`; guarded runtime smoke with `QWEN35_QUIET=1 QWEN35_CONSTRAINED_LITERAL_PREFIX='{'` generated ids `[90, 198]`, generated text `"{\n"`, and reported `literal_constrained_steps=1`.
 
 **next_update_549:** Replace the forced-literal probe with a real structured grammar controller: JSON object punctuation/string-key states and Qwen XML tool-call tag/function-name states should use literal frontiers; free-form parameter values should fall back to normal greedy or a schema-specific value grammar.
+
+**decision_update_550:** Added indexed tokenizer frontiers and an opt-in Qwen XML tool-call prefix controller. `Qwen35Constraints::TokenTextIndex` precomputes decoded token strings bucketed by first character; `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1` constrains the greedy loop to `<tool_call>\n<function=<tool-name>>\n` alternatives derived from `QWEN35_TOOLS_JSON`.
+
+**evidence_update_550:** Verification passed: guarded `spec/qwen35_constraints_spec.cr` -> `4 examples, 0 failures`; guarded no-codegen build of `bin/qwen35_generate.cr`; runtime smoke with one `read_file` tool generated `<tool_call>`, reported `literal_constrained_steps=4`, and reduced the 4-token constrained decode wall from the earlier full-vocab frontier scan smoke `1184.9ms` to `62.7ms` after indexing.
+
+**next_update_550:** Extend the structured controller beyond the prefix: constrain `<function=...>` completion across multiple tools, then parameter tag names for required schema fields, then closing tags. Keep free-form parameter values as fallback until schema-specific value grammars are implemented.
