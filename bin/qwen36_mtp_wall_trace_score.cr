@@ -12,6 +12,8 @@ thresholds = [0.1_f64, 0.25_f64, 0.5_f64, 1.0_f64, 2.0_f64, 4.0_f64, 8.0_f64]
 entry_rate_thresholds = [0.1_f64, 0.25_f64, 0.5_f64, 0.75_f64, 0.9_f64]
 entry_token_thresholds = [16.0_f64, 32.0_f64, 64.0_f64, 128.0_f64]
 include_target_oracle = false
+entry_pair_top = 12
+entry_pair_min_keep = 2
 
 OptionParser.parse do |p|
   p.banner = "Usage: qwen36_mtp_wall_trace_score TRACE.jsonl [TRACE2.jsonl ...] [--thresholds LIST] [--entry-rate-thresholds LIST] [--entry-token-thresholds LIST] [--include-target-oracle]"
@@ -25,6 +27,8 @@ OptionParser.parse do |p|
     entry_token_thresholds = v.split(',').map(&.strip).reject(&.empty?).map(&.to_f64)
   end
   p.on("--include-target-oracle", "Also score target_margin, which is oracle/offline-only for exact-first runtime") { include_target_oracle = true }
+  p.on("--entry-pair-top N", "Print top N two-feature entry skip policies by paired-plain ratio; default #{entry_pair_top}") { |v| entry_pair_top = v.to_i32 }
+  p.on("--entry-pair-min-keep N", "Require at least N non-skipped groups for two-feature entry policies; default #{entry_pair_min_keep}") { |v| entry_pair_min_keep = v.to_i32 }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -86,6 +90,43 @@ end
 
 private def str(obj : JSON::Any, key : String) : String
   obj[key].as_s
+end
+
+private def entry_feature_value(record : TraceRecord, feature : String) : Float64?
+  case feature
+  when "prompt_tokens" then record.prompt_tokens
+  when "prompt_unique_rate" then record.prompt_unique_rate
+  when "prompt_repeat_rate" then record.prompt_repeat_rate
+  when "prompt_bigram_repeat_rate" then record.prompt_bigram_repeat_rate
+  when "prompt_adjacent_repeat_rate" then record.prompt_adjacent_repeat_rate
+  when "entry_target_margin" then record.entry_target_margin
+  else nil
+  end
+end
+
+private def entry_condition_matches?(record : TraceRecord, feature : String, op : String, threshold : Float64) : Bool
+  value = entry_feature_value(record, feature)
+  return false unless value
+  op == "lt" ? value < threshold : value >= threshold
+end
+
+struct EntryPairResult
+  getter combine : String
+  getter left : String
+  getter right : String
+  getter groups : Int32
+  getter skipped_groups : Int32
+  getter kept_groups : Int32
+  getter skipped_tokens : Int32
+  getter actual_sum : Float64
+  getter modeled_sum : Float64
+  getter plain_sum : Float64
+  getter plain_ratio : Float64
+
+  def initialize(@combine, @left, @right, @groups, @skipped_groups, @skipped_tokens,
+                 @actual_sum, @modeled_sum, @plain_sum, @plain_ratio)
+    @kept_groups = @groups - @skipped_groups
+  end
 end
 
 records = [] of TraceRecord
@@ -166,9 +207,11 @@ entry_features = {
   "entry_target_margin"         => thresholds,
 }
 
+entry_conditions = [] of NamedTuple(feature: String, op: String, threshold: Float64)
 entry_features.each do |feature, feature_thresholds|
   feature_thresholds.each do |threshold|
     {"lt", "gte"}.each do |op|
+      entry_conditions << {feature: feature, op: op, threshold: threshold}
       actual_sum = 0.0
       plain_sum = 0.0
       plain_complete = true
@@ -186,20 +229,7 @@ entry_features.each do |feature, feature_thresholds|
         else
           plain_complete = false
         end
-        value = case feature
-                when "prompt_tokens" then first.prompt_tokens
-                when "prompt_unique_rate" then first.prompt_unique_rate
-                when "prompt_repeat_rate" then first.prompt_repeat_rate
-                when "prompt_bigram_repeat_rate" then first.prompt_bigram_repeat_rate
-                when "prompt_adjacent_repeat_rate" then first.prompt_adjacent_repeat_rate
-                when "entry_target_margin" then first.entry_target_margin
-                else nil
-                end
-        should_skip = if value
-                        op == "lt" ? value < threshold : value >= threshold
-                      else
-                        false
-                      end
+        should_skip = entry_condition_matches?(first, feature, op, threshold)
 
         if should_skip
           skipped_groups += 1
@@ -218,6 +248,62 @@ entry_features.each do |feature, feature_thresholds|
       plain_part = plain_complete && plain_sum > 0 ? " plain_wall_ms=#{plain_sum.round(3)} plain_delta_ms=#{(modeled_sum - plain_sum).round(3)} plain_ratio=#{(modeled_sum / plain_sum).round(4)}" : ""
       puts "entry_policy feature=#{feature} kind=runtime_legal_pre_mtp_entry op=#{op} threshold=#{threshold} groups=#{groups.size} skipped_groups=#{skipped_groups} actual_wall_ms=#{actual_sum.round(3)} modeled_wall_ms=#{modeled_sum.round(3)} delta_ms=#{delta.round(3)} ratio=#{ratio.round(4)}#{plain_part} skipped_tokens=#{skipped_tokens}"
     end
+  end
+end
+
+if entry_pair_top > 0 && entry_conditions.size >= 2
+  pair_results = [] of EntryPairResult
+  entry_conditions.each_with_index do |left, left_i|
+    ((left_i + 1)...entry_conditions.size).each do |right_i|
+      right = entry_conditions[right_i]
+      {"or", "and"}.each do |combine|
+        actual_sum = 0.0
+        plain_sum = 0.0
+        plain_complete = true
+        modeled_sum = 0.0
+        skipped_groups = 0
+        skipped_tokens = 0
+
+        groups.each_value do |rows|
+          sorted = rows.sort_by(&.pass)
+          first = sorted.first
+          actual_wall = sorted.map(&.wall_after_ms).max
+          actual_sum += actual_wall
+          if plain_exact_ms = first.plain_exact_ms
+            plain_sum += plain_exact_ms
+          else
+            plain_complete = false
+          end
+
+          left_match = entry_condition_matches?(first, left[:feature], left[:op], left[:threshold])
+          right_match = entry_condition_matches?(first, right[:feature], right[:op], right[:threshold])
+          should_skip = combine == "or" ? (left_match || right_match) : (left_match && right_match)
+
+          if should_skip
+            skipped_groups += 1
+            skipped_tokens += Math.max(0, sorted.last.end_i - first.start_i)
+            modeled_sum += first.plain_exact_ms || (first.wall_before_ms + first.plain_suffix_ms)
+          else
+            modeled_sum += actual_wall
+          end
+        end
+
+        next unless plain_complete && plain_sum > 0
+        next if skipped_groups == 0 || skipped_groups == groups.size
+        next if groups.size - skipped_groups < entry_pair_min_keep
+
+        plain_ratio = modeled_sum / plain_sum
+        left_label = "#{left[:feature]}#{left[:op]}#{left[:threshold]}"
+        right_label = "#{right[:feature]}#{right[:op]}#{right[:threshold]}"
+        pair_results << EntryPairResult.new(combine, left_label, right_label, groups.size, skipped_groups,
+          skipped_tokens, actual_sum, modeled_sum, plain_sum, plain_ratio)
+      end
+    end
+  end
+
+  pair_results.sort_by! { |r| {r.plain_ratio, -r.skipped_groups, r.modeled_sum} }
+  pair_results.first(entry_pair_top).each do |r|
+    puts "entry_pair_policy kind=runtime_legal_pre_mtp_entry combine=#{r.combine} left=#{r.left} right=#{r.right} groups=#{r.groups} skipped_groups=#{r.skipped_groups} kept_groups=#{r.kept_groups} actual_wall_ms=#{r.actual_sum.round(3)} modeled_wall_ms=#{r.modeled_sum.round(3)} plain_wall_ms=#{r.plain_sum.round(3)} plain_delta_ms=#{(r.modeled_sum - r.plain_sum).round(3)} plain_ratio=#{r.plain_ratio.round(4)} skipped_tokens=#{r.skipped_tokens}"
   end
 end
 
