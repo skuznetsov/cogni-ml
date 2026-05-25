@@ -257,8 +257,48 @@ class MtpSpecWallRouterPass
   end
 end
 
+class PromptEntryFeatures
+  getter prompt_tokens : Int32
+  getter prompt_unique_rate : Float64
+  getter prompt_repeat_rate : Float64
+  getter prompt_bigram_repeat_rate : Float64
+  getter prompt_adjacent_repeat_rate : Float64
+
+  def initialize(@prompt_tokens, @prompt_unique_rate, @prompt_repeat_rate,
+                 @prompt_bigram_repeat_rate, @prompt_adjacent_repeat_rate)
+  end
+end
+
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
+end
+
+private def prompt_entry_features(token_ids : Array(Int32)) : PromptEntryFeatures
+  token_count = token_ids.size
+  unique = token_ids.to_set.size
+  repeat_rate = token_count > 0 ? (token_count - unique).to_f64 / token_count : 0.0
+  unique_rate = token_count > 0 ? unique.to_f64 / token_count : 0.0
+
+  bigrams = Set({Int32, Int32}).new
+  repeated_bigrams = 0
+  if token_count > 1
+    (token_count - 1).times do |i|
+      pair = {token_ids[i], token_ids[i + 1]}
+      repeated_bigrams += 1 if bigrams.includes?(pair)
+      bigrams << pair
+    end
+  end
+  bigram_repeat_rate = token_count > 1 ? repeated_bigrams.to_f64 / (token_count - 1) : 0.0
+
+  adjacent_repeats = 0
+  if token_count > 1
+    (token_count - 1).times do |i|
+      adjacent_repeats += 1 if token_ids[i] == token_ids[i + 1]
+    end
+  end
+  adjacent_repeat_rate = token_count > 1 ? adjacent_repeats.to_f64 / (token_count - 1) : 0.0
+
+  PromptEntryFeatures.new(token_count, unique_rate, repeat_rate, bigram_repeat_rate, adjacent_repeat_rate)
 end
 
 private def mtp_hidden_topk(weights, mtp : ML::GGUF::Qwen35MTPWeights, prev_hidden, token_id, pos, k, next_hidden_raw, mtp_state)
@@ -431,7 +471,9 @@ end
 
 private def write_router_trace(io : IO, label : String, gamma : Int32, pass : MtpSpecWallRouterPass,
                                target_top2 : {Int32, Float32, Int32, Float32},
-                               plain_suffix_ms : Float64)
+                               plain_suffix_ms : Float64,
+                               entry_features : PromptEntryFeatures,
+                               entry_prev_token : Int32)
   top1_id, top1_logit, top2_id, top2_logit = target_top2
   mtp_target_rank = if pass.mtp_first_top1 == top1_id
                       1
@@ -448,6 +490,12 @@ private def write_router_trace(io : IO, label : String, gamma : Int32, pass : Mt
       json.field "pass", pass.pass_index
       json.field "start_i", pass.start_i
       json.field "end_i", pass.end_i
+      json.field "entry_prev_token", entry_prev_token
+      json.field "prompt_tokens", entry_features.prompt_tokens
+      json.field "prompt_unique_rate", entry_features.prompt_unique_rate
+      json.field "prompt_repeat_rate", entry_features.prompt_repeat_rate
+      json.field "prompt_bigram_repeat_rate", entry_features.prompt_bigram_repeat_rate
+      json.field "prompt_adjacent_repeat_rate", entry_features.prompt_adjacent_repeat_rate
       json.field "target_top1", top1_id
       json.field "target_top2", top2_id
       json.field "target_margin", (top1_logit - top2_logit).to_f64
@@ -730,6 +778,7 @@ target_margin_cache = {} of Int32 => {Int32, Float32, Int32, Float32}
 rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
   abort "prompt #{label.inspect} encoded to no tokens" if token_ids.empty?
+  entry_features = prompt_entry_features(token_ids)
   needed_seq = token_ids.size + (mtp_chain_tokens > 0 ? mtp_chain_tokens + 1 : 2)
   abort "prompt #{label.inspect} needs max_seq >= #{needed_seq}, got #{max_seq}" if needed_seq > max_seq
 
@@ -1429,7 +1478,8 @@ rows.each do |label, prompt_text|
         next if record.start_i >= mtp_chain_tokens
         top2 = get_target_top2.call(record.start_i)
         if io = router_trace_io
-          write_router_trace(io, label, gamma, record, top2, plain_suffix_ms[record.start_i])
+          entry_prev_token = record.start_i > 0 ? exact_ids[record.start_i - 1] : token_ids[-1]
+          write_router_trace(io, label, gamma, record, top2, plain_suffix_ms[record.start_i], entry_features, entry_prev_token)
         end
       end
 

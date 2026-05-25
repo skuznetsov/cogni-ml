@@ -16147,3 +16147,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the decision before entering the MTP proposal corridor. The failed transport was proposal-first then verifier-skip; potential decreases in `(verifier_ms)` but not enough in `(wall_ms)` because `(mtp_ms, controller_ms)` remains. The next legal move is a pre-MTP entry selector with features available before proposal, or a substantially cheaper verifier/proposal body.
 - adversary: The prompt shard is small and synthetic, so this is not a general MTP quality claim. It is enough to stop local scalar pre-verifier tuning on this route and redirect work to entry selection or body-cost reduction.
 - trust: {F:0.82,G:0.48,R:0.80}
+
+**LM-582 Next performance leverage is pre-MTP entry selection plus branch-state/body-cost work [shared/ml]**
+- status: ACTIVE plan anchor
+- claim tested: The next useful Qwen3.6 speed work should stop scalar post-proposal MTP tuning and move to pre-MTP entry selection, branch-state one-pass self-spec routing, and verifier-body reduction.
+- evidence: Recent corrected MTP traces and refutations show post-proposal skip policies are too late: broad exact-first MTP stayed below plain (`plain_speedup=0.922`), runtime-legal MTP margin gates only modeled up to `ratio=0.9618` against the already-bad MTP wall, and raw-blend/top2-rescue/fallback-chain cross-products remained below plain exact. Existing branch-state one-pass checkpoints show prompt-dependent replay reductions, while B2/B3 verifier FFN body remains the high-cost kernel class.
+- diagnosis: The repeated failure mode is paying to discover that a speculative corridor is bad. The legal LTP/WBA window must move earlier, before MTP proposal cost, or deeper, into verifier body work.
+- LTP/WBA: Window is the pre-MTP entry boundary after exact-first/session features are known. Transport either enters MTP/self-spec corridor or collapses to exact decode. Legal move must use only features available before proposal, preserving exact fallback. Potential target is `(bad_corridor_entries, verifier_calls, fallback_tokens, wall_ms)` with dual frame plain exact decode.
+- next: Add pre-MTP entry feature tracing and scorer support, then use broader traces to decide whether MTP remains sparse/default-off or earns a production route.
+- trust: {F:0.84,G:0.58,R:0.82}
+
+**LM-583 MTP wall traces now expose pre-MTP-entry features [shared/ml]**
+- status: IMPLEMENTED measurement slice
+- claim tested: The MTP wall trace/scorer can model entry/no-entry decisions using only features available before paying MTP proposal cost.
+- evidence: Router trace rows now include `entry_prev_token`, `prompt_tokens`, `prompt_unique_rate`, `prompt_repeat_rate`, `prompt_bigram_repeat_rate`, and `prompt_adjacent_repeat_rate`. `bin/qwen36_mtp_wall_trace_score.cr` now prints `entry_policy kind=runtime_legal_pre_mtp_entry` rows separately from post-proposal `policy kind=runtime_legal_pre_verifier` and `target_margin kind=oracle`. Verification passed: guarded no-codegen build of `bin/qwen35_mtp_sidecar_probe.cr`; no-codegen build of `bin/qwen36_mtp_wall_trace_score.cr`; release smoke on one Qwen3.6-27B facts row wrote the new fields and the scorer modeled entry skip (`ratio=0.7504`) on the deliberately bad tiny MTP route.
+- diagnosis: This closes the measurement gap from LM-581: future selectors can be evaluated at the correct boundary before proposal cost. It does not yet prove any selector is good.
+- LTP/WBA: Window is the pre-MTP entry boundary. Transport carries compact prompt/session features into an offline fail-closed model. Legal move is observation-only; exact runtime remains unchanged. Potential descends in `(illegal_oracle_feature_use, bad_corridor_entry_measurement_gap, route_selector_iteration_cost)`.
+- adversary: Prompt-level token statistics are weak features by themselves. Broader traces and likely feature combinations are required before implementing a runtime controller.
+- trust: {F:0.86,G:0.52,R:0.84}
