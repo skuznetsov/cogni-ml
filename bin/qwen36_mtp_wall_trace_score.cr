@@ -138,6 +138,8 @@ entry_features.each do |feature, feature_thresholds|
   feature_thresholds.each do |threshold|
     {"lt", "gte"}.each do |op|
       actual_sum = 0.0
+      plain_sum = 0.0
+      plain_complete = true
       modeled_sum = 0.0
       skipped_groups = 0
       skipped_tokens = 0
@@ -147,6 +149,11 @@ entry_features.each do |feature, feature_thresholds|
         first = sorted.first
         actual_wall = sorted.map(&.wall_after_ms).max
         actual_sum += actual_wall
+        if plain_exact_ms = first.plain_exact_ms
+          plain_sum += plain_exact_ms
+        else
+          plain_complete = false
+        end
         value = case feature
                 when "prompt_tokens" then first.prompt_tokens
                 when "prompt_unique_rate" then first.prompt_unique_rate
@@ -175,7 +182,8 @@ entry_features.each do |feature, feature_thresholds|
 
       delta = modeled_sum - actual_sum
       ratio = actual_sum > 0 ? modeled_sum / actual_sum : 0.0
-      puts "entry_policy feature=#{feature} kind=runtime_legal_pre_mtp_entry op=#{op} threshold=#{threshold} groups=#{groups.size} skipped_groups=#{skipped_groups} actual_wall_ms=#{actual_sum.round(3)} modeled_wall_ms=#{modeled_sum.round(3)} delta_ms=#{delta.round(3)} ratio=#{ratio.round(4)} skipped_tokens=#{skipped_tokens}"
+      plain_part = plain_complete && plain_sum > 0 ? " plain_wall_ms=#{plain_sum.round(3)} plain_delta_ms=#{(modeled_sum - plain_sum).round(3)} plain_ratio=#{(modeled_sum / plain_sum).round(4)}" : ""
+      puts "entry_policy feature=#{feature} kind=runtime_legal_pre_mtp_entry op=#{op} threshold=#{threshold} groups=#{groups.size} skipped_groups=#{skipped_groups} actual_wall_ms=#{actual_sum.round(3)} modeled_wall_ms=#{modeled_sum.round(3)} delta_ms=#{delta.round(3)} ratio=#{ratio.round(4)}#{plain_part} skipped_tokens=#{skipped_tokens}"
     end
   end
 end
