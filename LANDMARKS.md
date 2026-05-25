@@ -15987,3 +15987,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the profiler checkpoint after the FFN-down corridor. Transport carries phase labels into the bottleneck ledger. Legal move changes only the observation label, preserving kernels and state. Potential descends in `(attribution_mislabel_risk, false_optimization_branch_risk)`.
 - adversary: This does not change performance. Speed claims from detailed profiles before this fix should treat `ffn_down_add` rows as possibly meaning the whole down-plus-add phase, not necessarily the fused kernel.
 - trust: {F:0.82,G:0.56,R:0.80}
+
+**LM-564 Final-KV-only prefill remains the correct body-only default [shared/ml]**
+- status: VERIFIED relaxed-host A/B; keep default-on, not a current optimization target
+- claim tested: The default body-only final full-attention KV-only prefill route should not be disabled, but it is unlikely to be the remaining pp gap after the corrected benchmark framing.
+- evidence: `bin/qwen35_prefill_attribution.cr --prepare-state --compare-env=QWEN35_PREFILL_FINAL_KV_ONLY_OFF=1` guarded by `scripts/run_safe.sh` measured pp64 default `146.03ms` p50 vs off `153.05ms` p50 (`7/7` default wins), pp256 default `516.31ms` p50 vs off `516.96ms` p50 (avg noisy, `5/7` default wins), and pp1024 default `1872.69ms` p50 vs off `1949.69ms` p50 (`3/3` default wins).
+- diagnosis: Final-KV-only is a valid Spike that removes dead final-layer prompt body work, especially at pp64 and pp1024. The pp256 tie/noise means this branch should be considered already harvested, not the next speed frontier.
+- LTP/WBA: Window is the final full-attention prompt layer when `need_output=false`. Transport carries only K/V cache rows across the final-layer boundary. Legal move skips dead Q/attention/out-proj/FFN hidden output while preserving cache state. Potential descends in `(dead_final_layer_work, syncs, prefill_wall)`; dual frame is `QWEN35_PREFILL_FINAL_KV_ONLY_OFF=1` for diagnosis.
+- adversary: Runs were relaxed-host and contaminated by desktop CPU load, so this is branch-selection evidence, not public benchmark evidence. The paired shape-local signal is still enough to avoid disabling the default or re-optimizing this path immediately.
+- trust: {F:0.78,G:0.48,R:0.74}
+
+**LM-565 Forced-single literal head skip is exact but not promotable yet [shared/ml]**
+- status: IMPLEMENTED default-off probe; speed promotion refuted/noisy on first enum/bool tool suite
+- claim tested: In constrained decoding, if the tokenizer frontier contains exactly one legal token, the model can run body-only state update and emit the forced token without lm-head projection.
+- evidence: Added `QWEN35_CONSTRAINED_FORCE_SINGLE=1` and `forced_single_steps` telemetry in `qwen35_generate`. Verification through `scripts/run_safe.sh`: no-codegen build passed; `spec/qwen35_constraints_spec.cr spec/qwen35_chat_spec.cr` passed (`20 examples, 0 failures`); release runtime smokes produced the same parsed `edit_mode(mode=safe,dry_run=true)` call. A/B on the enum/bool tool-call smoke was mixed: default decode `957.2ms`, force-single `929.7ms`, then default `917.7ms`, force-single `949.1ms`; opt-in counted `forced_single_steps=17/45`.
+- diagnosis: The legal move is exact, but saving a tiny allowed-head projection does not reliably beat the body-only scheduling path in this loop. This is useful telemetry and a future suite probe, not a default.
+- LTP/WBA: Window is a grammar frontier with exactly one legal tokenizer id. Transport carries the forced token across the decode boundary after the body updates exact state. Legal move skips only lm-head ranking; boundary safety requires `allowed_ids.size == 1`. Potential target is `(head_rows_scanned, head_dispatches, constrained_wall)`, but the measured wall potential did not strictly descend under current scheduling.
+- adversary: Logit value is set to `0.0` on forced steps and must not be used as calibrated model confidence. Do not enable by default without larger paired prompt-suite wins.
+- trust: {F:0.84,G:0.36,R:0.76}

@@ -134,6 +134,7 @@ metal_profile_enabled = ENV["QWEN35_METAL_PROFILE"]? == "1"
 constrained_literal_prefix = ENV["QWEN35_CONSTRAINED_LITERAL_PREFIX"]?
 constrained_tool_call_prefix_enabled = ENV["QWEN35_CONSTRAINED_TOOL_CALL_PREFIX"]? == "1"
 structured_constraint_enabled = (constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty?) || constrained_tool_call_prefix_enabled
+constrained_force_single_literal = ENV["QWEN35_CONSTRAINED_FORCE_SINGLE"]? == "1"
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -212,23 +213,33 @@ def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
                                            token_id : Int32,
                                            pos : Int32,
                                            state : ML::GGUF::Qwen35CPU::State,
-                                           remaining : Array(String)) : {Int32, Float32, Array(String), String, Bool}
+                                           remaining : Array(String),
+                                           force_single_literal : Bool) : {Int32, Float32, Array(String), String, Bool, Bool}
   if literal_constraint_complete?(remaining)
     top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
-    return {top.to_i32, logit, [] of String, "", false}
+    return {top.to_i32, logit, [] of String, "", false, false}
   end
 
   allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(token_index, remaining)
   if allowed.empty?
     top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
-    return {top.to_i32, logit, [] of String, "", false}
+    return {top.to_i32, logit, [] of String, "", false, false}
+  end
+
+  if force_single_literal && allowed.size == 1
+    top = allowed[0]
+    ML::GGUF::Qwen35CPU.prefill_token(weights, token_id, pos, state)
+    piece = token_index.text_for_id(top)
+    next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(remaining, piece)
+    next_remaining = [] of String if literal_constraint_complete?(next_remaining)
+    return {top.to_i32, 0.0_f32, next_remaining, piece, true, true}
   end
 
   top, logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(weights, token_id, pos, state, allowed)
   piece = token_index.text_for_id(top)
   next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(remaining, piece)
   next_remaining = [] of String if literal_constraint_complete?(next_remaining)
-  {top.to_i32, logit, next_remaining, piece, true}
+  {top.to_i32, logit, next_remaining, piece, true, false}
 end
 
 def advance_tool_literal_stage(stage : String,
@@ -619,6 +630,7 @@ literal_remaining = if prefix = constrained_literal_prefix
                       [] of String
                     end
 literal_constrained_steps = 0
+literal_forced_single_steps = 0
 literal_emitted = ""
 tool_value_text = ""
 tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
@@ -792,11 +804,12 @@ if output_ids.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
     else
       constrained_stage = tool_literal_stage
-      top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
-        w, tok, constraint_token_index.not_nil!, final_id, pos, state, literal_remaining)
+      top, top_logit, literal_remaining, emitted_piece, constrained, forced_single = advance_next_maybe_literal_constrained(
+        w, tok, constraint_token_index.not_nil!, final_id, pos, state, literal_remaining, constrained_force_single_literal)
       constrained_generated = constrained
       if constrained
         literal_constrained_steps += 1
+        literal_forced_single_steps += 1 if forced_single
         tool_literal_stage_counts[constrained_stage] += 1 if constrained_tool_call_prefix_enabled
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
@@ -1299,11 +1312,12 @@ else
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     else
       constrained_stage = tool_literal_stage
-      top, top_logit, literal_remaining, emitted_piece, constrained = advance_next_maybe_literal_constrained(
-        w, tok, constraint_token_index.not_nil!, prev, pos, state, literal_remaining)
+      top, top_logit, literal_remaining, emitted_piece, constrained, forced_single = advance_next_maybe_literal_constrained(
+        w, tok, constraint_token_index.not_nil!, prev, pos, state, literal_remaining, constrained_force_single_literal)
       constrained_generated = constrained
       if constrained
         literal_constrained_steps += 1
+        literal_forced_single_steps += 1 if forced_single
         tool_literal_stage_counts[constrained_stage] += 1 if constrained_tool_call_prefix_enabled
         literal_emitted += emitted_piece
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
@@ -1408,7 +1422,7 @@ if constrained_tool_call_prefix_enabled
   stage_steps = tool_literal_stage_counts.to_a.sort_by { |entry| entry[0] }.map { |stage, count| "#{stage}:#{count}" }.join(",")
   stage_steps = "none" if stage_steps.empty?
   finite_value_params = tool_value_options_by_parameter.size
-  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
+  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
 end
 STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
