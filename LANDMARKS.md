@@ -16120,3 +16120,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window was a low-accept exact-first MTP segment with possible top2 correction. Transport tried to carry a blended draft hidden and a verified top2 correction through the next speculative pass. Legal exactness held, but recomputed potential increased in `(verifier_calls, verifier_ms, wall_ms)` faster than it decreased `(fallback_tokens)`. Collapse the branch.
 - adversary: Host noise can move single rows by a few percent, but all four variants stayed below plain exact and the accepted/verifier-call pattern matches prior refutations. Do not continue scalar cross-product tuning here without a new feature that reduces verifier body or predicts profitable spans before submission.
 - trust: {F:0.80,G:0.44,R:0.76}
+
+**LM-579 Exact GPU fallback-chain is visible but still not an MTP promotion [shared/ml]**
+- status: REFUTED as standalone promotion; remains default-off exact primitive
+- claim tested: Since the corrected exact-first MTP corridor spends most wall time in exact fallback suffixes, the existing GPU-resident exact fallback chain might close the remaining gap without changing verifier policy.
+- evidence: Same-binary 3-prompt Q4_K_M target + UD_Q4_K_XL sidecar, `tokens=12 gamma=4 stage=2 lazy hidden_resync rollback-log exact_first min_margin=1.0`, with `--mtp-spec-wall-gpu-fallback-chain --mtp-spec-wall-gpu-fallback-chain-min 1`. Base row preserved parity and moved `plain_speedup 0.939 -> 0.948` with `fallback_ms 1742.041 -> 1719.937`. Top2-rescue row preserved parity and moved `0.934 -> 0.944` with `fallback_ms 1175.156 -> 1147.691`. Logs: `/tmp/cogni_mtp_fallback_chain/base_chain.log`, `/tmp/cogni_mtp_fallback_chain/rescue_chain.log`.
+- diagnosis: Fallback execution is visible and the chain can shave a little suffix overhead, but it does not change the global shape: the route still pays MTP plus verifier before falling back, so wall remains below plain exact.
+- LTP/WBA: Window is the exact fallback suffix after a low-confidence MTP skip or reject. Transport carries exact greedy decode through a GPU-resident chain. Legal exactness held and local fallback potential decreased, but global potential `(wall_ms/plain_speedup)` did not cross promotion threshold.
+- adversary: Single-run host noise can explain part of the small gain, and earlier threshold retunes were neutral. Keep this as a composable exact primitive, not a default speed path, until a larger ABBA proves robust end-to-end gain.
+- trust: {F:0.78,G:0.42,R:0.72}
