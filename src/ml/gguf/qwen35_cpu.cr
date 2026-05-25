@@ -2682,9 +2682,10 @@ module ML::GGUF
       handoff_flip = false
       handoff_bytes = (n_tokens * hp.n_embd).to_i64 * sizeof(Float32)
       append_prefill_cmd = nil.as(ML::Metal::CommandBuffer?)
+      checkpoint_resident_ok = !checkpoint_requested || ENV["QWEN35_PREFILL_CHECKPOINT_RESIDENT"]? == "1"
+      resident_boundary_ok = ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" && checkpoint_resident_ok
       if ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
-         ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" &&
-         !checkpoint_requested && Qwen35Metal.available?
+         resident_boundary_ok && Qwen35Metal.available?
         append_prefill_cmd = ML::Metal::CommandBuffer.new
       end
       flush_prefill_cmd = -> {
@@ -2703,7 +2704,7 @@ module ML::GGUF
           fused_resident_final = false
           # LTP/WBA corridor: carry hidden rows across supported prefill groups
           # without exposing them to the host unless this is the final requested output.
-          if ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" && !checkpoint_requested
+          if resident_boundary_ok
             predicted_run_end = il + 1
             while predicted_run_end < weights.layers.size
               break unless weights.layers[predicted_run_end].is_a?(Qwen35RecurrentWeights)
@@ -2864,7 +2865,7 @@ module ML::GGUF
                 rec_read_output = true
                 rec_output_buf = nil.as(ML::MetalBuffer?)
                 rec_resident_final = false
-                if ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1" && !checkpoint_requested
+                if resident_boundary_ok
                   rec_read_output = need_output && run_end >= layer_limit
                   if !rec_read_output && run_end < layer_limit
                     if handoff_flip
