@@ -15969,3 +15969,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the non-64 Q4 FFN gate/up prompt chunk where B64 row-packing is legal but the old fusion corridor stopped at the tail. Transport carries the up projection through the underfilled B64 tile into half-rounded SwiGLU activations for FFN-down. Legal move clamps invalid local rows, writes only valid outputs, and avoids dedicated exact row-pack shapes, preserving exact fallback and all default routes. Potential descends in `(underfilled_tile_waste, swiglu_dispatches, f32_to_h16_conversion_mib, pp116_wall)`; dual frame is unset `QWEN35_Q4K_H16_B64_TAIL_MIN`.
 - adversary: Exactness is covered by focused specs, but benchmark evidence is relaxed-host and shape-local. Do not promote globally until pp96/pp112/pp116/pp160/pp256/long-prompt ABBA gates identify a safe threshold policy.
 - trust: {F:0.86,G:0.38,R:0.80}
+
+**LM-562 Exact B120 Q4_H16 prefill tile is refuted for pp116 [shared/ml]**
+- status: REFUTED temporary code removed
+- claim tested: A 15-simdgroup / 480-thread / 30 KiB `simd_mm_q4k_h16_b120` tile might beat B64 tail reuse for the pp113-120 corridor by processing pp116 in one exact-shape row-packed dispatch.
+- evidence: Temporary opt-in `QWEN35_Q4K_H16_B120=1` compiled and ran, but pp116 paired attribution regressed: default p50 `261.50ms` / `443.59 tok/s` vs B120 p50 `273.87ms` / `423.56 tok/s`, default wins `3/3`. The temporary kernel and routing code were removed.
+- diagnosis: The row-packing cliff starts before B120 for this shape. The 480-thread / 30 KiB tile likely loses enough occupancy/scheduling efficiency to dominate the saved tail dispatch/dequant work.
+- LTP/WBA: Window was the pp113-120 irregular prompt band. Transport tried to collapse the band into one monolithic row tile. Potential failed to descend because `(threadgroup_resource_pressure, occupancy_loss)` increased more than `(tail_dispatches, dequant_reuse)` decreased. Dual frame remains default exact route plus opt-in B64 tail-safe fusion for shape-specific A/B.
+- adversary: This is a short relaxed-host falsifier (`3` paired reps), but the regression is large enough to remove the code. Revisit only with new Metal occupancy evidence or a different algorithm, not another copied wide row tile.
+- trust: {F:0.76,G:0.34,R:0.72}
