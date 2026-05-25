@@ -16023,3 +16023,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: The proposed initial window failed the trigger condition (`singleton frontier span`) for real tool-call corridors. Dual frame remains the committed decode-loop span batching after the first selected token.
 - adversary: Do not reintroduce initial prompt-token span batching unless a profile shows real singleton spans before output token 1 or a different grammar representation certifies them.
 - trust: {F:0.78,G:0.42,R:0.74}
+
+**LM-568 Structured span suite is a reusable speed/parity gate [shared/ml]**
+- status: IMPLEMENTED benchmark script
+- claim tested: The structured tool-call forced-span route needs a repeatable local gate instead of `/tmp` one-off shell loops.
+- evidence: Added `scripts/qwen35_structured_span_suite.sh`. `bash -n` passed. `REPS=1 QWEN35_GENERATE_BIN=/tmp/qwen35_generate_structured_span_default scripts/qwen35_structured_span_suite.sh` completed enum/bool edit, required read, optional read, and multi-tool edit rows; parsed JSON was present in every row and default forced-span was faster than `QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1` in all four decode rows.
+- diagnosis: This gives future grammar work a compact regression/perf check with the same tool shapes that exposed the span win.
+- LTP/WBA: Window is the structured function-call benchmark suite. Transport carries paired default/off evidence through stable `suite_row` records. Legal move is observation-only; potential descends in `(unrepeatable_perf_claims, missing_parsed_json_checks, benchmark_setup_tax)`.
+- adversary: The script is still wall-clock and host-load sensitive; use it for branch selection and smoke gates, not final public benchmark claims without quiet-host ABBA.
+- trust: {F:0.82,G:0.50,R:0.80}

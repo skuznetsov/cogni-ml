@@ -819,6 +819,12 @@ Useful Qwen environment switches:
 | `QWEN35_PREFILL_CHUNK_OFF=1` | Force older non-chunked prefill path. |
 | `QWEN35_DECODE_WAVE_OFF=1` | Force older non-wave decode path. |
 
+Structured tool-call span batching can be regression-tested with:
+
+```sh
+REPS=2 scripts/qwen35_structured_span_suite.sh
+```
+
 ### Library Integration
 
 The current Qwen API is low-level and intended for native inference experiments:
