@@ -16032,3 +16032,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the structured function-call benchmark suite. Transport carries paired default/off evidence through stable `suite_row` records. Legal move is observation-only; potential descends in `(unrepeatable_perf_claims, missing_parsed_json_checks, benchmark_setup_tax)`.
 - adversary: The script is still wall-clock and host-load sensitive; use it for branch selection and smoke gates, not final public benchmark claims without quiet-host ABBA.
 - trust: {F:0.82,G:0.50,R:0.80}
+
+**LM-569 Qwen3.6 native target must beat llama.cpp MTP, not just plain decode [shared/ml]**
+- status: VERIFIED short local smoke; parent benchmark gate remains open
+- claim tested: After local llama.cpp gained `draft-mtp`, the relevant speed target changed materially versus earlier plain-Q4_K_M comparisons.
+- evidence: Rebuilt `build/benchmark_qwen_vs_llama` and `build/qwen36_mtp_baseline_matrix` from current source. A guarded short run `./build/qwen36_mtp_baseline_matrix --run-available --compare-plain --repeats=1 --gen=32 --wait-quiet-ms=30000 --quiet-poll-ms=2000 --load-warning-threshold=120 --load-total-warning-threshold=500` confirmed `llama-cli` and `llama-server` advertise `draft-mtp`, then measured native Qwen3.6-27B Q4_K_M body-only decode `8.96 tok/s` p50 vs llama.cpp plain `9.44 tok/s` avg in the native benchmark row. External llama.cpp MTP rows on the same short prompt measured `IQ4_NL` `15.9 tok/s` and `UD_Q4_K_XL` `13.2 tok/s`; their plain rows were `8.7` and `7.3 tok/s`.
+- diagnosis: Plain Q4_K_M parity is no longer sufficient. The concrete gap is now a proposal/verifier/controller gap: llama.cpp MTP roughly doubles its own plain IQ4_NL row on this prompt, while native GGUF MTP remains diagnostic/default-off because verifier/replay scheduling dominates.
+- LTP/WBA: Window is the benchmark target-definition boundary. Transport carries comparable target rows through the same prompt/cache settings. Legal move is observation-only: update the goal and next experiments without changing kernels. Potential descends in `(wrong_baseline_risk, stale_speed_claims, benchmark_artifact_drift)`. Dual frame is quiet-host multi-rep ABBA before any public claim.
+- adversary: This was a short one-repeat MTP smoke and one native benchmark row; it is valid for branch selection but not a publishable performance claim. Re-run with quiet-host multi-rep ABBA and longer generation before promoting.
+- trust: {F:0.74,G:0.42,R:0.72}
