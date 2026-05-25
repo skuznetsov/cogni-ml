@@ -135,6 +135,7 @@ constrained_literal_prefix = ENV["QWEN35_CONSTRAINED_LITERAL_PREFIX"]?
 constrained_tool_call_prefix_enabled = ENV["QWEN35_CONSTRAINED_TOOL_CALL_PREFIX"]? == "1"
 structured_constraint_enabled = (constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty?) || constrained_tool_call_prefix_enabled
 constrained_force_single_literal = ENV["QWEN35_CONSTRAINED_FORCE_SINGLE"]? == "1"
+constrained_force_literal_span = ENV["QWEN35_CONSTRAINED_FORCE_SPAN_OFF"]? != "1"
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -240,6 +241,30 @@ def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
   next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(remaining, piece)
   next_remaining = [] of String if literal_constraint_complete?(next_remaining)
   {top.to_i32, logit, next_remaining, piece, true, false}
+end
+
+def forced_literal_span(token_index : ML::GGUF::Qwen35Constraints::TokenTextIndex,
+                        remaining : Array(String),
+                        max_tokens : Int32) : {Array(Int32), Array(String), Array(String)}
+  ids = [] of Int32
+  pieces = [] of String
+  cursor = remaining
+  return {ids, pieces, cursor} if max_tokens <= 0 || literal_constraint_complete?(cursor)
+
+  max_tokens.times do
+    allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(token_index, cursor)
+    break unless allowed.size == 1
+
+    id = allowed[0]
+    piece = token_index.text_for_id(id)
+    cursor = ML::GGUF::Qwen35Constraints.advance_literal_options(cursor, piece)
+    cursor = [] of String if literal_constraint_complete?(cursor)
+    ids << id.to_i32
+    pieces << piece
+    break if cursor.empty?
+  end
+
+  {ids, pieces, cursor}
 end
 
 def advance_tool_literal_stage(stage : String,
@@ -631,6 +656,7 @@ literal_remaining = if prefix = constrained_literal_prefix
                     end
 literal_constrained_steps = 0
 literal_forced_single_steps = 0
+literal_forced_span_steps = 0
 literal_emitted = ""
 tool_value_text = ""
 tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
@@ -1308,7 +1334,40 @@ else
     prev = output_ids.last
     tstart = Time.instant
     constrained_generated = false
-    if literal_remaining.empty?
+    span_consumed = false
+    if constrained_force_literal_span && !literal_remaining.empty?
+      constrained_stage = tool_literal_stage
+      span_ids, span_pieces, span_remaining = forced_literal_span(
+        constraint_token_index.not_nil!, literal_remaining, n_gen - output_ids.size)
+      if span_ids.size >= 2
+        body_inputs = [prev]
+        body_inputs.concat(span_ids[0...-1])
+        ML::GGUF::Qwen35CPU.prefill_tokens(w, body_inputs, pos, state)
+        output_ids.concat(span_ids)
+        pos += span_ids.size
+        literal_remaining = span_remaining
+        literal_constrained_steps += span_ids.size
+        literal_forced_span_steps += span_ids.size
+        tool_literal_stage_counts[constrained_stage] += span_ids.size if constrained_tool_call_prefix_enabled
+        literal_emitted += span_pieces.join
+        if literal_remaining.empty? && constrained_tool_call_prefix_enabled
+          tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          tool_value_text = "" if reset_tool_value
+        end
+        dt = (Time.instant - tstart).total_seconds
+        if trace_steps
+          STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos - span_ids.size} forced_span=#{span_ids.size} took #{dt.round(2)}s\n"
+          STDOUT.flush
+        end
+        span_consumed = true
+      end
+    end
+    if span_consumed
+      break if constrained_tool_call_prefix_enabled && tool_literal_stage == "done"
+      break if output_ids.size >= n_gen
+      next
+    elsif literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     else
       constrained_stage = tool_literal_stage
@@ -1422,7 +1481,7 @@ if constrained_tool_call_prefix_enabled
   stage_steps = tool_literal_stage_counts.to_a.sort_by { |entry| entry[0] }.map { |stage, count| "#{stage}:#{count}" }.join(",")
   stage_steps = "none" if stage_steps.empty?
   finite_value_params = tool_value_options_by_parameter.size
-  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
+  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} forced_span_steps=#{literal_forced_span_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
 end
 STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
