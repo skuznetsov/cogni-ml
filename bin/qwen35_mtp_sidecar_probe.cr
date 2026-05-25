@@ -590,6 +590,7 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-wall-rec-checkpoint-replay", "For staged verifier chunks, checkpoint recurrent state after row 0 and use it to avoid replay on first-row reject") { mtp_spec_wall_rec_checkpoint_replay = true }
   p.on("--mtp-spec-wall-rec-rollback-log", "Log compact DeltaNet rollback data for row-1 rejects instead of copying full SSM checkpoint") { mtp_spec_wall_rec_rollback_log = true }
   p.on("--mtp-spec-wall-exact-first", "Emit one exact target token at each pass boundary before attempting MTP on the suffix") { mtp_spec_wall_exact_first = true }
+  p.on("--mtp-spec-wall-no-exact-first", "Disable exact-first even when a preset enables it") { mtp_spec_wall_exact_first = false }
   p.on("--mtp-spec-wall-gpu-fallback-chain", "Generate exact fallback suffixes as one GPU-resident greedy top1 chain") { mtp_spec_wall_gpu_fallback_chain = true }
   p.on("--mtp-spec-wall-gpu-fallback-chain-min N", "Use GPU fallback chain only for suffixes with at least N remaining tokens") { |v| mtp_spec_wall_gpu_fallback_chain_min = v.to_i32 }
   p.on("--mtp-spec-wall-speed-mode", "Enable the current exact low-risk MTP wall controller: exact-first stage2 lazy hidden-resync rollback-log, local low-margin exact off-ramp, and first-reject off-ramp") do
