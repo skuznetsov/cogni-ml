@@ -1006,6 +1006,11 @@ rows.each do |label, prompt_text|
         wall_token = exact_next
         wall_pos += 1
       end
+      # Router/oracle records describe the MTP entry window, not the outer pass
+      # boundary. With exact-first enabled these differ by one token; using the
+      # pre-exact-first index misaligns target-margin/rank attribution.
+      pass_mtp_entry_i = wall_ids.size
+      pass_mtp_entry_wall_ms = elapsed_ms(wall_start)
 
       remaining = mtp_chain_tokens - wall_ids.size
       draft_steps = Math.min(gamma, remaining)
@@ -1367,9 +1372,9 @@ rows.each do |label, prompt_text|
 
       router_records << MtpSpecWallRouterPass.new(
         wall_passes,
-        pass_start_i,
+        pass_mtp_entry_i,
         wall_ids.size,
-        pass_wall_before_ms,
+        pass_mtp_entry_wall_ms,
         elapsed_ms(wall_start),
         wall_accepted - pass_accepted_before,
         wall_rejections - pass_rejections_before,
