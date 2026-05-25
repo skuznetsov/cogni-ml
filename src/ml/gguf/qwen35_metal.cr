@@ -1739,8 +1739,7 @@ module ML
             return
           end
 
-          b64_tail_min = q4_h16_b64_tail_min_batch
-          use_b64_tail = b64_tail_min > 0 && batch >= b64_tail_min
+          use_b64_tail = q4_h16_b64_tail_candidate?(batch)
           if q4_h16_b64_gemm_enabled? && batch >= MM64_NR1 && ((batch % MM64_NR1) == 0 || use_b64_tail)
             enc.set_pipeline(mm_h16_b64_pipeline)
             enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
@@ -2414,6 +2413,11 @@ module ML
           (ENV["QWEN35_Q4K_H16_B64_TAIL_MIN"]? || "0").to_i32
         end
 
+        private def self.q4_h16_b64_tail_candidate?(batch : Int32) : Bool
+          min_batch = q4_h16_b64_tail_min_batch
+          min_batch > 0 && batch >= min_batch
+        end
+
         private def self.q4_h16_b48_gemm_enabled? : Bool
           ENV["QWEN35_Q4K_H16_B48_OFF"]? != "1"
         end
@@ -2528,7 +2532,7 @@ module ML
             q4_h16_b64_gemm_enabled? &&
             q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch) &&
             batch >= MM64_NR1 &&
-            (batch % MM64_NR1) == 0 &&
+            ((batch % MM64_NR1) == 0 || q4_h16_b64_tail_candidate?(batch)) &&
             (up_qw.out_dim % MM_NR0) == 0
         end
 
@@ -2541,7 +2545,7 @@ module ML
             q4_h16_b64_gemm_enabled? &&
             q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch) &&
             batch >= MM64_NR1 &&
-            (batch % MM64_NR1) == 0 &&
+            ((batch % MM64_NR1) == 0 || q4_h16_b64_tail_candidate?(batch)) &&
             (up_qw.out_dim % MM_NR0) == 0
         end
 
@@ -2554,7 +2558,7 @@ module ML
             q4_h16_b64_gemm_enabled? &&
             q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch) &&
             batch >= MM64_NR1 &&
-            (batch % MM64_NR1) == 0 &&
+            ((batch % MM64_NR1) == 0 || q4_h16_b64_tail_candidate?(batch)) &&
             (up_qw.out_dim % MM_NR0) == 0
         end
 

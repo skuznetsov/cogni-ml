@@ -806,6 +806,7 @@ Useful Qwen environment switches:
 | `QWEN35_Q4K_PAIR_H16_MIN_BATCH=64` | Tune the prefill Q4 gate/up shared H16 conversion threshold. The current default enables sharing from pp64 upward after refreshed A/B showed a small exact win. |
 | `QWEN35_Q4K_H16_B48_OFF=1` | Disable the exact 48-token Q4_K H16 prefill tile. The default route uses this only for exact 48-token chunks. |
 | `QWEN35_Q4K_H16_B64_OFF=1` | Disable the exact wide-batch Q4_K H16 prefill GEMM. The default route uses a 64-token batch tile for prompt chunks that are exact multiples of 64; irregular chunk sizes stay on the older 32-token tile to avoid tail regressions. |
+| `QWEN35_Q4K_H16_B64_TAIL_MIN=N` | Experimental exact prefill probe: for non-64 prompt chunks at least `N` tokens, allow the B64 Q4_K H16 tile and its tail-safe B64 up+SwiGLU fusion on the underfilled final tile. Default off because prior long-prompt tail evidence is shape-sensitive; use for A/B only. |
 | `QWEN35_Q4K_H16_B80_OFF=1` | Disable the exact 80-token Q4_K H16 prefill tile. The default route uses this only for exact 80-token chunks. |
 | `QWEN35_Q4K_H16_B96_OFF=1` | Disable the exact 96-token Q4_K H16 prefill tile. The default route uses this only for exact 96-token chunks; wider irregular chunks still avoid B96 after pp160/pp192 regressions. |
 | `QWEN35_Q4K_H16_B112_OFF=1` | Disable the exact 112-token Q4_K H16 prefill tile. The default route uses this only for exact 112-token chunks. |

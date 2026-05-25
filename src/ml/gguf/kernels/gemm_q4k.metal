@@ -1018,13 +1018,15 @@ kernel void simd_mm_q4k_h16_b64_swiglu(
     const int r0 = tgpig.y * MM64_NR0;
     const int r1 = tgpig.x * MM64_NR1;
 
-    if (r0 + MM64_NR0 > out_dim || r1 + MM64_NR1 > batch) {
+    const short nr0 = min(MM64_NR0, (int)out_dim - r0);
+    const short nr1 = min(MM64_NR1, (int)batch   - r1);
+    if (nr0 <= 0 || nr1 <= 0) {
         return;
     }
 
     const ushort tidw = tiitg & 127;
-    const short lr0 = tidw / MM_NL0;
-    const short lr1 = tiitg / MM_NL1;
+    const short lr0 = min((short)(tidw / MM_NL0), (short)(nr0 - 1));
+    const short lr1 = min((short)(tiitg / MM_NL1), (short)(nr1 - 1));
 
     const short il0 = tidw % MM_NL0;
     short il = il0;
@@ -1128,9 +1130,10 @@ kernel void simd_mm_q4k_h16_b64_swiglu(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (int idx = (int)tiitg; idx < MM64_NR0 * MM64_NR1; idx += 256) {
-        const int i = idx % MM64_NR0;
-        const int j = idx / MM64_NR0;
+    const int total_out = nr0 * nr1;
+    for (int idx = (int)tiitg; idx < total_out; idx += 256) {
+        const int i = idx % nr0;
+        const int j = idx / nr0;
         const uint out_idx = (r1 + j) * out_dim + r0 + i;
         const float g = gate[out_idx];
         const float sig = 1.0f / (1.0f + exp(-g));
@@ -1165,13 +1168,15 @@ kernel void simd_mm_q4k_h16_b64_swiglu_h16(
     const int r0 = tgpig.y * MM64_NR0;
     const int r1 = tgpig.x * MM64_NR1;
 
-    if (r0 + MM64_NR0 > out_dim || r1 + MM64_NR1 > batch) {
+    const short nr0 = min(MM64_NR0, (int)out_dim - r0);
+    const short nr1 = min(MM64_NR1, (int)batch   - r1);
+    if (nr0 <= 0 || nr1 <= 0) {
         return;
     }
 
     const ushort tidw = tiitg & 127;
-    const short lr0 = tidw / MM_NL0;
-    const short lr1 = tiitg / MM_NL1;
+    const short lr0 = min((short)(tidw / MM_NL0), (short)(nr0 - 1));
+    const short lr1 = min((short)(tiitg / MM_NL1), (short)(nr1 - 1));
 
     const short il0 = tidw % MM_NL0;
     short il = il0;
@@ -1275,9 +1280,10 @@ kernel void simd_mm_q4k_h16_b64_swiglu_h16(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (int idx = (int)tiitg; idx < MM64_NR0 * MM64_NR1; idx += 256) {
-        const int i = idx % MM64_NR0;
-        const int j = idx / MM64_NR0;
+    const int total_out = nr0 * nr1;
+    for (int idx = (int)tiitg; idx < total_out; idx += 256) {
+        const int i = idx % nr0;
+        const int j = idx / nr0;
         const uint out_idx = (r1 + j) * out_dim + r0 + i;
         const float g = gate[out_idx];
         const float sig = 1.0f / (1.0f + exp(-g));
