@@ -126,6 +126,35 @@ features << {"target_margin", true} if include_target_oracle
 
 puts "mtp_wall_trace_score records=#{records.size} groups=#{groups.size} thresholds=#{thresholds.join(",")}"
 
+oracle_plain_sum = 0.0
+oracle_modeled_sum = 0.0
+oracle_actual_sum = 0.0
+oracle_positive_groups = 0
+oracle_positive_delta = 0.0
+oracle_plain_complete = true
+groups.each_value do |rows|
+  sorted = rows.sort_by(&.pass)
+  first = sorted.first
+  actual_wall = sorted.map(&.wall_after_ms).max
+  oracle_actual_sum += actual_wall
+  if plain_exact_ms = first.plain_exact_ms
+    oracle_plain_sum += plain_exact_ms
+    if actual_wall < plain_exact_ms
+      oracle_positive_groups += 1
+      oracle_positive_delta += plain_exact_ms - actual_wall
+      oracle_modeled_sum += actual_wall
+    else
+      oracle_modeled_sum += plain_exact_ms
+    end
+  else
+    oracle_plain_complete = false
+  end
+end
+
+if oracle_plain_complete && oracle_plain_sum > 0
+  puts "entry_oracle kind=actual_wall_vs_plain groups=#{groups.size} positive_groups=#{oracle_positive_groups} actual_wall_ms=#{oracle_actual_sum.round(3)} plain_wall_ms=#{oracle_plain_sum.round(3)} modeled_wall_ms=#{oracle_modeled_sum.round(3)} plain_delta_ms=#{(oracle_modeled_sum - oracle_plain_sum).round(3)} plain_ratio=#{(oracle_modeled_sum / oracle_plain_sum).round(4)} positive_delta_ms=#{oracle_positive_delta.round(3)}"
+end
+
 entry_features = {
   "prompt_tokens"               => entry_token_thresholds,
   "prompt_unique_rate"          => entry_rate_thresholds,
