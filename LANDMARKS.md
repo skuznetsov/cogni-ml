@@ -15978,3 +15978,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window was the pp113-120 irregular prompt band. Transport tried to collapse the band into one monolithic row tile. Potential failed to descend because `(threadgroup_resource_pressure, occupancy_loss)` increased more than `(tail_dispatches, dequant_reuse)` decreased. Dual frame remains default exact route plus opt-in B64 tail-safe fusion for shape-specific A/B.
 - adversary: This is a short relaxed-host falsifier (`3` paired reps), but the regression is large enough to remove the code. Revisit only with new Metal occupancy evidence or a different algorithm, not another copied wide row tile.
 - trust: {F:0.76,G:0.34,R:0.72}
+
+**LM-563 Prefill detail profiler labels FFN-down truthfully [shared/ml]**
+- status: IMPLEMENTED observation-only profiler fix
+- claim tested: Detailed prefill checkpoints should not label the FFN-down phase as `ffn_down_add` when the default route is separate `ffn_down + add` and `QWEN35_PREFILL_FFN_DOWN_ADD_FUSED` is off.
+- evidence: Fixed all three prefill detail checkpoint sites to choose `ffn_down_add` only when the fused down-add encoder was actually used, otherwise `ffn_down`. No-codegen build of `bin/qwen35_prefill_attribution.cr` passed via `scripts/run_safe.sh` after the change.
+- diagnosis: This was a measurement bug, not a runtime speed bug. It explains why a detailed profile could appear to show fused prefill down-add work even though the fused route is default-off and previously refuted as a promotion candidate.
+- LTP/WBA: Window is the profiler checkpoint after the FFN-down corridor. Transport carries phase labels into the bottleneck ledger. Legal move changes only the observation label, preserving kernels and state. Potential descends in `(attribution_mislabel_risk, false_optimization_branch_risk)`.
+- adversary: This does not change performance. Speed claims from detailed profiles before this fix should treat `ffn_down_add` rows as possibly meaning the whole down-plus-add phase, not necessarily the fused kernel.
+- trust: {F:0.82,G:0.56,R:0.80}

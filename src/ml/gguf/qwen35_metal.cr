@@ -5628,7 +5628,8 @@ module ML
               add_enc.end_encoding
             end
             if full_detail_profile
-              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.ffn_down_add", phase_t0)
+              checkpoint_name = fused_down_add ? "ffn_down_add" : "ffn_down"
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.#{checkpoint_name}", phase_t0)
               cmd = checked[0]
               phase_t0 = checked[1]
             end
@@ -7468,7 +7469,8 @@ module ML
             full_add_enc.end_encoding
           end
           if full_detail_profile
-            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.ffn_down_add", phase_t0)
+            checkpoint_name = fused_down_add ? "ffn_down_add" : "ffn_down"
+            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.#{checkpoint_name}", phase_t0)
             cmd = checked[0]
             phase_t0 = checked[1]
           end
@@ -7790,7 +7792,8 @@ module ML
               rec_add_enc.end_encoding
             end
             if full_detail_profile
-              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.ffn_down_add", phase_t0)
+              checkpoint_name = fused_down_add ? "ffn_down_add" : "ffn_down"
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.#{checkpoint_name}", phase_t0)
               cmd = checked[0]
               phase_t0 = checked[1]
             end
