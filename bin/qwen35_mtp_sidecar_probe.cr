@@ -488,11 +488,20 @@ end
 
 private def write_router_trace(io : IO, label : String, gamma : Int32, pass : MtpSpecWallRouterPass,
                                target_top2 : {Int32, Float32, Int32, Float32},
+                               entry_target_top2 : {Int32, Float32, Int32, Float32}?,
                                plain_suffix_ms : Float64,
                                plain_exact_ms : Float64,
                                entry_features : PromptEntryFeatures,
                                entry_prev_token : Int32)
   top1_id, top1_logit, top2_id, top2_logit = target_top2
+  entry_top1_id = nil.as(Int32?)
+  entry_top2_id = nil.as(Int32?)
+  entry_margin = nil.as(Float64?)
+  if entry = entry_target_top2
+    entry_top1_id = entry[0]
+    entry_top2_id = entry[2]
+    entry_margin = (entry[1] - entry[3]).to_f64
+  end
   mtp_target_rank = if pass.mtp_first_top1 == top1_id
                       1
                     elsif pass.mtp_first_top2 == top1_id
@@ -514,6 +523,9 @@ private def write_router_trace(io : IO, label : String, gamma : Int32, pass : Mt
       json.field "prompt_repeat_rate", entry_features.prompt_repeat_rate
       json.field "prompt_bigram_repeat_rate", entry_features.prompt_bigram_repeat_rate
       json.field "prompt_adjacent_repeat_rate", entry_features.prompt_adjacent_repeat_rate
+      json.field "entry_target_top1", entry_top1_id
+      json.field "entry_target_top2", entry_top2_id
+      json.field "entry_target_margin", entry_margin
       json.field "target_top1", top1_id
       json.field "target_top2", top2_id
       json.field "target_margin", (top1_logit - top2_logit).to_f64
@@ -663,12 +675,13 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-wall-gpu-fallback-chain", "Generate exact fallback suffixes as one GPU-resident greedy top1 chain") { mtp_spec_wall_gpu_fallback_chain = true }
   p.on("--mtp-spec-wall-gpu-fallback-chain-min N", "Use GPU fallback chain only for suffixes with at least N remaining tokens") { |v| mtp_spec_wall_gpu_fallback_chain_min = v.to_i32 }
   p.on("--mtp-spec-wall-persistent-mtp-state", "Keep a llama.cpp-style MTP KV/history state across wall passes and repair it at verifier boundaries") { mtp_spec_wall_persistent_mtp_state = true }
-  p.on("--mtp-spec-wall-speed-mode", "Enable the current exact low-risk MTP wall controller: exact-first stage2 lazy hidden-resync rollback-log, local low-margin exact off-ramp, and first-reject off-ramp") do
+  p.on("--mtp-spec-wall-speed-mode", "Enable the current exact low-risk MTP wall controller: exact-first stage2 lazy hidden-resync checkpoint replay, local low-margin exact off-ramp, and first-reject off-ramp") do
     mtp_spec_wall_speed_mode = true
     mtp_spec_wall_stage = 2
     mtp_spec_wall_lazy_draft = true
     mtp_spec_wall_resync_draft_hidden = true
-    mtp_spec_wall_rec_rollback_log = true
+    mtp_spec_wall_rec_checkpoint_replay = true
+    mtp_spec_wall_rec_rollback_log = false
     mtp_spec_wall_reject_offramp = 1
     mtp_spec_wall_min_margin = 1.0
     mtp_spec_wall_min_margin_offramp = true
@@ -1547,7 +1560,8 @@ rows.each do |label, prompt_text|
         top2 = get_target_top2.call(record.start_i)
         if io = router_trace_io
           entry_prev_token = record.start_i > 0 ? exact_ids[record.start_i - 1] : token_ids[-1]
-          write_router_trace(io, label, gamma, record, top2, plain_suffix_ms[record.start_i], plain_exact_ms, entry_features, entry_prev_token)
+          entry_top2 = record.start_i > 0 ? get_target_top2.call(record.start_i - 1) : nil
+          write_router_trace(io, label, gamma, record, top2, entry_top2, plain_suffix_ms[record.start_i], plain_exact_ms, entry_features, entry_prev_token)
         end
       end
 

@@ -52,6 +52,7 @@ struct TraceRecord
   getter prompt_repeat_rate : Float64?
   getter prompt_bigram_repeat_rate : Float64?
   getter prompt_adjacent_repeat_rate : Float64?
+  getter entry_target_margin : Float64?
   getter mtp_first_margin : Float64?
   getter mtp_min_margin : Float64?
   getter target_margin : Float64?
@@ -62,7 +63,7 @@ struct TraceRecord
   def initialize(@label, @gamma, @pass, @start_i, @end_i, @wall_before_ms, @wall_after_ms,
                  @plain_exact_ms, @plain_suffix_ms,
                  @entry_prev_token, @prompt_tokens, @prompt_unique_rate, @prompt_repeat_rate,
-                 @prompt_bigram_repeat_rate, @prompt_adjacent_repeat_rate,
+                 @prompt_bigram_repeat_rate, @prompt_adjacent_repeat_rate, @entry_target_margin,
                  @mtp_first_margin, @mtp_min_margin, @target_margin,
                  @accepted_delta, @rejections_delta, @fallback_delta)
   end
@@ -109,6 +110,7 @@ paths.each do |path|
       f64(obj, "prompt_repeat_rate"),
       f64(obj, "prompt_bigram_repeat_rate"),
       f64(obj, "prompt_adjacent_repeat_rate"),
+      f64(obj, "entry_target_margin"),
       f64(obj, "mtp_first_margin"),
       f64(obj, "mtp_min_margin"),
       f64(obj, "target_margin"),
@@ -161,6 +163,7 @@ entry_features = {
   "prompt_repeat_rate"          => entry_rate_thresholds,
   "prompt_bigram_repeat_rate"   => entry_rate_thresholds,
   "prompt_adjacent_repeat_rate" => entry_rate_thresholds,
+  "entry_target_margin"         => thresholds,
 }
 
 entry_features.each do |feature, feature_thresholds|
@@ -189,6 +192,7 @@ entry_features.each do |feature, feature_thresholds|
                 when "prompt_repeat_rate" then first.prompt_repeat_rate
                 when "prompt_bigram_repeat_rate" then first.prompt_bigram_repeat_rate
                 when "prompt_adjacent_repeat_rate" then first.prompt_adjacent_repeat_rate
+                when "entry_target_margin" then first.entry_target_margin
                 else nil
                 end
         should_skip = if value
