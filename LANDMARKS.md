@@ -16138,3 +16138,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a router-trace pass before verifier submission. Transport carries only available MTP proposal features through fail-closed exact-suffix modeling. Legal move is offline scoring; target-margin transport is marked oracle to preserve boundary safety. Potential descends in `(illegal_feature_reuse, route_hypothesis_cost, repeated_scalar_tuning)`.
 - adversary: This scorer models first skip per prompt/gamma and is not a production controller. It needs broader traces before training or promoting any route selector.
 - trust: {F:0.84,G:0.50,R:0.82}
+
+**LM-581 Corrected broad MTP trace points to pre-MTP entry selection, not pre-verifier gating [shared/ml]**
+- status: VERIFIED measurement pivot
+- claim tested: Runtime-legal MTP margin gates might be enough if scored on a broader corrected trace with top2 accounting enabled.
+- evidence: Ran a 6-prompt Q4_K_M target + UD_Q4_K_XL sidecar trace (`reason/code/facts/json/sql/repeat`, `tokens=12 gamma=4 stage=2 lazy exact_first`, top2 accounting) to `/tmp/qwen36_mtp_router_trace_broad_top2_20260525135035.jsonl`. The unguarded MTP wall preserved parity but was slower than plain (`plain_speedup=0.922`, accepted `2/12`, fallback `58/72`). `qwen36_mtp_wall_trace_score` showed runtime-legal MTP margin thresholds can model modest savings after MTP is already paid: `mtp_min_margin < 4.0` skipped `5/6`, modeled ratio `0.9731`; `<8.0` skipped `6/6`, ratio `0.9618`. Target-margin oracle was similar (`best ratio 0.9618`) and is not runtime-legal at this exact-first boundary.
+- diagnosis: This route family mostly should not enter MTP at all on the tested prompts. Pre-verifier skip is too late: the proposal cost and controller complexity have already been paid, and modeled wall remains behind exact decode.
+- LTP/WBA: Window is the decision before entering the MTP proposal corridor. The failed transport was proposal-first then verifier-skip; potential decreases in `(verifier_ms)` but not enough in `(wall_ms)` because `(mtp_ms, controller_ms)` remains. The next legal move is a pre-MTP entry selector with features available before proposal, or a substantially cheaper verifier/proposal body.
+- adversary: The prompt shard is small and synthetic, so this is not a general MTP quality claim. It is enough to stop local scalar pre-verifier tuning on this route and redirect work to entry selection or body-cost reduction.
+- trust: {F:0.82,G:0.48,R:0.80}
