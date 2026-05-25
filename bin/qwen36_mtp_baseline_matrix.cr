@@ -9,12 +9,14 @@ record Candidate,
   hf_spec : String?,
   local_globs : Array(String),
   native_supported : Bool,
+  native_decode_supported : Bool,
   notes : String
 
-HOME_DIR             = ENV["HOME"]
-DEFAULT_LLAMA_CLI    = "#{HOME_DIR}/SrcArchives/AI/llama.cpp/build/bin/llama-cli"
-DEFAULT_LLAMA_SERVER = "#{HOME_DIR}/SrcArchives/AI/llama.cpp/build/bin/llama-server"
-DEFAULT_NATIVE_BENCH = "./build/benchmark_qwen_vs_llama"
+HOME_DIR                    = ENV["HOME"]
+DEFAULT_LLAMA_CLI           = "#{HOME_DIR}/SrcArchives/AI/llama.cpp/build/bin/llama-cli"
+DEFAULT_LLAMA_SERVER        = "#{HOME_DIR}/SrcArchives/AI/llama.cpp/build/bin/llama-server"
+DEFAULT_NATIVE_BENCH        = "./build/benchmark_qwen_vs_llama"
+DEFAULT_NATIVE_DECODE_SMOKE = "./build/qwen36_iq4_nl_decode_smoke"
 
 CANDIDATES = [
   Candidate.new(
@@ -22,6 +24,7 @@ CANDIDATES = [
     "plain",
     nil,
     ["#{HOME_DIR}/.cache/lm-studio/models/**/Qwen3.6-27B-Q4_K_M.gguf"],
+    true,
     true,
     "Current native target. No built-in GGUF MTP head; native sidecar MTP exists separately.",
   ),
@@ -35,7 +38,8 @@ CANDIDATES = [
       "#{HOME_DIR}/.cache/**/Qwen3.6-27B*IQ4_NL*MTP*.gguf",
     ],
     false,
-    "Reddit finalist target. llama.cpp/other runtime baseline first; native IQ4_NL support is not implemented yet.",
+    true,
+    "Reddit finalist target. Native target decode is supported; native IQ4_NL prefill/GEMM and production MTP remain separate follow-ups.",
   ),
   Candidate.new(
     "unsloth_ud_q4_k_xl_mtp",
@@ -47,13 +51,15 @@ CANDIDATES = [
       "#{HOME_DIR}/.cache/**/Qwen3.6-27B*UD-Q4_K_XL*MTP*.gguf",
     ],
     false,
-    "Reddit finalist alternative. Useful for MTP throughput/quality comparison; native UD quant support is not implemented yet.",
+    true,
+    "Reddit finalist alternative. Native target decode uses existing Q4/Q5/Q6/Q8 routes; production MTP remains a separate follow-up.",
   ),
   Candidate.new(
     "atomic_q4_k_xl_mtp",
     "mtp",
     "AtomicChat/Qwen3.6-27B-UDT-MTP-GGUF:Q4_K_XL_MTP",
     ["#{HOME_DIR}/.cache/**/Qwen3.6-27B*Q4_K_XL_MTP*.gguf"],
+    false,
     false,
     "Reproducible UDT MTP artifact with documented HF alias; benchmark as an external MTP baseline.",
   ),
@@ -62,6 +68,7 @@ CANDIDATES = [
 llama_cli = ENV["LLAMA_CLI"]? || DEFAULT_LLAMA_CLI
 llama_server = ENV["LLAMA_SERVER"]? || DEFAULT_LLAMA_SERVER
 native_bench = ENV["QWEN35_NATIVE_BENCH"]? || DEFAULT_NATIVE_BENCH
+native_decode_smoke = ENV["QWEN36_NATIVE_DECODE_SMOKE"]? || DEFAULT_NATIVE_DECODE_SMOKE
 prompt = "The capital of France is"
 gen = 128
 ctx = 8192
@@ -84,6 +91,7 @@ OptionParser.parse do |p|
   p.on("--llama-cli=PATH", "Path to llama-cli") { |v| llama_cli = v }
   p.on("--llama-server=PATH", "Path to llama-server") { |v| llama_server = v }
   p.on("--native-bench=PATH", "Path to build/benchmark_qwen_vs_llama") { |v| native_bench = v }
+  p.on("--native-decode-smoke=PATH", "Path to build/qwen36_iq4_nl_decode_smoke for same-codec target-decode smokes") { |v| native_decode_smoke = v }
   p.on("--prompt=TEXT", "Prompt for llama-cli MTP timing smoke") { |v| prompt = v }
   p.on("--gen=N", "Generated tokens for llama-cli timing smoke (default: 128)") { |v| gen = v.to_i }
   p.on("--ctx=N", "Context size for llama.cpp commands (default: 8192)") { |v| ctx = v.to_i }
@@ -227,17 +235,20 @@ llama_cli_has_draft_mtp = llama_cli_help.includes?("draft-mtp")
 llama_server_has_draft_mtp = llama_server_help.includes?("draft-mtp")
 native_bench_help = binary_help(native_bench)
 native_bench_has_cache_args = native_bench_help.includes?("--llama-cache-k") && native_bench_help.includes?("--llama-cache-v")
+native_decode_smoke_help = binary_help(native_decode_smoke)
+native_decode_smoke_ready = native_decode_smoke_help.includes?("--warmup") && native_decode_smoke_help.includes?("--runs")
 
 puts "Qwen3.6 MTP baseline matrix"
 puts "llama_cli=#{llama_cli} spec_type=#{llama_cli_has_spec_type} draft_mtp=#{llama_cli_has_draft_mtp}"
 puts "llama_server=#{llama_server} spec_type=#{llama_server_has_spec_type} draft_mtp=#{llama_server_has_draft_mtp}"
+puts "native_decode_smoke=#{native_decode_smoke} ready=#{native_decode_smoke_ready}"
 puts "settings: gen=#{gen} ctx=#{ctx} ngl=#{ngl} cache_k=#{cache_k} cache_v=#{cache_v} spec_draft_n_max=#{spec_draft_n_max} repeats=#{repeats} compare_plain=#{compare_plain}"
 puts
 
 CANDIDATES.each do |candidate|
   local_path = first_existing(candidate.local_globs)
   puts "#{candidate.name}"
-  puts "  kind=#{candidate.kind} native_supported=#{candidate.native_supported} local=#{local_path || "missing"} hf=#{candidate.hf_spec || "-"}"
+  puts "  kind=#{candidate.kind} native_supported=#{candidate.native_supported} native_decode_supported=#{candidate.native_decode_supported} local=#{local_path || "missing"} hf=#{candidate.hf_spec || "-"}"
   puts "  notes=#{candidate.notes}"
 
   if show_commands
@@ -295,6 +306,17 @@ CANDIDATES.each do |candidate|
         ]
         print_cmd("cogni-ml native/plain vs llama-bench", native_args)
       end
+      if candidate.native_decode_supported && local_path
+        runs = Math.max(1, gen)
+        decode_args = [
+          native_decode_smoke,
+          "--model=#{local_path}",
+          "--warmup=1",
+          "--runs=#{runs}",
+          "--max-seq=#{runs + 2}",
+        ]
+        print_cmd("cogni-ml native target decode smoke", decode_args)
+      end
     end
   end
 
@@ -325,6 +347,15 @@ CANDIDATES.each do |candidate|
       samples = [] of TimingSample
       repeats.times { samples << run_llama_cli_timing(llama_cli, mtp_args) }
       print_timing_summary("mtp", samples)
+      if candidate.native_decode_supported && local_path
+        if native_decode_smoke_ready && executable_file?(native_decode_smoke)
+          runs = Math.max(1, gen)
+          status = Process.run(native_decode_smoke, ["--model=#{local_path}", "--warmup=1", "--runs=#{runs}", "--max-seq=#{runs + 2}"], output: STDOUT, error: STDERR)
+          puts "  run: native decode smoke exit=#{status.exit_code}"
+        else
+          puts "  run: skipped; native decode smoke unavailable or stale. Rebuild build/qwen36_iq4_nl_decode_smoke first."
+        end
+      end
     elsif candidate.native_supported && local_path && executable_file?(native_bench)
       if compare_plain
         plain_args = llama_model_arg(candidate, local_path) + [
@@ -350,6 +381,11 @@ CANDIDATES.each do |candidate|
       end
       status = Process.run(native_bench, ["--model", local_path, "--prompt=64", "--gen", gen.to_s, "--reps=3", "--warmup=1", "--flash-attn", "--llama-cache-k", cache_k, "--llama-cache-v", cache_v], output: STDOUT, error: STDERR)
       puts "  run: native bench exit=#{status.exit_code}"
+      if candidate.native_decode_supported && native_decode_smoke_ready && executable_file?(native_decode_smoke)
+        runs = Math.max(1, gen)
+        status = Process.run(native_decode_smoke, ["--model=#{local_path}", "--warmup=1", "--runs=#{runs}", "--max-seq=#{runs + 2}"], output: STDOUT, error: STDERR)
+        puts "  run: native decode smoke exit=#{status.exit_code}"
+      end
     else
       puts "  run: skipped; local file missing or native bench unavailable"
     end
