@@ -289,6 +289,9 @@ private def mtp_hidden_topk(weights, mtp : ML::GGUF::Qwen35GGUFMTPWeights, prev_
   if k == 1 && ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1"
     fused = ML::GGUF::Qwen35MTP.forward_one_hidden_top1_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
     return {fused[:hidden], [fused[:top1]], elapsed_ms(start)}
+  elsif k == 2 && ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1"
+    fused = ML::GGUF::Qwen35MTP.forward_one_hidden_top2_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+    return {fused[:hidden], fused[:top2], elapsed_ms(start)}
   end
 
   next_hidden = ML::GGUF::Qwen35MTP.forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)

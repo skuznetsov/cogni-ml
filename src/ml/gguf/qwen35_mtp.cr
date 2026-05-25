@@ -826,6 +826,170 @@ module ML::GGUF
       {hidden: hidden_pre_norm, top1: hidden_top1_gguf(weights, mtp, hidden_pre_norm)}
     end
 
+    def forward_one_hidden_top2_gguf(weights : Qwen35Weights,
+                                     mtp : Qwen35GGUFMTPWeights,
+                                     prev_hidden : Array(Float32),
+                                     token_id : Int32,
+                                     pos : Int32,
+                                     mtp_state : State? = nil) : NamedTuple(hidden: Array(Float32), top2: Array({Int32, Float32}))
+      unless ENV["QWEN35_MTP_FFN_HEAD_FUSE"]? == "1" && ENV["QWEN35_MTP_FFN_HEAD_TOP2_FUSE_OFF"]? != "1"
+        hidden = forward_one_hidden_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
+        return {hidden: hidden, top2: hidden_top2_gguf(weights, mtp, hidden)}
+      end
+
+      hp = weights.hparams
+      hidden = hp.n_embd
+      raise ArgumentError.new("prev_hidden size #{prev_hidden.size} != #{hidden}") unless prev_hidden.size == hidden
+
+      emb = profile_stage("gguf.embed_lookup") { Qwen35CPU.embedding_lookup(mtp.token_embd_qw(weights.token_embd), token_id) }
+      emb_norm = profile_stage("gguf.nextn_enorm") { rms_norm_gguf(emb, mtp.nextn_enorm, hp.rms_eps) }
+      hidden_norm = profile_stage("gguf.nextn_hnorm") { rms_norm_gguf(prev_hidden, mtp.nextn_hnorm, hp.rms_eps) }
+
+      fc_in = Array(Float32).new(hidden * 2, 0.0_f32)
+      hidden.times do |i|
+        fc_in[i] = emb_norm[i]
+        fc_in[hidden + i] = hidden_norm[i]
+      end
+
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv
+      head_dim = hp.head_dim
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      heads_per_group = n_head // n_head_kv
+
+      residual = profile_stage("gguf.eh_proj") { Qwen35CPU.qmatvec_nobias(mtp.nextn_eh_proj_qw, fc_in) }
+      cur = profile_stage("gguf.attn_norm") { rms_norm_gguf(residual, mtp.attn_norm, hp.rms_eps) }
+      attn_o = Array(Float32).new(q_dim, 0.0_f32)
+
+      if cache = mtp_state
+        raise "mtp state kv_dim #{cache.kv_dim} != expected #{kv_dim}" unless cache.kv_dim == kv_dim
+        qkv = profile_stage("gguf.attn_qkv") { Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_k_qw, mtp.attn_v_qw], cur) }
+        q_full = qkv[0]
+        k = qkv[1]
+        v = qkv[2]
+        raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+        raise "mtp k_proj produced #{k.size}, expected #{kv_dim}" unless k.size == kv_dim
+        raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+
+        q = Array(Float32).new(q_dim, 0.0_f32)
+        gate = Array(Float32).new(q_dim, 0.0_f32)
+        n_head.times do |h|
+          src_base = h * 2 * head_dim
+          dst_base = h * head_dim
+          head_dim.times do |d|
+            q[dst_base + d] = q_full[src_base + d]
+            gate[dst_base + d] = q_full[src_base + head_dim + d]
+          end
+        end
+
+        profile_stage("gguf.attn_qk_norm_rope") do
+          n_head.times do |h|
+            rms_norm_gguf_slice!(q, h * head_dim, head_dim, mtp.attn_q_norm, hp.rms_eps)
+            Qwen35CPU.rope_partial!(q, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+          end
+          n_head_kv.times do |h|
+            rms_norm_gguf_slice!(k, h * head_dim, head_dim, mtp.attn_k_norm, hp.rms_eps)
+            Qwen35CPU.rope_partial!(k, h * head_dim, hp.rope_dim_count, head_dim, pos, hp.rope_freq_base)
+          end
+        end
+
+        profile_stage("gguf.attn_cache_append") do
+          cache.append!(k, v)
+          nil
+        end
+        scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+        scores = Array(Float32).new(cache.length, 0.0_f32)
+        probs = Array(Float32).new(cache.length, 0.0_f32)
+
+        profile_stage("gguf.attn_softmax_cpu") do
+          n_head.times do |h|
+            kvh = h // heads_per_group
+            q_base = h * head_dim
+            max_score = -Float32::INFINITY
+            cache.length.times do |t|
+              k_base = t * kv_dim + kvh * head_dim
+              dot = 0.0_f32
+              head_dim.times { |d| dot += q[q_base + d] * cache.k_cache[k_base + d] }
+              score = dot * scale
+              scores[t] = score
+              max_score = score if score > max_score
+            end
+
+            denom = 0.0_f32
+            cache.length.times do |t|
+              p = Math.exp((scores[t] - max_score).to_f64).to_f32
+              probs[t] = p
+              denom += p
+            end
+            inv_denom = 1.0_f32 / denom
+
+            head_dim.times do |d|
+              sum = 0.0_f32
+              cache.length.times do |t|
+                v_base = t * kv_dim + kvh * head_dim
+                sum += probs[t] * inv_denom * cache.v_cache[v_base + d]
+              end
+              attn_o[q_base + d] = sum * Qwen35CPU.sigmoid(gate[q_base + d])
+            end
+          end
+        end
+      else
+        qv = profile_stage("gguf.attn_qv") { Qwen35CPU.qmatvec_many([mtp.attn_q_qw, mtp.attn_v_qw], cur) }
+        q_full = qv[0]
+        v = qv[1]
+        raise "mtp q_proj produced #{q_full.size}, expected #{q_dim * 2}" unless q_full.size == q_dim * 2
+        raise "mtp v_proj produced #{v.size}, expected #{kv_dim}" unless v.size == kv_dim
+
+        profile_stage("gguf.attn_one_token_cpu") do
+          n_head.times do |h|
+            src_base = h * 2 * head_dim + head_dim
+            kvh = h // heads_per_group
+            q_base = h * head_dim
+            kv_base = kvh * head_dim
+            head_dim.times do |d|
+              attn_o[q_base + d] = v[kv_base + d] * Qwen35CPU.sigmoid(q_full[src_base + d])
+            end
+          end
+        end
+      end
+
+      attn_out = profile_stage("gguf.attn_output") { Qwen35CPU.qmatvec_nobias(mtp.attn_output_qw, attn_o) }
+      after_attn = profile_stage("gguf.attn_residual") { Array(Float32).new(hidden) { |i| residual[i] + attn_out[i] } }
+      cur2 = profile_stage("gguf.post_attn_norm") { rms_norm_gguf(after_attn, mtp.post_attention_norm, hp.rms_eps) }
+
+      if fused = profile_stage("gguf.ffn_head_top2_fused") {
+           Qwen35Metal.ffn_project_residual_top2(
+             cur2,
+             after_attn,
+             mtp.ffn_gate_qw,
+             mtp.ffn_up_qw,
+             mtp.ffn_down_qw,
+             mtp.shared_head_norm(weights.output_norm),
+             mtp.shared_head_qw(weights.output),
+             hp.rms_eps)
+         }
+        top2_raw = fused[:top2]
+        return {hidden: fused[:hidden], top2: [{top2_raw[0].to_i32, top2_raw[1]}, {top2_raw[2].to_i32, top2_raw[3]}]}
+      end
+
+      ffn_out = profile_stage("gguf.ffn_project_fused") do
+        ffn_project_gguf_metal(cur2, mtp.ffn_gate_qw, mtp.ffn_up_qw, mtp.ffn_down_qw)
+      end
+      unless ffn_out
+        gu = profile_stage("gguf.ffn_upgate") { Qwen35CPU.qmatvec_many([mtp.ffn_gate_qw, mtp.ffn_up_qw], cur2) }
+        gate_ff = gu[0]
+        up_ff = gu[1]
+        combined = profile_stage("gguf.ffn_swiglu_cpu") do
+          Qwen35CPU.silu!(gate_ff)
+          Array(Float32).new(gate_ff.size) { |i| gate_ff[i] * up_ff[i] }
+        end
+        ffn_out = profile_stage("gguf.ffn_down") { Qwen35CPU.qmatvec_nobias(mtp.ffn_down_qw, combined) }
+      end
+      hidden_pre_norm = profile_stage("gguf.ffn_residual") { Array(Float32).new(hidden) { |i| after_attn[i] + ffn_out[i] } }
+      {hidden: hidden_pre_norm, top2: hidden_top2_gguf(weights, mtp, hidden_pre_norm)}
+    end
+
     def hidden_top2_gguf(weights : Qwen35Weights,
                          mtp : Qwen35GGUFMTPWeights,
                          hidden_pre_norm : Array(Float32)) : Array({Int32, Float32})

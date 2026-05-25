@@ -133,4 +133,45 @@ describe ML::GGUF::Qwen35Metal do
     mtp.nextn_eh_proj_qw.in_dim.should eq(hp.n_embd * 2)
     mtp.shared_head_norm([] of Float32).size.should eq(hp.n_embd)
   end
+
+  it "keeps GGUF MTP FFN+head top2 fusion numerically aligned" do
+    weights = ML::GGUF::Qwen35Weights.from_gguf(QWEN36_IQ4_NL_METAL)
+    mtp = ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(QWEN36_IQ4_NL_METAL, weights.hparams)
+    prev_hidden = Array(Float32).new(weights.hparams.n_embd) do |i|
+      (((i * 23) % 41) - 20).to_f32 / 31.0_f32
+    end
+
+    old_fuse = ENV["QWEN35_MTP_FFN_HEAD_FUSE"]?
+    old_top2_off = ENV["QWEN35_MTP_FFN_HEAD_TOP2_FUSE_OFF"]?
+    begin
+      ENV["QWEN35_MTP_FFN_HEAD_FUSE"] = "1"
+      ENV["QWEN35_MTP_FFN_HEAD_TOP2_FUSE_OFF"] = "1"
+      reference = ML::GGUF::Qwen35MTP.forward_one_hidden_top2_gguf(
+        weights, mtp, prev_hidden, 13, 7
+      )
+
+      ENV.delete("QWEN35_MTP_FFN_HEAD_TOP2_FUSE_OFF")
+      fused = ML::GGUF::Qwen35MTP.forward_one_hidden_top2_gguf(
+        weights, mtp, prev_hidden, 13, 7
+      )
+
+      fused[:top2].map(&.[0]).should eq(reference[:top2].map(&.[0]))
+      fused[:top2].each_with_index do |(id, logit), i|
+        id.should eq(reference[:top2][i][0])
+        (logit - reference[:top2][i][1]).abs.should be <= 2.0e-3_f32
+      end
+      cosine_iq4(fused[:hidden], reference[:hidden]).should be >= 0.999999
+    ensure
+      if old_fuse
+        ENV["QWEN35_MTP_FFN_HEAD_FUSE"] = old_fuse
+      else
+        ENV.delete("QWEN35_MTP_FFN_HEAD_FUSE")
+      end
+      if old_top2_off
+        ENV["QWEN35_MTP_FFN_HEAD_TOP2_FUSE_OFF"] = old_top2_off
+      else
+        ENV.delete("QWEN35_MTP_FFN_HEAD_TOP2_FUSE_OFF")
+      end
+    end
+  end
 end
