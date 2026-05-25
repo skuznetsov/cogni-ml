@@ -44,6 +44,7 @@ struct TraceRecord
   getter end_i : Int32
   getter wall_before_ms : Float64
   getter wall_after_ms : Float64
+  getter plain_exact_ms : Float64?
   getter plain_suffix_ms : Float64
   getter entry_prev_token : Int32?
   getter prompt_tokens : Float64?
@@ -58,7 +59,8 @@ struct TraceRecord
   getter rejections_delta : Int32
   getter fallback_delta : Int32
 
-  def initialize(@label, @gamma, @pass, @start_i, @end_i, @wall_before_ms, @wall_after_ms, @plain_suffix_ms,
+  def initialize(@label, @gamma, @pass, @start_i, @end_i, @wall_before_ms, @wall_after_ms,
+                 @plain_exact_ms, @plain_suffix_ms,
                  @entry_prev_token, @prompt_tokens, @prompt_unique_rate, @prompt_repeat_rate,
                  @prompt_bigram_repeat_rate, @prompt_adjacent_repeat_rate,
                  @mtp_first_margin, @mtp_min_margin, @target_margin,
@@ -99,6 +101,7 @@ paths.each do |path|
       i32(obj, "end_i"),
       f64(obj, "wall_before_ms").not_nil!,
       f64(obj, "wall_after_ms").not_nil!,
+      f64(obj, "plain_exact_ms"),
       f64(obj, "plain_suffix_ms").not_nil!,
       i32_opt(obj, "entry_prev_token"),
       f64(obj, "prompt_tokens"),
@@ -161,9 +164,10 @@ entry_features.each do |feature, feature_thresholds|
         if should_skip
           skipped_groups += 1
           skipped_tokens += Math.max(0, sorted.last.end_i - first.start_i)
-          # Entry/no-entry model: pay work already done before this MTP pass
-          # (usually exact-first) and then finish exact from the same boundary.
-          modeled_sum += first.wall_before_ms + first.plain_suffix_ms
+          # Whole-route no-entry model: if we choose not to enter MTP at all,
+          # use the paired plain exact wall when present. Older traces lack it;
+          # for those, fall back to the post-entry exact suffix model.
+          modeled_sum += first.plain_exact_ms || (first.wall_before_ms + first.plain_suffix_ms)
         else
           modeled_sum += actual_wall
         end

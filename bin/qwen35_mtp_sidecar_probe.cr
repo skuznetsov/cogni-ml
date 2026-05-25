@@ -472,6 +472,7 @@ end
 private def write_router_trace(io : IO, label : String, gamma : Int32, pass : MtpSpecWallRouterPass,
                                target_top2 : {Int32, Float32, Int32, Float32},
                                plain_suffix_ms : Float64,
+                               plain_exact_ms : Float64,
                                entry_features : PromptEntryFeatures,
                                entry_prev_token : Int32)
   top1_id, top1_logit, top2_id, top2_logit = target_top2
@@ -506,6 +507,7 @@ private def write_router_trace(io : IO, label : String, gamma : Int32, pass : Mt
       json.field "mtp_min_margin", pass.mtp_min_margin
       json.field "wall_before_ms", pass.wall_before_ms
       json.field "wall_after_ms", pass.wall_after_ms
+      json.field "plain_exact_ms", plain_exact_ms
       json.field "plain_suffix_ms", plain_suffix_ms
       json.field "accepted_delta", pass.accepted_delta
       json.field "rejections_delta", pass.rejections_delta
@@ -1479,7 +1481,7 @@ rows.each do |label, prompt_text|
         top2 = get_target_top2.call(record.start_i)
         if io = router_trace_io
           entry_prev_token = record.start_i > 0 ? exact_ids[record.start_i - 1] : token_ids[-1]
-          write_router_trace(io, label, gamma, record, top2, plain_suffix_ms[record.start_i], entry_features, entry_prev_token)
+          write_router_trace(io, label, gamma, record, top2, plain_suffix_ms[record.start_i], plain_exact_ms, entry_features, entry_prev_token)
         end
       end
 
