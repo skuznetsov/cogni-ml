@@ -2418,6 +2418,19 @@ module ML
           min_batch > 0 && batch >= min_batch
         end
 
+        private def self.q4_h16_exact_rowpack_candidate?(batch : Int32) : Bool
+          (q4_h16_b48_gemm_enabled? && batch == MM48_NR1) ||
+            (q4_h16_b80_gemm_enabled? && batch == MM80_NR1) ||
+            (q4_h16_b96_gemm_enabled? && batch == MM96_NR1) ||
+            (q4_h16_b112_gemm_enabled? && batch == MM112_NR1)
+        end
+
+        private def self.q4_h16_b64_swiglu_batch_candidate?(batch : Int32) : Bool
+          batch >= MM64_NR1 &&
+            ((batch % MM64_NR1) == 0 ||
+              (q4_h16_b64_tail_candidate?(batch) && !q4_h16_exact_rowpack_candidate?(batch)))
+        end
+
         private def self.q4_h16_b48_gemm_enabled? : Bool
           ENV["QWEN35_Q4K_H16_B48_OFF"]? != "1"
         end
@@ -2531,8 +2544,7 @@ module ML
             !down_h16 &&
             q4_h16_b64_gemm_enabled? &&
             q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch) &&
-            batch >= MM64_NR1 &&
-            ((batch % MM64_NR1) == 0 || q4_h16_b64_tail_candidate?(batch)) &&
+            q4_h16_b64_swiglu_batch_candidate?(batch) &&
             (up_qw.out_dim % MM_NR0) == 0
         end
 
@@ -2544,8 +2556,7 @@ module ML
             down_h16 &&
             q4_h16_b64_gemm_enabled? &&
             q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch) &&
-            batch >= MM64_NR1 &&
-            ((batch % MM64_NR1) == 0 || q4_h16_b64_tail_candidate?(batch)) &&
+            q4_h16_b64_swiglu_batch_candidate?(batch) &&
             (up_qw.out_dim % MM_NR0) == 0
         end
 
@@ -2557,8 +2568,7 @@ module ML
             h16_batch_gemm_candidate?(down_qw, batch) &&
             q4_h16_b64_gemm_enabled? &&
             q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch) &&
-            batch >= MM64_NR1 &&
-            ((batch % MM64_NR1) == 0 || q4_h16_b64_tail_candidate?(batch)) &&
+            q4_h16_b64_swiglu_batch_candidate?(batch) &&
             (up_qw.out_dim % MM_NR0) == 0
         end
 
