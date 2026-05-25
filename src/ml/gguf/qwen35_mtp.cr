@@ -360,6 +360,22 @@ module ML::GGUF
         @length += 1
         @length - 1
       end
+
+      def truncate!(new_length : Int32) : Nil
+        raise ArgumentError.new("mtp truncate length #{new_length} outside 0..#{@length}") unless 0 <= new_length <= @length
+        @length = new_length
+      end
+
+      def fork : State
+        copy = State.new(@max_seq, @kv_dim)
+        used = @length * @kv_dim
+        used.times do |i|
+          copy.k_cache[i] = @k_cache[i]
+          copy.v_cache[i] = @v_cache[i]
+        end
+        copy.length = @length
+        copy
+      end
     end
 
     def bf16_at(raw : Bytes, i : Int32) : Float32
