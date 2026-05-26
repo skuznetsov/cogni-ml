@@ -25,6 +25,7 @@ hadamard_window = (ENV["QWEN35_HADAMARD_WINDOW"]? || "8").to_i
 hadamard_max_hamming = (ENV["QWEN35_HADAMARD_MAX_HAMMING"]? || "16").to_i
 hadamard_min_candidates = (ENV["QWEN35_HADAMARD_MIN_CANDIDATES"]? || min_candidates.to_s).to_i
 hadamard_min_exact_overlap = (ENV["QWEN35_HADAMARD_MIN_EXACT_OVERLAP"]? || "1.0").to_f64
+hadamard_trace = ENV["QWEN35_HADAMARD_TRACE"]? == "1"
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_ngram_speculative [--target PATH] [--tokenizer-bin PATH] [--tokens N] [--gamma N] [--min-ngram N] [--max-ngram N] [--hadamard-continuation] [--no-check] [prompt]"
@@ -42,6 +43,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--hadamard-max-hamming N", "Maximum 64-bit sketch Hamming distance for Hadamard continuation (default: env QWEN35_HADAMARD_MAX_HAMMING or 16)") { |value| hadamard_max_hamming = value.to_i }
   parser.on("--hadamard-min-candidates N", "Skip Hadamard continuation chunks shorter than N candidates (default: n-gram min-candidates)") { |value| hadamard_min_candidates = value.to_i }
   parser.on("--hadamard-min-exact-overlap F", "Minimum exact-token overlap for Hadamard continuation windows (default: env QWEN35_HADAMARD_MIN_EXACT_OVERLAP or 1.0)") { |value| hadamard_min_exact_overlap = value.to_f64 }
+  parser.on("--hadamard-trace", "Print per-corridor Hadamard span telemetry") { hadamard_trace = true }
   parser.on("--no-check", "Skip plain greedy replay/equality check") { check_plain = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -110,7 +112,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{weights.hparams.n_layer} dim=#{weights.hparams.n_embd} vocab=#{weights.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} hadamard_continuation=#{hadamard_continuation} hadamard_window=#{hadamard_window} hadamard_max_hamming=#{hadamard_max_hamming} hadamard_min_candidates=#{hadamard_min_candidates} hadamard_min_exact_overlap=#{hadamard_min_exact_overlap} n_gen=#{n_gen}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} hadamard_continuation=#{hadamard_continuation} hadamard_window=#{hadamard_window} hadamard_max_hamming=#{hadamard_max_hamming} hadamard_min_candidates=#{hadamard_min_candidates} hadamard_min_exact_overlap=#{hadamard_min_exact_overlap} hadamard_trace=#{hadamard_trace} n_gen=#{n_gen}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -139,6 +141,7 @@ wall0 = Time.instant
 while generated_ids.size < n_gen
   chunk_budget = Math.min(gamma, n_gen - generated_ids.size)
   candidate_source = "none"
+  hadamard_span = nil.as(ML::GGUF::HadamardContinuationDraft::CandidateSpan?)
   candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(history, chunk_budget, max_ngram, min_ngram, recursive: recursive_ngram, min_candidates: min_candidates)
   unless candidates.empty?
     candidate_source = "ngram"
@@ -149,6 +152,7 @@ while generated_ids.size < n_gen
          .candidate_span(chunk_budget, min_candidates: hadamard_min_candidates, max_hamming: hadamard_max_hamming, min_exact_overlap: hadamard_min_exact_overlap)
       candidates = span.ids
       candidate_source = "hadamard"
+      hadamard_span = span
     end
   end
 
@@ -182,6 +186,7 @@ while generated_ids.size < n_gen
   expected = target_next
   accepted_or_corrected = [] of Int32
   rejected = false
+  chunk_accepted = 0
   candidates.each_with_index do |cand, i|
     if cand == expected
       generated_ids << cand
@@ -193,6 +198,7 @@ while generated_ids.size < n_gen
       else
         ngram_accepted += 1
       end
+      chunk_accepted += 1
       expected = target_nexts[i][0]
     else
       generated_ids << expected
@@ -201,6 +207,10 @@ while generated_ids.size < n_gen
       rejected = true
       break
     end
+  end
+
+  if hadamard_trace && candidate_source == "hadamard" && (span = hadamard_span)
+    puts "hadamard_span source_start=#{span.source_start} window=#{span.window_size} exact=#{span.exact_matches}/#{span.window_size} hamming=#{span.hamming} proposed=#{candidates.size} accepted=#{chunk_accepted} rejected=#{rejected}"
   end
 
   if rejected
