@@ -1192,7 +1192,6 @@ elsif mtp_decode_enabled && !output_ids.empty?
           draft_pos = wall_pos
         end
       else
-        pass_rejected = true
         mtp_rejections += 1
         correction = top1s[accepted_stage][0]
         stage_candidates[0, accepted_stage].each do |id|
@@ -1224,10 +1223,17 @@ elsif mtp_decode_enabled && !output_ids.empty?
         end
 
         if rescued
-          pass_finished = true
+          if output_ids.size >= n_gen || wall_token == tok.eos_id
+            pass_finished = true
+          else
+            draft_hidden = wall_hidden
+            draft_token = wall_token
+            draft_pos = wall_pos
+          end
           next
         end
 
+        pass_rejected = true
         fallback_start = Time.instant
         wall_token, wall_pos, emitted = append_exact_suffix!(w, output_ids, wall_token, wall_pos, state, n_gen)
         mtp_fallback_tokens += emitted
