@@ -110,6 +110,7 @@ mtp_gguf_path = ENV["QWEN35_MTP_GGUF_PATH"]?
 mtp_gamma = (ENV["QWEN35_MTP_GAMMA"]? || "4").to_i
 mtp_stage = (ENV["QWEN35_MTP_STAGE"]? || "2").to_i
 mtp_min_margin = (ENV["QWEN35_MTP_MIN_MARGIN"]? || "1.0").to_f
+mtp_min_remaining = (ENV["QWEN35_MTP_MIN_REMAINING"]? || "8").to_i
 mtp_trace_enabled = ENV["QWEN35_MTP_TRACE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
@@ -177,6 +178,7 @@ raise "QWEN35_SPEC_BOOTSTRAP_STREAK must be positive" unless spec_bootstrap_stre
 raise "QWEN35_MTP_GAMMA must be positive" unless mtp_gamma > 0
 raise "QWEN35_MTP_STAGE must be positive" unless mtp_stage > 0
 raise "QWEN35_MTP_MIN_MARGIN must be non-negative" unless mtp_min_margin >= 0.0
+raise "QWEN35_MTP_MIN_REMAINING must be non-negative" unless mtp_min_remaining >= 0
 unless spec_verify_mode == "chunk-inplace" || spec_verify_mode == "hybrid" || spec_verify_mode == "serial"
   raise "QWEN35_SPEC_VERIFY must be chunk-inplace, hybrid, or serial"
 end
@@ -970,6 +972,14 @@ if output_ids.empty?
       )
       STDOUT << "  saved prompt-cache full #{ids.size} tokens sha=#{saved.artifact_sha256[0, 12]}\n"
     end
+  end
+end
+
+if mtp_decode_enabled && output_ids.size < n_gen
+  remaining_after_prefill = n_gen - output_ids.size
+  if remaining_after_prefill < mtp_min_remaining
+    STDOUT << "\nMTP no-entry gate: remaining=#{remaining_after_prefill} min_remaining=#{mtp_min_remaining}; using exact greedy decode\n"
+    mtp_decode_enabled = false
   end
 end
 
