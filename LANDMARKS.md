@@ -16416,3 +16416,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: The local window is valid, but the transport corridor after rescue is sticky: continuing MTP increases `(verifier_tokens, proposal_ms, wall_ms)` after recomputation. The certified dual frame for this prompt is exact fallback after the first reject.
 - adversary: This is one structured prompt under host noise, but the regression is large and ids match. Keep rescue opt-in until a pass-level selector proves positive EV across prompts.
 - trust: {F:0.87,G:0.56,R:0.84}
+
+**LM-612 Naive resident top1 verifier is unsafe until final hidden buffer production is certified [shared/ml]**
+- status: VERIFIED refutation; code removed
+- claim tested: `prefill_tokens_top1s` could avoid CPU hidden materialization by asking `prefill_tokens_hidden(... need_output:false, resident_output_buf: ...)` to leave final hidden rows on GPU, then running row-batched output-head top1 directly from that buffer.
+- evidence: Temporary `QWEN35_PREFILL_TOP1_RESIDENT_ROWS=1` prototype compiled and focused specs passed (`27 examples, 0 failures`), but the live 9B neural speculative smoke failed with `resident top1 verifier did not produce a GPU hidden buffer`; log `/tmp/qwen35_generate_resident_top1_on_20260525214902.log`. The code was removed before commit.
+- diagnosis: The current final-group prefill route does not guarantee resident final hidden production for the verifier shape. Because the failed attempt discovers this after mutating state, it is not fail-closed. A correct resident verifier needs a preflight-certified route or a separate verifier command path that owns final hidden buffer production as an invariant.
+- LTP/WBA: Desired window is top1-only verifier rows; transport is GPU-resident hidden rows into output-head top1. Legal move failed boundary safety because the corridor was not certified before state mutation. Dual frame remains host-visible hidden materialization.
+- next branch: first add a route-capability predicate or a dedicated final-hidden resident command path; only then reintroduce buffer-based top1 rows.
+- trust: {F:0.86,G:0.58,R:0.84}
