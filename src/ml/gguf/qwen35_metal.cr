@@ -176,6 +176,7 @@ module ML
         GEMM_Q56K_SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }}
         GEMM_MM_SOURCE   = {{ read_file("#{__DIR__}/kernels/gemm_mm.metal") }}
         DELTA_NET_SOURCE = {{ read_file("#{__DIR__}/kernels/delta_net.metal") }}
+        FFN_UPDOWN_Q8_SOURCE = {{ read_file("#{__DIR__}/kernels/ffn_updown_q8.metal") }}
         ATTN_DECODE_SOURCE = {{ read_file("#{__DIR__}/kernels/attn_decode_qwen35.metal") }}
         FFN_SOURCE = {{ read_file("#{__DIR__}/kernels/ffn_qwen35.metal") }}
         RECURRENT_SOURCE = {{ read_file("#{__DIR__}/kernels/recurrent_qwen35.metal") }}
@@ -244,6 +245,7 @@ module ML
         @@ffn_pca_updown_out_pipeline : ML::Metal::ComputePipeline?
         @@ffn_pca_updown_fused_pipeline : ML::Metal::ComputePipeline?
         @@ffn_pca_updown_fused_rows_pipeline : ML::Metal::ComputePipeline?
+        @@ffn_pca_updown_fused_rows_q8_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
         @@attn_gqa4_pipeline : ML::Metal::ComputePipeline?
         @@attn_splitk_stage1_pipeline : ML::Metal::ComputePipeline?
@@ -1226,6 +1228,12 @@ module ML
         private def self.ffn_pca_updown_fused_rows_pipeline : ML::Metal::ComputePipeline
           @@ffn_pca_updown_fused_rows_pipeline ||= ML::Metal::PipelineCache.get("ffn_pca_updown_fused_rows") {
             ML::Metal::ComputePipeline.new("ffn_pca_updown_fused_rows", DELTA_NET_SOURCE)
+          }
+        end
+
+        private def self.ffn_pca_updown_fused_rows_q8_pipeline : ML::Metal::ComputePipeline
+          @@ffn_pca_updown_fused_rows_q8_pipeline ||= ML::Metal::PipelineCache.get("ffn_pca_updown_fused_rows_q8") {
+            ML::Metal::ComputePipeline.new("ffn_pca_updown_fused_rows_q8", FFN_UPDOWN_Q8_SOURCE)
           }
         end
 
@@ -8756,6 +8764,10 @@ module ML
                                            lowrank_updown_c_mean_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                            lowrank_updown_coeff_w_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                            lowrank_updown_down_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_coeff_q8_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_coeff_q8_scale_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_down_q8_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
+                                           lowrank_updown_down_q8_scale_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                            lowrank_updown_rank : Int32 = 0,
                                            lowrank_updown_layer_indices : Set(Int32)? = nil,
                                            token_embd_qw : QuantWeight? = nil,
@@ -8786,6 +8798,10 @@ module ML
                 lowrank_updown_c_mean_bufs: lowrank_updown_c_mean_bufs,
                 lowrank_updown_coeff_w_bufs: lowrank_updown_coeff_w_bufs,
                 lowrank_updown_down_bufs: lowrank_updown_down_bufs,
+                lowrank_updown_coeff_q8_bufs: lowrank_updown_coeff_q8_bufs,
+                lowrank_updown_coeff_q8_scale_bufs: lowrank_updown_coeff_q8_scale_bufs,
+                lowrank_updown_down_q8_bufs: lowrank_updown_down_q8_bufs,
+                lowrank_updown_down_q8_scale_bufs: lowrank_updown_down_q8_scale_bufs,
                 lowrank_updown_rank: lowrank_updown_rank,
                 lowrank_updown_layer_indices: lowrank_updown_layer_indices,
                 token_embd_qw: token_embd_qw,
@@ -8816,6 +8832,10 @@ module ML
                 lowrank_updown_c_mean_bufs: lowrank_updown_c_mean_bufs,
                 lowrank_updown_coeff_w_bufs: lowrank_updown_coeff_w_bufs,
                 lowrank_updown_down_bufs: lowrank_updown_down_bufs,
+                lowrank_updown_coeff_q8_bufs: lowrank_updown_coeff_q8_bufs,
+                lowrank_updown_coeff_q8_scale_bufs: lowrank_updown_coeff_q8_scale_bufs,
+                lowrank_updown_down_q8_bufs: lowrank_updown_down_q8_bufs,
+                lowrank_updown_down_q8_scale_bufs: lowrank_updown_down_q8_scale_bufs,
                 lowrank_updown_rank: lowrank_updown_rank,
                 lowrank_updown_layer_indices: lowrank_updown_layer_indices,
                 token_embd_qw: token_embd_qw,
@@ -8997,8 +9017,12 @@ module ML
             raise "decode wave lowrank updown rank too large" if lowrank_updown_rank > 64
             raise "decode wave lowrank updown requires x_mean buffers" if lowrank_updown_x_mean_bufs.nil?
             raise "decode wave lowrank updown requires c_mean buffers" if lowrank_updown_c_mean_bufs.nil?
-            raise "decode wave lowrank updown requires coeff buffers" if lowrank_updown_coeff_w_bufs.nil?
-            raise "decode wave lowrank updown requires down buffers" if lowrank_updown_down_bufs.nil?
+            q8_updown = !lowrank_updown_coeff_q8_bufs.nil? &&
+                         !lowrank_updown_coeff_q8_scale_bufs.nil? &&
+                         !lowrank_updown_down_q8_bufs.nil? &&
+                         !lowrank_updown_down_q8_scale_bufs.nil?
+            f32_updown = !lowrank_updown_coeff_w_bufs.nil? && !lowrank_updown_down_bufs.nil?
+            raise "decode wave lowrank updown requires either f32 or q8 coeff/down buffers" unless q8_updown || f32_updown
           end
           lr_c_buf = lr_active ? Scratch.get(:wave_lr_c, (hp.ssm_group_count * lowrank_rank).to_i64 * sizeof(Float32)) : nil
           lr_qbar_buf = lr_active ? Scratch.get(:wave_lr_qbar, (hp.ssm_group_count * lowrank_rank).to_i64 * sizeof(Float32)) : nil
@@ -9470,21 +9494,46 @@ module ML
                 elsif use_layer_updown
                   x_mean_buf = lowrank_updown_x_mean_bufs.not_nil![il]? || raise "decode wave lowrank updown missing x_mean for layer #{il}"
                   c_mean_buf = lowrank_updown_c_mean_bufs.not_nil![il]? || raise "decode wave lowrank updown missing c_mean for layer #{il}"
-                  coeff_w_buf = lowrank_updown_coeff_w_bufs.not_nil![il]? || raise "decode wave lowrank updown missing coeff_w for layer #{il}"
-                  down_buf = lowrank_updown_down_bufs.not_nil![il]? || raise "decode wave lowrank updown missing down for layer #{il}"
+                  use_q8_updown = !lowrank_updown_coeff_q8_bufs.nil? &&
+                                   !lowrank_updown_coeff_q8_scale_bufs.nil? &&
+                                   !lowrank_updown_down_q8_bufs.nil? &&
+                                   !lowrank_updown_down_q8_scale_bufs.nil? &&
+                                   lowrank_updown_coeff_q8_bufs.not_nil!.has_key?(il) &&
+                                   lowrank_updown_down_q8_bufs.not_nil!.has_key?(il)
 
                   Profile.trace("rec.ffn_pca_updown") do
                     updown_enc = ML::Metal::ComputeEncoder.new(cmd)
-                    updown_enc.set_pipeline(ffn_pca_updown_fused_rows_pipeline)
-                    updown_enc.set_buffer(pre_norm_buf, 0)
-                    updown_enc.set_buffer(x_mean_buf, 1)
-                    updown_enc.set_buffer(c_mean_buf, 2)
-                    updown_enc.set_buffer(coeff_w_buf, 3)
-                    updown_enc.set_buffer(down_buf, 4)
-                    updown_enc.set_buffer(ffn_out_buf, 5, ML::Metal::BufferAccess::Write)
-                    updown_enc.set_value(hidden_dim.to_u32, 6)
-                    updown_enc.set_value(lowrank_updown_rank.to_u32, 7)
-                    updown_enc.set_value(1_u32, 8)
+                    if use_q8_updown
+                      coeff_q8_buf = lowrank_updown_coeff_q8_bufs.not_nil![il]? || raise "decode wave lowrank updown missing q8 coeff for layer #{il}"
+                      coeff_q8_scale_buf = lowrank_updown_coeff_q8_scale_bufs.not_nil![il]? || raise "decode wave lowrank updown missing q8 coeff scales for layer #{il}"
+                      down_q8_buf = lowrank_updown_down_q8_bufs.not_nil![il]? || raise "decode wave lowrank updown missing q8 down for layer #{il}"
+                      down_q8_scale_buf = lowrank_updown_down_q8_scale_bufs.not_nil![il]? || raise "decode wave lowrank updown missing q8 down scales for layer #{il}"
+                      updown_enc.set_pipeline(ffn_pca_updown_fused_rows_q8_pipeline)
+                      updown_enc.set_buffer(pre_norm_buf, 0)
+                      updown_enc.set_buffer(x_mean_buf, 1)
+                      updown_enc.set_buffer(c_mean_buf, 2)
+                      updown_enc.set_buffer(coeff_q8_buf, 3)
+                      updown_enc.set_buffer(coeff_q8_scale_buf, 4)
+                      updown_enc.set_buffer(down_q8_buf, 5)
+                      updown_enc.set_buffer(down_q8_scale_buf, 6)
+                      updown_enc.set_buffer(ffn_out_buf, 7, ML::Metal::BufferAccess::Write)
+                      updown_enc.set_value(hidden_dim.to_u32, 8)
+                      updown_enc.set_value(lowrank_updown_rank.to_u32, 9)
+                      updown_enc.set_value(1_u32, 10)
+                    else
+                      coeff_w_buf = lowrank_updown_coeff_w_bufs.not_nil![il]? || raise "decode wave lowrank updown missing coeff_w for layer #{il}"
+                      down_buf = lowrank_updown_down_bufs.not_nil![il]? || raise "decode wave lowrank updown missing down for layer #{il}"
+                      updown_enc.set_pipeline(ffn_pca_updown_fused_rows_pipeline)
+                      updown_enc.set_buffer(pre_norm_buf, 0)
+                      updown_enc.set_buffer(x_mean_buf, 1)
+                      updown_enc.set_buffer(c_mean_buf, 2)
+                      updown_enc.set_buffer(coeff_w_buf, 3)
+                      updown_enc.set_buffer(down_buf, 4)
+                      updown_enc.set_buffer(ffn_out_buf, 5, ML::Metal::BufferAccess::Write)
+                      updown_enc.set_value(hidden_dim.to_u32, 6)
+                      updown_enc.set_value(lowrank_updown_rank.to_u32, 7)
+                      updown_enc.set_value(1_u32, 8)
+                    end
                     updown_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
                     updown_enc.end_encoding
                   end

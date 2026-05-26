@@ -1365,6 +1365,89 @@ private def build_updown_adapter_buffer_maps(adapters : FFNUpDownAdapterMap,
   }
 end
 
+private def quantize_row_q8(values : Array(Float32)) : NamedTuple(bytes: Bytes, scale: Float32)
+  max_abs = 0.0_f32
+  values.each do |v|
+    a = v.abs
+    max_abs = a if a > max_abs
+  end
+  scale = max_abs > 0.0_f32 ? (max_abs / 127.0_f32) : 1.0_f32
+  bytes = Bytes.new(values.size)
+  values.each_with_index do |v, i|
+    q = (v / scale).round.to_i
+    q = -127 if q < -127
+    q = 127 if q > 127
+    bytes[i] = (q < 0 ? q + 256 : q).to_u8
+  end
+  {bytes: bytes, scale: scale}
+end
+
+private def build_updown_adapter_q8_buffer_maps(adapters : FFNUpDownAdapterMap,
+                                                layer_ids : Enumerable(Int32),
+                                                rank : Int32,
+                                                hidden_dim : Int32) : NamedTuple(x_mean: Hash(Int32, ML::MetalBuffer), c_mean: Hash(Int32, ML::MetalBuffer), coeff_q8: Hash(Int32, ML::MetalBuffer), coeff_scales: Hash(Int32, ML::MetalBuffer), down_q8: Hash(Int32, ML::MetalBuffer), down_scales: Hash(Int32, ML::MetalBuffer), rank: Int32)
+  raise "GPU pipeline pca-updown q8 rank must be positive" unless rank > 0
+  raise "GPU pipeline pca-updown q8 rank too large for current Metal kernel" if rank > 64
+
+  x_mean = {} of Int32 => ML::MetalBuffer
+  c_mean = {} of Int32 => ML::MetalBuffer
+  coeff_q8 = {} of Int32 => ML::MetalBuffer
+  coeff_scales = {} of Int32 => ML::MetalBuffer
+  down_q8 = {} of Int32 => ML::MetalBuffer
+  down_scales = {} of Int32 => ML::MetalBuffer
+  actual_rank = nil.as(Int32?)
+  layer_ids.each do |il|
+    adapter = adapters[il]? || raise "GPU pipeline pca-updown q8 missing adapter for layer #{il}"
+    limit = Math.min(rank, adapter.coeff_weights.size)
+    raise "GPU pipeline pca-updown q8 has no coefficient weights" unless limit > 0
+    raise "GPU pipeline pca-updown q8 output dim mismatch" unless adapter.down_basis[0].size == hidden_dim
+    if prev_rank = actual_rank
+      raise "GPU pipeline pca-updown q8 inconsistent adapter ranks: #{prev_rank} vs #{limit} at layer #{il}" unless prev_rank == limit
+    else
+      actual_rank = limit
+    end
+
+    coeff_bytes = Bytes.new(limit * hidden_dim)
+    down_bytes = Bytes.new(limit * hidden_dim)
+    coeff_scale_values = Array(Float32).new(limit)
+    down_scale_values = Array(Float32).new(limit)
+    limit.times do |j|
+      coeff_row = Array(Float32).new(hidden_dim)
+      hidden_dim.times { |d| coeff_row << adapter.coeff_weights[j][d].to_f32 }
+      cq = quantize_row_q8(coeff_row)
+      coeff_scale_values << cq[:scale]
+      cq[:bytes].each_with_index { |b, d| coeff_bytes[j * hidden_dim + d] = b }
+
+      down_row = Array(Float32).new(hidden_dim)
+      hidden_dim.times { |d| down_row << adapter.down_basis[j][d] }
+      dq = quantize_row_q8(down_row)
+      down_scale_values << dq[:scale]
+      dq[:bytes].each_with_index { |b, d| down_bytes[j * hidden_dim + d] = b }
+    end
+
+    coeff_buf = ML::MetalBuffer.new(coeff_bytes.size.to_i64)
+    coeff_buf.write_bytes(coeff_bytes.to_unsafe, coeff_bytes.size)
+    down_buf = ML::MetalBuffer.new(down_bytes.size.to_i64)
+    down_buf.write_bytes(down_bytes.to_unsafe, down_bytes.size)
+
+    x_mean[il] = ML::MetalBuffer.from_array(adapter.x_mean.map(&.to_f32))
+    c_mean[il] = ML::MetalBuffer.from_array(adapter.c_mean[0, limit].map(&.to_f32))
+    coeff_q8[il] = coeff_buf
+    coeff_scales[il] = ML::MetalBuffer.from_array(coeff_scale_values)
+    down_q8[il] = down_buf
+    down_scales[il] = ML::MetalBuffer.from_array(down_scale_values)
+  end
+  {
+    x_mean:       x_mean,
+    c_mean:       c_mean,
+    coeff_q8:     coeff_q8,
+    coeff_scales: coeff_scales,
+    down_q8:      down_q8,
+    down_scales:  down_scales,
+    rank:         actual_rank || raise("GPU pipeline pca-updown q8 has no layers"),
+  }
+end
+
 private def lowrank_state_buffer!(lr_state : LowRankState) : ML::MetalBuffer
   byte_size = lr_state.m.size.to_i64 * sizeof(Float32)
   buf = lr_state.m_buf
@@ -7977,6 +8060,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                                                 gamma_schedule : Array(Int32)? = nil,
                                                 draft_updown_rank : Int32? = nil,
                                                 ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
+                                                draft_updown_q8_metal : Bool = false,
                                                 draft_updown_fallback_on_reject : Bool = false,
                                                 draft_updown_after_full_accepts : Int32 = 0,
                                                 draft_updown_min_margin : Float64? = nil,
@@ -8128,6 +8212,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   updown_c_mean_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
   updown_coeff_w_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
   updown_down_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_coeff_q8_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_coeff_q8_scale_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_down_q8_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
+  updown_down_q8_scale_bufs = nil.as(Hash(Int32, ML::MetalBuffer)?)
   updown_actual_rank = 0
   if updown_rank = draft_updown_rank
     raise "GPU pipeline pca-updown cannot be combined with global draft_no_ffn" if draft_no_ffn
@@ -8138,12 +8226,24 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       raise "GPU pipeline pca-updown/no-ffn layer sets overlap: #{overlap.to_a.sort.join(',')}" unless overlap.empty?
     end
     adapters = ffn_updown_adapters || raise "GPU pipeline pca-updown requires FFN up/down adapters"
-    maps = build_updown_adapter_buffer_maps(adapters, draft_updown_layer_indices || lowrank_set, updown_rank, hp.n_embd)
-    updown_x_mean_bufs = maps[:x_mean]
-    updown_c_mean_bufs = maps[:c_mean]
-    updown_coeff_w_bufs = maps[:coeff_w]
-    updown_down_bufs = maps[:down]
-    updown_actual_rank = maps[:rank]
+    if draft_updown_q8_metal
+      maps = build_updown_adapter_q8_buffer_maps(adapters, draft_updown_layer_indices || lowrank_set, updown_rank, hp.n_embd)
+      updown_x_mean_bufs = maps[:x_mean]
+      updown_c_mean_bufs = maps[:c_mean]
+      updown_coeff_q8_bufs = maps[:coeff_q8]
+      updown_coeff_q8_scale_bufs = maps[:coeff_scales]
+      updown_down_q8_bufs = maps[:down_q8]
+      updown_down_q8_scale_bufs = maps[:down_scales]
+      updown_actual_rank = maps[:rank]
+      puts "ffn_updown_pca_adapter_metal mode=raw_q8 layers=#{(draft_updown_layer_indices || lowrank_set).to_a.sort.join(',')} max_rank=#{updown_actual_rank}"
+    else
+      maps = build_updown_adapter_buffer_maps(adapters, draft_updown_layer_indices || lowrank_set, updown_rank, hp.n_embd)
+      updown_x_mean_bufs = maps[:x_mean]
+      updown_c_mean_bufs = maps[:c_mean]
+      updown_coeff_w_bufs = maps[:coeff_w]
+      updown_down_bufs = maps[:down]
+      updown_actual_rank = maps[:rank]
+    end
   end
   wba = WbaTrace.maybe("self_spec_gpu_pipeline")
   attr_collect = true
@@ -8274,6 +8374,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                 lowrank_updown_c_mean_bufs: updown_c_mean_bufs,
                 lowrank_updown_coeff_w_bufs: updown_coeff_w_bufs,
                 lowrank_updown_down_bufs: updown_down_bufs,
+                lowrank_updown_coeff_q8_bufs: updown_coeff_q8_bufs,
+                lowrank_updown_coeff_q8_scale_bufs: updown_coeff_q8_scale_bufs,
+                lowrank_updown_down_q8_bufs: updown_down_q8_bufs,
+                lowrank_updown_down_q8_scale_bufs: updown_down_q8_scale_bufs,
                 lowrank_updown_rank: use_updown ? updown_actual_rank : 0,
                 lowrank_updown_layer_indices: draft_updown_layer_indices,
                 scratch_namespace: "#{label}_#{j}",
@@ -8288,6 +8392,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                 lowrank_updown_c_mean_bufs: updown_c_mean_bufs,
                 lowrank_updown_coeff_w_bufs: updown_coeff_w_bufs,
                 lowrank_updown_down_bufs: updown_down_bufs,
+                lowrank_updown_coeff_q8_bufs: updown_coeff_q8_bufs,
+                lowrank_updown_coeff_q8_scale_bufs: updown_coeff_q8_scale_bufs,
+                lowrank_updown_down_q8_bufs: updown_down_q8_bufs,
+                lowrank_updown_down_q8_scale_bufs: updown_down_q8_scale_bufs,
                 lowrank_updown_rank: use_updown ? updown_actual_rank : 0,
                 lowrank_updown_layer_indices: draft_updown_layer_indices,
                 scratch_namespace: "#{label}_#{j}",
@@ -11411,6 +11519,7 @@ simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_bits = [8, 4]
 simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_blocks = [16, 32, 64]
 ffn_updown_adapter_quant_bits : Int32? = nil
 ffn_updown_adapter_quant_hadamard_block : Int32? = nil
+ffn_updown_adapter_q8_metal = false
 dump_ffn_updown_adapters_path : String? = nil
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 simulate_self_spec_gpu_pipeline_router_trace_path : String? = nil
@@ -11685,6 +11794,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--ffn-updown-hadamard-blocks=LIST", "Power-of-two block sizes for Hadamard quant probes, default 16,32,64") { |v| simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_blocks = parse_int_list(v) }
   p.on("--ffn-updown-adapter-quant-bits=N", "Quality proxy: replace trained FFN pca-updown adapter rows with symmetric qN-dequantized rows before draft simulation") { |v| ffn_updown_adapter_quant_bits = v.to_i }
   p.on("--ffn-updown-adapter-quant-hadamard-block=N", "With --ffn-updown-adapter-quant-bits, quantize adapter rows in block-Hadamard space before dequantizing back to f32") { |v| ffn_updown_adapter_quant_hadamard_block = v.to_i }
+  p.on("--ffn-updown-adapter-q8-metal", "Use raw symmetric q8 adapter-row buffers in the Metal pca-updown draft kernel instead of f32 adapter rows") { ffn_updown_adapter_q8_metal = true }
   p.on("--dump-ffn-updown-adapters=PATH", "Write trained FFN pca-updown adapters as JSON for CUDA runner probes") { |v| dump_ffn_updown_adapters_path = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-router-trace=PATH", "Write JSONL self-spec router/reject-risk rows without raw token ids") { |v| simulate_self_spec_gpu_pipeline_router_trace_path = v }
@@ -12555,7 +12665,7 @@ if rank = simulate_logit_rank
           abba_note = abba_index >= 0 ? " abba_index=#{abba_index} mode=#{force_pure ? "pure" : "selector"} route_selector_would_select=#{selector_would_select}" : ""
           pipeline_gammas.each do |pipeline_gamma|
             pipeline_splits.each do |draft_split|
-              pipe = simulate_self_spec_gpu_pipeline_run(weights, prompt_token_ids, simulate_generate_tokens, pipeline_gamma, prompt_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, nil, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], nil, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+              pipe = simulate_self_spec_gpu_pipeline_run(weights, prompt_token_ids, simulate_generate_tokens, pipeline_gamma, prompt_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, nil, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], nil, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
               accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
               backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
               split_note = draft_split.nil? ? "" : " draft_split=#{draft_split}"
@@ -12705,6 +12815,7 @@ if rank = simulate_logit_rank
               pipe = simulate_self_spec_gpu_pipeline_run(weights, prompt_token_ids, simulate_generate_tokens, pipeline_gamma, prompt_layer_bases, rank,
                 !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn,
                 simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, nil, ffn_updown_adapters,
+                ffn_updown_adapter_q8_metal,
                 simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts,
                 simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks,
                 simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate,
@@ -12751,7 +12862,7 @@ if rank = simulate_logit_rank
                 next if pipeline_updown_rank && route[:updown].nil?
                 next if pipeline_updown_rank.nil? && route[:updown]
                 route_updown_rank = route[:updown] ? pipeline_updown_rank : nil
-                pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_gamma, layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, route_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_gamma, layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, route_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                 accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                 backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                 draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
@@ -12784,7 +12895,7 @@ if rank = simulate_logit_rank
                 next if pipeline_updown_rank && route[:updown].nil?
                 next if pipeline_updown_rank.nil? && route[:updown]
                 route_updown_rank = route[:updown] ? pipeline_updown_rank : nil
-                pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_schedule[0], layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, route_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_schedule[0], layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, route_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                 accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                 backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                 draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
@@ -12834,7 +12945,7 @@ if rank = simulate_logit_rank
                     puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{main_pre_submit_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note}#{self_spec_pipeline_exact_fallback_fields(exact, simulate_generate_tokens)}"
                     next
                   end
-                  pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_gamma, layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                  pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_gamma, layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                   accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                   backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                   draft_variant_note = simulate_self_spec_gpu_pipeline_draft_no_ffn ? " draft_no_ffn=1" : ""
@@ -12868,7 +12979,7 @@ if rank = simulate_logit_rank
           pipeline_splits.each do |draft_split|
             pipeline_updown_options.each do |pipeline_updown_rank|
               risk_offramp_options.each do |risk_offramp_margin|
-                pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_schedule[0], layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                pipe = simulate_self_spec_gpu_pipeline_run(weights, token_ids, simulate_generate_tokens, pipeline_schedule[0], layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, pipeline_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                 accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                 backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                 draft_variant_note = simulate_self_spec_gpu_pipeline_draft_no_ffn ? " draft_no_ffn=1" : ""
@@ -12974,7 +13085,7 @@ if rank = simulate_logit_rank
                     next if pipeline_updown_rank && route[:updown].nil?
                     next if pipeline_updown_rank.nil? && route[:updown]
                     route_updown_rank = route[:updown] ? pipeline_updown_rank : nil
-                    pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_gamma, suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, route_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                    pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_gamma, suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, route_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                     accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                     backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                     draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
@@ -13007,7 +13118,7 @@ if rank = simulate_logit_rank
                     next if pipeline_updown_rank && route[:updown].nil?
                     next if pipeline_updown_rank.nil? && route[:updown]
                     route_updown_rank = route[:updown] ? pipeline_updown_rank : nil
-                    pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_schedule[0], suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, route_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                    pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_schedule[0], suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, false, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, route_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, route[:noffn], route[:updown], simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, simulate_self_spec_gpu_pipeline_risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                     accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                     backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                     draft_skip_rec_note = simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn ? " draft_skip_recurrent_ffn=1" : ""
@@ -13058,7 +13169,7 @@ if rank = simulate_logit_rank
                     puts "self_spec_gpu_pipeline_suite name=#{suite_prompt[:name]} layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{suite_pre_submit_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note}#{self_spec_pipeline_exact_fallback_fields(exact, simulate_generate_tokens)}"
                     next
                   end
-                  pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_gamma, suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                  pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_gamma, suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, nil, pipeline_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                   accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                   backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                   draft_variant_note = simulate_self_spec_gpu_pipeline_draft_no_ffn ? " draft_no_ffn=1" : ""
@@ -13092,7 +13203,7 @@ if rank = simulate_logit_rank
             pipeline_splits.each do |draft_split|
               pipeline_updown_options.each do |pipeline_updown_rank|
                 risk_offramp_options.each do |risk_offramp_margin|
-                  pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_schedule[0], suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, pipeline_updown_rank, ffn_updown_adapters, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
+                  pipe = simulate_self_spec_gpu_pipeline_run(weights, suite_token_ids, simulate_generate_tokens, pipeline_schedule[0], suite_layer_bases, rank, !simulate_self_spec_gpu_pipeline_no_backup, draft_split, simulate_self_spec_gpu_pipeline_draft_no_ffn, simulate_self_spec_gpu_pipeline_draft_skip_recurrent_ffn, pipeline_schedule, pipeline_updown_rank, ffn_updown_adapters, ffn_updown_adapter_q8_metal, simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject, simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts, simulate_self_spec_gpu_pipeline_draft_updown_min_margin, simulate_self_spec_gpu_pipeline_draft_updown_max_chunks, simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept, simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate, simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps, simulate_self_spec_gpu_pipeline_draft_updown_agreement_margin_thresholds, !simulate_self_spec_gpu_pipeline_legacy_full_state_backup, draft_no_ffn_layer_set, draft_updown_layer_set, simulate_self_spec_gpu_pipeline_tree2_first, simulate_self_spec_gpu_pipeline_tree2_anywhere, simulate_self_spec_gpu_pipeline_tree2_staged_tokens, simulate_self_spec_gpu_pipeline_tree2_margin_guard, simulate_self_spec_gpu_pipeline_tree2_branch_guard, risk_offramp_margin, pipeline_mtp_k2_on_reject, simulate_self_spec_gpu_pipeline_reject_offramp_after)
                   accept_rate = pipe[:proposed_tokens] > 0 ? (100.0 * pipe[:accepted_draft_tokens] / pipe[:proposed_tokens]) : 0.0
                   backup_note = simulate_self_spec_gpu_pipeline_no_backup ? " no_backup=1" : ""
                   draft_variant_note = simulate_self_spec_gpu_pipeline_draft_no_ffn ? " draft_no_ffn=1" : ""
