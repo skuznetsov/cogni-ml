@@ -16407,3 +16407,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a product MTP pass. Transport is the pass-level token corridor from exact-first boundary through proposal, verifier, optional top2 rescue, and fallback. Potential is `(wall_delta_ms, verifier_tokens_delta, fallback_tokens_delta, rejected, emitted_delta)`; selector work should only enter MTP when this tuple is expected to descend versus exact suffix.
 - adversary: This is instrumentation, not a speed win. It should not be enabled in benchmarks unless explicitly measuring routing features because file I/O can perturb timing.
 - trust: {F:0.88,G:0.66,R:0.86}
+
+**LM-611 Product top2 rescue continuation can expose a worse second MTP pass [shared/ml]**
+- status: VERIFIED refutation of default promotion
+- claim tested: If product MTP top2 rescue finds the exact correction, continuing MTP from that corrected boundary should beat immediate exact fallback.
+- evidence: Same release binary and prompt/model family as LM-610. With `QWEN35_MTP_TOP2_RESCUE=1`, generated ids matched greedy but decode took `40523.3ms`, with two passes, `accepted=2/6`, `top2_rescues=1`, `verifier_tokens=9`, and pass trace `/tmp/qwen36_generate_mtp_pass_trace_20260525213956.jsonl`. With top2 rescue disabled, ids were identical and decode took `23362.5ms`, with one pass, `accepted=0/2`, `verifier_tokens=3`, and immediate exact fallback; log `/tmp/qwen36_generate_mtp_pass_trace_no_rescue_20260525214255.log`.
+- diagnosis: Top2 rescue is not a monotonic improvement. It can convert a local successful correction into an additional bad MTP pass. The real decision is not "can top2 rescue?" but "does continuing from this rescued boundary have positive expected value versus exact suffix?"
+- LTP/WBA: The local window is valid, but the transport corridor after rescue is sticky: continuing MTP increases `(verifier_tokens, proposal_ms, wall_ms)` after recomputation. The certified dual frame for this prompt is exact fallback after the first reject.
+- adversary: This is one structured prompt under host noise, but the regression is large and ids match. Keep rescue opt-in until a pass-level selector proves positive EV across prompts.
+- trust: {F:0.87,G:0.56,R:0.84}
