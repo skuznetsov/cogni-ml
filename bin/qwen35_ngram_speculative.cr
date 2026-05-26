@@ -1,6 +1,7 @@
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/ngram_draft"
+require "../src/ml/gguf/hadamard_continuation_draft"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 require "option_parser"
@@ -19,9 +20,13 @@ min_candidates = (ENV["QWEN35_NGRAM_MIN_CANDIDATES"]? || "0").to_i
 recursive_ngram = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 check_plain = ENV["QWEN35_NGRAM_CHECK_PLAIN"]? != "0"
+hadamard_continuation = ENV["QWEN35_HADAMARD_CONTINUATION"]? == "1"
+hadamard_window = (ENV["QWEN35_HADAMARD_WINDOW"]? || "8").to_i
+hadamard_max_hamming = (ENV["QWEN35_HADAMARD_MAX_HAMMING"]? || "16").to_i
+hadamard_min_candidates = (ENV["QWEN35_HADAMARD_MIN_CANDIDATES"]? || min_candidates.to_s).to_i
 
 OptionParser.parse(ARGV) do |parser|
-  parser.banner = "Usage: qwen35_ngram_speculative [--target PATH] [--tokenizer-bin PATH] [--tokens N] [--gamma N] [--min-ngram N] [--max-ngram N] [--no-check] [prompt]"
+  parser.banner = "Usage: qwen35_ngram_speculative [--target PATH] [--tokenizer-bin PATH] [--tokens N] [--gamma N] [--min-ngram N] [--max-ngram N] [--hadamard-continuation] [--no-check] [prompt]"
   parser.on("--target PATH", "Target GGUF path (default: Qwen3.5 9B Q4_K_M)") { |path| target_path = path }
   parser.on("--tokenizer-bin PATH", "llama.cpp tokenizer helper path") { |path| tokenizer_bin = path }
   parser.on("--tokens N", "Generated tokens to compare (default: 64)") { |value| n_gen = value.to_i }
@@ -31,6 +36,10 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--min-candidates N", "Skip n-gram chunks shorter than N candidates; 0 preserves historical behavior") { |value| min_candidates = value.to_i }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through the draft scratch history") { recursive_ngram = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram drafts after a rejected candidate chunk") { disable_after_reject = false }
+  parser.on("--hadamard-continuation", "If n-gram has no candidate, try draft-only Hadamard sketch continuation; exact verifier still checks every token") { hadamard_continuation = true }
+  parser.on("--hadamard-window N", "Token window size for --hadamard-continuation (default: env QWEN35_HADAMARD_WINDOW or 8)") { |value| hadamard_window = value.to_i }
+  parser.on("--hadamard-max-hamming N", "Maximum 64-bit sketch Hamming distance for Hadamard continuation (default: env QWEN35_HADAMARD_MAX_HAMMING or 16)") { |value| hadamard_max_hamming = value.to_i }
+  parser.on("--hadamard-min-candidates N", "Skip Hadamard continuation chunks shorter than N candidates (default: n-gram min-candidates)") { |value| hadamard_min_candidates = value.to_i }
   parser.on("--no-check", "Skip plain greedy replay/equality check") { check_plain = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -46,6 +55,9 @@ raise ArgumentError.new("--gamma must be positive") unless gamma > 0
 raise ArgumentError.new("--min-ngram must be positive") unless min_ngram > 0
 raise ArgumentError.new("--max-ngram must be >= --min-ngram") unless max_ngram >= min_ngram
 raise ArgumentError.new("--min-candidates must be non-negative") unless min_candidates >= 0
+raise ArgumentError.new("--hadamard-window must be positive") unless hadamard_window > 0
+raise ArgumentError.new("--hadamard-max-hamming must be non-negative") unless hadamard_max_hamming >= 0
+raise ArgumentError.new("--hadamard-min-candidates must be non-negative") unless hadamard_min_candidates >= 0
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -95,7 +107,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{weights.hparams.n_layer} dim=#{weights.hparams.n_embd} vocab=#{weights.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} n_gen=#{n_gen}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} hadamard_continuation=#{hadamard_continuation} hadamard_window=#{hadamard_window} hadamard_max_hamming=#{hadamard_max_hamming} hadamard_min_candidates=#{hadamard_min_candidates} n_gen=#{n_gen}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -110,12 +122,32 @@ proposed = 0
 cycles = 0
 plain_steps = 0
 ngram_disabled = false
+hadamard_disabled = false
+ngram_cycles = 0
+ngram_proposed = 0
+ngram_accepted = 0
+hadamard_cycles = 0
+hadamard_proposed = 0
+hadamard_accepted = 0
 target_verify_ms = 0.0
 target_backup_ms = 0.0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
-  candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(history, Math.min(gamma, n_gen - generated_ids.size), max_ngram, min_ngram, recursive: recursive_ngram, min_candidates: min_candidates)
+  chunk_budget = Math.min(gamma, n_gen - generated_ids.size)
+  candidate_source = "none"
+  candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(history, chunk_budget, max_ngram, min_ngram, recursive: recursive_ngram, min_candidates: min_candidates)
+  unless candidates.empty?
+    candidate_source = "ngram"
+  end
+
+  if candidates.empty? && hadamard_continuation && !hadamard_disabled
+    if span = ML::GGUF::HadamardContinuationDraft::IndexedHistory.new(history, window_size: hadamard_window)
+         .candidate_span(chunk_budget, min_candidates: hadamard_min_candidates, max_hamming: hadamard_max_hamming)
+      candidates = span.ids
+      candidate_source = "hadamard"
+    end
+  end
 
   if candidates.empty?
     generated_ids << target_next
@@ -130,6 +162,13 @@ while generated_ids.size < n_gen
 
   cycles += 1
   proposed += candidates.size
+  if candidate_source == "hadamard"
+    hadamard_cycles += 1
+    hadamard_proposed += candidates.size
+  else
+    ngram_cycles += 1
+    ngram_proposed += candidates.size
+  end
   tb0 = Time.instant
   backup.copy_from!(state)
   target_backup_ms += (Time.instant - tb0).total_milliseconds
@@ -146,6 +185,11 @@ while generated_ids.size < n_gen
       history << cand
       accepted_or_corrected << cand
       accepted += 1
+      if candidate_source == "hadamard"
+        hadamard_accepted += 1
+      else
+        ngram_accepted += 1
+      end
       expected = target_nexts[i][0]
     else
       generated_ids << expected
@@ -157,7 +201,13 @@ while generated_ids.size < n_gen
   end
 
   if rejected
-    ngram_disabled = true if disable_after_reject
+    if disable_after_reject
+      if candidate_source == "hadamard"
+        hadamard_disabled = true
+      else
+        ngram_disabled = true
+      end
+    end
     state.copy_from!(backup)
     tv1 = Time.instant
     corrected = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, accepted_or_corrected, pos, state)
@@ -181,6 +231,7 @@ end
 accept_rate = proposed == 0 ? 0.0 : accepted * 100.0 / proposed
 tokens_s = n_gen.to_f64 / (wall_ms / 1000.0)
 puts "accept_rate=#{accept_rate.round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles} plain_steps=#{plain_steps}"
+puts "proposal_sources ngram=#{ngram_accepted}/#{ngram_proposed} cycles=#{ngram_cycles} hadamard=#{hadamard_accepted}/#{hadamard_proposed} cycles=#{hadamard_cycles}"
 puts "ngram_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s)"
 if measured = plain_ms
   puts "plain_target_wall=#{measured.round(1)} ms (#{(measured / n_gen).round(2)} ms/tok)"
