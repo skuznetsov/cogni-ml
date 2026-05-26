@@ -16372,3 +16372,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Recomputed potential does not descend for `(verifier_calls, verifier_ms, proposal_ms, fallback_ms, wall_ms)` under stage, margin, or threshold moves. The certified dual frame is exact/no-entry until verifier cost is structurally reduced or proposal quality changes.
 - next branch: target chunk-major verifier/pass amortization, batch multiple verifier rows per command buffer with less host overhead, or switch to a different proposal source/selector that enters only on trace-proven high-EV windows.
 - trust: {F:0.89,G:0.62,R:0.86}
+
+**LM-607 Existing verifier-shaping switches do not make MTP top2 rescue positive EV [shared/ml]**
+- status: VERIFIED refutation
+- evidence: Verifier-shape sweep in `/tmp/qwen36_mtp_verifier_shape_20260525211639` found `stage_once` best but still below exact (`plain_speedup=0.939`); `stage_bonus` and `once_bonus` were much worse (`~0.815`) because they increased verifier rows. Serial early verify sweep in `/tmp/qwen36_mtp_serial_verify_20260525211816` found chunk verifier better (`0.951`) than serial early verify (`0.901`) even though serial verified one fewer token.
+- diagnosis: The existing knobs trade fallback work against verifier work, but the verifier cost curve is too steep. Serializing verification loses GPU batching; bonus tokens increase rows too much.
+- LTP/WBA: Stage-once is a small legal boundary reduction but does not descend total wall potential. Serial early verify reduces `verifier_tokens` but increases `verifier_ms`, so the potential tuple worsens after recomputation.
+- next branch: inspect `prefill_tokens_hidden_top1s_recurrent_checkpoint` and the product verifier path for duplicated state copies, avoidable readbacks, or a chunk-major verifier route that carries multiple rescue windows through one command-buffer wave.
+- trust: {F:0.88,G:0.60,R:0.86}
