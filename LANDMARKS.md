@@ -16364,3 +16364,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is top2-compatible reject. The same-pass transport reduces boundary tax by carrying the exact correction directly into the next draft span. Potential component `exact_first_tokens` descends, but total potential `(verifier_ms, proposal_ms, fallback_ms, wall_ms)` does not reliably descend yet.
 - adversary: Cold product CLI remains extremely slow because continued rescue exposes more cold proposal/verifier paths. Do not advertise speed; use this as a control-flow primitive for resident-mode experiments.
 - trust: {F:0.88,G:0.58,R:0.86}
+
+**LM-606 MTP control tuning is exhausted on the hot 3-prompt suite; next lever must change verifier/proposal economics [shared/ml]**
+- status: VERIFIED refutation; pivot required
+- evidence: Stage sweep in `/tmp/qwen36_mtp_stage_sweep_20260525211219` with top2 rescue found stage 2 best but still below exact (`plain_speedup=0.952`); stage 1 over-verified (`0.866`) and stage 4 drafted too much wrong tail (`0.778`). Margin sweep in `/tmp/qwen36_mtp_margin_sweep_20260525211343` stayed below exact; best observed was `margin=0.0` at `0.959`. Router-threshold oracle in `/tmp/qwen36_mtp_router_thresholds_20260525211529.log` skipped bad entries but only modeled `plain_speedup≈0.975-0.978`.
+- diagnosis: Current MTP proposal has useful local signal, but not enough positive expected value after verifier overhead. Scalar gates can avoid damage, but they do not create speed. Larger stages increase wrong-tail waste; smaller stages increase verifier overhead.
+- LTP/WBA: Recomputed potential does not descend for `(verifier_calls, verifier_ms, proposal_ms, fallback_ms, wall_ms)` under stage, margin, or threshold moves. The certified dual frame is exact/no-entry until verifier cost is structurally reduced or proposal quality changes.
+- next branch: target chunk-major verifier/pass amortization, batch multiple verifier rows per command buffer with less host overhead, or switch to a different proposal source/selector that enters only on trace-proven high-EV windows.
+- trust: {F:0.89,G:0.62,R:0.86}
