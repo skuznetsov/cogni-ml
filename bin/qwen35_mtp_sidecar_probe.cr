@@ -700,6 +700,7 @@ end
 
 abort "--mtp-spec-wall-top2-on-reject is incompatible with --mtp-spec-wall-promote-top2-margin" if mtp_spec_wall_top2_on_reject && mtp_spec_wall_promote_top2_margin
 mtp_spec_wall_top2_accounting = true if mtp_spec_wall_top2_miss_offramp || mtp_spec_wall_top2_rescue_continue || mtp_spec_wall_promote_top2_margin || mtp_spec_wall_top2_on_reject
+abort "--mtp-spec-wall-rec-rollback-log is incompatible with --mtp-spec-wall-top2-rescue-continue; rollback-log only captures row-1 reject state and is not certified for corrected-boundary continuation" if run_forward && mtp_spec_wall_rec_rollback_log && mtp_spec_wall_top2_rescue_continue
 
 abort "model not found: #{model_path}" unless File.exists?(model_path)
 mtp_source_path = mtp_from_gguf ? (mtp_gguf_path || model_path).not_nil! : mtp_path

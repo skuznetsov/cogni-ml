@@ -16380,3 +16380,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Stage-once is a small legal boundary reduction but does not descend total wall potential. Serial early verify reduces `verifier_tokens` but increases `verifier_ms`, so the potential tuple worsens after recomputation.
 - next branch: inspect `prefill_tokens_hidden_top1s_recurrent_checkpoint` and the product verifier path for duplicated state copies, avoidable readbacks, or a chunk-major verifier route that carries multiple rescue windows through one command-buffer wave.
 - trust: {F:0.88,G:0.60,R:0.86}
+
+**LM-608 Rollback-log recovery is not certified for corrected-boundary top2 continuation [shared/ml]**
+- status: VERIFIED guard; refuted composition
+- claim tested: The compact recurrent rollback-log path might compose with `--mtp-spec-wall-top2-rescue-continue` and remove replay/backup tax from the top2-rescue corridor.
+- evidence: Qwen3.6 Q4_K_M target plus UD-Q4_K_XL MTP sidecar hot suite with `--mtp-spec-wall-rec-rollback-log --mtp-spec-wall-top2-rescue-continue` failed parity on the `json` row. Log: `/tmp/qwen36_mtp_rollback_log_20260525212044/rollback.log`. Added an option guard in `bin/qwen35_mtp_sidecar_probe.cr`; verification passed with `crystal build --no-codegen bin/qwen35_mtp_sidecar_probe.cr --error-trace`, focused MTP/Metal specs (`12 examples, 0 failures`), release build, and an invalid-combo smoke that exits before model/MTP loading with only the incompatibility message.
+- diagnosis: The rollback-log frame only captures the row-1 reject recovery state. Top2 rescue continuation changes the boundary: after emitting the exact correction from MTP top2, speculation continues from a corrected target boundary that the current rollback log does not certify. This is not a verifier-speed path until corrected-boundary rollback state is explicitly represented and tested.
+- LTP/WBA: Window is a top2-compatible reject; rollback-log transport is a recurrent-state corridor valid for row-1 reject recovery. The attempted composition violates boundary safety because the corrected-boundary continuation can invalidate the rollback frame. Legal dual frame is checkpoint replay or no rollback-log when top2 rescue continuation is enabled.
+- adversary: This does not refute rollback-log alone; earlier evidence still supports it for two-row verifier spans without top2 continuation. It only refutes this cross-product.
+- trust: {F:0.90,G:0.62,R:0.88}
