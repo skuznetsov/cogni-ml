@@ -24,6 +24,7 @@ hadamard_continuation = ENV["QWEN35_HADAMARD_CONTINUATION"]? == "1"
 hadamard_window = (ENV["QWEN35_HADAMARD_WINDOW"]? || "8").to_i
 hadamard_max_hamming = (ENV["QWEN35_HADAMARD_MAX_HAMMING"]? || "16").to_i
 hadamard_min_candidates = (ENV["QWEN35_HADAMARD_MIN_CANDIDATES"]? || min_candidates.to_s).to_i
+hadamard_min_exact_overlap = (ENV["QWEN35_HADAMARD_MIN_EXACT_OVERLAP"]? || "0.75").to_f64
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_ngram_speculative [--target PATH] [--tokenizer-bin PATH] [--tokens N] [--gamma N] [--min-ngram N] [--max-ngram N] [--hadamard-continuation] [--no-check] [prompt]"
@@ -40,6 +41,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--hadamard-window N", "Token window size for --hadamard-continuation (default: env QWEN35_HADAMARD_WINDOW or 8)") { |value| hadamard_window = value.to_i }
   parser.on("--hadamard-max-hamming N", "Maximum 64-bit sketch Hamming distance for Hadamard continuation (default: env QWEN35_HADAMARD_MAX_HAMMING or 16)") { |value| hadamard_max_hamming = value.to_i }
   parser.on("--hadamard-min-candidates N", "Skip Hadamard continuation chunks shorter than N candidates (default: n-gram min-candidates)") { |value| hadamard_min_candidates = value.to_i }
+  parser.on("--hadamard-min-exact-overlap F", "Minimum exact-token overlap for Hadamard continuation windows (default: env QWEN35_HADAMARD_MIN_EXACT_OVERLAP or 0.75)") { |value| hadamard_min_exact_overlap = value.to_f64 }
   parser.on("--no-check", "Skip plain greedy replay/equality check") { check_plain = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -58,6 +60,7 @@ raise ArgumentError.new("--min-candidates must be non-negative") unless min_cand
 raise ArgumentError.new("--hadamard-window must be positive") unless hadamard_window > 0
 raise ArgumentError.new("--hadamard-max-hamming must be non-negative") unless hadamard_max_hamming >= 0
 raise ArgumentError.new("--hadamard-min-candidates must be non-negative") unless hadamard_min_candidates >= 0
+raise ArgumentError.new("--hadamard-min-exact-overlap must be between 0.0 and 1.0") unless hadamard_min_exact_overlap >= 0.0 && hadamard_min_exact_overlap <= 1.0
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -107,7 +110,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{weights.hparams.n_layer} dim=#{weights.hparams.n_embd} vocab=#{weights.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} hadamard_continuation=#{hadamard_continuation} hadamard_window=#{hadamard_window} hadamard_max_hamming=#{hadamard_max_hamming} hadamard_min_candidates=#{hadamard_min_candidates} n_gen=#{n_gen}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} hadamard_continuation=#{hadamard_continuation} hadamard_window=#{hadamard_window} hadamard_max_hamming=#{hadamard_max_hamming} hadamard_min_candidates=#{hadamard_min_candidates} hadamard_min_exact_overlap=#{hadamard_min_exact_overlap} n_gen=#{n_gen}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -143,7 +146,7 @@ while generated_ids.size < n_gen
 
   if candidates.empty? && hadamard_continuation && !hadamard_disabled
     if span = ML::GGUF::HadamardContinuationDraft::IndexedHistory.new(history, window_size: hadamard_window)
-         .candidate_span(chunk_budget, min_candidates: hadamard_min_candidates, max_hamming: hadamard_max_hamming)
+         .candidate_span(chunk_budget, min_candidates: hadamard_min_candidates, max_hamming: hadamard_max_hamming, min_exact_overlap: hadamard_min_exact_overlap)
       candidates = span.ids
       candidate_source = "hadamard"
     end

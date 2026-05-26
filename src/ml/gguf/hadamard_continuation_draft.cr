@@ -12,7 +12,8 @@ module ML::GGUF
       ids : Array(Int32),
       source_start : Int32,
       window_size : Int32,
-      hamming : Int32
+      hamming : Int32,
+      exact_matches : Int32
 
     class IndexedHistory
       getter history : Array(Int32)
@@ -46,28 +47,37 @@ module ML::GGUF
 
       def candidate_span(gamma : Int32,
                          min_candidates : Int32 = 0,
-                         max_hamming : Int32 = 16) : CandidateSpan?
+                         max_hamming : Int32 = 16,
+                         min_exact_overlap : Float64 = 0.75) : CandidateSpan?
         raise ArgumentError.new("gamma must be positive") unless gamma > 0
         raise ArgumentError.new("min_candidates must be non-negative") unless min_candidates >= 0
         raise ArgumentError.new("max_hamming must be non-negative") unless max_hamming >= 0
+        raise ArgumentError.new("min_exact_overlap must be between 0.0 and 1.0") unless min_exact_overlap >= 0.0 && min_exact_overlap <= 1.0
         return nil if @history.size < @window_size * 2 + 1
 
         current_start = @history.size - @window_size
         current = sketch_at(current_start)
+        min_exact_matches = (min_exact_overlap * @window_size).ceil.to_i
 
         best_start = -1
         best_dist = @sketch_bits + 1
+        best_exact_matches = -1
         # Latest compatible prior window wins ties; this mirrors cache locality.
         (current_start - 1).downto(0) do |start|
           continuation_start = start + @window_size
           next if continuation_start >= @history.size
 
+          exact_matches = exact_window_matches(current_start, start)
+          next if exact_matches < min_exact_matches
+
           dist = HadamardContinuationDraft.hamming_distance(current, sketch_at(start))
           next if dist > max_hamming
           next if dist > best_dist
+          next if dist == best_dist && exact_matches < best_exact_matches
 
           best_dist = dist
           best_start = start
+          best_exact_matches = exact_matches
         end
 
         return nil if best_start < 0
@@ -82,13 +92,14 @@ module ML::GGUF
         return nil if min_candidates > 0 && ids.size < min_candidates
         return nil if ids.empty?
 
-        CandidateSpan.new(ids, best_start, @window_size, best_dist)
+        CandidateSpan.new(ids, best_start, @window_size, best_dist, best_exact_matches)
       end
 
       def candidates(gamma : Int32,
                      min_candidates : Int32 = 0,
-                     max_hamming : Int32 = 16) : Array(Int32)
-        candidate_span(gamma, min_candidates: min_candidates, max_hamming: max_hamming).try(&.ids) || [] of Int32
+                     max_hamming : Int32 = 16,
+                     min_exact_overlap : Float64 = 0.75) : Array(Int32)
+        candidate_span(gamma, min_candidates: min_candidates, max_hamming: max_hamming, min_exact_overlap: min_exact_overlap).try(&.ids) || [] of Int32
       end
 
       private def rebuild_sketches : Nil
@@ -103,6 +114,14 @@ module ML::GGUF
 
       private def sketch_at(start : Int32) : UInt64
         @sketches[start]
+      end
+
+      private def exact_window_matches(a_start : Int32, b_start : Int32) : Int32
+        matches = 0
+        @window_size.times do |offset|
+          matches += 1 if @history[a_start + offset] == @history[b_start + offset]
+        end
+        matches
       end
 
       private def build_sketch(start : Int32) : UInt64
@@ -132,9 +151,10 @@ module ML::GGUF
                    sketch_bits : Int32 = 64,
                    vector_dim : Int32 = 64,
                    min_candidates : Int32 = 0,
-                   max_hamming : Int32 = 16) : Array(Int32)
+                   max_hamming : Int32 = 16,
+                   min_exact_overlap : Float64 = 0.75) : Array(Int32)
       IndexedHistory.new(history, window_size: window_size, sketch_bits: sketch_bits, vector_dim: vector_dim)
-        .candidates(gamma, min_candidates: min_candidates, max_hamming: max_hamming)
+        .candidates(gamma, min_candidates: min_candidates, max_hamming: max_hamming, min_exact_overlap: min_exact_overlap)
     end
 
     protected def positive_power_of_two?(n : Int32) : Bool
