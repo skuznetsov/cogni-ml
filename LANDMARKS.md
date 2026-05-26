@@ -16318,3 +16318,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the static remaining-token budget before prefill. Transport either stays in exact greedy prefill/decode or enters the MTP-ready boundary path. Legal move does not mutate state before choosing exact frame. Potential descends in `(mtp_ready_prefill_tax, sidecar_load_tax, proposal_tax, fallback_tax)` for short requests.
 - adversary: This early gate is bypassed when prompt cache or structured constraints are active, because those paths can change the number of already emitted tokens. The later post-prefill no-entry gate still protects those cases.
 - trust: {F:0.86,G:0.64,R:0.84}
+
+**LM-601 Entry target-margin gate is a safety primitive, not a default speed win [shared/ml]**
+- status: MEASURED product-path checkpoint; no default change
+- claim tested: The opt-in `QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN` gate might avoid bad long MTP entries cheaply enough to be a product speed win.
+- evidence: Qwen3.6-27B `Q4_K_M` target plus UD-Q4_K_XL sidecar, `The capital of France is`, `n_gen=20`, with `QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN=2.0`, skipped MTP at exact-first boundary margin `1.361`, avoided sidecar/proposal (`draft_load_ms=0.0`, `mtp_ms=0.0`), and matched greedy ids. But wall was effectively exact greedy plus controller tax: gated total `3101.1ms` / decode `1175.0ms` versus greedy total `3099.1ms` / decode `1133.0ms`. Logs: `/tmp/qwen36_generate_greedy_gen20_20260525203713.log`, `/tmp/qwen36_generate_mtp_margin2_gen20_20260525203713.log`.
+- diagnosis: The gate is valuable as a kill-switch against known-bad MTP entries, but not a standalone default speed policy. It pays exact-first and target-top2 controller cost, then runs the same exact suffix. This reinforces LM-591/LM-592: scalar margin routing needs held-out paired-wall evidence before default promotion.
+- LTP/WBA: Window is legal and boundary-safe, but the lexicographic potential only descends versus a bad MTP entry, not versus plain exact. Product default must compare against exact greedy, not against the already-entered bad corridor.
+- adversary: This was one easy prompt and a manually chosen threshold. Do not extrapolate to broad routing. Use it to guard forced probes or collect features, not to advertise speed.
+- trust: {F:0.84,G:0.48,R:0.82}
