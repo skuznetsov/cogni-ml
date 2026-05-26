@@ -114,6 +114,7 @@ mtp_min_remaining = (ENV["QWEN35_MTP_MIN_REMAINING"]? || "16").to_i
 mtp_entry_target_margin_min = ENV["QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN"]?.try(&.to_f)
 mtp_trace_enabled = ENV["QWEN35_MTP_TRACE"]? == "1"
 mtp_prewarm_enabled = ENV["QWEN35_MTP_PREWARM"]? == "1"
+mtp_top2_rescue_enabled = ENV["QWEN35_MTP_TOP2_RESCUE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
@@ -1043,6 +1044,8 @@ elsif mtp_decode_enabled && !output_ids.empty?
   mtp_accepted = 0
   mtp_rejections = 0
   mtp_margin_skips = 0
+  mtp_top2_checks = 0
+  mtp_top2_rescues = 0
   mtp_verifier_calls = 0
   mtp_verifier_tokens = 0
   mtp_fallback_tokens = 0
@@ -1093,6 +1096,7 @@ elsif mtp_decode_enabled && !output_ids.empty?
       current_stage = Math.min(mtp_stage, draft_budget - draft_generated)
       stage_candidates = [] of Int32
       stage_candidate_hiddens = [] of Array(Float32)
+      stage_candidate_top2s = [] of Array({Int32, Float32})
       stage_mtp_state = draft_budget > 1 ? ML::GGUF::Qwen35MTP::State.new(current_stage, hp.head_dim * hp.n_head_kv) : nil
       margin_skip_stage = false
 
@@ -1115,6 +1119,7 @@ elsif mtp_decode_enabled && !output_ids.empty?
         candidate = top2[0][0]
         stage_candidates << candidate
         stage_candidate_hiddens << result[:hidden]
+        stage_candidate_top2s << top2
         draft_hidden = result[:hidden]
         draft_token = candidate
         draft_pos += 1
@@ -1208,6 +1213,21 @@ elsif mtp_decode_enabled && !output_ids.empty?
         wall_token = correction
         output_ids << correction if output_ids.size < n_gen
 
+        rescued = false
+        if mtp_top2_rescue_enabled && accepted_stage < stage_candidate_top2s.size
+          mtp_top2_checks += 1
+          rejected_top2 = stage_candidate_top2s[accepted_stage]
+          if rejected_top2.size > 1 && rejected_top2[1][0] == correction
+            mtp_top2_rescues += 1
+            rescued = true
+          end
+        end
+
+        if rescued
+          pass_finished = true
+          next
+        end
+
         fallback_start = Time.instant
         wall_token, wall_pos, emitted = append_exact_suffix!(w, output_ids, wall_token, wall_pos, state, n_gen)
         mtp_fallback_tokens += emitted
@@ -1224,7 +1244,7 @@ elsif mtp_decode_enabled && !output_ids.empty?
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = mtp_draft_tokens > 0 ? (mtp_accepted.to_f64 * 100.0 / mtp_draft_tokens.to_f64) : 0.0
-  STDOUT << "  mtp summary: accepted=#{mtp_accepted}/#{mtp_draft_tokens} rate=#{rate.round(2)}% passes=#{mtp_passes} rejections=#{mtp_rejections} margin_skips=#{mtp_margin_skips} verifier_calls=#{mtp_verifier_calls} verifier_tokens=#{mtp_verifier_tokens} exact_first_tokens=#{mtp_exact_first_tokens} fallback_tokens=#{mtp_fallback_tokens} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} mtp_ms=#{mtp_mtp_ms.round(1)} exact_ms=#{mtp_exact_ms.round(1)} verifier_ms=#{mtp_verifier_ms.round(1)} backup_ms=#{mtp_backup_ms.round(1)} fallback_ms=#{mtp_fallback_ms.round(1)} prewarm_ms=#{mtp_prewarm_ms.round(1)}\n"
+  STDOUT << "  mtp summary: accepted=#{mtp_accepted}/#{mtp_draft_tokens} rate=#{rate.round(2)}% passes=#{mtp_passes} rejections=#{mtp_rejections} margin_skips=#{mtp_margin_skips} top2_checks=#{mtp_top2_checks} top2_rescues=#{mtp_top2_rescues} verifier_calls=#{mtp_verifier_calls} verifier_tokens=#{mtp_verifier_tokens} exact_first_tokens=#{mtp_exact_first_tokens} fallback_tokens=#{mtp_fallback_tokens} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} mtp_ms=#{mtp_mtp_ms.round(1)} exact_ms=#{mtp_exact_ms.round(1)} verifier_ms=#{mtp_verifier_ms.round(1)} backup_ms=#{mtp_backup_ms.round(1)} fallback_ms=#{mtp_fallback_ms.round(1)} prewarm_ms=#{mtp_prewarm_ms.round(1)}\n"
   STDOUT << ML::GGUF::Qwen35MTP.profile_report << "\n" if ML::GGUF::Qwen35MTP.profile_enabled?
 elsif speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."

@@ -16345,3 +16345,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the first proposal stage; corridor is the MTP proposal path; legal move is measuring and optionally warming without mutating exact target state. Potential descends for attribution clarity, not for end-to-end speed. Dual frame remains exact/no-entry until hot-session acceptance plus verifier cost prove positive expected value.
 - adversary: Single-prompt numbers are host-load sensitive, especially fallback and verifier wall. The min/max split is robust enough to identify cold compile tax, but not enough to advertise speedup.
 - trust: {F:0.87,G:0.55,R:0.84}
+
+**LM-604 Top2 rescue preserves exactness and can keep the MTP corridor alive, but only as a hot-session candidate [shared/ml]**
+- status: VERIFIED opt-in implementation; default remains off
+- change: Added `QWEN35_MTP_TOP2_RESCUE=1` in `bin/qwen35_generate.cr`. On an MTP stage reject, if the exact verifier correction equals the rejected token's MTP top2 candidate, the controller emits the exact correction and starts a new MTP pass instead of immediately exact-suffix fallback.
+- evidence: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; focused MTP/Metal specs passed with `12 examples, 0 failures`. Product smoke on Qwen3.6-27B gen20 preserved greedy ids exactly and reported `accepted=7/12`, `top2_checks=4`, `top2_rescues=4`, `fallback_tokens=0`; logs `/tmp/qwen36_generate_top2_rescue_greedy_gen20_20260525210222.log` and `/tmp/qwen36_generate_top2_rescue_mtp_gen20_20260525210222.log`.
+- hot-session evidence: sidecar hot suite with top2 rescue (`/tmp/qwen36_mtp_hot_wall_suite_top2_rescue_gen20_20260525210000.log`) preserved parity and found real rescue opportunities (`top2_rescues=1`, suite accept `54.55%`), but host timing was noisy. Treat `plain_speedup=1.041` as a hypothesis, not a claim.
+- diagnosis: Top2 rescue improves proposal continuity and removes some fallback suffixes, but the cold product CLI still regresses badly because each continued corridor exposes more cold proposal/verifier work. This is a resident/server-mode lever, not a default CLI lever.
+- LTP/WBA: Window is a local reject where exact correction is present in MTP top2. Transport is the corrected exact boundary into the next MTP pass. Legal move preserves exact state by restoring/replaying the verifier prefix before emitting correction. Potential descends only if avoided fallback work exceeds added verifier/proposal work; otherwise dual frame is exact suffix/no-entry.
+- adversary: Do not enable by default until ABBA hot-session runs show stable speedup across prompts. The product smoke proves parity and control-flow, not performance.
+- trust: {F:0.86,G:0.52,R:0.83}
