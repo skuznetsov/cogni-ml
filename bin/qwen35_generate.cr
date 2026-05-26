@@ -113,6 +113,7 @@ mtp_min_margin = (ENV["QWEN35_MTP_MIN_MARGIN"]? || "1.0").to_f
 mtp_min_remaining = (ENV["QWEN35_MTP_MIN_REMAINING"]? || "16").to_i
 mtp_entry_target_margin_min = ENV["QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN"]?.try(&.to_f)
 mtp_trace_enabled = ENV["QWEN35_MTP_TRACE"]? == "1"
+mtp_pass_trace_path = ENV["QWEN35_MTP_PASS_TRACE"]?
 mtp_prewarm_enabled = ENV["QWEN35_MTP_PREWARM"]? == "1"
 mtp_top2_rescue_enabled = ENV["QWEN35_MTP_TOP2_RESCUE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
@@ -1057,9 +1058,27 @@ elsif mtp_decode_enabled && !output_ids.empty?
   mtp_fallback_ms = 0.0
 
   ML::GGUF::Qwen35MTP.profile_reset if ML::GGUF::Qwen35MTP.profile_enabled?
+  mtp_pass_trace = mtp_pass_trace_path.try { |path| File.open(path, "w") }
   decode_t0 = Time.instant
   while output_ids.size < n_gen
     mtp_passes += 1
+    pass_wall_start = Time.instant
+    pass_output_start = output_ids.size
+    pass_pos_start = wall_pos
+    pass_draft_before = mtp_draft_tokens
+    pass_accepted_before = mtp_accepted
+    pass_rejections_before = mtp_rejections
+    pass_margin_skips_before = mtp_margin_skips
+    pass_top2_checks_before = mtp_top2_checks
+    pass_top2_rescues_before = mtp_top2_rescues
+    pass_verifier_calls_before = mtp_verifier_calls
+    pass_verifier_tokens_before = mtp_verifier_tokens
+    pass_fallback_tokens_before = mtp_fallback_tokens
+    pass_mtp_ms_before = mtp_mtp_ms
+    pass_exact_ms_before = mtp_exact_ms
+    pass_verifier_ms_before = mtp_verifier_ms
+    pass_backup_ms_before = mtp_backup_ms
+    pass_fallback_ms_before = mtp_fallback_ms
 
     exact_start = Time.instant
     wall_hidden, exact_next = advance_hidden_next(w, wall_token, wall_pos, state)
@@ -1246,7 +1265,41 @@ elsif mtp_decode_enabled && !output_ids.empty?
       STDOUT << "  mtp pass=#{mtp_passes} emitted=#{output_ids.size}/#{n_gen} draft=#{mtp_draft_tokens} accepted=#{mtp_accepted} rejected=#{pass_rejected} fallback=#{mtp_fallback_tokens}\n"
       STDOUT.flush
     end
+    if io = mtp_pass_trace
+      JSON.build(io) do |json|
+        json.object do
+          json.field "kind", "qwen35_generate_mtp_pass"
+          json.field "pass", mtp_passes
+          json.field "prompt_tokens", ids.size
+          json.field "n_gen", n_gen
+          json.field "start_output", pass_output_start
+          json.field "end_output", output_ids.size
+          json.field "emitted_delta", output_ids.size - pass_output_start
+          json.field "start_pos", pass_pos_start
+          json.field "end_pos", wall_pos
+          json.field "draft_delta", mtp_draft_tokens - pass_draft_before
+          json.field "accepted_delta", mtp_accepted - pass_accepted_before
+          json.field "rejections_delta", mtp_rejections - pass_rejections_before
+          json.field "margin_skips_delta", mtp_margin_skips - pass_margin_skips_before
+          json.field "top2_checks_delta", mtp_top2_checks - pass_top2_checks_before
+          json.field "top2_rescues_delta", mtp_top2_rescues - pass_top2_rescues_before
+          json.field "verifier_calls_delta", mtp_verifier_calls - pass_verifier_calls_before
+          json.field "verifier_tokens_delta", mtp_verifier_tokens - pass_verifier_tokens_before
+          json.field "fallback_tokens_delta", mtp_fallback_tokens - pass_fallback_tokens_before
+          json.field "rejected", pass_rejected
+          json.field "wall_delta_ms", (Time.instant - pass_wall_start).total_milliseconds
+          json.field "mtp_delta_ms", mtp_mtp_ms - pass_mtp_ms_before
+          json.field "exact_delta_ms", mtp_exact_ms - pass_exact_ms_before
+          json.field "verifier_delta_ms", mtp_verifier_ms - pass_verifier_ms_before
+          json.field "backup_delta_ms", mtp_backup_ms - pass_backup_ms_before
+          json.field "fallback_delta_ms", mtp_fallback_ms - pass_fallback_ms_before
+        end
+      end
+      io << '\n'
+      io.flush
+    end
   end
+  mtp_pass_trace.try(&.close)
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = mtp_draft_tokens > 0 ? (mtp_accepted.to_f64 * 100.0 / mtp_draft_tokens.to_f64) : 0.0
