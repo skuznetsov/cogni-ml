@@ -754,6 +754,14 @@ end
 pos = 0
 last_exact_hidden = nil.as(Array(Float32)?)
 
+if mtp_decode_enabled && !prompt_cache_enabled && !structured_constraint_enabled
+  remaining_after_prefill = Math.max(n_gen - 1, 0)
+  if remaining_after_prefill < mtp_min_remaining
+    STDOUT << "\nMTP prefill no-entry gate: remaining=#{remaining_after_prefill} min_remaining=#{mtp_min_remaining}; using exact greedy prefill/decode\n"
+    mtp_decode_enabled = false
+  end
+end
+
 if prompt_cache_enabled
   use_full_prompt_hit = n_gen >= prompt_cache_full_hit_min_gen
   max_prefix_len = if ids.empty?

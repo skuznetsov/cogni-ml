@@ -16309,3 +16309,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the remaining-token budget after prefill. Transport into MTP is legal only when enough suffix area remains to potentially amortize proposal/verifier tax. Raising the threshold lowers `(short_bad_entries, sidecar_load_tax, proposal_tax, fallback_tax)` while preserving exact greedy fallback.
 - adversary: This does not prove `16` is globally optimal. It is a local product-safe default from a concrete bad corridor plus prior trace evidence that simple always-enter MTP loses. Future held-out ABBA can retune upward/downward.
 - trust: {F:0.86,G:0.58,R:0.84}
+
+**LM-600 MTP no-entry now happens before prefill when statically decidable [shared/ml]**
+- status: IMPLEMENTED exact product-path cleanup
+- claim tested: Product MTP no-entry should avoid the MTP-ready prompt prefill path when the remaining generation budget is known before prefill.
+- evidence: `bin/qwen35_generate.cr` now checks `n_gen - 1 < QWEN35_MTP_MIN_REMAINING` before prompt cache/prefill when no prompt-cache or structured constraints are active. Verification passed: no-codegen and release builds. Runtime Qwen3.6-27B `Q4_K_M` target plus UD-Q4_K_XL sidecar, `The capital of France is`, `n_gen=12`, explicit `QWEN35_DECODE_POLICY=mtp`, printed `MTP prefill no-entry gate: remaining=11 min_remaining=16`, used `chunked 5/5 tokens with final top1`, reported `draft_load_ms=0.0`, emitted `[11751, 13, 271, 248068, 198, 8160, 579, 264, 7047, 1817, 25, 271]`, and avoided sidecar/proposal work. Log: `/tmp/qwen36_generate_mtp_prefill_gate_gen12_20260525203536.log`.
+- diagnosis: This is the correct Spike ordering: if the route will collapse to exact greedy, do it before materializing final hidden for MTP. It removes an avoidable prompt-path tax from explicit MTP product mode.
+- LTP/WBA: Window is the static remaining-token budget before prefill. Transport either stays in exact greedy prefill/decode or enters the MTP-ready boundary path. Legal move does not mutate state before choosing exact frame. Potential descends in `(mtp_ready_prefill_tax, sidecar_load_tax, proposal_tax, fallback_tax)` for short requests.
+- adversary: This early gate is bypassed when prompt cache or structured constraints are active, because those paths can change the number of already emitted tokens. The later post-prefill no-entry gate still protects those cases.
+- trust: {F:0.86,G:0.64,R:0.84}
