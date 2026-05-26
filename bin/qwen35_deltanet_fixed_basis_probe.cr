@@ -4473,6 +4473,160 @@ private def ffn_out_from_updown_adapter(ffn_in : Array(Float32), adapter : FFNUp
   out
 end
 
+private def hadamard_power_of_two?(n : Int32) : Bool
+  n > 0 && (n & (n - 1)) == 0
+end
+
+private def block_hadamard_inplace!(values : Array(Float64), block_size : Int32) : Nil
+  raise "Hadamard block size must be a positive power of two" unless hadamard_power_of_two?(block_size)
+  raise "Hadamard vector dimension must be divisible by block size" unless values.size % block_size == 0
+
+  offset = 0
+  scale = 1.0 / Math.sqrt(block_size.to_f64)
+  while offset < values.size
+    width = 1
+    while width < block_size
+      step = width * 2
+      i = 0
+      while i < block_size
+        width.times do |j|
+          a_i = offset + i + j
+          b_i = a_i + width
+          a = values[a_i]
+          b = values[b_i]
+          values[a_i] = a + b
+          values[b_i] = a - b
+        end
+        i += step
+      end
+      width = step
+    end
+    block_size.times { |i| values[offset + i] *= scale }
+    offset += block_size
+  end
+end
+
+private def quant_dequant_symmetric(values : Array(Float64), bits : Int32) : Array(Float64)
+  raise "quant bits must be 2..8" unless bits >= 2 && bits <= 8
+  qmax = ((1 << (bits - 1)) - 1).to_f64
+  max_abs = values.reduce(0.0) { |m, v| {m, v.abs}.max }
+  return Array(Float64).new(values.size, 0.0) if max_abs <= 0.0
+  scale = max_abs / qmax
+  values.map do |v|
+    q = (v / scale).round.clamp(-qmax, qmax)
+    q * scale
+  end
+end
+
+private def quant_dequant_hadamard(values : Array(Float64), bits : Int32, block_size : Int32) : Array(Float64)
+  tmp = values.dup
+  block_hadamard_inplace!(tmp, block_size)
+  tmp = quant_dequant_symmetric(tmp, bits)
+  # Normalized Hadamard is self-inverse.
+  block_hadamard_inplace!(tmp, block_size)
+  tmp
+end
+
+private def quantized_updown_adapter(adapter : FFNUpDownAdapter,
+                                     bits : Int32,
+                                     hadamard_block : Int32? = nil) : FFNUpDownAdapter
+  quant = ->(row : Array(Float64)) {
+    if block = hadamard_block
+      quant_dequant_hadamard(row, bits, block)
+    else
+      quant_dequant_symmetric(row, bits)
+    end
+  }
+
+  coeff_weights = adapter.coeff_weights.map { |row| quant.call(row) }
+  down_basis = adapter.down_basis.map do |row|
+    quant.call(row.map(&.to_f64)).map(&.to_f32)
+  end
+  FFNUpDownAdapter.new(adapter.x_mean, adapter.c_mean, coeff_weights, down_basis)
+end
+
+private def relative_rmse(exact : Array(Float32), approx : Array(Float32)) : Float64
+  raise "relative_rmse dimension mismatch" unless exact.size == approx.size
+  err_sq = 0.0
+  exact_sq = 0.0
+  exact.size.times do |i|
+    e = exact[i].to_f64
+    d = approx[i].to_f64 - e
+    err_sq += d * d
+    exact_sq += e * e
+  end
+  exact_sq > 0.0 ? Math.sqrt(err_sq / exact_sq) : 0.0
+end
+
+private def ffn_updown_hadamard_quant_feature_note(name : String,
+                                                   weights : ML::GGUF::Qwen35Weights,
+                                                   token_ids : Array(Int32),
+                                                   calib_count : Int32,
+                                                   layer_ids : Array(Int32),
+                                                   adapters : FFNUpDownAdapterMap,
+                                                   rank : Int32,
+                                                   bits_list : Array(Int32),
+                                                   block_sizes : Array(Int32)) : Array(String)
+  sample_map = ffn_updown_samples_for_token_sets(weights, [token_ids], layer_ids, token_ids.size)
+  notes = [] of String
+
+  layer_ids.uniq.sort.each do |il|
+    adapter = adapters[il]? || next
+    samples = sample_map[il]? || next
+    eval_start = Math.min(calib_count, samples.size)
+    next unless eval_start < samples.size
+    layer = weights.layers[il]
+    next unless layer.is_a?(ML::GGUF::Qwen35RecurrentWeights)
+
+    candidates = [] of NamedTuple(mode: String, adapter: FFNUpDownAdapter)
+    bits_list.each do |bits|
+      candidates << {mode: "raw_q#{bits}", adapter: quantized_updown_adapter(adapter, bits)}
+      block_sizes.each do |block|
+        next unless hadamard_power_of_two?(block) && weights.hparams.n_embd % block == 0
+        candidates << {mode: "hadamard#{block}_q#{bits}", adapter: quantized_updown_adapter(adapter, bits, block)}
+      end
+    end
+
+    dense_exact_rel = [] of Float64
+    dense_cos = [] of Float64
+    rel_by_mode = Hash(String, Array(Float64)).new { |h, k| h[k] = [] of Float64 }
+    dense_rel_by_mode = Hash(String, Array(Float64)).new { |h, k| h[k] = [] of Float64 }
+    cos_by_mode = Hash(String, Array(Float64)).new { |h, k| h[k] = [] of Float64 }
+
+    samples[eval_start, samples.size - eval_start].each do |sample|
+      activation = sample[:activation].map(&.to_f32)
+      ffn_in = sample[:ffn_in].map(&.to_f32)
+      exact = ML::GGUF::Qwen35CPU.qmatvec_nobias(layer.ffn_down_qw, activation)
+      dense = ffn_out_from_updown_adapter(ffn_in, adapter, rank)
+      dense_exact_rel << relative_rmse(exact, dense)
+      dense_cos << cosine(exact, dense)
+      candidates.each do |cand|
+        approx = ffn_out_from_updown_adapter(ffn_in, cand[:adapter], rank)
+        rel_by_mode[cand[:mode]] << relative_rmse(exact, approx)
+        dense_rel_by_mode[cand[:mode]] << relative_rmse(dense, approx)
+        cos_by_mode[cand[:mode]] << cosine(exact, approx)
+      end
+    end
+
+    baseline = dense_exact_rel.empty? ? 0.0 : mean(dense_exact_rel)
+    modes = rel_by_mode.keys.sort.map do |mode|
+      rel = rel_by_mode[mode]
+      dense_rel = dense_rel_by_mode[mode]
+      cos = cos_by_mode[mode]
+      next "#{mode}:empty" if rel.empty?
+      delta = baseline > 0.0 ? ((mean(rel) / baseline) - 1.0) * 100.0 : 0.0
+      "#{mode}:rel=#{mean(rel).round(6)},rel_vs_dense=#{mean(dense_rel).round(6)},cos=#{mean(cos).round(6)},delta=#{delta.round(2)}%"
+    end
+    notes << "ffn_updown_hadamard_quant_features name=#{name} layer=#{il} rank=#{rank} eval_samples=#{dense_exact_rel.size} dense_rel=#{baseline.round(6)} dense_cos=#{mean(dense_cos).round(6)} modes=#{modes.join(' ')}"
+  end
+
+  if notes.empty?
+    ["ffn_updown_hadamard_quant_features name=#{name} layers=#{layer_ids.join(',')} rank=#{rank} eval_samples=0"]
+  else
+    notes
+  end
+end
+
 private def dump_ffn_updown_adapters(path : String,
                                      adapters : FFNUpDownAdapterMap,
                                      rank : Int32,
@@ -11252,6 +11406,11 @@ simulate_self_spec_gpu_pipeline_hybrid_rich_sweep = false
 simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = false
 simulate_self_spec_gpu_pipeline_route_features = false
 simulate_self_spec_gpu_pipeline_ffn_updown_route_features = false
+simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_quant_features = false
+simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_bits = [8, 4]
+simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_blocks = [16, 32, 64]
+ffn_updown_adapter_quant_bits : Int32? = nil
+ffn_updown_adapter_quant_hadamard_block : Int32? = nil
 dump_ffn_updown_adapters_path : String? = nil
 simulate_self_spec_gpu_pipeline_route_scoreboard = false
 simulate_self_spec_gpu_pipeline_router_trace_path : String? = nil
@@ -11521,6 +11680,11 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-suite-hybrid-sweep", "Apply the hybrid route sweep to suite prompts and print aggregate prompt-stability ranking") { simulate_self_spec_gpu_pipeline_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_suite_hybrid_sweep = true; simulate_self_spec_gpu_pipeline_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-route-features", "Print held-out PCA residual features that can predict risky self-spec draft routes") { simulate_self_spec_gpu_pipeline_route_features = true }
   p.on("--simulate-self-spec-gpu-pipeline-ffn-updown-route-features", "Print held-out FFN pca-updown reconstruction residual features for prompt-level pca-updown route risk") { simulate_self_spec_gpu_pipeline_ffn_updown_route_features = true }
+  p.on("--simulate-self-spec-gpu-pipeline-ffn-updown-hadamard-quant-features", "Print held-out FFN pca-updown adapter quantization probes: raw vs block-Hadamard q8/q4 coefficient/down-basis rows") { simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_quant_features = true }
+  p.on("--ffn-updown-hadamard-quant-bits=LIST", "Bits for --simulate-self-spec-gpu-pipeline-ffn-updown-hadamard-quant-features, default 8,4") { |v| simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_bits = parse_int_list(v) }
+  p.on("--ffn-updown-hadamard-blocks=LIST", "Power-of-two block sizes for Hadamard quant probes, default 16,32,64") { |v| simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_blocks = parse_int_list(v) }
+  p.on("--ffn-updown-adapter-quant-bits=N", "Quality proxy: replace trained FFN pca-updown adapter rows with symmetric qN-dequantized rows before draft simulation") { |v| ffn_updown_adapter_quant_bits = v.to_i }
+  p.on("--ffn-updown-adapter-quant-hadamard-block=N", "With --ffn-updown-adapter-quant-bits, quantize adapter rows in block-Hadamard space before dequantizing back to f32") { |v| ffn_updown_adapter_quant_hadamard_block = v.to_i }
   p.on("--dump-ffn-updown-adapters=PATH", "Write trained FFN pca-updown adapters as JSON for CUDA runner probes") { |v| dump_ffn_updown_adapters_path = v }
   p.on("--simulate-self-spec-gpu-pipeline-route-scoreboard", "Print a ranked route scoreboard after a GPU self-spec hybrid sweep") { simulate_self_spec_gpu_pipeline_route_scoreboard = true }
   p.on("--simulate-self-spec-gpu-pipeline-router-trace=PATH", "Write JSONL self-spec router/reject-risk rows without raw token ids") { |v| simulate_self_spec_gpu_pipeline_router_trace_path = v }
@@ -11913,6 +12077,14 @@ if rank = simulate_logit_rank
           samples_for_layer = updown_samples[il]? || [] of NamedTuple(ffn_in: Array(Float64), activation: Array(Float64))
           updown[il] = train_ffn_updown_adapter(samples_for_layer, basis_set, down_adapters[il].down_basis, max_updown_rank)
         end
+        if quant_bits = ffn_updown_adapter_quant_bits
+          quant_block = ffn_updown_adapter_quant_hadamard_block
+          updown = updown.transform_values do |adapter|
+            quantized_updown_adapter(adapter, quant_bits, quant_block)
+          end
+          mode = quant_block ? "hadamard#{quant_block}_q#{quant_bits}" : "raw_q#{quant_bits}"
+          puts "ffn_updown_pca_adapter_quant mode=#{mode} layers=#{updown.keys.sort.join(',')} max_rank=#{max_updown_rank}"
+        end
         ffn_updown_adapters = updown
         puts "ffn_updown_pca_adapter layers=#{updown.keys.sort.join(',')} max_rank=#{max_updown_rank} samples=#{updown_samples.map { |il, s| "#{il}:#{s.size}" }.join(',')}"
         if dump_path = dump_ffn_updown_adapters_path
@@ -11921,6 +12093,11 @@ if rank = simulate_logit_rank
         end
         if simulate_self_spec_gpu_pipeline_ffn_updown_route_features
           puts ffn_updown_route_feature_note("main", weights, token_ids, calib_count, sorted_simulate_logit_layers, updown, max_updown_rank)
+        end
+        if simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_quant_features
+          ffn_updown_hadamard_quant_feature_note("main", weights, token_ids, calib_count, sorted_simulate_logit_layers, updown, max_updown_rank,
+            simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_bits,
+            simulate_self_spec_gpu_pipeline_ffn_updown_hadamard_blocks).each { |line| puts line }
         end
         if metal_rank = simulate_ffn_updown_metal_rank
           raise "Metal FFN up/down unavailable" unless ML::GGUF::Qwen35Metal.available?
