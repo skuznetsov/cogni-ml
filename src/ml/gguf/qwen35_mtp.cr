@@ -299,6 +299,8 @@ module ML::GGUF
 
     @@profile_counts = Hash(String, Int64).new(0_i64)
     @@profile_ns = Hash(String, Int64).new(0_i64)
+    @@profile_min_ns = Hash(String, Int64).new(Int64::MAX)
+    @@profile_max_ns = Hash(String, Int64).new(0_i64)
 
     def profile_enabled? : Bool
       ENV["QWEN35_MTP_STAGE_PROFILE"]? == "1"
@@ -307,6 +309,8 @@ module ML::GGUF
     def profile_reset : Nil
       @@profile_counts.clear
       @@profile_ns.clear
+      @@profile_min_ns.clear
+      @@profile_max_ns.clear
     end
 
     def profile_report : String
@@ -316,8 +320,10 @@ module ML::GGUF
         count = @@profile_counts[name]
         ms = ns.to_f64 / 1_000_000.0
         avg = count > 0 ? ms / count.to_f64 : 0.0
+        min_ms = @@profile_min_ns[name].to_f64 / 1_000_000.0
+        max_ms = @@profile_max_ns[name].to_f64 / 1_000_000.0
         pct = total_ns > 0 ? (ns.to_f64 * 100.0 / total_ns.to_f64) : 0.0
-        lines << "mtp_stage name=#{name} count=#{count} ms=#{ms.round(3)} avg_ms=#{avg.round(3)} pct=#{pct.round(2)}"
+        lines << "mtp_stage name=#{name} count=#{count} ms=#{ms.round(3)} avg_ms=#{avg.round(3)} min_ms=#{min_ms.round(3)} max_ms=#{max_ms.round(3)} pct=#{pct.round(2)}"
       end
       lines.join('\n')
     end
@@ -332,6 +338,8 @@ module ML::GGUF
       elapsed = (Time.instant - t0).total_nanoseconds.to_i64
       @@profile_counts[name] += 1
       @@profile_ns[name] += elapsed
+      @@profile_min_ns[name] = elapsed if elapsed < @@profile_min_ns[name]
+      @@profile_max_ns[name] = elapsed if elapsed > @@profile_max_ns[name]
       result
     end
 

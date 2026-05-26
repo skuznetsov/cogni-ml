@@ -113,6 +113,7 @@ mtp_min_margin = (ENV["QWEN35_MTP_MIN_MARGIN"]? || "1.0").to_f
 mtp_min_remaining = (ENV["QWEN35_MTP_MIN_REMAINING"]? || "16").to_i
 mtp_entry_target_margin_min = ENV["QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN"]?.try(&.to_f)
 mtp_trace_enabled = ENV["QWEN35_MTP_TRACE"]? == "1"
+mtp_prewarm_enabled = ENV["QWEN35_MTP_PREWARM"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
@@ -1016,7 +1017,7 @@ elsif mtp_decode_enabled && !output_ids.empty?
   puts "  mtp=#{mtp_gguf_path} gamma=#{mtp_gamma} stage=#{mtp_stage} min_margin=#{mtp_min_margin} exact_first=true checkpoint_replay=true reject_offramp=1"
 
   raise "MTP decode requires prompt-boundary hidden; disable prompt cache and structured constraints" unless last_exact_hidden
-  decode_t0 = Time.instant
+  ML::GGUF::Qwen35MTP.profile_reset if ML::GGUF::Qwen35MTP.profile_enabled?
   mtp = nil.as(ML::GGUF::Qwen35GGUFMTPWeights?)
   wall_hidden = last_exact_hidden.not_nil!
   wall_token = output_ids.last
@@ -1025,6 +1026,17 @@ elsif mtp_decode_enabled && !output_ids.empty?
   checkpoint_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(backup_state, hp) if prepare_state_metal
   ML::GGUF::Qwen35CPU.prepare_state_metal!(checkpoint_state, hp) if prepare_state_metal
+
+  mtp_prewarm_ms = 0.0
+  if mtp_prewarm_enabled
+    ML::GGUF::Qwen35MTP.profile_reset if ML::GGUF::Qwen35MTP.profile_enabled?
+    warm_start = Time.instant
+    warm_state = ML::GGUF::Qwen35MTP::State.new(1, hp.head_dim * hp.n_head_kv)
+    mtp_forward_top2(w, mtp ||= load_mtp_gguf.call, wall_hidden, wall_token, wall_pos, warm_state)
+    mtp_prewarm_ms = (Time.instant - warm_start).total_milliseconds
+    STDOUT << "  mtp prewarm: ms=#{mtp_prewarm_ms.round(1)}\n"
+    STDOUT << ML::GGUF::Qwen35MTP.profile_report << "\n" if ML::GGUF::Qwen35MTP.profile_enabled?
+  end
 
   mtp_passes = 0
   mtp_draft_tokens = 0
@@ -1041,6 +1053,8 @@ elsif mtp_decode_enabled && !output_ids.empty?
   mtp_backup_ms = 0.0
   mtp_fallback_ms = 0.0
 
+  ML::GGUF::Qwen35MTP.profile_reset if ML::GGUF::Qwen35MTP.profile_enabled?
+  decode_t0 = Time.instant
   while output_ids.size < n_gen
     mtp_passes += 1
 
@@ -1210,7 +1224,8 @@ elsif mtp_decode_enabled && !output_ids.empty?
 
   decode_ms = (Time.instant - decode_t0).total_milliseconds
   rate = mtp_draft_tokens > 0 ? (mtp_accepted.to_f64 * 100.0 / mtp_draft_tokens.to_f64) : 0.0
-  STDOUT << "  mtp summary: accepted=#{mtp_accepted}/#{mtp_draft_tokens} rate=#{rate.round(2)}% passes=#{mtp_passes} rejections=#{mtp_rejections} margin_skips=#{mtp_margin_skips} verifier_calls=#{mtp_verifier_calls} verifier_tokens=#{mtp_verifier_tokens} exact_first_tokens=#{mtp_exact_first_tokens} fallback_tokens=#{mtp_fallback_tokens} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} mtp_ms=#{mtp_mtp_ms.round(1)} exact_ms=#{mtp_exact_ms.round(1)} verifier_ms=#{mtp_verifier_ms.round(1)} backup_ms=#{mtp_backup_ms.round(1)} fallback_ms=#{mtp_fallback_ms.round(1)}\n"
+  STDOUT << "  mtp summary: accepted=#{mtp_accepted}/#{mtp_draft_tokens} rate=#{rate.round(2)}% passes=#{mtp_passes} rejections=#{mtp_rejections} margin_skips=#{mtp_margin_skips} verifier_calls=#{mtp_verifier_calls} verifier_tokens=#{mtp_verifier_tokens} exact_first_tokens=#{mtp_exact_first_tokens} fallback_tokens=#{mtp_fallback_tokens} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} mtp_ms=#{mtp_mtp_ms.round(1)} exact_ms=#{mtp_exact_ms.round(1)} verifier_ms=#{mtp_verifier_ms.round(1)} backup_ms=#{mtp_backup_ms.round(1)} fallback_ms=#{mtp_fallback_ms.round(1)} prewarm_ms=#{mtp_prewarm_ms.round(1)}\n"
+  STDOUT << ML::GGUF::Qwen35MTP.profile_report << "\n" if ML::GGUF::Qwen35MTP.profile_enabled?
 elsif speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
