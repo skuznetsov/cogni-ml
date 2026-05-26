@@ -110,7 +110,7 @@ mtp_gguf_path = ENV["QWEN35_MTP_GGUF_PATH"]?
 mtp_gamma = (ENV["QWEN35_MTP_GAMMA"]? || "4").to_i
 mtp_stage = (ENV["QWEN35_MTP_STAGE"]? || "2").to_i
 mtp_min_margin = (ENV["QWEN35_MTP_MIN_MARGIN"]? || "1.0").to_f
-mtp_min_remaining = (ENV["QWEN35_MTP_MIN_REMAINING"]? || "8").to_i
+mtp_min_remaining = (ENV["QWEN35_MTP_MIN_REMAINING"]? || "16").to_i
 mtp_entry_target_margin_min = ENV["QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN"]?.try(&.to_f)
 mtp_trace_enabled = ENV["QWEN35_MTP_TRACE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
