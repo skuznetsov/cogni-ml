@@ -9,15 +9,16 @@
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_constraints"
+require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_serving_route"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
 
-MODEL_PATH         = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+MODEL_PATH         = ENV["QWEN35_MODEL_PATH"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 DRAFT_MODEL_PATH   = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
-LLAMA_TOKENIZE_BIN = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
+LLAMA_TOKENIZE_BIN = ENV["LLAMA_TOKENIZE_BIN"]? || "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 
 request_t0 = Time.instant
 model_load_ms = 0.0
@@ -68,8 +69,8 @@ prompt_cache_artifact_codec_block = (ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLO
 prompt_cache_live_kv_artifacts = ENV["QWEN35_PROMPT_CACHE_LIVE_KV_ARTIFACTS"]? == "1"
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
-unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "auto"
-  raise "QWEN35_DECODE_POLICY must be greedy, ngram, speculative, or auto"
+unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "mtp" || decode_policy == "auto"
+  raise "QWEN35_DECODE_POLICY must be greedy, ngram, speculative, mtp, or auto"
 end
 legacy_speculative_decode_enabled = ENV["QWEN35_SPECULATIVE_DECODE"]? == "1" || ENV.has_key?("QWEN35_DRAFT_MODEL")
 legacy_ngram_decode_enabled = ENV["QWEN35_NGRAM_DECODE"]? == "1"
@@ -78,6 +79,7 @@ if decode_policy.empty? && legacy_speculative_decode_enabled && legacy_ngram_dec
 end
 speculative_decode_enabled = false
 ngram_decode_enabled = false
+mtp_decode_enabled = false
 case decode_policy
 when "greedy"
   # Explicit policy overrides legacy env toggles.
@@ -85,6 +87,8 @@ when "ngram", "auto"
   ngram_decode_enabled = true
 when "speculative"
   speculative_decode_enabled = true
+when "mtp"
+  mtp_decode_enabled = true
 else
   speculative_decode_enabled = legacy_speculative_decode_enabled
   ngram_decode_enabled = legacy_ngram_decode_enabled
@@ -102,6 +106,11 @@ spec_single_fast_enabled = ENV["QWEN35_SPEC_SINGLE_FAST_OFF"]? != "1"
 spec_verify_mode = (ENV["QWEN35_SPEC_VERIFY"]? || "chunk-inplace").downcase
 spec_skip_draft_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BEFORE_FALLBACK_OFF"]? != "1"
 spec_skip_draft_backup_before_fallback = ENV["QWEN35_SPEC_SKIP_DRAFT_BACKUP_BEFORE_FALLBACK_OFF"]? != "1"
+mtp_gguf_path = ENV["QWEN35_MTP_GGUF_PATH"]?
+mtp_gamma = (ENV["QWEN35_MTP_GAMMA"]? || "4").to_i
+mtp_stage = (ENV["QWEN35_MTP_STAGE"]? || "2").to_i
+mtp_min_margin = (ENV["QWEN35_MTP_MIN_MARGIN"]? || "1.0").to_f
+mtp_trace_enabled = ENV["QWEN35_MTP_TRACE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
 ngram_max = (ENV["QWEN35_NGRAM_MAX"]? || "8").to_i
@@ -165,14 +174,23 @@ raise "QWEN35_SPEC_FULL_ACCEPT_STREAK must be positive" unless spec_full_accept_
 raise "QWEN35_SPEC_FAST_REGROW_MIN_GAMMA must be non-negative" unless spec_fast_regrow_min_gamma >= 0
 raise "QWEN35_SPEC_BOOTSTRAP_GAMMA must be non-negative" unless spec_bootstrap_gamma >= 0
 raise "QWEN35_SPEC_BOOTSTRAP_STREAK must be positive" unless spec_bootstrap_streak > 0
+raise "QWEN35_MTP_GAMMA must be positive" unless mtp_gamma > 0
+raise "QWEN35_MTP_STAGE must be positive" unless mtp_stage > 0
+raise "QWEN35_MTP_MIN_MARGIN must be non-negative" unless mtp_min_margin >= 0.0
 unless spec_verify_mode == "chunk-inplace" || spec_verify_mode == "hybrid" || spec_verify_mode == "serial"
   raise "QWEN35_SPEC_VERIFY must be chunk-inplace, hybrid, or serial"
+end
+if mtp_decode_enabled
+  raise "QWEN35_DECODE_POLICY=mtp requires QWEN35_MTP_GGUF_PATH" unless mtp_gguf_path && File.exists?(mtp_gguf_path.not_nil!)
+  raise "QWEN35_DECODE_POLICY=mtp is incompatible with external draft speculative decode" if speculative_decode_enabled
+  raise "QWEN35_DECODE_POLICY=mtp is incompatible with n-gram speculative decode" if ngram_decode_enabled
+  raise "QWEN35_DECODE_POLICY=mtp is currently incompatible with prompt cache fast paths" if prompt_cache_enabled
 end
 if constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty? && constrained_tool_call_prefix_enabled
   raise "QWEN35_CONSTRAINED_LITERAL_PREFIX and QWEN35_CONSTRAINED_TOOL_CALL_PREFIX are mutually exclusive"
 end
 if structured_constraint_enabled
-  raise "constrained structured decoding is currently supported only with greedy decode" if speculative_decode_enabled || ngram_decode_enabled
+  raise "constrained structured decoding is currently supported only with greedy decode" if speculative_decode_enabled || ngram_decode_enabled || mtp_decode_enabled
   raise "constrained structured decoding is currently incompatible with prompt cache fast paths" if prompt_cache_enabled
 end
 if constrained_tool_call_prefix_enabled && chat_tools.empty?
@@ -202,6 +220,42 @@ def advance_next(weights : ML::GGUF::Qwen35Weights,
                  state : ML::GGUF::Qwen35CPU::State) : Int32
   top, _logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
   top.to_i32
+end
+
+def advance_hidden_next(weights : ML::GGUF::Qwen35Weights,
+                        token_id : Int32,
+                        pos : Int32,
+                        state : ML::GGUF::Qwen35CPU::State) : {Array(Float32), Int32}
+  hidden = ML::GGUF::Qwen35CPU.forward_hidden(weights, token_id, pos, state)
+  top, _logit = ML::GGUF::Qwen35CPU.hidden_top1(weights, hidden)
+  {hidden, top.to_i32}
+end
+
+def append_exact_suffix!(weights : ML::GGUF::Qwen35Weights,
+                         output_ids : Array(Int32),
+                         token_id : Int32,
+                         pos : Int32,
+                         state : ML::GGUF::Qwen35CPU::State,
+                         target_size : Int32) : {Int32, Int32, Int32}
+  emitted = 0
+  current_token = token_id
+  current_pos = pos
+  while output_ids.size < target_size
+    current_token = advance_next(weights, current_token, current_pos, state)
+    output_ids << current_token
+    current_pos += 1
+    emitted += 1
+  end
+  {current_token, current_pos, emitted}
+end
+
+def mtp_forward_top2(weights : ML::GGUF::Qwen35Weights,
+                     mtp : ML::GGUF::Qwen35GGUFMTPWeights,
+                     prev_hidden : Array(Float32),
+                     token_id : Int32,
+                     pos : Int32,
+                     mtp_state : ML::GGUF::Qwen35MTP::State?) : NamedTuple(hidden: Array(Float32), top2: Array({Int32, Float32}))
+  ML::GGUF::Qwen35MTP.forward_one_hidden_top2_gguf(weights, mtp, prev_hidden, token_id, pos, mtp_state)
 end
 
 def literal_constraint_complete?(remaining : Array(String)) : Bool
@@ -633,6 +687,20 @@ if speculative_decode_enabled
   puts "Loaded draft in #{(draft_load_ms / 1000.0).round(1)}s. n_layer=#{draft.not_nil!.hparams.n_layer} n_embd=#{draft.not_nil!.hparams.n_embd}"
 end
 
+mtp_gguf = nil.as(ML::GGUF::Qwen35GGUFMTPWeights?)
+if mtp_decode_enabled
+  tstart = Time.instant
+  mtp_hparams = if mtp_gguf_path.not_nil! == MODEL_PATH
+                  hp
+                else
+                  ML::GGUF::Qwen35Hparams.new(ML::GGUF::GGUFFile.new(mtp_gguf_path.not_nil!))
+                end
+  mtp_gguf = ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(mtp_gguf_path.not_nil!, mtp_hparams)
+  mtp_gguf.not_nil!.validate_for_qwen35!(hp)
+  draft_load_ms += (Time.instant - tstart).total_milliseconds
+  puts "Loaded GGUF MTP sidecar in #{((Time.instant - tstart).total_milliseconds / 1000.0).round(1)}s. path=#{mtp_gguf_path}"
+end
+
 max_seq = ids.size + n_gen + 8
 state_prepare_t0 = Time.instant
 state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
@@ -673,6 +741,7 @@ unless literal_remaining.empty?
 end
 
 pos = 0
+last_exact_hidden = nil.as(Array(Float32)?)
 
 if prompt_cache_enabled
   use_full_prompt_hit = n_gen >= prompt_cache_full_hit_min_gen
@@ -788,7 +857,20 @@ end
 # set `QWEN35_PREFILL_CHUNK_OFF=1` to force the older whole-token prefill loop.
 if output_ids.empty?
   puts "\nPrefilling #{ids.size} tokens..."
-  if !prompt_cache_enabled && ids.size > 1 && literal_remaining.empty?
+  if mtp_decode_enabled && ids.size > 1 && literal_remaining.empty?
+    prefix_ids = ids[0...-1]
+    tstart = Time.instant
+    ML::GGUF::Qwen35CPU.prefill_tokens(w, prefix_ids, pos, state)
+    pos += prefix_ids.size
+    final_hidden, top = advance_hidden_next(w, ids[-1], pos, state)
+    last_exact_hidden = final_hidden
+    output_ids << top
+    pos += 1
+    dt = (Time.instant - tstart).total_seconds
+    prefill_ms += dt * 1000.0
+    STDOUT << "  mtp-ready prefill #{ids.size}/#{ids.size} tokens with final hidden took #{dt.round(2)}s\n"
+    STDOUT.flush
+  elsif !prompt_cache_enabled && ids.size > 1 && literal_remaining.empty?
     tstart = Time.instant
     top, top_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, ids, pos, state)
     output_ids << top.to_i32
@@ -827,7 +909,14 @@ if output_ids.empty?
     tstart = Time.instant
     constrained_generated = false
     if literal_remaining.empty?
-      top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
+      if mtp_decode_enabled
+        final_hidden, top_id = advance_hidden_next(w, final_id, pos, state)
+        last_exact_hidden = final_hidden
+        top = top_id
+        top_logit = 0.0_f32
+      else
+        top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
+      end
     else
       constrained_stage = tool_literal_stage
       top, top_logit, literal_remaining, emitted_piece, constrained, forced_single = advance_next_maybe_literal_constrained(
@@ -895,6 +984,193 @@ end
 if output_ids.size >= n_gen
   STDOUT << "\nGeneration satisfied from validated cache; no decode loop needed.\n"
   decode_ms = 0.0
+elsif mtp_decode_enabled && !output_ids.empty?
+  puts "\nGenerating #{n_gen} tokens with exact GGUF MTP controller..."
+  puts "  mtp=#{mtp_gguf_path} gamma=#{mtp_gamma} stage=#{mtp_stage} min_margin=#{mtp_min_margin} exact_first=true checkpoint_replay=true reject_offramp=1"
+
+  raise "MTP decode requires prompt-boundary hidden; disable prompt cache and structured constraints" unless last_exact_hidden
+  decode_t0 = Time.instant
+  mtp = mtp_gguf.not_nil!
+  wall_hidden = last_exact_hidden.not_nil!
+  wall_token = output_ids.last
+  wall_pos = pos
+  backup_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  checkpoint_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(backup_state, hp) if prepare_state_metal
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(checkpoint_state, hp) if prepare_state_metal
+
+  mtp_passes = 0
+  mtp_draft_tokens = 0
+  mtp_accepted = 0
+  mtp_rejections = 0
+  mtp_margin_skips = 0
+  mtp_verifier_calls = 0
+  mtp_verifier_tokens = 0
+  mtp_fallback_tokens = 0
+  mtp_exact_first_tokens = 0
+  mtp_mtp_ms = 0.0
+  mtp_exact_ms = 0.0
+  mtp_verifier_ms = 0.0
+  mtp_backup_ms = 0.0
+  mtp_fallback_ms = 0.0
+
+  while output_ids.size < n_gen
+    mtp_passes += 1
+
+    exact_start = Time.instant
+    wall_hidden, exact_next = advance_hidden_next(w, wall_token, wall_pos, state)
+    mtp_exact_ms += (Time.instant - exact_start).total_milliseconds
+    output_ids << exact_next
+    wall_token = exact_next
+    wall_pos += 1
+    mtp_exact_first_tokens += 1
+    break if output_ids.size >= n_gen || wall_token == tok.eos_id
+
+    remaining = n_gen - output_ids.size
+    draft_budget = Math.min(mtp_gamma, remaining)
+    draft_hidden = wall_hidden
+    draft_token = wall_token
+    draft_pos = wall_pos
+    draft_generated = 0
+    pass_finished = false
+    pass_rejected = false
+
+    while draft_generated < draft_budget && !pass_finished && !pass_rejected && output_ids.size < n_gen
+      current_stage = Math.min(mtp_stage, draft_budget - draft_generated)
+      stage_candidates = [] of Int32
+      stage_candidate_hiddens = [] of Array(Float32)
+      stage_mtp_state = draft_budget > 1 ? ML::GGUF::Qwen35MTP::State.new(current_stage, hp.head_dim * hp.n_head_kv) : nil
+      margin_skip_stage = false
+
+      current_stage.times do |i|
+        mtp_start = Time.instant
+        result = mtp_forward_top2(w, mtp, draft_hidden, draft_token, draft_pos, stage_mtp_state)
+        mtp_mtp_ms += (Time.instant - mtp_start).total_milliseconds
+        mtp_draft_tokens += 1
+        top2 = result[:top2]
+        raise "MTP top2 route returned no candidates" if top2.empty?
+        if top2.size > 1
+          margin = (top2[0][1] - top2[1][1]).to_f64
+          if stage_candidates.empty? && margin < mtp_min_margin
+            margin_skip_stage = true
+            mtp_margin_skips += 1
+            break
+          end
+        end
+
+        candidate = top2[0][0]
+        stage_candidates << candidate
+        stage_candidate_hiddens << result[:hidden]
+        draft_hidden = result[:hidden]
+        draft_token = candidate
+        draft_pos += 1
+        draft_generated += 1
+      end
+
+      if margin_skip_stage
+        fallback_start = Time.instant
+        wall_token, wall_pos, emitted = append_exact_suffix!(w, output_ids, wall_token, wall_pos, state, n_gen)
+        mtp_fallback_tokens += emitted
+        mtp_fallback_ms += (Time.instant - fallback_start).total_milliseconds
+        pass_finished = true
+        next
+      end
+
+      break if stage_candidates.empty?
+
+      need_bonus = output_ids.size + stage_candidates.size < n_gen
+      verify_tail_count = need_bonus ? stage_candidates.size : Math.max(stage_candidates.size - 1, 0)
+      verify_tokens = [wall_token] + stage_candidates[0, verify_tail_count]
+
+      backup_start = Time.instant
+      ML::GGUF::Qwen35CPU.copy_state_metal_used!(backup_state, state, hp, used_tokens: wall_pos)
+      mtp_backup_ms += (Time.instant - backup_start).total_milliseconds
+
+      verifier_start = Time.instant
+      verified = if verify_tokens.size > 1
+                   ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s_recurrent_checkpoint(
+                     w, verify_tokens, wall_pos, state, 0, checkpoint_state)
+                 else
+                   ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(w, verify_tokens, wall_pos, state)
+                 end
+      mtp_verifier_ms += (Time.instant - verifier_start).total_milliseconds
+      mtp_verifier_calls += 1
+      mtp_verifier_tokens += verify_tokens.size
+      top1s = verified[:top1s]
+      hidden_rows = verified[:hidden]
+
+      accepted_stage = 0
+      stage_candidates.each_with_index do |candidate, i|
+        break if i >= top1s.size
+        break unless candidate == top1s[i][0]
+        accepted_stage += 1
+      end
+      mtp_accepted += accepted_stage
+
+      if accepted_stage == stage_candidates.size
+        stage_candidates.each do |id|
+          break if output_ids.size >= n_gen
+          output_ids << id
+        end
+
+        if need_bonus && output_ids.size < n_gen
+          bonus = top1s[accepted_stage][0]
+          row_base = accepted_stage * hp.n_embd
+          wall_hidden = hidden_rows[row_base, hp.n_embd]
+          wall_token = bonus
+          wall_pos += accepted_stage + 1
+          output_ids << bonus
+          pass_finished = true
+        elsif output_ids.size >= n_gen
+          pass_finished = true
+        else
+          row_base = Math.max(accepted_stage - 1, 0) * hp.n_embd
+          wall_hidden = hidden_rows[row_base, hp.n_embd]
+          wall_token = stage_candidates[-1]
+          wall_pos += accepted_stage
+          draft_hidden = wall_hidden
+          draft_token = wall_token
+          draft_pos = wall_pos
+        end
+      else
+        pass_rejected = true
+        mtp_rejections += 1
+        correction = top1s[accepted_stage][0]
+        stage_candidates[0, accepted_stage].each do |id|
+          break if output_ids.size >= n_gen
+          output_ids << id
+        end
+
+        restore_start = Time.instant
+        ML::GGUF::Qwen35CPU.copy_state_metal_used!(state, backup_state, hp, used_tokens: wall_pos)
+        mtp_backup_ms += (Time.instant - restore_start).total_milliseconds
+
+        replay_tokens = verify_tokens[0, accepted_stage + 1]
+        replay_start = Time.instant
+        wall_hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(w, replay_tokens, wall_pos, state)
+        mtp_verifier_ms += (Time.instant - replay_start).total_milliseconds
+
+        wall_pos += accepted_stage + 1
+        wall_token = correction
+        output_ids << correction if output_ids.size < n_gen
+
+        fallback_start = Time.instant
+        wall_token, wall_pos, emitted = append_exact_suffix!(w, output_ids, wall_token, wall_pos, state, n_gen)
+        mtp_fallback_tokens += emitted
+        mtp_fallback_ms += (Time.instant - fallback_start).total_milliseconds
+        pass_finished = true
+      end
+    end
+
+    if mtp_trace_enabled || trace_steps
+      STDOUT << "  mtp pass=#{mtp_passes} emitted=#{output_ids.size}/#{n_gen} draft=#{mtp_draft_tokens} accepted=#{mtp_accepted} rejected=#{pass_rejected} fallback=#{mtp_fallback_tokens}\n"
+      STDOUT.flush
+    end
+  end
+
+  decode_ms = (Time.instant - decode_t0).total_milliseconds
+  rate = mtp_draft_tokens > 0 ? (mtp_accepted.to_f64 * 100.0 / mtp_draft_tokens.to_f64) : 0.0
+  STDOUT << "  mtp summary: accepted=#{mtp_accepted}/#{mtp_draft_tokens} rate=#{rate.round(2)}% passes=#{mtp_passes} rejections=#{mtp_rejections} margin_skips=#{mtp_margin_skips} verifier_calls=#{mtp_verifier_calls} verifier_tokens=#{mtp_verifier_tokens} exact_first_tokens=#{mtp_exact_first_tokens} fallback_tokens=#{mtp_fallback_tokens} wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} mtp_ms=#{mtp_mtp_ms.round(1)} exact_ms=#{mtp_exact_ms.round(1)} verifier_ms=#{mtp_verifier_ms.round(1)} backup_ms=#{mtp_backup_ms.round(1)} fallback_ms=#{mtp_fallback_ms.round(1)}\n"
 elsif speculative_decode_enabled && !output_ids.empty?
   puts "\nGenerating #{n_gen} tokens with exact neural speculative decode..."
   puts "  draft=#{draft_model_path}"
