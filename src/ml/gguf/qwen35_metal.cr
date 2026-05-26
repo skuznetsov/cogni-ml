@@ -6825,7 +6825,8 @@ module ML
                                                rope_freq_base : Float32,
                                                eps : Float32,
                                                scale : Float32,
-                                               read_output : Bool = true) : Array(Float32)?
+                                               read_output : Bool = true,
+                                               output_buf : ML::MetalBuffer? = nil) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -7022,6 +7023,12 @@ module ML
           add_enc.dispatch_1d(n_tokens * hidden_dim, 256)
           add_enc.end_encoding
 
+          if ob = output_buf
+            blit = ML::Metal::BlitEncoder.new(cmd)
+            blit.copy_buffer(out_buf, 0, ob, 0, ((n_tokens * hidden_dim).to_i64 * sizeof(Float32)).to_i32)
+            blit.end_encoding
+          end
+
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
           cmd.wait
@@ -7033,6 +7040,77 @@ module ML
               (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
               (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
               read_output ? (t_read - t_wait.not_nil!).total_nanoseconds.to_i64 : 0_i64,
+            )
+          end
+          result
+        end
+
+        def self.rmsnorm_project_top1_rows_buffer(x_buf : ML::MetalBuffer,
+                                                  rows : Int32,
+                                                  norm_weight : Array(Float32),
+                                                  out_qw : QuantWeight,
+                                                  eps : Float32) : Array({Int32, Float32})?
+          return nil unless head_top1_fused_enabled?
+          return nil unless out_qw.type.q6_k?
+          return nil unless out_qw.in_dim % QK_K == 0
+          return nil unless rows > 0
+          hidden_dim = out_qw.in_dim
+          hidden_bytes = (rows * hidden_dim).to_i64 * sizeof(Float32)
+          return nil if x_buf.size < hidden_bytes
+
+          ML::Metal::Device.init!
+
+          tile_count = (out_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+          norm_w_buf = Scratch.get(:head_top1_rows_buf_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:head_top1_rows_buf_normed, hidden_bytes)
+          tile_values_buf = Scratch.get(:head_top1_rows_buf_tile_values, (rows * tile_count).to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:head_top1_rows_buf_tile_ids, (rows * tile_count).to_i64 * sizeof(UInt32))
+          top1_id_buf = Scratch.get(:head_top1_rows_buf_id, rows.to_i64 * sizeof(UInt32))
+          top1_value_buf = Scratch.get(:head_top1_rows_buf_value, rows.to_i64 * sizeof(Float32))
+          norm_w_buf.write(norm_weight)
+
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          t0 = Time.instant if Profile.enabled?
+          cmd = ML::Metal::CommandBuffer.new
+
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_rmsnorm_rows(norm_enc, x_buf, norm_w_buf, normed_buf, hidden_dim, rows, eps)
+          norm_enc.end_encoding
+
+          head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          head_top1_enc.set_pipeline(mv6_top1_tiles_batch_pipeline)
+          head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          head_top1_enc.set_buffer(normed_buf, 1)
+          head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_value(out_qw.in_dim.to_u32, 4)
+          head_top1_enc.set_value(out_qw.out_dim.to_u32, 5)
+          head_top1_enc.set_value(tile_count.to_u32, 6)
+          head_top1_enc.dispatch_threadgroups({tile_count, rows, 1}, {64, 1, 1})
+          head_top1_enc.end_encoding
+
+          reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          reduce_top1_enc.set_pipeline(top1_reduce_tiles_batch_pipeline)
+          reduce_top1_enc.set_buffer(tile_values_buf, 0)
+          reduce_top1_enc.set_buffer(tile_ids_buf, 1)
+          reduce_top1_enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_value(tile_count.to_u32, 4)
+          reduce_top1_enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+          reduce_top1_enc.end_encoding
+
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_top1_rows(top1_id_buf, top1_value_buf, rows)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
             )
           end
           result

@@ -860,7 +860,8 @@ module ML::GGUF
                                                      lw : Qwen35FullAttnWeights,
                                                      hp : Qwen35Hparams,
                                                      max_seq : Int32,
-                                                     read_output : Bool = true) : Array(Float32)?
+                                                     read_output : Bool = true,
+                                                     output_buf : ML::MetalBuffer? = nil) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -899,6 +900,7 @@ module ML::GGUF
           hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
           hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
           read_output: read_output,
+          output_buf: output_buf,
         )
       {% else %}
         nil
@@ -1420,6 +1422,47 @@ module ML::GGUF
         end
       {% end %}
       nil
+    end
+
+    private def output_project_top1s_resident_routed(x_buf : ML::MetalBuffer,
+                                                     rows : Int32,
+                                                     norm_weight : Array(Float32),
+                                                     out_qw : QuantWeight,
+                                                     eps : Float32) : Array({Int32, Float32})?
+      {% unless flag?(:cpu_only) %}
+        return nil if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
+        return nil unless metal_qw_supported?(out_qw)
+        return nil unless Qwen35Metal.available?
+        rows_min = (ENV["QWEN35_HEAD_TOP1_ROWS_MIN"]? || "8").to_i
+        return nil unless ENV["QWEN35_HEAD_TOP1_ROWS_OFF"]? != "1" &&
+                          (ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1" || rows >= rows_min)
+        return Qwen35Metal.rmsnorm_project_top1_rows_buffer(x_buf, rows, norm_weight, out_qw, eps)
+      {% end %}
+      nil
+    end
+
+    private def prefill_top1_resident_rows_supported?(weights : Qwen35Weights, rows : Int32) : Bool
+      {% unless flag?(:cpu_only) %}
+        return false unless ENV["QWEN35_PREFILL_TOP1_RESIDENT_ROWS"]? == "1"
+        return false unless ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? != "1"
+        return false unless Qwen35Metal.available?
+        return false unless weights.output.type.q6_k? && weights.output.in_dim % 256 == 0
+        rows_min = (ENV["QWEN35_HEAD_TOP1_ROWS_MIN"]? || "8").to_i
+        return false unless ENV["QWEN35_HEAD_TOP1_ROWS_OFF"]? != "1" &&
+                            (ENV["QWEN35_HEAD_TOP1_ROWS"]? == "1" || rows >= rows_min)
+        last_layer = weights.layers[-1].as?(Qwen35FullAttnWeights)
+        return false unless last_layer
+        metal_qw_supported?(weights.output) &&
+          metal_qw_supported?(last_layer.attn_q_qw) &&
+          metal_qw_supported?(last_layer.attn_k_qw) &&
+          metal_qw_supported?(last_layer.attn_v_qw) &&
+          metal_qw_supported?(last_layer.attn_output_qw) &&
+          metal_qw_supported?(last_layer.ffn_gate_qw) &&
+          metal_qw_supported?(last_layer.ffn_up_qw) &&
+          metal_qw_supported?(last_layer.ffn_down_qw)
+      {% else %}
+        false
+      {% end %}
     end
 
     # ─────────────────────────────────────────────────────────────────────
@@ -2427,6 +2470,24 @@ module ML::GGUF
         end
       end
 
+      {% unless flag?(:cpu_only) %}
+        if prefill_top1_resident_rows_supported?(weights, token_ids.size)
+          hp = weights.hparams
+          hidden_bytes = (token_ids.size * hp.n_embd).to_i64 * sizeof(Float32)
+          resident_buf = ML::MetalBuffer.new(hidden_bytes)
+          resident_written = [false]
+          prefill_tokens_hidden(weights, token_ids, start_pos, state,
+            need_output: false,
+            resident_output_buf: resident_buf,
+            resident_output_written: resident_written)
+          raise "resident top1 verifier did not produce a GPU hidden buffer despite positive preflight" unless resident_written[0]
+          if top1s = output_project_top1s_resident_routed(resident_buf, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
+            return top1s
+          end
+          raise "resident top1 verifier route unavailable despite positive preflight"
+        end
+      {% end %}
+
       hidden = prefill_tokens_hidden(weights, token_ids, start_pos, state)
       hp = weights.hparams
       if top1s = output_project_top1s_routed(hidden, token_ids.size, weights.output_norm, weights.output, hp.rms_eps)
@@ -2765,7 +2826,11 @@ module ML::GGUF
           end
 
           if gb = gpu_hidden
-            if !need_output && il + 1 >= layer_limit && !checkpoint_requested &&
+            full_output_buf = nil.as(ML::MetalBuffer?)
+            if resident_boundary_ok && !need_output && il + 1 >= layer_limit
+              full_output_buf = resident_output_buf
+            end
+            if !need_output && il + 1 >= layer_limit && !checkpoint_requested && full_output_buf.nil? &&
                final_full_attn_layer_chunk_kv_cache_only_routed([] of Float32, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
                  input_buf: gb, append_command_buffer: append_prefill_cmd)
               x = [] of Float32
@@ -2776,7 +2841,7 @@ module ML::GGUF
             flush_prefill_cmd.call
             x = gb.read(n_tokens * hp.n_embd)
             gpu_hidden = nil
-          elsif !need_output && il + 1 >= layer_limit && !checkpoint_requested &&
+          elsif !need_output && il + 1 >= layer_limit && !checkpoint_requested && resident_output_buf.nil? &&
                 final_full_attn_layer_chunk_kv_cache_only_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
                   append_command_buffer: append_prefill_cmd)
             x = [] of Float32
@@ -2785,11 +2850,25 @@ module ML::GGUF
           end
 
           read_output = need_output || il + 1 < layer_limit
+          full_resident_final = false
+          full_output_buf = nil.as(ML::MetalBuffer?)
+          if resident_boundary_ok && !read_output && il + 1 >= layer_limit
+            if rb = resident_output_buf
+              full_output_buf = rb
+              full_resident_final = true
+            end
+          end
           flush_prefill_cmd.call if read_output
-          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output)
+          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output, output_buf: full_output_buf)
             flush_prefill_cmd.call unless read_output
-            return [] of Float32 unless read_output
-            x = gpu_out
+            if read_output
+              x = gpu_out
+            elsif full_resident_final
+              resident_output_written.try { |flag| flag[0] = true }
+              x = [] of Float32
+            else
+              return [] of Float32
+            end
           else
             out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
             n_tokens.times do |t|
