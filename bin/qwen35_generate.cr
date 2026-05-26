@@ -690,17 +690,24 @@ if speculative_decode_enabled
 end
 
 mtp_gguf = nil.as(ML::GGUF::Qwen35GGUFMTPWeights?)
-if mtp_decode_enabled
-  tstart = Time.instant
-  mtp_hparams = if mtp_gguf_path.not_nil! == MODEL_PATH
-                  hp
-                else
-                  ML::GGUF::Qwen35Hparams.new(ML::GGUF::GGUFFile.new(mtp_gguf_path.not_nil!))
-                end
-  mtp_gguf = ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(mtp_gguf_path.not_nil!, mtp_hparams)
-  mtp_gguf.not_nil!.validate_for_qwen35!(hp)
-  draft_load_ms += (Time.instant - tstart).total_milliseconds
-  puts "Loaded GGUF MTP sidecar in #{((Time.instant - tstart).total_milliseconds / 1000.0).round(1)}s. path=#{mtp_gguf_path}"
+load_mtp_gguf = -> : ML::GGUF::Qwen35GGUFMTPWeights do
+  if loaded = mtp_gguf
+    loaded
+  else
+    raise "QWEN35_DECODE_POLICY=mtp requires QWEN35_MTP_GGUF_PATH" unless mtp_gguf_path
+    tstart = Time.instant
+    mtp_hparams = if mtp_gguf_path.not_nil! == MODEL_PATH
+                    hp
+                  else
+                    ML::GGUF::Qwen35Hparams.new(ML::GGUF::GGUFFile.new(mtp_gguf_path.not_nil!))
+                  end
+    loaded_mtp = ML::GGUF::Qwen35GGUFMTPWeights.from_gguf(mtp_gguf_path.not_nil!, mtp_hparams)
+    loaded_mtp.validate_for_qwen35!(hp)
+    draft_load_ms += (Time.instant - tstart).total_milliseconds
+    puts "Loaded GGUF MTP sidecar in #{((Time.instant - tstart).total_milliseconds / 1000.0).round(1)}s. path=#{mtp_gguf_path}"
+    mtp_gguf = loaded_mtp
+    loaded_mtp
+  end
 end
 
 max_seq = ids.size + n_gen + 8
@@ -1000,7 +1007,7 @@ elsif mtp_decode_enabled && !output_ids.empty?
 
   raise "MTP decode requires prompt-boundary hidden; disable prompt cache and structured constraints" unless last_exact_hidden
   decode_t0 = Time.instant
-  mtp = mtp_gguf.not_nil!
+  mtp = load_mtp_gguf.call
   wall_hidden = last_exact_hidden.not_nil!
   wall_token = output_ids.last
   wall_pos = pos
