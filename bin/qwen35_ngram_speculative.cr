@@ -24,7 +24,7 @@ hadamard_continuation = ENV["QWEN35_HADAMARD_CONTINUATION"]? == "1"
 hadamard_window = (ENV["QWEN35_HADAMARD_WINDOW"]? || "8").to_i
 hadamard_max_hamming = (ENV["QWEN35_HADAMARD_MAX_HAMMING"]? || "16").to_i
 hadamard_min_candidates = (ENV["QWEN35_HADAMARD_MIN_CANDIDATES"]? || min_candidates.to_s).to_i
-hadamard_min_exact_overlap = (ENV["QWEN35_HADAMARD_MIN_EXACT_OVERLAP"]? || "0.75").to_f64
+hadamard_min_exact_overlap = (ENV["QWEN35_HADAMARD_MIN_EXACT_OVERLAP"]? || "1.0").to_f64
 
 OptionParser.parse(ARGV) do |parser|
   parser.banner = "Usage: qwen35_ngram_speculative [--target PATH] [--tokenizer-bin PATH] [--tokens N] [--gamma N] [--min-ngram N] [--max-ngram N] [--hadamard-continuation] [--no-check] [prompt]"
@@ -41,7 +41,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--hadamard-window N", "Token window size for --hadamard-continuation (default: env QWEN35_HADAMARD_WINDOW or 8)") { |value| hadamard_window = value.to_i }
   parser.on("--hadamard-max-hamming N", "Maximum 64-bit sketch Hamming distance for Hadamard continuation (default: env QWEN35_HADAMARD_MAX_HAMMING or 16)") { |value| hadamard_max_hamming = value.to_i }
   parser.on("--hadamard-min-candidates N", "Skip Hadamard continuation chunks shorter than N candidates (default: n-gram min-candidates)") { |value| hadamard_min_candidates = value.to_i }
-  parser.on("--hadamard-min-exact-overlap F", "Minimum exact-token overlap for Hadamard continuation windows (default: env QWEN35_HADAMARD_MIN_EXACT_OVERLAP or 0.75)") { |value| hadamard_min_exact_overlap = value.to_f64 }
+  parser.on("--hadamard-min-exact-overlap F", "Minimum exact-token overlap for Hadamard continuation windows (default: env QWEN35_HADAMARD_MIN_EXACT_OVERLAP or 1.0)") { |value| hadamard_min_exact_overlap = value.to_f64 }
   parser.on("--no-check", "Skip plain greedy replay/equality check") { check_plain = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser

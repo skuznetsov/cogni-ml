@@ -48,7 +48,7 @@ module ML::GGUF
       def candidate_span(gamma : Int32,
                          min_candidates : Int32 = 0,
                          max_hamming : Int32 = 16,
-                         min_exact_overlap : Float64 = 0.75) : CandidateSpan?
+                         min_exact_overlap : Float64 = 1.0) : CandidateSpan?
         raise ArgumentError.new("gamma must be positive") unless gamma > 0
         raise ArgumentError.new("min_candidates must be non-negative") unless min_candidates >= 0
         raise ArgumentError.new("max_hamming must be non-negative") unless max_hamming >= 0
@@ -98,7 +98,7 @@ module ML::GGUF
       def candidates(gamma : Int32,
                      min_candidates : Int32 = 0,
                      max_hamming : Int32 = 16,
-                     min_exact_overlap : Float64 = 0.75) : Array(Int32)
+                     min_exact_overlap : Float64 = 1.0) : Array(Int32)
         candidate_span(gamma, min_candidates: min_candidates, max_hamming: max_hamming, min_exact_overlap: min_exact_overlap).try(&.ids) || [] of Int32
       end
 
@@ -152,7 +152,7 @@ module ML::GGUF
                    vector_dim : Int32 = 64,
                    min_candidates : Int32 = 0,
                    max_hamming : Int32 = 16,
-                   min_exact_overlap : Float64 = 0.75) : Array(Int32)
+                   min_exact_overlap : Float64 = 1.0) : Array(Int32)
       IndexedHistory.new(history, window_size: window_size, sketch_bits: sketch_bits, vector_dim: vector_dim)
         .candidates(gamma, min_candidates: min_candidates, max_hamming: max_hamming, min_exact_overlap: min_exact_overlap)
     end
