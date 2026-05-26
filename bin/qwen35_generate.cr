@@ -111,6 +111,7 @@ mtp_gamma = (ENV["QWEN35_MTP_GAMMA"]? || "4").to_i
 mtp_stage = (ENV["QWEN35_MTP_STAGE"]? || "2").to_i
 mtp_min_margin = (ENV["QWEN35_MTP_MIN_MARGIN"]? || "1.0").to_f
 mtp_min_remaining = (ENV["QWEN35_MTP_MIN_REMAINING"]? || "8").to_i
+mtp_entry_target_margin_min = ENV["QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN"]?.try(&.to_f)
 mtp_trace_enabled = ENV["QWEN35_MTP_TRACE"]? == "1"
 ngram_gamma = (ENV["QWEN35_NGRAM_GAMMA"]? || "32").to_i
 ngram_min = (ENV["QWEN35_NGRAM_MIN"]? || "6").to_i
@@ -179,6 +180,7 @@ raise "QWEN35_MTP_GAMMA must be positive" unless mtp_gamma > 0
 raise "QWEN35_MTP_STAGE must be positive" unless mtp_stage > 0
 raise "QWEN35_MTP_MIN_MARGIN must be non-negative" unless mtp_min_margin >= 0.0
 raise "QWEN35_MTP_MIN_REMAINING must be non-negative" unless mtp_min_remaining >= 0
+raise "QWEN35_MTP_ENTRY_TARGET_MARGIN_MIN must be non-negative" if mtp_entry_target_margin_min && mtp_entry_target_margin_min.not_nil! < 0.0
 unless spec_verify_mode == "chunk-inplace" || spec_verify_mode == "hybrid" || spec_verify_mode == "serial"
   raise "QWEN35_SPEC_VERIFY must be chunk-inplace, hybrid, or serial"
 end
@@ -1007,7 +1009,7 @@ elsif mtp_decode_enabled && !output_ids.empty?
 
   raise "MTP decode requires prompt-boundary hidden; disable prompt cache and structured constraints" unless last_exact_hidden
   decode_t0 = Time.instant
-  mtp = load_mtp_gguf.call
+  mtp = nil.as(ML::GGUF::Qwen35GGUFMTPWeights?)
   wall_hidden = last_exact_hidden.not_nil!
   wall_token = output_ids.last
   wall_pos = pos
@@ -1043,6 +1045,19 @@ elsif mtp_decode_enabled && !output_ids.empty?
     mtp_exact_first_tokens += 1
     break if output_ids.size >= n_gen || wall_token == tok.eos_id
 
+    if threshold = mtp_entry_target_margin_min
+      top1_id, top1_logit, top2_id, top2_logit = ML::GGUF::Qwen35CPU.hidden_top2(w, wall_hidden)
+      margin = (top1_logit - top2_logit).to_f64
+      if margin < threshold
+        fallback_start = Time.instant
+        wall_token, wall_pos, emitted = append_exact_suffix!(w, output_ids, wall_token, wall_pos, state, n_gen)
+        mtp_fallback_tokens += emitted
+        mtp_fallback_ms += (Time.instant - fallback_start).total_milliseconds
+        STDOUT << "  mtp entry-target-margin gate: margin=#{margin.round(3)} threshold=#{threshold} top1=#{top1_id} top2=#{top2_id}; using exact greedy suffix\n" if mtp_trace_enabled || trace_steps
+        break
+      end
+    end
+
     remaining = n_gen - output_ids.size
     draft_budget = Math.min(mtp_gamma, remaining)
     draft_hidden = wall_hidden
@@ -1061,7 +1076,7 @@ elsif mtp_decode_enabled && !output_ids.empty?
 
       current_stage.times do |i|
         mtp_start = Time.instant
-        result = mtp_forward_top2(w, mtp, draft_hidden, draft_token, draft_pos, stage_mtp_state)
+        result = mtp_forward_top2(w, mtp ||= load_mtp_gguf.call, draft_hidden, draft_token, draft_pos, stage_mtp_state)
         mtp_mtp_ms += (Time.instant - mtp_start).total_milliseconds
         mtp_draft_tokens += 1
         top2 = result[:top2]

@@ -1874,6 +1874,16 @@ module ML::GGUF
       {logits.index(maxv).not_nil!.to_i32, maxv}
     end
 
+    # Project a pre-output-norm hidden through the normal Qwen output head and
+    # return the best two logits. This is used by exact routing controllers
+    # that need a legal confidence signal from an already-computed boundary row.
+    def hidden_top2(weights : Qwen35Weights, hidden : Array(Float32)) : {Int32, Float32, Int32, Float32}
+      hp = weights.hparams
+      x = hidden.dup
+      rms_norm!(x, weights.output_norm, hp.rms_eps)
+      top2_from_logits(qmatvec_nobias(weights.output, x))
+    end
+
     # Project a pre-norm hidden through an explicit RMSNorm/head pair.
     # Used by GGUF MTP, where the draft head can have its own shared norm/head
     # while still reusing the target runtime's fused Q6/Q8 top1 kernels.
