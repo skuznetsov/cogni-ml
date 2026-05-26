@@ -16327,3 +16327,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is legal and boundary-safe, but the lexicographic potential only descends versus a bad MTP entry, not versus plain exact. Product default must compare against exact greedy, not against the already-entered bad corridor.
 - adversary: This was one easy prompt and a manually chosen threshold. Do not extrapolate to broad routing. Use it to guard forced probes or collect features, not to advertise speed.
 - trust: {F:0.84,G:0.48,R:0.82}
+
+**LM-602 Forced product MTP gen32 is parity-correct but economically non-viable [shared/ml]**
+- status: VERIFIED product-path refutation; pivot required before more controller plumbing
+- claim tested: Once generation is long enough to bypass short no-entry, forced production MTP might show enough acceptance to justify optimizing route plumbing.
+- evidence: Qwen3.6-27B `Q4_K_M` target plus UD-Q4_K_XL sidecar, structured JSON prompt, `n_gen=32`, `QWEN35_MTP_MIN_REMAINING=0`, preserved greedy ids exactly. Greedy decode took `1860.9ms`; forced MTP decode took `46841.7ms` with `accepted=0/2`, `rejections=1`, `verifier_calls=1`, `verifier_tokens=3`, `fallback_tokens=29`, `mtp_ms=9456.5`, `verifier_ms=17169.7`, `fallback_ms=19928.7`. Logs: `/tmp/qwen36_generate_greedy_gen32_20260525203853.log`, `/tmp/qwen36_generate_mtp_force_gen32_20260525203853.log`.
+- diagnosis: The production MTP path is exact, but current proposal quality/cost is not viable. More scalar gates or controller plumbing will at best avoid the bad route; it will not create speed. The next speed branch must change proposal economics: cheaper/warm/resident MTP body, different proposal source, or learned/trace-backed pre-entry selector with high positive expected value.
+- LTP/WBA: The MTP corridor fails potential descent after recomputation: `(proposal_ms, verifier_ms, fallback_ms, wall_ms)` all increase versus exact. The legal dual frame is exact greedy/no-entry. Continue using forced MTP only as a probe until proposal body or acceptance changes.
+- adversary: This is one prompt, but the failure margin is far beyond host noise and aligns with earlier 12-prompt trace refutations. Do not generalize acceptance rate numerically; do generalize the branch decision: controller-only work is currently low leverage.
+- trust: {F:0.88,G:0.56,R:0.86}
