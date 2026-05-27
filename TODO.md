@@ -3125,3 +3125,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_602:** Build gates passed: no-codegen and linked Metal build `/tmp/qwen35_current_hidden_probe`. Repeat prompt `tokens=32/calib=16/top5`: nearest top1/top5 `10/16`, centroid top1/top5 `10/16`. Code prompt: nearest `2/16` top1 and `3/16` top5; centroid also `2/16` and `3/16`. The route remains proposal-only and exact-verifier-required.
 
 **next_update_602:** Keep centroid metrics as a compression/cost diagnostic, not a quality lever. The next current-hidden branch should be either a learned small transition/classifier with stronger regularization and a real train/test split, or a runtime router that uses current-hidden repeat confidence only when it beats n-gram/session-cache economics.
+
+**decision_update_603:** Added a low-rank PCA/ridge current-hidden transition probe. It trains a hidden-delta map from calibration final-hidden rows and projects predicted next hidden through the normal output head. The result is strongly negative on the first repeat/code gate.
+
+**evidence_update_603:** Build gates passed: no-codegen and linked Metal build `/tmp/qwen35_current_hidden_probe`. Repeat prompt `tokens=32/calib=16/top5/rank4`: direct nearest-label and centroid stayed `10/16` (`62.5%`), nearest-delta was `4/12` (`33.33%`), PCA transition was only `1/15` (`6.67%`) with `pca_transition_ms=107.356`. Code prompt: direct top5 `3/16`, nearest-delta `2/15`, PCA transition `1/15`.
+
+**next_update_603:** Stop local current-hidden transition tuning for now. The actionable signal remains direct repeat/session replay from already-owned hidden rows. If this branch reopens, it should be with a larger offline trained sidecar or MTP-like head and a strict exact-verifier economics gate, not another tiny per-prompt ridge map.

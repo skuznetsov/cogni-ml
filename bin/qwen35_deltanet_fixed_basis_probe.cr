@@ -4590,11 +4590,40 @@ private def hidden_row_with_delta(hidden : Array(Float32),
   Array(Float32).new(dim) { |i| hidden[src_base + i] + hidden[to_base + i] - hidden[from_base + i] }
 end
 
+private def hidden_row64(hidden : Array(Float32), row : Int32, dim : Int32) : Array(Float64)
+  base = row * dim
+  Array(Float64).new(dim) { |i| hidden[base + i].to_f64 }
+end
+
+private def train_current_hidden_pca_transition(hidden : Array(Float32),
+                                                dim : Int32,
+                                                train_count : Int32,
+                                                rank : Int32,
+                                                pca_iters : Int32) : BlockResidualSurrogate?
+  return nil if rank <= 0 || train_count < 3
+
+  samples = [] of BlockResidualSample
+  (0...(train_count - 1)).each do |row|
+    inp = hidden_row64(hidden, row, dim)
+    out = hidden_row64(hidden, row + 1, dim)
+    delta = Array(Float64).new(dim) { |i| out[i] - inp[i] }
+    samples << {inp: inp, out: out, delta: delta}
+  end
+
+  train_rank = Math.min(rank, samples.size - 1)
+  return nil if train_rank <= 0
+  train_block_residual_surrogate(samples, -1, -1, train_rank, pca_iters)
+rescue ex
+  nil
+end
+
 private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
                                         prompt_name : String,
                                         token_ids : Array(Int32),
                                         calib_count : Int32,
-                                        top_k : Int32) : NamedTuple(eval_samples: Int32, train_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, centroid_top1_hits: Int32, centroid_topk_hits: Int32, unique_train_labels: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, p50_best_cos: Float64, min_best_cos: Float64, centroid_avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, centroid_top1_rate: Float64, centroid_topk_rate: Float64, transition_samples: Int32, transition_label_hits: Int32, transition_delta_hits: Int32, transition_label_rate: Float64, transition_delta_rate: Float64, transition_ms: Float64)
+                                        top_k : Int32,
+                                        pca_transition_rank : Int32,
+                                        pca_iters : Int32) : NamedTuple(eval_samples: Int32, train_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, centroid_top1_hits: Int32, centroid_topk_hits: Int32, unique_train_labels: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, p50_best_cos: Float64, min_best_cos: Float64, centroid_avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, centroid_top1_rate: Float64, centroid_topk_rate: Float64, transition_samples: Int32, transition_label_hits: Int32, transition_delta_hits: Int32, pca_transition_samples: Int32, pca_transition_hits: Int32, transition_label_rate: Float64, transition_delta_rate: Float64, pca_transition_rate: Float64, transition_ms: Float64, pca_transition_ms: Float64, pca_transition_effective_rank: Int32)
   raise "current-hidden proposal top_k must be positive" unless top_k > 0
   raise "current-hidden proposal needs at least one train and one eval token" unless calib_count > 0 && calib_count < token_ids.size
 
@@ -4672,6 +4701,25 @@ private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
   end
   transition_ms = (Time.instant - t_transition).total_milliseconds
 
+  t_pca_transition = Time.instant
+  pca_adapter = train_current_hidden_pca_transition(hidden, dim, train_count, pca_transition_rank, pca_iters)
+  pca_transition_hits = 0
+  pca_transition_samples = 0
+  if adapter = pca_adapter
+    (train_count...rows).each do |row|
+      next if row + 1 >= rows
+      target = labels[row + 1]
+      inp = hidden_row64(hidden, row, dim)
+      pred_delta = predict_block_residual(adapter, inp)
+      pred_hidden = Array(Float32).new(dim) { |i| (inp[i] + pred_delta[i]).to_f32 }
+      pred_id = ML::GGUF::Qwen35CPU.hidden_top1(weights, pred_hidden)[0]
+      pca_transition_hits += 1 if pred_id == target
+      pca_transition_samples += 1
+    end
+  end
+  pca_transition_ms = (Time.instant - t_pca_transition).total_milliseconds
+  pca_effective_rank = pca_adapter.try(&.input_basis.size) || 0
+
   sorted_cos = best_cosines.sort
   {
     eval_samples:        eval_count,
@@ -4695,9 +4743,14 @@ private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
     transition_samples:  transition_samples,
     transition_label_hits: transition_label_hits,
     transition_delta_hits: transition_delta_hits,
+    pca_transition_samples: pca_transition_samples,
+    pca_transition_hits: pca_transition_hits,
     transition_label_rate: transition_samples > 0 ? 100.0 * transition_label_hits / transition_samples : 0.0,
     transition_delta_rate: transition_samples > 0 ? 100.0 * transition_delta_hits / transition_samples : 0.0,
+    pca_transition_rate: pca_transition_samples > 0 ? 100.0 * pca_transition_hits / pca_transition_samples : 0.0,
     transition_ms:       transition_ms,
+    pca_transition_ms:   pca_transition_ms,
+    pca_transition_effective_rank: pca_effective_rank,
   }
 end
 
@@ -11734,6 +11787,7 @@ simulate_cost_truth_updown_rank : Int32? = nil
 simulate_cost_truth_updown_layers = [] of Int32
 simulate_current_hidden_proposal = false
 simulate_current_hidden_proposal_topk = 5
+simulate_current_hidden_transition_rank = 8
 simulate_current_hidden_proposal_suite_prompts = [] of NamedPrompt
 simulate_block_surrogate_start : Int32? = nil
 simulate_block_surrogate_end : Int32? = nil
@@ -11968,6 +12022,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-cost-truth-updown-layers=LIST", "Apply pca-updown cost-table rows only to the listed low-rank recurrent draft layers") { |v| simulate_cost_truth_updown_layers = parse_int_list(v) }
   p.on("--simulate-current-hidden-proposal", "Probe a verifier-safe proposal cache: nearest current final-hidden row -> exact top1 label") { simulate_current_hidden_proposal = true }
   p.on("--current-hidden-proposal-topk=N", "Candidate width for --simulate-current-hidden-proposal nearest-label coverage (default: 5)") { |v| simulate_current_hidden_proposal_topk = v.to_i }
+  p.on("--current-hidden-transition-rank=N", "Rank for the PCA hidden-delta transition inside --simulate-current-hidden-proposal (default: 8)") { |v| simulate_current_hidden_transition_rank = v.to_i }
   p.on("--current-hidden-proposal-suite-prompt=NAME::TEXT", "Additional prompt for --simulate-current-hidden-proposal; main --prompt is always included") do |v|
     add_current_hidden_proposal_suite_prompt.call(v)
   end
@@ -12189,6 +12244,7 @@ raise "calib-tokens must be positive" unless calib_tokens > 0
 raise "ranks must not be empty" if ranks.empty?
 raise "pca-iters must be positive" unless pca_iters > 0
 raise "current-hidden proposal topK must be positive" unless simulate_current_hidden_proposal_topk > 0
+raise "current-hidden transition rank must be non-negative" unless simulate_current_hidden_transition_rank >= 0
 raise "FFN block size must be positive" unless simulate_ffn_block_size > 0
 raise "FFN block selector percentages must be in 1..100" if simulate_ffn_block_selector_percents.any? { |v| v < 1 || v > 100 }
 pipeline_router_trace_io = simulate_self_spec_gpu_pipeline_router_trace_path.try { |path| File.open(path, "w") }
@@ -12292,9 +12348,10 @@ if simulate_current_hidden_proposal
     ids = item[:token_ids]
     prompt_calib_count = Math.min(calib_tokens, ids.size - 1)
     raise "current-hidden proposal prompt #{item[:name]} needs at least one held-out token" unless prompt_calib_count > 0 && prompt_calib_count < ids.size
-    proposal = run_current_hidden_proposal(weights, item[:name], ids, prompt_calib_count, simulate_current_hidden_proposal_topk)
+    proposal = run_current_hidden_proposal(weights, item[:name], ids, prompt_calib_count, simulate_current_hidden_proposal_topk, simulate_current_hidden_transition_rank, pca_iters)
     transition_per = proposal[:transition_samples] > 0 ? proposal[:transition_ms] / proposal[:transition_samples] : 0.0
-    puts "current_hidden_proposal name=#{item[:name]} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} top_k=#{proposal[:top_k]} train=#{proposal[:train_samples]} eval=#{proposal[:eval_samples]} unique_train_labels=#{proposal[:unique_train_labels]} top1=#{proposal[:top1_rate].round(2)}% topk=#{proposal[:topk_rate].round(2)}% hits=#{proposal[:top1_hits]}/#{proposal[:topk_hits]}/#{proposal[:eval_samples]} centroid_top1=#{proposal[:centroid_top1_rate].round(2)}% centroid_topk=#{proposal[:centroid_topk_rate].round(2)}% centroid_hits=#{proposal[:centroid_top1_hits]}/#{proposal[:centroid_topk_hits]}/#{proposal[:eval_samples]} collect_ms=#{proposal[:collect_ms].round(3)} proposal_ms=#{proposal[:proposal_ms].round(3)} proposal_ms_per_eval=#{(proposal[:proposal_ms] / proposal[:eval_samples]).round(6)} avg_best_cos=#{proposal[:avg_best_cos].round(6)} centroid_avg_best_cos=#{proposal[:centroid_avg_best_cos].round(6)} p50_best_cos=#{proposal[:p50_best_cos].round(6)} min_best_cos=#{proposal[:min_best_cos].round(6)} transition_samples=#{proposal[:transition_samples]} transition_label_top1=#{proposal[:transition_label_rate].round(2)}% transition_delta_top1=#{proposal[:transition_delta_rate].round(2)}% transition_hits=#{proposal[:transition_label_hits]}/#{proposal[:transition_delta_hits]}/#{proposal[:transition_samples]} transition_ms=#{proposal[:transition_ms].round(3)} transition_ms_per_eval=#{transition_per.round(6)} note=proposal_only_exact_verifier_required"
+    pca_transition_per = proposal[:pca_transition_samples] > 0 ? proposal[:pca_transition_ms] / proposal[:pca_transition_samples] : 0.0
+    puts "current_hidden_proposal name=#{item[:name]} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} top_k=#{proposal[:top_k]} train=#{proposal[:train_samples]} eval=#{proposal[:eval_samples]} unique_train_labels=#{proposal[:unique_train_labels]} top1=#{proposal[:top1_rate].round(2)}% topk=#{proposal[:topk_rate].round(2)}% hits=#{proposal[:top1_hits]}/#{proposal[:topk_hits]}/#{proposal[:eval_samples]} centroid_top1=#{proposal[:centroid_top1_rate].round(2)}% centroid_topk=#{proposal[:centroid_topk_rate].round(2)}% centroid_hits=#{proposal[:centroid_top1_hits]}/#{proposal[:centroid_topk_hits]}/#{proposal[:eval_samples]} collect_ms=#{proposal[:collect_ms].round(3)} proposal_ms=#{proposal[:proposal_ms].round(3)} proposal_ms_per_eval=#{(proposal[:proposal_ms] / proposal[:eval_samples]).round(6)} avg_best_cos=#{proposal[:avg_best_cos].round(6)} centroid_avg_best_cos=#{proposal[:centroid_avg_best_cos].round(6)} p50_best_cos=#{proposal[:p50_best_cos].round(6)} min_best_cos=#{proposal[:min_best_cos].round(6)} transition_samples=#{proposal[:transition_samples]} pca_transition_samples=#{proposal[:pca_transition_samples]} transition_label_top1=#{proposal[:transition_label_rate].round(2)}% transition_delta_top1=#{proposal[:transition_delta_rate].round(2)}% pca_transition_top1=#{proposal[:pca_transition_rate].round(2)}% transition_hits=#{proposal[:transition_label_hits]}/#{proposal[:transition_delta_hits]}/#{proposal[:transition_samples]} pca_transition_hits=#{proposal[:pca_transition_hits]}/#{proposal[:pca_transition_samples]} pca_transition_rank=#{proposal[:pca_transition_effective_rank]} transition_ms=#{proposal[:transition_ms].round(3)} pca_transition_ms=#{proposal[:pca_transition_ms].round(3)} transition_ms_per_eval=#{transition_per.round(6)} pca_transition_ms_per_eval=#{pca_transition_per.round(6)} note=proposal_only_exact_verifier_required"
   end
 end
 

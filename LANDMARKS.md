@@ -16948,3 +16948,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is current final hidden; transport is label-centroid summaries instead of individual hidden rows. Legal move preserves exact verifier boundary, but recomputed potential `(candidate coverage, proposal cost)` does not descend versus nearest replay on tested windows. Dual frame remains direct repeat/session replay plus exact fallback.
 - adversary: This does not refute learned current-hidden classifiers broadly. It refutes the simplest centroid summarization as a coverage improvement on the current small prompts.
 - trust: {F:0.88,G:0.34,R:0.84}
+
+
+**LM-670 PCA current-hidden transition overfits and underperforms direct replay [shared/ml]**
+- status: VERIFIED small Qwen3.5-9B gate; learned transition route refuted for current shape
+- change: The current-hidden proposal probe now trains a low-rank PCA/ridge hidden-delta map on calibration final-hidden transitions (`h_i -> h_{i+1}`), applies it to held-out final hidden rows, and projects the predicted next hidden through the normal output head. Flag: `--current-hidden-transition-rank=N`.
+- evidence: Guarded no-codegen build exited 0; linked Metal build `/tmp/qwen35_current_hidden_probe` exited 0. Repeat prompt `tokens=32/calib=16/top5/rank4`: direct nearest-label and centroid both kept `10/16` (`62.5%`), nearest-delta scored `4/12` (`33.33%`), but PCA transition scored only `1/15` (`6.67%`) with `pca_transition_ms=107.356`. Code prompt: direct top5 `3/16`, nearest-delta `2/15`, PCA transition `1/15`.
+- diagnosis: A learned final-hidden delta map from tiny calibration is worse than memory-style replay. The hidden transition is not locally linear enough in this low-data/rank setting, or the target is too sensitive after output RMSNorm/head. This branch should not be fused or promoted.
+- LTP/WBA: Window is current final hidden; transport is a PCA/ridge hidden-delta corridor. Legal move keeps exact verifier safety and lower-body replay at zero, but recomputed potential `(proposal_hit_rate, transition_cost)` increases versus direct replay. Collapse to a refutation; dual frame is repeat/session replay or exact decode.
+- adversary: This refutes only the tiny low-rank PCA transition. It does not refute a properly trained sidecar, MTP head, or larger offline classifier, but those are no longer a small local optimization.
+- trust: {F:0.88,G:0.34,R:0.84}
