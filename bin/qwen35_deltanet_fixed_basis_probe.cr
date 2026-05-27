@@ -12052,7 +12052,7 @@ end
 unless simulate_block_surrogate_suite_blocks.empty?
   block_rank = simulate_block_surrogate_rank || simulate_logit_rank || ranks.max
   raise "block surrogate rank must be positive" unless block_rank > 0
-  suite_token_sets = [{name: "main", token_ids: token_ids}] of PromptTokenSet
+  suite_token_sets = [{name: main_prompt_name, token_ids: token_ids}] of PromptTokenSet
   simulate_block_surrogate_suite_prompts.each do |suite_prompt|
     suite_token_sets << {
       name:      suite_prompt[:name],

@@ -3058,3 +3058,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_592:** Verification passed: guarded no-codegen build of `bin/qwen35_deltanet_fixed_basis_probe.cr`; linked Metal build `/tmp/qwen35_deltanet_fixed_basis_probe_prompt_name`; `--help` exposes `--prompt-name=NAME`. Default remains `main`, preserving old trace comparability.
 
 **next_update_592:** Re-run future self-spec portfolio traces with explicit labels, for example `--prompt-name=repeat_alpha`, before using `qwen35_proposal_router_oracle` output as router-training data. This does not change the LM-657 performance conclusion; next speed branch still needs structural proposal-body reduction or a cheaper certified source.
+
+
+**decision_update_593:** Ran the first clean repeat-corridor delta-basis gate for block-residual surrogates and fixed suite prompt labeling. The repeat phase does not support replacing PCA with output-impact basis: PCA ranked best, balanced was close, impact was worse. This turns `impact` into a router/phase candidate rather than a default basis.
+
+**evidence_update_593:** Qwen3.5-9B repeat prompt, block `28:28`, `tokens=24/calib=12/rank8/gamma2`, log `/tmp/qwen35_block_delta_basis_repeat_suite_20260527.log`, exited 0. All modes had parity and accepted `2/2`. PCA ranked first (`hidden_cos_mean=0.99521859`, `rel_rmse=0.09931474`, `delta_rel_rmse=0.38635226`, margin `0.4132`), balanced second (`0.99441003`, `0.10668893`, `0.41503917`, margin `0.3556`), impact third (`0.99020216`, `0.14127169`, `0.54957238`, margin `0.2891`). Label smoke `/tmp/qwen35_block_suite_prompt_name_smoke_20260527.log` exited 0 and printed `prompt=repeat_alpha` for main block-suite rows.
+
+**next_update_593:** Next basis work should be a small held-out phase suite, not a global switch: repeat/continuation should keep PCA unless impact wins elsewhere; default/facts/code/json can test impact/balanced as phase-specific routes. Do not fuse impact-basis surrogates until held-out self-spec acceptance and wall economics beat the PCA baseline.
