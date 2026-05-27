@@ -5826,13 +5826,15 @@ private def append_block_surrogate_suite_rows(rows : Array(BlockSurrogateSuiteRo
                                              tree_branch_verify : Bool,
                                              tree_select_advance : Bool,
                                              topk_oracle_k : Int32?,
-                                             topk_oracle_train_tokens : Int32?) : Nil
+                                             topk_oracle_train_tokens : Int32?,
+                                             min_ideal_speedup : Float64) : Nil
   block = layer_block_label(block_start, block_end)
   gammas.each do |gamma|
     spec = simulate_block_surrogate_self_spec_policy(weights, token_ids, gen_tokens, gamma,
       block_start, block_end, adapter, calib_count, state_mode)
     draft_margin_min = spec[:draft_min_margin_history].empty? ? 0.0 : spec[:draft_min_margin_history].min
-    puts "block_surrogate_suite_self_spec prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} gamma=#{gamma} gen_tokens=#{gen_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% draft_margin_min=#{draft_margin_min.round(4)} baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} draft_fork_ms=#{spec[:draft_fork_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} verifier_fork_ms=#{spec[:verifier_fork_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')}"
+    economics = (spec[:parity] && spec[:verifier_parity] && spec[:ideal_overlap_speedup] >= min_ideal_speedup) ? "candidate" : "fail_closed"
+    puts "block_surrogate_suite_self_spec prompt=#{prompt_name} block=#{block} mode=#{mode} state_mode=#{state_mode} rank=#{rank} clusters=#{clusters} gamma=#{gamma} gen_tokens=#{gen_tokens} chunks=#{spec[:chunks]} full_accept_chunks=#{spec[:full_accept_chunks]} rejections=#{spec[:rejections]} accepted_draft_tokens=#{spec[:accepted_draft_tokens]} proposed_tokens=#{spec[:proposed_tokens]} accept_rate=#{spec[:accept_rate].round(2)}% avg_accept=#{spec[:avg_accept].round(3)} verifier_tokens=#{spec[:verifier_tokens]} correction_steps=#{spec[:correction_steps]} draft_top2_hit=#{spec[:draft_top2_hit_rate].round(2)}% draft_top5_hit=#{spec[:draft_top5_hit_rate].round(2)}% draft_margin_min=#{draft_margin_min.round(4)} baseline_decode_ms=#{spec[:baseline_decode_ms].round(3)} draft_ms=#{spec[:draft_ms].round(3)} draft_fork_ms=#{spec[:draft_fork_ms].round(3)} verifier_ms=#{spec[:verifier_ms].round(3)} verifier_fork_ms=#{spec[:verifier_fork_ms].round(3)} self_seq_decode_ms=#{spec[:self_seq_decode_ms].round(3)} ideal_overlap_decode_ms=#{spec[:ideal_overlap_decode_ms].round(3)} cpu_seq_speedup=#{spec[:cpu_seq_speedup].round(4)} ideal_overlap_speedup=#{spec[:ideal_overlap_speedup].round(4)} economics=#{economics} min_ideal_speedup=#{min_ideal_speedup.round(4)} parity=#{spec[:parity]} verifier_parity=#{spec[:verifier_parity]} gamma_history=#{spec[:gamma_history].join(',')} accept_history=#{spec[:accept_history].join(',')}"
     rows << {
       prompt:                prompt_name,
       block:                 block,
@@ -6139,7 +6141,8 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
                                       tree_branch_verify : Bool,
                                       tree_select_advance : Bool,
                                       topk_oracle_k : Int32?,
-                                      topk_oracle_train_tokens : Int32?) : Array(BlockSurrogateSuiteRow)
+                                      topk_oracle_train_tokens : Int32?,
+                                      min_ideal_speedup : Float64) : Array(BlockSurrogateSuiteRow)
   rows = [] of BlockSurrogateSuiteRow
   tree_rows = [] of BlockSurrogateTreeSuiteRow
   token_sets.each do |prompt_case|
@@ -6178,7 +6181,7 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
         append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
           adapter, stats, mode_label, block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode,
           tree_rows, tree_top_k, tree_warmup_tokens, tree_prefill_seed, tree_branch_verify, tree_select_advance,
-          topk_oracle_k, topk_oracle_train_tokens)
+          topk_oracle_k, topk_oracle_train_tokens, min_ideal_speedup)
       end
 
       next unless cluster_count > 1
@@ -6191,7 +6194,7 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
         mixture, mix_stats, "mixture", block_rank, mixture.centroids.size, prompt_calib_count, gen_tokens,
         gammas, state_mode, tree_rows, tree_top_k, tree_warmup_tokens, tree_prefill_seed, tree_branch_verify,
-        tree_select_advance, topk_oracle_k, topk_oracle_train_tokens)
+        tree_select_advance, topk_oracle_k, topk_oracle_train_tokens, min_ideal_speedup)
     end
   end
 
@@ -11500,6 +11503,7 @@ simulate_block_surrogate_policy = false
 simulate_block_surrogate_state_mode = "skip"
 simulate_block_surrogate_error_feedback_decays = [] of Float64
 simulate_block_surrogate_delta_basis_modes = ["pca"]
+simulate_block_surrogate_min_ideal_speedup = 1.0
 simulate_block_surrogate_self_spec_gammas = [] of Int32
 simulate_block_surrogate_suite_blocks = [] of LayerBlock
 simulate_block_surrogate_suite_prompts = [] of NamedPrompt
@@ -11720,6 +11724,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
   p.on("--block-surrogate-error-feedback=LIST", "Probe one-token-lag EWMA residual-error correction decays for block residual predictions, e.g. 0,0.5,0.9") { |v| simulate_block_surrogate_error_feedback_decays = parse_float_list(v) }
   p.on("--block-surrogate-delta-basis=LIST", "Comma-separated delta bases for global block surrogate: pca,impact,balanced") { |v| simulate_block_surrogate_delta_basis_modes = v.split(',').map(&.strip).reject(&.empty?) }
+  p.on("--block-surrogate-min-ideal-speedup=F", "Fail-closed economics marker for block-surrogate self-spec rows; default 1.0 means ideal overlap must beat paired exact") { |v| simulate_block_surrogate_min_ideal_speedup = v.to_f }
   p.on("--block-surrogate-oracle-gen-calib=N", "Probe-only upper bound: add N exact generated-token block samples to training while still drafting from the original prompt boundary") { |v| simulate_block_surrogate_oracle_gen_calib = v.to_i }
   p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
   p.on("--simulate-block-surrogate-tree-oracle=K", "Run block-surrogate top-K tree oracle using --simulate-block-surrogate-self-spec-gammas as fixed chunk schedules") { |v| simulate_block_surrogate_tree_oracle_k = v.to_i }
@@ -11954,6 +11959,7 @@ valid_block_surrogate_delta_basis_modes = Set{"pca", "impact", "balanced"}
 simulate_block_surrogate_delta_basis_modes.each do |mode|
   raise "unsupported block surrogate delta basis #{mode.inspect}; expected pca, impact, or balanced" unless valid_block_surrogate_delta_basis_modes.includes?(mode)
 end
+raise "block surrogate min ideal speedup must be positive" unless simulate_block_surrogate_min_ideal_speedup > 0.0
 raise "block surrogate oracle generated calibration must be non-negative" unless simulate_block_surrogate_oracle_gen_calib >= 0
 unless {"skip", "shadow"}.includes?(simulate_block_surrogate_state_mode)
   raise "--block-surrogate-state-mode must be skip or shadow"
@@ -12067,7 +12073,7 @@ unless simulate_block_surrogate_suite_blocks.empty?
     simulate_block_surrogate_tree_oracle_k, simulate_block_surrogate_tree_warmup_tokens,
     simulate_block_surrogate_tree_prefill_seed, simulate_block_surrogate_tree_branch_verify,
     simulate_block_surrogate_tree_select_advance, simulate_block_surrogate_topk_oracle_k,
-    simulate_block_surrogate_topk_oracle_train_tokens)
+    simulate_block_surrogate_topk_oracle_train_tokens, simulate_block_surrogate_min_ideal_speedup)
 end
 
 if block_start = simulate_block_surrogate_start

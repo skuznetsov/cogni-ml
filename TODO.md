@@ -3079,3 +3079,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_595:** `/tmp/qwen35_block_surrogate_topk_reasoning_20260527.log`, Qwen3.5-9B block `28:28`, PCA, `tokens=16/calib=8/rank4/gen4/gamma2`, exited 0. Self-spec accepted `4/4`, parity true, tree oracle `top1_hits=4`, `topk_hits=4`, `misses=0`. Timing lost to plain: `baseline_decode_ms=2074.22`, `draft_ms=2692.75`, `verifier_ms=2083.991`, `ideal_overlap_decode_ms=2713.936`, `ideal_overlap_speedup=0.7643x`.
 
 **next_update_595:** Do not add a top-K rescue layer before reducing body cost. Next plausible exact-speed branch is either a GPU/fused late-layer surrogate body with measured lower `draft_ms`, or a runtime lower-bound gate that enters only when measured/estimated `draft_body + verifier` is below paired exact.
+
+
+**decision_update_596:** Added an explicit fail-closed economics marker for block-surrogate self-spec rows. Future surrogate quality gates now print whether the ideal-overlap lower bound actually beats paired exact before treating the route as a candidate.
+
+**evidence_update_596:** `bin/qwen35_deltanet_fixed_basis_probe.cr` supports `--block-surrogate-min-ideal-speedup=F`; guarded no-codegen and linked Metal builds passed. Runtime smoke `/tmp/qwen35_block_surrogate_econ_gate_smoke_20260527.log` exited 0 and marked a 100% accepted reasoning row as `economics=fail_closed` because `ideal_overlap_speedup=0.0012 < 1.0`, while `parity=true` and `verifier_parity=true`.
+
+**next_update_596:** Use `economics=candidate` as the first promotion filter for future late-block surrogate suites. If no rows clear it, do not add top-K rescue or fusion; first reduce proposal body cost or use a route where the body is already cheap enough.

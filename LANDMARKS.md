@@ -16880,3 +16880,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the late-layer reasoning span. Transport via PCA surrogate is quality-legal (`accepted=4/4`, parity true), but recomputed potential `(draft_ms, verifier_ms, ideal_overlap_ms)` does not descend versus exact decode. Dual frame remains exact decode until proposal body is eliminated/fused enough to satisfy `draft_body + verifier < plain`.
 - adversary: This is one prompt and short generation. It supports the existence of a quality corridor, not a general reasoning claim or a speed claim. Longer prompts may expose top-K misses; shorter smokes cannot justify fusion alone.
 - trust: {F:0.88,G:0.34,R:0.84}
+
+
+**LM-663 Block-surrogate probes now fail closed on ideal-overlap economics [shared/ml]**
+- status: VERIFIED instrumentation; no runtime policy change
+- change: `bin/qwen35_deltanet_fixed_basis_probe.cr` now supports `--block-surrogate-min-ideal-speedup=F` for block-surrogate self-spec suite rows. The row prints `economics=candidate` only when parity and verifier parity hold and `ideal_overlap_speedup >= F`; default `F=1.0` means the ideal-overlap lower bound must beat paired exact.
+- evidence: Guarded no-codegen build exited 0. Linked Metal build `/tmp/qwen35_deltanet_fixed_basis_probe_econ` exited 0. Runtime smoke `/tmp/qwen35_block_surrogate_econ_gate_smoke_20260527.log` exited 0 and printed a 100% accepted reasoning row with `ideal_overlap_speedup=0.0012`, `economics=fail_closed`, `min_ideal_speedup=1.0`, `parity=true`, `verifier_parity=true`.
+- diagnosis: This makes the LM-662 lesson explicit in probe output: quality/acceptance is necessary but insufficient. The legal promotion gate must include body/verifier economics before any route or fusion work is treated as a speed candidate.
+- LTP/WBA: Window is a block-surrogate proposal row. Transport into an accelerated corridor is legal only if the recomputed potential `(ideal_overlap_speedup, parity, verifier_parity)` descends versus exact decode. Otherwise the dual frame is exact decode and the row is marked fail-closed.
+- adversary: This is a marker, not a controller. It uses measured probe timings, so tiny one-token rows can be noisy; its role is to prevent false promotion, not to prove production speed.
+- trust: {F:0.89,G:0.62,R:0.86}
