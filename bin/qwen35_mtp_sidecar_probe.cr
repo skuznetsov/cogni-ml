@@ -855,8 +855,16 @@ rows.each do |label, prompt_text|
   ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams)
 
   prefill_start = Time.instant
-  hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(weights, token_ids, 0, state)
-  y1, y1_logit = ML::GGUF::Qwen35CPU.hidden_top1(weights, hidden)
+  prompt_hidden_flat = nil.as(Array(Float32)?)
+  if mtp_spec_wall_persistent_mtp_state
+    prefill_result = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, token_ids, 0, state)
+    prompt_hidden_flat = prefill_result[:hidden]
+    hidden = prompt_hidden_flat.not_nil![(token_ids.size - 1) * weights.hparams.n_embd, weights.hparams.n_embd]
+    y1, y1_logit = prefill_result[:top1s].last
+  else
+    hidden = ML::GGUF::Qwen35CPU.prefill_tokens_last_hidden(weights, token_ids, 0, state)
+    y1, y1_logit = ML::GGUF::Qwen35CPU.hidden_top1(weights, hidden)
+  end
   prefill_ms = elapsed_ms(prefill_start)
 
   verify_state = state.fork
@@ -869,11 +877,15 @@ rows.each do |label, prompt_text|
   if mtp_spec_wall_persistent_mtp_state
     prompt_mtp_state_start = Time.instant
     kv_dim = weights.hparams.head_dim * weights.hparams.n_head_kv
+    hidden_dim = weights.hparams.n_embd
     prompt_mtp_state = ML::GGUF::Qwen35MTP::State.new(max_seq, kv_dim)
-    prompt_hiddens = prompt_hidden_rows(weights, token_ids, max_seq)
     zero_hidden = Array(Float32).new(weights.hparams.n_embd, 0.0_f32)
     token_ids.each_with_index do |tok, i|
-      prev_h = i == 0 ? zero_hidden : prompt_hiddens[i - 1]
+      prev_h = if i == 0
+                 zero_hidden
+               else
+                 prompt_hidden_flat.not_nil![(i - 1) * hidden_dim, hidden_dim]
+               end
       mtp_sync_state_token!(weights, mtp, prev_h, tok, i.to_i32, prompt_mtp_state.not_nil!)
     end
     prompt_mtp_state_ms = elapsed_ms(prompt_mtp_state_start)
