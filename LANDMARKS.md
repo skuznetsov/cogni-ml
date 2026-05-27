@@ -16909,3 +16909,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the surrogate adapter application. The adapter move locally reduces `(delta_map_cost)` but recomputed route potential is dominated by `(hidden_boundary_acquisition, verifier_body)`. Legal next transport must carry an already-owned boundary or collapse more lower-layer work; otherwise exact decode remains the dual frame.
 - adversary: This is a tiny CPU timing and not a GPU kernel benchmark. It is sufficient to refute adapter-math optimization as the next bottleneck, not to estimate production fused speed.
 - trust: {F:0.88,G:0.50,R:0.84}
+
+
+**LM-666 Final-layer surrogate preserves repeat quality but cannot win because lower-body replay remains [shared/ml]**
+- status: VERIFIED one-prompt repeat gate; final-layer skip refuted as speed route
+- evidence: Repeat prompt final-band run `/tmp/qwen35_final_layer_surrogate_repeat_20260527.log`, Qwen3.5-9B, blocks `31:31` and `30:31`, `tokens=20`, `calib=10`, `rank=8`, `gen=2`, `gamma=2`, exited 0. Both rows preserved parity and accepted `2/2`. `31:31` had `hidden_cos_mean=0.9789267`, `delta_rel_rmse=0.30045804`, `ideal_overlap_speedup=0.4866`, `economics=fail_closed`. `30:31` had `hidden_cos_mean=0.97357796`, `delta_rel_rmse=0.31118618`, `ideal_overlap_speedup=0.5393`, `economics=fail_closed`.
+- diagnosis: Even the most local late-layer skip does not help when the draft route still computes lower layers for future tokens and then pays exact verification. The quality signal is real, but the acceleration frame is wrong: skipping the final layer is too small an area reduction and still has lower-body replay.
+- LTP/WBA: Window is final-layer replacement on a repeat corridor. Legal surrogate transport preserves output under exact verification, but the lexicographic potential `(lower_body_replay, verifier_ms, ideal_overlap_speedup)` does not descend. Dual frame remains exact decode unless the proposal starts from already-owned hidden/state or eliminates lower-body replay.
+- adversary: This is one prompt and short generation. It is a route-shape refutation, not a broad quality result.
+- trust: {F:0.88,G:0.38,R:0.84}

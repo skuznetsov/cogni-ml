@@ -3100,3 +3100,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_598:** No-codegen build passed; linked Metal build `/tmp/qwen35_deltanet_fixed_basis_probe_adapter_ms` passed. Runtime smoke `/tmp/qwen35_block_adapter_ms_smoke_20260527.log`, block `24:30`, `tokens=8/calib=4/rank2`, exited 0 and printed `adapter_ms=0.982`, `adapter_ms_per_sample=0.245521`, while exact block sample collection took `collect_ms=5854.13`.
 
 **next_update_598:** Next body-cost branch must target hidden-boundary acquisition, not adapter math: reuse an already-owned boundary, eliminate lower-layer replay, or design a proposal source that starts from current state/final hidden instead of replaying layers `0..k` for every draft token.
+
+
+**decision_update_599:** Tested final-layer and final-two-layer PCA surrogates on the repeat corridor. They preserve quality, but still fail economics because the draft path recomputes almost the whole lower body before the surrogate. This closes the simple late-exit escape hatch.
+
+**evidence_update_599:** `/tmp/qwen35_final_layer_surrogate_repeat_20260527.log`, Qwen3.5-9B repeat prompt, blocks `31:31` and `30:31`, `tokens=20/calib=10/rank8/gen2/gamma2`, exited 0. Both accepted `2/2` with parity. `31:31` ideal overlap speedup `0.4866`; `30:31` `0.5393`; both `economics=fail_closed`.
+
+**next_update_599:** Stop searching simple late-layer ranges as speed routes. The only remaining exact surrogate path with meaningful upside is boundary/state reuse: proposal must start from already-owned hidden/state, or use an MTP/self-distilled transition from current final hidden, not replay lower layers.
