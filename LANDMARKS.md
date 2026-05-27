@@ -16596,3 +16596,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a validated partial cached span. Transport restores boundary state, then continues exact decode along the remaining token corridor. Legal move requires greedy parity after recomputation. Potential descends in `(restore_ms)` for BF16/live-KV, but total potential remains limited by `(remaining_decode_ms)` unless the cached span covers most or all requested output.
 - adversary: Evidence is one prompt and short lengths; BF16 default promotion still needs a held-out five-prompt partial matrix and longer continuations. The probe is verified; broad product policy is not.
 - trust: {F:0.88,G:0.56,R:0.84}
+
+**LM-632 BF16 live-KV helps cold restore, but partial continuation is decode-dominated [shared/ml]**
+- status: VERIFIED five-prompt partial-continuation gate
+- claim tested: BF16 live-KV artifacts might be the next product default for cached continuations after terminal fast-forward rows showed large restore wins.
+- evidence: `/tmp/qwen35_warm_partial_probe`, `gen=16`, `cached_gen=8`, `requests=2`, `warmups=1`, modes `serving_continuation active_cursor`, five prompts. BF16 table `/tmp/qwen35_partial_recurrent-bf16_20260526_211401.tsv`; raw table `/tmp/qwen35_partial_raw_20260526_211422.tsv`. BF16 serving continuation avg p50 total `174.938ms`, restore `7.836ms`, decode `166.849ms`; raw serving continuation avg p50 total `195.090ms`, restore `27.051ms`, decode `167.753ms`. Active cursor avg p50 total was `167.199ms` BF16 and `168.073ms` raw, restore `0.0ms`, decode about `167-168ms`. The probe checks greedy parity and all rows passed.
+- diagnosis: BF16/live-KV is worth using for cold continuation restore, but it is not the limiting factor when only half the requested generation is cached. Active cursor is strictly better in resident continuation because it removes restore entirely; direct-output is better still when the terminal span is known.
+- LTP/WBA: Window is partial cached span restore. BF16 transport legally lowers `(restore_ms)` under parity checks, but recomputed potential remains dominated by `(remaining_decode_ms)`. Active cursor is the better Spike for resident sessions because it cancels restore work. Dual frame remains raw exact restore when BF16 parity or policy confidence is insufficient.
+- adversary: This is local 9B, short `gen=16`, and one cached coverage ratio (`8/16`). It supports route priority and BF16 opt-in for cold continuation, not universal default promotion.
+- trust: {F:0.88,G:0.62,R:0.84}
