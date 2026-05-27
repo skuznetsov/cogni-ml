@@ -16640,3 +16640,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is route attribution after a validated direct-output Spike. The legal move is telemetry-only: label exact-count and shorter-terminal spikes separately while preserving the same boundary checks. Potential descends in future debugging/search cost by exposing hit frequency.
 - adversary: Label proliferation is only justified if consumed by harness traces; keep it limited to this semantically distinct route.
 - trust: {F:0.90,G:0.66,R:0.86}
+
+**LM-637 Crystal Ball headless harness reports exact and shorter-terminal direct cache routes [shared/ml]**
+- status: VERIFIED product-harness smoke
+- claim tested: The route labels introduced for CogniQwen are visible through the real text/headless Crystal Ball harness, not only through unit helpers and `qwen35_generate`.
+- evidence: Built `/tmp/cb_cogni_qwen_harness_cache_probe` from `../crystal_ball/src/harness.cr` with guarded `run_safe.sh` after correcting a duplicate `bridge.o` link attempt. Stable-plan prompt-cache smoke on Qwen3.5-9B Q4_K_M: cold run printed `CogniQwen cache: cache_miss_no_source_history=1,cache_partial_miss_no_source_history=1,cache_saved_exact_span=1`; hot repeat printed `CogniQwen cache: direct_output=1`. After replacing the temporary direct-output certificate with a one-token EOS certificate and rerunning with a larger token budget, the harness printed `CogniQwen cache: direct_output_terminal_short=1` and trace `direct output certificate hit output_tokens=1`.
+- diagnosis: The Crystal Ball integration now exposes the route telemetry needed for product-shaped hit-rate measurement. This closes the gap between cache API/unit evidence and harness-visible serving behavior.
+- LTP/WBA: Window is a validated direct-output certificate reached through the product harness. Exact-count Spike emits `direct_output`; EOS-certified shorter terminal Spike emits `direct_output_terminal_short`. Boundary safety remains in Store certificate validation and tokenizer EOS identity; the harness only observes the route summary. Potential descends in `(weight/decode work, source-history lookup, route ambiguity)` for repeated terminal tasks.
+- adversary: The terminal-short harness row uses a synthetic temporary EOS certificate, so it verifies route mechanics and attribution, not natural hit frequency. Real-task route rates still need collection before prioritizing more label-specific optimization.
+- trust: {F:0.90,G:0.62,R:0.86}
