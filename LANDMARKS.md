@@ -16631,3 +16631,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is exact prompt after tokenizer load plus a shorter EOS direct-output certificate. The Spike skips weight load, state restore, source-history replay, prefill, and decode. Boundary safety is the Store certificate plus EOS guard.
 - adversary: Synthetic certificate proves route mechanics, not frequency in real workloads. The next question is hit-rate telemetry in Crystal Ball/headless harness, not more local unit tests.
 - trust: {F:0.90,G:0.58,R:0.86}
+
+**LM-636 Short terminal direct-output hits have distinct route telemetry [shared/ml]**
+- status: VERIFIED telemetry patch
+- change: `qwen35_generate` and Crystal Ball CogniQwen now report `direct_output_terminal_short` when an EOS-guarded shorter direct-output certificate satisfies a larger request budget. Exact-count hits remain `direct_output`.
+- evidence: Guarded no-codegen build of `bin/qwen35_generate.cr` passed. Crystal Ball targeted spec `spec/llm/local_spec.cr:4861` passed (`1 examples, 0 failures`). Runtime smoke with synthetic one-token EOS certificate and `n_gen=4` printed `cache_route=direct_output_terminal_short`, `prefill_ms=0.0`, and `decode_ms=0.0`.
+- diagnosis: The distinct label makes the new coverage path measurable in harness stats without changing cache formats or route semantics.
+- LTP/WBA: Window is route attribution after a validated direct-output Spike. The legal move is telemetry-only: label exact-count and shorter-terminal spikes separately while preserving the same boundary checks. Potential descends in future debugging/search cost by exposing hit frequency.
+- adversary: Label proliferation is only justified if consumed by harness traces; keep it limited to this semantically distinct route.
+- trust: {F:0.90,G:0.66,R:0.86}

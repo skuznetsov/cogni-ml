@@ -2930,3 +2930,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_574:** Runtime smoke confirmed the new `qwen35_generate` post-tokenizer at-most direct-output branch. A temporary synthetic cache seeded a one-token EOS direct-output certificate for prompt `At-most direct cache smoke prompt`; running `/tmp/qwen35_generate_atmost` with `n_gen=4`, prompt cache fast-forward enabled, and that cache root printed `Prompt cache direct output fast-forward hit after tokenizer load: emitted 1 cached tokens`, `cache_route=direct_output`, `output_tokens=1`, and exited before weight load (`prefill_ms=0.0`, `decode_ms=0.0`). This verifies the early-terminal larger-budget route at runtime, not just unit-level Store semantics.
 
 **next_update_574:** The next cached-span coverage lever is telemetry: count exact direct-output hits versus EOS-guarded shorter hits separately in product/harness runs, then decide if a dedicated `direct_output_terminal_short` route label is useful. Do not add label churn until real harness traces show ambiguity.
+
+**decision_update_575:** Added route telemetry for shorter terminal direct-output hits. Exact-count direct-output remains `direct_output`; EOS-guarded shorter hits now report `direct_output_terminal_short` in `qwen35_generate` and Crystal Ball CogniQwen.
+
+**evidence_update_575:** Verification passed: guarded no-codegen build of `bin/qwen35_generate.cr`; targeted Crystal Ball spec `spec/llm/local_spec.cr:4861` -> `1 examples, 0 failures`; rebuilt `/tmp/qwen35_generate_atmost` runtime smoke printed `cache_route=direct_output_terminal_short` for a one-token EOS certificate satisfying `n_gen=4` and still exited before weight load/prefill/decode.
+
+**next_update_575:** Use this label in headless harness traces to estimate hit frequency. If `direct_output_terminal_short` is rare, no further work is needed; if common, add it to benchmark summaries and README route documentation.

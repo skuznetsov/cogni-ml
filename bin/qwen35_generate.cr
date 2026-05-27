@@ -649,7 +649,7 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled && 
     token_cache_hit = true
     output_ids = output_hit.output_token_ids
     output_text = output_hit.generated_text
-    cache_route = ML::GGUF::Qwen35ServingRoute::DIRECT_OUTPUT
+    cache_route = output_ids.size == n_gen ? ML::GGUF::Qwen35ServingRoute::DIRECT_OUTPUT : "direct_output_terminal_short"
     source_history_lookup_ms += (Time.instant - direct_t0).total_milliseconds
     STDOUT << "\nPrompt cache direct output fast-forward hit after tokenizer load: emitted #{output_ids.size} cached tokens\n"
     total_ms = (Time.instant - request_t0).total_milliseconds
