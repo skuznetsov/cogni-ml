@@ -3131,3 +3131,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_603:** Build gates passed: no-codegen and linked Metal build `/tmp/qwen35_current_hidden_probe`. Repeat prompt `tokens=32/calib=16/top5/rank4`: direct nearest-label and centroid stayed `10/16` (`62.5%`), nearest-delta was `4/12` (`33.33%`), PCA transition was only `1/15` (`6.67%`) with `pca_transition_ms=107.356`. Code prompt: direct top5 `3/16`, nearest-delta `2/15`, PCA transition `1/15`.
 
 **next_update_603:** Stop local current-hidden transition tuning for now. The actionable signal remains direct repeat/session replay from already-owned hidden rows. If this branch reopens, it should be with a larger offline trained sidecar or MTP-like head and a strict exact-verifier economics gate, not another tiny per-prompt ridge map.
+
+**decision_update_604:** Characterized current-hidden replay on a longer corridor. It improves on repeated/session-like prompts and repeated JSON, while PCA transition remains negative. This is a router feature candidate, not a broad self-draft replacement.
+
+**evidence_update_604:** `/tmp/qwen35_current_hidden_probe`, Qwen3.5-9B, `tokens=64/calib=32`. TopK 8: repeat nearest/centroid `24/32` (`75%`), JSON nearest `26/32` (`81.25%`), reasoning nearest `23/32` (`71.88%`). TopK 16 did not improve repeat/JSON and moved reasoning to `24/32` (`75%`). Nearest-label transition for next row was strong on repeat/JSON (`22/28`, `25/30`) but weaker on reasoning (`15/29`). PCA transition stayed poor (`11/31`, `2/31`, `0/31`).
+
+**next_update_604:** If current-hidden replay is used, compare it apples-to-apples against n-gram/session-cache on repeated prompts with exact verifier wall timing. Do not add a general hidden ANN kernel until it beats n-gram or covers a class n-gram cannot cover.

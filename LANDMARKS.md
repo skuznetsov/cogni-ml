@@ -16958,3 +16958,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is current final hidden; transport is a PCA/ridge hidden-delta corridor. Legal move keeps exact verifier safety and lower-body replay at zero, but recomputed potential `(proposal_hit_rate, transition_cost)` increases versus direct replay. Collapse to a refutation; dual frame is repeat/session replay or exact decode.
 - adversary: This refutes only the tiny low-rank PCA transition. It does not refute a properly trained sidecar, MTP head, or larger offline classifier, but those are no longer a small local optimization.
 - trust: {F:0.88,G:0.34,R:0.84}
+
+
+**LM-671 Current-hidden replay strengthens on longer repeat/session corridors, but not enough for broad routing [shared/ml]**
+- status: VERIFIED small Qwen3.5-9B suite; candidate router feature only
+- evidence: Using `/tmp/qwen35_current_hidden_probe`, Qwen3.5-9B, `tokens=64/calib=32`, topK 8 and 16 over repeat-alpha, repeated JSON, and reasoning prompts. TopK 8: repeat nearest/centroid `24/32` (`75%`), JSON nearest `26/32` (`81.25%`), reasoning nearest `23/32` (`71.88%`). TopK 16 did not improve repeat/JSON and only moved reasoning to `24/32` (`75%`). Nearest-label transition for the next row was strong on repeat/JSON (`22/28` and `25/30`) but weaker on reasoning (`15/29`). PCA transition remained bad (`11/31`, `2/31`, `0/31`).
+- diagnosis: Current-hidden replay is a real session/repetition signal when the active window has repeated structure. It is not a universal self-draft body. Wider topK gives little benefit because the candidate set is bounded by unique training labels; missing tokens are outside the local hidden-memory table. The useful move is a fail-closed repeat/session router, not ANN/kernel work.
+- LTP/WBA: Window is a repeated/session hidden corridor. Transport is a bounded table of already-seen hidden rows/labels. Legal move proposes candidate ids or branch candidates while exact verifier owns correctness. Potential descends only when `(repeat/session signal, candidate coverage, proposal cost)` beats exact or n-gram; otherwise exact decode is the dual frame.
+- adversary: These are teacher-forced prompt rows, not generated self-spec chunks. Runtime promotion still needs paired wall economics and comparison against n-gram/session cache on the same prompts.
+- trust: {F:0.86,G:0.44,R:0.84}
