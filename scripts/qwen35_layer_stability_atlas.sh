@@ -45,7 +45,7 @@ prompts=(
   "A farmer has 12 apples, gives away 5, then buys twice as many as remain. How many apples now? Think briefly."
 )
 
-printf 'prompt_id\tstep\tpos\tinput_token\tfinal_top1\tstable_from_layer\ttop1_changes\tfinal_logit\n'
+printf 'prompt_id\tstep\tpos\tinput_token\tfinal_top1\tstable_from_layer\ttop1_changes\tfinal_logit\tprompt_tokens\tunique_rate\trepeat_rate\tbigram_repeat_rate\tadjacent_repeat_rate\n'
 
 count="${#prompt_ids[@]}"
 if [[ "${prompt_limit}" -gt 0 && "${prompt_limit}" -lt "${count}" ]]; then
@@ -60,7 +60,7 @@ for ((i = 0; i < count; i++)); do
   awk -v prompt_id="${prompt_id}" '
     BEGIN { found = 0 }
     $1 == "summary" {
-      print prompt_id "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8
+      print prompt_id "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12 "\t" $13
       found = 1
     }
     END { if (!found) exit 1 }
