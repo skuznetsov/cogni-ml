@@ -16928,3 +16928,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the current exact final-hidden row already owned by prefill/decode. Transport is a bounded hidden-neighbor table carrying candidate ids, not model state. Legal move is proposal-only; exact verifier remains the boundary. Potential descends on repeat corridors `(lower_body_replay=0, proposal_ms small, accepted candidates plausible)`, but fails to descend on varied/code corridors due to low topK coverage. Dual frame is exact decode or n-gram/session-cache routing.
 - adversary: This is CPU nearest-neighbor over prompt hidden rows, not a production ANN/GPU kernel and not a decode-wall benchmark. It tests candidate availability only. Any runtime use needs a fail-closed router and exact verifier economics.
 - trust: {F:0.88,G:0.42,R:0.84}
+
+
+**LM-668 Naive nearest-hidden delta transport is weaker than direct repeat labels [shared/ml]**
+- status: VERIFIED small Qwen3.5-9B gate; transition route not promoted
+- change: The current-hidden proposal probe now also scores a one-step hidden transport: copy the nearest calibrated delta `h[j+1]-h[j]`, form `h[i]+delta`, and project it through the normal output head to predict the next hidden row's exact top1.
+- evidence: Guarded no-codegen build exited 0; linked Metal build `/tmp/qwen35_current_hidden_probe` exited 0. Repeat prompt `tokens=32/calib=16/top5` kept direct nearest-label top1/top5 at `10/16` (`62.5%`), but one-step hidden transport scored only `4/12` (`33.33%`) versus label-next `5/12` (`41.67%`). Code prompt remained weak: direct top1 `2/16`, top5 `3/16`; transition delta `2/15` (`13.33%`).
+- diagnosis: The pseudo-MTP direction is real enough to test, but the naive nearest-delta transport is not yet the missing speed lever. For repeat corridors, direct label/session replay beats hidden-delta projection. For varied/code corridors, both are too weak. A stronger transition would need a learned local map, phase/router conditioning, or exact-state/session anchors.
+- LTP/WBA: Window is current final hidden. Transport by nearest hidden delta is boundary-safe and reduces lower-body replay to zero, but recomputed potential `(candidate_hit_rate, transition_head_cost, verifier_expected_work)` fails to descend versus direct label replay. Legal dual frame is n-gram/session-cache for repeat and exact decode elsewhere.
+- adversary: This is a tiny teacher-forced prompt-hidden test. It does not refute all current-hidden transition models; it refutes the simplest nearest-delta version as the next fusion target.
+- trust: {F:0.88,G:0.36,R:0.84}
