@@ -20,6 +20,12 @@ min_candidates = (ENV["QWEN35_NGRAM_MIN_CANDIDATES"]? || "0").to_i
 recursive_ngram = ENV["QWEN35_NGRAM_RECURSIVE_OFF"]? != "1"
 disable_after_reject = ENV["QWEN35_NGRAM_DISABLE_AFTER_REJECT_OFF"]? != "1"
 check_plain = ENV["QWEN35_NGRAM_CHECK_PLAIN"]? != "0"
+ngram_corridor_gate = ENV["QWEN35_NGRAM_CORRIDOR_GATE"]? == "1"
+ngram_corridor_min_size = (ENV["QWEN35_NGRAM_CORRIDOR_MIN_SIZE"]? || "4").to_i
+ngram_corridor_match_len_min = (ENV["QWEN35_NGRAM_CORRIDOR_MATCH_LEN_MIN"]? || "8").to_i
+ngram_corridor_lag4_min = (ENV["QWEN35_NGRAM_CORRIDOR_LAG4_MIN"]? || "0.25").to_f64
+ngram_corridor_lag8_min = (ENV["QWEN35_NGRAM_CORRIDOR_LAG8_MIN"]? || "0.5").to_f64
+ngram_corridor_entropy_max = (ENV["QWEN35_NGRAM_CORRIDOR_ENTROPY_MAX"]? || "0.6").to_f64
 hadamard_continuation = ENV["QWEN35_HADAMARD_CONTINUATION"]? == "1"
 hadamard_window = (ENV["QWEN35_HADAMARD_WINDOW"]? || "8").to_i
 hadamard_max_hamming = (ENV["QWEN35_HADAMARD_MAX_HAMMING"]? || "16").to_i
@@ -38,6 +44,12 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--min-candidates N", "Skip n-gram chunks shorter than N candidates; 0 preserves historical behavior") { |value| min_candidates = value.to_i }
   parser.on("--no-recursive-ngram", "Do not recursively extend n-gram candidates through the draft scratch history") { recursive_ngram = false }
   parser.on("--keep-ngram-after-reject", "Keep trying n-gram drafts after a rejected candidate chunk") { disable_after_reject = false }
+  parser.on("--ngram-corridor-gate", "Require periodic or low-entropy n-gram continuations before verifier entry") { ngram_corridor_gate = true }
+  parser.on("--ngram-corridor-min-size N", "Minimum candidate length for --ngram-corridor-gate evidence (default: 4)") { |value| ngram_corridor_min_size = value.to_i }
+  parser.on("--ngram-corridor-match-len-min N", "Accept candidate corridors with at least this suffix match length (default: 8)") { |value| ngram_corridor_match_len_min = value.to_i }
+  parser.on("--ngram-corridor-lag4-min F", "Minimum lag-4 ratio for --ngram-corridor-gate (default: 0.25)") { |value| ngram_corridor_lag4_min = value.to_f64 }
+  parser.on("--ngram-corridor-lag8-min F", "Minimum lag-8 ratio for --ngram-corridor-gate (default: 0.5)") { |value| ngram_corridor_lag8_min = value.to_f64 }
+  parser.on("--ngram-corridor-entropy-max F", "Maximum normalized entropy for --ngram-corridor-gate (default: 0.6)") { |value| ngram_corridor_entropy_max = value.to_f64 }
   parser.on("--hadamard-continuation", "If n-gram has no candidate, try draft-only Hadamard sketch continuation; exact verifier still checks every token") { hadamard_continuation = true }
   parser.on("--hadamard-window N", "Token window size for --hadamard-continuation (default: env QWEN35_HADAMARD_WINDOW or 8)") { |value| hadamard_window = value.to_i }
   parser.on("--hadamard-max-hamming N", "Maximum 64-bit sketch Hamming distance for Hadamard continuation (default: env QWEN35_HADAMARD_MAX_HAMMING or 16)") { |value| hadamard_max_hamming = value.to_i }
@@ -59,6 +71,11 @@ raise ArgumentError.new("--gamma must be positive") unless gamma > 0
 raise ArgumentError.new("--min-ngram must be positive") unless min_ngram > 0
 raise ArgumentError.new("--max-ngram must be >= --min-ngram") unless max_ngram >= min_ngram
 raise ArgumentError.new("--min-candidates must be non-negative") unless min_candidates >= 0
+raise ArgumentError.new("--ngram-corridor-min-size must be positive") unless ngram_corridor_min_size > 0
+raise ArgumentError.new("--ngram-corridor-match-len-min must be non-negative") unless ngram_corridor_match_len_min >= 0
+raise ArgumentError.new("--ngram-corridor-lag4-min must be non-negative") unless ngram_corridor_lag4_min >= 0.0
+raise ArgumentError.new("--ngram-corridor-lag8-min must be non-negative") unless ngram_corridor_lag8_min >= 0.0
+raise ArgumentError.new("--ngram-corridor-entropy-max must be non-negative") unless ngram_corridor_entropy_max >= 0.0
 raise ArgumentError.new("--hadamard-window must be positive") unless hadamard_window > 0
 raise ArgumentError.new("--hadamard-max-hamming must be non-negative") unless hadamard_max_hamming >= 0
 raise ArgumentError.new("--hadamard-min-candidates must be non-negative") unless hadamard_min_candidates >= 0
@@ -112,7 +129,7 @@ raise ArgumentError.new("prompt encoded to no tokens") if prompt_ids.empty?
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{weights.hparams.n_layer} dim=#{weights.hparams.n_embd} vocab=#{weights.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} hadamard_continuation=#{hadamard_continuation} hadamard_window=#{hadamard_window} hadamard_max_hamming=#{hadamard_max_hamming} hadamard_min_candidates=#{hadamard_min_candidates} hadamard_min_exact_overlap=#{hadamard_min_exact_overlap} hadamard_trace=#{hadamard_trace} n_gen=#{n_gen}"
+puts "prompt tokens=#{prompt_ids.size} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive_ngram=#{recursive_ngram} disable_after_reject=#{disable_after_reject} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} hadamard_continuation=#{hadamard_continuation} hadamard_window=#{hadamard_window} hadamard_max_hamming=#{hadamard_max_hamming} hadamard_min_candidates=#{hadamard_min_candidates} hadamard_min_exact_overlap=#{hadamard_min_exact_overlap} hadamard_trace=#{hadamard_trace} n_gen=#{n_gen}"
 
 max_seq = prompt_ids.size + n_gen + gamma + 8
 state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -131,6 +148,7 @@ hadamard_disabled = false
 ngram_cycles = 0
 ngram_proposed = 0
 ngram_accepted = 0
+ngram_corridor_skips = 0
 hadamard_cycles = 0
 hadamard_proposed = 0
 hadamard_accepted = 0
@@ -142,9 +160,25 @@ while generated_ids.size < n_gen
   chunk_budget = Math.min(gamma, n_gen - generated_ids.size)
   candidate_source = "none"
   hadamard_span = nil.as(ML::GGUF::HadamardContinuationDraft::CandidateSpan?)
-  candidates = ngram_disabled ? [] of Int32 : ML::GGUF::NgramDraft.candidates(history, chunk_budget, max_ngram, min_ngram, recursive: recursive_ngram, min_candidates: min_candidates)
-  unless candidates.empty?
-    candidate_source = "ngram"
+  candidates = [] of Int32
+  unless ngram_disabled
+    if span = ML::GGUF::NgramDraft::IndexedHistory.new(history, max_ngram: max_ngram, min_ngram: min_ngram)
+         .candidate_span(chunk_budget, recursive: recursive_ngram, min_candidates: min_candidates)
+      candidates = span.ids
+      if ngram_corridor_gate &&
+         !ML::GGUF::NgramDraft.corridor_candidate_shape?(candidates,
+           match_len: span.match_len,
+           min_size: ngram_corridor_min_size,
+           match_len_min: ngram_corridor_match_len_min,
+           lag4_min: ngram_corridor_lag4_min,
+           lag8_min: ngram_corridor_lag8_min,
+           entropy_max: ngram_corridor_entropy_max)
+        ngram_corridor_skips += 1
+        candidates = [] of Int32
+      else
+        candidate_source = "ngram"
+      end
+    end
   end
 
   if candidates.empty? && hadamard_continuation && !hadamard_disabled
@@ -209,8 +243,8 @@ while generated_ids.size < n_gen
     end
   end
 
-  if hadamard_trace && candidate_source == "hadamard" && (span = hadamard_span)
-    puts "hadamard_span source_start=#{span.source_start} window=#{span.window_size} exact=#{span.exact_matches}/#{span.window_size} hamming=#{span.hamming} proposed=#{candidates.size} accepted=#{chunk_accepted} rejected=#{rejected}"
+  if hadamard_trace && candidate_source == "hadamard" && (h_span = hadamard_span)
+    puts "hadamard_span source_start=#{h_span.source_start} window=#{h_span.window_size} exact=#{h_span.exact_matches}/#{h_span.window_size} hamming=#{h_span.hamming} proposed=#{candidates.size} accepted=#{chunk_accepted} rejected=#{rejected}"
   end
 
   if rejected
@@ -244,7 +278,7 @@ end
 accept_rate = proposed == 0 ? 0.0 : accepted * 100.0 / proposed
 tokens_s = n_gen.to_f64 / (wall_ms / 1000.0)
 puts "accept_rate=#{accept_rate.round(2)}% accepted=#{accepted}/#{proposed} cycles=#{cycles} plain_steps=#{plain_steps}"
-puts "proposal_sources ngram=#{ngram_accepted}/#{ngram_proposed} cycles=#{ngram_cycles} hadamard=#{hadamard_accepted}/#{hadamard_proposed} cycles=#{hadamard_cycles}"
+puts "proposal_sources ngram=#{ngram_accepted}/#{ngram_proposed} cycles=#{ngram_cycles} corridor_skips=#{ngram_corridor_skips} hadamard=#{hadamard_accepted}/#{hadamard_proposed} cycles=#{hadamard_cycles}"
 puts "ngram_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s)"
 if measured = plain_ms
   puts "plain_target_wall=#{measured.round(1)} ms (#{(measured / n_gen).round(2)} ms/tok)"

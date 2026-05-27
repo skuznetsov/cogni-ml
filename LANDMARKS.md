@@ -16533,3 +16533,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: The attempted partial transport fails recompute safety: local similarity can preserve `I`/`M` but still increase `(wrong_tail, verifier_tax)` after exact verification. The n-gram corridor is the certified dual frame for local repeats. A future legal Hadamard move must use a different transport area, such as session-cache or schema/template memory, where n-gram has no existing corridor.
 - adversary: This is a small prompt suite and short generation, so it does not refute all Hadamard-style retrieval. It refutes further tuning of the current fixed token-window continuation as an incremental speed path over normal n-gram.
 - trust: {F:0.86,G:0.50,R:0.82}
+
+**LM-625 Standalone n-gram probe now has the verified corridor certificate [shared/ml]**
+- status: VERIFIED probe integration
+- change: `bin/qwen35_ngram_speculative.cr` now supports `--ngram-corridor-gate` / `QWEN35_NGRAM_CORRIDOR_GATE=1` with tunable `min_size`, `match_len_min`, `lag4`, `lag8`, and entropy thresholds, and prints `corridor_skips` in proposal-source counters.
+- evidence: Guarded no-codegen build passed; focused specs `spec/ngram_draft_spec.cr spec/hadamard_continuation_draft_spec.cr` passed (`33 examples, 0 failures`); release build `/tmp/qwen35_ngram_corridor_probe2` passed. 9B exact-alpha with corridor gate preserved exact output and accepted `4/4` n-gram candidates while reporting `corridor_skips=2` (`19.5 ms/tok` vs plain `21.07`). A deliberately weak unigram path (`a b c d e a`, `min=max=1`) reported `corridor_skips=4`, made no proposals, and fell back exactly.
+- diagnosis: This is the correct reuse of prior LTP/WBA evidence: the local suffix trigger is not enough; the candidate transport must be certified by shape or strong match length before entering verifier work. It also confirms the Hadamard branch should not replace the existing n-gram corridor certificate.
+- LTP/WBA: Window is a repeated suffix. Transport is legal only if `NgramDraft.corridor_candidate_shape?` certifies periodic/low-entropy candidate structure or a strong suffix match. Potential descends by avoiding weak verifier chunks while preserving exact fallback. Dual frame remains serial exact decode for skipped corridors.
+- adversary: The real-model smokes are small and the feature is opt-in. Promotion to default requires broader repeat/near-miss/session-cache A/B, but this probe integration is verified for research use.
+- trust: {F:0.88,G:0.58,R:0.84}
