@@ -16578,3 +16578,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a validated request/session hit. Legal transport priority is terminal output, resident cursor, cold state fast-forward, source replay, then greedy fallback. Boundary safety depends on prefix/artifact/session validation before using any cached transport. The measured potential descends sharply in `(decode_work, verifier_work, restore_ms, route_tax)` for the first three routes.
 - adversary: This is local M2 Max, short `gen=16`, and the probe launches a process per matrix row, so it is route-latency evidence inside the warmed request loop, not end-to-end server throughput. Product promotion still needs lifecycle tests and apples-to-apples external benchmarks.
 - trust: {F:0.88,G:0.62,R:0.84}
+
+**LM-630 Crystal Ball CogniQwen now tries direct-output before source-history [shared/ml]**
+- status: VERIFIED cross-repo product fix
+- change: In `../crystal_ball`, `CogniQwen.try_cached_output` now calls the validated output-fast-forward certificate path before looking up source-history. This aligns product route order with LM-629: direct-output first, then state/cursor routes, then source replay, then greedy.
+- evidence: Crystal Ball commit `31ee0d7 perf(cogni-qwen): prefer direct output cache hits`. Guarded targeted spec passed: `../crystal_v2_repo/scripts/run_safe.sh crystal 120 12000 spec spec/llm/local_spec.cr:4802 --error-trace` -> `1 examples, 0 failures`. The spec seeds a direct-output certificate without source-history and verifies returned ids plus `direct_output=1` route attribution.
+- diagnosis: The matrix route ordering was not enough; one product path still entered the slower source-history frame first. This was a route-selector bug, not a kernel/decode bottleneck.
+- LTP/WBA: Window is a validated output certificate. Legal Spike is direct emission after certificate validation, before entering source-history transport. Boundary safety is `lookup_output_fast_forward` hash/session/model/turn validation. Potential descends in `(route_tax, source_lookup_tax, verifier_work)` without touching model state.
+- adversary: This fixes the Crystal Ball in-process provider path only. `qwen35_generate` already had direct-output preflight; active-cursor and cold continuation lifecycle still need product-level tests.
+- trust: {F:0.88,G:0.64,R:0.84}
