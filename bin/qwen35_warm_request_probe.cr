@@ -21,6 +21,12 @@ model_path = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL_PATH
 tokenizer_bin = ENV["QWEN35_TOKENIZER_BIN"]? || DEFAULT_TOKENIZER_BIN
 prompt = "The capital of France is"
 n_gen = 16
+cached_gen = n_gen
+cached_gen_explicit = false
+if raw_cached_gen = ENV["QWEN35_WARM_PROBE_CACHED_GEN"]?
+  cached_gen = raw_cached_gen.to_i
+  cached_gen_explicit = true
+end
 requests = 5
 warmups = 1
 max_seq = 1024
@@ -46,6 +52,10 @@ parser = OptionParser.new do |p|
   p.on("--model PATH", "Target GGUF model path (default: QWEN35_MODEL or local 9B)") { |v| model_path = v }
   p.on("--tokenizer-bin PATH", "External llama-tokenize fallback path") { |v| tokenizer_bin = v }
   p.on("--gen N", "Generated token count per request (default: 16)") { |v| n_gen = v.to_i }
+  p.on("--cached-gen N", "Cached generated token count for cache modes (default: --gen)") do |v|
+    cached_gen = v.to_i
+    cached_gen_explicit = true
+  end
   p.on("--requests N", "Measured request count (default: 5)") { |v| requests = v.to_i }
   p.on("--warmups N", "Explicit unmeasured warmup request count (default: 1)") { |v| warmups = v.to_i }
   p.on("--max-seq N", "State max sequence length (default: 1024)") { |v| max_seq = v.to_i }
@@ -72,8 +82,11 @@ parser = OptionParser.new do |p|
 end
 parser.parse(ARGV)
 prompt = ARGV.join(" ") unless ARGV.empty?
+cached_gen = n_gen unless cached_gen_explicit
 
 raise "--gen must be positive" unless n_gen > 0
+raise "--cached-gen must be positive" unless cached_gen > 0
+raise "--cached-gen must be <= --gen" unless cached_gen <= n_gen
 raise "--requests must be positive" unless requests > 0
 raise "--warmups must be non-negative" unless warmups >= 0
 raise "--max-seq must be positive" unless max_seq > 0
@@ -131,8 +144,9 @@ struct PromptCacheFastForwardTemplate
   getter cached_prefix_tokens : Array(Int32)
   getter full_history_tokens : Array(Int32)
   getter output_ids : Array(Int32)
+  getter expected_output_ids : Array(Int32)
 
-  def initialize(@store, @entry, @cached_prefix_tokens, @full_history_tokens, @output_ids)
+  def initialize(@store, @entry, @cached_prefix_tokens, @full_history_tokens, @output_ids, @expected_output_ids)
   end
 end
 
@@ -159,10 +173,11 @@ struct PromptCacheActiveCursorTemplate
   getter full_history_tokens : Array(Int32)
   getter prompt_token_count : Int32
   getter output_ids : Array(Int32)
+  getter expected_output_ids : Array(Int32)
   getter prompt : String
   getter reuse_state : ML::GGUF::Qwen35CPU::State?
 
-  def initialize(@session, @entry, @full_history_tokens, @prompt_token_count, @output_ids, @prompt, @reuse_state)
+  def initialize(@session, @entry, @full_history_tokens, @prompt_token_count, @output_ids, @expected_output_ids, @prompt, @reuse_state)
   end
 end
 
@@ -273,6 +288,7 @@ def build_prompt_cache_fast_forward_template(weights : ML::GGUF::Qwen35Weights,
                                              tokenizer : ML::GGUF::Qwen35Tokenizer,
                                              prompt : String,
                                              n_gen : Int32,
+                                             cached_gen : Int32,
                                              max_seq : Int32,
                                              prepare_state : Bool,
                                              resident_states : Int32,
@@ -292,17 +308,24 @@ def build_prompt_cache_fast_forward_template(weights : ML::GGUF::Qwen35Weights,
   ML::GGUF::Qwen35CPU.prepare_state_metal!(prompt_state, hp) if prepare_state
   first_token, _first_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, ids, 0, prompt_state)
 
+  expected_output_ids = [first_token]
+  expected_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(expected_state, hp, clear: false) if prepare_state
+  copy_prompt_state!(expected_state, prompt_state, hp, ids.size, prepare_state)
+  pos = ids.size
+  while expected_output_ids.size < n_gen
+    next_id, _next_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, expected_output_ids[-1], pos, expected_state)
+    expected_output_ids << next_id
+    pos += 1
+    break if next_id == tokenizer.eos_id
+  end
+  output_ids = expected_output_ids[0, Math.min(cached_gen, expected_output_ids.size)]
+
   span_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(span_state, hp, clear: false) if prepare_state
   copy_prompt_state!(span_state, prompt_state, hp, ids.size, prepare_state)
-
-  output_ids = [first_token]
-  pos = ids.size
-  while output_ids.size < n_gen
-    next_id, _next_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, output_ids[-1], pos, span_state)
-    output_ids << next_id
-    pos += 1
-    break if next_id == tokenizer.eos_id
+  if output_ids.size > 1
+    ML::GGUF::Qwen35CPU.prefill_tokens(weights, output_ids[0, output_ids.size - 1], ids.size, span_state)
   end
 
   # Decode state after emitting N tokens has processed the first N-1 generated
@@ -327,13 +350,14 @@ def build_prompt_cache_fast_forward_template(weights : ML::GGUF::Qwen35Weights,
     next_token_id: output_ids[-1],
   )
 
-  PromptCacheFastForwardTemplate.new(store, entry, cached_prefix_tokens, full_history_tokens, output_ids)
+  PromptCacheFastForwardTemplate.new(store, entry, cached_prefix_tokens, full_history_tokens, output_ids, expected_output_ids)
 end
 
 def build_prompt_cache_direct_output_template(weights : ML::GGUF::Qwen35Weights,
                                               tokenizer : ML::GGUF::Qwen35Tokenizer,
                                               prompt : String,
                                               n_gen : Int32,
+                                              cached_gen : Int32,
                                               max_seq : Int32,
                                               prepare_state : Bool,
                                               resident_states : Int32,
@@ -345,6 +369,7 @@ def build_prompt_cache_direct_output_template(weights : ML::GGUF::Qwen35Weights,
     tokenizer,
     prompt,
     n_gen,
+    cached_gen,
     max_seq,
     prepare_state,
     resident_states,
@@ -371,6 +396,7 @@ def build_prompt_cache_serving_route_template(weights : ML::GGUF::Qwen35Weights,
                                               tokenizer : ML::GGUF::Qwen35Tokenizer,
                                               prompt : String,
                                               n_gen : Int32,
+                                              cached_gen : Int32,
                                               max_seq : Int32,
                                               prepare_state : Bool,
                                               resident_states : Int32,
@@ -383,6 +409,7 @@ def build_prompt_cache_serving_route_template(weights : ML::GGUF::Qwen35Weights,
     tokenizer,
     prompt,
     n_gen,
+    cached_gen,
     max_seq,
     prepare_state,
     resident_states,
@@ -467,6 +494,7 @@ def run_prompt_cache_serving_route_request(weights : ML::GGUF::Qwen35Weights,
                                            max_seq : Int32,
                                            prepare_state : Bool,
                                            continuation_required : Bool,
+                                           requested_gen : Int32,
                                            reuse_state : ML::GGUF::Qwen35CPU::State? = nil) : {RequestTiming, Array(Int32)}
   fast_forward = replay.fast_forward
   request_t0 = Time.instant
@@ -498,16 +526,37 @@ def run_prompt_cache_serving_route_request(weights : ML::GGUF::Qwen35Weights,
     continuation_required: continuation_required,
     reuse_state: route_reuse_state,
   )
-  total_ms = (Time.instant - request_t0).total_milliseconds
-  restore_ms = result.replay ? total_ms - state_prepare_ms : 0.0
+  route_ms = (Time.instant - request_t0).total_milliseconds
+  decode_ms = 0.0
   output_ids = result.output_token_ids
+  if continuation_required && output_ids.size < requested_gen
+    restored = result.replay
+    raise "serving route continuation missing restored state" unless restored
+    next_id = restored.next_token_id
+    raise "serving route continuation missing next token" unless next_id
+
+    decode_t0 = Time.instant
+    pos = result.prompt_token_count + output_ids.size - 1
+    while output_ids.size < requested_gen
+      top, _ = ML::GGUF::Qwen35CPU.forward_top1(weights, next_id, pos, restored.state)
+      next_id = top.to_i32
+      pos += 1
+      output_ids << next_id
+    end
+    decode_ms = (Time.instant - decode_t0).total_milliseconds
+
+    expected = fast_forward.expected_output_ids[0, output_ids.size]
+    raise "serving route continuation diverged from expected greedy output" unless output_ids == expected
+  end
+  total_ms = (Time.instant - request_t0).total_milliseconds
+  restore_ms = result.replay ? route_ms - state_prepare_ms : 0.0
   timing = RequestTiming.new(
     total_ms,
     0.0,
     state_prepare_ms,
     restore_ms,
     0.0,
-    0.0,
+    decode_ms,
     result.prompt_token_count,
     output_ids.size,
     output_ids[0],
@@ -541,10 +590,12 @@ def build_prompt_cache_active_cursor_template(weights : ML::GGUF::Qwen35Weights,
     reuse_state: state,
   )
   raise "active cursor prewarm did not leave a cursor" unless session.active_cursor?
-  PromptCacheActiveCursorTemplate.new(session, fast_forward.entry, fast_forward.full_history_tokens, result.prompt_token_count, result.output_token_ids, replay.prompt, state)
+  PromptCacheActiveCursorTemplate.new(session, fast_forward.entry, fast_forward.full_history_tokens, result.prompt_token_count, result.output_token_ids, fast_forward.expected_output_ids, replay.prompt, state)
 end
 
-def run_prompt_cache_active_cursor_request(cursor : PromptCacheActiveCursorTemplate) : {RequestTiming, Array(Int32)}
+def run_prompt_cache_active_cursor_request(weights : ML::GGUF::Qwen35Weights,
+                                           cursor : PromptCacheActiveCursorTemplate,
+                                           requested_gen : Int32) : {RequestTiming, Array(Int32)}
   cursor.session.prewarm_continuation_cursor(
     cursor.prompt,
     cursor.output_ids,
@@ -561,16 +612,36 @@ def run_prompt_cache_active_cursor_request(cursor : PromptCacheActiveCursorTempl
     cursor.full_history_tokens,
     continuation_required: true,
   )
-  total_ms = (Time.instant - request_t0).total_milliseconds
   raise "active cursor route mismatch: #{result.route}" unless result.route == ML::GGUF::Qwen35ResidentSession::ACTIVE_CURSOR
   output_ids = result.output_token_ids
+  decode_ms = 0.0
+  if output_ids.size < requested_gen
+    replay = result.replay
+    raise "active cursor missing restored state" unless replay
+    next_id = replay.next_token_id
+    raise "active cursor missing next token" unless next_id
+
+    decode_t0 = Time.instant
+    pos = result.prompt_token_count + output_ids.size - 1
+    while output_ids.size < requested_gen
+      top, _ = ML::GGUF::Qwen35CPU.forward_top1(weights, next_id, pos, replay.state)
+      next_id = top.to_i32
+      pos += 1
+      output_ids << next_id
+    end
+    decode_ms = (Time.instant - decode_t0).total_milliseconds
+
+    expected = cursor.expected_output_ids[0, output_ids.size]
+    raise "active cursor continuation diverged from expected greedy output" unless output_ids == expected
+  end
+  total_ms = (Time.instant - request_t0).total_milliseconds
   timing = RequestTiming.new(
     total_ms,
     0.0,
     0.0,
     0.0,
     0.0,
-    0.0,
+    decode_ms,
     cursor.prompt_token_count,
     output_ids.size,
     output_ids[0],
@@ -781,14 +852,14 @@ mode = if prompt_cache_serving_route
        else
          "greedy"
        end
-puts "  prompt=#{prompt.inspect} gen=#{n_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} serving_route_continuation=#{serving_route_continuation} serving_route_direct_miss=#{serving_route_direct_miss} serving_route_active_cursor=#{serving_route_active_cursor} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
+puts "  prompt=#{prompt.inspect} gen=#{n_gen} cached_gen=#{cached_gen} requests=#{requests} warmups=#{warmups} max_seq=#{max_seq} prepare_state=#{prepare_state} mode=#{mode} serving_route_continuation=#{serving_route_continuation} serving_route_direct_miss=#{serving_route_direct_miss} serving_route_active_cursor=#{serving_route_active_cursor} resident_states=#{resident_states} artifact_codec=#{artifact_codec || "raw"} artifact_codec_block=#{artifact_codec_block} artifact_live_kv=#{artifact_live_kv} reuse_request_state=#{reuse_request_state}"
 puts "  startup_ms=#{startup_ms.round(1)}"
 
 source_template = source_replay ? build_source_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state) : nil
 prompt_cache_template = prompt_cache_replay ? build_prompt_cache_replay_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
-prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
-prompt_cache_direct_output_template = prompt_cache_direct_output ? build_prompt_cache_direct_output_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
-prompt_cache_serving_route_template = prompt_cache_serving_route ? build_prompt_cache_serving_route_template(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv, serving_route_direct_miss) : nil
+prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, cached_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
+prompt_cache_direct_output_template = prompt_cache_direct_output ? build_prompt_cache_direct_output_template(weights, tokenizer, prompt, n_gen, cached_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
+prompt_cache_serving_route_template = prompt_cache_serving_route ? build_prompt_cache_serving_route_template(weights, tokenizer, prompt, n_gen, cached_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv, serving_route_direct_miss) : nil
 reusable_request_state = nil.as(ML::GGUF::Qwen35CPU::State?)
 if reuse_request_state
   reusable_request_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
@@ -804,9 +875,9 @@ warmup_ms = 0.0
 warmups.times do
   warm_t0 = Time.instant
   if cursor = prompt_cache_active_cursor_template
-    run_prompt_cache_active_cursor_request(cursor)
+    run_prompt_cache_active_cursor_request(weights, cursor, n_gen)
   elsif replay = prompt_cache_serving_route_template
-    run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, reusable_request_state)
+    run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, n_gen, reusable_request_state)
   elsif replay = prompt_cache_direct_output_template
     run_prompt_cache_direct_output_request(replay)
   elsif replay = prompt_cache_fast_forward_template
@@ -832,9 +903,9 @@ timings = [] of RequestTiming
 
 requests.times do |i|
   timing, output_ids = if cursor = prompt_cache_active_cursor_template
-                         run_prompt_cache_active_cursor_request(cursor)
+                         run_prompt_cache_active_cursor_request(weights, cursor, n_gen)
                        elsif replay = prompt_cache_serving_route_template
-                         run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, reusable_request_state)
+                         run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, n_gen, reusable_request_state)
                        elsif replay = prompt_cache_direct_output_template
                          run_prompt_cache_direct_output_request(replay)
                        elsif replay = prompt_cache_fast_forward_template

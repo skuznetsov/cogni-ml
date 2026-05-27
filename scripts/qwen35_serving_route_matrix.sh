@@ -11,6 +11,7 @@ build_flags="${QWEN35_SERVING_MATRIX_BUILD_FLAGS:---release}"
 
 modes="${QWEN35_SERVING_MATRIX_MODES:-greedy source_replay direct_output serving_terminal serving_direct_miss serving_continuation active_cursor fast_forward_live}"
 gen="${QWEN35_SERVING_MATRIX_GEN:-16}"
+cached_gen="${QWEN35_SERVING_MATRIX_CACHED_GEN:-${gen}}"
 requests="${QWEN35_SERVING_MATRIX_REQUESTS:-3}"
 warmups="${QWEN35_SERVING_MATRIX_WARMUPS:-1}"
 max_seq="${QWEN35_SERVING_MATRIX_MAX_SEQ:-256}"
@@ -142,6 +143,7 @@ for ((idx = 0; idx < prompt_count; idx++)); do
     cmd=(
       "${probe_bin}"
       "--gen=${gen}"
+      "--cached-gen=${cached_gen}"
       "--requests=${requests}"
       "--warmups=${warmups}"
       "--max-seq=${max_seq}"
