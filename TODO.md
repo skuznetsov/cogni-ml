@@ -3050,3 +3050,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_591:** Trace root `/tmp/qwen36_portfolio_trace_20260527171912`. Self-spec probe build `/tmp/qwen35_deltanet_fixed_basis_probe_portfolio` passed and runtime dump `/tmp/qwen36_portfolio_trace_20260527171912/self_spec_cycles.jsonl` was scored with the n-gram and MTP traces. Portfolio oracle reported `self_lowrank/gamma=4/self_lowrank cycles=10 prompts=3 acc=91.9% rej=20.0% prop=37 accepted=34 gain_ms=-2835.9 wall_ms=5228.3 draft=2462.6`. Individual summaries preserved parity but lost: main `plain_speedup=0.3892x`, JSON `0.4192x`, reasoning `0.6209x`.
 
 **next_update_591:** Do not spend the next branch on lowrank self-draft scalar gates. The next self-draft attempt must reduce proposal body work structurally: larger block surrogate, fused/eliminated lowrank body, Hadamard/session-copy proposal windows, or a runtime lower-bound gate requiring `draft_body_ms + verifier_ms + replay_ms < plain_exact_ms` before entering. Also consider fixing main-prompt category labeling in self-spec cycle dumps before using the portfolio oracle as training data.
+
+
+**decision_update_592:** Fixed the self-spec cycle dump label hole from LM-657. The main `--prompt` can now be labeled with `--prompt-name=NAME` or `QWEN35_PROMPT_NAME`, so future portfolio traces can categorize repeat/json/reasoning main prompts without relying on text heuristics or changing suite prompt handling.
+
+**evidence_update_592:** Verification passed: guarded no-codegen build of `bin/qwen35_deltanet_fixed_basis_probe.cr`; linked Metal build `/tmp/qwen35_deltanet_fixed_basis_probe_prompt_name`; `--help` exposes `--prompt-name=NAME`. Default remains `main`, preserving old trace comparability.
+
+**next_update_592:** Re-run future self-spec portfolio traces with explicit labels, for example `--prompt-name=repeat_alpha`, before using `qwen35_proposal_router_oracle` output as router-training data. This does not change the LM-657 performance conclusion; next speed branch still needs structural proposal-body reduction or a cheaper certified source.

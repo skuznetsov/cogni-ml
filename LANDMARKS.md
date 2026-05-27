@@ -16832,3 +16832,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is the same-weight lowrank self-draft proposal boundary. Transport is the lowrank DN/pipeline chunk corridor over layers `0,2,4`. Legal move is exact verification, which preserves greedy parity. Recomputed potential `(draft_body_ms, verifier_ms, replay_ms, wall_ms)` increases despite high acceptance, so the corridor is sticky. Dual frame is exact decode unless a future self-draft body is structurally reduced, or a cheap certified source such as n-gram/Hadamard/session-copy supplies the proposal window.
 - adversary: The main repeat-like self-spec prompt was categorized as `unknown` in the cycle dump because the dump uses prompt name `main`; suite prompts `json` and `reasoning` are categorized correctly. This does not affect the aggregate speed refutation, but future portfolio training should either name the main prompt category or pass it explicitly.
 - trust: {F:0.86,G:0.43,R:0.83}
+
+
+**LM-658 Self-spec cycle dumps can now carry an explicit main-prompt category label [shared/ml]**
+- status: VERIFIED implementation; trace hygiene fix
+- change: `bin/qwen35_deltanet_fixed_basis_probe.cr` now accepts `--prompt-name=NAME` or `QWEN35_PROMPT_NAME` for the main `--prompt` in self-spec traces. The label is sanitized with the same conservative character set used by suite prompt labels, and default behavior remains `main` for backward compatibility.
+- evidence: `../crystal_v2_repo/scripts/run_safe.sh crystal 240 12000 build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace` exited 0. Linked Metal build `/tmp/qwen35_deltanet_fixed_basis_probe_prompt_name` exited 0, and `--help` lists `--prompt-name=NAME`.
+- diagnosis: LM-657 exposed that main self-spec cycle dumps were categorized as `unknown` because the main prompt label was hard-coded as `main`. Explicit naming removes that avoidable router-training ambiguity without guessing categories from prompt text.
+- LTP/WBA: Window is self-spec cycle dump emission. Transport is the main-prompt label into `prompt_name` and `prompt_category`. Legal move is metadata-only and does not mutate model state or timing math. Potential descends in `(category_ambiguity, router_training_noise)` while preserving old default output.
+- adversary: This is a trace-label fix, not a speed claim. Existing scripts that omit the new option keep the old `main`/`unknown` label, so previous evidence remains comparable.
+- trust: {F:0.88,G:0.70,R:0.86}
