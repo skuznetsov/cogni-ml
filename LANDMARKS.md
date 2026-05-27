@@ -16967,3 +16967,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a repeated/session hidden corridor. Transport is a bounded table of already-seen hidden rows/labels. Legal move proposes candidate ids or branch candidates while exact verifier owns correctness. Potential descends only when `(repeat/session signal, candidate coverage, proposal cost)` beats exact or n-gram; otherwise exact decode is the dual frame.
 - adversary: These are teacher-forced prompt rows, not generated self-spec chunks. Runtime promotion still needs paired wall economics and comparison against n-gram/session cache on the same prompts.
 - trust: {F:0.86,G:0.44,R:0.84}
+
+
+**LM-672 Prompt-table current-hidden replay can cover exact generated tokens on repeated corridors [shared/ml]**
+- status: VERIFIED small Qwen3.5-9B generated-token gate; coverage signal only
+- change: `--simulate-current-hidden-proposal` now also emits `current_hidden_generate_proposal` when `--simulate-generate=N` is set. It builds a prompt hidden/label table, then compares prompt-table nearest-label proposals against exact greedy generated hidden rows. This tests the runtime-relevant question: can already-owned session hidden vectors propose future generated tokens without lower-layer replay?
+- evidence: Build gates passed: no-codegen and linked Metal build `/tmp/qwen35_current_hidden_probe`. Runtime smoke, Qwen3.5-9B, `tokens=48/calib=24/gen=8/top8`: repeat-alpha generated gate hit `8/8` top1/top8 (`100%`) with exact ids repeating the prompt pattern; reasoning generated gate hit `6/8` top1 and `7/8` top8 (`87.5%`). Prompt held-out rows in the same run were repeat top8 `22/24` and reasoning top8 `15/24`.
+- diagnosis: The useful current-hidden frame is not learned hidden dynamics; it is prompt/session hidden-memory replay. On repeated corridors it can propose generated tokens very well. The CPU `proposal_ms` in this probe includes exact head/state work needed for measurement, so it must not be used as runtime speed evidence.
+- LTP/WBA: Window is the active generated hidden row and a session prompt hidden table. Transport carries candidate ids from nearby prior hidden rows. Legal move proposes only; exact verifier owns state/correctness. Potential plausibly descends for repeated corridors because lower-body replay is zero and candidate coverage is high. Dual frame is n-gram/session-cache or exact decode when coverage/risk is insufficient.
+- adversary: This is a tiny generated-token smoke and still lacks paired wall economics. It should trigger a runtime/cycle-dump experiment against n-gram, not a production route promotion by itself.
+- trust: {F:0.88,G:0.42,R:0.84}

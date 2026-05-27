@@ -3137,3 +3137,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_604:** `/tmp/qwen35_current_hidden_probe`, Qwen3.5-9B, `tokens=64/calib=32`. TopK 8: repeat nearest/centroid `24/32` (`75%`), JSON nearest `26/32` (`81.25%`), reasoning nearest `23/32` (`71.88%`). TopK 16 did not improve repeat/JSON and moved reasoning to `24/32` (`75%`). Nearest-label transition for next row was strong on repeat/JSON (`22/28`, `25/30`) but weaker on reasoning (`15/29`). PCA transition stayed poor (`11/31`, `2/31`, `0/31`).
 
 **next_update_604:** If current-hidden replay is used, compare it apples-to-apples against n-gram/session-cache on repeated prompts with exact verifier wall timing. Do not add a general hidden ANN kernel until it beats n-gram or covers a class n-gram cannot cover.
+
+**decision_update_605:** Added a generated-token coverage gate for current-hidden prompt-table replay. This is the runtime-relevant version of the probe: use prompt/session hidden rows to propose exact greedy generated tokens without replaying lower layers.
+
+**evidence_update_605:** Build gates passed: no-codegen and linked Metal build `/tmp/qwen35_current_hidden_probe`. Runtime smoke, Qwen3.5-9B, `tokens=48/calib=24/gen=8/top8`: repeat-alpha generated gate hit `8/8` top1/top8 (`100%`) with exact ids repeating the prompt pattern; reasoning generated gate hit `6/8` top1 and `7/8` top8 (`87.5%`). Prompt held-out rows in the same run were repeat top8 `22/24`, reasoning top8 `15/24`. The CPU probe's `proposal_ms` includes exact measurement work and is not a speed claim.
+
+**next_update_605:** Next speed branch should compare prompt-table current-hidden replay against n-gram on exact generated chunks with paired wall accounting. Required promotion gate: high generated-token coverage plus measured `proposal + verifier + rollback/replay < exact`, and fail-closed router features that avoid non-repeat misses.

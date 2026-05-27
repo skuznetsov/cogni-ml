@@ -4562,6 +4562,60 @@ private def hidden_row_centroid_cosine(hidden : Array(Float32),
   acc / denom
 end
 
+private def hidden_vector_norm(v : Array(Float32)) : Float64
+  acc = 0.0
+  v.each do |x|
+    xf = x.to_f64
+    acc += xf * xf
+  end
+  Math.sqrt(acc)
+end
+
+private def hidden_vector_row_cosine(v : Array(Float32),
+                                     v_norm : Float64,
+                                     hidden : Array(Float32),
+                                     dim : Int32,
+                                     row : Int32,
+                                     row_norms : Array(Float64)) : Float64
+  denom = v_norm * row_norms[row]
+  return -Float64::INFINITY if denom <= 0.0
+
+  base = row * dim
+  acc = 0.0
+  dim.times { |i| acc += v[i].to_f64 * hidden[base + i].to_f64 }
+  acc / denom
+end
+
+private def current_hidden_nearest_labels_for_vector(v : Array(Float32),
+                                                     hidden : Array(Float32),
+                                                     labels : Array(Int32),
+                                                     row_norms : Array(Float64),
+                                                     dim : Int32,
+                                                     train_count : Int32,
+                                                     top_k : Int32) : NamedTuple(ids: Array(Int32), best_row: Int32, best_cos: Float64)
+  v_norm = hidden_vector_norm(v)
+  by_label = {} of Int32 => Float64
+  best_row = 0
+  best_cos = -Float64::INFINITY
+  train_count.times do |j|
+    sim = hidden_vector_row_cosine(v, v_norm, hidden, dim, j, row_norms)
+    if sim > best_cos
+      best_cos = sim
+      best_row = j
+    end
+    label = labels[j]
+    prev = by_label[label]?
+    by_label[label] = sim if prev.nil? || sim > prev
+  end
+
+  ranked = by_label.to_a.sort_by { |pair| -pair[1] }
+  {
+    ids:      ranked.first(top_k).map { |pair| pair[0] },
+    best_row: best_row,
+    best_cos: best_cos,
+  }
+end
+
 private def current_hidden_centroid_labels(hidden : Array(Float32),
                                            norms : Array(Float64),
                                            dim : Int32,
@@ -4576,6 +4630,69 @@ private def current_hidden_centroid_labels(hidden : Array(Float32),
   {
     ids:      ranked.first(top_k).map { |pair| pair[0] },
     best_cos: ranked.empty? ? -Float64::INFINITY : ranked[0][1],
+  }
+end
+
+private def run_current_hidden_generate_proposal(weights : ML::GGUF::Qwen35Weights,
+                                                 prompt_name : String,
+                                                 prompt_ids : Array(Int32),
+                                                 gen_tokens : Int32,
+                                                 top_k : Int32) : NamedTuple(eval_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, transition_hits: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, transition_rate: Float64, exact_ids: Array(Int32))
+  raise "current-hidden generate proposal needs positive gen_tokens" unless gen_tokens > 0
+  raise "current-hidden generate proposal needs a non-empty prompt" if prompt_ids.empty?
+
+  hp = weights.hparams
+  max_seq = prompt_ids.size + gen_tokens + 4
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  t_collect = Time.instant
+  pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, prompt_ids, 0, state)
+  collect_ms = (Time.instant - t_collect).total_milliseconds
+
+  hidden = pair[:hidden]
+  labels = pair[:top1s].map { |row| row[0] }
+  rows = labels.size
+  dim = hp.n_embd
+  norms = Array(Float64).new(rows) { |i| hidden_row_norm(hidden, i, dim) }
+
+  current_hidden = hidden[(rows - 1) * dim, dim]
+  top1_hits = 0
+  topk_hits = 0
+  transition_hits = 0
+  exact_ids = [] of Int32
+  best_cosines = [] of Float64
+
+  t_probe = Time.instant
+  gen_tokens.times do |step|
+    exact_id = ML::GGUF::Qwen35CPU.hidden_top1(weights, current_hidden)[0]
+    exact_ids << exact_id
+    proposal = current_hidden_nearest_labels_for_vector(current_hidden, hidden, labels, norms, dim, rows, top_k)
+    ids = proposal[:ids]
+    top1_hits += 1 if ids[0]? == exact_id
+    topk_hits += 1 if ids.includes?(exact_id)
+    nearest = proposal[:best_row]
+    if nearest + 1 < rows && labels[nearest + 1] == exact_id
+      transition_hits += 1
+    end
+    best_cosines << proposal[:best_cos]
+    break if step == gen_tokens - 1
+    current_hidden = ML::GGUF::Qwen35CPU.forward_hidden(weights, exact_id, prompt_ids.size + step, state)
+  end
+  proposal_ms = (Time.instant - t_probe).total_milliseconds
+
+  eval_samples = exact_ids.size
+  {
+    eval_samples:    eval_samples,
+    top_k:           top_k,
+    top1_hits:       top1_hits,
+    topk_hits:       topk_hits,
+    transition_hits: transition_hits,
+    collect_ms:      collect_ms,
+    proposal_ms:     proposal_ms,
+    avg_best_cos:    best_cosines.empty? ? 0.0 : best_cosines.sum / best_cosines.size,
+    top1_rate:       eval_samples > 0 ? 100.0 * top1_hits / eval_samples : 0.0,
+    topk_rate:       eval_samples > 0 ? 100.0 * topk_hits / eval_samples : 0.0,
+    transition_rate: eval_samples > 0 ? 100.0 * transition_hits / eval_samples : 0.0,
+    exact_ids:       exact_ids,
   }
 end
 
@@ -12352,6 +12469,10 @@ if simulate_current_hidden_proposal
     transition_per = proposal[:transition_samples] > 0 ? proposal[:transition_ms] / proposal[:transition_samples] : 0.0
     pca_transition_per = proposal[:pca_transition_samples] > 0 ? proposal[:pca_transition_ms] / proposal[:pca_transition_samples] : 0.0
     puts "current_hidden_proposal name=#{item[:name]} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} top_k=#{proposal[:top_k]} train=#{proposal[:train_samples]} eval=#{proposal[:eval_samples]} unique_train_labels=#{proposal[:unique_train_labels]} top1=#{proposal[:top1_rate].round(2)}% topk=#{proposal[:topk_rate].round(2)}% hits=#{proposal[:top1_hits]}/#{proposal[:topk_hits]}/#{proposal[:eval_samples]} centroid_top1=#{proposal[:centroid_top1_rate].round(2)}% centroid_topk=#{proposal[:centroid_topk_rate].round(2)}% centroid_hits=#{proposal[:centroid_top1_hits]}/#{proposal[:centroid_topk_hits]}/#{proposal[:eval_samples]} collect_ms=#{proposal[:collect_ms].round(3)} proposal_ms=#{proposal[:proposal_ms].round(3)} proposal_ms_per_eval=#{(proposal[:proposal_ms] / proposal[:eval_samples]).round(6)} avg_best_cos=#{proposal[:avg_best_cos].round(6)} centroid_avg_best_cos=#{proposal[:centroid_avg_best_cos].round(6)} p50_best_cos=#{proposal[:p50_best_cos].round(6)} min_best_cos=#{proposal[:min_best_cos].round(6)} transition_samples=#{proposal[:transition_samples]} pca_transition_samples=#{proposal[:pca_transition_samples]} transition_label_top1=#{proposal[:transition_label_rate].round(2)}% transition_delta_top1=#{proposal[:transition_delta_rate].round(2)}% pca_transition_top1=#{proposal[:pca_transition_rate].round(2)}% transition_hits=#{proposal[:transition_label_hits]}/#{proposal[:transition_delta_hits]}/#{proposal[:transition_samples]} pca_transition_hits=#{proposal[:pca_transition_hits]}/#{proposal[:pca_transition_samples]} pca_transition_rank=#{proposal[:pca_transition_effective_rank]} transition_ms=#{proposal[:transition_ms].round(3)} pca_transition_ms=#{proposal[:pca_transition_ms].round(3)} transition_ms_per_eval=#{transition_per.round(6)} pca_transition_ms_per_eval=#{pca_transition_per.round(6)} note=proposal_only_exact_verifier_required"
+    if simulate_generate_tokens > 0
+      gen = run_current_hidden_generate_proposal(weights, item[:name], ids, simulate_generate_tokens, simulate_current_hidden_proposal_topk)
+      puts "current_hidden_generate_proposal name=#{item[:name]} prompt_tokens=#{ids.size} gen_tokens=#{simulate_generate_tokens} top_k=#{gen[:top_k]} eval=#{gen[:eval_samples]} top1=#{gen[:top1_rate].round(2)}% topk=#{gen[:topk_rate].round(2)}% transition_label=#{gen[:transition_rate].round(2)}% hits=#{gen[:top1_hits]}/#{gen[:topk_hits]}/#{gen[:transition_hits]}/#{gen[:eval_samples]} collect_ms=#{gen[:collect_ms].round(3)} proposal_ms=#{gen[:proposal_ms].round(3)} proposal_ms_per_eval=#{(gen[:proposal_ms] / gen[:eval_samples]).round(6)} avg_best_cos=#{gen[:avg_best_cos].round(6)} exact_ids=#{gen[:exact_ids].join(',')} note=prompt_table_vs_exact_generated_hidden"
+    end
   end
 end
 
