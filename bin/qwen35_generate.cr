@@ -637,6 +637,37 @@ puts "Prompt tokens (#{ids.size}): #{ids.inspect}"
 puts "Prompt decoded: #{tok.decode(ids).inspect}"
 constraint_token_index = structured_constraint_enabled ? ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok) : nil
 
+if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled && output_ids.empty?
+  direct_t0 = Time.instant
+  if output_hit = cache_store.not_nil!.lookup_output_fast_forward_at_most(
+       cache_model,
+       session_id,
+       model_prompt,
+       n_gen,
+       terminal_token_id: tok.eos_id,
+       turn_id: turn_id)
+    token_cache_hit = true
+    output_ids = output_hit.output_token_ids
+    output_text = output_hit.generated_text
+    cache_route = ML::GGUF::Qwen35ServingRoute::DIRECT_OUTPUT
+    source_history_lookup_ms += (Time.instant - direct_t0).total_milliseconds
+    STDOUT << "\nPrompt cache direct output fast-forward hit after tokenizer load: emitted #{output_ids.size} cached tokens\n"
+    total_ms = (Time.instant - request_t0).total_milliseconds
+    STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{output_hit.prompt_token_count} output_tokens=#{output_ids.size}\n"
+
+    puts "\n=== Generated token ids ==="
+    puts output_ids.inspect
+    puts "\n=== Generated text ==="
+    puts output_text
+    puts "\n=== Full output ==="
+    puts model_prompt + output_text.not_nil!
+    print_qwen_tool_calls_if_any(output_text.not_nil!, chat_mode, tool_response_json_format, chat_tools)
+    exit
+  else
+    source_history_lookup_ms += (Time.instant - direct_t0).total_milliseconds
+  end
+end
+
 if prompt_cache_enabled && prompt_cache_source_history_enabled && source_history_hit.nil?
   source_lookup_t0 = Time.instant
   source_history_hit = cache_store.not_nil!.lookup_source_history(session_id, cache_model, cache_tokenizer, turn_id: turn_id)

@@ -16614,3 +16614,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a validated direct-output certificate for the same prompt/session/model with shorter output count. Legal Spike is direct emission only if the shorter span is terminal; otherwise the boundary would invalidate the caller's larger generation budget. Potential descends in `(source_history_lookup, verifier_or_restore_work, route_tax)` while preserving exact-output semantics.
 - adversary: The API requires callers to pass a correct terminal token id. Callers without tokenizer context should continue exact-count lookup. Broad product speed depends on how often early-terminal cache hits occur.
 - trust: {F:0.90,G:0.66,R:0.86}
+
+**LM-634 qwen35_generate can use shorter terminal direct-output hits after tokenizer load [shared/ml]**
+- status: COMPLETED with build verification
+- change: `bin/qwen35_generate.cr` now performs an EOS-guarded `lookup_output_fast_forward_at_most` after tokenizer load and before weight load. This complements the existing pre-tokenizer exact-count direct-output lookup, which cannot safely know EOS.
+- evidence: Guarded no-codegen build passed: `../crystal_v2_repo/scripts/run_safe.sh crystal 240 16000 build --no-codegen bin/qwen35_generate.cr --error-trace`. Safety is backed by LM-633's Store spec for terminal-only at-most reuse.
+- diagnosis: The CLI/product path had the same early-terminal direct-cache coverage gap as CogniQwen. The correct dual-frame split is exact direct lookup before tokenizer, then EOS-guarded at-most lookup after tokenizer, then source-history/state fallback.
+- LTP/WBA: Window is post-tokenizer/pre-weight cache routing. Legal Spike emits cached output before weight load only if Store validation and EOS terminal guard pass. Boundary safety comes from output certificate hashes and tokenizer EOS identity. Potential descends in `(weight_load_ms, source_history_lookup, restore_or_decode_work)` on early-terminal cache hits.
+- adversary: This has build verification and Store-unit safety, but no runtime smoke yet for the new branch. Treat as completed coverage wiring, not measured speed evidence.
+- trust: {F:0.78,G:0.62,R:0.74}

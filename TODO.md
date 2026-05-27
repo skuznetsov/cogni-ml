@@ -2920,3 +2920,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_572:** Verification passed through `../crystal_v2_repo/scripts/run_safe.sh`: no-codegen build of `bin/qwen35_generate.cr`; targeted `spec/qwen35_prompt_cache_spec.cr:326` with Metal link flags -> `1 examples, 0 failures`. The spec covers exact shorter terminal reuse, no-EOS-guard miss, short non-terminal miss for larger budgets, and exact-count non-terminal hit preservation.
 
 **next_update_572:** Wire the at-most direct-output route into product callers that have tokenizer EOS available. Crystal Ball CogniQwen has this integration in `../crystal_ball` and should be committed separately; `qwen35_generate` can keep pre-tokenizer exact lookup and optionally add a post-tokenizer at-most preweight path later.
+
+**decision_update_573:** Wired EOS-guarded at-most direct-output lookup into `qwen35_generate` after tokenizer load and before weight load. The existing pre-tokenizer exact direct-output path remains unchanged; the new path only catches shorter terminal certificates once `tok.eos_id` is available.
+
+**evidence_update_573:** Verification passed through `../crystal_v2_repo/scripts/run_safe.sh`: `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` exited 0. The earlier Store spec from update 572 verifies the safety boundary: exact hits still work, shorter terminal hits require EOS, and shorter non-terminal hits do not satisfy larger budgets.
+
+**next_update_573:** If this route becomes common in Crystal Ball/headless harness, add a runtime smoke with a deliberately short EOS cached response and a larger later `--gen` request to measure the source-history lookup avoided. Until then, this is a safe coverage improvement rather than a headline speed benchmark.
