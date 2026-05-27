@@ -16623,3 +16623,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is post-tokenizer/pre-weight cache routing. Legal Spike emits cached output before weight load only if Store validation and EOS terminal guard pass. Boundary safety comes from output certificate hashes and tokenizer EOS identity. Potential descends in `(weight_load_ms, source_history_lookup, restore_or_decode_work)` on early-terminal cache hits.
 - adversary: This has build verification and Store-unit safety, but no runtime smoke yet for the new branch. Treat as completed coverage wiring, not measured speed evidence.
 - trust: {F:0.78,G:0.62,R:0.74}
+
+**LM-635 qwen35_generate runtime confirms post-tokenizer terminal direct cache hit [shared/ml]**
+- status: VERIFIED runtime smoke
+- evidence: Seeded a temporary cache with a one-token EOS direct-output certificate for `At-most direct cache smoke prompt`, then ran `/tmp/qwen35_generate_atmost` with `QWEN35_PROMPT_CACHE=1`, source-history fast-forward enabled, and `n_gen=4`. Output printed `Prompt cache direct output fast-forward hit after tokenizer load: emitted 1 cached tokens`, `cache_route=direct_output`, `output_tokens=1`, `prefill_ms=0.0`, `decode_ms=0.0`, and no weight-load message.
+- diagnosis: The post-tokenizer/pre-weight branch from LM-634 is live and reaches the desired larger-budget early-terminal fast path. This closes the runtime evidence gap left by build-only verification.
+- LTP/WBA: Window is exact prompt after tokenizer load plus a shorter EOS direct-output certificate. The Spike skips weight load, state restore, source-history replay, prefill, and decode. Boundary safety is the Store certificate plus EOS guard.
+- adversary: Synthetic certificate proves route mechanics, not frequency in real workloads. The next question is hit-rate telemetry in Crystal Ball/headless harness, not more local unit tests.
+- trust: {F:0.90,G:0.58,R:0.86}
