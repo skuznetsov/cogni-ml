@@ -16938,3 +16938,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is current final hidden. Transport by nearest hidden delta is boundary-safe and reduces lower-body replay to zero, but recomputed potential `(candidate_hit_rate, transition_head_cost, verifier_expected_work)` fails to descend versus direct label replay. Legal dual frame is n-gram/session-cache for repeat and exact decode elsewhere.
 - adversary: This is a tiny teacher-forced prompt-hidden test. It does not refute all current-hidden transition models; it refutes the simplest nearest-delta version as the next fusion target.
 - trust: {F:0.88,G:0.36,R:0.84}
+
+
+**LM-669 Current-hidden centroid scoring ties nearest replay and does not improve coverage [shared/ml]**
+- status: VERIFIED small Qwen3.5-9B gate; centroid route not promoted
+- change: The current-hidden proposal probe now also groups calibration hidden rows by exact top1 label, scores held-out hidden rows against label centroids, and reports centroid top1/topK coverage beside nearest-neighbor coverage.
+- evidence: Guarded no-codegen build exited 0; linked Metal build `/tmp/qwen35_current_hidden_probe` exited 0. Repeat prompt `tokens=32/calib=16/top5`: nearest top1/top5 `10/16`, centroid top1/top5 also `10/16`. Code prompt: nearest `2/16` top1 and `3/16` top5, centroid exactly tied `2/16` and `3/16`. Centroid did not improve the active windows and added probe scoring time in the CPU implementation.
+- diagnosis: Calibration label clusters are already represented by nearest rows on these small gates. Centroid scoring may still be useful as a cheaper production representation if a larger table would make nearest scan expensive, but it is not a quality breakthrough. Do not promote centroid-only current-hidden proposals without a larger repeated/session-cache gate showing equal coverage at lower wall cost.
+- LTP/WBA: Window is current final hidden; transport is label-centroid summaries instead of individual hidden rows. Legal move preserves exact verifier boundary, but recomputed potential `(candidate coverage, proposal cost)` does not descend versus nearest replay on tested windows. Dual frame remains direct repeat/session replay plus exact fallback.
+- adversary: This does not refute learned current-hidden classifiers broadly. It refutes the simplest centroid summarization as a coverage improvement on the current small prompts.
+- trust: {F:0.88,G:0.34,R:0.84}

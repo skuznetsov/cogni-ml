@@ -3119,3 +3119,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_601:** Build gates passed: no-codegen build and linked Metal build `/tmp/qwen35_current_hidden_probe`. Repeat prompt `tokens=32/calib=16/top5`: direct nearest-label stayed at `10/16` top1/top5 (`62.5%`), while hidden-delta transport predicted the next hidden row's exact top1 only `4/12` (`33.33%`) and label-next baseline was `5/12` (`41.67%`). Code prompt stayed weak: direct top1/top5 `2/16`/`3/16`, transition delta `2/15` (`13.33%`).
 
 **next_update_601:** Do not fuse nearest-delta transport. If current-hidden work continues, test learned/ridge transition or shortlist classifiers and require a route-specific economics gate. For near-term speed, use this as a repeat/session-cache feature rather than a general self-draft replacement.
+
+**decision_update_602:** Added centroid scoring to the current-hidden proposal probe. It compresses calibration hidden rows by exact top1 label and scores held-out rows against label centroids. On the tested windows it ties nearest replay, so it is not a new promotion path.
+
+**evidence_update_602:** Build gates passed: no-codegen and linked Metal build `/tmp/qwen35_current_hidden_probe`. Repeat prompt `tokens=32/calib=16/top5`: nearest top1/top5 `10/16`, centroid top1/top5 `10/16`. Code prompt: nearest `2/16` top1 and `3/16` top5; centroid also `2/16` and `3/16`. The route remains proposal-only and exact-verifier-required.
+
+**next_update_602:** Keep centroid metrics as a compression/cost diagnostic, not a quality lever. The next current-hidden branch should be either a learned small transition/classifier with stronger regularization and a real train/test split, or a runtime router that uses current-hidden repeat confidence only when it beats n-gram/session-cache economics.

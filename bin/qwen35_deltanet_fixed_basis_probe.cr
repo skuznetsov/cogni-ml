@@ -4521,6 +4521,64 @@ private def current_hidden_nearest_labels(hidden : Array(Float32),
   }
 end
 
+private def current_hidden_label_centroids(hidden : Array(Float32),
+                                           labels : Array(Int32),
+                                           dim : Int32,
+                                           train_count : Int32) : NamedTuple(centroids: Hash(Int32, Array(Float64)), norms: Hash(Int32, Float64), counts: Hash(Int32, Int32))
+  sums = {} of Int32 => Array(Float64)
+  counts = Hash(Int32, Int32).new(0)
+  train_count.times do |row|
+    label = labels[row]
+    sum = sums[label] ||= Array(Float64).new(dim, 0.0)
+    base = row * dim
+    dim.times { |i| sum[i] += hidden[base + i].to_f64 }
+    counts[label] += 1
+  end
+
+  centroids = {} of Int32 => Array(Float64)
+  norms = {} of Int32 => Float64
+  sums.each do |label, sum|
+    inv = 1.0 / counts[label]
+    centroid = Array(Float64).new(dim) { |i| sum[i] * inv }
+    centroids[label] = centroid
+    norms[label] = Math.sqrt(dot(centroid, centroid))
+  end
+
+  {centroids: centroids, norms: norms, counts: counts}
+end
+
+private def hidden_row_centroid_cosine(hidden : Array(Float32),
+                                       dim : Int32,
+                                       row : Int32,
+                                       row_norm : Float64,
+                                       centroid : Array(Float64),
+                                       centroid_norm : Float64) : Float64
+  denom = row_norm * centroid_norm
+  return -Float64::INFINITY if denom <= 0.0
+
+  base = row * dim
+  acc = 0.0
+  dim.times { |i| acc += hidden[base + i].to_f64 * centroid[i] }
+  acc / denom
+end
+
+private def current_hidden_centroid_labels(hidden : Array(Float32),
+                                           norms : Array(Float64),
+                                           dim : Int32,
+                                           eval_row : Int32,
+                                           centroid_pack : NamedTuple(centroids: Hash(Int32, Array(Float64)), norms: Hash(Int32, Float64), counts: Hash(Int32, Int32)),
+                                           top_k : Int32) : NamedTuple(ids: Array(Int32), best_cos: Float64)
+  ranked = centroid_pack[:centroids].map do |label, centroid|
+    sim = hidden_row_centroid_cosine(hidden, dim, eval_row, norms[eval_row], centroid, centroid_pack[:norms][label])
+    {label, sim}
+  end
+  ranked.sort_by! { |pair| -pair[1] }
+  {
+    ids:      ranked.first(top_k).map { |pair| pair[0] },
+    best_cos: ranked.empty? ? -Float64::INFINITY : ranked[0][1],
+  }
+end
+
 private def hidden_row_with_delta(hidden : Array(Float32),
                                   dim : Int32,
                                   src_row : Int32,
@@ -4536,7 +4594,7 @@ private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
                                         prompt_name : String,
                                         token_ids : Array(Int32),
                                         calib_count : Int32,
-                                        top_k : Int32) : NamedTuple(eval_samples: Int32, train_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, unique_train_labels: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, p50_best_cos: Float64, min_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, transition_samples: Int32, transition_label_hits: Int32, transition_delta_hits: Int32, transition_label_rate: Float64, transition_delta_rate: Float64, transition_ms: Float64)
+                                        top_k : Int32) : NamedTuple(eval_samples: Int32, train_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, centroid_top1_hits: Int32, centroid_topk_hits: Int32, unique_train_labels: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, p50_best_cos: Float64, min_best_cos: Float64, centroid_avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, centroid_top1_rate: Float64, centroid_topk_rate: Float64, transition_samples: Int32, transition_label_hits: Int32, transition_delta_hits: Int32, transition_label_rate: Float64, transition_delta_rate: Float64, transition_ms: Float64)
   raise "current-hidden proposal top_k must be positive" unless top_k > 0
   raise "current-hidden proposal needs at least one train and one eval token" unless calib_count > 0 && calib_count < token_ids.size
 
@@ -4555,9 +4613,13 @@ private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
 
   dim = hp.n_embd
   norms = Array(Float64).new(rows) { |i| hidden_row_norm(hidden, i, dim) }
+  centroid_pack = current_hidden_label_centroids(hidden, labels, dim, train_count)
   top1_hits = 0
   topk_hits = 0
+  centroid_top1_hits = 0
+  centroid_topk_hits = 0
   best_cosines = [] of Float64
+  centroid_best_cosines = [] of Float64
   nearest_rows = [] of Int32
 
   t_probe = Time.instant
@@ -4568,6 +4630,11 @@ private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
     top1_hits += 1 if ids[0]? == target
     topk_hits += 1 if ids.includes?(target)
     best_cosines << proposal[:best_cos]
+    centroid = current_hidden_centroid_labels(hidden, norms, dim, row, centroid_pack, top_k)
+    centroid_ids = centroid[:ids]
+    centroid_top1_hits += 1 if centroid_ids[0]? == target
+    centroid_topk_hits += 1 if centroid_ids.includes?(target)
+    centroid_best_cosines << centroid[:best_cos]
     if ids[0]?
       best_label = ids[0]
       nearest = 0
@@ -4612,14 +4679,19 @@ private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
     top_k:               top_k,
     top1_hits:           top1_hits,
     topk_hits:           topk_hits,
+    centroid_top1_hits:  centroid_top1_hits,
+    centroid_topk_hits:  centroid_topk_hits,
     unique_train_labels: labels[0, train_count].uniq.size,
     collect_ms:          collect_ms,
     proposal_ms:         proposal_ms,
     avg_best_cos:        best_cosines.sum / best_cosines.size,
     p50_best_cos:        sorted_cos[sorted_cos.size // 2],
     min_best_cos:        sorted_cos[0],
+    centroid_avg_best_cos: centroid_best_cosines.sum / centroid_best_cosines.size,
     top1_rate:           100.0 * top1_hits / eval_count,
     topk_rate:           100.0 * topk_hits / eval_count,
+    centroid_top1_rate:  100.0 * centroid_top1_hits / eval_count,
+    centroid_topk_rate:  100.0 * centroid_topk_hits / eval_count,
     transition_samples:  transition_samples,
     transition_label_hits: transition_label_hits,
     transition_delta_hits: transition_delta_hits,
@@ -12222,7 +12294,7 @@ if simulate_current_hidden_proposal
     raise "current-hidden proposal prompt #{item[:name]} needs at least one held-out token" unless prompt_calib_count > 0 && prompt_calib_count < ids.size
     proposal = run_current_hidden_proposal(weights, item[:name], ids, prompt_calib_count, simulate_current_hidden_proposal_topk)
     transition_per = proposal[:transition_samples] > 0 ? proposal[:transition_ms] / proposal[:transition_samples] : 0.0
-    puts "current_hidden_proposal name=#{item[:name]} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} top_k=#{proposal[:top_k]} train=#{proposal[:train_samples]} eval=#{proposal[:eval_samples]} unique_train_labels=#{proposal[:unique_train_labels]} top1=#{proposal[:top1_rate].round(2)}% topk=#{proposal[:topk_rate].round(2)}% hits=#{proposal[:top1_hits]}/#{proposal[:topk_hits]}/#{proposal[:eval_samples]} collect_ms=#{proposal[:collect_ms].round(3)} proposal_ms=#{proposal[:proposal_ms].round(3)} proposal_ms_per_eval=#{(proposal[:proposal_ms] / proposal[:eval_samples]).round(6)} avg_best_cos=#{proposal[:avg_best_cos].round(6)} p50_best_cos=#{proposal[:p50_best_cos].round(6)} min_best_cos=#{proposal[:min_best_cos].round(6)} transition_samples=#{proposal[:transition_samples]} transition_label_top1=#{proposal[:transition_label_rate].round(2)}% transition_delta_top1=#{proposal[:transition_delta_rate].round(2)}% transition_hits=#{proposal[:transition_label_hits]}/#{proposal[:transition_delta_hits]}/#{proposal[:transition_samples]} transition_ms=#{proposal[:transition_ms].round(3)} transition_ms_per_eval=#{transition_per.round(6)} note=proposal_only_exact_verifier_required"
+    puts "current_hidden_proposal name=#{item[:name]} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} top_k=#{proposal[:top_k]} train=#{proposal[:train_samples]} eval=#{proposal[:eval_samples]} unique_train_labels=#{proposal[:unique_train_labels]} top1=#{proposal[:top1_rate].round(2)}% topk=#{proposal[:topk_rate].round(2)}% hits=#{proposal[:top1_hits]}/#{proposal[:topk_hits]}/#{proposal[:eval_samples]} centroid_top1=#{proposal[:centroid_top1_rate].round(2)}% centroid_topk=#{proposal[:centroid_topk_rate].round(2)}% centroid_hits=#{proposal[:centroid_top1_hits]}/#{proposal[:centroid_topk_hits]}/#{proposal[:eval_samples]} collect_ms=#{proposal[:collect_ms].round(3)} proposal_ms=#{proposal[:proposal_ms].round(3)} proposal_ms_per_eval=#{(proposal[:proposal_ms] / proposal[:eval_samples]).round(6)} avg_best_cos=#{proposal[:avg_best_cos].round(6)} centroid_avg_best_cos=#{proposal[:centroid_avg_best_cos].round(6)} p50_best_cos=#{proposal[:p50_best_cos].round(6)} min_best_cos=#{proposal[:min_best_cos].round(6)} transition_samples=#{proposal[:transition_samples]} transition_label_top1=#{proposal[:transition_label_rate].round(2)}% transition_delta_top1=#{proposal[:transition_delta_rate].round(2)}% transition_hits=#{proposal[:transition_label_hits]}/#{proposal[:transition_delta_hits]}/#{proposal[:transition_samples]} transition_ms=#{proposal[:transition_ms].round(3)} transition_ms_per_eval=#{transition_per.round(6)} note=proposal_only_exact_verifier_required"
   end
 end
 
