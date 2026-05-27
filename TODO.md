@@ -3086,3 +3086,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_596:** `bin/qwen35_deltanet_fixed_basis_probe.cr` supports `--block-surrogate-min-ideal-speedup=F`; guarded no-codegen and linked Metal builds passed. Runtime smoke `/tmp/qwen35_block_surrogate_econ_gate_smoke_20260527.log` exited 0 and marked a 100% accepted reasoning row as `economics=fail_closed` because `ideal_overlap_speedup=0.0012 < 1.0`, while `parity=true` and `verifier_parity=true`.
 
 **next_update_596:** Use `economics=candidate` as the first promotion filter for future late-block surrogate suites. If no rows clear it, do not add top-K rescue or fusion; first reduce proposal body cost or use a route where the body is already cheap enough.
+
+
+**decision_update_597:** Tested wider late-band PCA block surrogates on the repeat corridor. Wider skips preserve quality and move draft cost in the right direction, but every tested band still fails the economics gate. This blocks super-fusing the current CPU/probe surrogate shape as a near-term speed route.
+
+**evidence_update_597:** `/tmp/qwen35_late_band_econ_repeat_20260527.log` produced accepted/parity rows before timeout: `24:24`, `24:25`, `26:28` all accepted `2/2` and printed `economics=fail_closed` with ideal-overlap speedups `0.5145`, `0.5369`, `0.5425`. Clean narrowed run `/tmp/qwen35_late_band_econ_repeat_wide_20260527.log` exited 0 for `28:30` and `24:30`; both accepted `1/1` and failed economics. `24:30` had lower draft body than `28:30` (`567.257ms` vs `631.835ms`) but not remotely enough in the probe path.
+
+**next_update_597:** Pivot from wider late-band search to body-cost elimination. The next useful experiment is not another late block range; it is a lower-bound/fused-body design: either compute the surrogate from an already-owned hidden boundary, or move the adapter math into a cheap GPU path and measure whether `draft_body + verifier` can ever clear the economics gate.

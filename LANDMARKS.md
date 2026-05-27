@@ -16890,3 +16890,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is a block-surrogate proposal row. Transport into an accelerated corridor is legal only if the recomputed potential `(ideal_overlap_speedup, parity, verifier_parity)` descends versus exact decode. Otherwise the dual frame is exact decode and the row is marked fail-closed.
 - adversary: This is a marker, not a controller. It uses measured probe timings, so tiny one-token rows can be noisy; its role is to prevent false promotion, not to prove production speed.
 - trust: {F:0.89,G:0.62,R:0.86}
+
+
+**LM-664 Wider late-band PCA surrogates preserve repeat quality but still fail economics [shared/ml]**
+- status: VERIFIED partial + narrowed gates; no fusion promotion
+- evidence: Repeat prompt late-band sweep `/tmp/qwen35_late_band_econ_repeat_20260527.log` timed out after useful rows for blocks `24:24`, `24:25`, and `26:28`. All preserved parity and accepted `2/2`, but all printed `economics=fail_closed`: `24:24 ideal_overlap_speedup=0.5145`, `24:25=0.5369`, `26:28=0.5425`. Narrowed clean run `/tmp/qwen35_late_band_econ_repeat_wide_20260527.log`, `gen=1`, exited 0 for `28:30` and `24:30`; both accepted `1/1` with parity but still printed `economics=fail_closed`. `24:30` reduced draft body versus `28:30` (`draft_ms 567.257 vs 631.835`) but remained far from beating exact in that smoke.
+- diagnosis: Skipping a wider late band improves the body-cost direction but not enough in the CPU/probe route. The route is quality-plausible for repeat/continuation, but still not speed-plausible without a much cheaper fused/GPU surrogate body or a different proposal source.
+- LTP/WBA: Window is repeat/continuation late-band replacement. Transport via PCA surrogate remains boundary-safe under exact verifier. Recomputed potential `(ideal_overlap_speedup, draft_ms, verifier_ms)` does not descend below exact for any tested late band, so the dual frame remains exact decode and the fusion branch is blocked until body cost is structurally reduced.
+- adversary: The full sweep timed out and the narrowed wide-band run used `gen=1`, whose timing is not a stable throughput measure. The consistent `economics=fail_closed` marker across accepted rows is the useful signal; do not use these logs as a published benchmark.
+- trust: {F:0.84,G:0.40,R:0.80}
