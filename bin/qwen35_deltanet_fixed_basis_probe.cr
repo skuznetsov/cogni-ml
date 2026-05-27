@@ -3347,9 +3347,12 @@ private def block_residual_prediction_stats(samples : Array(BlockResidualSample)
   exact_sq = 0.0
   delta_sq = 0.0
   max_delta = 0.0
+  adapter_ms = 0.0
 
   heldout.each do |sample|
+    t_pred = Time.instant
     pred_delta = yield sample[:inp]
+    adapter_ms += (Time.instant - t_pred).total_milliseconds
     approx_out = Array(Float64).new(dim) { |i| sample[:inp][i] + pred_delta[i] }
     cos = cosine64(approx_out, sample[:out])
     delta_cos = cosine64(pred_delta, sample[:delta])
@@ -3382,6 +3385,8 @@ private def block_residual_prediction_stats(samples : Array(BlockResidualSample)
     delta_rel_rmse:  delta_sq > 0.0 ? Math.sqrt(delta_err_sq / delta_sq) : 0.0,
     residual_energy: exact_sq > 0.0 ? Math.sqrt(delta_sq / exact_sq) : 0.0,
     max_delta:       max_delta,
+    adapter_ms:      adapter_ms,
+    adapter_ms_per_sample: adapter_ms / count,
   }
 end
 
@@ -3419,9 +3424,12 @@ private def block_residual_error_feedback_stats(samples : Array(BlockResidualSam
   delta_sq = 0.0
   max_delta = 0.0
   compared = 0
+  adapter_ms = 0.0
 
   samples.each_with_index do |sample, idx|
+    t_pred = Time.instant
     pred_delta = predict_block_residual(adapter, sample[:inp])
+    adapter_ms += (Time.instant - t_pred).total_milliseconds
     corrected_delta = Array(Float64).new(dim) { |i| pred_delta[i] + bias[i] }
     if idx >= eval_start
       approx_out = Array(Float64).new(dim) { |i| sample[:inp][i] + corrected_delta[i] }
@@ -3460,6 +3468,8 @@ private def block_residual_error_feedback_stats(samples : Array(BlockResidualSam
     rel_rmse:       exact_sq > 0.0 ? Math.sqrt(err_sq / exact_sq) : 0.0,
     delta_rel_rmse: delta_sq > 0.0 ? Math.sqrt(delta_err_sq / delta_sq) : 0.0,
     max_delta:      max_delta,
+    adapter_ms:     adapter_ms,
+    adapter_ms_per_sample: adapter_ms / samples.size,
   }
 end
 
@@ -6177,7 +6187,7 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
         train_ms = (Time.instant - t_train).total_milliseconds
         stats = block_residual_surrogate_stats(samples, adapter, train_count)
         mode_label = delta_basis_mode == "pca" ? "global" : "global_#{delta_basis_mode}"
-        puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=#{mode_label} delta_basis=#{delta_basis_mode} impact_vectors=#{impact_basis.size} rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
+        puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=#{mode_label} delta_basis=#{delta_basis_mode} impact_vectors=#{impact_basis.size} rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} adapter_ms=#{stats[:adapter_ms].round(3)} adapter_ms_per_sample=#{stats[:adapter_ms_per_sample].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
         append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
           adapter, stats, mode_label, block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode,
           tree_rows, tree_top_k, tree_warmup_tokens, tree_prefill_seed, tree_branch_verify, tree_select_advance,
@@ -6190,7 +6200,7 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       mixture = train_block_residual_mixture(train_samples, block_start, block_end, block_rank, cluster_count, pca_iters)
       mix_train_ms = (Time.instant - t_mix).total_milliseconds
       mix_stats = block_residual_mixture_stats(samples, mixture, train_count)
-      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} train_ms=#{mix_train_ms.round(3)}"
+      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} cluster_sizes=#{mixture.cluster_sizes.join(',')} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{mix_stats[:count]} hidden_cos_mean=#{mix_stats[:mean_cos].round(8)} hidden_cos_min=#{mix_stats[:min_cos].round(8)} delta_cos_mean=#{mix_stats[:mean_delta_cos].round(8)} rel_rmse=#{mix_stats[:rel_rmse].round(8)} delta_rel_rmse=#{mix_stats[:delta_rel_rmse].round(8)} adapter_ms=#{mix_stats[:adapter_ms].round(3)} adapter_ms_per_sample=#{mix_stats[:adapter_ms_per_sample].round(6)} train_ms=#{mix_train_ms.round(3)}"
       append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
         mixture, mix_stats, "mixture", block_rank, mixture.centroids.size, prompt_calib_count, gen_tokens,
         gammas, state_mode, tree_rows, tree_top_k, tree_warmup_tokens, tree_prefill_seed, tree_branch_verify,
@@ -12092,12 +12102,12 @@ if block_start = simulate_block_surrogate_start
     delta_basis_mode: block_delta_basis_mode, impact_basis_seed: block_impact_basis)
   train_ms = (Time.instant - t_train).total_milliseconds
   stats = block_residual_surrogate_stats(block_samples, block_adapter, calib_count)
-  puts "block_residual_surrogate_static block=#{block_start}:#{block_end} delta_basis=#{block_delta_basis_mode} impact_vectors=#{block_impact_basis.size} rank=#{block_rank} effective_input_rank=#{block_adapter.input_basis.size} effective_delta_rank=#{block_adapter.delta_basis.size} calib=#{calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rmse=#{stats[:rmse].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} residual_energy=#{stats[:residual_energy].round(8)} max_delta=#{stats[:max_delta].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)} note=teacher_forced_exact_trajectory_not_state_replacement"
+  puts "block_residual_surrogate_static block=#{block_start}:#{block_end} delta_basis=#{block_delta_basis_mode} impact_vectors=#{block_impact_basis.size} rank=#{block_rank} effective_input_rank=#{block_adapter.input_basis.size} effective_delta_rank=#{block_adapter.delta_basis.size} calib=#{calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rmse=#{stats[:rmse].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} residual_energy=#{stats[:residual_energy].round(8)} max_delta=#{stats[:max_delta].round(6)} adapter_ms=#{stats[:adapter_ms].round(3)} adapter_ms_per_sample=#{stats[:adapter_ms_per_sample].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)} note=teacher_forced_exact_trajectory_not_state_replacement"
   simulate_block_surrogate_error_feedback_decays.each do |decay|
     fb = block_residual_error_feedback_stats(block_samples, block_adapter, calib_count, decay)
     rel_gain = stats[:rel_rmse] > 0.0 ? 100.0 * (stats[:rel_rmse] - fb[:rel_rmse]) / stats[:rel_rmse] : 0.0
     delta_gain = stats[:delta_rel_rmse] > 0.0 ? 100.0 * (stats[:delta_rel_rmse] - fb[:delta_rel_rmse]) / stats[:delta_rel_rmse] : 0.0
-    puts "block_residual_error_feedback block=#{block_start}:#{block_end} mode=global rank=#{block_rank} decay=#{decay} calib_warmup=#{calib_count} heldout=#{fb[:count]} hidden_cos_mean=#{fb[:mean_cos].round(8)} hidden_cos_min=#{fb[:min_cos].round(8)} delta_cos_mean=#{fb[:mean_delta_cos].round(8)} rmse=#{fb[:rmse].round(8)} rel_rmse=#{fb[:rel_rmse].round(8)} delta_rel_rmse=#{fb[:delta_rel_rmse].round(8)} max_delta=#{fb[:max_delta].round(6)} rel_rmse_gain_pct=#{rel_gain.round(2)} delta_rel_rmse_gain_pct=#{delta_gain.round(2)} note=one_token_lag_adaptive_filter_exact_observations"
+    puts "block_residual_error_feedback block=#{block_start}:#{block_end} mode=global rank=#{block_rank} decay=#{decay} calib_warmup=#{calib_count} heldout=#{fb[:count]} hidden_cos_mean=#{fb[:mean_cos].round(8)} hidden_cos_min=#{fb[:min_cos].round(8)} delta_cos_mean=#{fb[:mean_delta_cos].round(8)} rmse=#{fb[:rmse].round(8)} rel_rmse=#{fb[:rel_rmse].round(8)} delta_rel_rmse=#{fb[:delta_rel_rmse].round(8)} max_delta=#{fb[:max_delta].round(6)} adapter_ms=#{fb[:adapter_ms].round(3)} adapter_ms_per_sample=#{fb[:adapter_ms_per_sample].round(6)} rel_rmse_gain_pct=#{rel_gain.round(2)} delta_rel_rmse_gain_pct=#{delta_gain.round(2)} note=one_token_lag_adaptive_filter_exact_observations"
   end
   if simulate_block_surrogate_clusters > 1
     t_mix = Time.instant
@@ -12109,7 +12119,7 @@ if block_start = simulate_block_surrogate_start
       fb = block_residual_error_feedback_stats(block_samples, mixture, calib_count, decay)
       rel_gain = mix_stats[:rel_rmse] > 0.0 ? 100.0 * (mix_stats[:rel_rmse] - fb[:rel_rmse]) / mix_stats[:rel_rmse] : 0.0
       delta_gain = mix_stats[:delta_rel_rmse] > 0.0 ? 100.0 * (mix_stats[:delta_rel_rmse] - fb[:delta_rel_rmse]) / mix_stats[:delta_rel_rmse] : 0.0
-      puts "block_residual_error_feedback block=#{block_start}:#{block_end} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} decay=#{decay} calib_warmup=#{calib_count} heldout=#{fb[:count]} hidden_cos_mean=#{fb[:mean_cos].round(8)} hidden_cos_min=#{fb[:min_cos].round(8)} delta_cos_mean=#{fb[:mean_delta_cos].round(8)} rmse=#{fb[:rmse].round(8)} rel_rmse=#{fb[:rel_rmse].round(8)} delta_rel_rmse=#{fb[:delta_rel_rmse].round(8)} max_delta=#{fb[:max_delta].round(6)} rel_rmse_gain_pct=#{rel_gain.round(2)} delta_rel_rmse_gain_pct=#{delta_gain.round(2)} note=one_token_lag_adaptive_filter_exact_observations"
+      puts "block_residual_error_feedback block=#{block_start}:#{block_end} mode=mixture rank=#{block_rank} clusters=#{mixture.centroids.size} decay=#{decay} calib_warmup=#{calib_count} heldout=#{fb[:count]} hidden_cos_mean=#{fb[:mean_cos].round(8)} hidden_cos_min=#{fb[:min_cos].round(8)} delta_cos_mean=#{fb[:mean_delta_cos].round(8)} rmse=#{fb[:rmse].round(8)} rel_rmse=#{fb[:rel_rmse].round(8)} delta_rel_rmse=#{fb[:delta_rel_rmse].round(8)} max_delta=#{fb[:max_delta].round(6)} adapter_ms=#{fb[:adapter_ms].round(3)} adapter_ms_per_sample=#{fb[:adapter_ms_per_sample].round(6)} rel_rmse_gain_pct=#{rel_gain.round(2)} delta_rel_rmse_gain_pct=#{delta_gain.round(2)} note=one_token_lag_adaptive_filter_exact_observations"
     end
     if simulate_block_surrogate_policy
       mix_logit = simulate_block_surrogate_logits_policy(weights, token_ids, block_start, block_end, mixture, calib_count, simulate_block_surrogate_state_mode)

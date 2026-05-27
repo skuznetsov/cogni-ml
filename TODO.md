@@ -3093,3 +3093,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_597:** `/tmp/qwen35_late_band_econ_repeat_20260527.log` produced accepted/parity rows before timeout: `24:24`, `24:25`, `26:28` all accepted `2/2` and printed `economics=fail_closed` with ideal-overlap speedups `0.5145`, `0.5369`, `0.5425`. Clean narrowed run `/tmp/qwen35_late_band_econ_repeat_wide_20260527.log` exited 0 for `28:30` and `24:30`; both accepted `1/1` and failed economics. `24:30` had lower draft body than `28:30` (`567.257ms` vs `631.835ms`) but not remotely enough in the probe path.
 
 **next_update_597:** Pivot from wider late-band search to body-cost elimination. The next useful experiment is not another late block range; it is a lower-bound/fused-body design: either compute the surrogate from an already-owned hidden boundary, or move the adapter math into a cheap GPU path and measure whether `draft_body + verifier` can ever clear the economics gate.
+
+
+**decision_update_598:** Added adapter-only timing to block-residual surrogate stats and measured the lower bound. The adapter math is cheap compared with exact trajectory/boundary acquisition, so fusing just the linear adapter is not the next speed lever.
+
+**evidence_update_598:** No-codegen build passed; linked Metal build `/tmp/qwen35_deltanet_fixed_basis_probe_adapter_ms` passed. Runtime smoke `/tmp/qwen35_block_adapter_ms_smoke_20260527.log`, block `24:30`, `tokens=8/calib=4/rank2`, exited 0 and printed `adapter_ms=0.982`, `adapter_ms_per_sample=0.245521`, while exact block sample collection took `collect_ms=5854.13`.
+
+**next_update_598:** Next body-cost branch must target hidden-boundary acquisition, not adapter math: reuse an already-owned boundary, eliminate lower-layer replay, or design a proposal source that starts from current state/final hidden instead of replaying layers `0..k` for every draft token.

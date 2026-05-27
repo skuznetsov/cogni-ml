@@ -16899,3 +16899,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is repeat/continuation late-band replacement. Transport via PCA surrogate remains boundary-safe under exact verifier. Recomputed potential `(ideal_overlap_speedup, draft_ms, verifier_ms)` does not descend below exact for any tested late band, so the dual frame remains exact decode and the fusion branch is blocked until body cost is structurally reduced.
 - adversary: The full sweep timed out and the narrowed wide-band run used `gen=1`, whose timing is not a stable throughput measure. The consistent `economics=fail_closed` marker across accepted rows is the useful signal; do not use these logs as a published benchmark.
 - trust: {F:0.84,G:0.40,R:0.80}
+
+
+**LM-665 Block-surrogate adapter math is cheap; hidden-boundary acquisition is the cost wall [shared/ml]**
+- status: VERIFIED instrumentation and tiny smoke
+- change: Block-residual surrogate stats now report `adapter_ms` and `adapter_ms_per_sample` for held-out adapter prediction. Error-feedback stats report the same timing.
+- evidence: Guarded no-codegen build exited 0; linked Metal build `/tmp/qwen35_deltanet_fixed_basis_probe_adapter_ms` exited 0. Runtime smoke `/tmp/qwen35_block_adapter_ms_smoke_20260527.log`, Qwen3.5-9B repeat prompt, block `24:30`, `tokens=8`, `calib=4`, `rank=2`, exited 0 and printed `adapter_ms=0.982`, `adapter_ms_per_sample=0.245521`, while collecting exact block samples cost `collect_ms=5854.13`.
+- diagnosis: The linear adapter itself is not the main speed wall. Current block-surrogate self-draft loses because it recomputes the lower-layer hidden boundary for every draft token and then pays exact verifier work. Optimizing/fusing the adapter alone cannot close the gap; the real lever is boundary reuse, lower-layer elimination, or a proposal source that starts from already-owned hidden/state.
+- LTP/WBA: Window is the surrogate adapter application. The adapter move locally reduces `(delta_map_cost)` but recomputed route potential is dominated by `(hidden_boundary_acquisition, verifier_body)`. Legal next transport must carry an already-owned boundary or collapse more lower-layer work; otherwise exact decode remains the dual frame.
+- adversary: This is a tiny CPU timing and not a GPU kernel benchmark. It is sufficient to refute adapter-math optimization as the next bottleneck, not to estimate production fused speed.
+- trust: {F:0.88,G:0.50,R:0.84}
