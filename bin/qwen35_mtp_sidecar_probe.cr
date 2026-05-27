@@ -1461,12 +1461,19 @@ rows.each do |label, prompt_text|
                 checkpoint_state.not_nil!,
                 weights.hparams)
             else
-              ML::GGUF::Qwen35CPU.copy_state_metal_used!(
-                wall_state,
-                checkpoint_state.not_nil!,
-                weights.hparams,
-                used_tokens: stage_pos + 1,
-                rec_only: true)
+              if state_slot_probe_can_skip_backup
+                ML::GGUF::Qwen35CPU.swap_recurrent_state_metal_buffers!(
+                  wall_state,
+                  checkpoint_state.not_nil!,
+                  weights.hparams)
+              else
+                ML::GGUF::Qwen35CPU.copy_state_metal_used!(
+                  wall_state,
+                  checkpoint_state.not_nil!,
+                  weights.hparams,
+                  used_tokens: stage_pos + 1,
+                  rec_only: true)
+              end
             end
             wall_backup_ms += elapsed_ms(rec_restore_start)
             wall_hidden = hidden_rows[0, weights.hparams.n_embd]

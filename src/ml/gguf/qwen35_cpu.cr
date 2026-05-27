@@ -272,6 +272,45 @@ module ML::GGUF
       {% end %}
     end
 
+    # Transfer ownership of recurrent GPU state buffers from `src` into `dst`
+    # without a blit. This is only valid when `src` is a disposable checkpoint
+    # state and the caller has proven full-attention KV rows remain valid or
+    # will be overwritten before use.
+    def swap_recurrent_state_metal_buffers!(dst : State, src : State, hp : Qwen35Hparams) : Nil
+      {% if flag?(:cpu_only) %}
+        dst.copy_from!(src)
+      {% else %}
+        unless Qwen35Metal.available?
+          dst.copy_from!(src)
+          return
+        end
+
+        raise ArgumentError.new("max_seq mismatch: #{dst.max_seq} != #{src.max_seq}") unless dst.max_seq == src.max_seq
+        raise ArgumentError.new("layer count mismatch: #{dst.layers.size} != #{src.layers.size}") unless dst.layers.size == src.layers.size
+
+        src.layers.each_with_index do |src_layer, il|
+          dst_layer = dst.layers[il]
+          dst_layer.position = src_layer.position
+          next if hp.full_attention?(il)
+
+          old_conv_buf = dst_layer.conv_state_buf
+          old_ssm_buf = dst_layer.ssm_state_buf
+          old_conv_state = dst_layer.conv_state
+          old_ssm_state = dst_layer.ssm_state
+
+          dst_layer.conv_state_buf = src_layer.conv_state_buf
+          dst_layer.ssm_state_buf = src_layer.ssm_state_buf
+          dst_layer.conv_state = src_layer.conv_state
+          dst_layer.ssm_state = src_layer.ssm_state
+
+          src_layer.conv_state_buf = old_conv_buf
+          src_layer.ssm_state_buf = old_ssm_buf
+          src_layer.conv_state = old_conv_state
+          src_layer.ssm_state = old_ssm_state
+        end
+      {% end %}
+    end
+
     def rollback_recurrent_ssm_metal_from_log!(state : State, log_state : State, hp : Qwen35Hparams) : Nil
       {% if flag?(:cpu_only) %}
         raise "rollback_recurrent_ssm_metal_from_log requires Metal"
