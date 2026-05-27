@@ -178,6 +178,15 @@ module ML::GGUF
       end
     end
 
+    struct LayerTop1TraceRow
+      getter layer : Int32
+      getter top1 : Int32
+      getter logit : Float32
+
+      def initialize(@layer : Int32, @top1 : Int32, @logit : Float32)
+      end
+    end
+
     # Pre-allocate the GPU-resident state buffers used by Qwen35 Metal
     # prefill/decode. This keeps latency-sensitive prefill timing focused on
     # model work rather than first-touch MetalBuffer allocation and zeroing.
@@ -1915,6 +1924,30 @@ module ML::GGUF
       logits = qmatvec_nobias(weights.output, x)
       maxv = logits.max
       {logits.index(maxv).not_nil!.to_i32, maxv}
+    end
+
+    # Probe helper: run one token through the decoder and project the hidden
+    # after each layer. This mutates `state` exactly like normal decode for the
+    # consumed token, but it is intentionally diagnostic rather than hot-path.
+    def forward_layer_top1_trace(weights : Qwen35Weights, token_id : Int32, pos : Int32,
+                                 state : State) : Array(LayerTop1TraceRow)
+      hp = weights.hparams
+      max_seq = state.max_seq
+      x = embedding_lookup(weights.token_embd, token_id)
+      rows = Array(LayerTop1TraceRow).new(weights.layers.size)
+
+      weights.layers.each_with_index do |lw, il|
+        case lw
+        in Qwen35FullAttnWeights
+          x = forward_full_attn_layer(x, pos, lw, state.layers[il], hp, max_seq)
+        in Qwen35RecurrentWeights
+          x = forward_recurrent_layer(x, pos, lw, state.layers[il], hp, max_seq)
+        end
+        top1, logit = hidden_top1(weights, x)
+        rows << LayerTop1TraceRow.new(il.to_i32, top1, logit)
+      end
+
+      rows
     end
 
     # Project a pre-output-norm hidden through the normal Qwen output head and

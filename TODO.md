@@ -8,6 +8,17 @@
 
 **Protocol:** v13.2. Quadrumvirate on each phase start. LOGBOOK in conversation, persistent state in LANDMARKS.md.
 
+**Current Landmark-graph math frontier (2026-05-27):**
+- [x] Persist the Quadrumvirate synthesis that the next breakthrough likely needs certified regime detection, not another local microkernel: route/cache corridors win by eliminating work; approximate proposal-body branches lose when verifier/fallback tax dominates.
+  - Evidence: ad-hoc memory note `~/.codex/memories/extensions/ad_hoc/notes/*-qwen-landmark-graph-math-plan.md`; relevant durable anchors are LM-616/619/624/627/629/632/638/639 and the MTP refutation rows below.
+- [x] Add the first layer-stability atlas probe for testing the renormalization/coarse-to-fine hypothesis. `bin/qwen35_layer_stability_probe.cr` traces the greedy top1 after each layer for a consumed token while mutating decode state exactly once.
+  - Evidence: no-codegen build passed; linked runtime smoke on Qwen3.5-9B Q4_K_M passed under `run_safe.sh`. `The capital of France is`, `gen=4`, produced stable-from layers `31/25/31/31`; JSON-ish prompt produced `30/31`; local repeat prompt produced `29/26/27/26`.
+  - Boundary: Initial smokes do not support a naive "late third does not matter" rule. They support a stricter phase/regime detector: late layers often still change top1, but some repeated/continuation phases stabilize earlier. Next gate is a broader prompt atlas before building late-band surrogates.
+- [ ] Run a broader layer-stability atlas over prompt classes (`facts`, `code`, `json/tool`, `repeat`, `reasoning`) and record distributions for `stable_from_layer`, top1 change count, and generated-token phase.
+- [ ] Implement a balanced/logit-impact basis probe: compare variance PCA against logit-impact/balanced directions for late-band surrogate acceptance and drift.
+- [ ] Prototype mixture block-residual surrogates keyed by cheap phase features; promote only if held-out exact-verifier acceptance and wall `plain_ratio` beat dense/greedy.
+- [ ] Reframe Hadamard from token-window continuation to session/template trajectory sketches where n-gram has no certified corridor.
+
 **Current harness integration frontier (2026-05-21):**
 - [x] Add Qwen XML-to-JSON function-calling bridge for CrystalBall-style harnesses. The model still receives Qwen-native XML tool instructions, but host output can now be normalized as `{"content":...,"tool_calls":[{"name":...,"arguments":{...}}]}` via `QWEN35_TOOL_RESPONSE_JSON=simple`, or OpenAI wrappers via `openai`.
   - Evidence: `crystal spec spec/qwen35_chat_spec.cr spec/qwen35_tokenizer_spec.cr --error-trace` passed (`10 examples, 0 failures`); `crystal build --no-codegen bin/qwen35_generate.cr --error-trace` passed; `crystal build --no-codegen bin/qwen35_tool_json_adapter.cr --error-trace` passed; adapter parse/render smokes passed.
