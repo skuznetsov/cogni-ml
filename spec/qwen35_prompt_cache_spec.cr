@@ -387,6 +387,7 @@ describe ML::GGUF::Qwen35PromptCache do
         output_token_ids: terminal_output,
         generated_text: " terminal",
         exact_entry: terminal_entry,
+        terminal_token_id: 50_i32,
       )
       store.save_output_fast_forward(
         session_id: "s1",
@@ -401,8 +402,25 @@ describe ML::GGUF::Qwen35PromptCache do
 
       store.lookup_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5, terminal_token_id: 50_i32).try(&.output_token_ids).should eq(terminal_output)
       store.lookup_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5).should be_nil
+      store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5).try(&.output_token_ids).should eq(terminal_output)
       store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 5, terminal_token_id: 50_i32).should be_nil
+      store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 5).should be_nil
       store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 2, terminal_token_id: 50_i32).try(&.output_token_ids).should eq(nonterminal_output)
+      store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 2).try(&.output_token_ids).should eq(nonterminal_output)
+
+      expect_raises(ArgumentError, /terminal_token_id/) do
+        store.save_output_fast_forward(
+          session_id: "s1",
+          model_id: "model-a",
+          tokenizer_id: "tok-a",
+          prompt_text: "bad terminal prompt",
+          prompt_token_ids: prompt_ids,
+          output_token_ids: terminal_output,
+          generated_text: " terminal",
+          exact_entry: terminal_entry,
+          terminal_token_id: 999_i32,
+        )
+      end
     ensure
       FileUtils.rm_rf(root) if Dir.exists?(root)
     end

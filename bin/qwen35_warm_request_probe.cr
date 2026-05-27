@@ -388,6 +388,7 @@ def build_prompt_cache_direct_output_template(weights : ML::GGUF::Qwen35Weights,
     output_token_ids: fast_forward.output_ids,
     generated_text: tokenizer.decode(fast_forward.output_ids),
     exact_entry: fast_forward.entry,
+    terminal_token_id: fast_forward.output_ids.last? == tokenizer.eos_id ? tokenizer.eos_id : nil,
   )
   PromptCacheDirectOutputTemplate.new(fast_forward.store, prompt, fast_forward.output_ids)
 end
@@ -429,6 +430,7 @@ def build_prompt_cache_serving_route_template(weights : ML::GGUF::Qwen35Weights,
       output_token_ids: fast_forward.output_ids,
       generated_text: tokenizer.decode(fast_forward.output_ids),
       exact_entry: fast_forward.entry,
+      terminal_token_id: fast_forward.output_ids.last? == tokenizer.eos_id ? tokenizer.eos_id : nil,
     )
   end
   PromptCacheServingRouteTemplate.new(fast_forward, prompt)

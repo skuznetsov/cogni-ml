@@ -152,6 +152,7 @@ module ML::GGUF
       property artifact_prefix_len : Int32
       property artifact_token_hash : String
       property artifact_next_token_id : Int32
+      property terminal_token_id : Int32? = nil
       property created_at_unix : Int64
 
       def initialize(@runtime_id : String,
@@ -175,7 +176,8 @@ module ML::GGUF
                      @artifact_prefix_len : Int32,
                      @artifact_token_hash : String,
                      @artifact_next_token_id : Int32,
-                     @created_at_unix : Int64)
+                     @created_at_unix : Int64,
+                     @terminal_token_id : Int32? = nil)
       end
     end
 
@@ -666,8 +668,10 @@ module ML::GGUF
                                    output_token_ids : Array(Int32),
                                    generated_text : String,
                                    exact_entry : Entry,
+                                   terminal_token_id : Int32? = nil,
                                    turn_id : String? = nil) : OutputFastForwardEntry
         raise ArgumentError.new("output_token_ids must not be empty") if output_token_ids.empty?
+        raise ArgumentError.new("terminal_token_id must match final output token") if terminal_token_id && terminal_token_id != output_token_ids[-1]
         tmp = nil.as(String?)
 
         full_history_len = prompt_token_ids.size + output_token_ids.size
@@ -705,6 +709,7 @@ module ML::GGUF
           artifact_token_hash: exact_entry.token_hash.not_nil!,
           artifact_next_token_id: artifact_next.not_nil!,
           created_at_unix: Time.utc.to_unix,
+          terminal_token_id: terminal_token_id,
         )
         path = output_fast_forward_path(model_id, session_id, turn_id, entry.prompt_text_hash, output_token_ids.size)
         FileUtils.mkdir_p(File.dirname(path))
@@ -778,6 +783,26 @@ module ML::GGUF
         (max_output_token_count - 1).downto(1) do |count|
           next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, turn_id: turn_id)
           return hit if hit.output_token_ids.last? == eos
+        end
+
+        nil
+      end
+
+      def lookup_terminal_output_fast_forward_at_most(model_id : String,
+                                                      session_id : String,
+                                                      prompt_text : String,
+                                                      max_output_token_count : Int32,
+                                                      turn_id : String? = nil) : OutputFastForwardEntry?
+        return nil if max_output_token_count <= 0
+
+        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, turn_id: turn_id)
+          return exact
+        end
+
+        (max_output_token_count - 1).downto(1) do |count|
+          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, turn_id: turn_id)
+          terminal = hit.terminal_token_id
+          return hit if terminal && hit.output_token_ids.last? == terminal
         end
 
         nil
@@ -963,6 +988,7 @@ module ML::GGUF
           artifact_token_hash: entry.artifact_token_hash,
           artifact_next_token_id: entry.artifact_next_token_id,
           created_at_unix: entry.created_at_unix,
+          terminal_token_id: entry.terminal_token_id,
         )
       end
 
@@ -1212,6 +1238,7 @@ module ML::GGUF
       return false unless entry.artifact_prefix_len == full_history_len - 1
       return false unless entry.artifact_token_hash == token_hash_concat(entry.prompt_token_ids, entry.output_token_ids, entry.artifact_prefix_len)
       return false unless entry.artifact_next_token_id == entry.output_token_ids[-1]
+      return false if entry.terminal_token_id && entry.terminal_token_id != entry.output_token_ids[-1]
 
       true
     end

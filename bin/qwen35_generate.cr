@@ -535,13 +535,13 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled
   cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || ML::GGUF::Qwen35PromptCache.default_root
   cache_store = ML::GGUF::Qwen35PromptCache::Store.new(cache_root)
   cache_model = cache_model_id(MODEL_PATH)
-  if output_hit = cache_store.not_nil!.lookup_output_fast_forward(cache_model, session_id, model_prompt, n_gen, turn_id: turn_id)
+  if output_hit = cache_store.not_nil!.lookup_terminal_output_fast_forward_at_most(cache_model, session_id, model_prompt, n_gen, turn_id: turn_id)
     token_cache_hit = true
     cached_prompt_ids = output_hit.prompt_token_ids
     cache_tokenizer = output_hit.tokenizer_id
     output_ids = output_hit.output_token_ids
     output_text = output_hit.generated_text
-    cache_route = ML::GGUF::Qwen35ServingRoute::DIRECT_OUTPUT
+    cache_route = output_ids.size == n_gen ? ML::GGUF::Qwen35ServingRoute::DIRECT_OUTPUT : "direct_output_terminal_short"
     source_history_lookup_ms = (Time.instant - preflight_t0).total_milliseconds
     tokenize_ms = source_history_lookup_ms
     STDOUT << "\nPrompt cache direct output fast-forward hit before tokenizer/weight load: emitted #{output_ids.size} cached tokens\n"
@@ -1910,6 +1910,7 @@ if prompt_cache_enabled && prompt_cache_source_history_enabled && cache_store
         output_token_ids: output_ids,
         generated_text: output_text.not_nil!,
         exact_entry: exact_entry,
+        terminal_token_id: output_ids.last? == tok.eos_id ? tok.eos_id : nil,
       )
     end
     source_history_save_ms = (Time.instant - source_save_t0).total_milliseconds
