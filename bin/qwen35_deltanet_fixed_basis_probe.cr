@@ -4474,6 +4474,109 @@ private def top_k_indices(v : Array(Float32), k : Int32) : Array(Int32)
   best_i
 end
 
+private def hidden_row_norm(hidden : Array(Float32), row : Int32, dim : Int32) : Float64
+  base = row * dim
+  acc = 0.0
+  dim.times do |i|
+    x = hidden[base + i].to_f64
+    acc += x * x
+  end
+  Math.sqrt(acc)
+end
+
+private def hidden_row_cosine(hidden : Array(Float32),
+                              dim : Int32,
+                              a : Int32,
+                              b : Int32,
+                              norms : Array(Float64)) : Float64
+  denom = norms[a] * norms[b]
+  return -Float64::INFINITY if denom <= 0.0
+
+  abase = a * dim
+  bbase = b * dim
+  acc = 0.0
+  dim.times { |i| acc += hidden[abase + i].to_f64 * hidden[bbase + i].to_f64 }
+  acc / denom
+end
+
+private def current_hidden_nearest_labels(hidden : Array(Float32),
+                                          labels : Array(Int32),
+                                          norms : Array(Float64),
+                                          dim : Int32,
+                                          eval_row : Int32,
+                                          train_count : Int32,
+                                          top_k : Int32) : NamedTuple(ids: Array(Int32), best_cos: Float64)
+  by_label = {} of Int32 => Float64
+  train_count.times do |j|
+    sim = hidden_row_cosine(hidden, dim, eval_row, j, norms)
+    label = labels[j]
+    prev = by_label[label]?
+    by_label[label] = sim if prev.nil? || sim > prev
+  end
+
+  ranked = by_label.to_a.sort_by { |pair| -pair[1] }
+  {
+    ids:      ranked.first(top_k).map { |pair| pair[0] },
+    best_cos: ranked.empty? ? -Float64::INFINITY : ranked[0][1],
+  }
+end
+
+private def run_current_hidden_proposal(weights : ML::GGUF::Qwen35Weights,
+                                             prompt_name : String,
+                                             token_ids : Array(Int32),
+                                             calib_count : Int32,
+                                             top_k : Int32) : NamedTuple(eval_samples: Int32, train_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, unique_train_labels: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, p50_best_cos: Float64, min_best_cos: Float64, top1_rate: Float64, topk_rate: Float64)
+  raise "current-hidden proposal top_k must be positive" unless top_k > 0
+  raise "current-hidden proposal needs at least one train and one eval token" unless calib_count > 0 && calib_count < token_ids.size
+
+  hp = weights.hparams
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: token_ids.size + 2)
+  t_collect = Time.instant
+  pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, token_ids, 0, state)
+  collect_ms = (Time.instant - t_collect).total_milliseconds
+
+  hidden = pair[:hidden]
+  labels = pair[:top1s].map { |row| row[0] }
+  rows = labels.size
+  train_count = calib_count.clamp(1, rows - 1)
+  eval_count = rows - train_count
+  raise "current-hidden proposal has no eval rows for #{prompt_name}" unless eval_count > 0
+
+  dim = hp.n_embd
+  norms = Array(Float64).new(rows) { |i| hidden_row_norm(hidden, i, dim) }
+  top1_hits = 0
+  topk_hits = 0
+  best_cosines = [] of Float64
+
+  t_probe = Time.instant
+  (train_count...rows).each do |row|
+    proposal = current_hidden_nearest_labels(hidden, labels, norms, dim, row, train_count, top_k)
+    ids = proposal[:ids]
+    target = labels[row]
+    top1_hits += 1 if ids[0]? == target
+    topk_hits += 1 if ids.includes?(target)
+    best_cosines << proposal[:best_cos]
+  end
+  proposal_ms = (Time.instant - t_probe).total_milliseconds
+
+  sorted_cos = best_cosines.sort
+  {
+    eval_samples:        eval_count,
+    train_samples:       train_count,
+    top_k:               top_k,
+    top1_hits:           top1_hits,
+    topk_hits:           topk_hits,
+    unique_train_labels: labels[0, train_count].uniq.size,
+    collect_ms:          collect_ms,
+    proposal_ms:         proposal_ms,
+    avg_best_cos:        best_cosines.sum / best_cosines.size,
+    p50_best_cos:        sorted_cos[sorted_cos.size // 2],
+    min_best_cos:        sorted_cos[0],
+    top1_rate:           100.0 * top1_hits / eval_count,
+    topk_rate:           100.0 * topk_hits / eval_count,
+  }
+end
+
 private def top1_margin(v : Array(Float32)) : Float64
   best = -Float32::INFINITY
   second = -Float32::INFINITY
@@ -11505,6 +11608,9 @@ simulate_cost_truth_chunks = [] of Int32
 simulate_cost_truth_branch_split_guards = [] of Int32
 simulate_cost_truth_updown_rank : Int32? = nil
 simulate_cost_truth_updown_layers = [] of Int32
+simulate_current_hidden_proposal = false
+simulate_current_hidden_proposal_topk = 5
+simulate_current_hidden_proposal_suite_prompts = [] of NamedPrompt
 simulate_block_surrogate_start : Int32? = nil
 simulate_block_surrogate_end : Int32? = nil
 simulate_block_surrogate_rank : Int32? = nil
@@ -11653,6 +11759,19 @@ add_self_spec_suite_prompt = ->(raw : String) {
   simulate_self_spec_gpu_pipeline_suite_prompts << {name: safe_name, text: text}
 }
 
+add_current_hidden_proposal_suite_prompt = ->(raw : String) {
+  if sep = raw.index("::")
+    name = raw[0, sep]
+    text = raw[(sep + 2)..]
+  else
+    name = "suite#{simulate_current_hidden_proposal_suite_prompts.size + 1}"
+    text = raw
+  end
+  safe_name = name.empty? ? "suite#{simulate_current_hidden_proposal_suite_prompts.size + 1}" : name.gsub(/[^A-Za-z0-9_.-]/, "_")
+  simulate_current_hidden_proposal_suite_prompts << {name: safe_name, text: text}
+  simulate_current_hidden_proposal = true
+}
+
 add_mtp_self_draft_fusion_suite_prompt = ->(raw : String) {
   if sep = raw.index("::")
     name = raw[0, sep]
@@ -11723,6 +11842,18 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-cost-truth-branch-splits=LIST", "With --simulate-cost-truth-table, also measure branch-guard verifier split shapes at 0-based guard indices; use -1 for all guards") { |v| simulate_cost_truth_branch_split_guards = parse_int_list(v) }
   p.on("--simulate-cost-truth-updown=R", "Include resident FFN pca-updown rank R in --simulate-cost-truth-table") { |v| simulate_cost_truth_updown_rank = v.to_i }
   p.on("--simulate-cost-truth-updown-layers=LIST", "Apply pca-updown cost-table rows only to the listed low-rank recurrent draft layers") { |v| simulate_cost_truth_updown_layers = parse_int_list(v) }
+  p.on("--simulate-current-hidden-proposal", "Probe a verifier-safe proposal cache: nearest current final-hidden row -> exact top1 label") { simulate_current_hidden_proposal = true }
+  p.on("--current-hidden-proposal-topk=N", "Candidate width for --simulate-current-hidden-proposal nearest-label coverage (default: 5)") { |v| simulate_current_hidden_proposal_topk = v.to_i }
+  p.on("--current-hidden-proposal-suite-prompt=NAME::TEXT", "Additional prompt for --simulate-current-hidden-proposal; main --prompt is always included") do |v|
+    add_current_hidden_proposal_suite_prompt.call(v)
+  end
+  p.on("--current-hidden-proposal-suite-prompts-file=PATH", "Read current-hidden proposal suite prompts from UTF-8 lines: NAME::TEXT or TEXT") do |path|
+    File.each_line(path) do |line|
+      raw = line.strip
+      next if raw.empty? || raw.starts_with?("#")
+      add_current_hidden_proposal_suite_prompt.call(raw)
+    end
+  end
   p.on("--simulate-block-residual-surrogate=START:END", "Probe a static low-rank residual surrogate for a contiguous layer block on exact teacher-forced trajectory") do |v|
     block = parse_layer_block(v)
     simulate_block_surrogate_start = block[:start]
@@ -11933,6 +12064,7 @@ raise "tokens must be positive" unless tokens_limit > 0
 raise "calib-tokens must be positive" unless calib_tokens > 0
 raise "ranks must not be empty" if ranks.empty?
 raise "pca-iters must be positive" unless pca_iters > 0
+raise "current-hidden proposal topK must be positive" unless simulate_current_hidden_proposal_topk > 0
 raise "FFN block size must be positive" unless simulate_ffn_block_size > 0
 raise "FFN block selector percentages must be in 1..100" if simulate_ffn_block_selector_percents.any? { |v| v < 1 || v > 100 }
 pipeline_router_trace_io = simulate_self_spec_gpu_pipeline_router_trace_path.try { |path| File.open(path, "w") }
@@ -12023,6 +12155,23 @@ puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.joi
 puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first calib_tokens; reports held-out L2 residual for normalized K vectors"
 puts basis_rank_note(bases, max_rank)
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
+
+if simulate_current_hidden_proposal
+  proposal_token_sets = [{name: main_prompt_name, token_ids: token_ids}]
+  simulate_current_hidden_proposal_suite_prompts.each do |suite_prompt|
+    proposal_token_sets << {
+      name:      suite_prompt[:name],
+      token_ids: token_ids_for_prompt(tok, suite_prompt[:text], tokens_limit),
+    }
+  end
+  proposal_token_sets.each do |item|
+    ids = item[:token_ids]
+    prompt_calib_count = Math.min(calib_tokens, ids.size - 1)
+    raise "current-hidden proposal prompt #{item[:name]} needs at least one held-out token" unless prompt_calib_count > 0 && prompt_calib_count < ids.size
+    proposal = run_current_hidden_proposal(weights, item[:name], ids, prompt_calib_count, simulate_current_hidden_proposal_topk)
+    puts "current_hidden_proposal name=#{item[:name]} token_vectors=#{ids.size} calib_tokens=#{prompt_calib_count} heldout_tokens=#{ids.size - prompt_calib_count} top_k=#{proposal[:top_k]} train=#{proposal[:train_samples]} eval=#{proposal[:eval_samples]} unique_train_labels=#{proposal[:unique_train_labels]} top1=#{proposal[:top1_rate].round(2)}% topk=#{proposal[:topk_rate].round(2)}% hits=#{proposal[:top1_hits]}/#{proposal[:topk_hits]}/#{proposal[:eval_samples]} collect_ms=#{proposal[:collect_ms].round(3)} proposal_ms=#{proposal[:proposal_ms].round(3)} proposal_ms_per_eval=#{(proposal[:proposal_ms] / proposal[:eval_samples]).round(6)} avg_best_cos=#{proposal[:avg_best_cos].round(6)} p50_best_cos=#{proposal[:p50_best_cos].round(6)} min_best_cos=#{proposal[:min_best_cos].round(6)} note=proposal_only_exact_verifier_required"
+  end
+end
 
 if simulate_dn_regime_features
   ranks.each do |rank|

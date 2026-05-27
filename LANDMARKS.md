@@ -16918,3 +16918,13 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is final-layer replacement on a repeat corridor. Legal surrogate transport preserves output under exact verification, but the lexicographic potential `(lower_body_replay, verifier_ms, ideal_overlap_speedup)` does not descend. Dual frame remains exact decode unless the proposal starts from already-owned hidden/state or eliminates lower-body replay.
 - adversary: This is one prompt and short generation. It is a route-shape refutation, not a broad quality result.
 - trust: {F:0.88,G:0.38,R:0.84}
+
+
+**LM-667 Current-hidden nearest-label proposals are corridor-specific, not a broad self-draft body replacement [shared/ml]**
+- status: VERIFIED implementation and two small Qwen3.5-9B gates; runtime route not promoted
+- change: `bin/qwen35_deltanet_fixed_basis_probe.cr` now has `--simulate-current-hidden-proposal`, `--current-hidden-proposal-topk=N`, and suite prompt flags. The probe collects exact pre-output hidden rows and exact top1 labels, then tests whether nearest training hidden rows can propose held-out exact top1 ids without replaying lower layers.
+- evidence: Guarded no-codegen build exited 0; linked Metal build `/tmp/qwen35_current_hidden_probe` exited 0. Tiny default prompt, `tokens=12`, `calib=6`, `top_k=3`, produced top1 `0/6` and top3 `1/6` with `proposal_ms=1.589`. Repeat prompt, `tokens=32`, `calib=16`, `top_k=5`, produced top1/top5 `10/16` (`62.5%`) with `proposal_ms=11.553`; a code suite prompt in the same run produced top1 `2/16` and top5 `3/16`.
+- diagnosis: Starting from already-owned final hidden is the right cost frame, but plain nearest-neighbor labels are only useful on repeat/session corridors. They are not a general replacement for neural/self-draft proposal body. The positive repeat signal should be routed like n-gram/session-cache memory; the negative varied/code signal blocks broad kernel work.
+- LTP/WBA: Window is the current exact final-hidden row already owned by prefill/decode. Transport is a bounded hidden-neighbor table carrying candidate ids, not model state. Legal move is proposal-only; exact verifier remains the boundary. Potential descends on repeat corridors `(lower_body_replay=0, proposal_ms small, accepted candidates plausible)`, but fails to descend on varied/code corridors due to low topK coverage. Dual frame is exact decode or n-gram/session-cache routing.
+- adversary: This is CPU nearest-neighbor over prompt hidden rows, not a production ANN/GPU kernel and not a decode-wall benchmark. It tests candidate availability only. Any runtime use needs a fail-closed router and exact verifier economics.
+- trust: {F:0.88,G:0.42,R:0.84}
