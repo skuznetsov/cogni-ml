@@ -696,6 +696,30 @@ private def pca_basis(vectors : Array(Array(Float64)), max_rank : Int32,
   basis
 end
 
+private def append_orthonormal_basis!(basis : Array(Array(Float64)),
+                                      candidate : Array(Float64),
+                                      eps : Float64 = 1.0e-7) : Bool
+  v = candidate.dup
+  orthogonalize!(v, basis)
+  n = norm(v)
+  return false if n <= eps
+  basis << v.map { |x| x / n }
+  true
+end
+
+private def interleaved_basis(primary : Array(Array(Float64)),
+                              secondary : Array(Array(Float64)),
+                              max_rank : Int32) : Array(Array(Float64))
+  basis = [] of Array(Float64)
+  max_size = Math.max(primary.size, secondary.size)
+  max_size.times do |i|
+    append_orthonormal_basis!(basis, primary[i]) if i < primary.size && basis.size < max_rank
+    append_orthonormal_basis!(basis, secondary[i]) if i < secondary.size && basis.size < max_rank
+    break if basis.size >= max_rank
+  end
+  basis
+end
+
 private def build_basis(vectors : Array(Array(Float64)), max_rank : Int32,
                         mode : String, pca_iters : Int32) : Array(Array(Float64))
   case mode
@@ -3266,6 +3290,36 @@ private def collect_block_residual_samples(weights : ML::GGUF::Qwen35Weights,
   samples
 end
 
+private def output_margin_impact_vectors(weights : ML::GGUF::Qwen35Weights,
+                                         token_ids : Array(Int32)) : Array(Array(Float64))
+  hp = weights.hparams
+  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: token_ids.size + 2)
+  vectors = [] of Array(Float64)
+
+  token_ids.each_with_index do |token_id, pos|
+    x = ML::GGUF::Qwen35CPU.embedding_lookup(weights.token_embd, token_id)
+    weights.layers.each_with_index do |layer, il|
+      case layer
+      in ML::GGUF::Qwen35FullAttnWeights
+        x = ML::GGUF::Qwen35CPU.forward_full_attn_layer(x, pos.to_i32, layer, state.layers[il], hp, state.max_seq)
+      in ML::GGUF::Qwen35RecurrentWeights
+        x = recurrent_layer_cpu_exact(x, layer, state.layers[il], hp)
+      end
+    end
+
+    x = ML::GGUF::Qwen35CPU.rms_norm(x, weights.output_norm, hp.rms_eps)
+    logits = ML::GGUF::Qwen35CPU.qmatvec_nobias(weights.output, x)
+    top2 = top_k_indices(logits, 2)
+    next if top2.size < 2 || top2[0] < 0 || top2[1] < 0
+
+    winner = ML::GGUF::Qwen35CPU.embedding_lookup(weights.output, top2[0])
+    runner = ML::GGUF::Qwen35CPU.embedding_lookup(weights.output, top2[1])
+    vectors << Array(Float64).new(winner.size) { |i| winner[i].to_f64 - runner[i].to_f64 }
+  end
+
+  vectors
+end
+
 private def cosine64(a : Array(Float64), b : Array(Float64)) : Float64
   dot = 0.0
   aa = 0.0
@@ -3781,7 +3835,9 @@ private def train_block_residual_surrogate(samples : Array(BlockResidualSample),
                                            block_end : Int32,
                                            rank : Int32,
                                            pca_iters : Int32,
-                                           ridge : Float64 = 1.0e-3) : BlockResidualSurrogate
+                                           ridge : Float64 = 1.0e-3,
+                                           delta_basis_mode : String = "pca",
+                                           impact_basis_seed : Array(Array(Float64))? = nil) : BlockResidualSurrogate
   raise "block surrogate rank must be positive" unless rank > 0
   raise "need block residual samples" if samples.empty?
 
@@ -3792,7 +3848,18 @@ private def train_block_residual_surrogate(samples : Array(BlockResidualSample),
   centered_inputs = centered_vectors(inputs, x_mean)
   centered_deltas = centered_vectors(deltas, delta_mean)
   input_basis = pca_basis(centered_inputs, rank, pca_iters)
-  delta_basis = pca_basis(centered_deltas, rank, pca_iters)
+  delta_pca_basis = pca_basis(centered_deltas, rank, pca_iters)
+  impact_basis = impact_basis_seed || [] of Array(Float64)
+  delta_basis = case delta_basis_mode
+                when "pca"
+                  delta_pca_basis
+                when "impact"
+                  greedy_basis(impact_basis, rank)
+                when "balanced"
+                  interleaved_basis(delta_pca_basis, greedy_basis(impact_basis, rank), rank)
+                else
+                  raise "unsupported block surrogate delta basis #{delta_basis_mode.inspect}; expected pca, impact, or balanced"
+                end
   input_rank = Math.min(rank, input_basis.size)
   delta_rank = Math.min(rank, delta_basis.size)
   raise "block surrogate needs non-empty input and delta PCA bases" unless input_rank > 0 && delta_rank > 0
@@ -6063,6 +6130,7 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
                                       gen_tokens : Int32,
                                       gammas : Array(Int32),
                                       cluster_count : Int32,
+                                      delta_basis_modes : Array(String),
                                       state_mode : String,
                                       oracle_gen_calib : Int32,
                                       tree_top_k : Int32?,
@@ -6092,17 +6160,26 @@ private def run_block_surrogate_suite(weights : ML::GGUF::Qwen35Weights,
       samples = collect_block_residual_samples(weights, sample_ids, block_start, block_end)
       collect_ms = (Time.instant - t0).total_milliseconds
       train_samples = samples[0, train_count]
+      impact_basis = if delta_basis_modes.any? { |mode| mode != "pca" }
+                       output_margin_impact_vectors(weights, sample_ids[0, train_count])
+                     else
+                       [] of Array(Float64)
+                     end
 
-      t_train = Time.instant
-      adapter = train_block_residual_surrogate(train_samples, block_start, block_end, block_rank, pca_iters)
-      train_ms = (Time.instant - t_train).total_milliseconds
-      stats = block_residual_surrogate_stats(samples, adapter, train_count)
       block_label = layer_block_label(block_start, block_end)
-      puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=global rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
-      append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
-        adapter, stats, "global", block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode,
-        tree_rows, tree_top_k, tree_warmup_tokens, tree_prefill_seed, tree_branch_verify, tree_select_advance,
-        topk_oracle_k, topk_oracle_train_tokens)
+      delta_basis_modes.each do |delta_basis_mode|
+        t_train = Time.instant
+        adapter = train_block_residual_surrogate(train_samples, block_start, block_end, block_rank, pca_iters,
+          delta_basis_mode: delta_basis_mode, impact_basis_seed: impact_basis)
+        train_ms = (Time.instant - t_train).total_milliseconds
+        stats = block_residual_surrogate_stats(samples, adapter, train_count)
+        mode_label = delta_basis_mode == "pca" ? "global" : "global_#{delta_basis_mode}"
+        puts "block_residual_surrogate_suite_static prompt=#{prompt_name} block=#{block_label} mode=#{mode_label} delta_basis=#{delta_basis_mode} impact_vectors=#{impact_basis.size} rank=#{block_rank} effective_input_rank=#{adapter.input_basis.size} effective_delta_rank=#{adapter.delta_basis.size} calib=#{prompt_calib_count} oracle_gen_calib=#{oracle_ids.size} train_samples=#{train_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)}"
+        append_block_surrogate_suite_rows(rows, weights, prompt_name, ids, block_start, block_end,
+          adapter, stats, mode_label, block_rank, 1, prompt_calib_count, gen_tokens, gammas, state_mode,
+          tree_rows, tree_top_k, tree_warmup_tokens, tree_prefill_seed, tree_branch_verify, tree_select_advance,
+          topk_oracle_k, topk_oracle_train_tokens)
+      end
 
       next unless cluster_count > 1
 
@@ -11422,6 +11499,7 @@ simulate_block_surrogate_clusters = 1
 simulate_block_surrogate_policy = false
 simulate_block_surrogate_state_mode = "skip"
 simulate_block_surrogate_error_feedback_decays = [] of Float64
+simulate_block_surrogate_delta_basis_modes = ["pca"]
 simulate_block_surrogate_self_spec_gammas = [] of Int32
 simulate_block_surrogate_suite_blocks = [] of LayerBlock
 simulate_block_surrogate_suite_prompts = [] of NamedPrompt
@@ -11641,6 +11719,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-block-surrogate-policy", "Also substitute the trained block surrogate into the full model and report logit/greedy top-k drift") { simulate_block_surrogate_policy = true }
   p.on("--block-surrogate-state-mode=MODE", "State handling for block policy: skip (cheap/stateless) or shadow (exact state update, surrogate output)") { |v| simulate_block_surrogate_state_mode = v }
   p.on("--block-surrogate-error-feedback=LIST", "Probe one-token-lag EWMA residual-error correction decays for block residual predictions, e.g. 0,0.5,0.9") { |v| simulate_block_surrogate_error_feedback_decays = parse_float_list(v) }
+  p.on("--block-surrogate-delta-basis=LIST", "Comma-separated delta bases for global block surrogate: pca,impact,balanced") { |v| simulate_block_surrogate_delta_basis_modes = v.split(',').map(&.strip).reject(&.empty?) }
   p.on("--block-surrogate-oracle-gen-calib=N", "Probe-only upper bound: add N exact generated-token block samples to training while still drafting from the original prompt boundary") { |v| simulate_block_surrogate_oracle_gen_calib = v.to_i }
   p.on("--simulate-block-surrogate-self-spec-gammas=LIST", "Run exact self-spec acceptance gate for block-surrogate draft proposals at comma-separated gammas") { |v| simulate_block_surrogate_self_spec_gammas = parse_int_list(v) }
   p.on("--simulate-block-surrogate-tree-oracle=K", "Run block-surrogate top-K tree oracle using --simulate-block-surrogate-self-spec-gammas as fixed chunk schedules") { |v| simulate_block_surrogate_tree_oracle_k = v.to_i }
@@ -11870,6 +11949,11 @@ if simulate_block_surrogate_start || simulate_block_surrogate_end
   raise "--simulate-block-residual-surrogate must set both start and end" unless simulate_block_surrogate_start && simulate_block_surrogate_end
 end
 raise "block surrogate clusters must be positive" unless simulate_block_surrogate_clusters > 0
+raise "block surrogate delta basis list must not be empty" if simulate_block_surrogate_delta_basis_modes.empty?
+valid_block_surrogate_delta_basis_modes = Set{"pca", "impact", "balanced"}
+simulate_block_surrogate_delta_basis_modes.each do |mode|
+  raise "unsupported block surrogate delta basis #{mode.inspect}; expected pca, impact, or balanced" unless valid_block_surrogate_delta_basis_modes.includes?(mode)
+end
 raise "block surrogate oracle generated calibration must be non-negative" unless simulate_block_surrogate_oracle_gen_calib >= 0
 unless {"skip", "shadow"}.includes?(simulate_block_surrogate_state_mode)
   raise "--block-surrogate-state-mode must be skip or shadow"
@@ -11978,7 +12062,8 @@ unless simulate_block_surrogate_suite_blocks.empty?
   run_block_surrogate_suite(weights, suite_token_sets, simulate_block_surrogate_suite_blocks,
     block_rank, pca_iters, calib_tokens, simulate_generate_tokens,
     simulate_block_surrogate_self_spec_gammas, simulate_block_surrogate_clusters,
-    simulate_block_surrogate_state_mode, simulate_block_surrogate_oracle_gen_calib,
+    simulate_block_surrogate_delta_basis_modes, simulate_block_surrogate_state_mode,
+    simulate_block_surrogate_oracle_gen_calib,
     simulate_block_surrogate_tree_oracle_k, simulate_block_surrogate_tree_warmup_tokens,
     simulate_block_surrogate_tree_prefill_seed, simulate_block_surrogate_tree_branch_verify,
     simulate_block_surrogate_tree_select_advance, simulate_block_surrogate_topk_oracle_k,
@@ -11994,11 +12079,14 @@ if block_start = simulate_block_surrogate_start
   block_samples = collect_block_residual_samples(weights, token_ids, block_start, block_end)
   collect_ms = (Time.instant - t0).total_milliseconds
   train_samples = block_samples[0, calib_count]
+  block_delta_basis_mode = simulate_block_surrogate_delta_basis_modes[0]
+  block_impact_basis = block_delta_basis_mode == "pca" ? [] of Array(Float64) : output_margin_impact_vectors(weights, token_ids[0, calib_count])
   t_train = Time.instant
-  block_adapter = train_block_residual_surrogate(train_samples, block_start, block_end, block_rank, pca_iters)
+  block_adapter = train_block_residual_surrogate(train_samples, block_start, block_end, block_rank, pca_iters,
+    delta_basis_mode: block_delta_basis_mode, impact_basis_seed: block_impact_basis)
   train_ms = (Time.instant - t_train).total_milliseconds
   stats = block_residual_surrogate_stats(block_samples, block_adapter, calib_count)
-  puts "block_residual_surrogate_static block=#{block_start}:#{block_end} rank=#{block_rank} effective_input_rank=#{block_adapter.input_basis.size} effective_delta_rank=#{block_adapter.delta_basis.size} calib=#{calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rmse=#{stats[:rmse].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} residual_energy=#{stats[:residual_energy].round(8)} max_delta=#{stats[:max_delta].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)} note=teacher_forced_exact_trajectory_not_state_replacement"
+  puts "block_residual_surrogate_static block=#{block_start}:#{block_end} delta_basis=#{block_delta_basis_mode} impact_vectors=#{block_impact_basis.size} rank=#{block_rank} effective_input_rank=#{block_adapter.input_basis.size} effective_delta_rank=#{block_adapter.delta_basis.size} calib=#{calib_count} heldout=#{stats[:count]} hidden_cos_mean=#{stats[:mean_cos].round(8)} hidden_cos_min=#{stats[:min_cos].round(8)} delta_cos_mean=#{stats[:mean_delta_cos].round(8)} rmse=#{stats[:rmse].round(8)} rel_rmse=#{stats[:rel_rmse].round(8)} delta_rel_rmse=#{stats[:delta_rel_rmse].round(8)} residual_energy=#{stats[:residual_energy].round(8)} max_delta=#{stats[:max_delta].round(6)} collect_ms=#{collect_ms.round(3)} train_ms=#{train_ms.round(3)} note=teacher_forced_exact_trajectory_not_state_replacement"
   simulate_block_surrogate_error_feedback_decays.each do |decay|
     fb = block_residual_error_feedback_stats(block_samples, block_adapter, calib_count, decay)
     rel_gain = stats[:rel_rmse] > 0.0 ? 100.0 * (stats[:rel_rmse] - fb[:rel_rmse]) / stats[:rel_rmse] : 0.0
