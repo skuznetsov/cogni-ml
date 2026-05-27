@@ -3072,3 +3072,10 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_594:** `/tmp/qwen35_block_delta_basis_phase_suite_20260527.tsv`, Qwen3.5-9B block `28:28`, `tokens=12/calib=6/rank4/pca_iters=2`, all rows exited 0. PCA vs impact vs balanced rel-RMSE: facts `0.192996 / 0.199228 / 0.193901`; JSON `0.220352 / 0.236611 / 0.221991`; reasoning `0.282042 / 0.301428 / 0.287830`. Earlier repeat gate `/tmp/qwen35_block_delta_basis_repeat_suite_20260527.log` also favored PCA: `0.099315 / 0.141272 / 0.106689`.
 
 **next_update_594:** Keep `--block-surrogate-delta-basis` as an analysis knob, but do not spend the next branch on impact-basis fusion. The best next falsifier is top-K/tree verification on PCA late-layer surrogates under phase gates, because the surrogate can be useful if it cheaply proposes candidate sets even when exact top1 is not stable.
+
+
+**decision_update_595:** Tested the next suggested top-K/tree gate for PCA late-layer block surrogates. On a small reasoning prompt, the surrogate already matched top1 and exact verifier accepted all proposed tokens; top-K rescue was unnecessary. The blocker remains proposal-body and verifier economics, not candidate coverage.
+
+**evidence_update_595:** `/tmp/qwen35_block_surrogate_topk_reasoning_20260527.log`, Qwen3.5-9B block `28:28`, PCA, `tokens=16/calib=8/rank4/gen4/gamma2`, exited 0. Self-spec accepted `4/4`, parity true, tree oracle `top1_hits=4`, `topk_hits=4`, `misses=0`. Timing lost to plain: `baseline_decode_ms=2074.22`, `draft_ms=2692.75`, `verifier_ms=2083.991`, `ideal_overlap_decode_ms=2713.936`, `ideal_overlap_speedup=0.7643x`.
+
+**next_update_595:** Do not add a top-K rescue layer before reducing body cost. Next plausible exact-speed branch is either a GPU/fused late-layer surrogate body with measured lower `draft_ms`, or a runtime lower-bound gate that enters only when measured/estimated `draft_body + verifier` is below paired exact.
