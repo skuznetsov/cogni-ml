@@ -762,6 +762,27 @@ module ML::GGUF
         clone_output_fast_forward_entry(entry)
       end
 
+      def lookup_output_fast_forward_at_most(model_id : String,
+                                             session_id : String,
+                                             prompt_text : String,
+                                             max_output_token_count : Int32,
+                                             terminal_token_id : Int32? = nil,
+                                             turn_id : String? = nil) : OutputFastForwardEntry?
+        return nil if max_output_token_count <= 0
+
+        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, turn_id: turn_id)
+          return exact
+        end
+        return nil unless eos = terminal_token_id
+
+        (max_output_token_count - 1).downto(1) do |count|
+          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, turn_id: turn_id)
+          return hit if hit.output_token_ids.last? == eos
+        end
+
+        nil
+      end
+
       private def append_manifest(entry : Entry) : Nil
         FileUtils.mkdir_p(@root)
         File.open(@manifest_path, "a") do |file|

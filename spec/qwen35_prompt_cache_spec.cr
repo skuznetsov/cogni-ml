@@ -323,6 +323,91 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "finds shorter terminal direct output certificates with an EOS guard" do
+    root = File.tempname("qwen35-output-fast-forward-at-most")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      prompt_ids = [10_i32, 20_i32]
+      terminal_output = [30_i32, 40_i32, 50_i32]
+      nonterminal_output = [31_i32, 41_i32]
+      terminal_history = prompt_ids + terminal_output
+      nonterminal_history = prompt_ids + nonterminal_output
+      terminal_entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+        session_id: "s1",
+        turn_id: nil,
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_hash: "unused",
+        prefix_len: terminal_history.size - 1,
+        max_seq: 16,
+        layer_count: 1,
+        artifact_path: "terminal.qkv",
+        artifact_sha256: "0" * 64,
+        artifact_byte_size: 0_i64,
+        state_byte_size: 0_i64,
+        created_at_unix: Time.utc.to_unix,
+        prompt_preview: nil,
+        token_hash: ML::GGUF::Qwen35PromptCache.token_hash(terminal_history, terminal_history.size - 1),
+        artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+        artifact_validation_steps: terminal_output.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(terminal_history),
+        next_token_id: terminal_output[-1],
+      )
+      nonterminal_entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+        session_id: "s1",
+        turn_id: nil,
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_hash: "unused",
+        prefix_len: nonterminal_history.size - 1,
+        max_seq: 16,
+        layer_count: 1,
+        artifact_path: "nonterminal.qkv",
+        artifact_sha256: "0" * 64,
+        artifact_byte_size: 0_i64,
+        state_byte_size: 0_i64,
+        created_at_unix: Time.utc.to_unix,
+        prompt_preview: nil,
+        token_hash: ML::GGUF::Qwen35PromptCache.token_hash(nonterminal_history, nonterminal_history.size - 1),
+        artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+        artifact_validation_steps: nonterminal_output.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(nonterminal_history),
+        next_token_id: nonterminal_output[-1],
+      )
+
+      store.save_output_fast_forward(
+        session_id: "s1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text: "terminal prompt",
+        prompt_token_ids: prompt_ids,
+        output_token_ids: terminal_output,
+        generated_text: " terminal",
+        exact_entry: terminal_entry,
+      )
+      store.save_output_fast_forward(
+        session_id: "s1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text: "nonterminal prompt",
+        prompt_token_ids: prompt_ids,
+        output_token_ids: nonterminal_output,
+        generated_text: " nonterminal",
+        exact_entry: nonterminal_entry,
+      )
+
+      store.lookup_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5, terminal_token_id: 50_i32).try(&.output_token_ids).should eq(terminal_output)
+      store.lookup_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5).should be_nil
+      store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 5, terminal_token_id: 50_i32).should be_nil
+      store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 2, terminal_token_id: 50_i32).try(&.output_token_ids).should eq(nonterminal_output)
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "generates pg_sorted_heap metadata SQL without accepting unsafe identifiers" do
     sql = ML::GGUF::Qwen35PromptCache.pg_sorted_heap_schema_sql
     sql.should contain("CREATE EXTENSION IF NOT EXISTS pg_sorted_heap")

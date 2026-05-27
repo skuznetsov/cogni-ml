@@ -16605,3 +16605,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is partial cached span restore. BF16 transport legally lowers `(restore_ms)` under parity checks, but recomputed potential remains dominated by `(remaining_decode_ms)`. Active cursor is the better Spike for resident sessions because it cancels restore work. Dual frame remains raw exact restore when BF16 parity or policy confidence is insufficient.
 - adversary: This is local 9B, short `gen=16`, and one cached coverage ratio (`8/16`). It supports route priority and BF16 opt-in for cold continuation, not universal default promotion.
 - trust: {F:0.88,G:0.62,R:0.84}
+
+**LM-633 EOS-guarded at-most direct-output lookup closes early-terminal cache gaps [shared/ml]**
+- status: VERIFIED cache API extension
+- change: Added `Qwen35PromptCache::Store#lookup_output_fast_forward_at_most`. It first tries the exact requested output count, then optionally searches shorter certificates only when `terminal_token_id` is supplied and the cached output ends with that token.
+- evidence: Guarded no-codegen build of `bin/qwen35_generate.cr` passed. Targeted prompt-cache spec passed with Metal link flags: `../crystal_v2_repo/scripts/run_safe.sh crystal 240 16000 spec spec/qwen35_prompt_cache_spec.cr:326 --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `1 examples, 0 failures`.
+- diagnosis: Direct-output certificates were keyed by exact output count, so an early-EOS cached response could miss when a later request used a larger budget. The safe local fix is not arbitrary at-most reuse; it is terminal-token-certified at-most reuse.
+- LTP/WBA: Window is a validated direct-output certificate for the same prompt/session/model with shorter output count. Legal Spike is direct emission only if the shorter span is terminal; otherwise the boundary would invalidate the caller's larger generation budget. Potential descends in `(source_history_lookup, verifier_or_restore_work, route_tax)` while preserving exact-output semantics.
+- adversary: The API requires callers to pass a correct terminal token id. Callers without tokenizer context should continue exact-count lookup. Broad product speed depends on how often early-terminal cache hits occur.
+- trust: {F:0.90,G:0.66,R:0.86}
