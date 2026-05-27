@@ -1,9 +1,10 @@
 #!/usr/bin/env crystal
 
-# Offline proposal-source router oracle for speculative cycle JSONL dumps.
+# Offline proposal-source router oracle for speculative cycle JSONL dumps and
+# MTP wall-router traces.
 #
 # This intentionally does not change runtime policy. It summarizes measured
-# cycle economics and asks which proposal source would be selected per prompt
+# corridor economics and asks which proposal source would be selected per prompt
 # category if the router were allowed to fail closed to direct exact decode.
 
 require "json"
@@ -25,20 +26,32 @@ class SourceStats
   def add(rec : JSON::Any)
     proposed_count = json_i(rec, "proposed_count")
     accepted_count = json_i(rec, "accepted_count")
+    add_values(
+      generated_count: json_i(rec, "generated_count"),
+      proposed_count: proposed_count,
+      accepted_count: accepted_count,
+      rejected: json_i(rec, "reject_index") >= 0,
+      gain_ms: json_f(rec, "expected_gain_ms"),
+      wall_ms: json_f(rec, "wall_ms"),
+      draft_ms: json_f(rec, "draft_ms"),
+      verify_ms: json_f(rec, "target_verify_ms"),
+      prompt_key: rec["prompt_hash"]?.try(&.as_s?))
+  end
 
+  def add_values(*, generated_count : Int32, proposed_count : Int32, accepted_count : Int32,
+                 rejected : Bool, gain_ms : Float64, wall_ms : Float64,
+                 draft_ms : Float64, verify_ms : Float64, prompt_key : String?)
     @cycles += 1
     @proposal_cycles += 1 if proposed_count > 0
-    @generated += json_i(rec, "generated_count")
+    @generated += generated_count
     @proposed += proposed_count
     @accepted += accepted_count
-    @rejects += 1 if json_i(rec, "reject_index") >= 0
-    @gain_ms += json_f(rec, "expected_gain_ms")
-    @wall_ms += json_f(rec, "wall_ms")
-    @draft_ms += json_f(rec, "draft_ms")
-    @verify_ms += json_f(rec, "target_verify_ms")
-    if prompt_hash = rec["prompt_hash"]?.try(&.as_s?)
-      @prompt_hashes << prompt_hash
-    end
+    @rejects += 1 if rejected
+    @gain_ms += gain_ms
+    @wall_ms += wall_ms
+    @draft_ms += draft_ms
+    @verify_ms += verify_ms
+    @prompt_hashes << prompt_key if prompt_key
   end
 
   def accept_rate : Float64
@@ -85,6 +98,7 @@ paths = [] of String
 min_cycles = 1
 min_gain_ms = 0.0
 include_target_only = false
+mtp_wall_records = 0
 
 OptionParser.parse do |p|
   p.banner = "Usage: qwen35_proposal_router_oracle [PATH ...] [--min-cycles N] [--min-gain-ms X] [--include-target-only]"
@@ -127,6 +141,44 @@ files.sort.each do |path|
     next if line.empty?
 
     rec = JSON.parse(line)
+    if rec["kind"]?.try(&.as_s?) == "mtp_wall_router_pass"
+      mtp_wall_records += 1
+      category = rec["label"]?.try(&.as_s?) || "unknown"
+      source = "mtp/mtp_wall"
+      wall_ms = json_f(rec, "wall_after_ms") - json_f(rec, "wall_before_ms")
+      plain_suffix_ms = json_f(rec, "plain_suffix_ms")
+      generated_count = Math.max(0, json_i(rec, "end_i") - json_i(rec, "start_i"))
+      accepted_count = json_i(rec, "accepted_delta")
+      fallback_count = json_i(rec, "fallback_delta")
+      mtp_controlled_count = Math.max(0, generated_count - fallback_count)
+      proposed_count = Math.max(accepted_count + json_i(rec, "rejections_delta"), mtp_controlled_count)
+      rejected = json_i(rec, "rejections_delta") > 0 || fallback_count > 0
+      prompt_key = "#{category}:#{json_i(rec, "gamma")}"
+
+      categories << category
+      stats[{category, source}].add_values(
+        generated_count: generated_count,
+        proposed_count: proposed_count,
+        accepted_count: accepted_count,
+        rejected: rejected,
+        gain_ms: plain_suffix_ms - wall_ms,
+        wall_ms: wall_ms,
+        draft_ms: json_f(rec, "mtp_delta_ms"),
+        verify_ms: json_f(rec, "verifier_delta_ms"),
+        prompt_key: prompt_key)
+      global[source].add_values(
+        generated_count: generated_count,
+        proposed_count: proposed_count,
+        accepted_count: accepted_count,
+        rejected: rejected,
+        gain_ms: plain_suffix_ms - wall_ms,
+        wall_ms: wall_ms,
+        draft_ms: json_f(rec, "mtp_delta_ms"),
+        verify_ms: json_f(rec, "verifier_delta_ms"),
+        prompt_key: prompt_key)
+      next
+    end
+
     category = category_key(rec)
     source = source_key(rec)
     next if !include_target_only && source.includes?("target_only")
@@ -139,7 +191,8 @@ files.sort.each do |path|
 end
 
 puts "Qwen35 proposal router oracle"
-puts "files=#{files.size} min_cycles=#{min_cycles} min_gain_ms=#{min_gain_ms} include_target_only=#{include_target_only}"
+puts "files=#{files.size} min_cycles=#{min_cycles} min_gain_ms=#{min_gain_ms} include_target_only=#{include_target_only} mtp_wall_records=#{mtp_wall_records}"
+puts "note: mtp_wall gain uses per-pass plain_suffix_ms - pass_wall_ms, and prop/acc counts are pass-local lower bounds; use qwen36_mtp_wall_trace_score for whole-route entry oracles" if mtp_wall_records > 0
 puts
 puts "Source economics"
 printf "%-36s %7s %7s %8s %8s %8s %9s %9s %9s %8s\n",
