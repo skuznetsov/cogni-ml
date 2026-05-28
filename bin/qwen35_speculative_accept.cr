@@ -78,6 +78,10 @@ current_hidden_trace_topk = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_TOPK"]? || "8").to_
 current_hidden_tree = ENV["QWEN35_SPEC_CURRENT_HIDDEN_TREE"]? == "1"
 current_hidden_tree_depth = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_TREE_DEPTH"]? || "4").to_i
 current_hidden_tree_width = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_TREE_WIDTH"]? || current_hidden_trace_topk.to_s).to_i
+current_hidden_ctx = ENV["QWEN35_SPEC_CURRENT_HIDDEN_CTX"]? == "1"
+current_hidden_ctx_seed = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_CTX_SEED"]? || "2").to_i
+current_hidden_ctx_depth = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_CTX_DEPTH"]? || "8").to_i
+current_hidden_ctx_width = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_CTX_WIDTH"]? || current_hidden_trace_topk.to_s).to_i
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
@@ -133,10 +137,14 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-trusted-source", "Bypass untrusted candidate-shape gates for source cursor proposals after prefix validation") { ngram_trusted_source = true }
   parser.on("--ngram-no-source-prefix-gate", "Disable prompt-prefix validation before source cursor replay") { ngram_source_prefix_gate = false }
   parser.on("--current-hidden-trace", "Trace-only: score prompt hidden-table replay against exact generated tokens without changing policy") { current_hidden_trace = true }
-  parser.on("--current-hidden-topk N", "Candidate width for current-hidden trace/tree routes (default: env QWEN35_SPEC_CURRENT_HIDDEN_TOPK or 8)") { |value| current_hidden_trace_topk = value.to_i; current_hidden_tree_width = value.to_i }
+  parser.on("--current-hidden-topk N", "Candidate width for current-hidden trace/tree/ctx routes (default: env QWEN35_SPEC_CURRENT_HIDDEN_TOPK or 8)") { |value| current_hidden_trace_topk = value.to_i; current_hidden_tree_width = value.to_i; current_hidden_ctx_width = value.to_i }
   parser.on("--current-hidden-tree", "Research: exact-first current-hidden topK beam verifier route") { current_hidden_tree = true }
   parser.on("--current-hidden-tree-depth N", "Chunk depth for --current-hidden-tree (default: env QWEN35_SPEC_CURRENT_HIDDEN_TREE_DEPTH or 4)") { |value| current_hidden_tree_depth = value.to_i }
   parser.on("--current-hidden-tree-width N", "Beam width/topK for --current-hidden-tree (default: --current-hidden-topk)") { |value| current_hidden_tree_width = value.to_i }
+  parser.on("--current-hidden-ctx", "Research: seed exact tokens, then verify one context-selected current-hidden path") { current_hidden_ctx = true }
+  parser.on("--current-hidden-ctx-seed N", "Exact seed tokens before --current-hidden-ctx proposals (default: env QWEN35_SPEC_CURRENT_HIDDEN_CTX_SEED or 2)") { |value| current_hidden_ctx_seed = value.to_i }
+  parser.on("--current-hidden-ctx-depth N", "Maximum context-selected proposal length for --current-hidden-ctx (default: env QWEN35_SPEC_CURRENT_HIDDEN_CTX_DEPTH or 8)") { |value| current_hidden_ctx_depth = value.to_i }
+  parser.on("--current-hidden-ctx-width N", "TopK candidate width for --current-hidden-ctx selector (default: --current-hidden-topk)") { |value| current_hidden_ctx_width = value.to_i }
   parser.on("--no-warm-verifier", "Do not warm the target chunk-verifier route before decode timing") { warm_verifier = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
@@ -188,6 +196,9 @@ raise ArgumentError.new("router model not found: #{router_model_path}") if route
 raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_TOPK must be positive") unless current_hidden_trace_topk > 0
 raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_TREE_DEPTH must be positive") unless current_hidden_tree_depth > 0
 raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_TREE_WIDTH must be positive") unless current_hidden_tree_width > 0
+raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_CTX_SEED must be positive") unless current_hidden_ctx_seed > 0
+raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_CTX_DEPTH must be positive") unless current_hidden_ctx_depth > 0
+raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_CTX_WIDTH must be positive") unless current_hidden_ctx_width > 0
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -1096,7 +1107,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk} current_hidden_tree=#{current_hidden_tree} current_hidden_tree_depth=#{current_hidden_tree_depth} current_hidden_tree_width=#{current_hidden_tree_width}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk} current_hidden_tree=#{current_hidden_tree} current_hidden_tree_depth=#{current_hidden_tree_depth} current_hidden_tree_width=#{current_hidden_tree_width} current_hidden_ctx=#{current_hidden_ctx} current_hidden_ctx_seed=#{current_hidden_ctx_seed} current_hidden_ctx_depth=#{current_hidden_ctx_depth} current_hidden_ctx_width=#{current_hidden_ctx_width}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -1118,7 +1129,7 @@ current_hidden_tree_labels = [] of Int32
 current_hidden_tree_norms = [] of Float64
 current_hidden_tree_dim = target.hparams.n_embd
 current_hidden_tree_train_count = prompt_ids.size
-if current_hidden_tree
+if current_hidden_tree || current_hidden_ctx
   prep0 = Time.instant
   prep_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: prompt_ids.size + n_gen + 8)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(prep_state, target.hparams) if prepare_state_metal
@@ -1204,6 +1215,15 @@ current_hidden_tree_rejects = 0
 current_hidden_tree_fallback_tokens = 0
 current_hidden_tree_fork_ms = 0.0
 current_hidden_tree_commit_ms = 0.0
+current_hidden_ctx_seeded_tokens = 0
+current_hidden_ctx_cursor = current_hidden_tree_train_count - 1
+current_hidden_ctx_cycles = 0
+current_hidden_ctx_proposed = 0
+current_hidden_ctx_accepted = 0
+current_hidden_ctx_rejects = 0
+current_hidden_ctx_fallback_tokens = 0
+current_hidden_ctx_select_ms = 0.0
+current_hidden_ctx_commit_ms = 0.0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
@@ -1214,6 +1234,200 @@ while generated_ids.size < n_gen
   cycle_candidate_features = nil.as(Hash(String, Float64)?)
   ngram_pending_replay_cursor = nil.as(Int32?)
   ngram_from_trusted_source = false
+
+  if current_hidden_ctx
+    cycle_wall0 = Time.instant
+    cycle_start_pos = pos
+    cycle_target_verify0 = target_verify_ms
+    cycle_target_backup0 = target_backup_ms
+    cycle_commit0 = commit_ms
+    cycle_select0 = current_hidden_ctx_select_ms
+    cycle_ctx_proposed0 = current_hidden_ctx_proposed
+    cycle_ctx_accepted0 = current_hidden_ctx_accepted
+    cycle_ctx_reject0 = current_hidden_ctx_rejects
+    cycle_ctx_fallback0 = current_hidden_ctx_fallback_tokens
+    path_ids = [] of Int32
+    path_rows = [] of Int32
+    accepted_prefix = 0
+    rejected_path = false
+
+    if current_hidden_ctx_seeded_tokens < current_hidden_ctx_seed
+      generated_ids << target_next
+      if generated_ids.size < n_gen
+        tv0 = Time.instant
+        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        current_hidden_tree_hidden.concat(hidden)
+        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+        current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
+      end
+      pos += 1
+      current_hidden_ctx_seeded_tokens += 1
+      current_hidden_ctx_fallback_tokens += 1
+      commit0 = Time.instant
+      new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+      history.concat(new_history)
+      ngram_history.try &.append(new_history)
+      commit_ms += (Time.instant - commit0).total_milliseconds
+      next
+    end
+
+    remaining = n_gen - generated_ids.size
+    depth = Math.min(current_hidden_ctx_depth, remaining)
+    select0 = Time.instant
+    cursor = current_hidden_ctx_cursor
+    emitted_for_select = generated_ids.dup
+    best_suffix_row = -1
+    best_suffix_overlap = 0
+    current_hidden_tree_train_count.times do |row|
+      overlap = token_suffix_overlap_at_prompt_row(prompt_ids, emitted_for_select, row)
+      if overlap > best_suffix_overlap || (overlap == best_suffix_overlap && row > best_suffix_row)
+        best_suffix_overlap = overlap
+        best_suffix_row = row
+      end
+    end
+
+    if best_suffix_row >= 0 && best_suffix_overlap >= current_hidden_ctx_seed
+      direct_len = Math.min(depth, current_hidden_tree_train_count - best_suffix_row)
+      direct_len.times do |i|
+        row = best_suffix_row + i
+        path_ids << current_hidden_tree_labels[row]
+        path_rows << row
+      end
+    else
+      candidates = current_hidden_chain_candidate_rows(
+        current_hidden_tree_hidden,
+        current_hidden_tree_labels,
+        current_hidden_tree_norms,
+        current_hidden_tree_dim,
+        cursor,
+        current_hidden_tree_train_count,
+        depth > 1,
+        current_hidden_ctx_width)
+      chosen = choose_current_hidden_context_candidate(prompt_ids, emitted_for_select, candidates)
+      if chosen
+        corridor_len = Math.min(depth, current_hidden_tree_train_count - chosen[:row])
+        corridor_len.times do |i|
+          row = chosen[:row] + i
+          path_ids << current_hidden_tree_labels[row]
+          path_rows << row
+        end
+      end
+    end
+    elapsed_select = (Time.instant - select0).total_milliseconds
+    current_hidden_ctx_select_ms += elapsed_select
+    proposal_ms += elapsed_select
+    current_hidden_ctx_cycles += 1
+    current_hidden_ctx_proposed += path_ids.size
+
+    if path_ids.empty?
+      generated_ids << target_next
+      if generated_ids.size < n_gen
+        tv0 = Time.instant
+        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        current_hidden_tree_hidden.concat(hidden)
+        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+        current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
+      end
+      pos += 1
+      current_hidden_ctx_fallback_tokens += 1
+    else
+      tb0 = Time.instant
+      target_backup_state.copy_from!(target_state)
+      target_backup_ms += (Time.instant - tb0).total_milliseconds
+
+      tv0 = Time.instant
+      target_nexts = target_prefill_top1s_for_future(target, path_ids, pos, target_state, allow_guarded_verifier, generated_ids.size, n_gen)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+
+      expected = target_next
+      path_ids.each_with_index do |cand, i|
+        break if generated_ids.size + accepted_prefix >= n_gen
+        break unless cand == expected
+        accepted_prefix += 1
+        expected = target_nexts[i][0] if i < target_nexts.size
+      end
+
+      if accepted_prefix == path_ids.size
+        accepted_ids = path_ids
+        generated_ids.concat(accepted_ids)
+        current_hidden_ctx_accepted += accepted_prefix
+        current_hidden_ctx_cursor = path_rows[accepted_prefix - 1] + 1 < current_hidden_tree_train_count ? path_rows[accepted_prefix - 1] + 1 : path_rows[accepted_prefix - 1] if accepted_prefix > 0
+        target_next = expected if generated_ids.size < n_gen
+        pos += accepted_prefix
+      elsif accepted_prefix > 0
+        rejected_path = true
+        current_hidden_ctx_rejects += 1
+        current_hidden_ctx_accepted += accepted_prefix
+        accepted_ids = path_ids[0, accepted_prefix]
+        target_state.copy_from!(target_backup_state)
+        generated_ids.concat(accepted_ids)
+        if generated_ids.size < n_gen
+          commit_ctx0 = Time.instant
+          replay = target_prefill_top1s_for_future(target, accepted_ids, cycle_start_pos, target_state, allow_guarded_verifier, generated_ids.size - accepted_ids.size, n_gen)
+          target_next = replay[-1][0] unless replay.empty?
+          current_hidden_ctx_commit_ms += (Time.instant - commit_ctx0).total_milliseconds
+        end
+        current_hidden_ctx_cursor = path_rows[accepted_prefix - 1] + 1 < current_hidden_tree_train_count ? path_rows[accepted_prefix - 1] + 1 : path_rows[accepted_prefix - 1]
+        pos += accepted_prefix
+      else
+        rejected_path = true
+        current_hidden_ctx_rejects += 1
+        target_state.copy_from!(target_backup_state)
+        generated_ids << target_next
+        if generated_ids.size < n_gen
+          tv1 = Time.instant
+          hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+          target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+          target_verify_ms += (Time.instant - tv1).total_milliseconds
+          current_hidden_tree_hidden.concat(hidden)
+          current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+          current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
+        end
+        pos += 1
+        current_hidden_ctx_fallback_tokens += 1
+      end
+    end
+
+    commit0 = Time.instant
+    new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+    history.concat(new_history)
+    ngram_history.try &.append(new_history)
+    commit_ms += (Time.instant - commit0).total_milliseconds
+    if dump_cycles_path
+      record = CycleDump.new(
+        prompt_hash, target_model_id, draft_model_id,
+        "current_hidden_ctx", "current_hidden_ctx", verify_mode,
+        cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
+        current_hidden_ctx_width, current_hidden_ctx_proposed - cycle_ctx_proposed0, current_hidden_ctx_accepted - cycle_ctx_accepted0, rejected_path ? accepted_prefix : -1,
+        0, ngram_min, ngram_max, ngram_recursive,
+        false, false,
+        token_ids_hash(path_ids), dump_cycle_token_ids ? path_ids : nil,
+        0.0,
+        target_verify_ms - cycle_target_verify0,
+        target_backup_ms - cycle_target_backup0,
+        0.0,
+        0.0,
+        (Time.instant - cycle_wall0).total_milliseconds)
+      record.proposal_ms = current_hidden_ctx_select_ms - cycle_select0
+      record.commit_ms = commit_ms - cycle_commit0
+      record.prompt_category = prompt_category
+      record.candidate_features = {
+        "ctx_seed" => current_hidden_ctx_seed.to_f64,
+        "ctx_depth" => depth.to_f64,
+        "ctx_width" => current_hidden_ctx_width.to_f64,
+        "ctx_path_len" => path_ids.size.to_f64,
+        "ctx_accepted" => accepted_prefix.to_f64,
+        "ctx_rejects" => (current_hidden_ctx_rejects - cycle_ctx_reject0).to_f64,
+        "ctx_fallback_tokens" => (current_hidden_ctx_fallback_tokens - cycle_ctx_fallback0).to_f64,
+      }
+      cycle_dumps << record
+    end
+    next
+  end
 
   if current_hidden_tree
     cycle_wall0 = Time.instant
@@ -2158,6 +2372,10 @@ if trace_result = current_hidden_trace_result
 end
 if current_hidden_tree
   puts "current_hidden_tree_stats prepare_ms=#{current_hidden_tree_prepare_ms.round(3)} cycles=#{current_hidden_tree_cycles} proposed=#{current_hidden_tree_proposed} accepted=#{current_hidden_tree_accepted} rejects=#{current_hidden_tree_rejects} fallback_tokens=#{current_hidden_tree_fallback_tokens} fork_ms=#{current_hidden_tree_fork_ms.round(3)} commit_ms=#{current_hidden_tree_commit_ms.round(3)} depth=#{current_hidden_tree_depth} width=#{current_hidden_tree_width} note=prepare_excluded_like_prefill"
+end
+if current_hidden_ctx
+  ctx_rate = current_hidden_ctx_proposed > 0 ? (current_hidden_ctx_accepted.to_f64 * 100.0 / current_hidden_ctx_proposed.to_f64) : 0.0
+  puts "current_hidden_ctx_stats prepare_ms=#{current_hidden_tree_prepare_ms.round(3)} cycles=#{current_hidden_ctx_cycles} proposed=#{current_hidden_ctx_proposed} accepted=#{current_hidden_ctx_accepted} rate=#{ctx_rate.round(2)}% rejects=#{current_hidden_ctx_rejects} fallback_tokens=#{current_hidden_ctx_fallback_tokens} select_ms=#{current_hidden_ctx_select_ms.round(3)} commit_ms=#{current_hidden_ctx_commit_ms.round(3)} seed=#{current_hidden_ctx_seed} depth=#{current_hidden_ctx_depth} width=#{current_hidden_ctx_width} note=prepare_excluded_like_prefill"
 end
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms target_replay=#{target_replay_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
