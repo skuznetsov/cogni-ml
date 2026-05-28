@@ -17,6 +17,7 @@ from typing import Dict, Iterable, Tuple
 PAIR_SUFFIXES = ("_closed", "_memory", "_mem")
 NAME_RE = re.compile(r"\bname=([^\s]+)")
 RANK_RE = re.compile(r"\brank=([^\s]+)")
+LAYERS_RE = re.compile(r"\blayers=([^\s]+)")
 ROW_TYPES = {
     "lowrank_eval_logit": "logit",
     "lowrank_eval_greedy": "greedy",
@@ -96,10 +97,12 @@ def load_rows(paths: Iterable[Path]):
                     continue
                 rank_m = RANK_RE.search(line)
                 rank = rank_m.group(1) if rank_m else "na"
+                layers_m = LAYERS_RE.search(line)
+                layers = layers_m.group(1) if layers_m else "na"
                 base, side = pair
                 metrics = parse_metrics(line)
                 if metrics:
-                    rows[(base, kind, rank)][side] = metrics
+                    rows[(base, kind, rank, layers)][side] = metrics
     return rows
 
 
@@ -129,17 +132,17 @@ def main() -> int:
         print("No paired rows found. Expected names like task_closed and task_memory.")
         return 1
 
-    header = ["pair", "row", "rank"]
+    header = ["pair", "row", "rank", "layers"]
     for metric in metrics:
         header.extend([f"closed_{metric}", f"memory_{metric}", f"delta_{metric}"])
     print("\t".join(header))
 
-    for (base, kind, rank), sides in sorted(rows.items()):
+    for (base, kind, rank, layers), sides in sorted(rows.items()):
         closed = sides.get("closed", {})
         memory = sides.get("memory", {})
         if not closed or not memory:
             continue
-        line = [base, kind, rank]
+        line = [base, kind, rank, layers]
         for metric in metrics:
             c = closed.get(metric)
             m = memory.get(metric)

@@ -208,3 +208,61 @@ Next gate: run more layers/ranks and a true self-spec acceptance row, but only i
 smaller slices or with prompt subsets. A prior six-layer `gen=4` all-pair run was
 stopped after several minutes because it exceeded the intended interactive probe
 budget before printing rows.
+
+## Follow-Up Scan: 2026-05-28
+
+A second bounded scan used `tokens=48`, `calib-tokens=24`, PCA rank `16/24`,
+and compared layer `24` against the band `24,25,26,28,29,30`.
+
+Feature scan root:
+
+```text
+/tmp/qwen_memory_pair_scan_20260528193743
+```
+
+The summarizer was updated to keep `layers` in the grouping key, because the
+first version collapsed rows with the same prompt/rank across different layer
+bands.
+
+Residual result, where negative delta means the memory-grounded prompt had lower
+residual:
+
+```text
+code_crystal rank16 layer24:        delta_mean -0.0145
+code_crystal rank24 layer24:        delta_mean -0.0103
+code_crystal rank16 band24..30:     delta_mean -0.0023
+code_crystal rank24 band24..30:     delta_mean +0.0011
+science_turing all tested shapes:   delta_mean +0.0159 .. +0.0218
+literature_hamlet all tested shapes: delta_mean +0.0169 .. +0.0292
+```
+
+Logit confirmation for rank24/layer24:
+
+```text
+/tmp/qwen_memory_pair_logit_rank24_layer24_20260528194213.log
+```
+
+All three pairs kept top1/top5 at `100%/100%` at rank24/layer24. The memory
+prompts still had worse residual geometry for science and literature, but that
+worse proxy did not flip top1 in this short teacher-forced gate.
+
+Code-only true self-spec smoke:
+
+```text
+/tmp/qwen_memory_pair_selfspec_code_20260528194342
+```
+
+Both code prompts passed `gen=4`, `gamma=4`, rank24/layer24 with `100%`
+acceptance and parity. The memory prompt had a much lower draft margin
+(`0.1607` versus `5.9533`), so memory-grounded evidence improved some residual
+metrics but also moved this example closer to a low-margin risk boundary.
+
+Updated interpretation:
+
+- The first plausible speed lane is code/tool/evidence, not arbitrary factual or
+  literary memory grounding.
+- Evidence type should become a router feature.
+- Rank/layer-band geometry, top1 parity, and draft margin can disagree; no single
+  proxy should promote a route.
+- The next self-spec gate should use larger `gen` on the code pair and add a
+  science/literature control only after a route selector exists.
