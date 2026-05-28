@@ -365,6 +365,20 @@ def hidden_vector_norm_spec(v : Array(Float32)) : Float64
   Math.sqrt(acc)
 end
 
+def current_hidden_prepare_prompt_table(weights : ML::GGUF::Qwen35Weights,
+                                        prompt_ids : Array(Int32),
+                                        prepare_state_metal : Bool) : NamedTuple(hidden: Array(Float32), labels: Array(Int32), norms: Array(Float64), ms: Float64)
+  prep0 = Time.instant
+  prep_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: prompt_ids.size + 8)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(prep_state, weights.hparams) if prepare_state_metal
+  pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, prompt_ids, 0, prep_state)
+  hidden = pair[:hidden]
+  labels = pair[:top1s].map { |row| row[0] }
+  dim = weights.hparams.n_embd
+  norms = Array(Float64).new(labels.size) { |row| hidden_row_norm_spec(hidden, row, dim) }
+  {hidden: hidden, labels: labels, norms: norms, ms: (Time.instant - prep0).total_milliseconds}
+end
+
 def current_hidden_trace_topk_for_row(hidden : Array(Float32),
                                       labels : Array(Int32),
                                       norms : Array(Float64),
@@ -1129,15 +1143,29 @@ current_hidden_tree_labels = [] of Int32
 current_hidden_tree_norms = [] of Float64
 current_hidden_tree_dim = target.hparams.n_embd
 current_hidden_tree_train_count = prompt_ids.size
-if current_hidden_tree || current_hidden_ctx
-  prep0 = Time.instant
-  prep_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: prompt_ids.size + n_gen + 8)
-  ML::GGUF::Qwen35CPU.prepare_state_metal!(prep_state, target.hparams) if prepare_state_metal
-  pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(target, prompt_ids, 0, prep_state)
-  current_hidden_tree_hidden = pair[:hidden]
-  current_hidden_tree_labels = pair[:top1s].map { |row| row[0] }
-  current_hidden_tree_norms = Array(Float64).new(current_hidden_tree_labels.size) { |row| hidden_row_norm_spec(current_hidden_tree_hidden, row, current_hidden_tree_dim) }
-  current_hidden_tree_prepare_ms = (Time.instant - prep0).total_milliseconds
+current_hidden_ctx_lazy_prepare_ms = 0.0
+current_hidden_ctx_lazy_prepares = 0
+current_hidden_ctx_route_possible = current_hidden_ctx && !target_only && !(ngram_enabled && ngram_target_only)
+current_hidden_ctx_initial_ngram_full_cover = false
+if current_hidden_ctx_route_possible && ngram_enabled &&
+   !ngram_risk_gate && !ngram_corridor_gate && router_model_path.nil? &&
+   ngram_replay_start < 0
+  preflight_limit = Math.min(ngram_gamma, n_gen)
+  preflight_candidates = ML::GGUF::NgramDraft.candidates(
+    prompt_ids,
+    preflight_limit,
+    ngram_max,
+    ngram_min,
+    recursive: ngram_recursive,
+    min_candidates: ngram_min_candidates)
+  current_hidden_ctx_initial_ngram_full_cover = preflight_candidates.size >= n_gen
+end
+if current_hidden_tree || (current_hidden_ctx_route_possible && !current_hidden_ctx_initial_ngram_full_cover)
+  table = current_hidden_prepare_prompt_table(target, prompt_ids, prepare_state_metal)
+  current_hidden_tree_hidden = table[:hidden]
+  current_hidden_tree_labels = table[:labels]
+  current_hidden_tree_norms = table[:norms]
+  current_hidden_tree_prepare_ms = table[:ms]
 end
 policy_hint = prefill_policy_hint(
   prompt, prompt_ids, tok, target_next, draft_next,
@@ -1623,7 +1651,17 @@ while generated_ids.size < n_gen
     end
   end
 
-  if current_hidden_ctx && !target_only && !(ngram_enabled && ngram_target_only)
+  if current_hidden_ctx_route_possible
+    if current_hidden_tree_labels.empty?
+      table = current_hidden_prepare_prompt_table(target, prompt_ids, prepare_state_metal)
+      current_hidden_tree_hidden = table[:hidden]
+      current_hidden_tree_labels = table[:labels]
+      current_hidden_tree_norms = table[:norms]
+      current_hidden_tree_prepare_ms = table[:ms]
+      current_hidden_ctx_lazy_prepare_ms += table[:ms]
+      current_hidden_ctx_lazy_prepares += 1
+    end
+
     cycle_wall0 = Time.instant
     cycle_start_pos = pos
     cycle_target_verify0 = target_verify_ms
@@ -2375,7 +2413,7 @@ if current_hidden_tree
 end
 if current_hidden_ctx
   ctx_rate = current_hidden_ctx_proposed > 0 ? (current_hidden_ctx_accepted.to_f64 * 100.0 / current_hidden_ctx_proposed.to_f64) : 0.0
-  puts "current_hidden_ctx_stats prepare_ms=#{current_hidden_tree_prepare_ms.round(3)} cycles=#{current_hidden_ctx_cycles} proposed=#{current_hidden_ctx_proposed} accepted=#{current_hidden_ctx_accepted} rate=#{ctx_rate.round(2)}% rejects=#{current_hidden_ctx_rejects} fallback_tokens=#{current_hidden_ctx_fallback_tokens} select_ms=#{current_hidden_ctx_select_ms.round(3)} commit_ms=#{current_hidden_ctx_commit_ms.round(3)} seed=#{current_hidden_ctx_seed} depth=#{current_hidden_ctx_depth} width=#{current_hidden_ctx_width} note=prepare_excluded_like_prefill"
+  puts "current_hidden_ctx_stats prepare_ms=#{current_hidden_tree_prepare_ms.round(3)} lazy_prepare_ms=#{current_hidden_ctx_lazy_prepare_ms.round(3)} lazy_prepares=#{current_hidden_ctx_lazy_prepares} initial_ngram_full_cover=#{current_hidden_ctx_initial_ngram_full_cover} cycles=#{current_hidden_ctx_cycles} proposed=#{current_hidden_ctx_proposed} accepted=#{current_hidden_ctx_accepted} rate=#{ctx_rate.round(2)}% rejects=#{current_hidden_ctx_rejects} fallback_tokens=#{current_hidden_ctx_fallback_tokens} select_ms=#{current_hidden_ctx_select_ms.round(3)} commit_ms=#{current_hidden_ctx_commit_ms.round(3)} seed=#{current_hidden_ctx_seed} depth=#{current_hidden_ctx_depth} width=#{current_hidden_ctx_width} note=ctx_prompt_table_selective_prepare"
 end
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms target_replay=#{target_replay_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
