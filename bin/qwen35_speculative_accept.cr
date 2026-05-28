@@ -73,6 +73,8 @@ ngram_replay_start = (ENV["QWEN35_SPEC_NGRAM_REPLAY_START"]? || "-1").to_i
 ngram_cursor_only = ENV["QWEN35_SPEC_NGRAM_CURSOR_ONLY"]? == "1"
 ngram_trusted_source = ENV["QWEN35_SPEC_NGRAM_TRUSTED_SOURCE"]? == "1"
 ngram_source_prefix_gate = ENV["QWEN35_SPEC_NGRAM_SOURCE_PREFIX_GATE_OFF"]? != "1"
+current_hidden_trace = ENV["QWEN35_SPEC_CURRENT_HIDDEN_TRACE"]? == "1"
+current_hidden_trace_topk = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_TOPK"]? || "8").to_i
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
@@ -127,6 +129,8 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-cursor-only", "Only propose from an active source-history cursor; fallback instead of suffix-searching") { ngram_cursor_only = true }
   parser.on("--ngram-trusted-source", "Bypass untrusted candidate-shape gates for source cursor proposals after prefix validation") { ngram_trusted_source = true }
   parser.on("--ngram-no-source-prefix-gate", "Disable prompt-prefix validation before source cursor replay") { ngram_source_prefix_gate = false }
+  parser.on("--current-hidden-trace", "Trace-only: score prompt hidden-table replay against exact generated tokens without changing policy") { current_hidden_trace = true }
+  parser.on("--current-hidden-topk N", "Candidate width for --current-hidden-trace (default: env QWEN35_SPEC_CURRENT_HIDDEN_TOPK or 8)") { |value| current_hidden_trace_topk = value.to_i }
   parser.on("--no-warm-verifier", "Do not warm the target chunk-verifier route before decode timing") { warm_verifier = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
@@ -175,6 +179,7 @@ raise ArgumentError.new("--ngram-trusted-source requires source prefix gate") if
 raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_MIN must be positive") unless router_long_min > 0
 raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_THRESHOLD must be in [0,1]") if router_long_threshold && !(0.0..1.0).includes?(router_long_threshold.not_nil!)
 raise ArgumentError.new("router model not found: #{router_model_path}") if router_model_path && !File.file?(router_model_path.not_nil!)
+raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_TOPK must be positive") unless current_hidden_trace_topk > 0
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -305,6 +310,123 @@ def token_ids_hash(ids : Array(Int32)) : String
     bytes[offset + 3] = ((value >> 24) & 0xff).to_u8
   end
   fnv1a64_hex(bytes)
+end
+
+def hidden_row_norm_spec(hidden : Array(Float32), row : Int32, dim : Int32) : Float64
+  base = row * dim
+  acc = 0.0
+  dim.times do |i|
+    x = hidden[base + i].to_f64
+    acc += x * x
+  end
+  Math.sqrt(acc)
+end
+
+def hidden_row_cosine_spec(hidden : Array(Float32),
+                           dim : Int32,
+                           a : Int32,
+                           b : Int32,
+                           norms : Array(Float64)) : Float64
+  denom = norms[a] * norms[b]
+  return -Float64::INFINITY if denom <= 0.0
+
+  abase = a * dim
+  bbase = b * dim
+  acc = 0.0
+  dim.times { |i| acc += hidden[abase + i].to_f64 * hidden[bbase + i].to_f64 }
+  acc / denom
+end
+
+def current_hidden_trace_topk_for_row(hidden : Array(Float32),
+                                      labels : Array(Int32),
+                                      norms : Array(Float64),
+                                      dim : Int32,
+                                      eval_row : Int32,
+                                      train_count : Int32,
+                                      top_k : Int32) : NamedTuple(ids: Array(Int32), best_cos: Float64)
+  by_label = {} of Int32 => Float64
+  train_count.times do |row|
+    sim = hidden_row_cosine_spec(hidden, dim, eval_row, row, norms)
+    label = labels[row]
+    prev = by_label[label]?
+    by_label[label] = sim if prev.nil? || sim > prev
+  end
+
+  ranked = by_label.to_a.sort_by { |pair| -pair[1] }
+  {
+    ids:      ranked.first(top_k).map { |pair| pair[0] },
+    best_cos: ranked.empty? ? -Float64::INFINITY : ranked[0][1],
+  }
+end
+
+def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
+                                prompt_ids : Array(Int32),
+                                generated_ids : Array(Int32),
+                                top_k : Int32) : NamedTuple(eval_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, exact_ids: Array(Int32))
+  raise ArgumentError.new("current_hidden_replay_trace needs non-empty prompt_ids") if prompt_ids.empty?
+  raise ArgumentError.new("current_hidden_replay_trace top_k must be positive") unless top_k > 0
+
+  return {
+    eval_samples: 0,
+    top_k:        top_k,
+    top1_hits:    0,
+    topk_hits:    0,
+    collect_ms:   0.0,
+    proposal_ms:  0.0,
+    avg_best_cos: 0.0,
+    top1_rate:    0.0,
+    topk_rate:    0.0,
+    exact_ids:    [] of Int32,
+  } if generated_ids.empty?
+
+  hp = weights.hparams
+  full_ids = prompt_ids.dup
+  full_ids.concat(generated_ids)
+  trace_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: full_ids.size + 4)
+
+  t_collect = Time.instant
+  pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(weights, full_ids, 0, trace_state)
+  collect_ms = (Time.instant - t_collect).total_milliseconds
+
+  hidden = pair[:hidden]
+  labels = pair[:top1s].map { |row| row[0] }
+  dim = hp.n_embd
+  rows = labels.size
+  train_count = prompt_ids.size
+  norms = Array(Float64).new(rows) { |row| hidden_row_norm_spec(hidden, row, dim) }
+
+  top1_hits = 0
+  topk_hits = 0
+  best_cosines = [] of Float64
+  exact_ids = [] of Int32
+
+  t_probe = Time.instant
+  generated_ids.each_with_index do |exact_id, step|
+    eval_row = train_count - 1 + step
+    break if eval_row >= rows
+
+    proposal = current_hidden_trace_topk_for_row(hidden, labels, norms, dim, eval_row, train_count, top_k)
+    ids = proposal[:ids]
+    exact_ids << exact_id
+    top1_hits += 1 if ids[0]? == exact_id
+    topk_hits += 1 if ids.includes?(exact_id)
+    best_cosines << proposal[:best_cos]
+  end
+  proposal_ms = (Time.instant - t_probe).total_milliseconds
+
+  eval_samples = exact_ids.size
+  {
+    eval_samples: eval_samples,
+    top_k:        top_k,
+    top1_hits:    top1_hits,
+    topk_hits:    topk_hits,
+    collect_ms:   collect_ms,
+    proposal_ms:  proposal_ms,
+    avg_best_cos: best_cosines.empty? ? 0.0 : best_cosines.sum / best_cosines.size,
+    top1_rate:    eval_samples > 0 ? 100.0 * top1_hits / eval_samples : 0.0,
+    topk_rate:    eval_samples > 0 ? 100.0 * topk_hits / eval_samples : 0.0,
+    exact_ids:    exact_ids,
+  }
 end
 
 class SpecRouterModel
@@ -716,7 +838,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -1567,6 +1689,7 @@ unless plain == generated_ids
   first_diff = plain.zip(generated_ids).index { |(a, b)| a != b } || Math.min(plain.size, generated_ids.size)
   raise "speculative output diverged from target greedy at #{first_diff}: plain=#{plain.inspect} speculative=#{generated_ids.inspect}"
 end
+current_hidden_trace_result = current_hidden_trace ? current_hidden_replay_trace(target, prompt_ids, generated_ids, current_hidden_trace_topk) : nil
 
 if path = dump_cycles_path
   plain_ms_per_token = plain_ms / n_gen
@@ -1603,6 +1726,10 @@ puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_ga
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s, decode_only=true)"
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
+if trace_result = current_hidden_trace_result
+  proposal_per_eval = trace_result[:eval_samples] > 0 ? trace_result[:proposal_ms] / trace_result[:eval_samples] : 0.0
+  puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} note=postrun_trace_only_not_in_wall"
+end
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms target_replay=#{target_replay_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
 puts "spec_accounting proposal=#{proposal_ms.round(3)} ms accept_scan=#{accept_scan_ms.round(3)} ms commit=#{commit_ms.round(3)} ms"
