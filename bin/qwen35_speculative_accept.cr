@@ -451,6 +451,35 @@ def current_hidden_tree_paths(hidden : Array(Float32),
   beams.reject { |beam| beam[:ids].empty? }
 end
 
+def token_suffix_overlap_at_prompt_row(prompt_ids : Array(Int32),
+                                       emitted_ids : Array(Int32),
+                                       prompt_row : Int32,
+                                       max_len : Int32 = 24) : Int32
+  return 0 if emitted_ids.empty? || prompt_row < 0
+
+  overlap = 0
+  while overlap < max_len && overlap < emitted_ids.size && overlap <= prompt_row
+    return overlap unless emitted_ids[emitted_ids.size - 1 - overlap] == prompt_ids[prompt_row - overlap]
+    overlap += 1
+  end
+  overlap
+end
+
+def choose_current_hidden_context_candidate(prompt_ids : Array(Int32),
+                                            emitted_ids : Array(Int32),
+                                            candidates : Array(NamedTuple(id: Int32, row: Int32, score: Float64))) : NamedTuple(id: Int32, row: Int32, score: Float64, overlap: Int32)?
+  best = nil.as(NamedTuple(id: Int32, row: Int32, score: Float64, overlap: Int32)?)
+  candidates.each do |candidate|
+    overlap = token_suffix_overlap_at_prompt_row(prompt_ids, emitted_ids, candidate[:row])
+    item = {id: candidate[:id], row: candidate[:row], score: candidate[:score], overlap: overlap}
+    if best.nil? || item[:overlap] > best.not_nil![:overlap] ||
+       (item[:overlap] == best.not_nil![:overlap] && item[:score] > best.not_nil![:score])
+      best = item
+    end
+  end
+  best
+end
+
 def current_hidden_chain_step(hidden : Array(Float32),
                               labels : Array(Int32),
                               norms : Array(Float64),
@@ -469,7 +498,7 @@ end
 def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
                                 prompt_ids : Array(Int32),
                                 generated_ids : Array(Int32),
-                                top_k : Int32) : NamedTuple(eval_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, chain_hits: Int32, chain_steps: Int32, chain_topk_hits: Int32, chain_topk_steps: Int32, seed1_topk_hits: Int32, seed1_topk_steps: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, chain_rate: Float64, chain_topk_rate: Float64, seed1_topk_rate: Float64, exact_ids: Array(Int32), chain_ids: Array(Int32), chain_topk_ids: Array(Int32), seed1_topk_ids: Array(Int32))
+                                top_k : Int32) : NamedTuple(eval_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, chain_hits: Int32, chain_steps: Int32, chain_topk_hits: Int32, chain_topk_steps: Int32, seed1_topk_hits: Int32, seed1_topk_steps: Int32, seed1_ctx_hits: Int32, seed1_ctx_steps: Int32, seed2_ctx_hits: Int32, seed2_ctx_steps: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, chain_rate: Float64, chain_topk_rate: Float64, seed1_topk_rate: Float64, seed1_ctx_rate: Float64, seed2_ctx_rate: Float64, exact_ids: Array(Int32), chain_ids: Array(Int32), chain_topk_ids: Array(Int32), seed1_topk_ids: Array(Int32), seed1_ctx_ids: Array(Int32), seed2_ctx_ids: Array(Int32))
   raise ArgumentError.new("current_hidden_replay_trace needs non-empty prompt_ids") if prompt_ids.empty?
   raise ArgumentError.new("current_hidden_replay_trace top_k must be positive") unless top_k > 0
 
@@ -484,6 +513,10 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
     chain_topk_steps: 0,
     seed1_topk_hits:  0,
     seed1_topk_steps: 0,
+    seed1_ctx_hits:  0,
+    seed1_ctx_steps: 0,
+    seed2_ctx_hits:  0,
+    seed2_ctx_steps: 0,
     collect_ms:   0.0,
     proposal_ms:  0.0,
     avg_best_cos: 0.0,
@@ -492,10 +525,14 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
     chain_rate:   0.0,
     chain_topk_rate: 0.0,
     seed1_topk_rate: 0.0,
+    seed1_ctx_rate: 0.0,
+    seed2_ctx_rate: 0.0,
     exact_ids:    [] of Int32,
     chain_ids:    [] of Int32,
     chain_topk_ids: [] of Int32,
     seed1_topk_ids: [] of Int32,
+    seed1_ctx_ids: [] of Int32,
+    seed2_ctx_ids: [] of Int32,
   } if generated_ids.empty?
 
   hp = weights.hparams
@@ -530,6 +567,16 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
   seed1_topk_hits = 0
   seed1_topk_steps = 0
   seed1_topk_cursor = train_count
+  seed1_ctx_ids = [] of Int32
+  seed1_ctx_hits = 0
+  seed1_ctx_steps = 0
+  seed1_ctx_cursor = train_count
+  seed1_ctx_emitted = generated_ids[0, Math.min(generated_ids.size, 1)]
+  seed2_ctx_ids = [] of Int32
+  seed2_ctx_hits = 0
+  seed2_ctx_steps = 0
+  seed2_ctx_cursor = train_count + 1
+  seed2_ctx_emitted = generated_ids[0, Math.min(generated_ids.size, 2)]
 
   t_probe = Time.instant
   generated_ids.each_with_index do |exact_id, step|
@@ -580,6 +627,28 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
         seed1_topk_cursor = chosen_row + 1 < train_count ? chosen_row + 1 : chosen_row
       end
     end
+
+    if step > 0 && seed1_ctx_cursor >= 0 && seed1_ctx_cursor < rows
+      candidates = current_hidden_chain_candidate_rows(hidden, labels, norms, dim, seed1_ctx_cursor, train_count, step < generated_ids.size - 1, top_k)
+      if chosen = choose_current_hidden_context_candidate(prompt_ids, seed1_ctx_emitted, candidates)
+        seed1_ctx_ids << chosen[:id]
+        seed1_ctx_hits += 1 if chosen[:id] == exact_id
+        seed1_ctx_steps += 1
+        seed1_ctx_emitted << chosen[:id]
+        seed1_ctx_cursor = chosen[:row] + 1 < train_count ? chosen[:row] + 1 : chosen[:row]
+      end
+    end
+
+    if step > 1 && seed2_ctx_cursor >= 0 && seed2_ctx_cursor < rows
+      candidates = current_hidden_chain_candidate_rows(hidden, labels, norms, dim, seed2_ctx_cursor, train_count, step < generated_ids.size - 1, top_k)
+      if chosen = choose_current_hidden_context_candidate(prompt_ids, seed2_ctx_emitted, candidates)
+        seed2_ctx_ids << chosen[:id]
+        seed2_ctx_hits += 1 if chosen[:id] == exact_id
+        seed2_ctx_steps += 1
+        seed2_ctx_emitted << chosen[:id]
+        seed2_ctx_cursor = chosen[:row] + 1 < train_count ? chosen[:row] + 1 : chosen[:row]
+      end
+    end
   end
   proposal_ms = (Time.instant - t_probe).total_milliseconds
 
@@ -595,6 +664,10 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
     chain_topk_steps: chain_topk_steps,
     seed1_topk_hits:  seed1_topk_hits,
     seed1_topk_steps: seed1_topk_steps,
+    seed1_ctx_hits:  seed1_ctx_hits,
+    seed1_ctx_steps: seed1_ctx_steps,
+    seed2_ctx_hits:  seed2_ctx_hits,
+    seed2_ctx_steps: seed2_ctx_steps,
     collect_ms:   collect_ms,
     proposal_ms:  proposal_ms,
     avg_best_cos: best_cosines.empty? ? 0.0 : best_cosines.sum / best_cosines.size,
@@ -603,10 +676,14 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
     chain_rate:   chain_steps > 0 ? 100.0 * chain_hits / chain_steps : 0.0,
     chain_topk_rate: chain_topk_steps > 0 ? 100.0 * chain_topk_hits / chain_topk_steps : 0.0,
     seed1_topk_rate: seed1_topk_steps > 0 ? 100.0 * seed1_topk_hits / seed1_topk_steps : 0.0,
+    seed1_ctx_rate: seed1_ctx_steps > 0 ? 100.0 * seed1_ctx_hits / seed1_ctx_steps : 0.0,
+    seed2_ctx_rate: seed2_ctx_steps > 0 ? 100.0 * seed2_ctx_hits / seed2_ctx_steps : 0.0,
     exact_ids:    exact_ids,
     chain_ids:    chain_ids,
     chain_topk_ids: chain_topk_ids,
     seed1_topk_ids: seed1_topk_ids,
+    seed1_ctx_ids: seed1_ctx_ids,
+    seed2_ctx_ids: seed2_ctx_ids,
   }
 end
 
@@ -2077,7 +2154,7 @@ puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} 
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 if trace_result = current_hidden_trace_result
   proposal_per_eval = trace_result[:eval_samples] > 0 ? trace_result[:proposal_ms] / trace_result[:eval_samples] : 0.0
-  puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} chain=#{trace_result[:chain_rate].round(2)}% chain_hits=#{trace_result[:chain_hits]}/#{trace_result[:chain_steps]} chain_topk=#{trace_result[:chain_topk_rate].round(2)}% chain_topk_hits=#{trace_result[:chain_topk_hits]}/#{trace_result[:chain_topk_steps]} seed1_topk=#{trace_result[:seed1_topk_rate].round(2)}% seed1_topk_hits=#{trace_result[:seed1_topk_hits]}/#{trace_result[:seed1_topk_steps]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} chain_ids=#{trace_result[:chain_ids].join(',')} chain_topk_ids=#{trace_result[:chain_topk_ids].join(',')} seed1_topk_ids=#{trace_result[:seed1_topk_ids].join(',')} note=postrun_trace_only_not_in_wall"
+  puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} chain=#{trace_result[:chain_rate].round(2)}% chain_hits=#{trace_result[:chain_hits]}/#{trace_result[:chain_steps]} chain_topk=#{trace_result[:chain_topk_rate].round(2)}% chain_topk_hits=#{trace_result[:chain_topk_hits]}/#{trace_result[:chain_topk_steps]} seed1_topk=#{trace_result[:seed1_topk_rate].round(2)}% seed1_topk_hits=#{trace_result[:seed1_topk_hits]}/#{trace_result[:seed1_topk_steps]} seed1_ctx=#{trace_result[:seed1_ctx_rate].round(2)}% seed1_ctx_hits=#{trace_result[:seed1_ctx_hits]}/#{trace_result[:seed1_ctx_steps]} seed2_ctx=#{trace_result[:seed2_ctx_rate].round(2)}% seed2_ctx_hits=#{trace_result[:seed2_ctx_hits]}/#{trace_result[:seed2_ctx_steps]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} chain_ids=#{trace_result[:chain_ids].join(',')} chain_topk_ids=#{trace_result[:chain_topk_ids].join(',')} seed1_topk_ids=#{trace_result[:seed1_topk_ids].join(',')} seed1_ctx_ids=#{trace_result[:seed1_ctx_ids].join(',')} seed2_ctx_ids=#{trace_result[:seed2_ctx_ids].join(',')} note=postrun_trace_only_not_in_wall"
 end
 if current_hidden_tree
   puts "current_hidden_tree_stats prepare_ms=#{current_hidden_tree_prepare_ms.round(3)} cycles=#{current_hidden_tree_cycles} proposed=#{current_hidden_tree_proposed} accepted=#{current_hidden_tree_accepted} rejects=#{current_hidden_tree_rejects} fallback_tokens=#{current_hidden_tree_fallback_tokens} fork_ms=#{current_hidden_tree_fork_ms.round(3)} commit_ms=#{current_hidden_tree_commit_ms.round(3)} depth=#{current_hidden_tree_depth} width=#{current_hidden_tree_width} note=prepare_excluded_like_prefill"
