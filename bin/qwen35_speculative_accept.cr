@@ -95,6 +95,7 @@ router_long_min = (ENV["QWEN35_SPEC_ROUTER_LONG_MIN"]? || "16").to_i
 prompt_cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]?
 prompt_cache_session = ENV["QWEN35_PROMPT_CACHE_SESSION"]? || "spec-probe"
 prompt_cache_restore = ENV["QWEN35_PROMPT_CACHE_RESTORE"]? == "1"
+prompt_cache_restore_prefix = ENV["QWEN35_PROMPT_CACHE_RESTORE_PREFIX"]? == "1"
 prompt_cache_save = ENV["QWEN35_PROMPT_CACHE_SAVE"]? == "1"
 
 OptionParser.parse(ARGV) do |parser|
@@ -161,6 +162,7 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--prompt-cache-root PATH", "Prompt-cache root for exact Qwen state artifacts") { |value| prompt_cache_root = value }
   parser.on("--prompt-cache-session ID", "Prompt-cache session id (default: env QWEN35_PROMPT_CACHE_SESSION or spec-probe)") { |value| prompt_cache_session = value }
   parser.on("--prompt-cache-restore", "Restore exact prompt state from prompt cache when metadata matches") { prompt_cache_restore = true }
+  parser.on("--prompt-cache-restore-prefix", "Restore longest cached prompt prefix and replay the uncached suffix") { prompt_cache_restore_prefix = true }
   parser.on("--prompt-cache-save", "Save exact prompt state to prompt cache after prefill miss") { prompt_cache_save = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -1159,7 +1161,7 @@ if loaded_draft = draft
 else
   puts "draft:  skipped skip_draft_load=#{skip_draft_load}"
 end
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk} current_hidden_tree=#{current_hidden_tree} current_hidden_tree_depth=#{current_hidden_tree_depth} current_hidden_tree_width=#{current_hidden_tree_width} current_hidden_ctx=#{current_hidden_ctx} current_hidden_ctx_seed=#{current_hidden_ctx_seed} current_hidden_ctx_depth=#{current_hidden_ctx_depth} current_hidden_ctx_width=#{current_hidden_ctx_width} prompt_cache_restore=#{prompt_cache_restore} prompt_cache_save=#{prompt_cache_save} prompt_cache_session=#{prompt_cache_session} prompt_cache_root=#{prompt_cache_root || ML::GGUF::Qwen35PromptCache.default_root}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk} current_hidden_tree=#{current_hidden_tree} current_hidden_tree_depth=#{current_hidden_tree_depth} current_hidden_tree_width=#{current_hidden_tree_width} current_hidden_ctx=#{current_hidden_ctx} current_hidden_ctx_seed=#{current_hidden_ctx_seed} current_hidden_ctx_depth=#{current_hidden_ctx_depth} current_hidden_ctx_width=#{current_hidden_ctx_width} prompt_cache_restore=#{prompt_cache_restore} prompt_cache_restore_prefix=#{prompt_cache_restore_prefix} prompt_cache_save=#{prompt_cache_save} prompt_cache_session=#{prompt_cache_session} prompt_cache_root=#{prompt_cache_root || ML::GGUF::Qwen35PromptCache.default_root}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 state_alloc0 = Time.instant
@@ -1208,43 +1210,66 @@ if current_hidden_ctx_route_possible && ngram_enabled &&
 end
 current_hidden_prefill_capture = current_hidden_tree || (current_hidden_ctx_route_possible && !current_hidden_ctx_initial_ngram_full_cover)
 prompt_cache_effective_root = prompt_cache_root ? prompt_cache_root.not_nil! : ML::GGUF::Qwen35PromptCache.default_root
-prompt_cache_store = (prompt_cache_restore || prompt_cache_save) ? ML::GGUF::Qwen35PromptCache::Store.new(prompt_cache_effective_root) : nil
+prompt_cache_store = (prompt_cache_restore || prompt_cache_restore_prefix || prompt_cache_save) ? ML::GGUF::Qwen35PromptCache::Store.new(prompt_cache_effective_root) : nil
 prompt_cache_lookup_ms = 0.0
 prompt_cache_restore_ms = 0.0
 prompt_cache_save_ms = 0.0
 prompt_cache_hit = false
 prompt_cache_saved = false
 prompt_cache_entry_prefix = 0
+prompt_cache_replayed_tokens = 0
+prompt_cache_mode = "none"
 prompt_cache_disabled_reason = ""
 prompt_cache_model_id = File.basename(target_path)
 prompt_cache_tokenizer_id = File.basename(tokenizer_bin)
 prompt_cache_entry = nil.as(ML::GGUF::Qwen35PromptCache::Entry?)
-if prompt_cache_restore && (store = prompt_cache_store)
+prompt_cache_replay_next = nil.as(Int32?)
+if (prompt_cache_restore || prompt_cache_restore_prefix) && (store = prompt_cache_store)
   lookup0 = Time.instant
-  prompt_cache_entry = store.lookup_prompt(prompt_cache_model_id, prompt_cache_tokenizer_id, prompt, prompt_ids)
+  prompt_cache_entry = prompt_cache_restore ? store.lookup_prompt(prompt_cache_model_id, prompt_cache_tokenizer_id, prompt, prompt_ids) : nil
+  if prompt_cache_entry.nil? && prompt_cache_restore_prefix && prompt_ids.size > 1
+    prompt_cache_entry = store.lookup_longest_prefix(prompt_cache_model_id, prompt_cache_tokenizer_id, prompt_ids, min_prefix_len: 1, max_prefix_len: prompt_ids.size - 1)
+  end
   prompt_cache_lookup_ms = (Time.instant - lookup0).total_milliseconds
   if entry = prompt_cache_entry
-    if entry.max_seq == max_seq
+    if entry.prefix_len == prompt_ids.size && entry.max_seq == max_seq
       restore0 = Time.instant
       target_state = store.restore(entry, target.hparams, prefer_metal: prepare_state_metal, reuse_state: target_state)
       prompt_cache_restore_ms = (Time.instant - restore0).total_milliseconds
       if next_id = entry.next_token_id
         prompt_cache_hit = true
         prompt_cache_entry_prefix = entry.prefix_len
+        prompt_cache_mode = "exact"
         current_hidden_prefill_capture = false
       else
         prompt_cache_disabled_reason = "hit_missing_next_token"
       end
+    elsif prompt_cache_restore_prefix && entry.prefix_len <= prompt_ids.size && entry.max_seq >= max_seq
+      restore0 = Time.instant
+      reusable_state = entry.max_seq == target_state.max_seq ? target_state : nil
+      replay = store.restore_and_replay_suffix(entry, target, prompt_ids, prefer_metal: prepare_state_metal, reuse_state: reusable_state)
+      prompt_cache_restore_ms = (Time.instant - restore0).total_milliseconds
+      if next_id = replay.next_token_id
+        target_state = replay.state
+        prompt_cache_replay_next = next_id
+        prompt_cache_hit = true
+        prompt_cache_entry_prefix = replay.reused_prefix_len
+        prompt_cache_replayed_tokens = replay.replayed_tokens
+        prompt_cache_mode = replay.replayed_tokens > 0 ? "prefix" : "exact"
+        current_hidden_prefill_capture = false
+      else
+        prompt_cache_disabled_reason = "prefix_missing_next_token"
+      end
     else
-      prompt_cache_disabled_reason = "max_seq_mismatch_entry_#{entry.max_seq}_need_#{max_seq}"
+      prompt_cache_disabled_reason = "max_seq_or_prefix_mismatch_entry_#{entry.max_seq}_#{entry.prefix_len}_need_#{max_seq}_#{prompt_ids.size}"
     end
   else
     prompt_cache_disabled_reason = "miss"
   end
 end
 target_prefill0 = Time.instant
-target_next = if prompt_cache_hit && (entry = prompt_cache_entry) && (next_id = entry.next_token_id)
-                next_id
+target_next = if prompt_cache_hit && (next_id = prompt_cache_replay_next || prompt_cache_entry.try(&.next_token_id))
+                next_id.not_nil!
               elsif current_hidden_prefill_capture
                 pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(target, prompt_ids, 0, target_state)
                 current_hidden_tree_hidden = pair[:hidden]
@@ -2542,8 +2567,8 @@ puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} 
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 puts "initial_prefill target=#{target_initial_prefill_ms.round(1)} ms draft=#{draft_initial_prefill_ms.round(1)} ms target_capture=#{current_hidden_prefill_capture} draft_lazy=#{lazy_draft_prefill} draft_prefilled=#{draft_prefilled} skip_draft_load=#{skip_draft_load}"
 puts "setup_breakdown tokenizer=#{tokenizer_load_ms.round(1)} ms target_load=#{target_load_ms.round(1)} ms draft_load=#{draft_load_ms.round(1)} ms draft_skipped=#{skip_draft_load} prompt_encode=#{prompt_encode_ms.round(3)} ms router_load=#{router_load_ms.round(3)} ms state_alloc=#{state_alloc_ms.round(1)} ms state_prepare=#{state_prepare_ms.round(1)} ms ctx_preflight=#{current_hidden_ctx_preflight_ms.round(3)} ms policy_hint=#{policy_hint_ms.round(3)} ms load_total=#{(load_s * 1000.0).round(1)} ms"
-if prompt_cache_restore || prompt_cache_save
-  puts "prompt_cache_stats restore=#{prompt_cache_restore} save=#{prompt_cache_save} hit=#{prompt_cache_hit} saved=#{prompt_cache_saved} prefix=#{prompt_cache_entry_prefix} lookup_ms=#{prompt_cache_lookup_ms.round(3)} restore_ms=#{prompt_cache_restore_ms.round(3)} save_ms=#{prompt_cache_save_ms.round(3)} reason=#{prompt_cache_disabled_reason}"
+if prompt_cache_restore || prompt_cache_restore_prefix || prompt_cache_save
+  puts "prompt_cache_stats restore=#{prompt_cache_restore} restore_prefix=#{prompt_cache_restore_prefix} save=#{prompt_cache_save} hit=#{prompt_cache_hit} saved=#{prompt_cache_saved} mode=#{prompt_cache_mode} prefix=#{prompt_cache_entry_prefix} replayed=#{prompt_cache_replayed_tokens} lookup_ms=#{prompt_cache_lookup_ms.round(3)} restore_ms=#{prompt_cache_restore_ms.round(3)} save_ms=#{prompt_cache_save_ms.round(3)} reason=#{prompt_cache_disabled_reason}"
 end
 if trace_result = current_hidden_trace_result
   proposal_per_eval = trace_result[:eval_samples] > 0 ? trace_result[:proposal_ms] / trace_result[:eval_samples] : 0.0

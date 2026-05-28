@@ -212,6 +212,7 @@
 - [x] **3.5.4** pg_sorted_heap metadata adapter for prompt KV cache (external artifact path + sorted session/hash index)
 - [x] **3.5.5** Correctness: exact top1 + full-logit close restore on 9B
 - [x] **3.5.6** Longest-prefix prompt cache: token-hash prefix lookup + exact suffix replay
+  - [x] Wire longest-prefix restore into `bin/qwen35_speculative_accept.cr` behind `--prompt-cache-restore-prefix` / `QWEN35_PROMPT_CACHE_RESTORE_PREFIX=1`. On an exact miss, the probe restores the longest verified token-hash prefix, replays only the uncached suffix through the exact target, and uses the replayed next-token boundary. Evidence: no-codegen and guarded release builds passed; `/tmp/qwen35_prompt_cache_prefix_20260528094232` saved prefix `12` and restored a `14`-token prompt with `hit=true mode=prefix replayed=2 initial_prefill target=0.0ms`; `/tmp/qwen35_prompt_cache_exact_20260528094250` confirmed exact restore still reports `mode=exact replayed=0`.
 
 ## Phase 4 — Optimization: beat llama.cpp
 
