@@ -343,10 +343,16 @@ def current_hidden_trace_topk_for_row(hidden : Array(Float32),
                                       dim : Int32,
                                       eval_row : Int32,
                                       train_count : Int32,
-                                      top_k : Int32) : NamedTuple(ids: Array(Int32), best_cos: Float64)
+                                      top_k : Int32) : NamedTuple(ids: Array(Int32), best_row: Int32, best_cos: Float64)
   by_label = {} of Int32 => Float64
+  best_row = -1
+  best_cos = -Float64::INFINITY
   train_count.times do |row|
     sim = hidden_row_cosine_spec(hidden, dim, eval_row, row, norms)
+    if sim > best_cos
+      best_cos = sim
+      best_row = row
+    end
     label = labels[row]
     prev = by_label[label]?
     by_label[label] = sim if prev.nil? || sim > prev
@@ -355,14 +361,38 @@ def current_hidden_trace_topk_for_row(hidden : Array(Float32),
   ranked = by_label.to_a.sort_by { |pair| -pair[1] }
   {
     ids:      ranked.first(top_k).map { |pair| pair[0] },
-    best_cos: ranked.empty? ? -Float64::INFINITY : ranked[0][1],
+    best_row: best_row,
+    best_cos: best_cos,
   }
+end
+
+def current_hidden_chain_step(hidden : Array(Float32),
+                              labels : Array(Int32),
+                              norms : Array(Float64),
+                              dim : Int32,
+                              cursor_row : Int32,
+                              train_count : Int32,
+                              require_next : Bool) : NamedTuple(id: Int32, next_row: Int32, best_row: Int32, best_cos: Float64)
+  best_row = -1
+  best_cos = -Float64::INFINITY
+  train_count.times do |row|
+    next if require_next && row + 1 >= train_count
+    sim = hidden_row_cosine_spec(hidden, dim, cursor_row, row, norms)
+    if sim > best_cos
+      best_cos = sim
+      best_row = row
+    end
+  end
+  return {id: -1, next_row: cursor_row, best_row: -1, best_cos: -Float64::INFINITY} if best_row < 0
+
+  next_row = best_row + 1 < train_count ? best_row + 1 : best_row
+  {id: labels[best_row], next_row: next_row, best_row: best_row, best_cos: best_cos}
 end
 
 def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
                                 prompt_ids : Array(Int32),
                                 generated_ids : Array(Int32),
-                                top_k : Int32) : NamedTuple(eval_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, exact_ids: Array(Int32))
+                                top_k : Int32) : NamedTuple(eval_samples: Int32, top_k: Int32, top1_hits: Int32, topk_hits: Int32, chain_hits: Int32, chain_steps: Int32, collect_ms: Float64, proposal_ms: Float64, avg_best_cos: Float64, top1_rate: Float64, topk_rate: Float64, chain_rate: Float64, exact_ids: Array(Int32), chain_ids: Array(Int32))
   raise ArgumentError.new("current_hidden_replay_trace needs non-empty prompt_ids") if prompt_ids.empty?
   raise ArgumentError.new("current_hidden_replay_trace top_k must be positive") unless top_k > 0
 
@@ -371,12 +401,16 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
     top_k:        top_k,
     top1_hits:    0,
     topk_hits:    0,
+    chain_hits:   0,
+    chain_steps:  0,
     collect_ms:   0.0,
     proposal_ms:  0.0,
     avg_best_cos: 0.0,
     top1_rate:    0.0,
     topk_rate:    0.0,
+    chain_rate:   0.0,
     exact_ids:    [] of Int32,
+    chain_ids:    [] of Int32,
   } if generated_ids.empty?
 
   hp = weights.hparams
@@ -399,6 +433,10 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
   topk_hits = 0
   best_cosines = [] of Float64
   exact_ids = [] of Int32
+  chain_ids = [] of Int32
+  chain_hits = 0
+  chain_steps = 0
+  chain_cursor = train_count - 1
 
   t_probe = Time.instant
   generated_ids.each_with_index do |exact_id, step|
@@ -411,6 +449,16 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
     top1_hits += 1 if ids[0]? == exact_id
     topk_hits += 1 if ids.includes?(exact_id)
     best_cosines << proposal[:best_cos]
+
+    if chain_cursor >= 0 && chain_cursor < train_count
+      chain = current_hidden_chain_step(hidden, labels, norms, dim, chain_cursor, train_count, step < generated_ids.size - 1)
+      if chain[:id] >= 0
+        chain_ids << chain[:id]
+        chain_hits += 1 if chain[:id] == exact_id
+        chain_steps += 1
+        chain_cursor = chain[:next_row]
+      end
+    end
   end
   proposal_ms = (Time.instant - t_probe).total_milliseconds
 
@@ -420,12 +468,16 @@ def current_hidden_replay_trace(weights : ML::GGUF::Qwen35Weights,
     top_k:        top_k,
     top1_hits:    top1_hits,
     topk_hits:    topk_hits,
+    chain_hits:   chain_hits,
+    chain_steps:  chain_steps,
     collect_ms:   collect_ms,
     proposal_ms:  proposal_ms,
     avg_best_cos: best_cosines.empty? ? 0.0 : best_cosines.sum / best_cosines.size,
     top1_rate:    eval_samples > 0 ? 100.0 * top1_hits / eval_samples : 0.0,
     topk_rate:    eval_samples > 0 ? 100.0 * topk_hits / eval_samples : 0.0,
+    chain_rate:   chain_steps > 0 ? 100.0 * chain_hits / chain_steps : 0.0,
     exact_ids:    exact_ids,
+    chain_ids:    chain_ids,
   }
 end
 
@@ -1728,7 +1780,7 @@ puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} 
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 if trace_result = current_hidden_trace_result
   proposal_per_eval = trace_result[:eval_samples] > 0 ? trace_result[:proposal_ms] / trace_result[:eval_samples] : 0.0
-  puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} note=postrun_trace_only_not_in_wall"
+  puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} chain=#{trace_result[:chain_rate].round(2)}% chain_hits=#{trace_result[:chain_hits]}/#{trace_result[:chain_steps]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} chain_ids=#{trace_result[:chain_ids].join(',')} note=postrun_trace_only_not_in_wall"
 end
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms target_replay=#{target_replay_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
