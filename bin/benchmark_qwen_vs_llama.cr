@@ -204,6 +204,70 @@ def measure_native_prefill_cached(w : ML::GGUF::Qwen35Weights,
   end
 end
 
+def measure_native_prefill_cached_prefix(w : ML::GGUF::Qwen35Weights,
+                                         model : String,
+                                         n_prompt : Int32,
+                                         suffix_tokens : Int32,
+                                         reps : Int32,
+                                         warmup : Int32) : NativeStats
+  raise "--native-prefill-cache-prefix-suffix must be positive" unless suffix_tokens > 0
+  raise "--native-prefill-cache-prefix-suffix must be smaller than --prompt" unless suffix_tokens < n_prompt
+
+  hp = w.hparams
+  full_prompt = Array(Int32).new(n_prompt) { |i| ((i * 7 + 11) % 1000).to_i32 }
+  prefix_len = n_prompt - suffix_tokens
+  prefix_prompt = full_prompt[0, prefix_len]
+  root = File.tempname("qwen35-bench-prompt-cache-prefix")
+  Dir.mkdir_p(root)
+
+  begin
+    store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+    seeded = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: n_prompt + 4)
+    run_native_prefill(w, prefix_prompt, seeded)
+    model_id = ML::GGUF::Qwen35PromptCache.short_hash("bench-model\0#{model}")
+    tokenizer_id = "synthetic-token-ids-v1"
+    entry = store.save(
+      session_id: "benchmark-prefix",
+      model_id: model_id,
+      tokenizer_id: tokenizer_id,
+      prompt_text: "",
+      token_ids: prefix_prompt,
+      state: seeded,
+    )
+
+    warmup.times do
+      replay = store.restore_and_replay_suffix(entry, w, full_prompt)
+      raise "prompt-cache prefix replay layer mismatch" unless replay.state.layers.size == hp.n_layer
+      raise "prompt-cache prefix replay suffix mismatch" unless replay.replayed_tokens == suffix_tokens
+      raise "prompt-cache prefix replay missing next token" unless replay.next_token_id
+    end
+
+    times = Array(Float64).new(reps)
+    reps.times do
+      t0 = Time.instant
+      replay = store.restore_and_replay_suffix(entry, w, full_prompt)
+      raise "prompt-cache prefix replay layer mismatch" unless replay.state.layers.size == hp.n_layer
+      raise "prompt-cache prefix replay suffix mismatch" unless replay.replayed_tokens == suffix_tokens
+      raise "prompt-cache prefix replay missing next token" unless replay.next_token_id
+      times << (Time.instant - t0).total_milliseconds
+    end
+
+    sorted = times.sort
+    avg_ms = times.sum / times.size
+    p50_ms = percentile(sorted, 50)
+    p95_ms = percentile(sorted, 95)
+    NativeStats.new(
+      avg_ms: avg_ms,
+      p50_ms: p50_ms,
+      p95_ms: p95_ms,
+      tok_s_avg: (n_prompt * 1000.0) / avg_ms,
+      tok_s_p50: (n_prompt * 1000.0) / p50_ms,
+    )
+  ensure
+    FileUtils.rm_rf(root) if Dir.exists?(root)
+  end
+end
+
 def run_native_prefill(w : ML::GGUF::Qwen35Weights,
                        prompt : Array(Int32),
                        state : ML::GGUF::Qwen35CPU::State,
@@ -323,6 +387,7 @@ llama_cache_type_v = nil.as(String?)
 llama_extra_args = [] of String
 native_decode_mode = "body"
 native_prefill_cache = false
+native_prefill_cache_prefix_suffix = 0
 native_prefill_prealloc = false
 native_prefill_prepare_state = false
 native_prefill_final_top1 = false
@@ -352,6 +417,7 @@ OptionParser.parse do |p|
   p.on("--native-prefill-body-only", "Deprecated no-op: native prefill defaults to llama-bench-compatible body-only pp") { native_prefill_final_top1 = false }
   p.on("--native-prefill-final-top1", "Measure product-shaped prompt processing plus final output-head top1") { native_prefill_final_top1 = true }
   p.on("--native-prefill-cache", "Measure native prefill as exact prompt-cache restore after one seeded run") { native_prefill_cache = true }
+  p.on("--native-prefill-cache-prefix-suffix=N", "Measure prompt-cache prefix restore plus exact replay of the last N prompt tokens") { |v| native_prefill_cache = true; native_prefill_cache_prefix_suffix = v.to_i }
   p.on("--native-prefill-prealloc", "Measure native prefill with state buffers allocated outside the timed loop") { native_prefill_prealloc = true }
   p.on("--native-prefill-prepare-state", "Prepare a fresh state's Metal buffers before each timed native prefill") { native_prefill_prepare_state = true }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
@@ -379,7 +445,9 @@ end
 
 w = ML::GGUF::Qwen35Weights.from_gguf(model)
 
-native_prefill = if native_prefill_cache
+native_prefill = if native_prefill_cache && native_prefill_cache_prefix_suffix > 0
+                   measure_native_prefill_cached_prefix(w, model, n_prompt, native_prefill_cache_prefix_suffix, reps, warmup)
+                 elsif native_prefill_cache
                    measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
                  elsif native_prefill_prealloc
                    measure_native_prefill_preallocated(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
@@ -396,7 +464,9 @@ llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers,
 puts "Qwen benchmark vs llama.cpp"
 puts "model: #{model}"
 puts "llama-bench: #{llama_bench}"
-native_prefill_mode = if native_prefill_cache
+native_prefill_mode = if native_prefill_cache && native_prefill_cache_prefix_suffix > 0
+                        "prompt_cache_prefix_restore_suffix#{native_prefill_cache_prefix_suffix}"
+                      elsif native_prefill_cache
                         "prompt_cache_restore_after_seed"
                       elsif native_prefill_prealloc
                         native_prefill_final_top1 ? "preallocated_state_chunked_prompt_plus_final_top1" : "preallocated_state_chunked_prompt_body_only"
