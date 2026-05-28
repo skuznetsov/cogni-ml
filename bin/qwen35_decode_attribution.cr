@@ -22,9 +22,10 @@ require_quiet = false
 greedy_chain = false
 gpu_token_chain = false
 decode_mode = "top1"
+profile_enabled = true
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_decode_attribution [--model PATH] [--prompt N] [--gen N] [--warmup N] [--reps N] [--compare-env NAME] [--body-only] [--gpu-token-chain]"
+  p.banner = "Usage: qwen35_decode_attribution [--model PATH] [--prompt N] [--gen N] [--warmup N] [--reps N] [--compare-env NAME] [--body-only] [--gpu-token-chain] [--no-profile]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--prompt=N", "Prompt tokens to prefill before timed decode; 0 matches benchmark synthetic decode state (default: 0)") { |v| prompt_len = v.to_i }
   p.on("--gen=N", "Decode tokens for attribution (default: 64)") { |v| gen_len = v.to_i }
@@ -36,6 +37,7 @@ OptionParser.parse do |p|
   p.on("--top1", "Measure product-shaped greedy top1 decode (default)") { decode_mode = "top1" }
   p.on("--greedy-chain", "Feed each generated top1 token into the next step instead of benchmark synthetic input tokens") { greedy_chain = true }
   p.on("--gpu-token-chain", "Use GPU-resident exact greedy token handoff for the timed decode suffix") { gpu_token_chain = true }
+  p.on("--no-profile", "Skip the profiled attribution pass and measure wall timing only") { profile_enabled = false }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
@@ -196,10 +198,15 @@ mode = if gpu_token_chain
 puts "prompt=#{prompt_len} gen=#{gen_len} warmup=#{warmup} reps=#{reps} mode=#{mode}"
 
 warmup.times { run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode) }
-profile_ms = run_decode_once(w, prompt, gen_len, profile: true, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
-puts
-print ML::GGUF::Qwen35Metal::Profile.report_io
-printf "  profiled wall: %.2f ms  %.2f tok/s\n", profile_ms, gen_len * 1000.0 / profile_ms
+if profile_enabled
+  profile_ms = run_decode_once(w, prompt, gen_len, profile: true, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode)
+  puts
+  print ML::GGUF::Qwen35Metal::Profile.report_io
+  printf "  profiled wall: %.2f ms  %.2f tok/s\n", profile_ms, gen_len * 1000.0 / profile_ms
+else
+  puts
+  puts "Profile pass skipped (--no-profile)."
+end
 
 times = Array(Float64).new(reps) { run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode) }
 printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
