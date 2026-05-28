@@ -501,6 +501,16 @@ artifacts:
 - exact prompt state, including optional full-prompt next-token metadata for
   long generations.
 
+The prompt-state lookup is longest-prefix based. If the new prompt extends a
+cached prompt, the CLI restores the verified prefix state and exact-replays only
+the uncached suffix before decode. A local product smoke on Qwen3.5 9B Q4_K_M
+restored `12/14` prompt tokens, replayed `2`, skipped normal prompt prefill
+(`prefill_ms=0.0`), and used `cache_route=prompt_state_restore`.
+`QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN` controls when a full-prompt hit can use
+stored next-token metadata directly; the default favors longer generations so
+short requests do not merely shift first model work from `prefill_ms` to
+`decode_ms`.
+
 When `QWEN35_PROMPT_CACHE_FAST_FORWARD=1` and source-history cache is enabled,
 the CLI also writes a direct per-key output fast-forward certificate for fully
 generated spans. On a repeated same-session terminal request, this lets
@@ -911,6 +921,9 @@ Additional benchmark modes:
 
 # Exact prompt-cache restore after one seeded native prefill.
 ./build/benchmark_qwen_vs_llama --native-prefill-cache
+
+# Prompt-cache prefix restore plus exact replay of the last N prompt tokens.
+./build/benchmark_qwen_vs_llama --native-prefill-cache-prefix-suffix=8
 ```
 
 Latest guarded relaxed-host Qwen3.5-9B Q4_K_M body-only rows on M2 Max:
@@ -1016,6 +1029,15 @@ Local Metal resident cache snapshot, M2 Max, Qwen 3.5 9B Q4_K_M, prompt
 | cogni-ml Metal Store fast-forward, resident states on | `~0.07 ms/tok` for 64 cached tokens; `~0.02 ms/tok` for 256 cached tokens | hot validated state restore plus cached token emission; no verifier body |
 | `qwen35_generate` direct output fast-forward | `~1-2 ms` total for a 16-token cached span even with 5k irrelevant legacy manifest rows per cache file | one-shot CLI hit reads a per-key output certificate, validates prompt/output/text/exact-span hashes before opening GGUF, emits cached ids/text, and exits |
 | Metal encoded BF16 artifact read+restore | `~26.35 ms` for a 28.4MB BF16 recurrent artifact in a one-prompt smoke | direct encoded BF16 recurrent decode into prepared Metal buffers; avoids CPU BF16 decode path measured at `~715 ms`, but resident decoded templates remain faster at `~1.7 ms` restore-only |
+
+Latest focused resident-cache smoke, M2 Max, Qwen3.5 9B Q4_K_M, prompt14/gen8
+(`/tmp/qwen35_warm_cache_modes_20260528095435`): plain resident greedy p50
+`265.185 ms`; Store replay without resident state p50 `156.728 ms` with p50
+restore `44.817 ms`; Store replay with `--resident-states 2` p50 `115.932 ms`
+with p50 restore `3.367 ms`; state fast-forward p50 `3.657 ms`; serving-route
+continuation p50 `4.304 ms`; active cursor p50 `0.007 ms`; direct-output
+certificate p50 `0.015 ms`. These are warm-process session-cache numbers, not
+one-shot CLI latency.
 
 Metal cache caveat: source replay and fast-forward are different contracts.
 Source replay still verifies the known span through the exact target stack.
