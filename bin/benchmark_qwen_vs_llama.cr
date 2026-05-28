@@ -7,6 +7,7 @@ require "../src/ml/gguf/qwen35_weights"
 
 MODEL_PATH  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 LLAMA_BENCH = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-bench"
+BENCHMARK_MODES = {"both", "native", "llama"}
 
 record NativeStats,
   avg_ms : Float64,
@@ -396,6 +397,7 @@ load_total_warning_threshold = 100.0
 wait_quiet_ms = 0
 quiet_poll_ms = 1000
 require_quiet = false
+benchmark_mode = "both"
 
 OptionParser.parse do |p|
   p.banner = "Usage: benchmark_qwen_vs_llama [options]"
@@ -425,14 +427,16 @@ OptionParser.parse do |p|
   p.on("--wait-quiet-ms=N", "Wait up to N ms for host load to fall below benchmark thresholds before measuring") { |v| wait_quiet_ms = v.to_i }
   p.on("--quiet-poll-ms=N", "Polling interval for --wait-quiet-ms (default: 1000)") { |v| quiet_poll_ms = v.to_i }
   p.on("--require-quiet", "Abort instead of warning when host CPU load exceeds process or total thresholds") { require_quiet = true }
+  p.on("--mode=MODE", "Benchmark mode: both, native, or llama (default: both)") { |v| benchmark_mode = v }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
   end
 end
 
+raise "--mode must be one of #{BENCHMARK_MODES.join(", ")}" unless BENCHMARK_MODES.includes?(benchmark_mode)
 raise "Model not found: #{model}" unless File.exists?(model)
-raise "llama-bench not found: #{llama_bench}" unless File.exists?(llama_bench)
+raise "llama-bench not found: #{llama_bench}" if benchmark_mode != "native" && !File.exists?(llama_bench)
 raise "--wait-quiet-ms must be non-negative" unless wait_quiet_ms >= 0
 raise "--quiet-poll-ms must be positive" unless quiet_poll_ms > 0
 
@@ -443,23 +447,32 @@ else
   ML::BenchLoadGuard.warn_if_busy(load_warning_threshold, load_total_warning_threshold)
 end
 
-w = ML::GGUF::Qwen35Weights.from_gguf(model)
+native_prefill = nil.as(NativeStats?)
+native_decode = nil.as(NativeStats?)
+llama_prefill = nil.as(LlamaStats?)
+llama_decode = nil.as(LlamaStats?)
 
-native_prefill = if native_prefill_cache && native_prefill_cache_prefix_suffix > 0
-                   measure_native_prefill_cached_prefix(w, model, n_prompt, native_prefill_cache_prefix_suffix, reps, warmup)
-                 elsif native_prefill_cache
-                   measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
-                 elsif native_prefill_prealloc
-                   measure_native_prefill_preallocated(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
-                 elsif native_prefill_prepare_state
-                   measure_native_prefill_prepared_state(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
-                 else
-                   measure_native_prefill(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
-                 end
-native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_mode)
+if benchmark_mode != "llama"
+  w = ML::GGUF::Qwen35Weights.from_gguf(model)
 
-llama_prefill = run_llama_bench(llama_bench, model, n_prompt, 0, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
-llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
+  native_prefill = if native_prefill_cache && native_prefill_cache_prefix_suffix > 0
+                     measure_native_prefill_cached_prefix(w, model, n_prompt, native_prefill_cache_prefix_suffix, reps, warmup)
+                   elsif native_prefill_cache
+                     measure_native_prefill_cached(w, model, n_prompt, reps, warmup)
+                   elsif native_prefill_prealloc
+                     measure_native_prefill_preallocated(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
+                   elsif native_prefill_prepare_state
+                     measure_native_prefill_prepared_state(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
+                   else
+                     measure_native_prefill(w, n_prompt, reps, warmup, final_top1: native_prefill_final_top1)
+                   end
+  native_decode = measure_native_decode(w, n_gen, reps, warmup, native_decode_mode)
+end
+
+if benchmark_mode != "native"
+  llama_prefill = run_llama_bench(llama_bench, model, n_prompt, 0, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
+  llama_decode = run_llama_bench(llama_bench, model, 0, n_gen, reps, n_gpu_layers, threads, flash_attn, llama_cache_type_k, llama_cache_type_v, llama_extra_args)
+end
 
 puts "Qwen benchmark vs llama.cpp"
 puts "model: #{model}"
@@ -481,14 +494,38 @@ native_decode_label = case native_decode_mode
                       when "full" then "full_logits"
                       else native_decode_mode
                       end
-puts "settings: prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_label}"
+puts "settings: mode=#{benchmark_mode} prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_label}"
 puts
 puts "Prefill"
-puts "  cogni-ml:  avg=#{native_prefill.avg_ms.round(2)} ms  p50=#{native_prefill.p50_ms.round(2)} ms  p95=#{native_prefill.p95_ms.round(2)} ms  avg=#{native_prefill.tok_s_avg.round(2)} tok/s  p50=#{native_prefill.tok_s_p50.round(2)} tok/s"
-puts "  llama.cpp: avg=#{(llama_prefill.avg_ns / 1_000_000.0).round(2)} ms  avg=#{llama_prefill.avg_ts.round(2)} tok/s  stddev=#{llama_prefill.stddev_ts.round(2)} tok/s"
-puts "  gap vs llama.cpp: #{pct_gap(native_prefill.tok_s_p50, llama_prefill.avg_ts).round(2)}%"
+if np = native_prefill
+  puts "  cogni-ml:  avg=#{np.avg_ms.round(2)} ms  p50=#{np.p50_ms.round(2)} ms  p95=#{np.p95_ms.round(2)} ms  avg=#{np.tok_s_avg.round(2)} tok/s  p50=#{np.tok_s_p50.round(2)} tok/s"
+else
+  puts "  cogni-ml:  skipped"
+end
+if lp = llama_prefill
+  puts "  llama.cpp: avg=#{(lp.avg_ns / 1_000_000.0).round(2)} ms  avg=#{lp.avg_ts.round(2)} tok/s  stddev=#{lp.stddev_ts.round(2)} tok/s"
+else
+  puts "  llama.cpp: skipped"
+end
+if np = native_prefill
+  if lp = llama_prefill
+    puts "  gap vs llama.cpp: #{pct_gap(np.tok_s_p50, lp.avg_ts).round(2)}%"
+  end
+end
 puts
 puts "Decode"
-puts "  cogni-ml:  avg=#{native_decode.avg_ms.round(2)} ms  p50=#{native_decode.p50_ms.round(2)} ms  p95=#{native_decode.p95_ms.round(2)} ms  avg=#{native_decode.tok_s_avg.round(2)} tok/s  p50=#{native_decode.tok_s_p50.round(2)} tok/s"
-puts "  llama.cpp: avg=#{(llama_decode.avg_ns / 1_000_000.0).round(2)} ms  avg=#{llama_decode.avg_ts.round(2)} tok/s  stddev=#{llama_decode.stddev_ts.round(2)} tok/s"
-puts "  gap vs llama.cpp: #{pct_gap(native_decode.tok_s_p50, llama_decode.avg_ts).round(2)}%"
+if nd = native_decode
+  puts "  cogni-ml:  avg=#{nd.avg_ms.round(2)} ms  p50=#{nd.p50_ms.round(2)} ms  p95=#{nd.p95_ms.round(2)} ms  avg=#{nd.tok_s_avg.round(2)} tok/s  p50=#{nd.tok_s_p50.round(2)} tok/s"
+else
+  puts "  cogni-ml:  skipped"
+end
+if ld = llama_decode
+  puts "  llama.cpp: avg=#{(ld.avg_ns / 1_000_000.0).round(2)} ms  avg=#{ld.avg_ts.round(2)} tok/s  stddev=#{ld.stddev_ts.round(2)} tok/s"
+else
+  puts "  llama.cpp: skipped"
+end
+if nd = native_decode
+  if ld = llama_decode
+    puts "  gap vs llama.cpp: #{pct_gap(nd.tok_s_p50, ld.avg_ts).round(2)}%"
+  end
+end
