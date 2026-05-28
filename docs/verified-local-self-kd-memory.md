@@ -266,3 +266,51 @@ Updated interpretation:
   proxy should promote a route.
 - The next self-spec gate should use larger `gen` on the code pair and add a
   science/literature control only after a route selector exists.
+
+## GPU Pipeline Wall Gate: 2026-05-28
+
+The code/tool evidence lane was then checked with the real GPU self-spec pipeline
+instead of only teacher-forced/logit proxies.
+
+Baseline GPU pipeline:
+
+```text
+/tmp/qwen_memory_pair_gpu_code_20260528195104/code_pair_gpu_gamma8.log
+```
+
+Settings: Qwen3.5-9B Q4_K_M, `tokens=48`, `calib=24`, `rank=24`, layer `24`,
+`gen=16`, `gamma=8`, `draft_split=1`.
+
+Result:
+
+```text
+code_crystal_closed: accept 100%, parity true, plain_speedup 0.6971x
+code_crystal_memory: accept 100%, parity true, plain_speedup 0.6754x
+```
+
+The route is exact and accepts cleanly, but it is slower than plain exact decode.
+The proposal body still costs too much relative to the verifier/plain baseline.
+
+No-FFN draft cheapening on layer 24:
+
+```text
+/tmp/qwen_memory_pair_gpu_code_noffn_20260528195149/code_pair_gpu_gamma8_noffn24.log
+```
+
+Result:
+
+```text
+code_crystal_closed: accept 100%, parity true, plain_speedup 0.6852x
+code_crystal_memory: accept 100%, parity true, plain_speedup 0.6773x
+```
+
+This did not improve the code pair. The default main prompt also rejected once
+under no-FFN, showing this local cheapening can reduce robustness.
+
+Conclusion:
+
+- Memory-conditioned code/tool evidence is a quality/acceptance-positive lane,
+  but not yet a speed lane in the current GPU pipeline shape.
+- The next speed lever is not another one-layer no-FFN tweak. It must reduce
+  proposal body cost more structurally, or reuse known evidence/session spans via
+  active verification/replay instead of rerunning a near-full self-draft body.
