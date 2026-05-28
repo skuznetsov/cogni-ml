@@ -1235,200 +1235,6 @@ while generated_ids.size < n_gen
   ngram_pending_replay_cursor = nil.as(Int32?)
   ngram_from_trusted_source = false
 
-  if current_hidden_ctx
-    cycle_wall0 = Time.instant
-    cycle_start_pos = pos
-    cycle_target_verify0 = target_verify_ms
-    cycle_target_backup0 = target_backup_ms
-    cycle_commit0 = commit_ms
-    cycle_select0 = current_hidden_ctx_select_ms
-    cycle_ctx_proposed0 = current_hidden_ctx_proposed
-    cycle_ctx_accepted0 = current_hidden_ctx_accepted
-    cycle_ctx_reject0 = current_hidden_ctx_rejects
-    cycle_ctx_fallback0 = current_hidden_ctx_fallback_tokens
-    path_ids = [] of Int32
-    path_rows = [] of Int32
-    accepted_prefix = 0
-    rejected_path = false
-
-    if current_hidden_ctx_seeded_tokens < current_hidden_ctx_seed
-      generated_ids << target_next
-      if generated_ids.size < n_gen
-        tv0 = Time.instant
-        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
-        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
-        target_verify_ms += (Time.instant - tv0).total_milliseconds
-        current_hidden_tree_hidden.concat(hidden)
-        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
-        current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
-      end
-      pos += 1
-      current_hidden_ctx_seeded_tokens += 1
-      current_hidden_ctx_fallback_tokens += 1
-      commit0 = Time.instant
-      new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
-      history.concat(new_history)
-      ngram_history.try &.append(new_history)
-      commit_ms += (Time.instant - commit0).total_milliseconds
-      next
-    end
-
-    remaining = n_gen - generated_ids.size
-    depth = Math.min(current_hidden_ctx_depth, remaining)
-    select0 = Time.instant
-    cursor = current_hidden_ctx_cursor
-    emitted_for_select = generated_ids.dup
-    best_suffix_row = -1
-    best_suffix_overlap = 0
-    current_hidden_tree_train_count.times do |row|
-      overlap = token_suffix_overlap_at_prompt_row(prompt_ids, emitted_for_select, row)
-      if overlap > best_suffix_overlap || (overlap == best_suffix_overlap && row > best_suffix_row)
-        best_suffix_overlap = overlap
-        best_suffix_row = row
-      end
-    end
-
-    if best_suffix_row >= 0 && best_suffix_overlap >= current_hidden_ctx_seed
-      direct_len = Math.min(depth, current_hidden_tree_train_count - best_suffix_row)
-      direct_len.times do |i|
-        row = best_suffix_row + i
-        path_ids << current_hidden_tree_labels[row]
-        path_rows << row
-      end
-    else
-      candidates = current_hidden_chain_candidate_rows(
-        current_hidden_tree_hidden,
-        current_hidden_tree_labels,
-        current_hidden_tree_norms,
-        current_hidden_tree_dim,
-        cursor,
-        current_hidden_tree_train_count,
-        depth > 1,
-        current_hidden_ctx_width)
-      chosen = choose_current_hidden_context_candidate(prompt_ids, emitted_for_select, candidates)
-      if chosen
-        corridor_len = Math.min(depth, current_hidden_tree_train_count - chosen[:row])
-        corridor_len.times do |i|
-          row = chosen[:row] + i
-          path_ids << current_hidden_tree_labels[row]
-          path_rows << row
-        end
-      end
-    end
-    elapsed_select = (Time.instant - select0).total_milliseconds
-    current_hidden_ctx_select_ms += elapsed_select
-    proposal_ms += elapsed_select
-    current_hidden_ctx_cycles += 1
-    current_hidden_ctx_proposed += path_ids.size
-
-    if path_ids.empty?
-      generated_ids << target_next
-      if generated_ids.size < n_gen
-        tv0 = Time.instant
-        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
-        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
-        target_verify_ms += (Time.instant - tv0).total_milliseconds
-        current_hidden_tree_hidden.concat(hidden)
-        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
-        current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
-      end
-      pos += 1
-      current_hidden_ctx_fallback_tokens += 1
-    else
-      tb0 = Time.instant
-      target_backup_state.copy_from!(target_state)
-      target_backup_ms += (Time.instant - tb0).total_milliseconds
-
-      tv0 = Time.instant
-      target_nexts = target_prefill_top1s_for_future(target, path_ids, pos, target_state, allow_guarded_verifier, generated_ids.size, n_gen)
-      target_verify_ms += (Time.instant - tv0).total_milliseconds
-
-      expected = target_next
-      path_ids.each_with_index do |cand, i|
-        break if generated_ids.size + accepted_prefix >= n_gen
-        break unless cand == expected
-        accepted_prefix += 1
-        expected = target_nexts[i][0] if i < target_nexts.size
-      end
-
-      if accepted_prefix == path_ids.size
-        accepted_ids = path_ids
-        generated_ids.concat(accepted_ids)
-        current_hidden_ctx_accepted += accepted_prefix
-        current_hidden_ctx_cursor = path_rows[accepted_prefix - 1] + 1 < current_hidden_tree_train_count ? path_rows[accepted_prefix - 1] + 1 : path_rows[accepted_prefix - 1] if accepted_prefix > 0
-        target_next = expected if generated_ids.size < n_gen
-        pos += accepted_prefix
-      elsif accepted_prefix > 0
-        rejected_path = true
-        current_hidden_ctx_rejects += 1
-        current_hidden_ctx_accepted += accepted_prefix
-        accepted_ids = path_ids[0, accepted_prefix]
-        target_state.copy_from!(target_backup_state)
-        generated_ids.concat(accepted_ids)
-        if generated_ids.size < n_gen
-          commit_ctx0 = Time.instant
-          replay = target_prefill_top1s_for_future(target, accepted_ids, cycle_start_pos, target_state, allow_guarded_verifier, generated_ids.size - accepted_ids.size, n_gen)
-          target_next = replay[-1][0] unless replay.empty?
-          current_hidden_ctx_commit_ms += (Time.instant - commit_ctx0).total_milliseconds
-        end
-        current_hidden_ctx_cursor = path_rows[accepted_prefix - 1] + 1 < current_hidden_tree_train_count ? path_rows[accepted_prefix - 1] + 1 : path_rows[accepted_prefix - 1]
-        pos += accepted_prefix
-      else
-        rejected_path = true
-        current_hidden_ctx_rejects += 1
-        target_state.copy_from!(target_backup_state)
-        generated_ids << target_next
-        if generated_ids.size < n_gen
-          tv1 = Time.instant
-          hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
-          target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
-          target_verify_ms += (Time.instant - tv1).total_milliseconds
-          current_hidden_tree_hidden.concat(hidden)
-          current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
-          current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
-        end
-        pos += 1
-        current_hidden_ctx_fallback_tokens += 1
-      end
-    end
-
-    commit0 = Time.instant
-    new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
-    history.concat(new_history)
-    ngram_history.try &.append(new_history)
-    commit_ms += (Time.instant - commit0).total_milliseconds
-    if dump_cycles_path
-      record = CycleDump.new(
-        prompt_hash, target_model_id, draft_model_id,
-        "current_hidden_ctx", "current_hidden_ctx", verify_mode,
-        cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
-        current_hidden_ctx_width, current_hidden_ctx_proposed - cycle_ctx_proposed0, current_hidden_ctx_accepted - cycle_ctx_accepted0, rejected_path ? accepted_prefix : -1,
-        0, ngram_min, ngram_max, ngram_recursive,
-        false, false,
-        token_ids_hash(path_ids), dump_cycle_token_ids ? path_ids : nil,
-        0.0,
-        target_verify_ms - cycle_target_verify0,
-        target_backup_ms - cycle_target_backup0,
-        0.0,
-        0.0,
-        (Time.instant - cycle_wall0).total_milliseconds)
-      record.proposal_ms = current_hidden_ctx_select_ms - cycle_select0
-      record.commit_ms = commit_ms - cycle_commit0
-      record.prompt_category = prompt_category
-      record.candidate_features = {
-        "ctx_seed" => current_hidden_ctx_seed.to_f64,
-        "ctx_depth" => depth.to_f64,
-        "ctx_width" => current_hidden_ctx_width.to_f64,
-        "ctx_path_len" => path_ids.size.to_f64,
-        "ctx_accepted" => accepted_prefix.to_f64,
-        "ctx_rejects" => (current_hidden_ctx_rejects - cycle_ctx_reject0).to_f64,
-        "ctx_fallback_tokens" => (current_hidden_ctx_fallback_tokens - cycle_ctx_fallback0).to_f64,
-      }
-      cycle_dumps << record
-    end
-    next
-  end
-
   if current_hidden_tree
     cycle_wall0 = Time.instant
     cycle_start_pos = pos
@@ -1815,6 +1621,200 @@ while generated_ids.size < n_gen
       end
       next
     end
+  end
+
+  if current_hidden_ctx && !target_only && !(ngram_enabled && ngram_target_only)
+    cycle_wall0 = Time.instant
+    cycle_start_pos = pos
+    cycle_target_verify0 = target_verify_ms
+    cycle_target_backup0 = target_backup_ms
+    cycle_commit0 = commit_ms
+    cycle_select0 = current_hidden_ctx_select_ms
+    cycle_ctx_proposed0 = current_hidden_ctx_proposed
+    cycle_ctx_accepted0 = current_hidden_ctx_accepted
+    cycle_ctx_reject0 = current_hidden_ctx_rejects
+    cycle_ctx_fallback0 = current_hidden_ctx_fallback_tokens
+    path_ids = [] of Int32
+    path_rows = [] of Int32
+    accepted_prefix = 0
+    rejected_path = false
+
+    if current_hidden_ctx_seeded_tokens < current_hidden_ctx_seed
+      generated_ids << target_next
+      if generated_ids.size < n_gen
+        tv0 = Time.instant
+        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        current_hidden_tree_hidden.concat(hidden)
+        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+        current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
+      end
+      pos += 1
+      current_hidden_ctx_seeded_tokens += 1
+      current_hidden_ctx_fallback_tokens += 1
+      commit0 = Time.instant
+      new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+      history.concat(new_history)
+      ngram_history.try &.append(new_history)
+      commit_ms += (Time.instant - commit0).total_milliseconds
+      next
+    end
+
+    remaining = n_gen - generated_ids.size
+    depth = Math.min(current_hidden_ctx_depth, remaining)
+    select0 = Time.instant
+    cursor = current_hidden_ctx_cursor
+    emitted_for_select = generated_ids.dup
+    best_suffix_row = -1
+    best_suffix_overlap = 0
+    current_hidden_tree_train_count.times do |row|
+      overlap = token_suffix_overlap_at_prompt_row(prompt_ids, emitted_for_select, row)
+      if overlap > best_suffix_overlap || (overlap == best_suffix_overlap && row > best_suffix_row)
+        best_suffix_overlap = overlap
+        best_suffix_row = row
+      end
+    end
+
+    if best_suffix_row >= 0 && best_suffix_overlap >= current_hidden_ctx_seed
+      direct_len = Math.min(depth, current_hidden_tree_train_count - best_suffix_row)
+      direct_len.times do |i|
+        row = best_suffix_row + i
+        path_ids << current_hidden_tree_labels[row]
+        path_rows << row
+      end
+    else
+      candidates = current_hidden_chain_candidate_rows(
+        current_hidden_tree_hidden,
+        current_hidden_tree_labels,
+        current_hidden_tree_norms,
+        current_hidden_tree_dim,
+        cursor,
+        current_hidden_tree_train_count,
+        depth > 1,
+        current_hidden_ctx_width)
+      chosen = choose_current_hidden_context_candidate(prompt_ids, emitted_for_select, candidates)
+      if chosen
+        corridor_len = Math.min(depth, current_hidden_tree_train_count - chosen[:row])
+        corridor_len.times do |i|
+          row = chosen[:row] + i
+          path_ids << current_hidden_tree_labels[row]
+          path_rows << row
+        end
+      end
+    end
+    elapsed_select = (Time.instant - select0).total_milliseconds
+    current_hidden_ctx_select_ms += elapsed_select
+    proposal_ms += elapsed_select
+    current_hidden_ctx_cycles += 1
+    current_hidden_ctx_proposed += path_ids.size
+
+    if path_ids.empty?
+      generated_ids << target_next
+      if generated_ids.size < n_gen
+        tv0 = Time.instant
+        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        current_hidden_tree_hidden.concat(hidden)
+        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+        current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
+      end
+      pos += 1
+      current_hidden_ctx_fallback_tokens += 1
+    else
+      tb0 = Time.instant
+      target_backup_state.copy_from!(target_state)
+      target_backup_ms += (Time.instant - tb0).total_milliseconds
+
+      tv0 = Time.instant
+      target_nexts = target_prefill_top1s_for_future(target, path_ids, pos, target_state, allow_guarded_verifier, generated_ids.size, n_gen)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+
+      expected = target_next
+      path_ids.each_with_index do |cand, i|
+        break if generated_ids.size + accepted_prefix >= n_gen
+        break unless cand == expected
+        accepted_prefix += 1
+        expected = target_nexts[i][0] if i < target_nexts.size
+      end
+
+      if accepted_prefix == path_ids.size
+        accepted_ids = path_ids
+        generated_ids.concat(accepted_ids)
+        current_hidden_ctx_accepted += accepted_prefix
+        current_hidden_ctx_cursor = path_rows[accepted_prefix - 1] + 1 < current_hidden_tree_train_count ? path_rows[accepted_prefix - 1] + 1 : path_rows[accepted_prefix - 1] if accepted_prefix > 0
+        target_next = expected if generated_ids.size < n_gen
+        pos += accepted_prefix
+      elsif accepted_prefix > 0
+        rejected_path = true
+        current_hidden_ctx_rejects += 1
+        current_hidden_ctx_accepted += accepted_prefix
+        accepted_ids = path_ids[0, accepted_prefix]
+        target_state.copy_from!(target_backup_state)
+        generated_ids.concat(accepted_ids)
+        if generated_ids.size < n_gen
+          commit_ctx0 = Time.instant
+          replay = target_prefill_top1s_for_future(target, accepted_ids, cycle_start_pos, target_state, allow_guarded_verifier, generated_ids.size - accepted_ids.size, n_gen)
+          target_next = replay[-1][0] unless replay.empty?
+          current_hidden_ctx_commit_ms += (Time.instant - commit_ctx0).total_milliseconds
+        end
+        current_hidden_ctx_cursor = path_rows[accepted_prefix - 1] + 1 < current_hidden_tree_train_count ? path_rows[accepted_prefix - 1] + 1 : path_rows[accepted_prefix - 1]
+        pos += accepted_prefix
+      else
+        rejected_path = true
+        current_hidden_ctx_rejects += 1
+        target_state.copy_from!(target_backup_state)
+        generated_ids << target_next
+        if generated_ids.size < n_gen
+          tv1 = Time.instant
+          hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+          target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+          target_verify_ms += (Time.instant - tv1).total_milliseconds
+          current_hidden_tree_hidden.concat(hidden)
+          current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+          current_hidden_ctx_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
+        end
+        pos += 1
+        current_hidden_ctx_fallback_tokens += 1
+      end
+    end
+
+    commit0 = Time.instant
+    new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+    history.concat(new_history)
+    ngram_history.try &.append(new_history)
+    commit_ms += (Time.instant - commit0).total_milliseconds
+    if dump_cycles_path
+      record = CycleDump.new(
+        prompt_hash, target_model_id, draft_model_id,
+        "current_hidden_ctx", "current_hidden_ctx", verify_mode,
+        cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
+        current_hidden_ctx_width, current_hidden_ctx_proposed - cycle_ctx_proposed0, current_hidden_ctx_accepted - cycle_ctx_accepted0, rejected_path ? accepted_prefix : -1,
+        0, ngram_min, ngram_max, ngram_recursive,
+        false, false,
+        token_ids_hash(path_ids), dump_cycle_token_ids ? path_ids : nil,
+        0.0,
+        target_verify_ms - cycle_target_verify0,
+        target_backup_ms - cycle_target_backup0,
+        0.0,
+        0.0,
+        (Time.instant - cycle_wall0).total_milliseconds)
+      record.proposal_ms = current_hidden_ctx_select_ms - cycle_select0
+      record.commit_ms = commit_ms - cycle_commit0
+      record.prompt_category = prompt_category
+      record.candidate_features = {
+        "ctx_seed" => current_hidden_ctx_seed.to_f64,
+        "ctx_depth" => depth.to_f64,
+        "ctx_width" => current_hidden_ctx_width.to_f64,
+        "ctx_path_len" => path_ids.size.to_f64,
+        "ctx_accepted" => accepted_prefix.to_f64,
+        "ctx_rejects" => (current_hidden_ctx_rejects - cycle_ctx_reject0).to_f64,
+        "ctx_fallback_tokens" => (current_hidden_ctx_fallback_tokens - cycle_ctx_fallback0).to_f64,
+      }
+      cycle_dumps << record
+    end
+    next
   end
 
   if target_only || (ngram_enabled && ngram_target_only)
