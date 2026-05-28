@@ -1091,11 +1091,14 @@ puts "Loading tokenizer and models..."
 t0 = Time.instant
 tok = load_tokenizer(target_path, tokenizer_bin)
 target = ML::GGUF::Qwen35Weights.from_gguf(target_path)
-draft = ML::GGUF::Qwen35Weights.from_gguf(draft_path)
+skip_draft_load = router_model_path.nil? && (target_only || ngram_target_only || current_hidden_tree || current_hidden_ctx)
+draft = skip_draft_load ? nil : ML::GGUF::Qwen35Weights.from_gguf(draft_path)
 load_s = (Time.instant - t0).total_seconds
 
-unless target.output.out_dim == draft.output.out_dim
-  raise ArgumentError.new("target/draft vocab mismatch: #{target.output.out_dim} != #{draft.output.out_dim}")
+if loaded_draft = draft
+  unless target.output.out_dim == loaded_draft.output.out_dim
+    raise ArgumentError.new("target/draft vocab mismatch: #{target.output.out_dim} != #{loaded_draft.output.out_dim}")
+  end
 end
 
 prompt_ids = tok.encode(prompt)
@@ -1120,19 +1123,25 @@ cycle_dumps = [] of CycleDump
 
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
-puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
+if loaded_draft = draft
+  puts "draft:  layers=#{loaded_draft.hparams.n_layer} dim=#{loaded_draft.hparams.n_embd} vocab=#{loaded_draft.output.out_dim}"
+else
+  puts "draft:  skipped skip_draft_load=#{skip_draft_load}"
+end
 puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk} current_hidden_tree=#{current_hidden_tree} current_hidden_tree_depth=#{current_hidden_tree_depth} current_hidden_tree_width=#{current_hidden_tree_width} current_hidden_ctx=#{current_hidden_ctx} current_hidden_ctx_seed=#{current_hidden_ctx_seed} current_hidden_ctx_depth=#{current_hidden_ctx_depth} current_hidden_ctx_width=#{current_hidden_ctx_width}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
-draft_state = ML::GGUF::Qwen35CPU::State.new(draft.hparams, max_seq: max_seq)
 target_backup_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
-draft_cycle_base = ML::GGUF::Qwen35CPU::State.new(draft.hparams, max_seq: max_seq)
+draft_state = draft ? ML::GGUF::Qwen35CPU::State.new(draft.not_nil!.hparams, max_seq: max_seq) : nil.as(ML::GGUF::Qwen35CPU::State?)
+draft_cycle_base = draft ? ML::GGUF::Qwen35CPU::State.new(draft.not_nil!.hparams, max_seq: max_seq) : nil.as(ML::GGUF::Qwen35CPU::State?)
 if prepare_state_metal
   ML::GGUF::Qwen35CPU.prepare_state_metal!(target_state, target.hparams)
-  ML::GGUF::Qwen35CPU.prepare_state_metal!(draft_state, draft.hparams)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(target_backup_state, target.hparams)
-  ML::GGUF::Qwen35CPU.prepare_state_metal!(draft_cycle_base, draft.hparams)
+  if loaded_draft = draft
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(draft_state.not_nil!, loaded_draft.hparams)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(draft_cycle_base.not_nil!, loaded_draft.hparams)
+  end
 end
 
 current_hidden_tree_prepare_ms = 0.0
@@ -1170,13 +1179,13 @@ target_next = if current_hidden_prefill_capture
                 prefill_next(target, prompt_ids, target_state)
               end
 target_initial_prefill_ms = (Time.instant - target_prefill0).total_milliseconds
-lazy_draft_prefill = router_model_path.nil? && (target_only || ngram_enabled || current_hidden_ctx)
+lazy_draft_prefill = skip_draft_load || (router_model_path.nil? && (target_only || ngram_enabled || current_hidden_ctx))
 draft_prefilled = false
 draft_next = -1
 draft_initial_prefill_ms = 0.0
 unless lazy_draft_prefill
   draft_prefill0 = Time.instant
-  draft_next = prefill_next(draft, prompt_ids, draft_state)
+  draft_next = prefill_next(draft.not_nil!, prompt_ids, draft_state.not_nil!)
   draft_initial_prefill_ms = (Time.instant - draft_prefill0).total_milliseconds
   draft_prefilled = true
 end
@@ -1988,9 +1997,14 @@ while generated_ids.size < n_gen
     next
   end
 
+  raise "draft model not loaded; neural fallback unavailable" if skip_draft_load
+  draft_weights = draft.not_nil!
+  draft_state_nn = draft_state.not_nil!
+  draft_cycle_base_nn = draft_cycle_base.not_nil!
+
   unless draft_prefilled
     td_prefill0 = Time.instant
-    draft_next = prefill_next(draft, prompt_ids, draft_state)
+    draft_next = prefill_next(draft_weights, prompt_ids, draft_state_nn)
     draft_initial_prefill_ms += (Time.instant - td_prefill0).total_milliseconds
     draft_prefilled = true
   end
@@ -1998,7 +2012,7 @@ while generated_ids.size < n_gen
   unless pending_draft_tokens.empty?
     tr0 = Time.instant
     pending_draft_tokens.each_with_index do |tok_id, i|
-      draft_next = advance_next(draft, tok_id, pending_draft_start_pos + i, draft_state)
+      draft_next = advance_next(draft_weights, tok_id, pending_draft_start_pos + i, draft_state_nn)
     end
     draft_resync_ms += (Time.instant - tr0).total_milliseconds
     pending_draft_tokens.clear
@@ -2045,7 +2059,7 @@ while generated_ids.size < n_gen
       draft_skips_before_fallback += 1
     else
       td0 = Time.instant
-      draft_next = advance_next(draft, correction_or_accepted[0], pos, draft_state)
+      draft_next = advance_next(draft_weights, correction_or_accepted[0], pos, draft_state_nn)
       draft_ms += (Time.instant - td0).total_milliseconds
     end
     pos += 1
@@ -2060,7 +2074,7 @@ while generated_ids.size < n_gen
     proposed += 1
     if generated_ids.size < n_gen
       td0 = Time.instant
-      draft_next = advance_next(draft, accepted_token, pos, draft_state)
+      draft_next = advance_next(draft_weights, accepted_token, pos, draft_state_nn)
       draft_ms += (Time.instant - td0).total_milliseconds
       tv0 = Time.instant
       target_next = advance_next(target, accepted_token, pos, target_state)
@@ -2081,7 +2095,7 @@ while generated_ids.size < n_gen
                                      Math.max(1, current_gamma // 2) <= plain_fallback_gamma
     unless skip_draft_backup_for_fallback
       tdb0 = Time.instant
-      draft_cycle_base.copy_from!(draft_state)
+      draft_cycle_base_nn.copy_from!(draft_state_nn)
       draft_backup_ms += (Time.instant - tdb0).total_milliseconds
     else
       draft_backup_skips += 1
@@ -2121,7 +2135,7 @@ while generated_ids.size < n_gen
           break if generated_ids.size + stage_candidates.size >= n_gen
           stage_candidates << draft_next
           break if generated_ids.size + stage_candidates.size >= n_gen
-          draft_next = advance_next(draft, draft_next, stage_start_pos + i, draft_state)
+          draft_next = advance_next(draft_weights, draft_next, stage_start_pos + i, draft_state_nn)
         end
         draft_ms += (Time.instant - td0).total_milliseconds
         proposed += stage_candidates.size
@@ -2180,7 +2194,7 @@ while generated_ids.size < n_gen
         break if generated_ids.size + candidates.size >= n_gen
         candidates << draft_next
         break if generated_ids.size + candidates.size >= n_gen
-        draft_next = advance_next(draft, draft_next, pos + i, draft_state)
+        draft_next = advance_next(draft_weights, draft_next, pos + i, draft_state_nn)
       end
       draft_ms += (Time.instant - td0).total_milliseconds
       proposed += candidates.size
@@ -2305,7 +2319,7 @@ while generated_ids.size < n_gen
       else
         raise "draft backup missing before required resync" if skip_draft_backup_for_fallback
         tr0 = Time.instant
-        draft_next = resync_draft!(draft, draft_state, draft_cycle_base, correction_or_accepted, cycle_start_pos)
+        draft_next = resync_draft!(draft_weights, draft_state_nn, draft_cycle_base_nn, correction_or_accepted, cycle_start_pos)
         draft_resync_ms += (Time.instant - tr0).total_milliseconds
       end
     end
@@ -2427,7 +2441,7 @@ puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_ga
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s, decode_only=true)"
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
-puts "initial_prefill target=#{target_initial_prefill_ms.round(1)} ms draft=#{draft_initial_prefill_ms.round(1)} ms target_capture=#{current_hidden_prefill_capture} draft_lazy=#{lazy_draft_prefill} draft_prefilled=#{draft_prefilled}"
+puts "initial_prefill target=#{target_initial_prefill_ms.round(1)} ms draft=#{draft_initial_prefill_ms.round(1)} ms target_capture=#{current_hidden_prefill_capture} draft_lazy=#{lazy_draft_prefill} draft_prefilled=#{draft_prefilled} skip_draft_load=#{skip_draft_load}"
 if trace_result = current_hidden_trace_result
   proposal_per_eval = trace_result[:eval_samples] > 0 ? trace_result[:proposal_ms] / trace_result[:eval_samples] : 0.0
   puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} chain=#{trace_result[:chain_rate].round(2)}% chain_hits=#{trace_result[:chain_hits]}/#{trace_result[:chain_steps]} chain_topk=#{trace_result[:chain_topk_rate].round(2)}% chain_topk_hits=#{trace_result[:chain_topk_hits]}/#{trace_result[:chain_topk_steps]} seed1_topk=#{trace_result[:seed1_topk_rate].round(2)}% seed1_topk_hits=#{trace_result[:seed1_topk_hits]}/#{trace_result[:seed1_topk_steps]} seed1_ctx=#{trace_result[:seed1_ctx_rate].round(2)}% seed1_ctx_hits=#{trace_result[:seed1_ctx_hits]}/#{trace_result[:seed1_ctx_steps]} seed2_ctx=#{trace_result[:seed2_ctx_rate].round(2)}% seed2_ctx_hits=#{trace_result[:seed2_ctx_hits]}/#{trace_result[:seed2_ctx_steps]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} chain_ids=#{trace_result[:chain_ids].join(',')} chain_topk_ids=#{trace_result[:chain_topk_ids].join(',')} seed1_topk_ids=#{trace_result[:seed1_topk_ids].join(',')} seed1_ctx_ids=#{trace_result[:seed1_ctx_ids].join(',')} seed2_ctx_ids=#{trace_result[:seed2_ctx_ids].join(',')} note=postrun_trace_only_not_in_wall"
