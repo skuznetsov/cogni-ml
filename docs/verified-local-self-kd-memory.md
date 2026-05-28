@@ -156,3 +156,55 @@ Why not higher:
 Operational rule: do not promote this as a product or paper claim until the
 paired falsifier shows lower rank or higher acceptance on memory-grounded prompts
 with exact verifier parity.
+
+## First Local Smoke: 2026-05-28
+
+A first narrow 9B smoke was run with Qwen3.5-9B Q4_K_M, `tokens=32`,
+`calib-tokens=16`, `rank=16`, `basis=pca`, `pca-iters=2`, and one recurrent
+layer island (`24`). This is not a promotion gate; it only checks whether the
+paired harness can produce falsifiable rows without a long run.
+
+Prompt fixture: `examples/qwen_memory_grounded_pairs.txt`.
+Summary helper: `scripts/summarize_memory_grounded_pairs.py`.
+
+Feature-only residual run:
+
+```text
+/tmp/qwen_memory_grounded_pairs_features_20260528193306.log
+```
+
+Closed-book versus memory-grounded residual deltas:
+
+```text
+code_crystal:       residual_mean 0.4173 -> 0.3955, delta -0.0218
+science_turing:     residual_mean 0.4040 -> 0.4188, delta +0.0148
+literature_hamlet:  residual_mean 0.4222 -> 0.4333, delta +0.0111
+```
+
+Low-rank logit drift run:
+
+```text
+/tmp/qwen_memory_grounded_pairs_logit_20260528193338.log
+```
+
+Top1/top5 result:
+
+```text
+code_crystal:       top1 100.00% -> 100.00%, top5 100.00% -> 100.00%
+science_turing:     top1 100.00% ->  93.75%, top5 100.00% -> 100.00%
+literature_hamlet:  top1 100.00% -> 100.00%, top5 100.00% -> 100.00%
+```
+
+Interpretation:
+
+- The harness works and can already falsify over-broad claims.
+- Memory-grounding improved the cheap residual proxy for the code prompt, but
+  worsened it for the science and literature prompts in this tiny setup.
+- Top5 stayed intact for all three pairs, but science lost one top1 position.
+- The current evidence says typed memory may help selected regimes; it is not a
+  universal automatic surrogate-speed win.
+
+Next gate: run more layers/ranks and a true self-spec acceptance row, but only in
+smaller slices or with prompt subsets. A prior six-layer `gen=4` all-pair run was
+stopped after several minutes because it exceeded the intended interactive probe
+budget before printing rows.
