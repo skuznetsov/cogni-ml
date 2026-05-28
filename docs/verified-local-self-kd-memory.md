@@ -314,3 +314,36 @@ Conclusion:
 - The next speed lever is not another one-layer no-FFN tweak. It must reduce
   proposal body cost more structurally, or reuse known evidence/session spans via
   active verification/replay instead of rerunning a near-full self-draft body.
+
+## Current-Hidden Proposal Probe: 2026-05-28
+
+To test a more structural proposal-body reduction, the paired fixture was run
+through the existing current-hidden nearest-label/transition probe instead of a
+full low-rank self-draft body.
+
+Log:
+
+```text
+/tmp/qwen_memory_pair_current_hidden_20260528195354.log
+```
+
+Settings: Qwen3.5-9B Q4_K_M, `tokens=48`, `calib=24`, top-K `5`, transition
+rank `8`.
+
+Summary:
+
+```text
+code_crystal:      top1 16.67 -> 20.83, top5 16.67 -> 20.83
+science_turing:    top1 25.00 ->  4.17, top5 37.50 -> 12.50
+literature_hamlet: top1 29.17 ->  4.17, top5 50.00 -> 16.67
+```
+
+The code memory prompt again improves slightly and has better nearest-hidden
+cosine, but the absolute top-K coverage is far too low for a useful verifier
+proposal source. Science and literature memory grounding make this proposal
+family much worse.
+
+Conclusion: current-hidden nearest-label is useful as a cheap diagnostic/router
+feature, not as a standalone proposal body. The next structural route should use
+retrieved evidence/session spans as candidate token sources, then active exact
+verification, rather than trying to infer next tokens from nearest hidden rows.

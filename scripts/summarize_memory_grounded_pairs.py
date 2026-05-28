@@ -27,8 +27,11 @@ ROW_TYPES = {
     "self_spec_gpu_pipeline_suite": "suite_features",
     "self_spec_prompt_route_features": "route_features",
     "self_spec_ffn_updown_route_features": "ffn_updown_features",
+    "current_hidden_proposal": "current_hidden",
 }
 METRIC_KEYS = (
+    "top1",
+    "topk",
     "top1_match",
     "top5_hit",
     "accept_rate",
@@ -41,6 +44,8 @@ METRIC_KEYS = (
     "residual_max",
     "rel_rmse_mean",
     "cos_mean",
+    "avg_best_cos",
+    "proposal_ms_per_eval",
 )
 
 

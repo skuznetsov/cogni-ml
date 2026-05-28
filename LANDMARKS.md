@@ -17284,3 +17284,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The current memory-conditioned code lane is acceptance-positive but not speed-positive. The proposal body is still too close to full decode cost, and one-layer no-FFN is not enough. Future speed work should target structural proposal-body elimination, active known-span replay, or a route that uses external memory to avoid draft work rather than just making the same self-draft slightly approximate.
 - LTP/WBA: Window is code/tool evidence with clean acceptance. Transport is layer24/rank24 self-draft over a 16-token corridor. Legal move failed the potential check because `(proposal body + verifier + wait)` exceeded plain exact decode. Dual frame is plain exact until a stronger proposal-body collapse or replay route lowers wall cost.
 - trust: {F:0.86,G:0.32,R:0.82}
+
+**LM-708 Current-hidden proposal is a diagnostic, not a memory-grounded proposal body [shared/ml]**
+- status: MEASURED refutation for standalone current-hidden proposals
+- evidence: `/tmp/qwen_memory_pair_current_hidden_20260528195354.log`, Qwen3.5-9B Q4_K_M, paired closed/memory fixture, `tokens=48`, `calib=24`, current-hidden topK `5`, transition rank `8`. The summarizer now parses `current_hidden_proposal` rows.
+- result: Code memory improved slightly (`top1/top5 16.67 -> 20.83`, avg nearest-hidden cosine `0.6528 -> 0.7077`, proposal ms/eval `2.286 -> 1.951`), but absolute coverage is too low. Science and literature memory grounding regressed hard (`science top5 37.5 -> 12.5`, literature top5 `50.0 -> 16.67`).
+- diagnosis: Nearest current-hidden labels are not a strong enough standalone candidate source. They may still be useful as route features or risk signals. The next structural speed route should use external memory/session spans as explicit candidate token sources with active exact verification, not infer candidates from hidden nearest neighbors alone.
+- LTP/WBA: Window is a local hidden-state chart over the held-out corridor. Transport would be label lookup from nearest training states, but the potential fails because candidate coverage is too low. Dual frame remains exact decode or explicit known-span replay.
+- trust: {F:0.86,G:0.34,R:0.84}
