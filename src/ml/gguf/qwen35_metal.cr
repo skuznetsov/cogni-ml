@@ -2727,6 +2727,20 @@ module ML
               (output_qw.type.q8_0? && output_qw.in_dim % Q8_0_QK == 0))
         end
 
+        private def self.profile_bump_head_top1_shape(label : String,
+                                                      output_qw : QuantWeight,
+                                                      rows : Int32? = nil) : Nil
+          return unless Profile.enabled?
+
+          weight_bytes = if rows
+                           row_bytes = output_qw.raw.size.to_i64 // output_qw.out_dim
+                           row_bytes * rows.not_nil!
+                         else
+                           output_qw.raw.size.to_i64
+                         end
+          Profile.bump_matmul_shape("#{label} #{output_qw.type.name} #{output_qw.in_dim}x#{output_qw.out_dim} b1", weight_bytes)
+        end
+
         # Gated attention decode on Metal. CPU side prepares Q (post-rmsnorm,
         # post-RoPE) and gate (raw, kernel applies sigmoid); K/V are already
         # appended to the per-layer k_cache_buf/v_cache_buf at row `pos`.
@@ -8181,6 +8195,7 @@ module ML
 
           head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
           head_top1_enc.set_pipeline(out_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
+          profile_bump_head_top1_shape("head_top1", out_qw)
           head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
           head_top1_enc.set_buffer(normed_buf, 1)
           head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
@@ -8258,6 +8273,7 @@ module ML
 
           head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
           head_top1_enc.set_pipeline(mv6_top1_allowed_tiles_pipeline)
+          profile_bump_head_top1_shape("head_top1_allowed#{allowed_n}", out_qw, rows: allowed_n)
           head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
           head_top1_enc.set_buffer(normed_buf, 1)
           head_top1_enc.set_buffer(allowed_ids_buf, 2)
@@ -8317,6 +8333,7 @@ module ML
 
           head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
           head_top1_enc.set_pipeline(out_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
+          profile_bump_head_top1_shape("head_top1_no_norm", out_qw)
           head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
           head_top1_enc.set_buffer(x_buf, 1)
           head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
@@ -9637,6 +9654,11 @@ module ML
                       output_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline
                     end
                   )
+                  if use_allowed_top1
+                    profile_bump_head_top1_shape("head_top1_allowed#{allowed_n}", output_qw, rows: allowed_n)
+                  else
+                    profile_bump_head_top1_shape(use_head_top2 ? "head_top2" : "head_top1", output_qw)
+                  end
                   head_top1_enc.set_buffer(out_w_buf.not_nil!, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
                   head_top1_enc.set_buffer(pre_norm_buf, 1)
                   if use_allowed_top1

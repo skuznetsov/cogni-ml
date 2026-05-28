@@ -3232,3 +3232,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_619:** Guarded release build `/tmp/qwen35_decode_attribution_noprofile` passed. Sequential no-profile body decode measured p50 `1341.65ms` / `47.70 tok/s`; sequential profiled body decode measured post-profile p50 `1358.35ms` / `47.12 tok/s`; paired `benchmark_qwen_vs_llama` rerun measured native decode p50 `1364.19ms` / `46.91 tok/s` versus llama.cpp `43.49 tok/s` (`+7.87%`) on the relaxed host. The concurrent body/top1 no-profile run measured ~22.8 tok/s and is explicitly invalid.
 
 **next_update_619:** Do not run GPU performance commands in parallel. Use `--no-profile` when the goal is wall-speed parity with benchmark harnesses, and use the profiled attribution pass only for shape/operator attribution. Next speed branch should use sequential relaxed/quiet paired runs and focus on the largest decode traffic shapes: `rec.ffn_upgate`, `rec.proj`, `rec.ffn_down_add`, and full-attn FFN up/down.
+
+**decision_update_620:** Added top1 output-head logical traffic accounting to `Qwen35Metal.Profile`. Product top1 decode now exposes the full-vocab Q6 head scan as a first-class attribution row instead of hiding it inside wave wait.
+
+**evidence_update_620:** No-codegen and release builds passed. Sequential Qwen3.5-9B top1 attribution (`gen=64`) now reports `head.top1 head_top1 Q6_K 4096x248320 b1`, `64 calls`, `50925.00 MiB`, `16.56%` of logical matmul traffic; relaxed wall p50 was `1455.71ms` / `43.96 tok/s`.
+
+**next_update_620:** Treat the output head as the next high-leverage product corridor only when a boundary-safe candidate set exists. For function calling / structured JSON, measure `forward_top1_allowed` through the existing constrained decode path; for unconstrained greedy, do not approximate-prune the head unless exact verifier or grammar certification is present.
