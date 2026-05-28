@@ -75,6 +75,9 @@ ngram_trusted_source = ENV["QWEN35_SPEC_NGRAM_TRUSTED_SOURCE"]? == "1"
 ngram_source_prefix_gate = ENV["QWEN35_SPEC_NGRAM_SOURCE_PREFIX_GATE_OFF"]? != "1"
 current_hidden_trace = ENV["QWEN35_SPEC_CURRENT_HIDDEN_TRACE"]? == "1"
 current_hidden_trace_topk = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_TOPK"]? || "8").to_i
+current_hidden_tree = ENV["QWEN35_SPEC_CURRENT_HIDDEN_TREE"]? == "1"
+current_hidden_tree_depth = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_TREE_DEPTH"]? || "4").to_i
+current_hidden_tree_width = (ENV["QWEN35_SPEC_CURRENT_HIDDEN_TREE_WIDTH"]? || current_hidden_trace_topk.to_s).to_i
 prepare_state_metal = ENV["QWEN35_PREPARE_STATE_OFF"]? != "1"
 warm_verifier = ENV["QWEN35_SPEC_WARM_VERIFIER_OFF"]? != "1"
 allow_guarded_verifier = ENV["QWEN35_SPEC_ALLOW_GUARDED_VERIFIER"]? == "1"
@@ -130,7 +133,10 @@ OptionParser.parse(ARGV) do |parser|
   parser.on("--ngram-trusted-source", "Bypass untrusted candidate-shape gates for source cursor proposals after prefix validation") { ngram_trusted_source = true }
   parser.on("--ngram-no-source-prefix-gate", "Disable prompt-prefix validation before source cursor replay") { ngram_source_prefix_gate = false }
   parser.on("--current-hidden-trace", "Trace-only: score prompt hidden-table replay against exact generated tokens without changing policy") { current_hidden_trace = true }
-  parser.on("--current-hidden-topk N", "Candidate width for --current-hidden-trace (default: env QWEN35_SPEC_CURRENT_HIDDEN_TOPK or 8)") { |value| current_hidden_trace_topk = value.to_i }
+  parser.on("--current-hidden-topk N", "Candidate width for current-hidden trace/tree routes (default: env QWEN35_SPEC_CURRENT_HIDDEN_TOPK or 8)") { |value| current_hidden_trace_topk = value.to_i; current_hidden_tree_width = value.to_i }
+  parser.on("--current-hidden-tree", "Research: exact-first current-hidden topK beam verifier route") { current_hidden_tree = true }
+  parser.on("--current-hidden-tree-depth N", "Chunk depth for --current-hidden-tree (default: env QWEN35_SPEC_CURRENT_HIDDEN_TREE_DEPTH or 4)") { |value| current_hidden_tree_depth = value.to_i }
+  parser.on("--current-hidden-tree-width N", "Beam width/topK for --current-hidden-tree (default: --current-hidden-topk)") { |value| current_hidden_tree_width = value.to_i }
   parser.on("--no-warm-verifier", "Do not warm the target chunk-verifier route before decode timing") { warm_verifier = false }
   parser.on("--trace", "Print per-cycle verifier decisions") { trace = true }
   parser.on("--dump-cycles PATH", "Write per-cycle speculative policy/timing records as JSONL") { |path| dump_cycles_path = path }
@@ -180,6 +186,8 @@ raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_MIN must be positive") unless r
 raise ArgumentError.new("QWEN35_SPEC_ROUTER_LONG_THRESHOLD must be in [0,1]") if router_long_threshold && !(0.0..1.0).includes?(router_long_threshold.not_nil!)
 raise ArgumentError.new("router model not found: #{router_model_path}") if router_model_path && !File.file?(router_model_path.not_nil!)
 raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_TOPK must be positive") unless current_hidden_trace_topk > 0
+raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_TREE_DEPTH must be positive") unless current_hidden_tree_depth > 0
+raise ArgumentError.new("QWEN35_SPEC_CURRENT_HIDDEN_TREE_WIDTH must be positive") unless current_hidden_tree_width > 0
 
 def load_tokenizer(model_path : String, tokenizer_bin : String) : ML::GGUF::Qwen35Tokenizer
   g = ML::GGUF::GGUFFile.new(model_path)
@@ -337,6 +345,15 @@ def hidden_row_cosine_spec(hidden : Array(Float32),
   acc / denom
 end
 
+def hidden_vector_norm_spec(v : Array(Float32)) : Float64
+  acc = 0.0
+  v.each do |x|
+    xf = x.to_f64
+    acc += xf * xf
+  end
+  Math.sqrt(acc)
+end
+
 def current_hidden_trace_topk_for_row(hidden : Array(Float32),
                                       labels : Array(Int32),
                                       norms : Array(Float64),
@@ -366,14 +383,14 @@ def current_hidden_trace_topk_for_row(hidden : Array(Float32),
   }
 end
 
-def current_hidden_chain_candidates(hidden : Array(Float32),
-                                    labels : Array(Int32),
-                                    norms : Array(Float64),
-                                    dim : Int32,
-                                    cursor_row : Int32,
-                                    train_count : Int32,
-                                    require_next : Bool,
-                                    top_k : Int32) : NamedTuple(ids: Array(Int32), rows: Array(Int32), best_cos: Float64)
+def current_hidden_chain_candidate_rows(hidden : Array(Float32),
+                                        labels : Array(Int32),
+                                        norms : Array(Float64),
+                                        dim : Int32,
+                                        cursor_row : Int32,
+                                        train_count : Int32,
+                                        require_next : Bool,
+                                        top_k : Int32) : Array(NamedTuple(id: Int32, row: Int32, score: Float64))
   by_label = {} of Int32 => NamedTuple(row: Int32, score: Float64)
   train_count.times do |row|
     next if require_next && row + 1 >= train_count
@@ -383,13 +400,55 @@ def current_hidden_chain_candidates(hidden : Array(Float32),
     by_label[label] = {row: row, score: sim} if prev.nil? || sim > prev[:score]
   end
 
-  ranked = by_label.to_a.sort_by { |pair| -pair[1][:score] }
-  picked = ranked.first(top_k)
+  by_label.to_a
+    .sort_by { |pair| -pair[1][:score] }
+    .first(top_k)
+    .map { |pair| {id: pair[0], row: pair[1][:row], score: pair[1][:score]} }
+end
+
+def current_hidden_chain_candidates(hidden : Array(Float32),
+                                    labels : Array(Int32),
+                                    norms : Array(Float64),
+                                    dim : Int32,
+                                    cursor_row : Int32,
+                                    train_count : Int32,
+                                    require_next : Bool,
+                                    top_k : Int32) : NamedTuple(ids: Array(Int32), rows: Array(Int32), best_cos: Float64)
+  picked = current_hidden_chain_candidate_rows(hidden, labels, norms, dim, cursor_row, train_count, require_next, top_k)
   {
-    ids:      picked.map { |pair| pair[0] },
-    rows:     picked.map { |pair| pair[1][:row] },
-    best_cos: ranked.empty? ? -Float64::INFINITY : ranked[0][1][:score],
+    ids:      picked.map { |pair| pair[:id] },
+    rows:     picked.map { |pair| pair[:row] },
+    best_cos: picked.empty? ? -Float64::INFINITY : picked[0][:score],
   }
+end
+
+def current_hidden_tree_paths(hidden : Array(Float32),
+                              labels : Array(Int32),
+                              norms : Array(Float64),
+                              dim : Int32,
+                              cursor_row : Int32,
+                              train_count : Int32,
+                              depth : Int32,
+                              width : Int32) : Array(NamedTuple(ids: Array(Int32), rows: Array(Int32), cursor: Int32, score: Float64))
+  beams = [{ids: [] of Int32, rows: [] of Int32, cursor: cursor_row, score: 0.0}]
+  depth.times do |step|
+    expanded = [] of NamedTuple(ids: Array(Int32), rows: Array(Int32), cursor: Int32, score: Float64)
+    require_next = step < depth - 1
+    beams.each do |beam|
+      current_hidden_chain_candidate_rows(hidden, labels, norms, dim, beam[:cursor], train_count, require_next, width).each do |candidate|
+        next_cursor = candidate[:row] + 1 < train_count ? candidate[:row] + 1 : candidate[:row]
+        expanded << {
+          ids:    beam[:ids] + [candidate[:id]],
+          rows:   beam[:rows] + [candidate[:row]],
+          cursor: next_cursor,
+          score:  beam[:score] + candidate[:score],
+        }
+      end
+    end
+    break if expanded.empty?
+    beams = expanded.sort_by { |beam| -beam[:score] }.first(width)
+  end
+  beams.reject { |beam| beam[:ids].empty? }
 end
 
 def current_hidden_chain_step(hidden : Array(Float32),
@@ -960,7 +1019,7 @@ cycle_dumps = [] of CycleDump
 puts "Loaded in #{load_s.round(2)}s"
 puts "target: layers=#{target.hparams.n_layer} dim=#{target.hparams.n_embd} vocab=#{target.output.out_dim}"
 puts "draft:  layers=#{draft.hparams.n_layer} dim=#{draft.hparams.n_embd} vocab=#{draft.output.out_dim}"
-puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk}"
+puts "prompt tokens=#{prompt_ids.size} prompt_hash=#{prompt_hash} prompt_category=#{prompt_category} gamma=#{gamma} max_gamma=#{max_gamma} adaptive=#{adaptive_gamma} adaptive_regrow=#{adaptive_regrow} full_accept_streak=#{adaptive_full_accept_streak} fast_regrow_min_gamma=#{adaptive_fast_regrow_min_gamma} bootstrap_gamma=#{adaptive_bootstrap_gamma} bootstrap_streak=#{adaptive_bootstrap_streak} target_only=#{target_only} ngram=#{ngram_enabled} ngram_gamma=#{ngram_gamma} ngram_min=#{ngram_min} ngram_max=#{ngram_max} ngram_min_candidates=#{ngram_min_candidates} ngram_stage_min=#{ngram_stage_min} ngram_probe_gate=#{ngram_probe_gate} ngram_probe_min=#{ngram_probe_min} ngram_risk_gate=#{ngram_risk_gate} ngram_corridor_gate=#{ngram_corridor_gate} ngram_corridor_min_size=#{ngram_corridor_min_size} ngram_corridor_match_len_min=#{ngram_corridor_match_len_min} ngram_corridor_lag4_min=#{ngram_corridor_lag4_min} ngram_corridor_lag8_min=#{ngram_corridor_lag8_min} ngram_corridor_entropy_max=#{ngram_corridor_entropy_max} ngram_risk_min_size=#{ngram_risk_min_size} ngram_recursive=#{ngram_recursive} ngram_disable_after_reject=#{ngram_disable_after_reject} ngram_replay_on_reject=#{ngram_replay_on_reject} ngram_target_only=#{ngram_target_only} ngram_index=#{ngram_index_enabled} ngram_source_history=#{ngram_source_history.size} ngram_replay_start=#{ngram_replay_start} ngram_cursor_only=#{ngram_cursor_only} ngram_trusted_source=#{ngram_trusted_source} ngram_source_prefix_gate=#{ngram_source_prefix_gate} ngram_source_prefix_match=#{ngram_source_prefix_match} router_model=#{router_model_path || ""} early_reject=#{early_reject_enabled} single_fast=#{single_accept_fast_enabled} plain_fallback=#{plain_fallback_enabled} fallback_gamma=#{plain_fallback_gamma} skip_draft_before_fallback=#{skip_draft_before_fallback_enabled} skip_draft_backup_before_fallback=#{skip_draft_backup_before_fallback_enabled} prepare_state=#{prepare_state_metal} warm_verifier=#{warm_verifier} stage_gate=#{stage_gate} n_gen=#{n_gen} verify=#{verify_mode} allow_guarded_verifier=#{allow_guarded_verifier} dump_cycles=#{dump_cycles_path || ""} dump_token_ids=#{dump_cycle_token_ids} current_hidden_trace=#{current_hidden_trace} current_hidden_topk=#{current_hidden_trace_topk} current_hidden_tree=#{current_hidden_tree} current_hidden_tree_depth=#{current_hidden_tree_depth} current_hidden_tree_width=#{current_hidden_tree_width}"
 
 max_seq = prompt_ids.size + n_gen + Math.max(gamma, ngram_gamma) + 8
 target_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: max_seq)
@@ -976,6 +1035,22 @@ end
 
 target_next = prefill_next(target, prompt_ids, target_state)
 draft_next = prefill_next(draft, prompt_ids, draft_state)
+current_hidden_tree_prepare_ms = 0.0
+current_hidden_tree_hidden = [] of Float32
+current_hidden_tree_labels = [] of Int32
+current_hidden_tree_norms = [] of Float64
+current_hidden_tree_dim = target.hparams.n_embd
+current_hidden_tree_train_count = prompt_ids.size
+if current_hidden_tree
+  prep0 = Time.instant
+  prep_state = ML::GGUF::Qwen35CPU::State.new(target.hparams, max_seq: prompt_ids.size + n_gen + 8)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(prep_state, target.hparams) if prepare_state_metal
+  pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(target, prompt_ids, 0, prep_state)
+  current_hidden_tree_hidden = pair[:hidden]
+  current_hidden_tree_labels = pair[:top1s].map { |row| row[0] }
+  current_hidden_tree_norms = Array(Float64).new(current_hidden_tree_labels.size) { |row| hidden_row_norm_spec(current_hidden_tree_hidden, row, current_hidden_tree_dim) }
+  current_hidden_tree_prepare_ms = (Time.instant - prep0).total_milliseconds
+end
 policy_hint = prefill_policy_hint(
   prompt, prompt_ids, tok, target_next, draft_next,
   ngram_gamma, ngram_min, ngram_max, ngram_recursive, ngram_risk_min_size)
@@ -1043,6 +1118,15 @@ target_only_tokens = 0
 ngram_target_only_tokens = 0
 draft_skips_before_fallback = 0
 draft_backup_skips = 0
+current_hidden_tree_seeded = false
+current_hidden_tree_cursor = current_hidden_tree_train_count - 1
+current_hidden_tree_cycles = 0
+current_hidden_tree_proposed = 0
+current_hidden_tree_accepted = 0
+current_hidden_tree_rejects = 0
+current_hidden_tree_fallback_tokens = 0
+current_hidden_tree_fork_ms = 0.0
+current_hidden_tree_commit_ms = 0.0
 
 wall0 = Time.instant
 while generated_ids.size < n_gen
@@ -1053,6 +1137,149 @@ while generated_ids.size < n_gen
   cycle_candidate_features = nil.as(Hash(String, Float64)?)
   ngram_pending_replay_cursor = nil.as(Int32?)
   ngram_from_trusted_source = false
+
+  if current_hidden_tree
+    cycle_wall0 = Time.instant
+    cycle_start_pos = pos
+    cycle_target_verify0 = target_verify_ms
+    cycle_commit0 = commit_ms
+    cycle_tree_fork0 = current_hidden_tree_fork_ms
+    cycle_tree_commit0 = current_hidden_tree_commit_ms
+    cycle_tree_proposed0 = current_hidden_tree_proposed
+    cycle_tree_accepted0 = current_hidden_tree_accepted
+    cycle_tree_reject0 = current_hidden_tree_rejects
+    cycle_tree_fallback0 = current_hidden_tree_fallback_tokens
+
+    if !current_hidden_tree_seeded
+      generated_ids << target_next
+      if generated_ids.size < n_gen
+        tv0 = Time.instant
+        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        current_hidden_tree_hidden.concat(hidden)
+        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+        current_hidden_tree_cursor = current_hidden_tree_train_count
+      end
+      pos += 1
+      current_hidden_tree_seeded = true
+      current_hidden_tree_fallback_tokens += 1
+      commit0 = Time.instant
+      new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+      history.concat(new_history)
+      ngram_history.try &.append(new_history)
+      commit_ms += (Time.instant - commit0).total_milliseconds
+      next
+    end
+
+    remaining = n_gen - generated_ids.size
+    depth = Math.min(current_hidden_tree_depth, remaining)
+    paths = current_hidden_tree_paths(current_hidden_tree_hidden, current_hidden_tree_labels, current_hidden_tree_norms, current_hidden_tree_dim, current_hidden_tree_cursor, current_hidden_tree_train_count, depth, current_hidden_tree_width)
+    proposal_ms += 0.0
+    current_hidden_tree_cycles += 1
+    current_hidden_tree_proposed += paths.sum { |path| path[:ids].size }
+
+    best_path = nil.as(NamedTuple(ids: Array(Int32), rows: Array(Int32), cursor: Int32, score: Float64)?)
+    best_accept = 0
+    best_full_state = nil.as(ML::GGUF::Qwen35CPU::State?)
+    best_next = target_next
+    paths.each do |path|
+      fork0 = Time.instant
+      verify_state = target_state.fork
+      current_hidden_tree_fork_ms += (Time.instant - fork0).total_milliseconds
+      tv0 = Time.instant
+      target_nexts = target_prefill_top1s_for_future(target, path[:ids], pos, verify_state, allow_guarded_verifier, generated_ids.size, n_gen)
+      target_verify_ms += (Time.instant - tv0).total_milliseconds
+      expected = target_next
+      accepted_prefix = 0
+      path[:ids].each_with_index do |cand, i|
+        break if generated_ids.size + accepted_prefix >= n_gen
+        break unless cand == expected
+        accepted_prefix += 1
+        expected = target_nexts[i][0] if i < target_nexts.size
+      end
+      if accepted_prefix > best_accept
+        best_accept = accepted_prefix
+        best_path = path
+        if accepted_prefix == path[:ids].size
+          best_full_state = verify_state
+          best_next = expected
+        else
+          best_full_state = nil
+          best_next = expected
+        end
+      end
+    end
+
+    if best_accept > 0 && (path = best_path)
+      accepted_ids = path[:ids][0, best_accept]
+      generated_ids.concat(accepted_ids)
+      current_hidden_tree_accepted += best_accept
+      if generated_ids.size < n_gen
+        commit_tree0 = Time.instant
+        if best_accept == path[:ids].size && (state = best_full_state)
+          target_state.copy_from!(state)
+          target_next = best_next
+        else
+          replay = target_prefill_top1s_for_future(target, accepted_ids, cycle_start_pos, target_state, allow_guarded_verifier, generated_ids.size - accepted_ids.size, n_gen)
+          target_next = replay[-1][0] unless replay.empty?
+        end
+        current_hidden_tree_commit_ms += (Time.instant - commit_tree0).total_milliseconds
+        current_hidden_tree_cursor = path[:rows][best_accept - 1] + 1 < current_hidden_tree_train_count ? path[:rows][best_accept - 1] + 1 : path[:rows][best_accept - 1]
+      end
+      pos += best_accept
+    else
+      current_hidden_tree_rejects += 1 unless paths.empty?
+      generated_ids << target_next
+      if generated_ids.size < n_gen
+        tv0 = Time.instant
+        hidden = ML::GGUF::Qwen35CPU.forward_hidden(target, target_next, pos, target_state)
+        target_next = ML::GGUF::Qwen35CPU.hidden_top1(target, hidden)[0]
+        target_verify_ms += (Time.instant - tv0).total_milliseconds
+        current_hidden_tree_hidden.concat(hidden)
+        current_hidden_tree_norms << hidden_vector_norm_spec(hidden)
+        current_hidden_tree_cursor = current_hidden_tree_hidden.size // current_hidden_tree_dim - 1
+      end
+      pos += 1
+      current_hidden_tree_fallback_tokens += 1
+    end
+
+    commit0 = Time.instant
+    new_history = generated_ids[history_size_before, generated_ids.size - history_size_before]
+    history.concat(new_history)
+    ngram_history.try &.append(new_history)
+    commit_ms += (Time.instant - commit0).total_milliseconds
+    if dump_cycles_path
+      record = CycleDump.new(
+        prompt_hash, target_model_id, draft_model_id,
+        "current_hidden_tree", "current_hidden_tree", verify_mode,
+        cycle_start_pos, history_size_before, generated_ids.size - history_size_before,
+        current_hidden_tree_width, current_hidden_tree_proposed - cycle_tree_proposed0, current_hidden_tree_accepted - cycle_tree_accepted0, best_accept > 0 ? -1 : 0,
+        0, ngram_min, ngram_max, ngram_recursive,
+        false, false,
+        token_ids_hash(best_path.try(&.[:ids]) || [] of Int32), dump_cycle_token_ids ? (best_path.try(&.[:ids]) || [] of Int32) : nil,
+        0.0,
+        target_verify_ms - cycle_target_verify0,
+        target_backup_ms,
+        0.0,
+        0.0,
+        (Time.instant - cycle_wall0).total_milliseconds)
+      record.commit_ms = commit_ms - cycle_commit0
+      record.prompt_category = prompt_category
+      record.candidate_features = {
+        "tree_depth" => depth.to_f64,
+        "tree_width" => current_hidden_tree_width.to_f64,
+        "tree_paths" => paths.size.to_f64,
+        "tree_best_accept" => best_accept.to_f64,
+        "tree_fork_ms" => current_hidden_tree_fork_ms - cycle_tree_fork0,
+        "tree_commit_ms" => current_hidden_tree_commit_ms - cycle_tree_commit0,
+        "tree_rejects" => (current_hidden_tree_rejects - cycle_tree_reject0).to_f64,
+        "tree_fallback_tokens" => (current_hidden_tree_fallback_tokens - cycle_tree_fallback0).to_f64,
+      }
+      cycle_dumps << record
+    end
+    next
+  end
 
   if !target_only && ngram_enabled && !ngram_disabled
     proposal0 = Time.instant
@@ -1851,6 +2078,9 @@ puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
 if trace_result = current_hidden_trace_result
   proposal_per_eval = trace_result[:eval_samples] > 0 ? trace_result[:proposal_ms] / trace_result[:eval_samples] : 0.0
   puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} chain=#{trace_result[:chain_rate].round(2)}% chain_hits=#{trace_result[:chain_hits]}/#{trace_result[:chain_steps]} chain_topk=#{trace_result[:chain_topk_rate].round(2)}% chain_topk_hits=#{trace_result[:chain_topk_hits]}/#{trace_result[:chain_topk_steps]} seed1_topk=#{trace_result[:seed1_topk_rate].round(2)}% seed1_topk_hits=#{trace_result[:seed1_topk_hits]}/#{trace_result[:seed1_topk_steps]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} chain_ids=#{trace_result[:chain_ids].join(',')} chain_topk_ids=#{trace_result[:chain_topk_ids].join(',')} seed1_topk_ids=#{trace_result[:seed1_topk_ids].join(',')} note=postrun_trace_only_not_in_wall"
+end
+if current_hidden_tree
+  puts "current_hidden_tree_stats prepare_ms=#{current_hidden_tree_prepare_ms.round(3)} cycles=#{current_hidden_tree_cycles} proposed=#{current_hidden_tree_proposed} accepted=#{current_hidden_tree_accepted} rejects=#{current_hidden_tree_rejects} fallback_tokens=#{current_hidden_tree_fallback_tokens} fork_ms=#{current_hidden_tree_fork_ms.round(3)} commit_ms=#{current_hidden_tree_commit_ms.round(3)} depth=#{current_hidden_tree_depth} width=#{current_hidden_tree_width} note=prepare_excluded_like_prefill"
 end
 puts "verifier_warmup_wall=#{verifier_warmup_ms.round(1)} ms"
 puts "time_breakdown draft=#{draft_ms.round(1)} ms target_verify=#{target_verify_ms.round(1)} ms target_backup=#{target_backup_ms.round(1)} ms target_replay=#{target_replay_ms.round(1)} ms draft_backup=#{draft_backup_ms.round(1)} ms draft_resync=#{draft_resync_ms.round(1)} ms"
