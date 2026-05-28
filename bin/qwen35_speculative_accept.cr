@@ -1159,6 +1159,7 @@ if current_hidden_ctx_route_possible && ngram_enabled &&
   current_hidden_ctx_initial_ngram_full_cover = preflight_candidates.size >= n_gen
 end
 current_hidden_prefill_capture = current_hidden_tree || (current_hidden_ctx_route_possible && !current_hidden_ctx_initial_ngram_full_cover)
+target_prefill0 = Time.instant
 target_next = if current_hidden_prefill_capture
                 pair = ML::GGUF::Qwen35CPU.prefill_tokens_hidden_top1s(target, prompt_ids, 0, target_state)
                 current_hidden_tree_hidden = pair[:hidden]
@@ -1168,7 +1169,17 @@ target_next = if current_hidden_prefill_capture
               else
                 prefill_next(target, prompt_ids, target_state)
               end
-draft_next = prefill_next(draft, prompt_ids, draft_state)
+target_initial_prefill_ms = (Time.instant - target_prefill0).total_milliseconds
+lazy_draft_prefill = router_model_path.nil? && (target_only || ngram_enabled || current_hidden_ctx)
+draft_prefilled = false
+draft_next = -1
+draft_initial_prefill_ms = 0.0
+unless lazy_draft_prefill
+  draft_prefill0 = Time.instant
+  draft_next = prefill_next(draft, prompt_ids, draft_state)
+  draft_initial_prefill_ms = (Time.instant - draft_prefill0).total_milliseconds
+  draft_prefilled = true
+end
 if current_hidden_prefill_capture
   current_hidden_tree_prepare_ms = 0.0
 end
@@ -1977,6 +1988,13 @@ while generated_ids.size < n_gen
     next
   end
 
+  unless draft_prefilled
+    td_prefill0 = Time.instant
+    draft_next = prefill_next(draft, prompt_ids, draft_state)
+    draft_initial_prefill_ms += (Time.instant - td_prefill0).total_milliseconds
+    draft_prefilled = true
+  end
+
   unless pending_draft_tokens.empty?
     tr0 = Time.instant
     pending_draft_tokens.each_with_index do |tok_id, i|
@@ -2409,6 +2427,7 @@ puts "gamma_stats avg=#{avg_gamma} max_seen=#{gamma_max_seen} final=#{current_ga
 puts "spec_wall=#{wall_ms.round(1)} ms (#{(wall_ms / n_gen).round(2)} ms/tok, #{tokens_s.round(2)} tok/s, verify=#{verify_mode})"
 puts "plain_target_wall=#{plain_ms.round(1)} ms (#{(plain_ms / n_gen).round(2)} ms/tok, #{plain_tokens_s.round(2)} tok/s, decode_only=true)"
 puts "plain_target_prefill_wall=#{plain_prefill_ms.round(1)} ms"
+puts "initial_prefill target=#{target_initial_prefill_ms.round(1)} ms draft=#{draft_initial_prefill_ms.round(1)} ms target_capture=#{current_hidden_prefill_capture} draft_lazy=#{lazy_draft_prefill} draft_prefilled=#{draft_prefilled}"
 if trace_result = current_hidden_trace_result
   proposal_per_eval = trace_result[:eval_samples] > 0 ? trace_result[:proposal_ms] / trace_result[:eval_samples] : 0.0
   puts "current_hidden_trace top_k=#{trace_result[:top_k]} eval=#{trace_result[:eval_samples]} top1=#{trace_result[:top1_rate].round(2)}% topk=#{trace_result[:topk_rate].round(2)}% hits=#{trace_result[:top1_hits]}/#{trace_result[:topk_hits]}/#{trace_result[:eval_samples]} chain=#{trace_result[:chain_rate].round(2)}% chain_hits=#{trace_result[:chain_hits]}/#{trace_result[:chain_steps]} chain_topk=#{trace_result[:chain_topk_rate].round(2)}% chain_topk_hits=#{trace_result[:chain_topk_hits]}/#{trace_result[:chain_topk_steps]} seed1_topk=#{trace_result[:seed1_topk_rate].round(2)}% seed1_topk_hits=#{trace_result[:seed1_topk_hits]}/#{trace_result[:seed1_topk_steps]} seed1_ctx=#{trace_result[:seed1_ctx_rate].round(2)}% seed1_ctx_hits=#{trace_result[:seed1_ctx_hits]}/#{trace_result[:seed1_ctx_steps]} seed2_ctx=#{trace_result[:seed2_ctx_rate].round(2)}% seed2_ctx_hits=#{trace_result[:seed2_ctx_hits]}/#{trace_result[:seed2_ctx_steps]} collect_ms=#{trace_result[:collect_ms].round(3)} proposal_ms=#{trace_result[:proposal_ms].round(3)} proposal_ms_per_eval=#{proposal_per_eval.round(6)} avg_best_cos=#{trace_result[:avg_best_cos].round(6)} exact_ids=#{trace_result[:exact_ids].join(',')} chain_ids=#{trace_result[:chain_ids].join(',')} chain_topk_ids=#{trace_result[:chain_topk_ids].join(',')} seed1_topk_ids=#{trace_result[:seed1_topk_ids].join(',')} seed1_ctx_ids=#{trace_result[:seed1_ctx_ids].join(',')} seed2_ctx_ids=#{trace_result[:seed2_ctx_ids].join(',')} note=postrun_trace_only_not_in_wall"
