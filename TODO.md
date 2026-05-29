@@ -3288,3 +3288,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_712:** Verification passed: focused prompt-cache specs `spec/qwen35_prompt_cache_spec.cr:200` and `spec/qwen35_prompt_cache_spec.cr:338` with `build/bridge.o` Metal link flags each passed (`1 example, 0 failures`); no-codegen builds passed for `bin/qwen35_generate.cr`, `bin/qwen35_warm_request_probe.cr`, and `src/ml/gguf/qwen35_serving_route.cr`; `git diff --check` passed.
 
 **next_update_712:** Continue resident/session-cache productization on top of the certified route layer. Highest remaining leverage is same-process active cursor lifecycle in service harnesses and broader route hit-rate measurement; do not weaken certificate boundaries to chase sub-microsecond direct-output lookups.
+
+**decision_update_713:** Added a no-validator self-draft text diagnostic. `--simulate-self-draft-gpu-chain-text` decodes GPU self-draft `chain_ids` and paired exact greedy ids directly in the probe output, avoiding manual token-id parsing when inspecting whether a drafter behaves like a standalone language model.
+
+**evidence_update_713:** Verification passed: no-codegen build of `bin/qwen35_deltanet_fixed_basis_probe.cr`; release build `/tmp/qwen35_self_draft_text_probe` with `build/bridge.o` Metal link flags; runtime smoke `/tmp/qwen35_self_draft_text_flag_fresh_20260528204755.log` emitted `self_draft_gpu_chain_text` with `agreement=24/24` and identical draft/exact text for a rank16/layers `0,2,4` story prompt.
+
+**next_update_713:** Use the new text diagnostic on aggressive draft bodies (`pca-updown`, `no-FFN`, block surrogate, lower rank/layer coverage) and chat-templated prompts. The current baseline low-rank route matching exact greedy on short raw-completion prompts does not prove free-run robustness for cheaper routes.

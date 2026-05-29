@@ -11965,6 +11965,7 @@ simulate_self_spec_wall_metal_project = false
 simulate_self_spec_wall_metal_layer_updown = false
 simulate_self_draft_metal_baseline = 0
 simulate_self_draft_gpu_chain = 0
+simulate_self_draft_gpu_chain_text = false
 simulate_self_draft_gpu_state_only = 0
 simulate_self_draft_gpu_chain_overlap = 0
 simulate_mtp_self_draft_fusion = 0
@@ -12234,6 +12235,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-wall-metal-layer-updown", "Route lowrank-ffn-pca-updown-R draft layers through the integrated Metal layer-updown path") { simulate_self_spec_wall_metal_lowrank = true; simulate_self_spec_wall_metal_project = true; simulate_self_spec_wall_metal_layer_updown = true }
   p.on("--simulate-self-draft-metal-baseline=N", "Wall-clock the Metal-only self-draft (low-rank on --simulate-logits-layers) vs exact greedy and chunk-major verifier on N held-out tokens") { |v| simulate_self_draft_metal_baseline = v.to_i }
   p.on("--simulate-self-draft-gpu-chain=N", "Queue N low-rank self-draft top1 steps with GPU top1_id -> next embedding and no intermediate CPU readback") { |v| simulate_self_draft_gpu_chain = v.to_i }
+  p.on("--simulate-self-draft-gpu-chain-text", "With --simulate-self-draft-gpu-chain, decode draft/exact ids as escaped text for no-validator inspection") { simulate_self_draft_gpu_chain_text = true }
   p.on("--simulate-self-draft-gpu-state-only=N", "Queue N known-token low-rank draft state updates without lm-head/top1; lower-bound ablation for draft head/control cost") { |v| simulate_self_draft_gpu_state_only = v.to_i }
   p.on("--simulate-self-draft-gpu-chain-overlap=N", "Run GPU self-draft chain on a lane queue while chunk-major verifier runs on the default queue") { |v| simulate_self_draft_gpu_chain_overlap = v.to_i }
   p.on("--simulate-mtp-self-draft-fusion=N", "Probe MTP top-K as a verifier-rescue/fusion source over N GPU self-draft steps") { |v| simulate_mtp_self_draft_fusion = v.to_i }
@@ -12965,6 +12967,9 @@ if rank = simulate_logit_rank
     if simulate_self_draft_gpu_chain > 0
       chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain, layer_bases, rank)
       puts "self_draft_gpu_chain layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} submit_ms=#{chain[:submit_ms].round(3)} wait_ms=#{chain[:wait_ms].round(3)} chain_ms=#{chain[:chain_ms].round(3)} exact_ms=#{chain[:exact_ms].round(3)} agreement=#{chain[:agreement]}/#{chain[:steps]} chain_ids=#{chain[:chain_ids].join(',')} exact_ids=#{chain[:exact_ids].join(',')}"
+      if simulate_self_draft_gpu_chain_text
+        puts "self_draft_gpu_chain_text layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} agreement=#{chain[:agreement]}/#{chain[:steps]} draft_text=#{tok.decode(chain[:chain_ids]).inspect} exact_text=#{tok.decode(chain[:exact_ids]).inspect}"
+      end
     end
     if simulate_self_draft_gpu_state_only > 0
       state_only = simulate_self_draft_gpu_state_only_run(weights, token_ids, calib_count, simulate_self_draft_gpu_state_only, layer_bases, rank)
