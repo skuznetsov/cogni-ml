@@ -142,11 +142,11 @@ for ((idx = 0; idx < prompt_count; idx++)); do
     log_file="${tmp_dir}/${prompt_id}.${mode}.log"
     cmd=(
       "${probe_bin}"
-      "--gen=${gen}"
-      "--cached-gen=${cached_gen}"
-      "--requests=${requests}"
-      "--warmups=${warmups}"
-      "--max-seq=${max_seq}"
+      "--gen" "${gen}"
+      "--cached-gen" "${cached_gen}"
+      "--requests" "${requests}"
+      "--warmups" "${warmups}"
+      "--max-seq" "${max_seq}"
       "--quiet"
     )
     while IFS= read -r -d '' arg; do
@@ -154,7 +154,7 @@ for ((idx = 0; idx < prompt_count; idx++)); do
     done < <(mode_args "${mode}")
     cmd+=("${prompt}")
 
-    "${cmd[@]}" >"${log_file}"
+    "${cmd[@]}" >"${log_file}" 2>&1
 
     avg_total="$(extract_field avg_total_ms "${log_file}")"
     p50_total="$(extract_field p50_total_ms "${log_file}")"
