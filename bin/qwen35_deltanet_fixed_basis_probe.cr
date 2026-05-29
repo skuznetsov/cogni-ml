@@ -3135,8 +3135,10 @@ private def ffn_activation_vectors_for_prompt(weights : ML::GGUF::Qwen35Weights,
   vectors
 end
 
-private def token_ids_for_prompt(tok, prompt : String, tokens_limit : Int32) : Array(Int32)
+private def token_ids_for_prompt(tok, prompt : String, tokens_limit : Int32, repeat : Bool = true) : Array(Int32)
   token_ids = tok.encode(prompt, add_bos_override: false)
+  return token_ids[0, Math.min(tokens_limit, token_ids.size)] unless repeat
+
   while token_ids.size < tokens_limit
     token_ids.concat(tok.encode(prompt, add_bos_override: false))
   end
@@ -11876,6 +11878,7 @@ mtp_path = ENV["QWEN35_MTP"]? || DEFAULT_MTP
 tokenizer_bin = ENV["LLAMA_TOKENIZE_BIN"]? || DEFAULT_TOKENIZER
 prompt = DEFAULT_PROMPT
 main_prompt_name = safe_prompt_label(ENV["QWEN35_PROMPT_NAME"]? || "main", "main")
+prompt_as_prefix = false
 tokens_limit = 96
 calib_tokens = 32
 layer_index = 0
@@ -11966,6 +11969,8 @@ simulate_self_spec_wall_metal_layer_updown = false
 simulate_self_draft_metal_baseline = 0
 simulate_self_draft_gpu_chain = 0
 simulate_self_draft_gpu_chain_text = false
+simulate_self_draft_gpu_chain_updown_rank : Int32? = nil
+simulate_self_draft_gpu_chain_updown_layers = [] of Int32
 simulate_self_draft_gpu_state_only = 0
 simulate_self_draft_gpu_chain_overlap = 0
 simulate_mtp_self_draft_fusion = 0
@@ -12111,6 +12116,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--mtp=PATH", "Qwen3.6 MTP safetensors sidecar path for MTP/self-draft fusion probes") { |v| mtp_path = v }
   p.on("--tokenizer=PATH", "llama-tokenize path") { |v| tokenizer_bin = v }
   p.on("--prompt=TEXT", "Prompt text") { |v| prompt = v }
+  p.on("--prompt-as-prefix", "Use --prompt tokens once as the generation prefix instead of repeating it to fill --tokens") { prompt_as_prefix = true }
   p.on("--prompt-name=NAME", "Stable label for the main --prompt in self-spec traces") { |v| main_prompt_name = safe_prompt_label(v, "main") }
   p.on("--tokens=N", "Max prompt tokens to use") { |v| tokens_limit = v.to_i }
   p.on("--calib-tokens=N", "Tokens used to build the fixed basis") { |v| calib_tokens = v.to_i }
@@ -12236,6 +12242,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-draft-metal-baseline=N", "Wall-clock the Metal-only self-draft (low-rank on --simulate-logits-layers) vs exact greedy and chunk-major verifier on N held-out tokens") { |v| simulate_self_draft_metal_baseline = v.to_i }
   p.on("--simulate-self-draft-gpu-chain=N", "Queue N low-rank self-draft top1 steps with GPU top1_id -> next embedding and no intermediate CPU readback") { |v| simulate_self_draft_gpu_chain = v.to_i }
   p.on("--simulate-self-draft-gpu-chain-text", "With --simulate-self-draft-gpu-chain, decode draft/exact ids as escaped text for no-validator inspection") { simulate_self_draft_gpu_chain_text = true }
+  p.on("--simulate-self-draft-gpu-chain-updown=R", "With --simulate-self-draft-gpu-chain, also run resident FFN pca-updown rank R for no-validator drift/text inspection") { |v| simulate_self_draft_gpu_chain_updown_rank = v.to_i }
+  p.on("--simulate-self-draft-gpu-chain-updown-layers=LIST", "Apply self-draft gpu chain pca-updown only to the listed low-rank recurrent draft layers") { |v| simulate_self_draft_gpu_chain_updown_layers = parse_int_list(v) }
   p.on("--simulate-self-draft-gpu-state-only=N", "Queue N known-token low-rank draft state updates without lm-head/top1; lower-bound ablation for draft head/control cost") { |v| simulate_self_draft_gpu_state_only = v.to_i }
   p.on("--simulate-self-draft-gpu-chain-overlap=N", "Run GPU self-draft chain on a lane queue while chunk-major verifier runs on the default queue") { |v| simulate_self_draft_gpu_chain_overlap = v.to_i }
   p.on("--simulate-mtp-self-draft-fusion=N", "Probe MTP top-K as a verifier-rescue/fusion source over N GPU self-draft steps") { |v| simulate_mtp_self_draft_fusion = v.to_i }
@@ -12378,6 +12386,12 @@ if simulate_mtp_self_draft_fusion > 0
     raise "--simulate-mtp-self-draft-fusion-updown must be positive" unless rank > 0
   end
 end
+if rank = simulate_self_draft_gpu_chain_updown_rank
+  raise "--simulate-self-draft-gpu-chain-updown requires --simulate-self-draft-gpu-chain" unless simulate_self_draft_gpu_chain > 0
+  raise "--simulate-self-draft-gpu-chain-updown requires --simulate-logits-rank" if simulate_logit_rank.nil?
+  raise "--simulate-self-draft-gpu-chain-updown requires --simulate-logits-layers" if simulate_logit_layers.empty?
+  raise "--simulate-self-draft-gpu-chain-updown must be positive" unless rank > 0
+end
 if simulate_self_spec_gpu_pipeline_mtp_k2_on_reject
   raise "MTP sidecar not found: #{mtp_path}" unless File.exists?(mtp_path)
   raise "--simulate-self-spec-gpu-pipeline-mtp-k2-on-reject requires --simulate-self-spec-gpu-pipeline or pipeline gammas/schedules" unless simulate_self_spec_gpu_pipeline > 0 || !simulate_self_spec_gpu_pipeline_gammas.empty? || !simulate_self_spec_gpu_pipeline_schedules.empty?
@@ -12432,8 +12446,8 @@ end
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
-token_ids = token_ids_for_prompt(tok, prompt, tokens_limit)
-ffn_pca_calib_token_sets = ffn_pca_calib_prompts.map { |calib_prompt| token_ids_for_prompt(tok, calib_prompt, tokens_limit) }
+token_ids = token_ids_for_prompt(tok, prompt, tokens_limit, repeat: !prompt_as_prefix)
+ffn_pca_calib_token_sets = ffn_pca_calib_prompts.map { |calib_prompt| token_ids_for_prompt(tok, calib_prompt, tokens_limit, repeat: !prompt_as_prefix) }
 
 weights = ML::GGUF::Qwen35Weights.from_gguf(model)
 per_head = recurrent_k_vectors_for_prompt(weights, token_ids, layer_index)
@@ -12674,6 +12688,9 @@ if rank = simulate_logit_rank
     end
     if pipeline_updown_rank = simulate_self_spec_gpu_pipeline_draft_updown_rank
       ffn_pca_updown_ranks << pipeline_updown_rank
+    end
+    if chain_updown_rank = simulate_self_draft_gpu_chain_updown_rank
+      ffn_pca_updown_ranks << chain_updown_rank
     end
     if fusion_updown_rank = simulate_mtp_self_draft_fusion_updown_rank
       ffn_pca_updown_ranks << fusion_updown_rank
@@ -12969,6 +12986,16 @@ if rank = simulate_logit_rank
       puts "self_draft_gpu_chain layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} submit_ms=#{chain[:submit_ms].round(3)} wait_ms=#{chain[:wait_ms].round(3)} chain_ms=#{chain[:chain_ms].round(3)} exact_ms=#{chain[:exact_ms].round(3)} agreement=#{chain[:agreement]}/#{chain[:steps]} chain_ids=#{chain[:chain_ids].join(',')} exact_ids=#{chain[:exact_ids].join(',')}"
       if simulate_self_draft_gpu_chain_text
         puts "self_draft_gpu_chain_text layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} agreement=#{chain[:agreement]}/#{chain[:steps]} draft_text=#{tok.decode(chain[:chain_ids]).inspect} exact_text=#{tok.decode(chain[:exact_ids]).inspect}"
+      end
+      if chain_updown_rank = simulate_self_draft_gpu_chain_updown_rank
+        chain_updown_layer_set = simulate_self_draft_gpu_chain_updown_layers.empty? ? nil : Set(Int32).new(simulate_self_draft_gpu_chain_updown_layers)
+        updown_chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain, layer_bases, rank,
+          chain_updown_rank, ffn_updown_adapters, chain_updown_layer_set)
+        updown_layer_note = chain_updown_layer_set ? " updown_layers=#{chain_updown_layer_set.not_nil!.to_a.sort.join(',')}" : ""
+        puts "self_draft_gpu_chain_updown layers=#{simulate_logit_layers.join(',')} rank=#{rank} updown_rank=#{updown_chain[:updown_rank]}#{updown_layer_note} steps=#{updown_chain[:steps]} submit_ms=#{updown_chain[:submit_ms].round(3)} wait_ms=#{updown_chain[:wait_ms].round(3)} chain_ms=#{updown_chain[:chain_ms].round(3)} exact_ms=#{updown_chain[:exact_ms].round(3)} agreement=#{updown_chain[:agreement]}/#{updown_chain[:steps]} chain_ids=#{updown_chain[:chain_ids].join(',')} exact_ids=#{updown_chain[:exact_ids].join(',')}"
+        if simulate_self_draft_gpu_chain_text
+          puts "self_draft_gpu_chain_updown_text layers=#{simulate_logit_layers.join(',')} rank=#{rank} updown_rank=#{updown_chain[:updown_rank]}#{updown_layer_note} steps=#{updown_chain[:steps]} agreement=#{updown_chain[:agreement]}/#{updown_chain[:steps]} draft_text=#{tok.decode(updown_chain[:chain_ids]).inspect} exact_text=#{tok.decode(updown_chain[:exact_ids]).inspect}"
+        end
       end
     end
     if simulate_self_draft_gpu_state_only > 0
