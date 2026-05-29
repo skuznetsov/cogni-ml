@@ -242,13 +242,25 @@ describe ML::GGUF::Qwen35PromptCache do
         "s1",
         "prompt text",
         output_ids.size,
+        tokenizer_id: "tok-a",
         turn_id: "t1",
       ).should be_true
+      ML::GGUF::Qwen35PromptCache.output_fast_forward_entry_valid?(
+        saved,
+        "model-a",
+        "s1",
+        "prompt text",
+        output_ids.size,
+        tokenizer_id: "tok-b",
+        turn_id: "t1",
+      ).should be_false
       hit = store.lookup_output_fast_forward("model-a", "s1", "prompt text", output_ids.size, turn_id: "t1")
       hit.should_not be_nil
       hit.not_nil!.prompt_token_ids.should eq(prompt_ids)
       hit.not_nil!.output_token_ids.should eq(output_ids)
       hit.not_nil!.generated_text.should eq(" generated text")
+      store.lookup_output_fast_forward("model-a", "s1", "prompt text", output_ids.size, tokenizer_id: "tok-a", turn_id: "t1").should_not be_nil
+      store.lookup_output_fast_forward("model-a", "s1", "prompt text", output_ids.size, tokenizer_id: "tok-b", turn_id: "t1").should be_nil
       hit.not_nil!.output_token_ids << 999_i32
       store.lookup_output_fast_forward("model-a", "s1", "prompt text", output_ids.size, turn_id: "t1").try(&.output_token_ids).should eq(output_ids)
 
@@ -403,9 +415,13 @@ describe ML::GGUF::Qwen35PromptCache do
       store.lookup_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5, terminal_token_id: 50_i32).try(&.output_token_ids).should eq(terminal_output)
       store.lookup_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5).should be_nil
       store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5).try(&.output_token_ids).should eq(terminal_output)
+      store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5, tokenizer_id: "tok-a").try(&.output_token_ids).should eq(terminal_output)
+      store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "terminal prompt", 5, tokenizer_id: "tok-b").should be_nil
       store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 5, terminal_token_id: 50_i32).should be_nil
       store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 5).should be_nil
       store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 2, terminal_token_id: 50_i32).try(&.output_token_ids).should eq(nonterminal_output)
+      store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 2, terminal_token_id: 50_i32, tokenizer_id: "tok-a").try(&.output_token_ids).should eq(nonterminal_output)
+      store.lookup_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 2, terminal_token_id: 50_i32, tokenizer_id: "tok-b").should be_nil
       store.lookup_terminal_output_fast_forward_at_most("model-a", "s1", "nonterminal prompt", 2).try(&.output_token_ids).should eq(nonterminal_output)
 
       expect_raises(ArgumentError, /terminal_token_id/) do

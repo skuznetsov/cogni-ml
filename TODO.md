@@ -3282,3 +3282,9 @@ Wall-clock tok/s measured with `/usr/bin/time`:
 **evidence_update_626:** Guarded checks passed: `crystal build --no-codegen src/harness.cr --error-trace`, `crystal spec spec/agent/react_spec.cr --error-trace` (`29 examples, 0 failures`), and linked harness build `/tmp/cb_harness_cogni_section_excerpt`. Runtime `/tmp/cb_cogni_section_excerpt_20260528105740.log` for `explain the requirements` reduced the second-call prompt from prior no-tool frame `4290` tokens / `11764.0ms` to `321` prompt tokens / `2182.2ms`; the older tool-capable route was `11535` prompt tokens / `38670.3ms`.
 
 **next_update_626:** Next branch: test multi-section and alias cases. If exact heading match misses too often, add conservative alias maps from headings (`requirements` -> requirements section) rather than semantic guessing. Do not apply section transport to edit/verify/search/run flows.
+
+**decision_update_712:** Hardened direct-output/session-cache route validation with tokenizer-aware lookup. Optional `tokenizer_id` validation now fails closed for known-tokenizer direct-output and terminal-short certificates, while preserving pre-tokenizer fast-forward compatibility for paths where tokenizer metadata is not loaded yet.
+
+**evidence_update_712:** Verification passed: focused prompt-cache specs `spec/qwen35_prompt_cache_spec.cr:200` and `spec/qwen35_prompt_cache_spec.cr:338` with `build/bridge.o` Metal link flags each passed (`1 example, 0 failures`); no-codegen builds passed for `bin/qwen35_generate.cr`, `bin/qwen35_warm_request_probe.cr`, and `src/ml/gguf/qwen35_serving_route.cr`; `git diff --check` passed.
+
+**next_update_712:** Continue resident/session-cache productization on top of the certified route layer. Highest remaining leverage is same-process active cursor lifecycle in service harnesses and broader route hit-rate measurement; do not weaken certificate boundaries to chase sub-microsecond direct-output lookups.

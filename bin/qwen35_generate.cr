@@ -645,6 +645,7 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled && 
        model_prompt,
        n_gen,
        terminal_token_id: tok.eos_id,
+       tokenizer_id: cache_tokenizer,
        turn_id: turn_id)
     token_cache_hit = true
     output_ids = output_hit.output_token_ids

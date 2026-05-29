@@ -729,6 +729,7 @@ module ML::GGUF
                                      session_id : String,
                                      prompt_text : String,
                                      output_token_count : Int32,
+                                     tokenizer_id : String? = nil,
                                      turn_id : String? = nil) : OutputFastForwardEntry?
         return nil if output_token_count <= 0
 
@@ -758,6 +759,7 @@ module ML::GGUF
           session_id,
           prompt_text,
           output_token_count,
+          tokenizer_id: tokenizer_id,
           turn_id: turn_id,
         )
         unless valid
@@ -772,16 +774,17 @@ module ML::GGUF
                                              prompt_text : String,
                                              max_output_token_count : Int32,
                                              terminal_token_id : Int32? = nil,
+                                             tokenizer_id : String? = nil,
                                              turn_id : String? = nil) : OutputFastForwardEntry?
         return nil if max_output_token_count <= 0
 
-        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, turn_id: turn_id)
+        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, tokenizer_id: tokenizer_id, turn_id: turn_id)
           return exact
         end
         return nil unless eos = terminal_token_id
 
         (max_output_token_count - 1).downto(1) do |count|
-          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, turn_id: turn_id)
+          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, tokenizer_id: tokenizer_id, turn_id: turn_id)
           return hit if hit.output_token_ids.last? == eos
         end
 
@@ -792,15 +795,16 @@ module ML::GGUF
                                                       session_id : String,
                                                       prompt_text : String,
                                                       max_output_token_count : Int32,
+                                                      tokenizer_id : String? = nil,
                                                       turn_id : String? = nil) : OutputFastForwardEntry?
         return nil if max_output_token_count <= 0
 
-        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, turn_id: turn_id)
+        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, tokenizer_id: tokenizer_id, turn_id: turn_id)
           return exact
         end
 
         (max_output_token_count - 1).downto(1) do |count|
-          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, turn_id: turn_id)
+          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, tokenizer_id: tokenizer_id, turn_id: turn_id)
           terminal = hit.terminal_token_id
           return hit if terminal && hit.output_token_ids.last? == terminal
         end
@@ -1215,11 +1219,13 @@ module ML::GGUF
                                          session_id : String,
                                          prompt_text : String,
                                          expected_output_tokens : Int32,
+                                         tokenizer_id : String? = nil,
                                          turn_id : String? = nil) : Bool
       return false unless expected_output_tokens > 0
       return false unless entry.runtime_id == OUTPUT_FAST_FORWARD_RUNTIME_ID
       return false unless entry.model_id == model_id
       return false unless entry.session_id == session_id
+      return false if tokenizer_id && entry.tokenizer_id != tokenizer_id
       return false if turn_id && entry.turn_id != turn_id
       return false unless entry.prompt_text_hash == prompt_text_hash(prompt_text)
       return false unless entry.prompt_token_count == entry.prompt_token_ids.size

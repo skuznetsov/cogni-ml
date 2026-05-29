@@ -659,6 +659,7 @@ def run_prompt_cache_direct_output_request(replay : PromptCacheDirectOutputTempl
     "warm-request-probe",
     replay.prompt,
     replay.output_ids.size,
+    tokenizer_id: "warm-tokenizer",
   )
   raise "direct output fast-forward miss" unless hit
   raise "direct output fast-forward token mismatch" unless hit.output_token_ids == replay.output_ids

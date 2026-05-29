@@ -10,10 +10,10 @@ module ML::GGUF
   module Qwen35ServingRoute
     extend self
 
-    DIRECT_OUTPUT                    = "direct_output"
-    SOURCE_HISTORY_DIRECT_FALLBACK   = "source_history_direct_output_fallback"
-    STATE_FAST_FORWARD_CONTINUATION  = "state_fast_forward_continuation"
-    STATE_FAST_FORWARD_FALLBACK      = "state_fast_forward_fallback"
+    DIRECT_OUTPUT                   = "direct_output"
+    SOURCE_HISTORY_DIRECT_FALLBACK  = "source_history_direct_output_fallback"
+    STATE_FAST_FORWARD_CONTINUATION = "state_fast_forward_continuation"
+    STATE_FAST_FORWARD_FALLBACK     = "state_fast_forward_fallback"
 
     record Result,
       route : String,
@@ -43,6 +43,7 @@ module ML::GGUF
           session_id,
           prompt_text,
           output_token_ids.size,
+          tokenizer_id: exact_entry.tokenizer_id,
           turn_id: turn_id,
         )
         if hit
