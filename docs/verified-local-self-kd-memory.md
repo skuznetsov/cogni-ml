@@ -347,3 +347,50 @@ Conclusion: current-hidden nearest-label is useful as a cheap diagnostic/router
 feature, not as a standalone proposal body. The next structural route should use
 retrieved evidence/session spans as candidate token sources, then active exact
 verification, rather than trying to infer next tokens from nearest hidden rows.
+
+## Evidence Copy Coverage Probe: 2026-05-28
+
+The next question was whether explicit evidence text can directly feed a cheap
+copy/pointer draft route. The existing product path already has exact
+source-history replay and n-gram speculative verification, so the right first
+test was not a new neural proposal body. It was a coverage probe:
+
+- Can the current prompt suffix trigger existing n-gram replay from the evidence?
+- Do exact generated tokens form contiguous spans inside the provided evidence?
+- Is the evidence useful mainly as semantic conditioning rather than literal
+  copyable text?
+
+Helper:
+
+```text
+scripts/qwen_memory_evidence_copy_coverage.py
+```
+
+Coverage log:
+
+```text
+/tmp/qwen_memory_evidence_copy_coverage_all_20260528201659.tsv
+```
+
+Rows from existing and bounded follow-up logs:
+
+```text
+science_turing_memory:    prompt_ngram_match 0, evidence_prefix 0, best_run 2, hit 75.00%
+code_crystal_memory:      prompt_ngram_match 0, evidence_prefix 2, best_run 5, hit 62.50%
+literature_hamlet_memory: prompt_ngram_match 0, evidence_prefix 2, best_run 2, hit 43.75%
+```
+
+The high token-hit percentages are not enough: they include punctuation/common
+tokens and do not imply a verifier-friendly candidate span. The hard signal is
+that current prompt-suffix n-gram replay finds no source corridor, and exact
+generated outputs only contain tiny contiguous evidence spans in this fixture.
+
+Interpretation:
+
+- Direct evidence-copy replay is not the missing speed lever for these answer
+  prompts as currently written.
+- Evidence is still useful as semantic conditioning and route context, but the
+  proposal body cannot just copy the evidence text.
+- The next useful candidate-source route is session/known-output replay or
+  structured function/value spans, where source text is expected to be emitted
+  nearly verbatim and exact active verification can amortize over longer spans.
