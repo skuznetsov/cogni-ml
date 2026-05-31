@@ -44,6 +44,10 @@ module ML::GGUF
       end
     end
 
+    def top1_id_buf(index : Int32) : ML::MetalBuffer
+      submissions[index].top1_id_buf.not_nil!
+    end
+
     def second_id(index : Int32) : Int32
       if buf = submissions[index].second_id_buf
         buf.contents.as(Pointer(UInt32)).value.to_i32

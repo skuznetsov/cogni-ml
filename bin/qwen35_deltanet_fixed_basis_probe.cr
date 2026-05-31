@@ -9381,7 +9381,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
 
       if emitted_tokens + proposal.size < gen_tokens
         t_next = Time.instant
-        last_proposed_buf = current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+        last_proposed_buf = current_block.top1_id_buf(proposal.size - 1)
         next_schedule_index = (current_schedule_index + 1) % schedule.size
         next_steps = Math.min(schedule[next_schedule_index], gen_tokens - emitted_tokens - proposal.size)
         next_proposal_limit = next_steps
@@ -9590,7 +9590,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           t_next = Time.instant
           current_schedule_index = (current_schedule_index + 1) % schedule.size
           next_steps = Math.min(schedule[current_schedule_index], gen_tokens - emitted_tokens)
-          last_proposed_buf = current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+          last_proposed_buf = current_block.top1_id_buf(proposal.size - 1)
           current_block = submit_routed_block.call(current_block.state, current_block.lr_bufs, current_block.full_current, last_proposed_buf, pos_last, "self_spec_tree2_anywhere_next_#{chunks}", nil, next_steps, draft_updown_enabled)
           current_proposal = read_block.call(current_block, next_steps, "tree2_anywhere_next_#{chunks}")
           draft_next_ms += (Time.instant - t_next).total_milliseconds
@@ -9698,7 +9698,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     can_overlap_next_after_branch_guard = branch_guard_index.nil? || branch_guard_overlap_next
     if emitted_tokens + proposal.size < gen_tokens && !risk_offramp && !refresh_current_draft && can_overlap_next_after_branch_guard
       t_next = Time.instant
-      last_proposed_buf = current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+      last_proposed_buf = current_block.top1_id_buf(proposal.size - 1)
       next_schedule_index = (current_schedule_index + 1) % schedule.size
       next_steps = Math.min(schedule[next_schedule_index], gen_tokens - emitted_tokens - proposal.size)
       next_proposal_limit = next_steps
@@ -10220,7 +10220,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           chunk_draft_next_ms += dt_next
         else
           t_next = Time.instant
-          last_proposed_buf = current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+          last_proposed_buf = current_block.top1_id_buf(proposal.size - 1)
           next_steps = Math.min(schedule[next_schedule_index], gen_tokens - emitted_tokens)
           current_block = submit_routed_block.call(current_block.state, current_block.lr_bufs, current_block.full_current, last_proposed_buf, pos_last, "self_spec_risk_offramp_next_#{chunks}", nil, next_steps, draft_updown_enabled)
           current_proposal = read_block.call(current_block, next_steps, "risk_offramp_next_#{chunks}")
@@ -10511,7 +10511,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         serial_update_noffn_after_accept.call(serial_proposal_margin_min, serial_proposal_margin_checks)
         if serial_emitted_tokens < gen_tokens
           serial_target_next_id = expected
-          last_proposed_buf = serial_current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+          last_proposed_buf = serial_current_block.top1_id_buf(proposal.size - 1)
           serial_schedule_index = (serial_schedule_index + 1) % schedule.size
           serial_current_block = submit_routed_block.call(serial_current_block.state, serial_current_block.lr_bufs, serial_current_block.full_current, last_proposed_buf, serial_pos_last, "self_spec_serial_staged_next_#{serial_chunks}", nil, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
           serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_staged_next_#{serial_chunks}")
@@ -10557,7 +10557,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
         serial_update_noffn_after_accept.call(serial_proposal_margin_min, serial_proposal_margin_checks)
         if serial_emitted_tokens < gen_tokens
           serial_schedule_index = (serial_schedule_index + 1) % schedule.size
-          last_proposed_buf = serial_current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+          last_proposed_buf = serial_current_block.top1_id_buf(proposal.size - 1)
           serial_current_block = submit_routed_block.call(serial_current_block.state, serial_current_block.lr_bufs, serial_current_block.full_current, last_proposed_buf, serial_pos_last, "self_spec_serial_tree2_anywhere_next_#{serial_chunks}", nil, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), serial_draft_updown_enabled)
           serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens - serial_emitted_tokens), "serial_tree2_anywhere_next_#{serial_chunks}")
         end
@@ -10798,7 +10798,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           serial_current_block = submit_seed_owned.call(exact_base, serial_last_token, serial_pos_last, "self_spec_serial_refresh_accept_#{serial_chunks}", serial_next_steps, serial_draft_updown_enabled)
           serial_current_proposal = read_block.call(serial_current_block, serial_next_steps, "serial_refresh_accept_#{serial_chunks}")
         else
-          last_proposed_buf = serial_current_block.submissions[proposal.size - 1].top1_id_buf.not_nil!
+          last_proposed_buf = serial_current_block.top1_id_buf(proposal.size - 1)
           serial_current_block = submit_routed_block.call(serial_current_block.state, serial_current_block.lr_bufs, serial_current_block.full_current, last_proposed_buf, serial_pos_last, "self_spec_serial_next_#{serial_chunks}", nil, serial_next_steps, serial_draft_updown_enabled)
           serial_current_proposal = read_block.call(serial_current_block, serial_next_steps, "serial_next_#{serial_chunks}")
         end
