@@ -77,6 +77,18 @@ def parse_metrics(line: str) -> dict[str, str]:
     return {m.group(1): m.group(2) for m in FIELD_RE.finditer(line.split(" draft_text=", 1)[0])}
 
 
+def parse_probe_metrics(log_text: str) -> tuple[dict[str, str], str]:
+    metrics: dict[str, str] = {}
+    text_line = ""
+    for raw_line in log_text.splitlines():
+        if raw_line.startswith("self_draft_gpu_chain "):
+            metrics.update(parse_metrics(raw_line))
+        elif raw_line.startswith("self_draft_gpu_chain_text"):
+            text_line = raw_line
+            metrics.update(parse_metrics(raw_line))
+    return metrics, text_line
+
+
 def ratio(value: str) -> float:
     if "/" not in value:
         return 0.0
@@ -187,7 +199,7 @@ def main() -> int:
         ]
         returncode = run_to_file(cmd, log_path, timeout=args.timeout + 45)
         log_text = log_path.read_text(encoding="utf-8", errors="replace")
-        line = next((line for line in log_text.splitlines() if line.startswith("self_draft_gpu_chain_text")), "")
+        metrics, line = parse_probe_metrics(log_text)
         if not line:
             rows.append({
                 "name": case.name,
@@ -197,7 +209,6 @@ def main() -> int:
                 "elapsed_s": f"{time.time() - started:.3f}",
             })
             continue
-        metrics = parse_metrics(line)
         text_match = TEXT_RE.search(line)
         if not text_match:
             rows.append({
@@ -259,6 +270,10 @@ def main() -> int:
             "salvage_accepted": metrics.get("salvage_accepted", ""),
             "salvage_corrections": metrics.get("salvage_corrections", ""),
             "salvage_dropped": metrics.get("salvage_dropped", ""),
+            "submit_ms": metrics.get("submit_ms", ""),
+            "wait_ms": metrics.get("wait_ms", ""),
+            "chain_ms": metrics.get("chain_ms", ""),
+            "exact_ms": metrics.get("exact_ms", ""),
             "word_ratio": f"{difflib.SequenceMatcher(None, words_exact, words_draft).ratio():.6f}",
             "draft_compile": "skipped" if args.skip_crystal_check else int(draft_ok),
             "exact_compile": "skipped" if args.skip_crystal_check else int(exact_ok),
@@ -294,6 +309,10 @@ def main() -> int:
         "salvage_accepted",
         "salvage_corrections",
         "salvage_dropped",
+        "submit_ms",
+        "wait_ms",
+        "chain_ms",
+        "exact_ms",
         "word_ratio",
         "draft_compile",
         "exact_compile",
