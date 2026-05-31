@@ -9,6 +9,7 @@ require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_ffn_updown_adapter"
 require "../src/ml/gguf/quant_matmul"
 require "../src/ml/cuda/qwen_recurrent_layer_runner"
 require "../src/ml/cuda/qwen_full_attn_layer_runner"
@@ -712,28 +713,23 @@ alias FfnPcaUpdownAdapter = NamedTuple(
   coeff_w: Array(Float32),
   down: Array(Float32))
 
-def json_f32_array(value : JSON::Any, label : String) : Array(Float32)
-  value.as_a.map { |item| item.as_f.to_f32 }
-rescue ex
-  raise ArgumentError.new("invalid #{label}: #{ex.message}")
-end
-
 def load_ffn_pca_updown_adapters(path : String, hidden : Int32) : Hash(Int32, FfnPcaUpdownAdapter)
-  root = JSON.parse(File.read(path))
-  format = root["format"]?.try(&.as_s?) || ""
-  raise "unsupported adapter format: #{format}" unless format == "qwen35_ffn_updown_adapter_v1"
-  file_hidden = root["hidden_dim"]?.try(&.as_i?) || hidden
+  artifact = ML::GGUF::Qwen35FFNUpDownAdapterArtifact.load(path)
+  file_hidden = artifact[:hidden_dim]
   raise "adapter hidden #{file_hidden} does not match model hidden #{hidden}" unless file_hidden == hidden
 
   adapters = {} of Int32 => FfnPcaUpdownAdapter
-  root["layers"].as_a.each do |entry|
-    layer_id = entry["layer"].as_i
-    rank = entry["rank"].as_i
+  artifact[:adapters].each do |layer_id, adapter|
+    rank = adapter.rank
     raise "adapter layer #{layer_id} rank must be in 1..64" unless rank > 0 && rank <= 64
-    x_mean = json_f32_array(entry["x_mean"], "layer #{layer_id} x_mean")
-    c_mean = json_f32_array(entry["c_mean"], "layer #{layer_id} c_mean")
-    coeff_w = json_f32_array(entry["coeff_w"], "layer #{layer_id} coeff_w")
-    down = json_f32_array(entry["down"], "layer #{layer_id} down")
+    x_mean = adapter.x_mean.map(&.to_f32)
+    c_mean = adapter.c_mean[0, rank].map(&.to_f32)
+    coeff_w = Array(Float32).new(rank * hidden)
+    down = Array(Float32).new(rank * hidden)
+    rank.times do |r|
+      hidden.times { |d| coeff_w << adapter.coeff_weights[r][d].to_f32 }
+      hidden.times { |d| down << adapter.down_basis[r][d] }
+    end
     raise "adapter layer #{layer_id} x_mean size mismatch" unless x_mean.size == hidden
     raise "adapter layer #{layer_id} c_mean size mismatch" unless c_mean.size >= rank
     raise "adapter layer #{layer_id} coeff_w size mismatch" unless coeff_w.size >= rank * hidden

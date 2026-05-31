@@ -17494,3 +17494,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: Full product self-spec extraction is still too entangled with probe scheduling, `ProbeRuntime`, online adapter training, verifier backup/replay, branch guards, WBA traces, and timing diagnostics. This slice extracts the portable adapter artifact first, so future product code can load precomputed PCA-updown proposal bodies without importing the whole probe.
 - LTP/WBA: Window is the FFN PCA-updown adapter artifact boundary. Transport is the adapter coefficients from offline calibration/probe code into a future product self-spec corridor. Legal move is pure data/math extraction with identical probe semantics and exact-verifier boundary preserved. Potential descends in `(probe_entanglement_area, artifact_drift_risk, future_runner_extraction_area)`; dual frame remains route hit with no compatible product runner -> diagnostic-only/no proposal execution.
 - trust: {F:0.88,G:0.54,R:0.86}
+
+**LM-735 CUDA mixed-stack PCA-updown adapter loader now reuses the shared artifact parser [shared/ml]**
+- status: VERIFIED parser unification slice
+- change: `bin/cuda_mixed_stack_probe.cr` now loads `qwen35_ffn_updown_adapter_v1` through `ML::GGUF::Qwen35FFNUpDownAdapterArtifact.load` instead of maintaining a second JSON parser. The CUDA probe still flattens rows into its runner-owned `Float32` buffers, but artifact validation and format parsing are shared with the Metal/probe path.
+- evidence: `scripts/run_safe.sh crystal 180 6000 build --no-codegen bin/cuda_mixed_stack_probe.cr --error-trace` passed. `scripts/run_safe.sh crystal 120 4000 spec spec/qwen35_ffn_updown_adapter_spec.cr --error-trace` passed (`4 examples, 0 failures`).
+- diagnosis: This reduces format drift before product self-spec extraction and keeps CUDA/Metal PCA-updown experiments on the same artifact contract. It does not change CUDA runner semantics or claim a speedup.
+- LTP/WBA: Window is duplicated adapter JSON parsing. Transport is the shared artifact parser into the CUDA runner flattening boundary. Legal move preserves runner buffer layout while eliminating a divergent parser. Potential descends in `(artifact_drift_risk, duplicate_parser_area)`; dual frame is build failure or format mismatch -> reject artifact before runner setup.
+- trust: {F:0.86,G:0.58,R:0.84}
