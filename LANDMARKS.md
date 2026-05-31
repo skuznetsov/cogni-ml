@@ -17502,3 +17502,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This reduces format drift before product self-spec extraction and keeps CUDA/Metal PCA-updown experiments on the same artifact contract. It does not change CUDA runner semantics or claim a speedup.
 - LTP/WBA: Window is duplicated adapter JSON parsing. Transport is the shared artifact parser into the CUDA runner flattening boundary. Legal move preserves runner buffer layout while eliminating a divergent parser. Potential descends in `(artifact_drift_risk, duplicate_parser_area)`; dual frame is build failure or format mismatch -> reject artifact before runner setup.
 - trust: {F:0.86,G:0.58,R:0.84}
+
+**LM-736 qwen35_generate validates PCA-updown adapter artifacts without executing them [shared/ml]**
+- status: VERIFIED fail-closed product hook
+- change: Added `QWEN35_SELF_SPEC_UPDOWN_ADAPTERS_PATH` to `bin/qwen35_generate.cr`. When a resolved proposal route is `pca_updown`, the product generator loads the shared `qwen35_ffn_updown_adapter_v1` artifact, checks model hidden size, requested route layers, and requested rank, then reports `adapter_artifact=valid|invalid`. Decode behavior still remains unchanged with `product_self_spec=unsupported decode_path=unchanged`.
+- evidence: `scripts/run_safe.sh crystal 180 7000 build --no-codegen bin/qwen35_generate.cr --error-trace` passed. README documents the diagnostic adapter validation hook.
+- diagnosis: Product self-spec now has both certificate lookup and adapter-artifact validation at the prompt boundary, but still no proposal execution. This is the correct fail-closed staging point before extracting the actual scheduler/verifier corridor from the probe.
+- LTP/WBA: Window is a route hit for `pca_updown`. Transport is the adapter artifact into the future proposal corridor. Legal move validates only dimensions/layers/rank and does not mutate decode state. Potential descends in `(artifact_mismatch_risk, future_runner_extraction_area)` while keeping `(wrong_body_risk, rollback_tax)` flat because no approximate body executes.
+- trust: {F:0.84,G:0.52,R:0.82}

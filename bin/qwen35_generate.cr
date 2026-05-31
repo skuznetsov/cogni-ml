@@ -11,6 +11,7 @@ require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_constraints"
 require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/ngram_draft"
+require "../src/ml/gguf/qwen35_ffn_updown_adapter"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_proposal_route"
 require "../src/ml/gguf/qwen35_serving_route"
@@ -33,6 +34,7 @@ decode_ms = 0.0
 source_history_save_ms = 0.0
 token_cache_hit = false
 cache_route = "none"
+model_hidden_dim = nil.as(Int32?)
 
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
@@ -70,6 +72,7 @@ prompt_cache_artifact_codec_block = (ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLO
 prompt_cache_live_kv_artifacts = ENV["QWEN35_PROMPT_CACHE_LIVE_KV_ARTIFACTS"]? == "1"
 self_spec_route_memory_root = ENV["QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT"]?.try { |v| v.empty? ? nil : v }
 self_spec_route_key = ENV["QWEN35_SELF_SPEC_ROUTE_KEY"]?.try { |v| v.empty? ? nil : v }
+self_spec_adapter_path = ENV["QWEN35_SELF_SPEC_UPDOWN_ADAPTERS_PATH"]?.try { |v| v.empty? ? nil : v }
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "mtp" || decode_policy == "auto"
@@ -607,6 +610,7 @@ end
 puts "Loading tokenizer metadata..."
 t0 = Time.instant
 g = ML::GGUF::GGUFFile.new(MODEL_PATH)
+model_hidden_dim = ML::GGUF::Qwen35Hparams.new(g).n_embd
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(g, MODEL_PATH, LLAMA_TOKENIZE_BIN)
 g.close
 model_load_ms = (Time.instant - t0).total_milliseconds
@@ -651,7 +655,41 @@ if route_root = self_spec_route_memory_root
     rank_text = route_entry.route_rank ? route_entry.route_rank.to_s : "na"
     layers_text = route_entry.route_layers.empty? ? "default" : route_entry.route_layers.join(',')
     key_text = self_spec_route_key || "exact_prompt"
-    STDOUT << "  self-spec proposal route hit: key=#{key_text} route=#{route_entry.route} rank=#{rank_text} layers=#{layers_text} product_self_spec=unsupported decode_path=unchanged\n"
+    adapter_note = "adapter_artifact=not_requested"
+    if route_entry.route != ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN
+      adapter_note = "adapter_artifact=not_applicable"
+    elsif adapter_path = self_spec_adapter_path
+      adapter_note = begin
+        artifact = ML::GGUF::Qwen35FFNUpDownAdapterArtifact.load(adapter_path)
+        requested_rank = route_entry.route_rank || artifact[:rank]
+        requested_layers = route_entry.route_layers.empty? ? artifact[:adapters].keys.sort : route_entry.route_layers
+        missing = requested_layers.reject { |layer_id| artifact[:adapters].has_key?(layer_id) }
+        short_rank = requested_layers.select do |layer_id|
+          adapter = artifact[:adapters][layer_id]?
+          adapter && adapter.rank < requested_rank
+        end
+        if expected_hidden = model_hidden_dim
+          if artifact[:hidden_dim] != expected_hidden
+            "adapter_artifact=invalid reason=hidden_dim expected=#{expected_hidden} actual=#{artifact[:hidden_dim]}"
+          elsif !missing.empty?
+            "adapter_artifact=invalid reason=missing_layers layers=#{missing.join(',')}"
+          elsif !short_rank.empty?
+            "adapter_artifact=invalid reason=rank_too_small layers=#{short_rank.join(',')} requested_rank=#{requested_rank}"
+          else
+            "adapter_artifact=valid source=#{artifact[:source]} hidden=#{artifact[:hidden_dim]} rank=#{artifact[:rank]} checked_layers=#{requested_layers.join(',')}"
+          end
+        elsif !missing.empty?
+          "adapter_artifact=invalid reason=missing_layers layers=#{missing.join(',')}"
+        elsif !short_rank.empty?
+          "adapter_artifact=invalid reason=rank_too_small layers=#{short_rank.join(',')} requested_rank=#{requested_rank}"
+        else
+          "adapter_artifact=valid source=#{artifact[:source]} hidden=#{artifact[:hidden_dim]} rank=#{artifact[:rank]} checked_layers=#{requested_layers.join(',')}"
+        end
+      rescue ex
+        "adapter_artifact=invalid reason=#{ex.message.try(&.gsub(/\s+/, "_")) || ex.class.name}"
+      end
+    end
+    STDOUT << "  self-spec proposal route hit: key=#{key_text} route=#{route_entry.route} rank=#{rank_text} layers=#{layers_text} #{adapter_note} product_self_spec=unsupported decode_path=unchanged\n"
   else
     key_text = self_spec_route_key || "exact_prompt"
     STDOUT << "  self-spec proposal route miss: key=#{key_text} product_self_spec=unsupported decode_path=unchanged\n"

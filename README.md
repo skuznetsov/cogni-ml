@@ -449,6 +449,10 @@ generation speedup until the same verifier/proposal corridor is wired into the
 normal generator. `qwen35_generate` can resolve the route table with
 `QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT` for diagnostics and future wiring, but it
 prints `product_self_spec=unsupported` and leaves the decode path unchanged.
+If `QWEN35_SELF_SPEC_UPDOWN_ADAPTERS_PATH` is also set, the generator validates
+the referenced PCA-updown adapter artifact against the selected route layers and
+rank, then reports `adapter_artifact=valid|invalid` without executing the
+adapter.
 The PCA-updown FFN adapter data path is now shared in
 `src/ml/gguf/qwen35_ffn_updown_adapter.cr`: it owns the centered low-rank
 projection math, Hadamard/symmetric quant-dequant helpers, and the
@@ -817,6 +821,7 @@ Useful Qwen environment switches:
 | `QWEN35_PROMPT_CACHE_RESIDENT_STATES=0` | Number of restored prompt-cache states to keep hot in a resident process. `0` disables the in-memory state cache. Positive values avoid rereading and redecompressing `.qkv` artifacts on repeated same-process session hits. |
 | `QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT=/path` | Diagnostic/future-wiring hook: resolve a same-weight self-spec proposal route in `qwen35_generate` using the shared route table. Current product generation does not execute the PCA-updown self-spec runner, so hits are reported and the decode path remains unchanged. |
 | `QWEN35_SELF_SPEC_ROUTE_KEY=KEY` | Optional caller-certified key for `QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT`; without it, lookup uses exact prompt text and token ids. |
+| `QWEN35_SELF_SPEC_UPDOWN_ADAPTERS_PATH=/path.json` | Optional diagnostic/future-wiring hook paired with `QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT`: validate a `qwen35_ffn_updown_adapter_v1` artifact for a selected `pca_updown` route and report validity without changing decode behavior. |
 | `QWEN35_NATIVE_TOKENIZER_OFF=1` | Disable the native Crystal Qwen BPE encoder and use the external `llama-tokenize` bootstrap path. |
 | `QWEN35_PREPARE_STATE_OFF=1` | Disable eager Metal state-buffer preparation in `qwen35_generate`. By default the CLI prepares KV/DeltaNet buffers before timing prompt ingest. |
 | `QWEN35_METAL_PROFILE=1` | Enable Metal dispatch/profile attribution for the timed decode region in `qwen35_generate`. The report includes wave/group timings, prefill/source-replay phase traces, matmul logical traffic, conversion traffic, and CPU fallback counts. |
