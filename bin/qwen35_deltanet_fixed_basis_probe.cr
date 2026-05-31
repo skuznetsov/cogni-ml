@@ -6,6 +6,7 @@ require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/qwen35_prompt_cache"
+require "../src/ml/gguf/qwen35_proposal_route"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
@@ -12629,15 +12630,18 @@ route_memory_model_id = nil.as(String?)
 route_memory_tokenizer_id = nil.as(String?)
 route_memory_learned = false
 if route_memory_root = simulate_self_spec_gpu_pipeline_draft_updown_route_memory_root
-  model_info = File.info(model)
-  route_memory_model_id = ML::GGUF::Qwen35PromptCache.short_hash("model\0#{model}\0#{model_info.size}\0#{model_info.modification_time.to_unix}")
-  route_memory_tokenizer_id = ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{route_memory_model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
-  route_memory_store = ML::GGUF::Qwen35PromptCache::Store.new(route_memory_root)
-  route_memory_entry = if route_key = simulate_self_spec_gpu_pipeline_draft_updown_route_key
-                         route_memory_store.not_nil!.lookup_proposal_route_key(route_memory_model_id.not_nil!, route_memory_tokenizer_id.not_nil!, route_key)
-                       else
-                         route_memory_store.not_nil!.lookup_proposal_route(route_memory_model_id.not_nil!, route_memory_tokenizer_id.not_nil!, prompt, token_ids)
-                       end
+  resolution = ML::GGUF::Qwen35ProposalRoute.resolve(
+    route_memory_root,
+    model,
+    tok,
+    prompt,
+    token_ids,
+    simulate_self_spec_gpu_pipeline_draft_updown_route_key,
+  )
+  route_memory_model_id = resolution.model_id
+  route_memory_tokenizer_id = resolution.tokenizer_id
+  route_memory_store = resolution.store
+  route_memory_entry = resolution.entry
   if route_hit = route_memory_entry
     case route_hit.route
     when ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_BASELINE

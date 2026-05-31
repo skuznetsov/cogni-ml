@@ -4,6 +4,7 @@ require "json"
 require "option_parser"
 require "./../src/ml/gguf/reader"
 require "./../src/ml/gguf/qwen35_prompt_cache"
+require "./../src/ml/gguf/qwen35_proposal_route"
 require "./../src/ml/gguf/qwen35_tokenizer"
 
 DEFAULT_MODEL     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
@@ -57,9 +58,8 @@ abort "model not found: #{model}" unless File.exists?(model)
 
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
-model_info = File.info(model)
-model_id = ML::GGUF::Qwen35PromptCache.short_hash("model\0#{model}\0#{model_info.size}\0#{model_info.modification_time.to_unix}")
-tokenizer_id = ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
+model_id = ML::GGUF::Qwen35ProposalRoute.model_id(model)
+tokenizer_id = ML::GGUF::Qwen35ProposalRoute.tokenizer_id(model_id, tok)
 store = ML::GGUF::Qwen35PromptCache::Store.new(root)
 
 load_prompt = -> do

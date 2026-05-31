@@ -12,6 +12,7 @@ require "../src/ml/gguf/qwen35_constraints"
 require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/ngram_draft"
 require "../src/ml/gguf/qwen35_prompt_cache"
+require "../src/ml/gguf/qwen35_proposal_route"
 require "../src/ml/gguf/qwen35_serving_route"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
@@ -206,12 +207,11 @@ end
 spec_max_gamma = Math.max(spec_max_gamma, spec_gamma)
 
 def cache_model_id(path : String) : String
-  info = File.info(path)
-  ML::GGUF::Qwen35PromptCache.short_hash("model\0#{path}\0#{info.size}\0#{info.modification_time.to_unix}")
+  ML::GGUF::Qwen35ProposalRoute.model_id(path)
 end
 
 def cache_tokenizer_id(model_id : String, tok : ML::GGUF::Qwen35Tokenizer) : String
-  ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
+  ML::GGUF::Qwen35ProposalRoute.tokenizer_id(model_id, tok)
 end
 
 def prefill_next(weights : ML::GGUF::Qwen35Weights,
