@@ -18,6 +18,10 @@ module ML::GGUF
     def initialize(@submissions, @state, @lr_bufs, @full_current, @use_updown, @use_noffn)
     end
 
+    def size : Int32
+      submissions.size
+    end
+
     def wait!(limit : Int32? = nil) : Nil
       active = active_submissions(limit)
       waited_cmds = Set(UInt64).new
