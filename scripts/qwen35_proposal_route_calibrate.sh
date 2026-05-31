@@ -86,7 +86,8 @@ while IFS= read -r raw || [[ -n "${raw}" ]]; do
   fi
   name="${raw%%::*}"
   escaped_prompt="${raw#*::}"
-  prompt="$(printf '%b' "${escaped_prompt}")"
+  prompt="$(printf '%b__QWEN35_ROUTE_CAL_END__' "${escaped_prompt}")"
+  prompt="${prompt%__QWEN35_ROUTE_CAL_END__}"
   safe_name="$(printf '%s' "${name}" | tr -c 'A-Za-z0-9_.-' '_')"
   base_log="${tmp_dir}/${safe_name}.baseline.log"
   up_log="${tmp_dir}/${safe_name}.updown.log"

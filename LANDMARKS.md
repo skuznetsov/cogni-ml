@@ -17440,3 +17440,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This gives us an offline route-table builder instead of one-off manual seeding. The gen4 smoke intentionally demonstrates fail-closed behavior; the known gen16 `code_square` PCA-updown win remains LM-726. Future calibration should run at the target serving length/schedule (`gen16/32`, gamma4/8) and then use the produced cache as a hot-path route table.
 - LTP/WBA: Window is a prompt/task calibration row. Transport is the measured decision into route memory. Legal move seeds only `pca_updown` when the lexicographic potential `(parity_risk, acceptance_loss, overlap_area)` descends; otherwise it seeds baseline. Dual frame is baseline/exact for missing or failed calibration rows.
 - trust: {F:0.86,G:0.48,R:0.84}
+
+**LM-728 Route calibration must preserve prompt-boundary trailing newlines [shared/ml]**
+- status: VERIFIED bugfix plus calibration confirmation
+- issue: The first version of `scripts/qwen35_proposal_route_calibrate.sh` decoded escaped prompt text through command substitution, which stripped trailing newlines. This changed `code_square` from the known 63-token prompt boundary to 62 tokens and produced a misleading baseline decision in `/tmp/qwen_route_cal_gen16_root_20260530214949`.
+- change: Prompt decoding now appends/removes a sentinel so trailing newlines survive Bash command substitution.
+- evidence: `bash -n scripts/qwen35_proposal_route_calibrate.sh` passed. Fixed one-prompt gen16 calibration root `/tmp/qwen_route_cal_code_square_fixed_root_20260530220023` restored `prompt_tokens=63` and selected `pca_updown`: baseline accept `83.33%`, one reject, `819.823ms`; updown accept `100%`, zero rejects, `609.968ms`; gain `209.855ms`; parity true.
+- diagnosis: Route-memory keys are boundary-sensitive. Prompt text normalization, especially trailing assistant-prefix newlines, is part of the route certificate and must not be silently changed by scripts. The fixed script now reproduces LM-726's route decision shape.
+- LTP/WBA: Window is the exact prompt boundary. Transport is the calibrated route key tied to tokenized prompt state. Legal move must preserve the prompt-token boundary before measuring or seeding. Potential descends only after boundary recomputation confirms token count; otherwise the measurement belongs to a different corridor.
+- trust: {F:0.90,G:0.48,R:0.86}
