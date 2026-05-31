@@ -41,6 +41,7 @@ module ProbeRuntime
   @@self_spec_draft_no_ffn_min_margin : Float64? = nil
   @@self_spec_draft_no_ffn_max_chunks : Int32? = nil
   @@self_spec_draft_updown_race_first_chunk = false
+  @@self_spec_draft_updown_first_margin_threshold : Float64? = nil
 
   def self.fallback_score_mode : String
     @@fallback_score_mode
@@ -108,6 +109,17 @@ module ProbeRuntime
 
   def self.self_spec_draft_updown_race_first_chunk=(enabled : Bool)
     @@self_spec_draft_updown_race_first_chunk = enabled
+  end
+
+  def self.self_spec_draft_updown_first_margin_threshold : Float64?
+    @@self_spec_draft_updown_first_margin_threshold
+  end
+
+  def self.self_spec_draft_updown_first_margin_threshold=(threshold : Float64?)
+    if value = threshold
+      raise "GPU pipeline pca-updown first-margin threshold must be non-negative" if value < 0.0
+    end
+    @@self_spec_draft_updown_first_margin_threshold = threshold
   end
 
   def self.self_spec_router_trace_io : IO?
@@ -8652,7 +8664,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   active_draft_no_ffn_layer_indices = active_draft_no_ffn ? draft_no_ffn_layer_indices : nil
   max_gamma = schedule.max
   router_trace_enabled = !ProbeRuntime.self_spec_router_trace_io.nil?
-  tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || !draft_no_ffn_min_margin.nil? || draft_updown_agreement_gate || mtp_k2_on_reject_enabled || router_trace_enabled
+  tree2_enabled = tree2_first || tree2_anywhere || tree2_staged_tokens > 0 || !tree2_margin_guard.nil? || !tree2_branch_guard.nil? || !risk_offramp_margin.nil? || !draft_updown_min_margin.nil? || !ProbeRuntime.self_spec_draft_updown_first_margin_threshold.nil? || !draft_no_ffn_min_margin.nil? || draft_updown_agreement_gate || mtp_k2_on_reject_enabled || router_trace_enabled
 
   hp = weights.hparams
   copy_verifier_state = ->(dst : ML::GGUF::Qwen35CPU::State, src : ML::GGUF::Qwen35CPU::State, used_tokens : Int32) {
@@ -9228,7 +9240,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     end
   }
   draft_updown_race_first_chunk = ProbeRuntime.self_spec_draft_updown_race_first_chunk
-  draft_updown_enabled = draft_updown_available && !draft_updown_race_first_chunk && draft_updown_after_rejects <= 0 && draft_updown_after_full_accepts <= 0 && draft_updown_min_margin.nil? && draft_updown_cap_open.call
+  draft_updown_first_margin_threshold = ProbeRuntime.self_spec_draft_updown_first_margin_threshold
+  draft_updown_enabled = draft_updown_available && !draft_updown_race_first_chunk && draft_updown_first_margin_threshold.nil? && draft_updown_after_rejects <= 0 && draft_updown_after_full_accepts <= 0 && draft_updown_min_margin.nil? && draft_updown_cap_open.call
   draft_updown_full_accept_streak = 0
   draft_noffn_chunks = 0
   draft_noffn_full_accept_streak = 0
@@ -9259,6 +9272,28 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   verifier_initial_ms += (Time.instant - t_initial_target).total_milliseconds if attr_collect
   wba.try(&.mark("verifier", "initial_target", t_initial_target, Time.instant))
   current_proposal = read_block.call(current_block, Math.min(gamma, gen_tokens), "seed")
+  if threshold = draft_updown_first_margin_threshold
+    if draft_updown_available && !current_block.use_updown && gen_tokens > 0
+      first_margin_min = Float64::INFINITY
+      first_margin_checks = 0
+      current_proposal.each_index do |i|
+        if margin = read_top2_margin.call(current_block, i)
+          first_margin_min = margin if margin < first_margin_min
+          first_margin_checks += 1
+        end
+      end
+      if first_margin_checks > 0 && first_margin_min <= threshold.not_nil!
+        up_block = submit_seed.call(state_before_last, last_token, pos_last, "self_spec_seed_updown_first_margin", Math.min(schedule[current_schedule_index], gen_tokens), true)
+        up_proposal = read_block.call(up_block, Math.min(gamma, gen_tokens), "seed_updown_first_margin")
+        drain_block.call(current_block)
+        current_block = up_block
+        current_proposal = up_proposal
+        draft_updown_enabled = true
+      else
+        draft_updown_enabled = false
+      end
+    end
+  end
   if draft_updown_race_first_chunk && draft_updown_available && !current_block.use_updown && gen_tokens > 0
     score_first_chunk = ->(candidate_proposal : Array(Int32)) {
       eval_state = verifier_state.fork
@@ -10403,7 +10438,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       true
     end
   }
-  serial_draft_updown_enabled = serial_draft_updown_available && draft_updown_after_rejects <= 0 && draft_updown_after_full_accepts <= 0 && draft_updown_min_margin.nil? && serial_draft_updown_cap_open.call
+  serial_draft_updown_enabled = serial_draft_updown_available && draft_updown_first_margin_threshold.nil? && draft_updown_after_rejects <= 0 && draft_updown_after_full_accepts <= 0 && draft_updown_min_margin.nil? && serial_draft_updown_cap_open.call
   serial_draft_updown_full_accept_streak = 0
   serial_rejections = 0
   serial_draft_noffn_chunks = 0
@@ -10475,6 +10510,28 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   }
   serial_current_block = submit_seed.call(serial_state_before_last, serial_last_token, serial_pos_last, "self_spec_serial_seed", Math.min(schedule[serial_schedule_index], gen_tokens), serial_draft_updown_enabled)
   serial_current_proposal = read_block.call(serial_current_block, Math.min(schedule[serial_schedule_index], gen_tokens), "serial_seed")
+  if threshold = draft_updown_first_margin_threshold
+    if serial_draft_updown_available && !serial_current_block.use_updown && gen_tokens > 0
+      first_margin_min = Float64::INFINITY
+      first_margin_checks = 0
+      serial_current_proposal.each_index do |i|
+        if margin = read_top2_margin.call(serial_current_block, i)
+          first_margin_min = margin if margin < first_margin_min
+          first_margin_checks += 1
+        end
+      end
+      if first_margin_checks > 0 && first_margin_min <= threshold.not_nil!
+        up_block = submit_seed.call(serial_state_before_last, serial_last_token, serial_pos_last, "self_spec_serial_seed_updown_first_margin", Math.min(schedule[serial_schedule_index], gen_tokens), true)
+        up_proposal = read_block.call(up_block, Math.min(schedule[serial_schedule_index], gen_tokens), "serial_seed_updown_first_margin")
+        drain_block.call(serial_current_block)
+        serial_current_block = up_block
+        serial_current_proposal = up_proposal
+        serial_draft_updown_enabled = true
+      else
+        serial_draft_updown_enabled = false
+      end
+    end
+  end
   if draft_updown_race_first_chunk && serial_draft_updown_available && !serial_current_block.use_updown && gen_tokens > 0
     serial_score_first_chunk = ->(candidate_proposal : Array(Int32)) {
       eval_state = serial_verifier_state.fork
@@ -12103,6 +12160,7 @@ simulate_self_spec_gpu_pipeline_draft_updown_min_margin : Float64? = nil
 simulate_self_spec_gpu_pipeline_draft_updown_max_chunks : Int32? = nil
 simulate_self_spec_gpu_pipeline_draft_updown_after_rejects = 0
 simulate_self_spec_gpu_pipeline_draft_updown_race_first_chunk = false
+simulate_self_spec_gpu_pipeline_draft_updown_first_margin_threshold : Float64? = nil
 simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept = false
 simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate = false
 simulate_self_spec_gpu_pipeline_draft_updown_agreement_steps = 1
@@ -12397,6 +12455,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-max-chunks=N", "Use pca-updown for at most N draft chunks in a run; N=0 keeps the pca route closed and is useful for drift/burst falsifiers") { |v| simulate_self_spec_gpu_pipeline_draft_updown_max_chunks = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-after-rejects=N", "Start with baseline lowrank and enable pca-updown for future chunks after N exact verifier rejects; an updown reject disables it again") { |v| simulate_self_spec_gpu_pipeline_draft_updown_after_rejects = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-race-first-chunk", "Exact-score lowrank and pca-updown first chunks before committing; choose pca-updown only if it full-accepts while lowrank rejects") { simulate_self_spec_gpu_pipeline_draft_updown_race_first_chunk = true }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-updown-first-margin=F", "Start with baseline lowrank; if the first seed chunk top1/top2 min-margin is <= F, switch that chunk and future chunks to pca-updown") { |v| simulate_self_spec_gpu_pipeline_draft_updown_first_margin_threshold = v.to_f64 }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-refresh-on-accept", "After a fully accepted pca-updown chunk, discard approximate draft state and seed the next chunk from exact verifier state") { simulate_self_spec_gpu_pipeline_draft_updown_refresh_on_accept = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-refresh-on-accept", "After every fully accepted draft chunk, discard approximate draft state and seed the next chunk from exact verifier state") { ProbeRuntime.self_spec_draft_refresh_on_accept = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-agreement-gate", "Probe lowrank vs pca-updown at the same boundary and use pca-updown only when its next top1 matches lowrank top1/top2") { simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate = true }
@@ -12487,6 +12546,7 @@ raise "FFN block selector percentages must be in 1..100" if simulate_ffn_block_s
 pipeline_router_trace_io = simulate_self_spec_gpu_pipeline_router_trace_path.try { |path| File.open(path, "w") }
 ProbeRuntime.self_spec_router_trace_io = pipeline_router_trace_io
 ProbeRuntime.self_spec_draft_updown_race_first_chunk = simulate_self_spec_gpu_pipeline_draft_updown_race_first_chunk
+ProbeRuntime.self_spec_draft_updown_first_margin_threshold = simulate_self_spec_gpu_pipeline_draft_updown_first_margin_threshold
 at_exit { pipeline_router_trace_io.try(&.close) }
 if simulate_mtp_self_draft_fusion > 0
   raise "MTP sidecar not found: #{mtp_path}" unless File.exists?(mtp_path)
