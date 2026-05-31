@@ -7650,7 +7650,7 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
                                               draft_updown_rank : Int32? = nil,
                                               ffn_updown_adapters : FFNUpDownAdapterMap? = nil,
                                               draft_updown_layer_indices : Set(Int32)? = nil,
-                                              capture_top2 : Bool = false) : NamedTuple(steps: Int32, submit_ms: Float64, wait_ms: Float64, chain_ms: Float64, exact_ms: Float64, agreement: Int32, chain_ids: Array(Int32), chain_second_ids: Array(Int32), chain_top2_margins: Array(Float64), exact_ids: Array(Int32), agreement_lcs: Int32, first_mismatch: Int32, updown_rank: Int32)
+                                              capture_top2 : Bool = false) : NamedTuple(steps: Int32, submit_ms: Float64, wait_ms: Float64, chain_ms: Float64, exact_ms: Float64, agreement: Int32, chain_ids: Array(Int32), chain_second_ids: Array(Int32), chain_top2_margins: Array(Float64), exact_ids: Array(Int32), agreement_lcs: Int32, top2_agreement: Int32, top2_rescues: Int32, first_mismatch: Int32, updown_rank: Int32)
   raise "self-draft GPU chain requires at least one held-out token" unless n_draft > 0
   raise "self-draft GPU chain requires Metal" unless ML::GGUF::Qwen35Metal.available?
   hp = weights.hparams
@@ -7775,6 +7775,14 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
   chain_ms = (Time.instant - t_chain).total_milliseconds
   agreement = chain_ids.zip(exact_ids).count { |pair| pair[0] == pair[1] }
   agreement_lcs = token_lcs_length(chain_ids, exact_ids)
+  top2_agreement = if capture_top2
+                     chain_ids.each_index.count do |i|
+                       chain_ids[i] == exact_ids[i] || chain_second_ids[i] == exact_ids[i]
+                     end
+                   else
+                     agreement
+                   end
+  top2_rescues = top2_agreement - agreement
   first_mismatch = first_mismatch_index(chain_ids, exact_ids)
 
   {
@@ -7785,6 +7793,8 @@ private def simulate_self_draft_gpu_chain_run(weights : ML::GGUF::Qwen35Weights,
     exact_ms:    exact_ms,
     agreement:   agreement,
     agreement_lcs: agreement_lcs,
+    top2_agreement: top2_agreement,
+    top2_rescues: top2_rescues,
     first_mismatch: first_mismatch,
     chain_ids:   chain_ids,
     chain_second_ids: chain_second_ids,
@@ -11992,6 +12002,7 @@ simulate_self_spec_wall_metal_layer_updown = false
 simulate_self_draft_metal_baseline = 0
 simulate_self_draft_gpu_chain = 0
 simulate_self_draft_gpu_chain_text = false
+simulate_self_draft_gpu_chain_top2 = false
 simulate_self_draft_gpu_chain_updown_rank : Int32? = nil
 simulate_self_draft_gpu_chain_updown_layers = [] of Int32
 simulate_self_draft_gpu_state_only = 0
@@ -12271,6 +12282,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-draft-metal-baseline=N", "Wall-clock the Metal-only self-draft (low-rank on --simulate-logits-layers) vs exact greedy and chunk-major verifier on N held-out tokens") { |v| simulate_self_draft_metal_baseline = v.to_i }
   p.on("--simulate-self-draft-gpu-chain=N", "Queue N low-rank self-draft top1 steps with GPU top1_id -> next embedding and no intermediate CPU readback") { |v| simulate_self_draft_gpu_chain = v.to_i }
   p.on("--simulate-self-draft-gpu-chain-text", "With --simulate-self-draft-gpu-chain, decode draft/exact ids as escaped text for no-validator inspection") { simulate_self_draft_gpu_chain_text = true }
+  p.on("--simulate-self-draft-gpu-chain-top2", "With --simulate-self-draft-gpu-chain, capture draft top2 ids/margins and report exact top2 rescue count") { simulate_self_draft_gpu_chain_top2 = true }
   p.on("--simulate-self-draft-gpu-chain-updown=R", "With --simulate-self-draft-gpu-chain, also run resident FFN pca-updown rank R for no-validator drift/text inspection") { |v| simulate_self_draft_gpu_chain_updown_rank = v.to_i }
   p.on("--simulate-self-draft-gpu-chain-updown-layers=LIST", "Apply self-draft gpu chain pca-updown only to the listed low-rank recurrent draft layers") { |v| simulate_self_draft_gpu_chain_updown_layers = parse_int_list(v) }
   p.on("--simulate-self-draft-gpu-state-only=N", "Queue N known-token low-rank draft state updates without lm-head/top1; lower-bound ablation for draft head/control cost") { |v| simulate_self_draft_gpu_state_only = v.to_i }
@@ -13062,19 +13074,19 @@ if rank = simulate_logit_rank
       puts "self_draft_metal_baseline layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{sd[:steps]} self_draft_ms=#{sd[:self_draft_ms].round(3)} exact_ms=#{sd[:exact_ms].round(3)} verifier_ms=#{sd[:verifier_ms].round(3)} self_draft_per_tok_ms=#{sd[:self_draft_per_token_ms].round(3)} exact_per_tok_ms=#{sd[:exact_per_token_ms].round(3)} verifier_per_tok_ms=#{sd[:verifier_per_token_ms].round(3)} self_spec_wall_ratio=#{sd[:self_spec_wall_ratio].round(4)} agreement=#{sd[:agreement]}/#{sd[:steps]} self_draft_ids=#{sd[:self_draft_ids].join(',')} exact_ids=#{sd[:exact_ids].join(',')} verifier_ids=#{sd[:verifier_ids].join(',')}"
     end
     if simulate_self_draft_gpu_chain > 0
-      chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain, layer_bases, rank)
-      puts "self_draft_gpu_chain layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} submit_ms=#{chain[:submit_ms].round(3)} wait_ms=#{chain[:wait_ms].round(3)} chain_ms=#{chain[:chain_ms].round(3)} exact_ms=#{chain[:exact_ms].round(3)} agreement=#{chain[:agreement]}/#{chain[:steps]} lcs_agreement=#{chain[:agreement_lcs]}/#{chain[:steps]} first_mismatch=#{chain[:first_mismatch]} chain_ids=#{chain[:chain_ids].join(',')} exact_ids=#{chain[:exact_ids].join(',')}"
+      chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain, layer_bases, rank, capture_top2: simulate_self_draft_gpu_chain_top2)
+      puts "self_draft_gpu_chain layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} submit_ms=#{chain[:submit_ms].round(3)} wait_ms=#{chain[:wait_ms].round(3)} chain_ms=#{chain[:chain_ms].round(3)} exact_ms=#{chain[:exact_ms].round(3)} agreement=#{chain[:agreement]}/#{chain[:steps]} lcs_agreement=#{chain[:agreement_lcs]}/#{chain[:steps]} first_mismatch=#{chain[:first_mismatch]} top2_agreement=#{chain[:top2_agreement]}/#{chain[:steps]} top2_rescues=#{chain[:top2_rescues]} chain_ids=#{chain[:chain_ids].join(',')} exact_ids=#{chain[:exact_ids].join(',')}"
       if simulate_self_draft_gpu_chain_text
-        puts "self_draft_gpu_chain_text layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} agreement=#{chain[:agreement]}/#{chain[:steps]} lcs_agreement=#{chain[:agreement_lcs]}/#{chain[:steps]} first_mismatch=#{chain[:first_mismatch]} draft_text=#{tok.decode(chain[:chain_ids]).inspect} exact_text=#{tok.decode(chain[:exact_ids]).inspect}"
+        puts "self_draft_gpu_chain_text layers=#{simulate_logit_layers.join(',')} rank=#{rank} steps=#{chain[:steps]} agreement=#{chain[:agreement]}/#{chain[:steps]} lcs_agreement=#{chain[:agreement_lcs]}/#{chain[:steps]} first_mismatch=#{chain[:first_mismatch]} top2_agreement=#{chain[:top2_agreement]}/#{chain[:steps]} top2_rescues=#{chain[:top2_rescues]} draft_text=#{tok.decode(chain[:chain_ids]).inspect} exact_text=#{tok.decode(chain[:exact_ids]).inspect}"
       end
       if chain_updown_rank = simulate_self_draft_gpu_chain_updown_rank
         chain_updown_layer_set = simulate_self_draft_gpu_chain_updown_layers.empty? ? nil : Set(Int32).new(simulate_self_draft_gpu_chain_updown_layers)
         updown_chain = simulate_self_draft_gpu_chain_run(weights, token_ids, calib_count, simulate_self_draft_gpu_chain, layer_bases, rank,
           chain_updown_rank, ffn_updown_adapters, chain_updown_layer_set)
         updown_layer_note = chain_updown_layer_set ? " updown_layers=#{chain_updown_layer_set.not_nil!.to_a.sort.join(',')}" : ""
-        puts "self_draft_gpu_chain_updown layers=#{simulate_logit_layers.join(',')} rank=#{rank} updown_rank=#{updown_chain[:updown_rank]}#{updown_layer_note} steps=#{updown_chain[:steps]} submit_ms=#{updown_chain[:submit_ms].round(3)} wait_ms=#{updown_chain[:wait_ms].round(3)} chain_ms=#{updown_chain[:chain_ms].round(3)} exact_ms=#{updown_chain[:exact_ms].round(3)} agreement=#{updown_chain[:agreement]}/#{updown_chain[:steps]} lcs_agreement=#{updown_chain[:agreement_lcs]}/#{updown_chain[:steps]} first_mismatch=#{updown_chain[:first_mismatch]} chain_ids=#{updown_chain[:chain_ids].join(',')} exact_ids=#{updown_chain[:exact_ids].join(',')}"
+        puts "self_draft_gpu_chain_updown layers=#{simulate_logit_layers.join(',')} rank=#{rank} updown_rank=#{updown_chain[:updown_rank]}#{updown_layer_note} steps=#{updown_chain[:steps]} submit_ms=#{updown_chain[:submit_ms].round(3)} wait_ms=#{updown_chain[:wait_ms].round(3)} chain_ms=#{updown_chain[:chain_ms].round(3)} exact_ms=#{updown_chain[:exact_ms].round(3)} agreement=#{updown_chain[:agreement]}/#{updown_chain[:steps]} lcs_agreement=#{updown_chain[:agreement_lcs]}/#{updown_chain[:steps]} first_mismatch=#{updown_chain[:first_mismatch]} top2_agreement=#{updown_chain[:top2_agreement]}/#{updown_chain[:steps]} top2_rescues=#{updown_chain[:top2_rescues]} chain_ids=#{updown_chain[:chain_ids].join(',')} exact_ids=#{updown_chain[:exact_ids].join(',')}"
         if simulate_self_draft_gpu_chain_text
-          puts "self_draft_gpu_chain_updown_text layers=#{simulate_logit_layers.join(',')} rank=#{rank} updown_rank=#{updown_chain[:updown_rank]}#{updown_layer_note} steps=#{updown_chain[:steps]} agreement=#{updown_chain[:agreement]}/#{updown_chain[:steps]} lcs_agreement=#{updown_chain[:agreement_lcs]}/#{updown_chain[:steps]} first_mismatch=#{updown_chain[:first_mismatch]} draft_text=#{tok.decode(updown_chain[:chain_ids]).inspect} exact_text=#{tok.decode(updown_chain[:exact_ids]).inspect}"
+          puts "self_draft_gpu_chain_updown_text layers=#{simulate_logit_layers.join(',')} rank=#{rank} updown_rank=#{updown_chain[:updown_rank]}#{updown_layer_note} steps=#{updown_chain[:steps]} agreement=#{updown_chain[:agreement]}/#{updown_chain[:steps]} lcs_agreement=#{updown_chain[:agreement_lcs]}/#{updown_chain[:steps]} first_mismatch=#{updown_chain[:first_mismatch]} top2_agreement=#{updown_chain[:top2_agreement]}/#{updown_chain[:steps]} top2_rescues=#{updown_chain[:top2_rescues]} draft_text=#{tok.decode(updown_chain[:chain_ids]).inspect} exact_text=#{tok.decode(updown_chain[:exact_ids]).inspect}"
         end
       end
     end
