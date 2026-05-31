@@ -152,6 +152,100 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "stores proposal-route memory with fail-closed prompt and route-key validation" do
+    root = File.tempname("qwen35-proposal-route")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      prompt = "Write a Crystal square function"
+      token_ids = [10_i32, 20_i32, 30_i32]
+
+      saved = store.save_proposal_route(
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text: prompt,
+        token_ids: token_ids,
+        route: ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN,
+        route_rank: 4,
+        route_layers: [4, 0, 2, 2],
+        route_key: "code_square",
+        trigger: "first-margin<=0.10",
+        evidence: "accept=100 overlap_ms=697.708",
+      )
+
+      saved.route.should eq(ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN)
+      saved.route_rank.should eq(4)
+      saved.route_layers.should eq([0, 2, 4])
+      saved.route_key_hash.should eq(ML::GGUF::Qwen35PromptCache.proposal_route_key_hash("code_square"))
+
+      hit = store.lookup_proposal_route("model-a", "tok-a", prompt, token_ids)
+      hit.should_not be_nil
+      hit.not_nil!.route.should eq(ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN)
+      hit.not_nil!.route_layers << 99
+      store.lookup_proposal_route("model-a", "tok-a", prompt, token_ids).not_nil!.route_layers.should eq([0, 2, 4])
+
+      key_hit = store.lookup_proposal_route_key("model-a", "tok-a", "code_square")
+      key_hit.should_not be_nil
+      key_hit.not_nil!.route_rank.should eq(4)
+
+      store.lookup_proposal_route("model-a", "tok-a", "#{prompt}!", token_ids).should be_nil
+      store.lookup_proposal_route("model-a", "tok-b", prompt, token_ids).should be_nil
+      store.lookup_proposal_route_key("model-a", "tok-a", "code_clamp").should be_nil
+      ML::GGUF::Qwen35PromptCache.proposal_route_entry_valid?(
+        saved,
+        "model-a",
+        "tok-a",
+        prompt,
+        token_ids,
+      ).should be_true
+
+      File.open(store.proposal_route_manifest_path, "a") do |file|
+        file.puts("{bad json")
+      end
+      store.lookup_proposal_route("model-a", "tok-a", prompt, token_ids).should_not be_nil
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
+  it "rejects malformed proposal-route policies" do
+    root = File.tempname("qwen35-proposal-route-bad")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      expect_raises(ArgumentError, /requires positive route_rank/) do
+        store.save_proposal_route(
+          model_id: "model-a",
+          tokenizer_id: "tok-a",
+          prompt_text: "prompt",
+          token_ids: [1_i32],
+          route: ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN,
+        )
+      end
+      expect_raises(ArgumentError, /must not set route_rank/) do
+        store.save_proposal_route(
+          model_id: "model-a",
+          tokenizer_id: "tok-a",
+          prompt_text: "prompt",
+          token_ids: [1_i32],
+          route: ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_BASELINE,
+          route_rank: 4,
+        )
+      end
+      expect_raises(ArgumentError, /unsupported proposal route/) do
+        store.save_proposal_route(
+          model_id: "model-a",
+          tokenizer_id: "tok-a",
+          prompt_text: "prompt",
+          token_ids: [1_i32],
+          route: "unknown",
+        )
+      end
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "reuses parsed manifests without exposing mutable cache state" do
     root = File.tempname("qwen35-manifest-cache")
     Dir.mkdir_p(root)

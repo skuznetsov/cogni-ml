@@ -17,7 +17,10 @@ module ML::GGUF
     SOURCE_HISTORY_RUNTIME_ID        = "cogni-ml/qwen35-source-history-v1"
     TOKENIZED_PROMPT_RUNTIME_ID      = "cogni-ml/qwen35-tokenized-prompt-v1"
     OUTPUT_FAST_FORWARD_RUNTIME_ID   = "cogni-ml/qwen35-output-fast-forward-v1"
+    PROPOSAL_ROUTE_RUNTIME_ID        = "cogni-ml/qwen35-proposal-route-v1"
     EXACT_KNOWN_SPAN_VALIDATION_KIND = "exact-known-span-v1"
+    PROPOSAL_ROUTE_BASELINE          = "baseline"
+    PROPOSAL_ROUTE_PCA_UPDOWN        = "pca_updown"
 
     class Entry
       include JSON::Serializable
@@ -181,6 +184,41 @@ module ML::GGUF
       end
     end
 
+    class ProposalRouteEntry
+      include JSON::Serializable
+
+      property runtime_id : String
+      property model_id : String
+      property tokenizer_id : String
+      property prompt_text_hash : String
+      property prompt_token_hash : String
+      property prompt_token_count : Int32
+      property route : String
+      property route_rank : Int32? = nil
+      property route_layers : Array(Int32)
+      property route_key_hash : String? = nil
+      property route_key_preview : String? = nil
+      property trigger : String? = nil
+      property evidence : String? = nil
+      property created_at_unix : Int64
+
+      def initialize(@runtime_id : String,
+                     @model_id : String,
+                     @tokenizer_id : String,
+                     @prompt_text_hash : String,
+                     @prompt_token_hash : String,
+                     @prompt_token_count : Int32,
+                     @route : String,
+                     @route_layers : Array(Int32),
+                     @created_at_unix : Int64,
+                     @route_rank : Int32? = nil,
+                     @route_key_hash : String? = nil,
+                     @route_key_preview : String? = nil,
+                     @trigger : String? = nil,
+                     @evidence : String? = nil)
+      end
+    end
+
     record ReplayResult,
       state : Qwen35CPU::State,
       reused_prefix_len : Int32,
@@ -194,6 +232,7 @@ module ML::GGUF
       getter manifest_path : String
       getter source_history_manifest_path : String
       getter tokenized_prompt_manifest_path : String
+      getter proposal_route_manifest_path : String
       getter output_fast_forward_dir : String
 
       private record ArtifactFingerprint,
@@ -213,6 +252,7 @@ module ML::GGUF
         @manifest_path = File.join(@root, "manifest.jsonl")
         @source_history_manifest_path = File.join(@root, "source_history.jsonl")
         @tokenized_prompt_manifest_path = File.join(@root, "tokenized_prompts.jsonl")
+        @proposal_route_manifest_path = File.join(@root, "proposal_routes.jsonl")
         @output_fast_forward_dir = File.join(@root, "output_fast_forward")
         @resident_state_cache_limit = resident_state_cache_entries || (ENV["QWEN35_PROMPT_CACHE_RESIDENT_STATES"]? || "0").to_i
         raise ArgumentError.new("resident_state_cache_entries must be non-negative") if @resident_state_cache_limit < 0
@@ -225,6 +265,8 @@ module ML::GGUF
         @source_history_manifest_cache = [] of SourceHistoryEntry
         @tokenized_prompt_manifest_fingerprint = nil.as(ManifestFingerprint?)
         @tokenized_prompt_manifest_cache = [] of TokenizedPromptEntry
+        @proposal_route_manifest_fingerprint = nil.as(ManifestFingerprint?)
+        @proposal_route_manifest_cache = [] of ProposalRouteEntry
         @entry_index_fingerprint = nil.as(ManifestFingerprint?)
         @entry_exact_index = {} of Tuple(String, String, String, Int32) => Array(Entry)
         @entry_prefix_index = {} of Tuple(String, String, Int32, String) => Array(Entry)
@@ -234,6 +276,9 @@ module ML::GGUF
         @tokenized_prompt_index_fingerprint = nil.as(ManifestFingerprint?)
         @tokenized_prompt_exact_index = {} of Tuple(String, String, String) => Array(TokenizedPromptEntry)
         @tokenized_prompt_model_index = {} of Tuple(String, String) => Array(TokenizedPromptEntry)
+        @proposal_route_index_fingerprint = nil.as(ManifestFingerprint?)
+        @proposal_route_prompt_index = {} of Tuple(String, String, String, String) => Array(ProposalRouteEntry)
+        @proposal_route_key_index = {} of Tuple(String, String, String) => Array(ProposalRouteEntry)
         @output_fast_forward_cache = {} of String => Tuple(ManifestFingerprint, OutputFastForwardEntry)
       end
 
@@ -633,6 +678,81 @@ module ML::GGUF
         clone_tokenized_prompt_entries(tokenized_prompt_manifest_entries)
       end
 
+      def save_proposal_route(model_id : String,
+                              tokenizer_id : String,
+                              prompt_text : String,
+                              token_ids : Array(Int32),
+                              route : String,
+                              route_rank : Int32? = nil,
+                              route_layers : Array(Int32) = [] of Int32,
+                              route_key : String? = nil,
+                              trigger : String? = nil,
+                              evidence : String? = nil) : ProposalRouteEntry
+        validate_proposal_route!(route, route_rank, route_layers)
+        entry = ProposalRouteEntry.new(
+          runtime_id: PROPOSAL_ROUTE_RUNTIME_ID,
+          model_id: model_id,
+          tokenizer_id: tokenizer_id,
+          prompt_text_hash: Qwen35PromptCache.prompt_text_hash(prompt_text),
+          prompt_token_hash: Qwen35PromptCache.token_hash(token_ids),
+          prompt_token_count: token_ids.size.to_i32,
+          route: route,
+          route_rank: route_rank,
+          route_layers: route_layers.uniq.sort,
+          route_key_hash: route_key.try { |key| Qwen35PromptCache.proposal_route_key_hash(key) },
+          route_key_preview: route_key.try { |key| key[0, Math.min(key.size, 80)] },
+          trigger: trigger,
+          evidence: evidence,
+          created_at_unix: Time.utc.to_unix,
+        )
+        FileUtils.mkdir_p(@root)
+        File.open(@proposal_route_manifest_path, "a") do |file|
+          entry.to_json(file)
+          file << '\n'
+        end
+        @proposal_route_manifest_fingerprint = nil
+        clone_proposal_route_entry(entry)
+      end
+
+      def lookup_proposal_route(model_id : String,
+                                tokenizer_id : String,
+                                prompt_text : String,
+                                token_ids : Array(Int32)) : ProposalRouteEntry?
+        ensure_proposal_route_indices
+        prompt_text_hash = Qwen35PromptCache.prompt_text_hash(prompt_text)
+        token_hash = Qwen35PromptCache.token_hash(token_ids)
+        candidates = @proposal_route_prompt_index[{model_id, tokenizer_id, prompt_text_hash, token_hash}]?
+        return nil unless candidates
+
+        valid_candidates = candidates.select do |entry|
+          Qwen35PromptCache.proposal_route_entry_valid?(entry, model_id, tokenizer_id, prompt_text, token_ids)
+        end
+        if hit = valid_candidates.max_by? { |entry| entry.created_at_unix }
+          clone_proposal_route_entry(hit)
+        end
+      end
+
+      def lookup_proposal_route_key(model_id : String,
+                                    tokenizer_id : String,
+                                    route_key : String) : ProposalRouteEntry?
+        ensure_proposal_route_indices
+        route_key_hash = Qwen35PromptCache.proposal_route_key_hash(route_key)
+        candidates = @proposal_route_key_index[{model_id, tokenizer_id, route_key_hash}]?
+        return nil unless candidates
+
+        valid_candidates = candidates.select do |entry|
+          Qwen35PromptCache.proposal_route_entry_valid?(entry, model_id, tokenizer_id) &&
+            entry.route_key_hash == route_key_hash
+        end
+        if hit = valid_candidates.max_by? { |entry| entry.created_at_unix }
+          clone_proposal_route_entry(hit)
+        end
+      end
+
+      def proposal_route_entries : Array(ProposalRouteEntry)
+        clone_proposal_route_entries(proposal_route_manifest_entries)
+      end
+
       private def tokenized_prompt_manifest_entries : Array(TokenizedPromptEntry)
         fingerprint = manifest_fingerprint(@tokenized_prompt_manifest_path)
         unless fingerprint
@@ -657,6 +777,33 @@ module ML::GGUF
         end
         @tokenized_prompt_manifest_fingerprint = fingerprint
         @tokenized_prompt_manifest_cache = parsed
+        parsed
+      end
+
+      private def proposal_route_manifest_entries : Array(ProposalRouteEntry)
+        fingerprint = manifest_fingerprint(@proposal_route_manifest_path)
+        unless fingerprint
+          @proposal_route_manifest_fingerprint = nil
+          @proposal_route_manifest_cache = [] of ProposalRouteEntry
+          return [] of ProposalRouteEntry
+        end
+        if @proposal_route_manifest_fingerprint == fingerprint
+          return @proposal_route_manifest_cache
+        end
+
+        parsed = [] of ProposalRouteEntry
+        File.each_line(@proposal_route_manifest_path) do |line|
+          stripped = line.strip
+          next if stripped.empty?
+
+          begin
+            parsed << ProposalRouteEntry.from_json(stripped)
+          rescue JSON::ParseException | KeyError
+            # A corrupt proposal-route line must not enable an approximate drafter.
+          end
+        end
+        @proposal_route_manifest_fingerprint = fingerprint
+        @proposal_route_manifest_cache = parsed
         parsed
       end
 
@@ -885,6 +1032,28 @@ module ML::GGUF
         @tokenized_prompt_index_fingerprint = fingerprint
       end
 
+      private def ensure_proposal_route_indices : Nil
+        proposal_route_manifest_entries
+        fingerprint = @proposal_route_manifest_fingerprint
+        return if @proposal_route_index_fingerprint == fingerprint
+
+        prompt_index = {} of Tuple(String, String, String, String) => Array(ProposalRouteEntry)
+        key_index = {} of Tuple(String, String, String) => Array(ProposalRouteEntry)
+        @proposal_route_manifest_cache.each do |entry|
+          next unless entry.runtime_id == PROPOSAL_ROUTE_RUNTIME_ID
+
+          prompt_key = {entry.model_id, entry.tokenizer_id, entry.prompt_text_hash, entry.prompt_token_hash}
+          (prompt_index[prompt_key] ||= [] of ProposalRouteEntry) << entry
+          if route_key_hash = entry.route_key_hash
+            key = {entry.model_id, entry.tokenizer_id, route_key_hash}
+            (key_index[key] ||= [] of ProposalRouteEntry) << entry
+          end
+        end
+        @proposal_route_prompt_index = prompt_index
+        @proposal_route_key_index = key_index
+        @proposal_route_index_fingerprint = fingerprint
+      end
+
       private def source_history_entry_valid?(entry : SourceHistoryEntry) : Bool
         entry.runtime_id == SOURCE_HISTORY_RUNTIME_ID &&
           entry.token_count == entry.token_ids.size &&
@@ -895,6 +1064,19 @@ module ML::GGUF
         entry.runtime_id == TOKENIZED_PROMPT_RUNTIME_ID &&
           entry.token_count == entry.token_ids.size &&
           entry.token_hash == Qwen35PromptCache.token_hash(entry.token_ids)
+      end
+
+      private def validate_proposal_route!(route : String, route_rank : Int32?, route_layers : Array(Int32)) : Nil
+        unless Qwen35PromptCache.valid_proposal_route_name?(route)
+          raise ArgumentError.new("unsupported proposal route #{route.inspect}")
+        end
+        if route == PROPOSAL_ROUTE_BASELINE && route_rank
+          raise ArgumentError.new("baseline proposal route must not set route_rank")
+        end
+        if route == PROPOSAL_ROUTE_PCA_UPDOWN
+          raise ArgumentError.new("pca_updown proposal route requires positive route_rank") unless route_rank && route_rank.not_nil! > 0
+        end
+        raise ArgumentError.new("proposal route layers must be non-negative") if route_layers.any? { |layer| layer < 0 }
       end
 
       private def clone_entries(entries : Array(Entry)) : Array(Entry)
@@ -964,6 +1146,29 @@ module ML::GGUF
           token_hash: entry.token_hash,
           token_count: entry.token_count,
           token_ids: entry.token_ids.dup,
+          created_at_unix: entry.created_at_unix,
+        )
+      end
+
+      private def clone_proposal_route_entries(entries : Array(ProposalRouteEntry)) : Array(ProposalRouteEntry)
+        entries.map { |entry| clone_proposal_route_entry(entry) }
+      end
+
+      private def clone_proposal_route_entry(entry : ProposalRouteEntry) : ProposalRouteEntry
+        ProposalRouteEntry.new(
+          runtime_id: entry.runtime_id,
+          model_id: entry.model_id,
+          tokenizer_id: entry.tokenizer_id,
+          prompt_text_hash: entry.prompt_text_hash,
+          prompt_token_hash: entry.prompt_token_hash,
+          prompt_token_count: entry.prompt_token_count,
+          route: entry.route,
+          route_rank: entry.route_rank,
+          route_layers: entry.route_layers.dup,
+          route_key_hash: entry.route_key_hash,
+          route_key_preview: entry.route_key_preview,
+          trigger: entry.trigger,
+          evidence: entry.evidence,
           created_at_unix: entry.created_at_unix,
         )
       end
@@ -1180,6 +1385,10 @@ module ML::GGUF
       Digest::SHA256.hexdigest("qwen35-prompt-text-v1\0#{prompt_text}")
     end
 
+    def proposal_route_key_hash(route_key : String) : String
+      Digest::SHA256.hexdigest("qwen35-proposal-route-key-v1\0#{route_key}")
+    end
+
     def generated_text_hash(generated_text : String) : String
       Digest::SHA256.hexdigest("qwen35-generated-text-v1\0#{generated_text}")
     end
@@ -1245,6 +1454,38 @@ module ML::GGUF
       return false unless entry.artifact_token_hash == token_hash_concat(entry.prompt_token_ids, entry.output_token_ids, entry.artifact_prefix_len)
       return false unless entry.artifact_next_token_id == entry.output_token_ids[-1]
       return false if entry.terminal_token_id && entry.terminal_token_id != entry.output_token_ids[-1]
+
+      true
+    end
+
+    def valid_proposal_route_name?(route : String) : Bool
+      route == PROPOSAL_ROUTE_BASELINE || route == PROPOSAL_ROUTE_PCA_UPDOWN
+    end
+
+    def proposal_route_entry_valid?(entry : ProposalRouteEntry,
+                                    model_id : String,
+                                    tokenizer_id : String,
+                                    prompt_text : String? = nil,
+                                    token_ids : Array(Int32)? = nil) : Bool
+      return false unless entry.runtime_id == PROPOSAL_ROUTE_RUNTIME_ID
+      return false unless entry.model_id == model_id
+      return false unless entry.tokenizer_id == tokenizer_id
+      return false unless valid_proposal_route_name?(entry.route)
+      return false unless entry.prompt_token_count > 0
+      return false if entry.route_layers.any? { |layer| layer < 0 }
+      if entry.route == PROPOSAL_ROUTE_BASELINE
+        return false if entry.route_rank
+      elsif entry.route == PROPOSAL_ROUTE_PCA_UPDOWN
+        rank = entry.route_rank
+        return false unless rank && rank > 0
+      end
+      if prompt = prompt_text
+        return false unless entry.prompt_text_hash == prompt_text_hash(prompt)
+      end
+      if ids = token_ids
+        return false unless entry.prompt_token_count == ids.size
+        return false unless entry.prompt_token_hash == token_hash(ids)
+      end
 
       true
     end

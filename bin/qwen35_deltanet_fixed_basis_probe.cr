@@ -5,6 +5,7 @@ require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_mtp"
+require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
@@ -12154,6 +12155,8 @@ simulate_self_spec_gpu_pipeline_draft_updown_ranks = [] of Int32
 simulate_self_spec_gpu_pipeline_draft_updown_repeats = 1
 simulate_self_spec_gpu_pipeline_draft_updown_layers = [] of Int32
 simulate_self_spec_gpu_pipeline_draft_updown_categories = [] of String
+simulate_self_spec_gpu_pipeline_draft_updown_route_memory_root : String? = nil
+simulate_self_spec_gpu_pipeline_draft_updown_route_key : String? = nil
 simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject = false
 simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts = 0
 simulate_self_spec_gpu_pipeline_draft_updown_min_margin : Float64? = nil
@@ -12449,6 +12452,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-repeats=N", "Repeat draft body A/B in ABBA order and score against median lowrank baselines") { |v| simulate_self_spec_gpu_pipeline_draft_updown_repeats = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-layers=LIST", "Apply resident FFN pca-updown only to the listed low-rank recurrent draft layers; enables hybrid draft bodies") { |v| simulate_self_spec_gpu_pipeline_draft_updown_layers = parse_int_list(v) }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-categories=LIST", "Only enable pca-updown for prompt categories/names in LIST; prompt category is the prefix before '_'") { |v| simulate_self_spec_gpu_pipeline_draft_updown_categories = v.split(',').map(&.strip).reject(&.empty?) }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-updown-route-memory=ROOT", "Lookup cached proposal-body route decisions before pca-updown adapter setup") { |v| simulate_self_spec_gpu_pipeline_draft_updown_route_memory_root = v }
+  p.on("--simulate-self-spec-gpu-pipeline-draft-updown-route-key=KEY", "With route memory, prefer this stable prompt/task route key over exact prompt-token lookup") { |v| simulate_self_spec_gpu_pipeline_draft_updown_route_key = v }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-fallback-on-reject", "After the first pca-updown draft rejection, resync future draft blocks with baseline lowrank") { simulate_self_spec_gpu_pipeline_draft_updown_fallback_on_reject = true }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-after-full-accepts=N", "Only enable pca-updown after N consecutive full-accept chunks; any reject disables and resets the streak") { |v| simulate_self_spec_gpu_pipeline_draft_updown_after_full_accepts = v.to_i }
   p.on("--simulate-self-spec-gpu-pipeline-draft-updown-min-margin=F", "Only enable pca-updown for future draft blocks after a full-accept chunk whose draft top2 min-margin is at least F; combines with --simulate-self-spec-gpu-pipeline-draft-updown-after-full-accepts") { |v| simulate_self_spec_gpu_pipeline_draft_updown_min_margin = v.to_f64 }
@@ -12618,6 +12623,33 @@ end
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
 token_ids = token_ids_for_prompt(tok, prompt, tokens_limit, repeat: !prompt_as_prefix)
+route_memory_entry = nil.as(ML::GGUF::Qwen35PromptCache::ProposalRouteEntry?)
+if route_memory_root = simulate_self_spec_gpu_pipeline_draft_updown_route_memory_root
+  model_info = File.info(model)
+  route_model_id = ML::GGUF::Qwen35PromptCache.short_hash("model\0#{model}\0#{model_info.size}\0#{model_info.modification_time.to_unix}")
+  route_tokenizer_id = ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{route_model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
+  route_store = ML::GGUF::Qwen35PromptCache::Store.new(route_memory_root)
+  route_memory_entry = if route_key = simulate_self_spec_gpu_pipeline_draft_updown_route_key
+                         route_store.lookup_proposal_route_key(route_model_id, route_tokenizer_id, route_key)
+                       else
+                         route_store.lookup_proposal_route(route_model_id, route_tokenizer_id, prompt, token_ids)
+                       end
+  if route_hit = route_memory_entry
+    case route_hit.route
+    when ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_BASELINE
+      simulate_self_spec_gpu_pipeline_draft_updown_rank = nil
+      simulate_self_spec_gpu_pipeline_draft_updown_ranks.clear
+      simulate_self_spec_gpu_pipeline_draft_updown_first_margin_threshold = nil
+    when ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN
+      simulate_self_spec_gpu_pipeline_draft_updown_rank = route_hit.route_rank
+      simulate_self_spec_gpu_pipeline_draft_updown_ranks.clear
+      simulate_self_spec_gpu_pipeline_draft_updown_first_margin_threshold = nil
+      if simulate_self_spec_gpu_pipeline_draft_updown_layers.empty? && !route_hit.route_layers.empty?
+        simulate_self_spec_gpu_pipeline_draft_updown_layers = route_hit.route_layers.dup
+      end
+    end
+  end
+end
 ffn_pca_calib_token_sets = ffn_pca_calib_prompts.map { |calib_prompt| token_ids_for_prompt(tok, calib_prompt, tokens_limit, repeat: !prompt_as_prefix) }
 
 weights = ML::GGUF::Qwen35Weights.from_gguf(model)
@@ -12638,6 +12670,15 @@ puts "layer=#{layer_index} token_vectors=#{token_ids.size} calib_tokens=#{calib_
 puts "heads=#{per_head.size} state_size=#{per_head[0][0].size} ranks=#{ranks.join(',')}"
 puts "basis=#{basis_mode} pca_iters=#{pca_iters}; per-head basis over first calib_tokens; reports held-out L2 residual for normalized K vectors"
 puts basis_rank_note(bases, max_rank)
+if route_hit = route_memory_entry
+  layers = route_hit.route_layers.empty? ? "default" : route_hit.route_layers.join(",")
+  rank_text = route_hit.route_rank ? route_hit.route_rank.to_s : "na"
+  key_text = simulate_self_spec_gpu_pipeline_draft_updown_route_key || "exact_prompt"
+  puts "proposal_route_memory hit=1 key=#{key_text} route=#{route_hit.route} rank=#{rank_text} layers=#{layers} trigger=#{route_hit.trigger || "unknown"}"
+elsif simulate_self_spec_gpu_pipeline_draft_updown_route_memory_root
+  key_text = simulate_self_spec_gpu_pipeline_draft_updown_route_key || "exact_prompt"
+  puts "proposal_route_memory hit=0 key=#{key_text}"
+end
 puts "thresholds=#{thresholds.map { |t| t.round(4) }.join(',')}"
 
 if simulate_current_hidden_proposal
