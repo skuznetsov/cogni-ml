@@ -15,11 +15,36 @@ from pathlib import Path
 
 CODE_RE = re.compile(r"```(?:crystal)?\n(.*?)(?:\n```|\Z)", re.S)
 ERROR_RE = re.compile(r"Error: ([^|\n]+)")
+CODEISH_RE = re.compile(r"^\s*(?:#|class\s|module\s|struct\s|enum\s|def\s|require\s|alias\s|record\s)")
 
 
-def first_code_block(text: str) -> str:
+def clean_implicit_candidate(text: str) -> str:
+    for marker in ("\n<think>", "\n<|im_end|>", "\n<|im_start|>"):
+        if marker in text:
+            text = text.split(marker, 1)[0]
+    return text.strip()
+
+
+def best_code_candidate(candidates : list[str]) -> str:
+    cleaned = [clean_implicit_candidate(candidate) for candidate in candidates]
+    cleaned = [candidate for candidate in cleaned if candidate.strip()]
+    if not cleaned:
+        return ""
+    codeish = [candidate for candidate in cleaned if CODEISH_RE.search(candidate)]
+    pool = codeish or cleaned
+    return max(pool, key=lambda candidate: len(candidate.strip()))
+
+
+def first_code_block(text: str, *, implicit_open_fence: bool = False) -> str:
+    if implicit_open_fence:
+        prefix, sep, rest = text.partition("\n```")
+        candidates = [prefix]
+        candidates.extend(match.group(1) for match in CODE_RE.finditer(rest if sep else text))
+        return best_code_candidate(candidates)
     match = CODE_RE.search(text)
-    return match.group(1) if match else ""
+    if match:
+        return match.group(1)
+    return ""
 
 
 def run_to_file(cmd: list[str], path: Path, *, timeout: int | None = None) -> int:
@@ -96,6 +121,7 @@ def main() -> int:
     ap.add_argument("--crystal", default="crystal")
     ap.add_argument("--timeout", type=int, default=90)
     ap.add_argument("--max-mem-mb", type=int, default=2500)
+    ap.add_argument("--implicit-open-fence", action="store_true", help="Treat generated text as already inside an opening code fence when no fenced block is present")
     args = ap.parse_args()
 
     rows: list[dict[str, str]] = []
@@ -108,7 +134,7 @@ def main() -> int:
         for kind in ("draft", "exact"):
             text_path = Path(row[f"{kind}_text"])
             text = text_path.read_text(encoding="utf-8", errors="replace")
-            code = first_code_block(text)
+            code = first_code_block(text, implicit_open_fence=args.implicit_open_fence)
             ok, error, code_path, log_path = check_code(
                 code,
                 name=name,
