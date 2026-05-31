@@ -6,6 +6,31 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-LTP-WBA-CODE-2026-05-31] LTP/WBA is encoded in Qwen35 runtime routes, not only documentation
+**status:** verified-with-caveat
+**trust:** {F:0.82, G:medium, R:0.78}
+**context:** ml (kernel scheduling / prefill / artifact framing)
+**evidence:**
+- claim: "`ComputeGraph` builds dependency waves from read/write buffer conflicts, offset ranges, and partition keys, then emits barriers only between compiled waves."
+  source: `src/ml/metal/compute_graph.cr:58-63`, `:92-105`, `:238-333`, `:367-374`; `src/ml/gguf/metal_backend.cr:545-562`, `:1925-1931`
+  verified_at: 2026-05-31
+  decay_trigger: ComputeGraph dependency analysis or Metal backend graph path changed
+- claim: "Qwen35 prefill uses a resident command-buffer corridor that carries hidden rows through supported full/recurrent prefill groups and flushes on read/unsupported boundaries."
+  source: `src/ml/gguf/qwen35_cpu.cr:2867-2879`, `:2888-2922`, `:3065-3099`; `src/ml/gguf/qwen35_metal.cr:9047-9049`, `:9730-9734`
+  verified_at: 2026-05-31
+  decay_trigger: prefill routing, resident-boundary policy, or append-command-buffer ownership changed
+- claim: "The strongest current kernel-level WBA moves are exact Q4/H16 row-packing and producer-consumer fusion: B48/B64/B80/B96/B112 row-pack gates, plus B64 up-projection + SwiGLU/H16 fusion for eligible downstream consumers."
+  source: `src/ml/gguf/qwen35_metal.cr:1728-1784`, `:1824-1920`, `:2558-2597`, `:5708-5772`, `:7628-7690`, `:7952-8012`; `src/ml/gguf/kernels/gemm_q4k.metal:351-358`, `:991-1146`
+  verified_at: 2026-05-31
+  decay_trigger: Q4/H16 route gates, kernel tile geometry, or FFN fusion paths changed
+- claim: "`scripts/qwen35_profile_atlas.cr` is an attribution/controller aid that ranks LTP/WBA candidate windows and dual-frame fallbacks, not standalone benchmark evidence."
+  source: `scripts/qwen35_profile_atlas.cr:145-208`; `README.md:792-806`
+  verified_at: 2026-05-31
+  decay_trigger: profiler output schema or atlas semantics changed
+**caveat:**
+- `crystal build --no-codegen test_graph.cr --error-trace` currently fails because `OpBuilder#buffer` passes `access` into the `BufBinding.length` positional slot. Do not use `test_graph.cr` as release evidence until the public `add_op` builder smoke is repaired.
+**paper_boundary:** Use cogni-ml as companion-artifact evidence for operational LTP/WBA in inference-engine kernel scheduling. Avoid claiming formal proof of speedup from this artifact; public claims need frozen commit, quiet-host ABBA logs, and a repaired ComputeGraph smoke/spec.
+
 ### [LM-claude-1] Qwen 3.6 27B architecture verified
 **status:** verified
 **trust:** {F:0.95, G:high, R:0.95}
@@ -17699,3 +17724,10 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: 27B's unchecked self-draft route is qualitatively much more stable than 9B on this 128-token suite, but half the 27B rows are still in `<think>`/plain-text planning rather than fenced code at the cutoff. This is evidence for a stronger latent/self-KD corridor in the larger model, not yet proof that the no-validator code path produces usable code or that it beats exact production decode. Next tests should either force code-only/no-think prompts or extend the diagnostic window before judging code validity, while preserving sequential execution to avoid memory-pressure artifacts.
 - LTP/WBA: Window is the first 128 generated tokens of each prompt/model pair. Transport carries alignment, LCS, word similarity, and chain/exact timing through the same suite corridor across model size. Legal move is diagnostic-only route comparison; production boundaries remain exact verifier or compile/test validator. Potential descends in `(model_size_quality_uncertainty, route_false_entry_risk, no-code_classifier_error, memory_pressure_artifact_risk)`. Dual frame is exact greedy or code-only prompt retest when thinking-mode consumes the diagnostic window.
 - trust: {F:0.88,G:0.40,R:0.84}
+
+**LM-761 Naive `<think></think>` suffix injection changes the coding window but is not a clean self-draft win [codex-f/ml]**
+- status: MEASURED prompt-injection A/B
+- evidence: Created a temporary 10-prompt file by appending `<think>\n\n</think>\n\n` to each coding prompt and ran the same 128-token no-validator suite sequentially. 27B injected run wrote `/tmp/qwen_self_draft_code_attractor_suite_27b_128_think_closed_20260531125521/summary.tsv`; 9B injected run wrote `/tmp/qwen_self_draft_code_attractor_suite_9b_128_think_closed_20260531131557/summary.tsv`. Compared against LM-760 baselines: 27B `both_code` rows improved `5 -> 7`, but strong-text rows dropped `9 -> 7`, drift rows rose `0 -> 3`, mean agreement/LCS/word dropped `0.788/0.940/0.942 -> 0.702/0.807/0.789`, and median chain/exact worsened `0.938 -> 0.960`. 9B strong-text rows improved `2 -> 4` and drift rows fell `5 -> 3`, but `both_code` dropped `10 -> 9` and median chain/exact worsened `0.967 -> 1.045`.
+- diagnosis: Closing the think block as an assistant-prefix/suffix can force some prompts into code earlier, especially for Qwen3.6-27B, but it also perturbs the draft/exact trajectory and can create new drift. Treat this as a route feature candidate, not a default. A better next test is a small injection portfolio (`<think></think>`, `</think>`, `We need answer.`, code-fence prefill, and model-specific no-think control if available) scored by code emergence plus alignment, then routed per prompt rather than globally applied.
+- LTP/WBA: Window is the assistant-prefill control span immediately before generation. Transport is the model's local mode switch from reasoning/planning to code emission. Legal move must decrease `(no-code_window_area, route_uncertainty)` without increasing `(drift_cases, verifier/repair_area, chain_ms/exact_ms)`. The naive suffix lowers no-code area on some 27B prompts but increases drift potential, so the dual frame is a prompt-conditioned injection portfolio or exact/no-injection fallback.
+- trust: {F:0.88,G:0.36,R:0.84}
