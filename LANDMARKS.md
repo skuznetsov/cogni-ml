@@ -17542,3 +17542,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This verifies the helper in a same-weight self-spec corridor before touching the GPU scheduler. It reduces controller drift while preserving exact emitted ids and diagnostic exact-id history.
 - LTP/WBA: Window is same-weight proposal span plus exact verifier top1 span. Transport is expected-token state through a bounded chunk. Legal move accepts equal ids or emits exact correction once; the helper now also transports expected-id history for diagnostics. Potential descends in `(same_weight_controller_duplication, diagnostic_drift_risk, future_gpu_runner_area)`.
 - trust: {F:0.88,G:0.62,R:0.86}
+
+**LM-741 GPU self-spec draft-block wait/read semantics are shared outside the probe [shared/ml]**
+- status: VERIFIED extraction slice
+- change: Added `ML::GGUF::Qwen35SelfSpecDraftBlock` in `src/ml/gguf/qwen35_self_spec_draft_block.cr`. It owns submitted draft-wave completion, duplicate command-buffer wait suppression, top1 id readback, top2 margin readback, and drain semantics. `bin/qwen35_deltanet_fixed_basis_probe.cr` now aliases the shared type while keeping proposal scheduling and timing attribution probe-local.
+- evidence: `scripts/run_safe.sh crystal 180 7000 build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace` passed. `scripts/run_safe.sh crystal 180 7000 build --no-codegen bin/qwen35_generate.cr --error-trace` passed.
+- diagnosis: This is the smallest safe scheduler extraction step. The runner submission closure is still too coupled to route experiments, WBA tracing, adapter maps, exact-refresh policy, and draft counters; extracting the block object first reduces duplicated wait/read mechanics without changing proposal execution.
+- LTP/WBA: Window is a submitted draft block. Transport is command completion and id/margin readback across a bounded verifier/proposal corridor. Legal move only waits and reads already-submitted buffers while preserving exact verifier boundaries. Potential descends in `(scheduler_extraction_area, duplicated_wait_read_area, command_wait_drift_risk)`; dual frame is unchanged probe-local scheduling.
+- trust: {F:0.84,G:0.54,R:0.82}

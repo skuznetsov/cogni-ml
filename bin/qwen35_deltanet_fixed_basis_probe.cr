@@ -8,6 +8,7 @@ require "../src/ml/gguf/qwen35_ffn_updown_adapter"
 require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_proposal_route"
+require "../src/ml/gguf/qwen35_self_spec_draft_block"
 require "../src/ml/gguf/qwen35_self_spec_updown_buffers"
 require "../src/ml/gguf/qwen35_spec_acceptance"
 require "../src/ml/gguf/qwen35_tokenizer"
@@ -363,17 +364,7 @@ private class LowRankState
   property fallback_steps : Int32 = 0
 end
 
-private class GpuDraftBlock
-  getter submissions : Array(ML::GGUF::Qwen35Metal::DecodeWaveSubmission)
-  getter state : ML::GGUF::Qwen35CPU::State
-  getter lr_bufs : Hash(Int32, ML::MetalBuffer)
-  getter full_current : Hash(Int32, Bool)
-  getter use_updown : Bool
-  getter use_noffn : Bool
-
-  def initialize(@submissions, @state, @lr_bufs, @full_current, @use_updown, @use_noffn)
-  end
-end
+private alias GpuDraftBlock = ML::GGUF::Qwen35SelfSpecDraftBlock
 
 private struct FFNAdapter
   getter basis : Array(Array(Float64))
@@ -8836,54 +8827,24 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   }
 
   read_block = ->(block : GpuDraftBlock, limit : Int32, label : String) {
-    active = block.submissions[0, limit]
     t_wait = Time.instant
-    waited_cmds = Set(UInt64).new
-    active.each do |sub|
-      sub.pending_cmds.each do |cmd|
-        id = cmd.object_id
-        next if waited_cmds.includes?(id)
-        cmd.wait
-        waited_cmds << id
-      end
-      id = sub.cmd.object_id
-      unless waited_cmds.includes?(id)
-        sub.cmd.wait
-        waited_cmds << id
-      end
-    end
+    block.wait!(limit)
     draft_wait_block_ms += (Time.instant - t_wait).total_milliseconds if attr_collect
     wba.try(&.mark("draft", "wait_block_#{label}", t_wait, Time.instant))
 
-    ids = Array(Int32).new(active.size)
     t_read = Time.instant
-    active.each do |sub|
-      ids << sub.top1_id_buf.not_nil!.contents.as(Pointer(UInt32)).value.to_i32
-    end
+    ids = block.top1_ids(limit, wait: false)
     draft_read_ids_ms += (Time.instant - t_read).total_milliseconds if attr_collect
     wba.try(&.mark("draft", "read_ids_#{label}", t_read, Time.instant))
     ids
   }
 
   read_second_id = ->(block : GpuDraftBlock, index : Int32) {
-    if buf = block.submissions[index].second_id_buf
-      buf.contents.as(Pointer(UInt32)).value.to_i32
-    else
-      -1_i32
-    end
+    block.second_id(index)
   }
 
   read_top2_margin = ->(block : GpuDraftBlock, index : Int32) {
-    sub = block.submissions[index]
-    if top = sub.top1_value_buf
-      if second = sub.second_value_buf
-        top.contents.as(Pointer(Float32)).value.to_f64 - second.contents.as(Pointer(Float32)).value.to_f64
-      else
-        nil
-      end
-    else
-      nil
-    end
+    block.top2_margin(index)
   }
   branch_guard_snapshot_suffix_allowed = ->(block : GpuDraftBlock, suffix_start : Int32, verifier_size : Int32) {
     prefix_policy_enabled = !branch_guard_snapshot_prefix_suffix_thresholds.empty?
@@ -8941,22 +8902,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   }
 
   drain_block = ->(block : GpuDraftBlock?) {
-    if b = block
-      waited_cmds = Set(UInt64).new
-      b.submissions.each do |sub|
-        sub.pending_cmds.each do |cmd|
-          id = cmd.object_id
-          next if waited_cmds.includes?(id)
-          cmd.wait
-          waited_cmds << id
-        end
-        id = sub.cmd.object_id
-        unless waited_cmds.includes?(id)
-          sub.cmd.wait
-          waited_cmds << id
-        end
-      end
-    end
+    block.try(&.drain!)
   }
 
   draft_updown_agreement_checks = 0
