@@ -8569,7 +8569,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
                                                 tree2_branch_guard : Float64? = nil,
                                                 risk_offramp_margin : Float64? = nil,
                                                 mtp_k2_on_reject : ML::GGUF::Qwen35MTPWeights? = nil,
-                                                reject_offramp_after : Int32 = 0) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, draft_noffn_chunks: Int32, draft_updown_agreement_checks: Int32, draft_updown_agreement_passes: Int32, draft_updown_agreement_top1: Int32, draft_updown_agreement_top2: Int32, draft_updown_agreement_fails: Int32, draft_updown_agreement_probe_ms: Float64, draft_updown_agreement_margin_min_avg: Float64, draft_updown_agreement_margin_pass_avg: Float64, draft_updown_agreement_margin_fail_avg: Float64, draft_updown_agreement_margin_sweep: String, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, tree2_branch_guard_threshold: Float64, tree2_branch_guard_hits: Int32, tree2_branch_guard_tokens: Int32, tree2_branch_guard_rejects: Int32, tree2_branch_guard_rescues: Int32, tree2_branch_guard_misses: Int32, tree2_branch_guard_passes: Int32, tree2_branch_guard_prefix_rejects: Int32, tree2_branch_guard_replayless_resyncs: Int32, tree2_branch_guard_snapshot_copies: Int32, tree2_branch_guard_snapshot_ms: Float64, tree2_branch_guard_snapshot_restore_ms: Float64, tree2_branch_guard_snapshot_resync_base_ms: Float64, tree2_branch_guard_suffix_replays: Int32, tree2_branch_guard_suffix_replay_tokens: Int32, tree2_branch_guard_suffix_replay_ms: Float64, tree2_branch_guard_prefix_verify_ms: Float64, tree2_branch_guard_prefix_verify_tokens: Int32, tree2_branch_guard_token_verify_ms: Float64, tree2_branch_guard_token_verify_tokens: Int32, tree2_branch_guard_suffix_verify_ms: Float64, tree2_branch_guard_suffix_verify_tokens: Int32, tree2_branch_guard_snapshot_suffix_verify_ms: Float64, tree2_branch_guard_snapshot_suffix_verify_tokens: Int32, tree2_branch_guard_no_snapshot_suffix_verify_ms: Float64, tree2_branch_guard_no_snapshot_suffix_verify_tokens: Int32, risk_offramp_threshold: Float64, risk_offramp_hits: Int32, risk_offramp_delayed_blocks: Int32, risk_offramp_delayed_tokens: Int32, mtp_k2_reject_checks: Int32, mtp_k2_reject_rescues: Int32, mtp_k2_reject_misses: Int32, mtp_k2_reject_ms: Float64, reject_offramp_after: Int32, reject_offramp_hits: Int32, reject_offramp_tokens: Int32, reject_offramp_ms: Float64, tail_salvage_max_corrections: Int32, tail_salvage_checks: Int32, tail_salvage_hits: Int32, tail_salvage_accepted: Int32, tail_salvage_corrections: Int32, tail_salvage_dropped: Int32, tail_salvage_bails: Int32, tail_salvage_verify_ms: Float64, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), accept_history: Array(Int32), reject_index_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, draft_resyncs: Int32, draft_wasted_tail_tokens: Int32, draft_wasted_next_tokens: Int32, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
+                                                reject_offramp_after : Int32 = 0) : NamedTuple(chunks: Int32, rejections: Int32, accepted_draft_tokens: Int32, proposed_tokens: Int32, draft_updown_chunks: Int32, draft_noffn_chunks: Int32, draft_updown_agreement_checks: Int32, draft_updown_agreement_passes: Int32, draft_updown_agreement_top1: Int32, draft_updown_agreement_top2: Int32, draft_updown_agreement_fails: Int32, draft_updown_agreement_probe_ms: Float64, draft_updown_agreement_margin_min_avg: Float64, draft_updown_agreement_margin_pass_avg: Float64, draft_updown_agreement_margin_fail_avg: Float64, draft_updown_agreement_margin_sweep: String, tree2_first_checks: Int32, tree2_first_rescues: Int32, tree2_first_misses: Int32, tree2_first_early_exits: Int32, tree2_anywhere_checks: Int32, tree2_anywhere_rescues: Int32, tree2_anywhere_misses: Int32, tree2_anywhere_early_exits: Int32, tree2_staged_checks: Int32, tree2_staged_rescues: Int32, tree2_staged_misses: Int32, tree2_staged_early_exits: Int32, tree2_staged_stages: Int32, tree2_margin_checks: Int32, tree2_margin_avg: Float64, tree2_margin_min: Float64, tree2_reject_margin_checks: Int32, tree2_reject_margin_avg: Float64, tree2_reject_margin_min: Float64, tree2_margin_guard_threshold: Float64, tree2_margin_guard_hits: Int32, tree2_margin_guard_tokens: Int32, tree2_margin_guard_rejects: Int32, tree2_margin_guard_passes: Int32, tree2_branch_guard_threshold: Float64, tree2_branch_guard_hits: Int32, tree2_branch_guard_tokens: Int32, tree2_branch_guard_rejects: Int32, tree2_branch_guard_rescues: Int32, tree2_branch_guard_misses: Int32, tree2_branch_guard_passes: Int32, tree2_branch_guard_prefix_rejects: Int32, tree2_branch_guard_replayless_resyncs: Int32, tree2_branch_guard_snapshot_copies: Int32, tree2_branch_guard_snapshot_ms: Float64, tree2_branch_guard_snapshot_restore_ms: Float64, tree2_branch_guard_snapshot_resync_base_ms: Float64, tree2_branch_guard_suffix_replays: Int32, tree2_branch_guard_suffix_replay_tokens: Int32, tree2_branch_guard_suffix_replay_ms: Float64, tree2_branch_guard_prefix_verify_ms: Float64, tree2_branch_guard_prefix_verify_tokens: Int32, tree2_branch_guard_token_verify_ms: Float64, tree2_branch_guard_token_verify_tokens: Int32, tree2_branch_guard_suffix_verify_ms: Float64, tree2_branch_guard_suffix_verify_tokens: Int32, tree2_branch_guard_snapshot_suffix_verify_ms: Float64, tree2_branch_guard_snapshot_suffix_verify_tokens: Int32, tree2_branch_guard_no_snapshot_suffix_verify_ms: Float64, tree2_branch_guard_no_snapshot_suffix_verify_tokens: Int32, risk_offramp_threshold: Float64, risk_offramp_hits: Int32, risk_offramp_delayed_blocks: Int32, risk_offramp_delayed_tokens: Int32, mtp_k2_reject_checks: Int32, mtp_k2_reject_rescues: Int32, mtp_k2_reject_misses: Int32, mtp_k2_reject_ms: Float64, reject_offramp_after: Int32, reject_offramp_hits: Int32, reject_offramp_tokens: Int32, reject_offramp_ms: Float64, tail_salvage_max_corrections: Int32, tail_salvage_checks: Int32, tail_salvage_hits: Int32, tail_salvage_accepted: Int32, tail_salvage_next_accepted: Int32, tail_salvage_corrections: Int32, tail_salvage_dropped: Int32, tail_salvage_bails: Int32, tail_salvage_verify_ms: Float64, draft_seed_ms: Float64, draft_next_ms: Float64, verifier_ms: Float64, draft_wait_ms: Float64, backup_ms: Float64, rebuild_ms: Float64, controller_ms: Float64, plain_exact_ms: Float64, serial_ms: Float64, overlap_ms: Float64, replay_ms: Float64, hidden_ms: Float64, speedup: Float64, plain_speedup: Float64, parity: Bool, gamma_history: Array(Int32), accept_history: Array(Int32), reject_index_history: Array(Int32), exact_ids: Array(Int32), emitted_ids: Array(Int32), draft_steps: Int32, draft_blocks: Int32, draft_fork_ms: Float64, draft_token_buf_ms: Float64, draft_lr_project_ms: Float64, draft_submit_ms: Float64, draft_commit_ms: Float64, draft_wait_block_ms: Float64, draft_read_ids_ms: Float64, draft_resync_ms: Float64, draft_resyncs: Int32, draft_wasted_tail_tokens: Int32, draft_wasted_next_tokens: Int32, verifier_initial_ms: Float64, verifier_prefill_ms: Float64, verifier_chunks: Int32, verifier_tokens: Int32, verifier_tail_skip_tokens: Int32)
   raise "GPU pipeline requires Metal" unless ML::GGUF::Qwen35Metal.available?
   raise "GPU pipeline gamma must be positive" unless gamma > 0
   raise "GPU pipeline gen_tokens must be positive" unless gen_tokens > 0
@@ -8767,6 +8767,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
   tail_salvage_checks = 0
   tail_salvage_hits = 0
   tail_salvage_accepted = 0
+  tail_salvage_next_accepted = 0
   tail_salvage_corrections = 0
   tail_salvage_dropped = 0
   tail_salvage_bails = 0
@@ -10197,11 +10198,14 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       replay = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, scratch)
       local_expected = replay[-1][0]
       local_accepted = 0
+      local_next_accepted = 0
       local_corrections = 0
       local_dropped = 0
-      draft_index = rejected_index
-      while draft_index < proposal.size && emitted_tokens < gen_tokens
-        cand = proposal[draft_index]
+      salvage_candidates = proposal[rejected_index, proposal.size - rejected_index] + next_proposal
+      current_tail_size = proposal.size - rejected_index
+      draft_index = 0
+      while draft_index < salvage_candidates.size && emitted_tokens < gen_tokens
+        cand = salvage_candidates[draft_index]
         if cand == local_expected
           exact_ids << local_expected
           correction_or_accepted << cand
@@ -10209,6 +10213,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           emitted_tokens += 1
           accepted_draft_tokens += 1
           local_accepted += 1
+          local_next_accepted += 1 if draft_index >= current_tail_size
           pos = cycle_start_pos + correction_or_accepted.size - 1
           last_token = cand
           pos_last = pos
@@ -10236,10 +10241,12 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       end
       tail_salvage_hits += 1 if local_accepted > 0 || local_corrections > 0 || local_dropped > 0
       tail_salvage_accepted += local_accepted
+      tail_salvage_next_accepted += local_next_accepted
       tail_salvage_corrections += local_corrections
       tail_salvage_dropped += local_dropped
       tail_salvage_bails += 1 if local_accepted == 0 && local_corrections >= tail_salvage_max_corrections && local_dropped > 0
       draft_wasted_tail_tokens = Math.max(0, draft_wasted_tail_tokens - local_accepted)
+      draft_wasted_next_tokens = Math.max(0, draft_wasted_next_tokens - local_next_accepted)
       dt_salvage = (Time.instant - t_salvage).total_milliseconds
       tail_salvage_verify_ms += dt_salvage
       verifier_ms += dt_salvage
@@ -10803,6 +10810,16 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     serial_branch_guard_resync_index = -1
     serial_branch_guard_snapshot_state = nil.as(ML::GGUF::Qwen35CPU::State?)
     serial_branch_guard_snapshot_pos = -1
+    serial_next_proposal = [] of Int32
+    if tail_salvage_enabled && serial_emitted_tokens + proposal.size < gen_tokens
+      next_schedule_index = (serial_schedule_index + 1) % schedule.size
+      next_steps = Math.min(schedule[next_schedule_index], gen_tokens - serial_emitted_tokens - proposal.size)
+      if next_steps > 0
+        last_proposed_buf = serial_current_block.top1_id_buf(proposal.size - 1)
+        serial_next_block = submit_routed_block.call(serial_current_block.state, serial_current_block.lr_bufs, serial_current_block.full_current, last_proposed_buf, serial_pos_last + proposal.size, "self_spec_serial_tail_salvage_next_#{serial_chunks}", nil, next_steps, serial_draft_updown_enabled)
+        serial_next_proposal = read_block.call(serial_next_block, next_steps, "serial_tail_salvage_next_#{serial_chunks}")
+      end
+    end
     target_nexts = [] of {Int32, Float32}
     if bgi = serial_branch_guard_index
       prefix_size = bgi
@@ -10912,9 +10929,10 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       replay = ML::GGUF::Qwen35CPU.prefill_tokens_top1s(weights, correction_or_accepted, cycle_start_pos, scratch)
       local_expected = replay[-1][0]
       local_corrections = 0
-      draft_index = serial_rejected_index
-      while draft_index < proposal.size && serial_emitted_tokens < gen_tokens
-        cand = proposal[draft_index]
+      salvage_candidates = proposal[serial_rejected_index, proposal.size - serial_rejected_index] + serial_next_proposal
+      draft_index = 0
+      while draft_index < salvage_candidates.size && serial_emitted_tokens < gen_tokens
+        cand = salvage_candidates[draft_index]
         if cand == local_expected
           serial_exact_ids << local_expected
           correction_or_accepted << cand
@@ -11107,6 +11125,7 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     tail_salvage_checks:          tail_salvage_checks,
     tail_salvage_hits:            tail_salvage_hits,
     tail_salvage_accepted:        tail_salvage_accepted,
+    tail_salvage_next_accepted:   tail_salvage_next_accepted,
     tail_salvage_corrections:     tail_salvage_corrections,
     tail_salvage_dropped:         tail_salvage_dropped,
     tail_salvage_bails:           tail_salvage_bails,
@@ -11185,11 +11204,12 @@ end
 
 private def self_spec_pipeline_tail_salvage_note(pipe) : String
   return "" if pipe[:tail_salvage_max_corrections] <= 0
-  sprintf(" tail_salvage_max_corrections=%d tail_salvage_checks=%d tail_salvage_hits=%d tail_salvage_accepted=%d tail_salvage_corrections=%d tail_salvage_dropped=%d tail_salvage_bails=%d tail_salvage_verify_ms=%.3f",
+  sprintf(" tail_salvage_max_corrections=%d tail_salvage_checks=%d tail_salvage_hits=%d tail_salvage_accepted=%d tail_salvage_next_accepted=%d tail_salvage_corrections=%d tail_salvage_dropped=%d tail_salvage_bails=%d tail_salvage_verify_ms=%.3f",
     pipe[:tail_salvage_max_corrections],
     pipe[:tail_salvage_checks],
     pipe[:tail_salvage_hits],
     pipe[:tail_salvage_accepted],
+    pipe[:tail_salvage_next_accepted],
     pipe[:tail_salvage_corrections],
     pipe[:tail_salvage_dropped],
     pipe[:tail_salvage_bails],
