@@ -11,10 +11,10 @@ require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_constraints"
 require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/ngram_draft"
-require "../src/ml/gguf/qwen35_ffn_updown_adapter"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_proposal_route"
 require "../src/ml/gguf/qwen35_serving_route"
+require "../src/ml/gguf/qwen35_self_spec_plan"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
 
@@ -643,56 +643,24 @@ puts "Prompt tokens (#{ids.size}): #{ids.inspect}"
 puts "Prompt decoded: #{tok.decode(ids).inspect}"
 
 if route_root = self_spec_route_memory_root
-  route_resolution = ML::GGUF::Qwen35ProposalRoute.resolve(
+  plan = ML::GGUF::Qwen35SelfSpecPlan.resolve(
     route_root,
     MODEL_PATH,
     tok,
     model_prompt,
     ids,
+    model_hidden_dim || raise("model hidden dimension unavailable for self-spec plan"),
     self_spec_route_key,
+    self_spec_adapter_path,
   )
-  if route_entry = route_resolution.entry
+  if route_entry = plan.route_entry
     rank_text = route_entry.route_rank ? route_entry.route_rank.to_s : "na"
     layers_text = route_entry.route_layers.empty? ? "default" : route_entry.route_layers.join(',')
     key_text = self_spec_route_key || "exact_prompt"
-    adapter_note = "adapter_artifact=not_requested"
-    if route_entry.route != ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN
-      adapter_note = "adapter_artifact=not_applicable"
-    elsif adapter_path = self_spec_adapter_path
-      adapter_note = begin
-        artifact = ML::GGUF::Qwen35FFNUpDownAdapterArtifact.load(adapter_path)
-        requested_rank = route_entry.route_rank || artifact[:rank]
-        requested_layers = route_entry.route_layers.empty? ? artifact[:adapters].keys.sort : route_entry.route_layers
-        missing = requested_layers.reject { |layer_id| artifact[:adapters].has_key?(layer_id) }
-        short_rank = requested_layers.select do |layer_id|
-          adapter = artifact[:adapters][layer_id]?
-          adapter && adapter.rank < requested_rank
-        end
-        if expected_hidden = model_hidden_dim
-          if artifact[:hidden_dim] != expected_hidden
-            "adapter_artifact=invalid reason=hidden_dim expected=#{expected_hidden} actual=#{artifact[:hidden_dim]}"
-          elsif !missing.empty?
-            "adapter_artifact=invalid reason=missing_layers layers=#{missing.join(',')}"
-          elsif !short_rank.empty?
-            "adapter_artifact=invalid reason=rank_too_small layers=#{short_rank.join(',')} requested_rank=#{requested_rank}"
-          else
-            "adapter_artifact=valid source=#{artifact[:source]} hidden=#{artifact[:hidden_dim]} rank=#{artifact[:rank]} checked_layers=#{requested_layers.join(',')}"
-          end
-        elsif !missing.empty?
-          "adapter_artifact=invalid reason=missing_layers layers=#{missing.join(',')}"
-        elsif !short_rank.empty?
-          "adapter_artifact=invalid reason=rank_too_small layers=#{short_rank.join(',')} requested_rank=#{requested_rank}"
-        else
-          "adapter_artifact=valid source=#{artifact[:source]} hidden=#{artifact[:hidden_dim]} rank=#{artifact[:rank]} checked_layers=#{requested_layers.join(',')}"
-        end
-      rescue ex
-        "adapter_artifact=invalid reason=#{ex.message.try(&.gsub(/\s+/, "_")) || ex.class.name}"
-      end
-    end
-    STDOUT << "  self-spec proposal route hit: key=#{key_text} route=#{route_entry.route} rank=#{rank_text} layers=#{layers_text} #{adapter_note} product_self_spec=unsupported decode_path=unchanged\n"
+    STDOUT << "  self-spec proposal route hit: key=#{key_text} route=#{route_entry.route} rank=#{rank_text} layers=#{layers_text} plan=#{plan.status} #{plan.adapter_note} product_self_spec=unsupported decode_path=unchanged\n"
   else
     key_text = self_spec_route_key || "exact_prompt"
-    STDOUT << "  self-spec proposal route miss: key=#{key_text} product_self_spec=unsupported decode_path=unchanged\n"
+    STDOUT << "  self-spec proposal route miss: key=#{key_text} plan=#{plan.status} product_self_spec=unsupported decode_path=unchanged\n"
   end
 end
 

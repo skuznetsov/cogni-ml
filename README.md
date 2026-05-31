@@ -451,8 +451,9 @@ normal generator. `qwen35_generate` can resolve the route table with
 prints `product_self_spec=unsupported` and leaves the decode path unchanged.
 If `QWEN35_SELF_SPEC_UPDOWN_ADAPTERS_PATH` is also set, the generator validates
 the referenced PCA-updown adapter artifact against the selected route layers and
-rank, then reports `adapter_artifact=valid|invalid` without executing the
-adapter.
+rank through `ML::GGUF::Qwen35SelfSpecPlan`, then reports
+`plan=pca_updown|invalid_adapter|baseline|route_miss` and
+`adapter_artifact=valid|invalid` without executing the adapter.
 The PCA-updown FFN adapter data path is now shared in
 `src/ml/gguf/qwen35_ffn_updown_adapter.cr`: it owns the centered low-rank
 projection math, Hadamard/symmetric quant-dequant helpers, and the
