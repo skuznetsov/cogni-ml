@@ -140,6 +140,8 @@ def classify(
     has_code = bool(first_code_block(draft)) and bool(first_code_block(exact))
     word_ratio = difflib.SequenceMatcher(None, exact.split(), draft.split()).ratio()
     if not has_code:
+        if lcs >= 0.75 and word_ratio >= 0.65:
+            return "same_text_no_code_unchecked" if not compile_checked else "same_text_no_code"
         return "topic_or_format_collapse"
     if lcs >= 0.75 and word_ratio >= 0.65:
         if not compile_checked:
@@ -155,6 +157,7 @@ def classify(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--binary", type=Path, default=Path("/tmp/qwen35_probe_tail_salvage_handoff"))
+    ap.add_argument("--model", type=Path, default=None, help="Optional GGUF model path passed through to the probe")
     ap.add_argument("--prompts", type=Path, default=Path("examples/qwen_self_draft_code_prompts.jsonl"))
     ap.add_argument("--out-dir", type=Path, default=Path("/tmp/qwen_self_draft_code_attractor_suite"))
     ap.add_argument("--run-safe", type=Path, default=Path("scripts/run_safe.sh"))
@@ -197,6 +200,8 @@ def main() -> int:
             "--simulate-self-draft-gpu-chain-text",
             "--simulate-self-draft-gpu-chain-top2",
         ]
+        if args.model is not None:
+            cmd.insert(4, f"--model={args.model}")
         returncode = run_to_file(cmd, log_path, timeout=args.timeout + 45)
         log_text = log_path.read_text(encoding="utf-8", errors="replace")
         metrics, line = parse_probe_metrics(log_text)
