@@ -10134,6 +10134,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
     cur_mtp_input_token = mtp_input_token
     cur_mtp_input_pos = mtp_input_pos
     rejected_index = -1
+    tail_salvage_verifier_ready = false
+    tail_salvage_next_expected = 0_i32
     proposal.each_with_index do |cand, i|
       accepted_before = accepted_draft_tokens
       rejections_before = rejections
@@ -10247,6 +10249,8 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
       tail_salvage_bails += 1 if local_accepted == 0 && local_corrections >= tail_salvage_max_corrections && local_dropped > 0
       draft_wasted_tail_tokens = Math.max(0, draft_wasted_tail_tokens - local_accepted)
       draft_wasted_next_tokens = Math.max(0, draft_wasted_next_tokens - local_next_accepted)
+      tail_salvage_verifier_ready = true
+      tail_salvage_next_expected = local_expected
       dt_salvage = (Time.instant - t_salvage).total_milliseconds
       tail_salvage_verify_ms += dt_salvage
       verifier_ms += dt_salvage
@@ -10304,6 +10308,15 @@ private def simulate_self_spec_gpu_pipeline_run(weights : ML::GGUF::Qwen35Weight
           resync_base = copy_owned_resync_base_from_branch_snapshot.call(verifier_state, snapshot, branch_guard_snapshot_pos, pos_last, accepted_tail_prefix, "branch_guard_suffix_#{chunks}_#{rejected_index}")
           tree2_branch_guard_snapshot_resync_base_ms += (Time.instant - t_snapshot_resync_base).total_milliseconds
           wba.try(&.mark("verifier", "branch_guard_suffix_replay_#{chunks}_#{rejected_index}", t_suffix_replay, Time.instant))
+        elsif tail_salvage_verifier_ready
+          backup = verifier_backup.not_nil!
+          scratch = tail_salvage_scratch.not_nil!
+          copy_verifier_state.call(verifier_state, scratch, pos_last + 1)
+          target_next_id = tail_salvage_next_expected
+          resync_base = copy_owned_resync_base.call(backup, cycle_start_pos, "tail_salvage_#{chunks}")
+          if correction_or_accepted.size > 1
+            ML::GGUF::Qwen35CPU.prefill_tokens(weights, correction_or_accepted[0, correction_or_accepted.size - 1], cycle_start_pos, resync_base)
+          end
         elsif use_verifier_backup
           backup = verifier_backup.not_nil!
           copy_verifier_state.call(verifier_state, backup, cycle_start_pos)
