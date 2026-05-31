@@ -11,6 +11,7 @@ describe ML::GGUF::Qwen35SpecAcceptance do
     )
 
     result.emitted.should eq([10, 11, 12])
+    result.expected_ids.should eq([10, 11, 12])
     result.accepted.should eq(3)
     result.rejected.should be_false
     result.reject_index.should be_nil
@@ -27,6 +28,7 @@ describe ML::GGUF::Qwen35SpecAcceptance do
     )
 
     result.emitted.should eq([10, 11])
+    result.expected_ids.should eq([10, 11])
     result.accepted.should eq(1)
     result.rejected.should be_true
     result.reject_index.should eq(1)
@@ -43,6 +45,7 @@ describe ML::GGUF::Qwen35SpecAcceptance do
     )
 
     result.emitted.should eq([1, 2])
+    result.expected_ids.should eq([1, 2])
     result.accepted.should eq(2)
     result.rejected.should be_false
   end
@@ -57,6 +60,7 @@ describe ML::GGUF::Qwen35SpecAcceptance do
     )
 
     result.emitted.should eq([1, 2])
+    result.expected_ids.should eq([1, 2])
     result.accepted.should eq(2)
     result.rejected.should be_false
   end

@@ -7,6 +7,7 @@ module ML::GGUF
 
     record Result,
       emitted : Array(Int32),
+      expected_ids : Array(Int32),
       accepted : Int32,
       rejected : Bool,
       next_expected : Int32,
@@ -22,12 +23,14 @@ module ML::GGUF
              max_output : Int32,
              eos_id : Int32? = nil) : Result
       emitted = [] of Int32
+      expected_ids = [] of Int32
       accepted = 0
       expected = initial_expected
       reject_index = nil.as(Int32?)
 
       candidates.each_with_index do |cand, i|
         break if emitted.size >= max_output
+        expected_ids << expected
         if cand == expected
           emitted << cand
           accepted += 1
@@ -40,7 +43,7 @@ module ML::GGUF
         end
       end
 
-      Result.new(emitted, accepted, !reject_index.nil?, expected, reject_index)
+      Result.new(emitted, expected_ids, accepted, !reject_index.nil?, expected, reject_index)
     end
   end
 end

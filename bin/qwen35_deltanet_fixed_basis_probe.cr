@@ -9,6 +9,7 @@ require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_proposal_route"
 require "../src/ml/gguf/qwen35_self_spec_updown_buffers"
+require "../src/ml/gguf/qwen35_spec_acceptance"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
@@ -7225,21 +7226,17 @@ private def simulate_self_spec_wall_policy(weights : ML::GGUF::Qwen35Weights,
     verifier_ms += dt_verify
     chunk_verifier_ms << dt_verify
 
-    correction_or_accepted = [] of Int32
-    expected = target_next_id
-    rejected = false
-    proposal.each_with_index do |cand, i|
-      exact_ids << expected
-      emitted = if cand == expected
-                  accepted_draft_tokens += 1
-                  cand
-                else
-                  rejections += 1
-                  correction_steps += 1
-                  rejected = true
-                  expected
-                end
-      correction_or_accepted << emitted
+    scan = ML::GGUF::Qwen35SpecAcceptance.scan(proposal, target_next_id, target_nexts, gen_tokens - emitted_tokens)
+    correction_or_accepted = scan.emitted
+    exact_ids.concat(scan.expected_ids)
+    accepted_draft_tokens += scan.accepted
+    rejected = scan.rejected
+    if rejected
+      rejections += 1
+      correction_steps += 1
+    end
+
+    correction_or_accepted.each_with_index do |emitted, i|
       emitted_ids << emitted
       emitted_tokens += 1
 
@@ -7249,8 +7246,6 @@ private def simulate_self_spec_wall_policy(weights : ML::GGUF::Qwen35Weights,
       pos_last = pos
       exact_logits = logits_with_lowrank_policy(weights, emitted, pos.to_i32, shadow_state,
         layer_bases, rank, calib_count, exact_lr_states, fallback_threshold, nil, false)
-      expected = target_nexts[i][0] if cand == expected
-      break if rejected || emitted_tokens >= gen_tokens
     end
 
     if rejected

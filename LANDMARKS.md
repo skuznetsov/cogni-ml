@@ -17534,3 +17534,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: The self-spec scheduler remains too entangled for a safe direct move, but acceptance scanning is a clean LTP/WBA boundary used by several proposal corridors. Sharing it reduces duplicate exact-verifier controller logic before extracting a product same-weight runner.
 - LTP/WBA: Window is a verifier top1 span plus draft candidate span. Transport is the exact expected token through a bounded candidate corridor. Legal move accepts matching tokens or emits the exact correction at the first mismatch. Potential descends in `(duplicate_controller_area, accept_scan_drift_risk, future_runner_extraction_area)` while preserving exact fallback semantics.
 - trust: {F:0.88,G:0.62,R:0.86}
+
+**LM-740 CPU same-weight self-spec wall path reuses the shared acceptance scan [shared/ml]**
+- status: VERIFIED same-weight helper adoption
+- change: Extended `Qwen35SpecAcceptance::Result` with `expected_ids`, then rewired `simulate_self_spec_wall_policy` in `bin/qwen35_deltanet_fixed_basis_probe.cr` to use the shared scan helper for the CPU same-weight self-spec verifier loop. Product speculative and n-gram paths remain on the same helper.
+- evidence: `scripts/run_safe.sh crystal 120 5000 spec spec/qwen35_spec_acceptance_spec.cr --error-trace` passed (`4 examples, 0 failures`). `scripts/run_safe.sh crystal 180 7000 build --no-codegen bin/qwen35_deltanet_fixed_basis_probe.cr --error-trace` passed. `scripts/run_safe.sh crystal 180 7000 build --no-codegen bin/qwen35_generate.cr --error-trace` passed. `git diff --check` passed.
+- diagnosis: This verifies the helper in a same-weight self-spec corridor before touching the GPU scheduler. It reduces controller drift while preserving exact emitted ids and diagnostic exact-id history.
+- LTP/WBA: Window is same-weight proposal span plus exact verifier top1 span. Transport is expected-token state through a bounded chunk. Legal move accepts equal ids or emits exact correction once; the helper now also transports expected-id history for diagnostics. Potential descends in `(same_weight_controller_duplication, diagnostic_drift_risk, future_gpu_runner_area)`.
+- trust: {F:0.88,G:0.62,R:0.86}
