@@ -8,6 +8,7 @@ require "../src/ml/gguf/qwen35_ffn_updown_adapter"
 require "../src/ml/gguf/qwen35_mtp"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_proposal_route"
+require "../src/ml/gguf/qwen35_self_spec_updown_buffers"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 
@@ -1382,34 +1383,7 @@ private def build_updown_adapter_buffer_maps(adapters : FFNUpDownAdapterMap,
                                              layer_ids : Enumerable(Int32),
                                              rank : Int32,
                                              hidden_dim : Int32) : NamedTuple(x_mean: Hash(Int32, ML::MetalBuffer), c_mean: Hash(Int32, ML::MetalBuffer), coeff_w: Hash(Int32, ML::MetalBuffer), down: Hash(Int32, ML::MetalBuffer), rank: Int32)
-  raise "GPU pipeline pca-updown rank must be positive" unless rank > 0
-  raise "GPU pipeline pca-updown rank too large for current Metal kernel" if rank > 64
-
-  x_mean = {} of Int32 => ML::MetalBuffer
-  c_mean = {} of Int32 => ML::MetalBuffer
-  coeff_w = {} of Int32 => ML::MetalBuffer
-  down = {} of Int32 => ML::MetalBuffer
-  actual_rank = nil.as(Int32?)
-  layer_ids.each do |il|
-    adapter = adapters[il]? || raise "GPU pipeline pca-updown missing adapter for layer #{il}"
-    bufs = updown_adapter_buffers!(LowRankState.new, adapter, rank, hidden_dim)
-    if prev_rank = actual_rank
-      raise "GPU pipeline pca-updown inconsistent adapter ranks: #{prev_rank} vs #{bufs[:rank]} at layer #{il}" unless prev_rank == bufs[:rank]
-    else
-      actual_rank = bufs[:rank]
-    end
-    x_mean[il] = bufs[:x_mean]
-    c_mean[il] = bufs[:c_mean]
-    coeff_w[il] = bufs[:coeff_w]
-    down[il] = bufs[:down]
-  end
-  {
-    x_mean:  x_mean,
-    c_mean:  c_mean,
-    coeff_w: coeff_w,
-    down:    down,
-    rank:    actual_rank || raise("GPU pipeline pca-updown has no layers"),
-  }
+  ML::GGUF::Qwen35SelfSpecUpdownBuffers.build_f32_maps(adapters, layer_ids, rank, hidden_dim)
 end
 
 private def quantize_row_q8(values : Array(Float32)) : NamedTuple(bytes: Bytes, scale: Float32)
