@@ -17478,3 +17478,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This is the smallest safe extraction toward product self-spec: it moves the route certificate boundary into `src/` without moving the still-entangled GPU self-spec runner. The full runner remains probe-local because it depends on local basis training, PCA-updown adapter building, WBA/probe runtime globals, branch guards, and route experiments.
 - LTP/WBA: Window is shared route identity construction. Transport is the same certificate key across CLI seeding, probe application, and future product generation. Legal move preserves existing route semantics and only removes duplicated hash/lookup code. Potential descends in `(identity_drift_risk, duplicated_lookup_area, future_wiring_area)` while dual frame remains ordinary decode for any missing/incompatible route.
 - trust: {F:0.88,G:0.58,R:0.86}
+
+**LM-733 qwen35_generate can resolve self-spec route certificates without changing decode semantics [shared/ml]**
+- status: VERIFIED fail-closed product hook
+- change: Added `QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT` and optional `QWEN35_SELF_SPEC_ROUTE_KEY` to `bin/qwen35_generate.cr`. After tokenization, the product generator resolves the shared proposal-route table and reports hit/miss plus route/rank/layers, but explicitly prints `product_self_spec=unsupported decode_path=unchanged`; no greedy, n-gram/cache, external-draft, or MTP behavior changes.
+- evidence: `scripts/run_safe.sh crystal 180 7000 build --no-codegen bin/qwen35_generate.cr --error-trace` passed. README documents the diagnostic/future-wiring hook and its non-speed boundary.
+- diagnosis: This is a safe product-side landing pad for future self-spec runner extraction. It validates that route certificates can be resolved at the real product prompt boundary without claiming a product speedup or activating PCA-updown in an incompatible corridor.
+- LTP/WBA: Window is the product prompt-token boundary after tokenizer resolution. Transport is the route certificate into a future self-spec corridor. Legal move is observation-only until a compatible runner exists, preserving exact decode semantics. Potential descends in `(future_wiring_area, identity_mismatch_risk)` without increasing `(wrong_body_risk, rollback_tax)` because no proposal body is executed.
+- trust: {F:0.84,G:0.52,R:0.82}

@@ -68,6 +68,8 @@ prompt_cache_artifact_codec = ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC"]?.try(&.d
 prompt_cache_artifact_codec = nil if prompt_cache_artifact_codec == "raw" || prompt_cache_artifact_codec == ""
 prompt_cache_artifact_codec_block = (ENV["QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK"]? || "8").to_i
 prompt_cache_live_kv_artifacts = ENV["QWEN35_PROMPT_CACHE_LIVE_KV_ARTIFACTS"]? == "1"
+self_spec_route_memory_root = ENV["QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT"]?.try { |v| v.empty? ? nil : v }
+self_spec_route_key = ENV["QWEN35_SELF_SPEC_ROUTE_KEY"]?.try { |v| v.empty? ? nil : v }
 trace_steps = ENV["QWEN35_TRACE_STEPS_OFF"]? != "1" && ENV["QWEN35_QUIET"]? != "1"
 decode_policy = (ENV["QWEN35_DECODE_POLICY"]? || "").downcase
 unless decode_policy.empty? || decode_policy == "greedy" || decode_policy == "ngram" || decode_policy == "speculative" || decode_policy == "mtp" || decode_policy == "auto"
@@ -635,6 +637,27 @@ ids = if cached = cached_prompt_ids
 tokenize_ms = (Time.instant - tokenize_t0).total_milliseconds
 puts "Prompt tokens (#{ids.size}): #{ids.inspect}"
 puts "Prompt decoded: #{tok.decode(ids).inspect}"
+
+if route_root = self_spec_route_memory_root
+  route_resolution = ML::GGUF::Qwen35ProposalRoute.resolve(
+    route_root,
+    MODEL_PATH,
+    tok,
+    model_prompt,
+    ids,
+    self_spec_route_key,
+  )
+  if route_entry = route_resolution.entry
+    rank_text = route_entry.route_rank ? route_entry.route_rank.to_s : "na"
+    layers_text = route_entry.route_layers.empty? ? "default" : route_entry.route_layers.join(',')
+    key_text = self_spec_route_key || "exact_prompt"
+    STDOUT << "  self-spec proposal route hit: key=#{key_text} route=#{route_entry.route} rank=#{rank_text} layers=#{layers_text} product_self_spec=unsupported decode_path=unchanged\n"
+  else
+    key_text = self_spec_route_key || "exact_prompt"
+    STDOUT << "  self-spec proposal route miss: key=#{key_text} product_self_spec=unsupported decode_path=unchanged\n"
+  end
+end
+
 constraint_token_index = structured_constraint_enabled ? ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok) : nil
 
 if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled && output_ids.empty?
