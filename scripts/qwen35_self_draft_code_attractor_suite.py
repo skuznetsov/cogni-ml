@@ -81,9 +81,14 @@ def parse_probe_metrics(log_text: str) -> tuple[dict[str, str], str]:
     metrics: dict[str, str] = {}
     text_line = ""
     for raw_line in log_text.splitlines():
-        if raw_line.startswith("self_draft_gpu_chain "):
+        if raw_line.startswith("self_draft_gpu_chain_updown "):
             metrics.update(parse_metrics(raw_line))
-        elif raw_line.startswith("self_draft_gpu_chain_text"):
+        elif raw_line.startswith("self_draft_gpu_chain "):
+            metrics.update(parse_metrics(raw_line))
+        elif raw_line.startswith("self_draft_gpu_chain_updown_text"):
+            text_line = raw_line
+            metrics.update(parse_metrics(raw_line))
+        elif raw_line.startswith("self_draft_gpu_chain_text") and not text_line:
             text_line = raw_line
             metrics.update(parse_metrics(raw_line))
     return metrics, text_line
@@ -170,6 +175,7 @@ def main() -> int:
     ap.add_argument("--layers", default="0,2")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--skip-crystal-check", action="store_true")
+    ap.add_argument("--extra-probe-arg", action="append", default=[], help="Additional argument passed through to the probe; may be repeated")
     args = ap.parse_args()
 
     cases = load_prompts(args.prompts)
@@ -200,6 +206,7 @@ def main() -> int:
             "--simulate-self-draft-gpu-chain-text",
             "--simulate-self-draft-gpu-chain-top2",
         ]
+        cmd.extend(args.extra_probe_arg)
         if args.model is not None:
             cmd.insert(4, f"--model={args.model}")
         returncode = run_to_file(cmd, log_path, timeout=args.timeout + 45)
