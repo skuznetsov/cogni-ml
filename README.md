@@ -449,6 +449,11 @@ generation speedup until the same verifier/proposal corridor is wired into the
 normal generator. `qwen35_generate` can resolve the route table with
 `QWEN35_SELF_SPEC_ROUTE_MEMORY_ROOT` for diagnostics and future wiring, but it
 prints `product_self_spec=unsupported` and leaves the decode path unchanged.
+The PCA-updown FFN adapter data path is now shared in
+`src/ml/gguf/qwen35_ffn_updown_adapter.cr`: it owns the centered low-rank
+projection math, Hadamard/symmetric quant-dequant helpers, and the
+`qwen35_ffn_updown_adapter_v1` artifact dump/load format. The heavy
+self-spec scheduler is still probe-local.
 
 Manual route lookup/seed example:
 
