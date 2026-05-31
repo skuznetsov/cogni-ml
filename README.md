@@ -423,6 +423,43 @@ QWEN35_HEAD_FULL_ROWS_GUARDED=1 \
 ./build/qwen35_generate "The capital of France is" 64
 ```
 
+Experimental same-weight proposal-route memory:
+
+```sh
+crystal build --release --no-debug \
+  bin/qwen35_proposal_route_memory.cr \
+  -o build/qwen35_proposal_route_memory
+
+QWEN35_ROUTE_CAL_ROOT=/tmp/qwen35_route_memory \
+QWEN35_ROUTE_CAL_GEN=16 \
+QWEN35_ROUTE_CAL_GAMMA=4 \
+QWEN35_ROUTE_CAL_UPDOWN_RANK=4 \
+QWEN35_ROUTE_CAL_UPDOWN_LAYERS=0,2,4 \
+scripts/qwen35_proposal_route_calibrate.sh
+```
+
+The route cache stores certified proposal-body choices such as `baseline` or
+`pca_updown` for the GPU self-spec probe path. It is intentionally not a
+`qwen35_generate` decode-policy switch yet: the product generator currently has
+greedy, n-gram/cache, external-draft speculative, and GGUF-MTP paths, while the
+PCA-updown same-weight proposal body lives in
+`bin/qwen35_deltanet_fixed_basis_probe.cr`. Use route memory to avoid repeating
+online route calibration in that probe corridor; do not count it as a product
+generation speedup until the same verifier/proposal corridor is wired into the
+normal generator.
+
+Manual route lookup/seed example:
+
+```sh
+./build/qwen35_proposal_route_memory \
+  --root /tmp/qwen35_route_memory \
+  --prompt "def square(x): return x * x\n" \
+  --route-key code_square \
+  --route pca_updown \
+  --rank 4 \
+  --layers 0,2,4
+```
+
 Enable Qwen chat-template prompting and XML-style function calls:
 
 ```sh
@@ -782,7 +819,7 @@ Useful Qwen environment switches:
 | `QWEN35_CONSTRAINED_LITERAL_PREFIX='...'` | Experimental greedy-only constrained decoding probe. Forces an exact literal prefix using tokenizer-derived allowed-token frontiers and the constrained Q6 head path, then falls back to normal greedy decode after the literal completes. Currently incompatible with prompt-cache/speculative/n-gram fast paths. |
 | `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1` | Experimental greedy-only structured tool-call mode. Requires `QWEN35_TOOLS_JSON`; constrains Qwen XML `<tool_call>\n<function=...>\n` prefixes over the available function names, required `<parameter=...>\n` tags in schema order, lets the model choose schema-valid optional parameter tags before final close, constrains finite enum/boolean values and small bounded integer ranges, falls back for free-form single-line values, constrains the inter-parameter and final closing tags after value newlines, stops generation after a complete constrained tool call, batches deterministic literal spans by default, and emits a `tool constraint summary` line with constrained-stage, forced-span, and free-form fallback counts. |
 | `QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1` | Disable deterministic literal-span batching inside constrained structured decoding. This is a diagnostic kill switch; the default batches grammar-proven spans with exact body-only state updates and skips intermediate lm-head ranking. |
-| `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk gating; explicit policy overrides legacy mode envs. |
+| `QWEN35_DECODE_POLICY=greedy\|ngram\|speculative\|mtp\|auto` | Explicit decode-mode selector. `auto` chooses the exact fail-closed n-gram path with risk gating; explicit policy overrides legacy mode envs. `mtp` requires `QWEN35_MTP_GGUF_PATH` and remains explicit/default-off. |
 | `QWEN35_TRACE_STEPS_OFF=1` | Suppress per-token/per-cycle trace lines in `qwen35_generate` while keeping summaries and final output. |
 | `QWEN35_QUIET=1` | Alias for suppressing per-step traces in `qwen35_generate`; useful for cleaner local timing. |
 | `QWEN35_NGRAM_DECODE=1` | Enable exact n-gram speculative decode in `qwen35_generate`. |
