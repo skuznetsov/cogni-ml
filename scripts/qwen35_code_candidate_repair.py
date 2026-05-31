@@ -67,6 +67,11 @@ def repair_next_local(code: str) -> tuple[str, bool]:
     return "\n".join(out) + ("\n" if code.endswith("\n") else ""), changed
 
 
+def repair_abstract_int_instance_vars(code: str) -> tuple[str, bool]:
+    repaired = re.sub(r"(@[a-zA-Z_][a-zA-Z0-9_]*\s*:\s*)Int\b", r"\1Int32", code)
+    return repaired, repaired != code
+
+
 def repair_common_crystal_syntax(code: str, error: str) -> tuple[str, list[str]]:
     repairs: list[str] = []
     new_code = code
@@ -84,6 +89,11 @@ def repair_common_crystal_syntax(code: str, error: str) -> tuple[str, list[str]]
         new_code, changed = repair_next_local(new_code)
         if changed:
             repairs.append("rename_next_local")
+
+    if "can't use Int as the type of instance variable" in error:
+        new_code, changed = repair_abstract_int_instance_vars(new_code)
+        if changed:
+            repairs.append("abstract_int_ivar_to_int32")
 
     if "invalid char escape sequence" in error or "'\\1'" in new_code:
         replaced = new_code.replace(".gsub(/\\\\(.)/, '\\1')", ".gsub(/\\\\(.)/) { |m| m[1].to_s }")
@@ -135,6 +145,18 @@ def repair_one(row: dict[str, str], *, out_dir: Path, run_safe: Path, crystal: s
         ok, err = compile_code(code, path=candidate_path, log_path=log_path, run_safe=run_safe, crystal=crystal, timeout=timeout, max_mem_mb=max_mem_mb)
     if appended:
         repairs.append(f"append_end_x{appended}")
+
+    # Some repairs expose the next compiler frontier. For example appending
+    # missing `end`s can reveal Crystal's abstract-Int instance-var error.
+    followup_rounds = 0
+    while not ok and followup_rounds < 3:
+        followup_rounds += 1
+        next_code, followup_repairs = repair_common_crystal_syntax(code, err)
+        if next_code == code:
+            break
+        code = next_code
+        repairs.extend(followup_repairs)
+        ok, err = compile_code(code, path=candidate_path, log_path=log_path, run_safe=run_safe, crystal=crystal, timeout=timeout, max_mem_mb=max_mem_mb)
 
     return {
         "name": name,
