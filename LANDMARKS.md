@@ -17526,3 +17526,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - diagnosis: This moves another product-reusable piece of the PCA-updown proposal body out of the monolithic probe while leaving scheduling, verifier, and approximate execution unchanged. Q8 adapter buffers remain probe-local because that path is already refuted as a speed default and should not be promoted before a new bottleneck appears.
 - LTP/WBA: Window is validated adapter data plus route layer set. Transport is resident Metal buffer maps into a future same-weight proposal runner. Legal move prepares buffers only and preserves exact decode semantics. Potential descends in `(scheduler_extraction_area, duplicated_setup_area, adapter_shape_drift_risk)`; dual frame is missing/invalid adapter -> no proposal runner activation.
 - trust: {F:0.86,G:0.54,R:0.84}
+
+**LM-739 Exact speculative acceptance scan is shared as a pure helper [shared/ml]**
+- status: VERIFIED extraction slice
+- change: Added `ML::GGUF::Qwen35SpecAcceptance` in `src/ml/gguf/qwen35_spec_acceptance.cr`. It scans candidate draft tokens against an initial exact expected id and verifier top1 rows, returning emitted ids, accepted count, reject index, and next expected id without mutating model state. `bin/qwen35_generate.cr` now uses it for product external-draft speculative and n-gram exact-verifier scans.
+- evidence: `scripts/run_safe.sh crystal 120 5000 spec spec/qwen35_spec_acceptance_spec.cr --error-trace` passed (`4 examples, 0 failures`). `scripts/run_safe.sh crystal 180 7000 build --no-codegen bin/qwen35_generate.cr --error-trace` passed. `git diff --check` passed for touched files.
+- diagnosis: The self-spec scheduler remains too entangled for a safe direct move, but acceptance scanning is a clean LTP/WBA boundary used by several proposal corridors. Sharing it reduces duplicate exact-verifier controller logic before extracting a product same-weight runner.
+- LTP/WBA: Window is a verifier top1 span plus draft candidate span. Transport is the exact expected token through a bounded candidate corridor. Legal move accepts matching tokens or emits the exact correction at the first mismatch. Potential descends in `(duplicate_controller_area, accept_scan_drift_risk, future_runner_extraction_area)` while preserving exact fallback semantics.
+- trust: {F:0.88,G:0.62,R:0.86}

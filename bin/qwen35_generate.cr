@@ -15,6 +15,7 @@ require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_proposal_route"
 require "../src/ml/gguf/qwen35_serving_route"
 require "../src/ml/gguf/qwen35_self_spec_plan"
+require "../src/ml/gguf/qwen35_spec_acceptance"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
 
@@ -1513,21 +1514,11 @@ elsif speculative_decode_enabled && !output_ids.empty?
         end
         target_verify_ms += (Time.instant - tstart).total_milliseconds
 
-        expected = target_next
-        candidates.each_with_index do |cand, i|
-          if cand == expected
-            output_ids << cand
-            correction_or_accepted << cand
-            accepted += 1
-            expected = target_nexts[i][0]
-            break if cand == tok.eos_id
-          else
-            output_ids << expected
-            correction_or_accepted << expected
-            rejected = true
-            break
-          end
-        end
+        scan = ML::GGUF::Qwen35SpecAcceptance.scan(candidates, target_next, target_nexts, n_gen - output_ids.size, tok.eos_id)
+        output_ids.concat(scan.emitted)
+        correction_or_accepted.concat(scan.emitted)
+        accepted += scan.accepted
+        rejected = scan.rejected
 
         if rejected
           state.copy_from!(target_backup_state)
@@ -1729,28 +1720,16 @@ elsif ngram_decode_enabled && !output_ids.empty?
         ML::GGUF::Qwen35CPU.prefill_tokens_top1s(w, verify_candidates, stage_pos, state)
       end
 
-      expected = next_id
-      stage_candidates.each_with_index do |cand, i|
-        break if output_ids.size >= n_gen
-        if cand == expected
-          output_ids << cand
-          history << cand
-          ngram_history.try &.append(cand)
-          accepted_or_corrected << cand
-          stage_accepted_or_corrected << cand
-          ngram_accepted += 1
-          expected = target_nexts[i][0] if i < target_nexts.size
-          break if cand == tok.eos_id
-        else
-          output_ids << expected
-          history << expected
-          ngram_history.try &.append(expected)
-          accepted_or_corrected << expected
-          stage_accepted_or_corrected << expected
-          rejected = true
-          break
-        end
+      scan = ML::GGUF::Qwen35SpecAcceptance.scan(stage_candidates, next_id, target_nexts, n_gen - output_ids.size, tok.eos_id)
+      scan.emitted.each do |id|
+        output_ids << id
+        history << id
+        ngram_history.try &.append(id)
+        accepted_or_corrected << id
+        stage_accepted_or_corrected << id
       end
+      ngram_accepted += scan.accepted
+      rejected = scan.rejected
 
       if rejected
         ngram_disabled = true if ngram_disable_after_reject
