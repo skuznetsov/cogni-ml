@@ -12623,16 +12623,20 @@ end
 gguf = ML::GGUF::GGUFFile.new(model)
 tok = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model, tokenizer_bin)
 token_ids = token_ids_for_prompt(tok, prompt, tokens_limit, repeat: !prompt_as_prefix)
+route_memory_store = nil.as(ML::GGUF::Qwen35PromptCache::Store?)
 route_memory_entry = nil.as(ML::GGUF::Qwen35PromptCache::ProposalRouteEntry?)
+route_memory_model_id = nil.as(String?)
+route_memory_tokenizer_id = nil.as(String?)
+route_memory_learned = false
 if route_memory_root = simulate_self_spec_gpu_pipeline_draft_updown_route_memory_root
   model_info = File.info(model)
-  route_model_id = ML::GGUF::Qwen35PromptCache.short_hash("model\0#{model}\0#{model_info.size}\0#{model_info.modification_time.to_unix}")
-  route_tokenizer_id = ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{route_model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
-  route_store = ML::GGUF::Qwen35PromptCache::Store.new(route_memory_root)
+  route_memory_model_id = ML::GGUF::Qwen35PromptCache.short_hash("model\0#{model}\0#{model_info.size}\0#{model_info.modification_time.to_unix}")
+  route_memory_tokenizer_id = ML::GGUF::Qwen35PromptCache.short_hash("tokenizer\0#{route_memory_model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
+  route_memory_store = ML::GGUF::Qwen35PromptCache::Store.new(route_memory_root)
   route_memory_entry = if route_key = simulate_self_spec_gpu_pipeline_draft_updown_route_key
-                         route_store.lookup_proposal_route_key(route_model_id, route_tokenizer_id, route_key)
+                         route_memory_store.not_nil!.lookup_proposal_route_key(route_memory_model_id.not_nil!, route_memory_tokenizer_id.not_nil!, route_key)
                        else
-                         route_store.lookup_proposal_route(route_model_id, route_tokenizer_id, prompt, token_ids)
+                         route_memory_store.not_nil!.lookup_proposal_route(route_memory_model_id.not_nil!, route_memory_tokenizer_id.not_nil!, prompt, token_ids)
                        end
   if route_hit = route_memory_entry
     case route_hit.route
@@ -13775,6 +13779,34 @@ if rank = simulate_logit_rank
                   attr_note = simulate_self_spec_gpu_pipeline_attribution ? self_spec_pipeline_attr_note(pipe) : ""
                   agreement_note = simulate_self_spec_gpu_pipeline_draft_updown_agreement_gate ? self_spec_pipeline_updown_agreement_note(pipe) : ""
                   puts "self_spec_gpu_pipeline layers=#{simulate_logit_layers.join(',')} rank=#{rank} gamma=#{pipeline_gamma}#{branch_snapshot_mode_note}#{split_note}#{draft_variant_note}#{draft_no_ffn_layers_note}#{draft_skip_rec_note}#{draft_updown_note}#{draft_updown_category_note}#{draft_updown_layers_note}#{draft_updown_fallback_note}#{draft_updown_warmup_note}#{draft_updown_margin_note}#{risk_offramp_note}#{main_pre_submit_router_note}#{exact_refresh_note}#{backup_note}#{state_backup_note} gen_tokens=#{simulate_generate_tokens} chunks=#{pipe[:chunks]} draft_updown_chunks=#{pipe[:draft_updown_chunks]} draft_noffn_chunks=#{pipe[:draft_noffn_chunks]} rejections=#{pipe[:rejections]} accepted_draft_tokens=#{pipe[:accepted_draft_tokens]} proposed_tokens=#{pipe[:proposed_tokens]} accept_rate=#{accept_rate.round(2)}% parity=#{pipe[:parity]} gamma_history=#{pipe[:gamma_history].join(',')} draft_seed_ms=#{pipe[:draft_seed_ms].round(3)} draft_next_ms=#{pipe[:draft_next_ms].round(3)} verifier_ms=#{pipe[:verifier_ms].round(3)} draft_wait_ms=#{pipe[:draft_wait_ms].round(3)} backup_ms=#{pipe[:backup_ms].round(3)} rebuild_ms=#{pipe[:rebuild_ms].round(3)} controller_ms=#{pipe[:controller_ms].round(3)} replay_ms=#{pipe[:replay_ms].round(3)} plain_exact_ms=#{pipe[:plain_exact_ms].round(3)} serial_ms=#{pipe[:serial_ms].round(3)} overlap_ms=#{pipe[:overlap_ms].round(3)} hidden_ms=#{pipe[:hidden_ms].round(3)} speedup=#{pipe[:speedup].round(4)}x plain_speedup=#{pipe[:plain_speedup].round(4)}x#{tree2_note}#{agreement_note}#{attr_note} exact_ids=#{pipe[:exact_ids].join(',')} emitted_ids=#{pipe[:emitted_ids].join(',')}"
+                  if !route_memory_learned &&
+                     route_memory_entry.nil? &&
+                     (store = route_memory_store) &&
+                     (threshold = simulate_self_spec_gpu_pipeline_draft_updown_first_margin_threshold) &&
+                     pipeline_updown_rank &&
+                     risk_offramp_margin.nil? &&
+                     branch_snapshot_mode[:name].empty?
+                    learned_route = pipe[:draft_updown_chunks] > 0 && effective_pipeline_updown_rank ? ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN : ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_BASELINE
+                    learned_rank = learned_route == ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN ? effective_pipeline_updown_rank : nil
+                    learned_layers = learned_route == ML::GGUF::Qwen35PromptCache::PROPOSAL_ROUTE_PCA_UPDOWN && draft_updown_layer_set ? draft_updown_layer_set.not_nil!.to_a.sort : [] of Int32
+                    evidence = "gamma=#{pipeline_gamma} split=#{draft_split || "default"} accept=#{accept_rate.round(2)} overlap_ms=#{pipe[:overlap_ms].round(3)} updown_chunks=#{pipe[:draft_updown_chunks]} parity=#{pipe[:parity]}"
+                    saved_route = store.save_proposal_route(
+                      model_id: route_memory_model_id.not_nil!,
+                      tokenizer_id: route_memory_tokenizer_id.not_nil!,
+                      prompt_text: prompt,
+                      token_ids: token_ids,
+                      route: learned_route,
+                      route_rank: learned_rank,
+                      route_layers: learned_layers,
+                      route_key: simulate_self_spec_gpu_pipeline_draft_updown_route_key,
+                      trigger: "first-margin<=#{threshold}",
+                      evidence: evidence,
+                    )
+                    route_memory_learned = true
+                    saved_rank = saved_route.route_rank ? saved_route.route_rank.to_s : "na"
+                    saved_layers = saved_route.route_layers.empty? ? "default" : saved_route.route_layers.join(",")
+                    puts "proposal_route_memory_saved route=#{saved_route.route} rank=#{saved_rank} layers=#{saved_layers} key=#{simulate_self_spec_gpu_pipeline_draft_updown_route_key || "exact_prompt"}"
+                  end
                   if dump_path = simulate_self_spec_gpu_pipeline_dump_cycles_path
                     dump_self_spec_gpu_pipeline_cycles(dump_path.not_nil!, main_prompt_name, prompt, "self_lowrank/gamma=#{pipeline_gamma}", simulate_logit_layers, rank, "gamma=#{pipeline_gamma}", pipe)
                   end
