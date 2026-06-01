@@ -16,6 +16,7 @@ from pathlib import Path
 CODE_RE = re.compile(r"```(?:crystal)?\n(.*?)(?:\n```|\Z)", re.S)
 ERROR_RE = re.compile(r"Error: ([^|\n]+)")
 CODEISH_RE = re.compile(r"^\s*(?:#|class\s|module\s|struct\s|enum\s|def\s|require\s|alias\s|record\s)")
+CONSTRUCT_RE = re.compile(r"^\s*(?:class|module|struct|enum|def|record|alias|require|getter|setter|property)\b")
 
 
 def clean_implicit_candidate(text: str) -> str:
@@ -77,6 +78,20 @@ def compact_error(text: str) -> str:
     return one[-240:]
 
 
+def code_shape(code: str) -> tuple[int, int, bool]:
+    non_comment_lines = 0
+    construct_count = 0
+    for raw in code.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("```"):
+            continue
+        non_comment_lines += 1
+        if CONSTRUCT_RE.search(raw):
+            construct_count += 1
+    substantive = non_comment_lines >= 3 and construct_count >= 1
+    return non_comment_lines, construct_count, substantive
+
+
 def check_code(
     code: str,
     *,
@@ -135,6 +150,7 @@ def main() -> int:
             text_path = Path(row[f"{kind}_text"])
             text = text_path.read_text(encoding="utf-8", errors="replace")
             code = first_code_block(text, implicit_open_fence=args.implicit_open_fence)
+            non_comment_lines, construct_count, substantive = code_shape(code)
             ok, error, code_path, log_path = check_code(
                 code,
                 name=name,
@@ -151,6 +167,9 @@ def main() -> int:
                     "kind": kind,
                     "ok": str(int(ok)),
                     "code_chars": str(len(code)),
+                    "non_comment_lines": str(non_comment_lines),
+                    "construct_count": str(construct_count),
+                    "substantive_code": str(int(substantive)),
                     "error": error,
                     "code_path": str(code_path),
                     "log_path": str(log_path),
@@ -168,6 +187,9 @@ def main() -> int:
         "kind",
         "ok",
         "code_chars",
+        "non_comment_lines",
+        "construct_count",
+        "substantive_code",
         "error",
         "source_status",
         "lcs_ratio",
