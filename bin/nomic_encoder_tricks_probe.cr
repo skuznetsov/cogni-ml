@@ -181,6 +181,7 @@ limit_queries = 0
 backend_name = "metal"
 suite = "toy"
 show_results = false
+summary_only = false
 docs_tsv = nil.as(String?)
 queries_tsv = nil.as(String?)
 rerank_k = 3
@@ -195,6 +196,7 @@ OptionParser.parse do |p|
   p.on("--limit-docs=N", "Limit built-in docs") { |v| limit_docs = v.to_i }
   p.on("--limit-queries=N", "Limit built-in queries") { |v| limit_queries = v.to_i }
   p.on("--backend=NAME", "metal | f32 | f16sim (default: metal)") { |v| backend_name = v }
+  p.on("--summary-only", "Suppress per-query mismatch details") { summary_only = true }
   p.on("--show-results", "Print per-query top1/top3 details instead of compact mismatches") { show_results = true }
   p.on("-h", "--help", "Show help") do
     puts p
@@ -324,6 +326,8 @@ puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlab
   min_cos = cosines.min
   details = if show_results
               result_parts.join(",")
+            elsif summary_only
+              mismatch_parts.empty? ? "ok" : "mismatches=#{mismatch_parts.size}"
             else
               mismatch_parts.empty? ? "ok" : mismatch_parts.join(",")
             end
