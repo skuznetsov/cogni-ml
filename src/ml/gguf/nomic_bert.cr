@@ -426,11 +426,29 @@ module ML::GGUF
 
       {% unless flag?(:cpu_only) %}
       if @backend.is_a?(MetalBackend)
-        return embed_gpu_batch(token_batches)
+        return embed_gpu_batch(token_batches, @layers)
       end
       {% end %}
 
       token_batches.map { |tokens| embed_tokens(tokens) }
+    end
+
+    # Batch embed after the first `depth` transformer blocks. This is the
+    # product-shaped counterpart of `embed_depth`: same exact layer prefix, but
+    # through the padded Metal microbatch path when available.
+    def embed_batch_depth(texts : Array(String), depth : Int32, max_batch : Int32? = nil) : Array(Array(Float32))
+      raise ArgumentError.new("NomicBertMoE depth must be in 1..#{@n_layers}, got #{depth}") unless 1 <= depth <= @n_layers
+      return [] of Array(Float32) if texts.empty?
+
+      token_batches = texts.map { |t| tokenize(t) }
+
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        return embed_gpu_batch(token_batches, @layers[0, depth], max_batch || configured_metal_depth_batch_size)
+      end
+      {% end %}
+
+      token_batches.map { |tokens| forward(tokens, depth) }
     end
 
     def profile_embed_batch(texts : Array(String)) : EmbedProfile
@@ -482,10 +500,9 @@ module ML::GGUF
     end
 
     {% unless flag?(:cpu_only) %}
-    private def embed_gpu_batch(token_batches : Array(Array(Int32))) : Array(Array(Float32))
+    private def embed_gpu_batch(token_batches : Array(Array(Int32)), layers : Array(LayerWeights), max_batch : Int32 = configured_metal_batch_size) : Array(Array(Float32))
       mb = @backend.as(MetalBackend)
       pad_id = @tokenizer.not_nil!.pad_id
-      max_batch = configured_metal_batch_size
       indexed = token_batches.each_with_index.map { |tokens, idx| {idx, tokens} }.to_a
       indexed.sort_by! { |(_, tokens)| -tokens.size }
       results = Array(Array(Float32)?).new(token_batches.size, nil)
@@ -510,7 +527,7 @@ module ML::GGUF
           batch_size,
           max_seq_len,
           lengths,
-          @layers,
+          layers,
           @dim,
           @n_heads,
           @head_dim,
@@ -596,6 +613,16 @@ module ML::GGUF
       raw = ENV["EMBED_NATIVE_MAX_BATCH"]?
       val = raw.try(&.to_i?) || 8
       val > 0 ? val.to_i32 : 8_i32
+    end
+
+    private def configured_metal_depth_batch_size : Int32
+      raw = ENV["EMBED_NATIVE_DEPTH_MAX_BATCH"]?
+      val = raw.try(&.to_i?)
+      return val.to_i32 if val && val > 0
+
+      # Wider variable-length depth batches currently diverge on long Markdown
+      # corpora; keep the exact early-exit product path on the verified corridor.
+      {configured_metal_batch_size, 2}.min.to_i32
     end
     {% end %}
 

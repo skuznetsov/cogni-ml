@@ -205,6 +205,8 @@ backend_name = "metal"
 suite = "toy"
 show_results = false
 summary_only = false
+use_batched = false
+batch_size_override = nil.as(Int32?)
 docs_tsv = nil.as(String?)
 queries_tsv = nil.as(String?)
 rerank_k = 3
@@ -221,6 +223,8 @@ OptionParser.parse do |p|
   p.on("--limit-docs=N", "Limit built-in docs") { |v| limit_docs = v.to_i }
   p.on("--limit-queries=N", "Limit built-in queries") { |v| limit_queries = v.to_i }
   p.on("--backend=NAME", "metal | f32 | f16sim (default: metal)") { |v| backend_name = v }
+  p.on("--batched", "Use embed_batch_depth for each requested depth") { use_batched = true }
+  p.on("--batch-size=N", "Override embed_batch_depth microbatch size for --batched probes") { |v| batch_size_override = v.to_i }
   p.on("--summary-only", "Suppress per-query mismatch details") { summary_only = true }
   p.on("--show-results", "Print per-query top1/top3 details instead of compact mismatches") { show_results = true }
   p.on("-h", "--help", "Show help") do
@@ -293,12 +297,28 @@ depth_ms = Array(Float64).new(model.n_layers, 0.0)
 texts.each_with_index do |text, i|
   tokens = model.tokenize(text)
   token_counts[i] = tokens.size
-  layer_vectors << compute_depths.map do |depth|
+end
+
+if use_batched
+  depth_results = {} of Int32 => Array(Array(Float32))
+  compute_depths.each do |depth|
     t_depth = Time.instant
-    vec = model.embed_depth(text, depth)
+    vecs = model.embed_batch_depth(texts, depth, batch_size_override)
     depth_ms[depth - 1] += (Time.instant - t_depth).total_milliseconds
-    vec
-  end.to_a
+    depth_results[depth] = vecs
+  end
+  texts.each_index do |i|
+    layer_vectors << compute_depths.map { |depth| depth_results[depth][i] }.to_a
+  end
+else
+  texts.each_with_index do |text, _i|
+    layer_vectors << compute_depths.map do |depth|
+      t_depth = Time.instant
+      vec = model.embed_depth(text, depth)
+      depth_ms[depth - 1] += (Time.instant - t_depth).total_milliseconds
+      vec
+    end.to_a
+  end
 end
 
 full_depth_i = depth_index[full_depth]
@@ -309,7 +329,7 @@ puts "model=#{model_path}"
 puts "backend=#{backend_name}"
 puts "suite=#{suite}"
 puts "docs_tsv=#{docs_tsv || ""} queries_tsv=#{queries_tsv || ""}"
-puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} eval_depths=#{eval_depths.join(",")} computed_depths=#{compute_depths.join(",")} dim=#{model.dim} rerank_k=#{rerank_k} tokens=#{token_counts.join(",")}"
+puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} eval_depths=#{eval_depths.join(",")} computed_depths=#{compute_depths.join(",")} dim=#{model.dim} rerank_k=#{rerank_k} batched=#{use_batched} batch_size=#{batch_size_override || "auto"} tokens=#{token_counts.join(",")}"
 puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tinvalid_vecs\tzeroish_vecs\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tshallow_has_label@k\tshallow_has_full@k\tfull_rerank_label@k\tfull_rerank_full@k\tcandidate_union@k\tcandidate_doc_pct\tlazy_full_doc_savings_pct\tdetails"
 
 eval_depths.each do |depth|
