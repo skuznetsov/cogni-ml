@@ -165,6 +165,7 @@ module ML::GGUF
     @pipelines : Hash(String, ML::Metal::ComputePipeline)
     @workspace : GPUWorkspace?
     @norm_bufs_cache : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer))?
+    @norm_bufs_cache_key : UInt64?
     @compiled_graphs : Hash(GraphCacheKey, ML::Metal::ComputeGraph)
     @compiled_batch_graphs : Hash(BatchGraphCacheKey, ML::Metal::ComputeGraph)
     @workspace_token_capacity : Int32 = 0
@@ -301,10 +302,16 @@ module ML::GGUF
       @compiled_graphs.clear
       @compiled_batch_graphs.clear
       @norm_bufs_cache = nil
+      @norm_bufs_cache_key = nil
     end
 
     private def norm_bufs_for(layers : Array(NomicBertMoE::LayerWeights), dim : Int32)
-      @norm_bufs_cache ||= layers.map do |lw|
+      key = weights_fingerprint(layers) ^ layers.size.to_u64 ^ (dim.to_u64 << 32)
+      cached = @norm_bufs_cache
+      return cached if cached && @norm_bufs_cache_key == key
+
+      @norm_bufs_cache_key = key
+      @norm_bufs_cache = layers.map do |lw|
         n1w = ML::MetalBuffer.new(dim.to_i64 * 4); n1w.write(lw.norm1_w)
         n1b = ML::MetalBuffer.new(dim.to_i64 * 4); n1b.write(lw.norm1_b)
         n2w = ML::MetalBuffer.new(dim.to_i64 * 4); n2w.write(lw.norm2_w)

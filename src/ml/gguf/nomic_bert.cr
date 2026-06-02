@@ -227,6 +227,25 @@ module ML::GGUF
       forward(tokens)
     end
 
+    # Embed after the first `depth` transformer blocks.
+    # This is an exact early-exit probe path: it runs a prefix of the real
+    # encoder and mean-pools that hidden state, rather than training a surrogate.
+    def embed_depth(text : String, depth : Int32) : Array(Float32)
+      embed_tokens_depth(tokenize(text), depth)
+    end
+
+    def embed_tokens_depth(tokens : Array(Int32), depth : Int32) : Array(Float32)
+      raise ArgumentError.new("NomicBertMoE depth must be in 1..#{@n_layers}, got #{depth}") unless 1 <= depth <= @n_layers
+
+      {% unless flag?(:cpu_only) %}
+      if @backend.is_a?(MetalBackend)
+        return embed_gpu_depth(tokens, depth)
+      end
+      {% end %}
+
+      forward(tokens, depth)
+    end
+
     def profile_embed(text : String) : EmbedProfile
       total_start = Time.instant
       t0 = Time.instant
@@ -304,6 +323,29 @@ module ML::GGUF
         token_ids,
         seq_len,
         @layers,
+        @dim,
+        @n_heads,
+        @head_dim,
+        @ffn_dim,
+        @n_experts,
+        @n_experts_used,
+        @moe_every_n,
+        @gpu_token_embd_buf.not_nil!,
+        @gpu_token_types_buf.not_nil!,
+        @gpu_embd_norm_w_buf.not_nil!,
+        @gpu_embd_norm_b_buf.not_nil!,
+      )
+    end
+
+    private def embed_gpu_depth(tokens : Array(Int32), depth : Int32) : Array(Float32)
+      seq_len = tokens.size
+      mb = @backend.as(MetalBackend)
+      token_ids = Array(Int32).new(seq_len) { |i| tokens[i].clamp(0, @vocab_size - 1) }
+
+      mb.encode_token_ids(
+        token_ids,
+        seq_len,
+        @layers[0, depth],
         @dim,
         @n_heads,
         @head_dim,
@@ -565,8 +607,9 @@ module ML::GGUF
     end
 
     # Forward pass: token IDs → mean-pooled L2-normalized embedding
-    private def forward(tokens : Array(Int32)) : Array(Float32)
+    private def forward(tokens : Array(Int32), depth : Int32 = @n_layers) : Array(Float32)
       seq_len = tokens.size
+      raise ArgumentError.new("NomicBertMoE depth must be in 1..#{@n_layers}, got #{depth}") unless 1 <= depth <= @n_layers
 
       # 1. Token embedding lookup + type embedding + layer norm
       hidden = Array(Float32).new(seq_len * @dim, 0.0_f32)
@@ -581,7 +624,7 @@ module ML::GGUF
       # 2. Transformer blocks
       # nomic-bert uses post-norm: output = norm(x + sublayer(x))
       # The norm names (attn_output_norm, layer_output_norm) confirm post-norm.
-      @n_layers.times do |layer_idx|
+      depth.times do |layer_idx|
         lw = @layers[layer_idx]
 
         # Attention sublayer + residual + norm
