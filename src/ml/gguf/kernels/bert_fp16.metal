@@ -7,6 +7,14 @@ using namespace metal;
 
 #define FOR_UNROLL _Pragma("clang loop unroll(full)")
 
+static inline float finite_or_zero(float v) {
+    return isfinite(v) ? v : 0.0f;
+}
+
+static inline float finite_or_neg_inf(float v) {
+    return isfinite(v) ? v : -1.0e30f;
+}
+
 // ============================================================================
 // QKV split: [seq, 3*dim] half → Q, K half [n_heads, seq, head_dim]
 //                                 V_t half [n_heads, head_dim, seq]
@@ -256,19 +264,26 @@ kernel void attention_forward(
             half4 k4 = kj4[d4];
             dot += qr[d4*4]*float(k4.x) + qr[d4*4+1]*float(k4.y) + qr[d4*4+2]*float(k4.z) + qr[d4*4+3]*float(k4.w);
         }
-        float s = dot * scale;
+        float s = finite_or_neg_inf(dot * scale);
         shared[j] = s;
         local_max = max(local_max, s);
     }
 
-    float global_max = simd_max(local_max);
+    float global_max = finite_or_neg_inf(simd_max(local_max));
     float local_sum = 0.0f;
     for (uint j = lane; j < seq_len; j += 32) {
-        float e = exp(shared[j] - global_max);
+        float e = finite_or_zero(exp(shared[j] - global_max));
         shared[j] = e;
         local_sum += e;
     }
-    float inv_sum = 1.0f / simd_sum(local_sum);
+    float denom = simd_sum(local_sum);
+    if (!isfinite(denom) || denom <= 1.0e-12f) {
+        for (uint d = lane; d < head_dim; d += 32) {
+            output[i * (n_heads * head_dim) + h * head_dim + d] = half(0.0f);
+        }
+        return;
+    }
+    float inv_sum = 1.0f / denom;
     for (uint j = lane; j < seq_len; j += 32) shared[j] *= inv_sum;
     simdgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -283,7 +298,7 @@ kernel void attention_forward(
             val += shared[j]*float(v4.x) + shared[j+1]*float(v4.y) + shared[j+2]*float(v4.z) + shared[j+3]*float(v4.w);
         }
         for (; j < seq_len; j++) val += shared[j] * float(vt_row[j]);
-        output[i * (n_heads * head_dim) + h * head_dim + d] = half(val);
+        output[i * (n_heads * head_dim) + h * head_dim + d] = half(finite_or_zero(val));
     }
 }
 
@@ -332,26 +347,29 @@ kernel void attention_forward_batch(
             half4 k4 = kj4[d4];
             dot += qr[d4*4]*float(k4.x) + qr[d4*4+1]*float(k4.y) + qr[d4*4+2]*float(k4.z) + qr[d4*4+3]*float(k4.w);
         }
-        float s = dot * scale;
+        float s = finite_or_neg_inf(dot * scale);
         shared[j] = s;
         local_max = max(local_max, s);
     }
 
-    float global_max = simd_max(local_max);
+    float global_max = finite_or_neg_inf(simd_max(local_max));
     float local_sum = 0.0f;
     for (uint j = lane; j < valid_len; j += 32) {
-        float e = exp(shared[j] - global_max);
+        float e = finite_or_zero(exp(shared[j] - global_max));
         shared[j] = e;
         local_sum += e;
     }
     float denom = simd_sum(local_sum);
-    if (denom <= 1e-12f) return;
+    const uint out_base = (b * max_seq + pos) * (n_heads * head_dim) + h * head_dim;
+    if (!isfinite(denom) || denom <= 1.0e-12f) {
+        for (uint d = lane; d < head_dim; d += 32) output[out_base + d] = half(0.0f);
+        return;
+    }
     float inv_sum = 1.0f / denom;
     for (uint j = lane; j < valid_len; j += 32) shared[j] *= inv_sum;
     simdgroup_barrier(mem_flags::mem_threadgroup);
 
     const uint vt_h_off = (b * n_heads + h) * head_dim * max_seq;
-    const uint out_base = (b * max_seq + pos) * (n_heads * head_dim) + h * head_dim;
     for (uint d = lane; d < head_dim; d += 32) {
         device const half* vt_row = V_t + vt_h_off + d * max_seq;
         float val = 0.0f;
@@ -362,7 +380,7 @@ kernel void attention_forward_batch(
                    shared[j + 2] * float(v4.z) + shared[j + 3] * float(v4.w);
         }
         for (; j < valid_len; j++) val += shared[j] * float(vt_row[j]);
-        output[out_base + d] = half(val);
+        output[out_base + d] = half(finite_or_zero(val));
     }
 }
 
@@ -385,7 +403,7 @@ kernel void residual_layernorm(
 
     float local_sum = 0.0f;
     for (uint j = lane; j < dim; j += 32) {
-        float v = float(row[j]) + float(y_row[j]);
+        float v = finite_or_zero(float(row[j])) + finite_or_zero(float(y_row[j]));
         row[j] = half(v);
         local_sum += v;
     }
@@ -393,10 +411,12 @@ kernel void residual_layernorm(
 
     float local_var = 0.0f;
     for (uint j = lane; j < dim; j += 32) { float d = float(row[j]) - mean; local_var += d * d; }
-    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+    float var = simd_sum(local_var) / float(dim);
+    float inv_std = (!isfinite(var) || var < 0.0f) ? 0.0f : rsqrt(var + 1e-5f);
 
     for (uint j = lane; j < dim; j += 32) {
-        row[j] = half((float(row[j]) - mean) * inv_std * w[j] + b[j]);
+        float out = (float(row[j]) - mean) * inv_std * w[j] + b[j];
+        row[j] = half(finite_or_zero(out));
     }
 }
 
@@ -416,7 +436,7 @@ kernel void residual_layernorm_f32(
 
     float local_sum = 0.0f;
     for (uint j = lane; j < dim; j += 32) {
-        float v = float(row[j]) + y_f32[pos * dim + j];
+        float v = finite_or_zero(float(row[j])) + finite_or_zero(y_f32[pos * dim + j]);
         row[j] = half(v);
         local_sum += v;
     }
@@ -424,10 +444,12 @@ kernel void residual_layernorm_f32(
 
     float local_var = 0.0f;
     for (uint j = lane; j < dim; j += 32) { float d = float(row[j]) - mean; local_var += d * d; }
-    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+    float var = simd_sum(local_var) / float(dim);
+    float inv_std = (!isfinite(var) || var < 0.0f) ? 0.0f : rsqrt(var + 1e-5f);
 
     for (uint j = lane; j < dim; j += 32) {
-        row[j] = half((float(row[j]) - mean) * inv_std * w[j] + b[j]);
+        float out = (float(row[j]) - mean) * inv_std * w[j] + b[j];
+        row[j] = half(finite_or_zero(out));
     }
 }
 
@@ -449,7 +471,7 @@ kernel void residual_layernorm_copy(
 
     float local_sum = 0.0f;
     for (uint j = lane; j < dim; j += 32) {
-        float v = float(x[pos * dim + j]) + float(y[pos * dim + j]);
+        float v = finite_or_zero(float(x[pos * dim + j])) + finite_or_zero(float(y[pos * dim + j]));
         out[pos * dim + j] = half(v);
         local_sum += v;
     }
@@ -457,10 +479,12 @@ kernel void residual_layernorm_copy(
 
     float local_var = 0.0f;
     for (uint j = lane; j < dim; j += 32) { float d = float(out[pos * dim + j]) - mean; local_var += d * d; }
-    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+    float var = simd_sum(local_var) / float(dim);
+    float inv_std = (!isfinite(var) || var < 0.0f) ? 0.0f : rsqrt(var + 1e-5f);
 
     for (uint j = lane; j < dim; j += 32) {
-        out[pos * dim + j] = half((float(out[pos * dim + j]) - mean) * inv_std * w[j] + b[j]);
+        float normed = (float(out[pos * dim + j]) - mean) * inv_std * w[j] + b[j];
+        out[pos * dim + j] = half(finite_or_zero(normed));
     }
 }
 
@@ -504,7 +528,7 @@ kernel void gate_softmax_topk_count(
     float partial[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
     device const half* h_row = hidden + pos * dim;
     for (uint j = lane; j < dim; j += 32) {
-        float hv = float(h_row[j]);
+        float hv = finite_or_zero(float(h_row[j]));
         for (uint e = 0; e < 8; e++) {
             partial[e] += hv * gate_w[e * dim + j];
         }
@@ -517,11 +541,18 @@ kernel void gate_softmax_topk_count(
 
     // Softmax + top-k (lane 0 only, trivial for 8 elements)
     if (lane == 0) {
-        float max_g = logits[0];
-        for (uint e = 1; e < n_experts; e++) max_g = max(max_g, logits[e]);
+        float max_g = finite_or_neg_inf(logits[0]);
+        for (uint e = 1; e < n_experts; e++) {
+            logits[e] = finite_or_neg_inf(logits[e]);
+            max_g = max(max_g, logits[e]);
+        }
+        logits[0] = finite_or_neg_inf(logits[0]);
         float sum_exp = 0.0f;
-        for (uint e = 0; e < n_experts; e++) { logits[e] = exp(logits[e] - max_g); sum_exp += logits[e]; }
-        float inv_sum = 1.0f / sum_exp;
+        for (uint e = 0; e < n_experts; e++) {
+            logits[e] = finite_or_zero(exp(logits[e] - max_g));
+            sum_exp += logits[e];
+        }
+        float inv_sum = (!isfinite(sum_exp) || sum_exp <= 1.0e-12f) ? (1.0f / float(n_experts)) : (1.0f / sum_exp);
         for (uint e = 0; e < n_experts; e++) logits[e] *= inv_sum;
 
         uint out_base = pos * k;
@@ -570,12 +601,15 @@ kernel void softmax_topk(
     uint tid [[thread_position_in_grid]])
 {
     device const float* row = gate_logits + tid * n_experts;
-    float max_g = row[0];
-    for (uint e = 1; e < n_experts; e++) max_g = max(max_g, row[e]);
+    float max_g = finite_or_neg_inf(row[0]);
+    for (uint e = 1; e < n_experts; e++) max_g = max(max_g, finite_or_neg_inf(row[e]));
     float sum_exp = 0.0f;
     float probs[8];
-    for (uint e = 0; e < n_experts; e++) { probs[e] = exp(row[e] - max_g); sum_exp += probs[e]; }
-    float inv_sum = 1.0f / sum_exp;
+    for (uint e = 0; e < n_experts; e++) {
+        probs[e] = finite_or_zero(exp(finite_or_neg_inf(row[e]) - max_g));
+        sum_exp += probs[e];
+    }
+    float inv_sum = (!isfinite(sum_exp) || sum_exp <= 1.0e-12f) ? (1.0f / float(n_experts)) : (1.0f / sum_exp);
     for (uint e = 0; e < n_experts; e++) probs[e] *= inv_sum;
     uint out_base = tid * k;
     for (uint i = 0; i < k; i++) {
@@ -963,7 +997,7 @@ kernel void mean_pool_l2(
 
     for (uint d = lid; d < dim; d += 256) {
         float sum = 0.0f;
-        for (uint p = 0; p < seq_len; p++) sum += float(hidden[p * dim + d]);
+        for (uint p = 0; p < seq_len; p++) sum += finite_or_zero(float(hidden[p * dim + d]));
         float mean = sum / float(seq_len);
         output[d] = mean;
         local_norm += mean * mean;
@@ -977,7 +1011,8 @@ kernel void mean_pool_l2(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    float inv_norm = rsqrt(partial_norm[0] + 1e-12f);
+    float norm = partial_norm[0];
+    float inv_norm = (!isfinite(norm) || norm <= 1.0e-12f) ? 0.0f : rsqrt(norm + 1e-12f);
     for (uint d = lid; d < dim; d += 256) output[d] *= inv_norm;
 }
 
@@ -1007,7 +1042,7 @@ kernel void mean_pool_l2_batch(
 
     for (uint d = lid; d < dim; d += 256) {
         float sum = 0.0f;
-        for (uint p = 0; p < valid_len; p++) sum += float(hidden[(token_base + p) * dim + d]);
+        for (uint p = 0; p < valid_len; p++) sum += finite_or_zero(float(hidden[(token_base + p) * dim + d]));
         float mean = sum / float(valid_len);
         output[out_base + d] = mean;
         local_norm += mean * mean;
@@ -1021,7 +1056,8 @@ kernel void mean_pool_l2_batch(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    float inv_norm = rsqrt(partial_norm[0] + 1e-12f);
+    float norm = partial_norm[0];
+    float inv_norm = (!isfinite(norm) || norm <= 1.0e-12f) ? 0.0f : rsqrt(norm + 1e-12f);
     for (uint d = lid; d < dim; d += 256) output[out_base + d] *= inv_norm;
 }
 
@@ -1041,14 +1077,16 @@ kernel void layernorm_inplace(
     device half* row = x + pos * dim;
 
     float local_sum = 0.0f;
-    for (uint j = lane; j < dim; j += 32) local_sum += float(row[j]);
+    for (uint j = lane; j < dim; j += 32) local_sum += finite_or_zero(float(row[j]));
     float mean = simd_sum(local_sum) / float(dim);
 
     float local_var = 0.0f;
-    for (uint j = lane; j < dim; j += 32) { float d = float(row[j]) - mean; local_var += d * d; }
-    float inv_std = rsqrt(simd_sum(local_var) / float(dim) + 1e-5f);
+    for (uint j = lane; j < dim; j += 32) { float d = finite_or_zero(float(row[j])) - mean; local_var += d * d; }
+    float var = simd_sum(local_var) / float(dim);
+    float inv_std = (!isfinite(var) || var < 0.0f) ? 0.0f : rsqrt(var + 1e-5f);
 
     for (uint j = lane; j < dim; j += 32) {
-        row[j] = half((float(row[j]) - mean) * inv_std * w[j] + b[j]);
+        float out = (finite_or_zero(float(row[j])) - mean) * inv_std * w[j] + b[j];
+        row[j] = half(finite_or_zero(out));
     }
 }
