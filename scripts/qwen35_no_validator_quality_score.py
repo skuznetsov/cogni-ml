@@ -146,8 +146,11 @@ def score_row(
 
     think_leak = has_think_leak(row.get("draft_text"))
     substantive = compile_row is not None and compile_row.get("substantive_code") == "1"
-    compile_ok = compile_row is not None and compile_row.get("ok") == "1"
-    repair_ok = repair_row is not None and repair_row.get("repaired_ok") == "1"
+    # A tiny/comment-only snippet can compile and even survive "repair", but it
+    # is not useful code. Gate compile/repair credit on the substantive-code
+    # shape check so route scores do not reward placeholders like "# ...".
+    compile_ok = substantive and compile_row is not None and compile_row.get("ok") == "1"
+    repair_ok = substantive and repair_row is not None and repair_row.get("repaired_ok") == "1"
     stub = draft_stub_like(row, compile_row)
 
     score = 0.0
