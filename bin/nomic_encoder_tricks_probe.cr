@@ -175,6 +175,19 @@ def load_queries_tsv(path : String) : Array(QueryItem)
   rows
 end
 
+def parse_depths(raw : String, max_depth : Int32) : Array(Int32)
+  depths = [] of Int32
+  raw.split(",").each do |part|
+    value = part.strip
+    next if value.empty?
+    depth = value.to_i
+    raise "depth must be in 1..#{max_depth}, got #{depth}" unless 1 <= depth <= max_depth
+    depths << depth
+  end
+  raise "--depths produced no depths" if depths.empty?
+  depths.uniq.sort
+end
+
 model_path = DEFAULT_MODEL
 limit_docs = 0
 limit_queries = 0
@@ -185,6 +198,7 @@ summary_only = false
 docs_tsv = nil.as(String?)
 queries_tsv = nil.as(String?)
 rerank_k = 3
+depths_arg = nil.as(String?)
 
 OptionParser.parse do |p|
   p.banner = "Usage: nomic_encoder_tricks_probe [options]"
@@ -193,6 +207,7 @@ OptionParser.parse do |p|
   p.on("--docs-tsv=PATH", "External docs TSV: id<TAB>text") { |v| docs_tsv = v }
   p.on("--queries-tsv=PATH", "External queries TSV: id<TAB>expected_doc<TAB>text") { |v| queries_tsv = v }
   p.on("--rerank-k=N", "Candidate count for shallow->full rerank metrics (default: 3)") { |v| rerank_k = v.to_i }
+  p.on("--depths=LIST", "Comma-separated depths to evaluate; full depth is always computed for rerank") { |v| depths_arg = v }
   p.on("--limit-docs=N", "Limit built-in docs") { |v| limit_docs = v.to_i }
   p.on("--limit-queries=N", "Limit built-in queries") { |v| limit_queries = v.to_i }
   p.on("--backend=NAME", "metal | f32 | f16sim (default: metal)") { |v| backend_name = v }
@@ -254,6 +269,12 @@ else
 end
 load_ms = (Time.instant - started).total_milliseconds
 
+full_depth = model.n_layers
+eval_depths = depths_arg ? parse_depths(depths_arg.not_nil!, model.n_layers) : (1..model.n_layers).to_a
+compute_depths = (eval_depths + [full_depth]).uniq.sort
+depth_index = {} of Int32 => Int32
+compute_depths.each_with_index { |depth, i| depth_index[depth] = i }
+
 layer_vectors = Array(Array(Array(Float32))).new(texts.size)
 token_counts = Array(Int32).new(texts.size, 0)
 depth_ms = Array(Float64).new(model.n_layers, 0.0)
@@ -261,7 +282,7 @@ depth_ms = Array(Float64).new(model.n_layers, 0.0)
 texts.each_with_index do |text, i|
   tokens = model.tokenize(text)
   token_counts[i] = tokens.size
-  layer_vectors << (1..model.n_layers).map do |depth|
+  layer_vectors << compute_depths.map do |depth|
     t_depth = Time.instant
     vec = model.embed_depth(text, depth)
     depth_ms[depth - 1] += (Time.instant - t_depth).total_milliseconds
@@ -269,20 +290,21 @@ texts.each_with_index do |text, i|
   end.to_a
 end
 
-full_depth = model.n_layers
-full_docs = layer_vectors[0, docs.size].map { |layers| layers[full_depth - 1] }
-full_queries = layer_vectors[docs.size, queries.size].map { |layers| layers[full_depth - 1] }
+full_depth_i = depth_index[full_depth]
+full_docs = layer_vectors[0, docs.size].map { |layers| layers[full_depth_i] }
+full_queries = layer_vectors[docs.size, queries.size].map { |layers| layers[full_depth_i] }
 
 puts "model=#{model_path}"
 puts "backend=#{backend_name}"
 puts "suite=#{suite}"
 puts "docs_tsv=#{docs_tsv || ""} queries_tsv=#{queries_tsv || ""}"
-puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} dim=#{model.dim} rerank_k=#{rerank_k} tokens=#{token_counts.join(",")}"
+puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} eval_depths=#{eval_depths.join(",")} computed_depths=#{compute_depths.join(",")} dim=#{model.dim} rerank_k=#{rerank_k} tokens=#{token_counts.join(",")}"
 puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tshallow_has_label@k\tshallow_has_full@k\tfull_rerank_label@k\tfull_rerank_full@k\tdetails"
 
-(1..model.n_layers).each do |depth|
-  doc_vecs = layer_vectors[0, docs.size].map { |layers| layers[depth - 1] }
-  query_vecs = layer_vectors[docs.size, queries.size].map { |layers| layers[depth - 1] }
+eval_depths.each do |depth|
+  current_depth_i = depth_index[depth]
+  doc_vecs = layer_vectors[0, docs.size].map { |layers| layers[current_depth_i] }
+  query_vecs = layer_vectors[docs.size, queries.size].map { |layers| layers[current_depth_i] }
 
   cosines = [] of Float64
   label_hits = 0
