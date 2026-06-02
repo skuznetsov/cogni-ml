@@ -1,4 +1,5 @@
 require "option_parser"
+require "set"
 {% unless flag?(:cpu_only) %}
   require "../src/ml/gguf/metal_backend"
 {% end %}
@@ -109,7 +110,8 @@ def cosine(a : Array(Float32), b : Array(Float32)) : Float64
     nb += bv * bv
   end
   return 0.0 if na <= 0.0 || nb <= 0.0
-  dot / Math.sqrt(na * nb)
+  score = dot / Math.sqrt(na * nb)
+  score.nan? ? 0.0 : score
 end
 
 def mean_pool_l2(hidden : Array(Float32), seq_len : Int32, dim : Int32) : Array(Float32)
@@ -137,17 +139,59 @@ def ranked_docs(query_vec : Array(Float32), docs : Array(Array(Float32)), names 
   rows
 end
 
+def ranked_docs_subset(query_vec : Array(Float32), docs : Array(Array(Float32)), names : Array(String), candidate_names : Array(String)) : Array(Tuple(String, Float64))
+  candidates = Set(String).new(candidate_names)
+  rows = [] of Tuple(String, Float64)
+  docs.each_with_index do |doc_vec, i|
+    name = names[i]
+    next unless candidates.includes?(name)
+    rows << {name, cosine(query_vec, doc_vec)}
+  end
+  rows.sort_by! { |pair| -pair[1] }
+  rows
+end
+
+def load_docs_tsv(path : String) : Array(TextItem)
+  rows = [] of TextItem
+  File.each_line(path) do |line|
+    stripped = line.strip
+    next if stripped.empty? || stripped.starts_with?("#")
+    parts = stripped.split('	', 2)
+    raise "bad docs TSV row in #{path}: expected id<TAB>text, got #{line.inspect}" unless parts.size == 2
+    rows << TextItem.new(parts[0], parts[1])
+  end
+  rows
+end
+
+def load_queries_tsv(path : String) : Array(QueryItem)
+  rows = [] of QueryItem
+  File.each_line(path) do |line|
+    stripped = line.strip
+    next if stripped.empty? || stripped.starts_with?("#")
+    parts = stripped.split('	', 3)
+    raise "bad queries TSV row in #{path}: expected id<TAB>expected_doc<TAB>text, got #{line.inspect}" unless parts.size == 3
+    rows << QueryItem.new(parts[0], parts[2], parts[1])
+  end
+  rows
+end
+
 model_path = DEFAULT_MODEL
 limit_docs = 0
 limit_queries = 0
 backend_name = "metal"
 suite = "toy"
 show_results = false
+docs_tsv = nil.as(String?)
+queries_tsv = nil.as(String?)
+rerank_k = 3
 
 OptionParser.parse do |p|
   p.banner = "Usage: nomic_encoder_tricks_probe [options]"
   p.on("--model=PATH", "GGUF model path") { |v| model_path = v }
   p.on("--suite=NAME", "toy | hard | combined (default: toy)") { |v| suite = v }
+  p.on("--docs-tsv=PATH", "External docs TSV: id<TAB>text") { |v| docs_tsv = v }
+  p.on("--queries-tsv=PATH", "External queries TSV: id<TAB>expected_doc<TAB>text") { |v| queries_tsv = v }
+  p.on("--rerank-k=N", "Candidate count for shallow->full rerank metrics (default: 3)") { |v| rerank_k = v.to_i }
   p.on("--limit-docs=N", "Limit built-in docs") { |v| limit_docs = v.to_i }
   p.on("--limit-queries=N", "Limit built-in queries") { |v| limit_queries = v.to_i }
   p.on("--backend=NAME", "metal | f32 | f16sim (default: metal)") { |v| backend_name = v }
@@ -163,18 +207,30 @@ unless File.exists?(model_path)
   exit 2
 end
 
-docs_all, queries_all = case suite
-                        when "toy"
-                          {TOY_DOCS, TOY_QUERIES}
-                        when "hard"
-                          {HARD_DOCS, HARD_QUERIES}
-                        when "combined"
-                          {TOY_DOCS + HARD_DOCS, TOY_QUERIES + HARD_QUERIES}
+docs_all, queries_all = if docs_tsv || queries_tsv
+                          raise "--docs-tsv and --queries-tsv must be provided together" unless docs_tsv && queries_tsv
+                          {load_docs_tsv(docs_tsv.not_nil!), load_queries_tsv(queries_tsv.not_nil!)}
                         else
-                          raise "unknown suite: #{suite}"
+                          case suite
+                          when "toy"
+                            {TOY_DOCS, TOY_QUERIES}
+                          when "hard"
+                            {HARD_DOCS, HARD_QUERIES}
+                          when "combined"
+                            {TOY_DOCS + HARD_DOCS, TOY_QUERIES + HARD_QUERIES}
+                          else
+                            raise "unknown suite: #{suite}"
+                          end
                         end
 docs = limit_docs > 0 ? docs_all.first(limit_docs) : docs_all
 queries = limit_queries > 0 ? queries_all.first(limit_queries) : queries_all
+raise "docs set is empty" if docs.empty?
+raise "queries set is empty" if queries.empty?
+name_set = Set(String).new(docs.map(&.name))
+queries.each do |query|
+  raise "query #{query.name.inspect} expects missing doc #{query.expected_doc.inspect}" unless name_set.includes?(query.expected_doc)
+end
+rerank_k = rerank_k.clamp(1, docs.size)
 texts = docs.map(&.text) + queries.map(&.text)
 names = docs.map(&.name)
 
@@ -218,8 +274,9 @@ full_queries = layer_vectors[docs.size, queries.size].map { |layers| layers[full
 puts "model=#{model_path}"
 puts "backend=#{backend_name}"
 puts "suite=#{suite}"
-puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} dim=#{model.dim} tokens=#{token_counts.join(",")}"
-puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tdetails"
+puts "docs_tsv=#{docs_tsv || ""} queries_tsv=#{queries_tsv || ""}"
+puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} dim=#{model.dim} rerank_k=#{rerank_k} tokens=#{token_counts.join(",")}"
+puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tshallow_has_label@k\tshallow_has_full@k\tfull_rerank_label@k\tfull_rerank_full@k\tdetails"
 
 (1..model.n_layers).each do |depth|
   doc_vecs = layer_vectors[0, docs.size].map { |layers| layers[depth - 1] }
@@ -230,6 +287,10 @@ puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlab
   label_top3_hits = 0
   full_agree = 0
   full_top3_contains_depth_top1 = 0
+  shallow_has_label_k = 0
+  shallow_has_full_k = 0
+  full_rerank_label_k = 0
+  full_rerank_full_k = 0
   result_parts = [] of String
   mismatch_parts = [] of String
 
@@ -241,14 +302,21 @@ puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlab
     score = rank[0][1]
     full_pred = full_rank[0][0]
     top3 = rank.first(3).map { |pair| pair[0] }
+    topk = rank.first(rerank_k).map { |pair| pair[0] }
     full_top3 = full_rank.first(3).map { |pair| pair[0] }
+    rerank = ranked_docs_subset(full_queries[qi], full_docs, names, topk)
+    rerank_pred = rerank.empty? ? "" : rerank[0][0]
     label_hits += 1 if pred == queries[qi].expected_doc
     label_top3_hits += 1 if top3.includes?(queries[qi].expected_doc)
     full_agree += 1 if pred == full_pred
     full_top3_contains_depth_top1 += 1 if full_top3.includes?(pred)
-    result_parts << "#{queries[qi].name}:#{pred}:#{score.round(4)}:top3=#{top3.join("|")}"
-    if pred != queries[qi].expected_doc || pred != full_pred
-      mismatch_parts << "#{queries[qi].name}:pred=#{pred}:expected=#{queries[qi].expected_doc}:full=#{full_pred}:top3=#{top3.join("|")}"
+    shallow_has_label_k += 1 if topk.includes?(queries[qi].expected_doc)
+    shallow_has_full_k += 1 if topk.includes?(full_pred)
+    full_rerank_label_k += 1 if rerank_pred == queries[qi].expected_doc
+    full_rerank_full_k += 1 if rerank_pred == full_pred
+    result_parts << "#{queries[qi].name}:#{pred}:#{score.round(4)}:top3=#{top3.join("|")}:rerank=#{rerank_pred}"
+    if pred != queries[qi].expected_doc || pred != full_pred || rerank_pred != full_pred
+      mismatch_parts << "#{queries[qi].name}:pred=#{pred}:expected=#{queries[qi].expected_doc}:full=#{full_pred}:rerank=#{rerank_pred}:top3=#{top3.join("|")}:topk=#{topk.join("|")}"
     end
   end
 
@@ -259,5 +327,5 @@ puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlab
             else
               mismatch_parts.empty? ? "ok" : mismatch_parts.join(",")
             end
-  puts "#{depth}\t#{depth_ms[depth - 1].round(3)}\t#{(depth_ms[depth - 1] / texts.size).round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{label_hits}/#{queries.size}\t#{label_top3_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{full_top3_contains_depth_top1}/#{queries.size}\t#{details}"
+  puts "#{depth}\t#{depth_ms[depth - 1].round(3)}\t#{(depth_ms[depth - 1] / texts.size).round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{label_hits}/#{queries.size}\t#{label_top3_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{full_top3_contains_depth_top1}/#{queries.size}\t#{shallow_has_label_k}/#{queries.size}\t#{shallow_has_full_k}/#{queries.size}\t#{full_rerank_label_k}/#{queries.size}\t#{full_rerank_full_k}/#{queries.size}\t#{details}"
 end
