@@ -173,6 +173,7 @@ def main() -> int:
     ap.add_argument("--tokens", type=int, default=768)
     ap.add_argument("--rank", type=int, default=64)
     ap.add_argument("--layers", default="0,2")
+    ap.add_argument("--exact-first", type=int, default=0, help="Emit N exact greedy tokens before the no-validator draft chain")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--skip-crystal-check", action="store_true")
     ap.add_argument("--extra-probe-arg", action="append", default=[], help="Additional argument passed through to the probe; may be repeated")
@@ -206,6 +207,8 @@ def main() -> int:
             "--simulate-self-draft-gpu-chain-text",
             "--simulate-self-draft-gpu-chain-top2",
         ]
+        if args.exact_first > 0:
+            cmd.append(f"--simulate-self-draft-gpu-chain-exact-first={args.exact_first}")
         cmd.extend(args.extra_probe_arg)
         if args.model is not None:
             cmd.insert(4, f"--model={args.model}")
