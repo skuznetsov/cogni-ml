@@ -962,17 +962,44 @@ module ML::GGUF
           else
             total_routing = token_count * n_experts_used
 
-            enc.set_pipeline(pipe("moe_route_and_dispatch"))
-            enc.set_buffer(ws.routing_ids, 0); enc.set_buffer(ws.routing_wts, 1)
-            enc.set_buffer(ws.gather_map, 2, w); enc.set_buffer(ws.scatter_wts, 3, w)
-            enc.set_buffer(ws.expert_counts, 4, rw); enc.set_buffer(ws.expert_offsets, 5, w)
-            enc.set_buffer(ws.dispatch_args, 6, w)
-            enc.set_value(n_experts_used.to_u32, 7); enc.set_value(n_experts.to_u32, 8)
-            enc.set_value(batch, 9)
-            enc.set_value(ffn_dim_u, 10); enc.set_value(dim_u, 11); enc.set_value(dim_u, 12)
-            tg_sz = {token_count, 1024}.min
-            enc.dispatch_threadgroups({1, 1, 1}, {tg_sz, 1, 1})
-            enc.memory_barrier
+            if token_count <= 1024
+              enc.set_pipeline(pipe("moe_route_and_dispatch"))
+              enc.set_buffer(ws.routing_ids, 0); enc.set_buffer(ws.routing_wts, 1)
+              enc.set_buffer(ws.gather_map, 2, w); enc.set_buffer(ws.scatter_wts, 3, w)
+              enc.set_buffer(ws.expert_counts, 4, rw); enc.set_buffer(ws.expert_offsets, 5, w)
+              enc.set_buffer(ws.dispatch_args, 6, w)
+              enc.set_value(n_experts_used.to_u32, 7); enc.set_value(n_experts.to_u32, 8)
+              enc.set_value(batch, 9)
+              enc.set_value(ffn_dim_u, 10); enc.set_value(dim_u, 11); enc.set_value(dim_u, 12)
+              enc.dispatch_threadgroups({1, 1, 1}, {token_count, 1, 1})
+              enc.memory_barrier
+            else
+              # The fused route kernel uses a threadgroup barrier and is legal
+              # only while the whole token window fits in one threadgroup.
+              # Wider variable-length batches need command-buffer barriers
+              # between prefix, counter reset, and routing-map construction.
+              enc.set_pipeline(pipe("moe_prefix_sum"))
+              enc.set_buffer(ws.expert_counts, 0)
+              enc.set_buffer(ws.expert_offsets, 1, w)
+              enc.set_value(n_experts.to_u32, 2)
+              enc.dispatch_1d(1, 1)
+              enc.memory_barrier
+
+              enc.set_pipeline(pipe("zero_int"))
+              enc.set_buffer(ws.expert_counts, 0, w)
+              enc.dispatch_1d(n_experts, 256)
+              enc.memory_barrier
+
+              enc.set_pipeline(pipe("moe_build_routing"))
+              enc.set_buffer(ws.routing_ids, 0); enc.set_buffer(ws.routing_wts, 1)
+              enc.set_buffer(ws.gather_map, 2, w); enc.set_buffer(ws.scatter_wts, 3, w)
+              enc.set_buffer(ws.expert_offsets, 4)
+              enc.set_buffer(ws.expert_counts, 5, rw)
+              enc.set_value(n_experts_used.to_u32, 6)
+              enc.set_value(n_experts.to_u32, 7)
+              enc.dispatch_1d(token_count, 256)
+              enc.memory_barrier
+            end
 
             enc.set_pipeline(pipe("moe_gather"))
             enc.set_buffer(h_out, 0); enc.set_buffer(ws.moe_input, 1, w); enc.set_buffer(ws.gather_map, 2)

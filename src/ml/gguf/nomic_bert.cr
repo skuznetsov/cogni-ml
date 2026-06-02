@@ -444,7 +444,7 @@ module ML::GGUF
 
       {% unless flag?(:cpu_only) %}
       if @backend.is_a?(MetalBackend)
-        return embed_gpu_batch(token_batches, @layers[0, depth], max_batch || configured_metal_depth_batch_size)
+        return embed_gpu_batch(token_batches, @layers[0, depth], max_batch || configured_metal_batch_size)
       end
       {% end %}
 
@@ -615,15 +615,6 @@ module ML::GGUF
       val > 0 ? val.to_i32 : 8_i32
     end
 
-    private def configured_metal_depth_batch_size : Int32
-      raw = ENV["EMBED_NATIVE_DEPTH_MAX_BATCH"]?
-      val = raw.try(&.to_i?)
-      return val.to_i32 if val && val > 0
-
-      # Wider variable-length depth batches currently diverge on long Markdown
-      # corpora; keep the exact early-exit product path on the verified corridor.
-      {configured_metal_batch_size, 2}.min.to_i32
-    end
     {% end %}
 
     # Tokenize text → token IDs (delegates to SentencePiece unigram tokenizer)
