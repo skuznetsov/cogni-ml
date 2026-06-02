@@ -139,6 +139,16 @@ def ranked_docs(query_vec : Array(Float32), docs : Array(Array(Float32)), names 
   rows
 end
 
+def vector_norm(a : Array(Float32)) : Float64
+  sum = 0.0_f64
+  a.each do |v|
+    return Float64::NAN unless v.finite?
+    vf = v.to_f64
+    sum += vf * vf
+  end
+  Math.sqrt(sum)
+end
+
 def ranked_docs_subset(query_vec : Array(Float32), docs : Array(Array(Float32)), names : Array(String), candidate_names : Array(String)) : Array(Tuple(String, Float64))
   candidates = Set(String).new(candidate_names)
   rows = [] of Tuple(String, Float64)
@@ -250,6 +260,7 @@ end
 rerank_k = rerank_k.clamp(1, docs.size)
 texts = docs.map(&.text) + queries.map(&.text)
 names = docs.map(&.name)
+text_names = docs.map(&.name) + queries.map(&.name)
 
 started = Time.instant
 case backend_name
@@ -299,12 +310,26 @@ puts "backend=#{backend_name}"
 puts "suite=#{suite}"
 puts "docs_tsv=#{docs_tsv || ""} queries_tsv=#{queries_tsv || ""}"
 puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} eval_depths=#{eval_depths.join(",")} computed_depths=#{compute_depths.join(",")} dim=#{model.dim} rerank_k=#{rerank_k} tokens=#{token_counts.join(",")}"
-puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tshallow_has_label@k\tshallow_has_full@k\tfull_rerank_label@k\tfull_rerank_full@k\tdetails"
+puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tinvalid_vecs\tzeroish_vecs\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tshallow_has_label@k\tshallow_has_full@k\tfull_rerank_label@k\tfull_rerank_full@k\tcandidate_union@k\tcandidate_doc_pct\tlazy_full_doc_savings_pct\tdetails"
 
 eval_depths.each do |depth|
   current_depth_i = depth_index[depth]
   doc_vecs = layer_vectors[0, docs.size].map { |layers| layers[current_depth_i] }
   query_vecs = layer_vectors[docs.size, queries.size].map { |layers| layers[current_depth_i] }
+  all_vecs = doc_vecs + query_vecs
+  invalid_vecs = 0
+  zeroish_vecs = 0
+  health_parts = [] of String
+  all_vecs.each_with_index do |vec, vi|
+    norm = vector_norm(vec)
+    if norm.nan?
+      invalid_vecs += 1
+      health_parts << "invalid=#{text_names[vi]}" if health_parts.size < 8
+    elsif norm < 1.0e-6
+      zeroish_vecs += 1
+      health_parts << "zeroish=#{text_names[vi]}" if health_parts.size < 8
+    end
+  end
 
   cosines = [] of Float64
   label_hits = 0
@@ -317,6 +342,7 @@ eval_depths.each do |depth|
   full_rerank_full_k = 0
   result_parts = [] of String
   mismatch_parts = [] of String
+  candidate_union = Set(String).new
 
   query_vecs.each_with_index do |qv, qi|
     cosines << cosine(qv, full_queries[qi])
@@ -327,6 +353,7 @@ eval_depths.each do |depth|
     full_pred = full_rank[0][0]
     top3 = rank.first(3).map { |pair| pair[0] }
     topk = rank.first(rerank_k).map { |pair| pair[0] }
+    topk.each { |name| candidate_union.add(name) }
     full_top3 = full_rank.first(3).map { |pair| pair[0] }
     rerank = ranked_docs_subset(full_queries[qi], full_docs, names, topk)
     rerank_pred = rerank.empty? ? "" : rerank[0][0]
@@ -346,12 +373,19 @@ eval_depths.each do |depth|
 
   mean_cos = cosines.sum / cosines.size
   min_cos = cosines.min
+  candidate_doc_pct = 100.0 * candidate_union.size / docs.size
+  lazy_full_doc_savings_pct = 100.0 * (docs.size - candidate_union.size) / docs.size
   details = if show_results
               result_parts.join(",")
             elsif summary_only
-              mismatch_parts.empty? ? "ok" : "mismatches=#{mismatch_parts.size}"
+              parts = [] of String
+              parts << "mismatches=#{mismatch_parts.size}" unless mismatch_parts.empty?
+              parts.concat(health_parts)
+              parts.empty? ? "ok" : parts.join(",")
             else
-              mismatch_parts.empty? ? "ok" : mismatch_parts.join(",")
+              parts = mismatch_parts.dup
+              parts.concat(health_parts)
+              parts.empty? ? "ok" : parts.join(",")
             end
-  puts "#{depth}\t#{depth_ms[depth - 1].round(3)}\t#{(depth_ms[depth - 1] / texts.size).round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{label_hits}/#{queries.size}\t#{label_top3_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{full_top3_contains_depth_top1}/#{queries.size}\t#{shallow_has_label_k}/#{queries.size}\t#{shallow_has_full_k}/#{queries.size}\t#{full_rerank_label_k}/#{queries.size}\t#{full_rerank_full_k}/#{queries.size}\t#{details}"
+  puts "#{depth}\t#{depth_ms[depth - 1].round(3)}\t#{(depth_ms[depth - 1] / texts.size).round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{invalid_vecs}\t#{zeroish_vecs}\t#{label_hits}/#{queries.size}\t#{label_top3_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{full_top3_contains_depth_top1}/#{queries.size}\t#{shallow_has_label_k}/#{queries.size}\t#{shallow_has_full_k}/#{queries.size}\t#{full_rerank_label_k}/#{queries.size}\t#{full_rerank_full_k}/#{queries.size}\t#{candidate_union.size}/#{docs.size}\t#{candidate_doc_pct.round(2)}\t#{lazy_full_doc_savings_pct.round(2)}\t#{details}"
 end
