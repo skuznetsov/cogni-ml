@@ -5,7 +5,7 @@ require "../src/ml/gguf/qwen35_weights"
 DEFAULT_MODEL_PATH = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
 def usage(io : IO) : Nil
-  io << "Usage: qwen35_gguf_info [--model PATH] [--load-weights] [--list-tensors]\n"
+  io << "Usage: qwen35_gguf_info [--model PATH] [--load-weights] [--list-tensors] [--print-chat-template]\n"
   io << "\n"
   io << "CPU-only Qwen 3.5/3.6 GGUF metadata smoke. Build with -Dcpu_only on Linux/CUDA hosts.\n"
   io << "\n"
@@ -13,12 +13,15 @@ def usage(io : IO) : Nil
   io << "  --model PATH     GGUF file path. Defaults to QWEN35_MODEL or the 9B LM Studio path.\n"
   io << "  --load-weights   Also instantiate Qwen35Weights without Metal registration.\n"
   io << "  --list-tensors   Print tensor inventory lines after the summary.\n"
+  io << "  --print-chat-template\n"
+  io << "                   Print tokenizer.chat_template metadata without scanning tensor data.\n"
   io << "  -h, --help       Show this help.\n"
 end
 
 model_path = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL_PATH
 load_weights = false
 list_tensors = false
+print_chat_template = false
 
 args = ARGV.dup
 until args.empty?
@@ -30,6 +33,8 @@ until args.empty?
     load_weights = true
   when "--list-tensors"
     list_tensors = true
+  when "--print-chat-template"
+    print_chat_template = true
   when "-h", "--help"
     usage(STDOUT)
     exit 0
@@ -100,4 +105,12 @@ if list_tensors
     dims = tensor.dims.join("x")
     puts "tensor=#{tensor.name}\tdims=#{dims}\ttype=#{tensor.type.name}\tbytes=#{tensor.data_bytes}"
   end
+end
+
+if print_chat_template
+  puts "chat_template<<EOF"
+  if template = gguf.get_string("tokenizer.chat_template")
+    puts template
+  end
+  puts "EOF"
 end

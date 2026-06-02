@@ -21,6 +21,24 @@ describe ML::GGUF::Qwen35Chat do
     rendered.ends_with?("<|im_start|>assistant\n").should be_true
   end
 
+  it "renders Qwen no-thinking generation prompt when requested" do
+    rendered = ML::GGUF::Qwen35Chat.render_user_prompt(
+      "Write Crystal code.",
+      enable_thinking: false,
+    )
+
+    rendered.should end_with("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+  end
+
+  it "renders Qwen thinking generation prompt when explicitly enabled" do
+    rendered = ML::GGUF::Qwen35Chat.render_user_prompt(
+      "Think before answering.",
+      enable_thinking: true,
+    )
+
+    rendered.should end_with("<|im_start|>assistant\n<think>\n")
+  end
+
   it "parses Qwen XML tool calls with multiline parameters" do
     text = "I will call it.\n<tool_call>\n<function=get_weather>\n<parameter=city>\nParis\n</parameter>\n<parameter=notes>\nline one\nline two\n</parameter>\n</function>\n</tool_call>"
     calls = ML::GGUF::Qwen35Chat.parse_tool_calls(text)

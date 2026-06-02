@@ -116,6 +116,14 @@ def repair_common_crystal_syntax(code: str, error: str) -> tuple[str, list[str]]
     return new_code, repairs
 
 
+def eof_likely_needs_end(error: str) -> bool:
+    return "expecting identifier 'end', not 'EOF'" in error or (
+        "unexpected token: EOF" in error
+        and "end" in error
+        and ("expecting" in error or "not 'EOF'" in error)
+    )
+
+
 def compile_code(code: str, *, path: Path, log_path: Path, run_safe: Path, crystal: str, timeout: int, max_mem_mb: int) -> tuple[bool, str]:
     path.write_text(code if code.endswith("\n") else code + "\n", encoding="utf-8")
     rc = run_to_file(
@@ -139,7 +147,7 @@ def repair_one(row: dict[str, str], *, out_dir: Path, run_safe: Path, crystal: s
 
     ok, err = compile_code(code, path=candidate_path, log_path=log_path, run_safe=run_safe, crystal=crystal, timeout=timeout, max_mem_mb=max_mem_mb)
     appended = 0
-    while not ok and "expecting identifier 'end', not 'EOF'" in err and appended < max_append_end:
+    while not ok and eof_likely_needs_end(err) and appended < max_append_end:
         code = code.rstrip() + "\nend\n"
         appended += 1
         ok, err = compile_code(code, path=candidate_path, log_path=log_path, run_safe=run_safe, crystal=crystal, timeout=timeout, max_mem_mb=max_mem_mb)

@@ -31,6 +31,12 @@ TEXT_RE = re.compile(r'draft_text=("(?:[^"\\]|\\.)*") exact_text=("(?:[^"\\]|\\.
 FIELD_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)=([^\s]+)")
 CODE_RE = re.compile(r"```(?:crystal)?\n(.*?)\n```", re.S)
 
+ASSISTANT_PREFILLS = {
+    "none": "",
+    "crystal-fence": "```crystal\n",
+    "final-crystal-fence": "Final answer:\n```crystal\n",
+}
+
 
 def load_prompts(path: Path) -> list[PromptCase]:
     cases: list[PromptCase] = []
@@ -46,6 +52,25 @@ def load_prompts(path: Path) -> list[PromptCase]:
             raise ValueError(f"{path}:{lineno}: missing {exc.args[0]!r}") from exc
         cases.append(PromptCase(name=name, prompt=prompt))
     return cases
+
+
+def qwen_chat_prompt(prompt: str, *, enable_thinking: bool | None) -> str:
+    rendered = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+    if enable_thinking is False:
+        rendered += "<think>\n\n</think>\n\n"
+    elif enable_thinking is True:
+        rendered += "<think>\n"
+    return rendered
+
+
+def apply_prompt_mode(prompt: str, *, qwen_chat: str, assistant_prefill: str) -> str:
+    if qwen_chat == "no-think":
+        rendered = qwen_chat_prompt(prompt, enable_thinking=False)
+    elif qwen_chat == "think":
+        rendered = qwen_chat_prompt(prompt, enable_thinking=True)
+    else:
+        rendered = prompt
+    return rendered + ASSISTANT_PREFILLS[assistant_prefill]
 
 
 def run_to_file(cmd: list[str], path: Path, *, timeout: int | None = None) -> int:
@@ -112,6 +137,17 @@ def first_code_block(text: str) -> str:
     return ""
 
 
+def first_code_candidate(text: str, *, implicit_open_fence: bool) -> str:
+    if implicit_open_fence:
+        close = text.find("```")
+        return text[:close] if close >= 0 else text
+    return first_code_block(text)
+
+
+def looks_like_crystal_code(code: str) -> bool:
+    return bool(re.search(r"\b(class|module|struct|enum|def|require|getter|property|record)\b|@[a-zA-Z_]", code))
+
+
 def crystal_check(code: str, *, out_path: Path, crystal: str, timeout: int, max_mem_mb: int, run_safe: Path) -> tuple[bool, str]:
     if not code.strip():
         return (False, "no_code_block")
@@ -139,10 +175,10 @@ def classify(
     exact_ok: bool,
     *,
     compile_checked: bool,
+    has_code: bool,
 ) -> str:
     lcs = ratio(metrics.get("lcs_agreement", "0/0"))
     positional = ratio(metrics.get("agreement", "0/0"))
-    has_code = bool(first_code_block(draft)) and bool(first_code_block(exact))
     word_ratio = difflib.SequenceMatcher(None, exact.split(), draft.split()).ratio()
     if not has_code:
         if lcs >= 0.75 and word_ratio >= 0.65:
@@ -174,6 +210,10 @@ def main() -> int:
     ap.add_argument("--rank", type=int, default=64)
     ap.add_argument("--layers", default="0,2")
     ap.add_argument("--exact-first", type=int, default=0, help="Emit N exact greedy tokens before the no-validator draft chain")
+    ap.add_argument("--qwen-chat", choices=["none", "think", "no-think"], default="none",
+                    help="Wrap each raw prompt with the Qwen chat generation prefix; no-think matches enable_thinking=false")
+    ap.add_argument("--assistant-prefill", choices=sorted(ASSISTANT_PREFILLS), default="none",
+                    help="Append a fixed assistant prefix after the raw/chat prompt; crystal-fence starts generation inside a code block")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--skip-crystal-check", action="store_true")
     ap.add_argument("--extra-probe-arg", action="append", default=[], help="Additional argument passed through to the probe; may be repeated")
@@ -188,6 +228,7 @@ def main() -> int:
     for case in cases:
         started = time.time()
         log_path = args.out_dir / f"{case.name}.log"
+        prompt = apply_prompt_mode(case.prompt, qwen_chat=args.qwen_chat, assistant_prefill=args.assistant_prefill)
         cmd = [
             str(args.run_safe),
             str(args.binary),
@@ -195,7 +236,7 @@ def main() -> int:
             str(args.max_mem_mb),
             "--prompt-as-prefix",
             f"--prompt-name={case.name}",
-            f"--prompt={case.prompt}",
+            f"--prompt={prompt}",
             f"--tokens={args.tokens}",
             "--calib-tokens=10000",
             f"--ranks={args.rank}",
@@ -240,8 +281,9 @@ def main() -> int:
         exact_path = args.out_dir / f"{case.name}.exact.txt"
         draft_path.write_text(draft, encoding="utf-8")
         exact_path.write_text(exact, encoding="utf-8")
-        draft_code = first_code_block(draft)
-        exact_code = first_code_block(exact)
+        implicit_open_fence = ASSISTANT_PREFILLS[args.assistant_prefill].endswith("```crystal\n")
+        draft_code = first_code_candidate(draft, implicit_open_fence=implicit_open_fence)
+        exact_code = first_code_candidate(exact, implicit_open_fence=implicit_open_fence)
         if args.skip_crystal_check:
             draft_ok, draft_err = False, "skipped"
             exact_ok, exact_err = False, "skipped"
@@ -273,8 +315,11 @@ def main() -> int:
                 draft_ok,
                 exact_ok,
                 compile_checked=not args.skip_crystal_check,
+                has_code=looks_like_crystal_code(draft_code) and looks_like_crystal_code(exact_code),
             ),
             "returncode": returncode,
+            "prompt_mode": args.qwen_chat,
+            "assistant_prefill": args.assistant_prefill,
             "agreement": metrics.get("agreement", ""),
             "agreement_ratio": f"{ratio(metrics.get('agreement', '0/0')):.6f}",
             "lcs_agreement": metrics.get("lcs_agreement", ""),
@@ -303,7 +348,7 @@ def main() -> int:
         }
         rows.append(row)
         print(
-            f"{case.name}\t{row['status']}\tagreement={row['agreement']}\t"
+            f"{case.name}\t{row['status']}\tmode={args.qwen_chat}/{args.assistant_prefill}\tagreement={row['agreement']}\t"
             f"lcs={row['lcs_agreement']}\tword={row['word_ratio']}\t"
             f"compile={row['draft_compile']}/{row['exact_compile']}\tlog={log_path}",
             flush=True,
@@ -314,6 +359,8 @@ def main() -> int:
         "name",
         "status",
         "returncode",
+        "prompt_mode",
+        "assistant_prefill",
         "agreement",
         "agreement_ratio",
         "lcs_agreement",

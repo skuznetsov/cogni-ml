@@ -19,7 +19,8 @@ module ML::GGUF
 
     def self.render(messages : Array(Message),
                     tools : Array(JSON::Any) = [] of JSON::Any,
-                    add_generation_prompt : Bool = true) : String
+                    add_generation_prompt : Bool = true,
+                    enable_thinking : Bool? = nil) : String
       raise ArgumentError.new("Qwen35Chat.render requires at least one message") if messages.empty?
 
       String.build do |io|
@@ -48,18 +49,19 @@ module ML::GGUF
         messages[start_index..].each do |message|
           emit_message(io, message)
         end
-        io << "<|im_start|>assistant\n" if add_generation_prompt
+        emit_generation_prompt(io, enable_thinking) if add_generation_prompt
       end
     end
 
     def self.render_user_prompt(prompt : String,
                                 system : String? = nil,
                                 tools : Array(JSON::Any) = [] of JSON::Any,
-                                add_generation_prompt : Bool = true) : String
+                                add_generation_prompt : Bool = true,
+                                enable_thinking : Bool? = nil) : String
       messages = [] of Message
       messages << Message.new("system", system.not_nil!) if system && !system.empty?
       messages << Message.new("user", prompt)
-      render(messages, tools, add_generation_prompt)
+      render(messages, tools, add_generation_prompt, enable_thinking)
     end
 
     def self.messages_from_openai_json(json : String) : Array(Message)
@@ -181,6 +183,17 @@ module ML::GGUF
         end
       end
       io << "<|im_end|>\n"
+    end
+
+    private def self.emit_generation_prompt(io : IO, enable_thinking : Bool?) : Nil
+      io << "<|im_start|>assistant\n"
+      case enable_thinking
+      when false
+        # Matches Qwen3.6 tokenizer.chat_template for enable_thinking=false.
+        io << "<think>\n\n</think>\n\n"
+      when true
+        io << "<think>\n"
+      end
     end
 
     private def self.emit_tool_call(io : IO, call : ToolCall) : Nil
