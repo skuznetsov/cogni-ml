@@ -1,6 +1,6 @@
 require "option_parser"
 {% unless flag?(:cpu_only) %}
-require "../src/ml/gguf/metal_backend"
+  require "../src/ml/gguf/metal_backend"
 {% end %}
 require "../src/ml/gguf/nomic_bert"
 
@@ -9,7 +9,7 @@ DEFAULT_MODEL = ENV["EMBED_MODEL"]? || (Path.home / ".cache/lm-studio/models/nom
 record TextItem, name : String, text : String
 record QueryItem, name : String, text : String, expected_doc : String
 
-DOCS = [
+TOY_DOCS = [
   TextItem.new("crystal_generics", "Crystal generics and macros let developers write reusable statically typed code with Ruby-like syntax while compiling to native LLVM binaries."),
   TextItem.new("metal_kernels", "Apple Metal compute kernels use command buffers, threadgroups, simdgroups, and GPU-resident buffers to accelerate matrix operations."),
   TextItem.new("postgres_hnsw", "PostgreSQL vector search can use HNSW indexes, cosine distance, and compressed embeddings for fast approximate nearest neighbor retrieval."),
@@ -20,13 +20,81 @@ DOCS = [
   TextItem.new("compiler_debug", "Compiler debug information maps optimized machine code back to source locations, variables, scopes, and stack frames."),
 ]
 
-QUERIES = [
+TOY_QUERIES = [
   QueryItem.new("q_crystal", "How do Crystal macros and generic types help native compiled code?", "crystal_generics"),
   QueryItem.new("q_metal", "GPU command buffers and simdgroup matrix kernels on Apple Metal", "metal_kernels"),
   QueryItem.new("q_postgres", "nearest neighbor search with PostgreSQL vectors and HNSW cosine index", "postgres_hnsw"),
   QueryItem.new("q_csv", "incremental CSV reader for quoted fields and CRLF line endings", "csv_parser"),
   QueryItem.new("q_rate", "token bucket limiter with refill per second and monotonic clock", "rate_limiter"),
   QueryItem.new("q_hadamard", "compressed vector search using Hadamard transform and ADC", "flash_hadamard"),
+]
+
+HARD_DOCS = [
+  TextItem.new("crystal_macro_dsl", "Crystal macros expand at compile time, inspect AST nodes, generate overloads, and build internal DSLs while preserving static type checking."),
+  TextItem.new("crystal_fibers_io", "Crystal fibers multiplex blocking-looking IO over an event loop with channels, scheduler yields, timeouts, and lightweight concurrency."),
+  TextItem.new("crystal_c_bindings", "Crystal C bindings use lib declarations, pointer types, structs, callbacks, and link flags to call native libraries through a stable ABI."),
+
+  TextItem.new("metal_compute_buffers", "Metal compute workloads encode command buffers, bind MTLBuffer objects, choose threadgroup sizes, and dispatch GPU kernels for data-parallel math."),
+  TextItem.new("metal_render_pipeline", "Metal rendering configures vertex descriptors, render pass attachments, shaders, depth state, textures, and draw calls for graphics pipelines."),
+  TextItem.new("cuda_kernel_occupancy", "CUDA kernel performance depends on blocks, warps, shared memory, occupancy, memory coalescing, streams, and asynchronous copies on NVIDIA GPUs."),
+
+  TextItem.new("pg_hnsw_index", "PostgreSQL HNSW indexes organize vectors into navigable small-world graphs and tune ef_search for approximate nearest-neighbor recall."),
+  TextItem.new("pg_ivfpq_index", "IVF-PQ vector search partitions embeddings into coarse lists and compresses residual subvectors with product quantization codes."),
+  TextItem.new("pg_full_text", "PostgreSQL full-text search tokenizes documents into lexemes, stores tsvectors, ranks tsquery matches, and supports stemming dictionaries."),
+
+  TextItem.new("csv_stream_parser", "A streaming CSV parser tracks quote state across chunks, handles doubled quotes, delimiters, CRLF boundaries, and malformed unterminated rows."),
+  TextItem.new("json_pointer_patch", "JSON Pointer and JSON Patch address nested values by escaped path segments and apply add, remove, replace, move, copy, and test operations."),
+  TextItem.new("ini_config_parser", "An INI parser reads sections, keys, comments, duplicate entries, quoted values, and interpolation rules from line-oriented config files."),
+
+  TextItem.new("token_bucket", "A token bucket limiter accumulates tokens at a refill rate up to capacity and spends tokens immediately for burst-tolerant request control."),
+  TextItem.new("leaky_bucket", "A leaky bucket limiter drains queued work at a fixed rate to smooth bursts and bound output throughput over time."),
+  TextItem.new("retry_backoff", "Retry backoff policies use exponential delay, jitter, maximum attempts, and retryable error classification to avoid thundering herds."),
+
+  TextItem.new("hadamard_adc", "Hadamard-rotated sketches with packed four-bit codes can support fast asymmetric distance computation for vector retrieval."),
+  TextItem.new("pca_lowrank", "PCA low-rank compression projects vectors onto principal components, stores compact coefficients, and reconstructs approximate embeddings."),
+  TextItem.new("pq_codebooks", "Product quantization splits vectors into subspaces, assigns codebook centroids, and evaluates approximate distances through lookup tables."),
+
+  TextItem.new("debug_dwarf_locations", "DWARF debug info records source lines, lexical scopes, variable location lists, inlined calls, and stack unwinding metadata."),
+  TextItem.new("compiler_optimizer_passes", "Compiler optimization passes transform IR with inlining, constant folding, loop unrolling, vectorization, and dead-code elimination."),
+  TextItem.new("runtime_stack_traces", "Runtime stack traces capture call frames, function names, instruction pointers, exception context, and symbolized source locations."),
+
+  TextItem.new("moe_bert_router", "A MoE BERT encoder routes token hidden states to top experts, combines expert outputs, and pools final hidden vectors for embeddings."),
+  TextItem.new("dense_bert_encoder", "A dense BERT encoder applies the same transformer feed-forward layers to every token before pooling sentence embeddings."),
+  TextItem.new("decoder_llm_generate", "A decoder-only language model autoregressively predicts next tokens from causal attention and maintains KV cache during generation."),
+]
+
+HARD_QUERIES = [
+  QueryItem.new("q_macro_ast", "compile-time AST expansion for typed Crystal DSL overload generation", "crystal_macro_dsl"),
+  QueryItem.new("q_fiber_channels", "lightweight Crystal concurrency with channels and scheduler-driven IO timeouts", "crystal_fibers_io"),
+  QueryItem.new("q_ffi_callbacks", "Crystal lib declarations for native ABI pointers structs and callbacks", "crystal_c_bindings"),
+
+  QueryItem.new("q_metal_compute", "MTLBuffer binding and threadgroup dispatch for Metal compute math kernels", "metal_compute_buffers"),
+  QueryItem.new("q_metal_render", "render pass attachments vertex descriptors textures and draw calls in Metal", "metal_render_pipeline"),
+  QueryItem.new("q_cuda_occupancy", "NVIDIA warps occupancy coalesced memory streams and shared memory copies", "cuda_kernel_occupancy"),
+
+  QueryItem.new("q_hnsw_ef", "ef_search tuning in navigable small-world graph vector index for Postgres", "pg_hnsw_index"),
+  QueryItem.new("q_ivfpq_residual", "coarse inverted lists and product quantized residual subvectors", "pg_ivfpq_index"),
+  QueryItem.new("q_tsquery", "lexemes stemming dictionaries tsvector and tsquery document ranking", "pg_full_text"),
+
+  QueryItem.new("q_csv_chunks", "quoted CSV field continues across chunks with CRLF and doubled quotes", "csv_stream_parser"),
+  QueryItem.new("q_json_patch", "escaped JSON Pointer path segments used by replace move copy and test", "json_pointer_patch"),
+  QueryItem.new("q_ini_sections", "line config parser for sections comments duplicate keys and interpolation", "ini_config_parser"),
+
+  QueryItem.new("q_token_bucket", "burst tolerant limiter spends accumulated refill tokens up to capacity", "token_bucket"),
+  QueryItem.new("q_leaky_bucket", "queue drains at fixed rate to smooth bursty request output", "leaky_bucket"),
+  QueryItem.new("q_retry_jitter", "exponential retry delay with jitter maximum attempts and retryable errors", "retry_backoff"),
+
+  QueryItem.new("q_hadamard_adc", "packed four-bit Hadamard sketches for asymmetric distance retrieval", "hadamard_adc"),
+  QueryItem.new("q_pca_coeffs", "principal component coefficients reconstruct approximate embedding vectors", "pca_lowrank"),
+  QueryItem.new("q_pq_lut", "subspace codebook centroids and lookup-table approximate vector distances", "pq_codebooks"),
+
+  QueryItem.new("q_dwarf_locations", "DWARF variable location lists lexical scopes inlined calls and unwinding", "debug_dwarf_locations"),
+  QueryItem.new("q_opt_passes", "IR inlining constant folding loop unrolling vectorization dead-code elimination", "compiler_optimizer_passes"),
+  QueryItem.new("q_stack_symbols", "exception call frames instruction pointers and symbolized stack source locations", "runtime_stack_traces"),
+
+  QueryItem.new("q_moe_experts", "top expert routing in BERT encoder before pooled embedding output", "moe_bert_router"),
+  QueryItem.new("q_dense_bert", "same transformer feed-forward layers for every token in sentence encoder", "dense_bert_encoder"),
+  QueryItem.new("q_decoder_kv", "causal autoregressive next-token model maintains KV cache while generating", "decoder_llm_generate"),
 ]
 
 def cosine(a : Array(Float32), b : Array(Float32)) : Float64
@@ -60,30 +128,30 @@ def mean_pool_l2(hidden : Array(Float32), seq_len : Int32, dim : Int32) : Array(
   out.map! { |v| norm > 1.0e-8_f32 ? v / norm : v }
 end
 
-def top_doc(query_vec : Array(Float32), docs : Array(Array(Float32)), names : Array(String)) : {String, Float64}
-  best_name = ""
-  best_score = -Float64::INFINITY
+def ranked_docs(query_vec : Array(Float32), docs : Array(Array(Float32)), names : Array(String)) : Array(Tuple(String, Float64))
+  rows = [] of Tuple(String, Float64)
   docs.each_with_index do |doc_vec, i|
-    score = cosine(query_vec, doc_vec)
-    if score > best_score
-      best_score = score
-      best_name = names[i]
-    end
+    rows << {names[i], cosine(query_vec, doc_vec)}
   end
-  {best_name, best_score}
+  rows.sort_by! { |pair| -pair[1] }
+  rows
 end
 
 model_path = DEFAULT_MODEL
-limit_docs = DOCS.size
-limit_queries = QUERIES.size
+limit_docs = 0
+limit_queries = 0
 backend_name = "metal"
+suite = "toy"
+show_results = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: nomic_encoder_tricks_probe [options]"
   p.on("--model=PATH", "GGUF model path") { |v| model_path = v }
+  p.on("--suite=NAME", "toy | hard | combined (default: toy)") { |v| suite = v }
   p.on("--limit-docs=N", "Limit built-in docs") { |v| limit_docs = v.to_i }
   p.on("--limit-queries=N", "Limit built-in queries") { |v| limit_queries = v.to_i }
   p.on("--backend=NAME", "metal | f32 | f16sim (default: metal)") { |v| backend_name = v }
+  p.on("--show-results", "Print per-query top1/top3 details instead of compact mismatches") { show_results = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -95,8 +163,18 @@ unless File.exists?(model_path)
   exit 2
 end
 
-docs = DOCS.first(limit_docs)
-queries = QUERIES.first(limit_queries)
+docs_all, queries_all = case suite
+                        when "toy"
+                          {TOY_DOCS, TOY_QUERIES}
+                        when "hard"
+                          {HARD_DOCS, HARD_QUERIES}
+                        when "combined"
+                          {TOY_DOCS + HARD_DOCS, TOY_QUERIES + HARD_QUERIES}
+                        else
+                          raise "unknown suite: #{suite}"
+                        end
+docs = limit_docs > 0 ? docs_all.first(limit_docs) : docs_all
+queries = limit_queries > 0 ? queries_all.first(limit_queries) : queries_all
 texts = docs.map(&.text) + queries.map(&.text)
 names = docs.map(&.name)
 
@@ -139,8 +217,9 @@ full_queries = layer_vectors[docs.size, queries.size].map { |layers| layers[full
 
 puts "model=#{model_path}"
 puts "backend=#{backend_name}"
+puts "suite=#{suite}"
 puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} dim=#{model.dim} tokens=#{token_counts.join(",")}"
-puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tfull_top1_agree\tquery_results"
+puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tdetails"
 
 (1..model.n_layers).each do |depth|
   doc_vecs = layer_vectors[0, docs.size].map { |layers| layers[depth - 1] }
@@ -148,19 +227,37 @@ puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tlabel_top1\tful
 
   cosines = [] of Float64
   label_hits = 0
+  label_top3_hits = 0
   full_agree = 0
+  full_top3_contains_depth_top1 = 0
   result_parts = [] of String
+  mismatch_parts = [] of String
 
   query_vecs.each_with_index do |qv, qi|
     cosines << cosine(qv, full_queries[qi])
-    pred, score = top_doc(qv, doc_vecs, names)
-    full_pred = top_doc(full_queries[qi], full_docs, names)[0]
+    rank = ranked_docs(qv, doc_vecs, names)
+    full_rank = ranked_docs(full_queries[qi], full_docs, names)
+    pred = rank[0][0]
+    score = rank[0][1]
+    full_pred = full_rank[0][0]
+    top3 = rank.first(3).map { |pair| pair[0] }
+    full_top3 = full_rank.first(3).map { |pair| pair[0] }
     label_hits += 1 if pred == queries[qi].expected_doc
+    label_top3_hits += 1 if top3.includes?(queries[qi].expected_doc)
     full_agree += 1 if pred == full_pred
-    result_parts << "#{queries[qi].name}:#{pred}:#{score.round(4)}"
+    full_top3_contains_depth_top1 += 1 if full_top3.includes?(pred)
+    result_parts << "#{queries[qi].name}:#{pred}:#{score.round(4)}:top3=#{top3.join("|")}"
+    if pred != queries[qi].expected_doc || pred != full_pred
+      mismatch_parts << "#{queries[qi].name}:pred=#{pred}:expected=#{queries[qi].expected_doc}:full=#{full_pred}:top3=#{top3.join("|")}"
+    end
   end
 
   mean_cos = cosines.sum / cosines.size
   min_cos = cosines.min
-  puts "#{depth}\t#{depth_ms[depth - 1].round(3)}\t#{(depth_ms[depth - 1] / texts.size).round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{label_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{result_parts.join(",")}"
+  details = if show_results
+              result_parts.join(",")
+            else
+              mismatch_parts.empty? ? "ok" : mismatch_parts.join(",")
+            end
+  puts "#{depth}\t#{depth_ms[depth - 1].round(3)}\t#{(depth_ms[depth - 1] / texts.size).round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{label_hits}/#{queries.size}\t#{label_top3_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{full_top3_contains_depth_top1}/#{queries.size}\t#{details}"
 end
