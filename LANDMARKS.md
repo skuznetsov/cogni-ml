@@ -18577,3 +18577,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is a prefix microprofile, not full Gemma4 decode speed. It compares current host-array cache vs resident-cache scaffold while hidden/intermediate tensors still round-trip through host arrays. The speedup applies only when K/V state is allocated once and reused across decode steps.
 **LTP/WBA:** Window is the `max_seq`-scaled cache transfer boundary; transport keeps K/V in resident Metal buffers across token positions; legal move excludes one-time allocation from the recurrent decode potential and lowers repeated cache upload/readback work. Potential `Phi=(repeated_cache_transfer, allocation_tax, hidden_roundtrip, full_resident_area)` decreased for reused session state. Dual frame: if state allocation is in the hot path, resident cache is currently worse and must use pooling or exact host-cache fallback.
 **next_gate:** Carry hidden and FFN/attention intermediates as resident buffers for the same prefix, or add a buffer-pool/persistent-session policy so resident state allocation is never charged per token/request.
+
+### [LM-COGNIGEMMA-23] Gemma4 resident K/V speedup scales with cache span but also helps short prefixes
+**status:** verified
+**trust:** {F:0.80, G:narrow, R:0.80}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "Resident K/V cache remains faster even at `max_seq=8`, but the speedup is smaller than at `max_seq=1024`."
+  source: `/tmp/gemma4_metal_prefix_profile --stop-layer 2 --max-seq 8 --tokens 42,43 --warmups 1 --runs 5 --mode both` under `scripts/run_safe.sh` -> host p50 `31.638ms`, resident p50 `22.949ms`, resident-vs-host p50 speedup `1.3786x`; prior `max_seq=1024` separate-mode p50s were host `51.133ms`, resident `28.085ms` (`~1.82x`)
+  verified_at: 2026-06-03
+  decay_trigger: profile probe rewrite, cache implementation rewrite, or hidden/intermediate residency reducing non-cache overhead
+**boundary:** This is still a stop-layer 2, two-token prefix microprofile. It supports the cache-transfer LTP but does not prove full decode speed or resident hidden/intermediate benefits.
+**LTP/WBA:** Window is the cache span. Transport cost descends more as `max_seq` grows, while a short-context win remains because resident cache also avoids per-step cache array materialization/readback overhead. Potential `Phi=(cache_span_transfer, cache_array_materialization, hidden_roundtrip, resident_area)` points next to resident hidden/intermediate buffers after K/V.
+**next_gate:** Implement or profile hidden-buffer residency for the same stop-layer 2 prefix; keep the resident K/V path as the baseline corridor.
