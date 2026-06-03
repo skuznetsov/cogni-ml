@@ -26,6 +26,16 @@ def gemma4_metal_max_abs_diff(a : Array(Float32), b : Array(Float32)) : Float32
   max
 end
 
+def gemma4_metal_expect_close(label : String, cpu : Array(Float32), gpu : Array(Float32)) : Nil
+  gpu.size.should eq(cpu.size)
+  cos = gemma4_metal_cosine(cpu, gpu)
+  diff = gemma4_metal_max_abs_diff(cpu, gpu)
+  scale = cpu.map(&.abs).max
+  puts "  [#{label}] cos=#{cos.round(8)}, max|d|=#{diff}"
+  cos.should be >= 0.9999
+  diff.should be < 0.02_f32 * scale
+end
+
 describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
@@ -52,5 +62,41 @@ describe "Gemma4 Metal primitives" do
 
     gpu.size.should eq(w.hparams.n_embd)
     gpu.all? { |v| v == 0.0_f32 }.should be_true
+  end
+
+  it "projects SWA-layer Q/K/V with matmul_many like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    lw = w.layers[0]
+    x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
+    v_qw = lw.attn_v_qw.not_nil!
+
+    cpu = [
+      ML::GGUF::Gemma4CPU.matmul(lw.attn_q_qw, x_norm),
+      ML::GGUF::Gemma4CPU.matmul(lw.attn_k_qw, x_norm),
+      ML::GGUF::Gemma4CPU.matmul(v_qw, x_norm),
+    ]
+    gpu = ML::GGUF::Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm).not_nil!
+
+    gemma4_metal_expect_close("gemma4_swa_q_proj", cpu[0], gpu[0])
+    gemma4_metal_expect_close("gemma4_swa_k_proj", cpu[1], gpu[1])
+    gemma4_metal_expect_close("gemma4_swa_v_proj", cpu[2], gpu[2])
+  end
+
+  it "projects full-attention Q/K and preserves the K-as-V structural boundary" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    lw = w.layers[5]
+    lw.attn_v_qw.should be_nil
+    x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
+
+    cpu = [
+      ML::GGUF::Gemma4CPU.matmul(lw.attn_q_qw, x_norm),
+      ML::GGUF::Gemma4CPU.matmul(lw.attn_k_qw, x_norm),
+    ]
+    gpu = ML::GGUF::Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw], x_norm).not_nil!
+
+    gemma4_metal_expect_close("gemma4_full_q_proj", cpu[0], gpu[0])
+    gemma4_metal_expect_close("gemma4_full_k_proj", cpu[1], gpu[1])
   end
 end

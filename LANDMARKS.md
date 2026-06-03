@@ -18408,3 +18408,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This proves only token-id to hidden-vector embedding dequant for Q6_K. It does not prove Gemma4 Q/K/V projection, attention, FFN, logits, tokenizer, multimodal projector, or full decode parity.
 **LTP/WBA:** Window is a single token id into a Q6_K embedding row; transport is the bounded `hidden_dim` row corridor on the registered mmap buffer; legal move is dequant-only extraction with out-of-range zeroing; boundary safety is no model state mutation and CPU-row parity. Potential `Phi=(vocab_materialization, missing_metal_primitive, row_stride_uncertainty, parity_gap)` decreased under the focused spec.
 **next_gate:** Add Gemma4 Metal Q/K/V projection+norm+RoPE parity for one SWA and one full-attention layer, then introduce the ungated GQA decode attention kernel.
+
+### [LM-COGNIGEMMA-13] Gemma4 Q4_K attention projections reuse Metal matmul_many
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.87}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "Existing `Qwen35Metal.matmul_many` can project Gemma4 SWA-layer Q/K/V Q4_K tensors with CPU-reference parity in one command-buffer corridor."
+  source: `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 240 18000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `4 examples, 0 failures`; SWA projection rows had `cos=1.0`, max abs diffs `4.9591064e-5`, `3.385544e-5`, `2.2888184e-5`
+  verified_at: 2026-06-03
+  decay_trigger: matmul_many routing rewrite, Gemma4 quant layout change, or attention weight layout change
+- claim: "Full-attention layer 5 can project Q/K through the same route while preserving the structural boundary that V is absent and must be derived from K before separate normalization."
+  source: same spec command; full Q/K projection rows had `cos=1.0`, max abs diffs `0.00024414062`, `8.010864e-5`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 full-layer V semantics change or CPU projection rewrite
+**boundary:** This proves raw projection parity only. It does not prove per-head Q/K learned RMSNorm, plain V RMSNorm, RoPE, KV-cache write, attention context, output projection, FFN, or logits parity.
+**LTP/WBA:** Window is the per-layer projection group after `attn_norm`; transport is Q/K/V rows through one `matmul_many` corridor; legal move reuses exact quant GEMV without changing Gemma4 semantics; boundary safety keeps full-layer K-as-V outside the projection shortcut. Potential `Phi=(separate_syncs, projection_uncertainty, weight_uploads, parity_gap)` decreased under the focused spec.
+**next_gate:** Add Gemma4-specific Metal normalization/RoPE parity, including full-layer `rope_freqs.weight` factors, before introducing ungated attention.
