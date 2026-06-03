@@ -260,6 +260,21 @@ module ML::GGUF
       out
     end
 
+    # Get array-of-bool metadata.
+    # Returns nil if key missing or not a bool array.
+    def get_bool_array(key : String) : Array(Bool)?
+      arr = @metadata[key]?.as?(Array(Value))
+      return nil unless arr
+      out = Array(Bool).new(arr.size)
+      arr.each do |v|
+        case v
+        when Bool then out << v
+        else           return nil
+        end
+      end
+      out
+    end
+
     private def parse_header
       # Magic
       magic = read_bytes(4)

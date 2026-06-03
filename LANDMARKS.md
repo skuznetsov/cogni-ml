@@ -18208,3 +18208,117 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is repeated per-query dynamic SQL. Transport is the whole query table through one batch corridor. Legal Ladder lowers dynamic execution count from `N` to `1` while preserving exact fallback boundary. Potential `Phi=(dynamic_exec_count, per_query_PL_tax, identity_error, exact_fallback_error)` drops in the synthetic gate without observed correctness regressions.
 - trust: {F=.88,G=.43,R=.87}
 - decay_trigger: real Nomic source corpus, 103K Gutenberg corpus, query table schema changes, non-int4 ids, top-k fallback requirement, or C-level batch API rewrite
+
+### [LM-COGNIGEMMA-1] Gemma4 12B GGUF architecture inventory verified
+**status:** verified
+**trust:** {F:0.90, G:narrow, R:0.90}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "Local Gemma4 12B Q4_K_M GGUF uses `arch=gemma4`, 48 layers, `d_model=3840`, `ffn=15360`, context 131072, vocab 262144."
+  source: `crystal run bin/gemma4_inventory.cr -- --tensors`; `crystal spec spec/gemma4_meta_spec.cr --error-trace`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 GGUF replaced or metadata parser changed
+- claim: "Gemma4 attention cadence is 40 SWA layers and 8 full-attention layers: full layers `5,11,17,23,29,35,41,47`; SWA window 1024."
+  source: same commands above
+  verified_at: 2026-06-03
+  decay_trigger: model file replaced
+- claim: "SWA layers use `n_head_kv=8`, `head_dim=256`; full-attention layers use `n_head_kv=1`, `head_dim=512`; final logit softcap is 30.0."
+  source: same commands above
+  verified_at: 2026-06-03
+  decay_trigger: model file replaced
+- claim: "The output head is a huge `Q6_K:3840x262144` tensor, making LM-head/top1 a first-class decode bottleneck candidate."
+  source: tensor histogram from `bin/gemma4_inventory.cr --tensors`
+  verified_at: 2026-06-03
+  decay_trigger: quantization/model file changed
+**port_boundary:** First CogniGemma port should be text-only exact parity, then Metal decode, then `gemma4uv` multimodal projector. Do not copy Qwen35 DeltaNet control flow; reuse quant kernels, resident wave scheduling, cache/session infrastructure, and LTP/WBA attribution discipline.
+
+### [LM-COGNIGEMMA-2] Gemma4 structural GGUF weight mapping verified
+**status:** verified
+**trust:** {F:0.88, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Weights` maps token embedding, output norm, rope freqs, and all 48 transformer layers while keeping the GGUF mmap alive for raw quantized tensor slices."
+  source: `src/ml/gguf/gemma4_weights.cr`; `crystal spec spec/gemma4_meta_spec.cr --error-trace`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 tensor names/layout or GGUF reader lifetime semantics change
+- claim: "SWA layers have explicit `attn_v.weight`; full-attention layers in the local GGUF do not. The loader represents V as optional so forward parity must handle the full-layer V semantics from llama.cpp before implementation."
+  source: `spec/gemma4_meta_spec.cr`; local tensor enumeration for `blk.0` and `blk.5`
+  verified_at: 2026-06-03
+  decay_trigger: model quantization/layout changes
+**next_gate:** CPU forward must first resolve full-layer value semantics from llama.cpp (`attn_v` absent) before claiming logits parity.
+
+### [LM-COGNIGEMMA-3] Gemma4 full-attention layers reuse K as V before norms
+**status:** verified
+**trust:** {F:0.90, G:narrow, R:0.89}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "For Gemma4 layers without `attn_v.weight`, llama.cpp sets `Vcur = Kcur` before reshaping/norms, then applies learned `attn_k_norm` to K, plain RMSNorm to V, and RoPE only to K."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/src/models/gemma4.cpp:243`
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp Gemma4 graph rewrite or upstream Qwen/Gemma GGUF layout change
+- claim: "The local Gemma4 12B Q4_K_M GGUF omits explicit V only on full-attention layers `5,11,17,23,29,35,41,47`; SWA layers carry explicit `attn_v.weight`."
+  source: local layer enumeration via `crystal eval` and `Gemma4Weights` spec guards
+  verified_at: 2026-06-03
+  decay_trigger: model quantization/layout changes
+**parity_rule:** Native CogniGemma forward must implement `Vpre = explicit_v ? V(x) : Kpre`; then `K = RMSNorm(Kpre, attn_k_norm)` and `V = RMSNorm(Vpre, no learned weight)`. Applying `attn_k_norm` or RoPE to reused V is a parity bug.
+**next_gate:** Add the CPU/Metal attention primitive only after this rule is represented in code-level tests or a tiny forward oracle.
+
+### [LM-COGNIGEMMA-4] Gemma4 CPU primitive math scaffold verified
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4CPU` has reference primitives for weighted RMSNorm, plain RMSNorm, slice RMSNorm, llama.cpp-style tanh GELU, final logit softcap, and quantized matmul dispatch."
+  source: `src/ml/gguf/gemma4_cpu.cr`; `crystal build --no-codegen src/ml/gguf/gemma4_cpu.cr --error-trace`
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp Gemma4 graph activation/norm semantics change
+- claim: "Targeted primitive specs pass, including negative size mismatch guard."
+  source: `crystal spec spec/gemma4_cpu_spec.cr --error-trace` (`5 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: primitive rewrite or full-forward parity mismatch
+**boundary:** This does not prove full logits parity. It only removes uncertainty around primitive math before building the text-only forward path.
+**next_gate:** Implement tiny forward probes in structural order: embedding row load, one SWA layer projection/norm shape check, one full layer K-as-V check, then whole-model top1 parity against llama.cpp.
+
+### [LM-COGNIGEMMA-5] Gemma4 embedding lookup is row-local and bounded
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "Gemma4 Q6_K token embedding lookup can dequantize one row at a time: the local 3840-dim Q6_K row is 3150 bytes, avoiding a vocab-sized one-hot/matmul path."
+  source: `Gemma4CPU.embedding_lookup`; `crystal spec spec/gemma4_cpu_spec.cr --error-trace` (`6 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: GGUF token embedding layout, quant row size, or `QuantWeight` dimension convention changes
+**LTP/WBA:** Window is a single `token_id`; transport is one quantized embedding row; legal move is row-local dequantization; boundary safety is token-id range plus raw-slice bound check. Potential `Phi=(layout_uncertainty, vocab_alloc_area, row_bounds_error, parity_risk)` decreases without touching the full decoder graph.
+**next_gate:** Build layer-shape probes using this embedding vector as input: SWA layer 0 Q/K/V norm shapes and full layer 5 K-as-V branch.
+
+### [LM-COGNIGEMMA-6] Gemma4 attention projection/norm corridor verified
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.87}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4CPU.attention_project_normed` implements `attn_norm -> Q/K/V projection -> per-head Q/K RMSNorm -> plain V RMSNorm` through real local GGUF weights for SWA layer 0."
+  source: `crystal spec spec/gemma4_cpu_spec.cr --error-trace` (`8 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 attention graph rewrite, Q/K/V tensor shape change, or norm semantics mismatch
+- claim: "Full-attention layer 5 reuses pre-norm K as V and then separates them via learned K norm versus plain V norm."
+  source: same spec command; llama.cpp source check `/Users/sergey/SrcArchives/AI/llama.cpp/src/models/gemma4.cpp:243`
+  verified_at: 2026-06-03
+  decay_trigger: model layout or upstream graph rewrite
+**boundary:** This corridor stops before RoPE, attention score/value accumulation, residual/post norms, FFN, and logits. It is a shape/semantics gate for the next forward slice.
+**next_gate:** Add RoPE text-mode semantics for SWA/full layers, then a one-token attention-cache update probe.
+
+### [LM-COGNIGEMMA-7] Gemma4 short-context text RoPE corridor verified
+**status:** verified
+**trust:** {F:0.84, G:narrow, R:0.86}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4CPU.apply_rope_to_qk!` applies NeoX-paired ggml-style RoPE to Q/K and leaves V unchanged for SWA and full-attention layer probes."
+  source: `crystal spec spec/gemma4_cpu_spec.cr --error-trace` (`10 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: full logits parity mismatch, llama.cpp RoPE path rewrite, or long-context scaling use
+- claim: "Full Gemma4 layers use `rope_freqs.weight` proportional factors; local tensor shape is `[256]`, F32."
+  source: local GGUF tensor probe; llama.cpp `gemma4.cpp` full-layer `freq_factors` path
+  verified_at: 2026-06-03
+  decay_trigger: model file or GGUF layout change
+**boundary:** This is a short-context/default-scaling RoPE gate. It does not prove YaRN/extrapolated long-context parity or multimodal M-RoPE.
+**next_gate:** Implement one-token SWA attention cache/update with sliding-window bounds, then full-layer attention using K-as-V cache semantics.
