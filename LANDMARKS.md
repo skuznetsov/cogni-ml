@@ -18371,3 +18371,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: CPU primitive optimization, compiler flags, host load, or Metal path implementation
 **decision:** Whole-model CPU top1 parity is too slow for the routine gate. Keep CPU probe as a diagnostic/slow oracle, but move exact parity work to smaller layer probes and then Metal-resident forward.
 **next_gate:** Start Metal port from verified corridors: embedding row, Q/K/V projection+norm+RoPE, attention context/output, then FFN block tail.
+
+### [LM-COGNIGEMMA-11] CogniGemma Metal reuse map established
+**status:** verified source audit; implementation pending
+**trust:** {F:0.78, G:narrow, R:0.82}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "Existing Qwen35 Metal quant matmul APIs can route Gemma4 Q4_K and Q6_K weights, including tied Q6_K output/head matmul, because `Qwen35Metal.matmul` supports Q4_K/Q5_K/Q6_K/Q8_0/IQ4_NL via mmap-backed weight slots."
+  source: `src/ml/gguf/qwen35_metal.cr` public `matmul`, `matmul_many`, Q4/Q6 pipelines
+  verified_at: 2026-06-03
+  decay_trigger: Qwen35Metal API rewrite or Gemma4 quant layout change
+- claim: "Qwen35 decode attention kernel is not directly reusable for Gemma4 because it multiplies by `sigmoid(gate)` and assumes Qwen-style gated attention; Gemma4 attention is ungated and upstream sets `f_attention_scale=1.0`."
+  source: `src/ml/gguf/kernels/attn_decode_qwen35.metal`; `/Users/sergey/SrcArchives/AI/llama.cpp/src/models/gemma4.cpp:11`
+  verified_at: 2026-06-03
+  decay_trigger: attention kernel split or Gemma4 graph change
+- claim: "First Gemma4-specific Metal work should target Q6_K token embedding, ungated GQA decode attention for head_dim 256/512, full-layer `rope_freqs` RoPE, and GELU-parallel FFN fusion."
+  source: source audit of Qwen Metal kernels and verified CPU Gemma corridors
+  verified_at: 2026-06-03
+  decay_trigger: first Metal implementation benchmark
+**LTP/WBA:** Windows are the verified CPU corridors: embedding, Q/K/V projection+norm+RoPE, attention context/output, FFN block tail, and LM head. Transport is resident Metal buffers through one decode-wave command corridor. Legal moves reuse exact quant matmul where semantics match and introduce Gemma kernels only at semantic mismatches. Potential `Phi=(host_syncs, CPU_work, semantic_mismatch, bytes_read, launch_count)` should decrease without weakening CPU fallback.
+**next_gate:** Implement the smallest Metal-backed Gemma helper first: Q6_K embedding row from token id or Q4/Q6 projection wrapper with CPU parity spec, then add ungated attention decode.
