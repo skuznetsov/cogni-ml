@@ -9,6 +9,15 @@ DEFAULT_MODEL = ENV["EMBED_MODEL"]? || (Path.home / ".cache/lm-studio/models/nom
 
 record TextItem, name : String, text : String
 record QueryItem, name : String, text : String, expected_doc : String
+record DepthRetrievalMetrics,
+  depth : Int32,
+  ms_total : Float64,
+  ms_per_text : Float64,
+  invalid_vecs : Int32,
+  zeroish_vecs : Int32,
+  shallow_has_full_k : Int32,
+  full_rerank_full_k : Int32,
+  candidate_union_size : Int32
 
 TOY_DOCS = [
   TextItem.new("crystal_generics", "Crystal generics and macros let developers write reusable statically typed code with Ruby-like syntax while compiling to native LLVM binaries."),
@@ -211,6 +220,7 @@ docs_tsv = nil.as(String?)
 queries_tsv = nil.as(String?)
 rerank_k = 3
 depths_arg = nil.as(String?)
+show_economics = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: nomic_encoder_tricks_probe [options]"
@@ -225,6 +235,7 @@ OptionParser.parse do |p|
   p.on("--backend=NAME", "metal | f32 | f16sim (default: metal)") { |v| backend_name = v }
   p.on("--batched", "Use embed_batch_depth for each requested depth") { use_batched = true }
   p.on("--batch-size=N", "Override embed_batch_depth microbatch size for --batched probes") { |v| batch_size_override = v.to_i }
+  p.on("--economics", "Print rough two-stage retrieval economics after quality metrics") { show_economics = true }
   p.on("--summary-only", "Suppress per-query mismatch details") { summary_only = true }
   p.on("--show-results", "Print per-query top1/top3 details instead of compact mismatches") { show_results = true }
   p.on("-h", "--help", "Show help") do
@@ -332,6 +343,8 @@ puts "docs_tsv=#{docs_tsv || ""} queries_tsv=#{queries_tsv || ""}"
 puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} layers=#{model.n_layers} eval_depths=#{eval_depths.join(",")} computed_depths=#{compute_depths.join(",")} dim=#{model.dim} rerank_k=#{rerank_k} batched=#{use_batched} batch_size=#{batch_size_override || "auto"} tokens=#{token_counts.join(",")}"
 puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tinvalid_vecs\tzeroish_vecs\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tshallow_has_label@k\tshallow_has_full@k\tfull_rerank_label@k\tfull_rerank_full@k\tcandidate_union@k\tcandidate_doc_pct\tlazy_full_doc_savings_pct\tdetails"
 
+retrieval_metrics = [] of DepthRetrievalMetrics
+
 eval_depths.each do |depth|
   current_depth_i = depth_index[depth]
   doc_vecs = layer_vectors[0, docs.size].map { |layers| layers[current_depth_i] }
@@ -395,6 +408,8 @@ eval_depths.each do |depth|
   min_cos = cosines.min
   candidate_doc_pct = 100.0 * candidate_union.size / docs.size
   lazy_full_doc_savings_pct = 100.0 * (docs.size - candidate_union.size) / docs.size
+  ms_total = depth_ms[depth - 1]
+  ms_per_text = ms_total / texts.size
   details = if show_results
               result_parts.join(",")
             elsif summary_only
@@ -407,5 +422,52 @@ eval_depths.each do |depth|
               parts.concat(health_parts)
               parts.empty? ? "ok" : parts.join(",")
             end
-  puts "#{depth}\t#{depth_ms[depth - 1].round(3)}\t#{(depth_ms[depth - 1] / texts.size).round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{invalid_vecs}\t#{zeroish_vecs}\t#{label_hits}/#{queries.size}\t#{label_top3_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{full_top3_contains_depth_top1}/#{queries.size}\t#{shallow_has_label_k}/#{queries.size}\t#{shallow_has_full_k}/#{queries.size}\t#{full_rerank_label_k}/#{queries.size}\t#{full_rerank_full_k}/#{queries.size}\t#{candidate_union.size}/#{docs.size}\t#{candidate_doc_pct.round(2)}\t#{lazy_full_doc_savings_pct.round(2)}\t#{details}"
+  puts "#{depth}\t#{ms_total.round(3)}\t#{ms_per_text.round(3)}\t#{mean_cos.round(6)}\t#{min_cos.round(6)}\t#{invalid_vecs}\t#{zeroish_vecs}\t#{label_hits}/#{queries.size}\t#{label_top3_hits}/#{queries.size}\t#{full_agree}/#{queries.size}\t#{full_top3_contains_depth_top1}/#{queries.size}\t#{shallow_has_label_k}/#{queries.size}\t#{shallow_has_full_k}/#{queries.size}\t#{full_rerank_label_k}/#{queries.size}\t#{full_rerank_full_k}/#{queries.size}\t#{candidate_union.size}/#{docs.size}\t#{candidate_doc_pct.round(2)}\t#{lazy_full_doc_savings_pct.round(2)}\t#{details}"
+  retrieval_metrics << DepthRetrievalMetrics.new(
+    depth: depth,
+    ms_total: ms_total,
+    ms_per_text: ms_per_text,
+    invalid_vecs: invalid_vecs,
+    zeroish_vecs: zeroish_vecs,
+    shallow_has_full_k: shallow_has_full_k,
+    full_rerank_full_k: full_rerank_full_k,
+    candidate_union_size: candidate_union.size,
+  )
+end
+
+if show_economics
+  full_total_ms = depth_ms[full_depth - 1]
+  full_ms_per_text = full_total_ms / texts.size
+  full_query_ms = full_ms_per_text * queries.size
+  puts
+  puts "economics_note=rough_embedding_only_estimate full_depth=#{full_depth} full_ms_per_text=#{full_ms_per_text.round(3)} full_baseline_ms=#{full_total_ms.round(3)}"
+  puts "economics_depth\tk\tquality_gate\tcandidate_docs\tcandidate_doc_pct\tcold_lazy_ms\tcold_lazy_speedup\thot_query_extra_embed_ms\treduced_doc_scan_pct\tverdict"
+
+  retrieval_metrics.each do |m|
+    next if m.depth == full_depth
+    candidate_doc_pct = 100.0 * m.candidate_union_size / docs.size
+    reduced_doc_scan_pct = 100.0 * (docs.size - m.candidate_union_size) / docs.size
+    lazy_full_docs_ms = full_ms_per_text * m.candidate_union_size
+    cold_lazy_ms = m.ms_total + full_query_ms + lazy_full_docs_ms
+    cold_lazy_speedup = full_total_ms / cold_lazy_ms
+    hot_query_extra_embed_ms = m.ms_per_text * queries.size
+
+    quality_ok = m.invalid_vecs == 0 &&
+                 m.zeroish_vecs == 0 &&
+                 m.shallow_has_full_k == queries.size &&
+                 m.full_rerank_full_k == queries.size
+    verdict =
+      if !quality_ok
+        "quality_fail"
+      elsif cold_lazy_speedup > 1.05
+        "cold_lazy_candidate"
+      elsif reduced_doc_scan_pct >= 10.0
+        "hot_index_gate_only"
+      else
+        "weak_economics"
+      end
+
+    quality_gate = "#{m.full_rerank_full_k}/#{queries.size}"
+    puts "#{m.depth}\t#{rerank_k}\t#{quality_gate}\t#{m.candidate_union_size}/#{docs.size}\t#{candidate_doc_pct.round(2)}\t#{cold_lazy_ms.round(3)}\t#{cold_lazy_speedup.round(3)}\t#{hot_query_extra_embed_ms.round(3)}\t#{reduced_doc_scan_pct.round(2)}\t#{verdict}"
+  end
 end
