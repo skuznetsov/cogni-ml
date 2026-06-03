@@ -100,6 +100,38 @@ module ML::GGUF
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
       @@softcap_pipeline : ML::Metal::ComputePipeline?
 
+      class ResidentLayerState
+        getter k_cache_buf : ML::MetalBuffer
+        getter v_cache_buf : ML::MetalBuffer
+        getter kv_dim : Int32
+        getter max_seq : Int32
+
+        def initialize(@kv_dim : Int32, @max_seq : Int32)
+          @k_cache_buf = ML::MetalBuffer.from_array(Array(Float32).new(max_seq * kv_dim, 0.0_f32))
+          @v_cache_buf = ML::MetalBuffer.from_array(Array(Float32).new(max_seq * kv_dim, 0.0_f32))
+        end
+
+        def k_cache : Array(Float32)
+          @k_cache_buf.read(@max_seq * @kv_dim)
+        end
+
+        def v_cache : Array(Float32)
+          @v_cache_buf.read(@max_seq * @kv_dim)
+        end
+      end
+
+      class ResidentState
+        getter layers : Array(ResidentLayerState)
+        getter max_seq : Int32
+
+        def initialize(hp : Gemma4Hparams, @max_seq : Int32 = 1024)
+          @layers = Array(ResidentLayerState).new(hp.n_layer) do |il|
+            kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
+            ResidentLayerState.new(kv_dim, @max_seq)
+          end
+        end
+      end
+
       def available? : Bool
         ML::Metal::Device.init!
       end
@@ -198,6 +230,45 @@ module ML::GGUF
         }
       end
 
+      def attention_context_from_projection_resident(proj : Gemma4CPU::AttentionProjection,
+                                                     hp : Gemma4Hparams,
+                                                     il : Int32,
+                                                     pos : Int32,
+                                                     lstate : ResidentLayerState) : Array(Float32)?
+        return nil unless available?
+
+        n_head = hp.n_head
+        n_head_kv = hp.n_head_kv(il)
+        head_dim = hp.head_dim_for_layer(il)
+        kv_dim = n_head_kv * head_dim
+        q_dim = n_head * head_dim
+        heads_per_group = n_head // n_head_kv
+        raise ArgumentError.new("position #{pos} exceeds max_seq #{lstate.max_seq}") if pos < 0 || pos >= lstate.max_seq
+        raise ArgumentError.new("q projection size mismatch at layer #{il}") unless proj.q.size == q_dim
+        raise ArgumentError.new("k projection size mismatch at layer #{il}") unless proj.k.size == kv_dim
+        raise ArgumentError.new("v projection size mismatch at layer #{il}") unless proj.v.size == kv_dim
+        raise ArgumentError.new("resident kv_dim mismatch") unless lstate.kv_dim == kv_dim
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+
+        start_pos = hp.attention_start_pos(il, pos)
+        len = pos - start_pos + 1
+        q_buf = ML::MetalBuffer.from_array(proj.q)
+        k_buf = ML::MetalBuffer.from_array(proj.k)
+        v_buf = ML::MetalBuffer.from_array(proj.v)
+        out_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_kv_write_one(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, pos, kv_dim)
+        encode_attention_context_one(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, out_buf,
+          start_pos, len, n_head, n_head_kv, head_dim, heads_per_group)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+
+        out_buf.read(q_dim)
+      end
+
       def layer_tail(x : Array(Float32),
                      attn_projected : Array(Float32),
                      lw : Gemma4LayerWeights,
@@ -271,6 +342,38 @@ module ML::GGUF
         }
       end
 
+      def forward_layer_resident_cache(weights : Gemma4Weights,
+                                       il : Int32,
+                                       x : Array(Float32),
+                                       pos : Int32,
+                                       state : ResidentState) : Array(Float32)?
+        return nil unless available?
+
+        hp = weights.hparams
+        lw = weights.layers[il]
+        hidden_dim = hp.n_embd
+        raise ArgumentError.new("forward_layer_resident_cache input size mismatch") unless x.size == hidden_dim
+
+        x_norm = rms_norm(x, lw.attn_norm, hp.rms_eps).not_nil!
+        raw = if v_qw = lw.attn_v_qw
+                Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm)
+              else
+                Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw], x_norm)
+              end
+        return nil unless raw
+
+        pre = if raw.size == 3
+                Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[2], false)
+              else
+                Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[1].dup, true)
+              end
+        proj = normalize_and_rope_projection(pre, lw, hp, il, pos, hp.full_attention?(il) ? weights.rope_freqs : nil).not_nil!
+        ctx = attention_context_from_projection_resident(proj, hp, il, pos, state.layers[il]).not_nil!
+        attn_projected = Qwen35Metal.matmul(lw.attn_output_qw, ctx, 1)
+        return nil unless attn_projected
+        layer_tail(x, attn_projected, lw, hp)
+      end
+
       def forward_logits_from_hidden(weights : Gemma4Weights,
                                      hidden : Array(Float32)) : Array(Float32)?
         return nil unless available?
@@ -303,6 +406,25 @@ module ML::GGUF
           x = result[:out]
           lstate.k_cache = result[:k_cache]
           lstate.v_cache = result[:v_cache]
+        end
+        x
+      end
+
+      def forward_hidden_resident_cache(weights : Gemma4Weights,
+                                        token_id : Int32,
+                                        pos : Int32,
+                                        state : ResidentState,
+                                        stop_layer : Int32? = nil) : Array(Float32)?
+        hp = weights.hparams
+        x = Qwen35Metal.embedding_q6k_from_token_id(weights.token_embd, token_id)
+        return nil unless x
+        scale = Math.sqrt(hp.n_embd.to_f64).to_f32
+        x.size.times { |i| x[i] *= scale }
+
+        layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+        layer_count.times do |il|
+          x = forward_layer_resident_cache(weights, il, x, pos, state)
+          return nil unless x
         end
         x
       end

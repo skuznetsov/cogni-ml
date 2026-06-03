@@ -18547,3 +18547,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is a correctness-first host-array scaffold. It proves multi-layer state continuity and SWA/full-layer composition, but not resident GPU execution, full 48-layer decode, exact greedy top1, tokenizer/chat-template, multimodal projector, or speed.
 **LTP/WBA:** Window is a bounded layer prefix; transport carries hidden and K/V state across layers 0-5 and two token positions; legal move composes verified local layer corridors while preserving per-layer cache ownership. Boundary safety is hidden parity plus per-layer cache parity. Potential `Phi=(state_continuity_gap, full_layer_boundary_gap, prefix_decode_gap, resident_area)` decreased; remaining area is converting the proven prefix corridor into resident GPU buffers/waves.
 **next_gate:** Build resident buffer/state plumbing for the same stop-layer prefix, using this host-array scaffold as oracle; then profile sync/readback collapse before expanding to 48 layers.
+
+### [LM-COGNIGEMMA-21] Gemma4 resident K/V cache prefix parity verified
+**status:** verified
+**trust:** {F:0.87, G:narrow, R:0.87}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Metal::ResidentState` keeps prefix K/V caches in Metal buffers across token positions while matching CPU hidden and cache outputs for a stop-layer 2 path."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_metal_resident_build crystal build --no-codegen src/ml/gguf/gemma4_metal.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 1500 32000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `17 examples, 0 failures`; stop2 resident-cache hidden `cos=1.0`, max abs diff `3.8146973e-6`; layer0/1 K/V cache cosines `1.0`, max abs diffs <= `7.1525574e-6`
+  verified_at: 2026-06-03
+  decay_trigger: resident state layout rewrite, attention-context kernel rewrite, forward_hidden_resident_cache rewrite, or cache verification gate change
+**boundary:** This only makes K/V cache storage resident for the tested prefix. Hidden vectors and most projection/tail intermediates still round-trip through host arrays, and the full spec now takes about 3.5 minutes. This is not a speed claim.
+**LTP/WBA:** Window is the K/V cache upload/readback boundary inside the prefix decode corridor; transport carries cached K/V as Metal buffers across token positions; legal move updates cache in place and reads it only at the verification boundary. Potential `Phi=(cache_roundtrip_boundary, resident_state_gap, prefix_cache_parity_gap, full_resident_area)` decreased. Next legal move should carry hidden/intermediate buffers resident instead of adding broader host-array tests.
+**next_gate:** Add targeted resident-prefix perf/profiling that compares host-array `forward_hidden` versus resident-cache `forward_hidden_resident_cache`, then use attribution to choose hidden-buffer residency or command-buffer fusion.
