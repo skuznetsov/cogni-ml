@@ -18513,3 +18513,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is a correctness-first composed helper with host-visible arrays and multiple command buffers. It does not prove GPU-resident 48-layer decode, output norm/head logits, tokenizer/chat-template parity, multimodal mmproj integration, or speed versus llama.cpp.
 **LTP/WBA:** Window is one layer at one token position; transport is the full local layer corridor from input hidden to output hidden plus K/V cache boundary; legal moves compose already-verified exact kernels without altering residual/state semantics. Boundary safety is checked by output parity and K/V cache parity over a multi-token sequence. Potential `Phi=(uncomposed_layer_gap, state_boundary_uncertainty, semantic_mismatch, full_decode_area)` decreased; remaining area is resident multi-layer decode plus logits/head.
 **next_gate:** Remove host readback boundaries by adding GPU-resident composed layer/wave plumbing, then add output norm+tied-head+softcap top-k parity before full text decode.
+
+### [LM-COGNIGEMMA-19] Gemma4 Metal output norm, tied head, and softcap top-k gate verified
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.86}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Metal.forward_logits_from_hidden` applies output RMSNorm, the tied Q6_K token embedding head, and Gemma4 final logit softcap with CPU top-5 set parity on a one-layer hidden vector."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_metal_logits_build crystal build --no-codegen src/ml/gguf/gemma4_metal.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 720 26000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `15 examples, 0 failures`; CPU top-5 ids `[258882, 50283, 21464, 156848, 146639]`; GPU top-5 ids `[50283, 258882, 21464, 156848, 146639]`; top-5 sets match; per-token score diffs <= `3.8146973e-6`
+  verified_at: 2026-06-03
+  decay_trigger: output norm/head route rewrite, token embedding quant layout change, softcap kernel rewrite, or logits top-k gate change
+- refutation: "Strict ordered top-5/top-1 parity is not a stable gate for the synthetic one-layer hidden because final softcap saturates several logits at ~30."
+  source: first spec attempt failed with CPU top-1 `258882` vs GPU top-1 `50283`; after printing scores, both were saturated (`29.999998` vs `30.0`, `29.999996` vs `30.0`) with micro-level score drift
+  verified_at: 2026-06-03
+  decay_trigger: using a non-saturated final hidden/logit sample, exact full-model hidden, or a stronger top-1 margin test
+**boundary:** This proves the terminal head path on one synthetic one-layer hidden vector as top-5 set parity, not exact greedy top-1 parity. Full text decode still needs resident multi-layer state, tokenizer/chat-template handling, and an exact top-1 gate on realistic final hidden states.
+**LTP/WBA:** Window is the terminal hidden vector; transport is output RMSNorm -> tied Q6_K head -> softcap -> top-k readback; legal move isolates the head boundary without full 48-layer decode. Boundary safety is limited by saturated logits, so the dual frame is top-k set/score-drift evidence until a realistic hidden gives a non-tied top-1 margin. Potential `Phi=(missing_head_gate, softcap_uncertainty, topk_set_gap, full_decode_area)` decreased; exact top-1 remains a later margin-sensitive gate.
+**next_gate:** Add a resident decode scaffold that carries hidden/KV through multiple layers, then run output-head top-1 parity on realistic final hidden states with margin diagnostics.

@@ -51,6 +51,11 @@ module ML::GGUF
                         v_cache : Array(Float32)) : NamedTuple(out: Array(Float32), k_cache: Array(Float32), v_cache: Array(Float32))?
         nil
       end
+
+      def forward_logits_from_hidden(weights : Gemma4Weights,
+                                     hidden : Array(Float32)) : Array(Float32)?
+        nil
+      end
     {% else %}
       GEMMA4_SOURCE = {{ read_file("#{__DIR__}/kernels/gemma4.metal") }}
 
@@ -63,6 +68,7 @@ module ML::GGUF
       @@add_vec_pipeline : ML::Metal::ComputePipeline?
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
+      @@softcap_pipeline : ML::Metal::ComputePipeline?
 
       def available? : Bool
         ML::Metal::Device.init!
@@ -235,6 +241,19 @@ module ML::GGUF
         }
       end
 
+      def forward_logits_from_hidden(weights : Gemma4Weights,
+                                     hidden : Array(Float32)) : Array(Float32)?
+        return nil unless available?
+
+        hp = weights.hparams
+        raise ArgumentError.new("forward_logits_from_hidden hidden size mismatch") unless hidden.size == hp.n_embd
+        x = rms_norm(hidden, weights.output_norm, hp.rms_eps).not_nil!
+        logits = Qwen35Metal.matmul(weights.token_embd, x, 1)
+        return nil unless logits
+        softcap!(logits, hp.final_logit_softcapping)
+        logits
+      end
+
       def rms_norm(x : Array(Float32), weight : Array(Float32), eps : Float32) : Array(Float32)?
         return nil unless available?
         raise ArgumentError.new("rms_norm weight size mismatch") unless x.size == weight.size
@@ -297,6 +316,21 @@ module ML::GGUF
         cmd.commit
         cmd.wait
         out_buf.read(gate.size)
+      end
+
+      def softcap!(x : Array(Float32), cap : Float32) : Nil
+        return if cap <= 0.0_f32
+        return unless available?
+
+        x_buf = ML::MetalBuffer.from_array(x)
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_softcap(enc, x_buf, x.size, cap)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        updated = x_buf.read(x.size)
+        x.size.times { |i| x[i] = updated[i] }
       end
 
       private def encode_rmsnorm_weighted(enc : ML::Metal::ComputeEncoder,
@@ -443,6 +477,17 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
+      private def encode_softcap(enc : ML::Metal::ComputeEncoder,
+                                 x_buf : ML::MetalBuffer,
+                                 count : Int32,
+                                 cap : Float32) : Nil
+        enc.set_pipeline(softcap_pipeline)
+        enc.set_buffer(x_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_value(count.to_u32, 1)
+        enc.set_value(cap, 2)
+        enc.dispatch_1d(count, 256)
+      end
+
       private def rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline
         @@rmsnorm_weighted_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_heads_weighted") {
           ML::Metal::ComputePipeline.new("gemma4_rmsnorm_heads_weighted", GEMMA4_SOURCE)
@@ -494,6 +539,12 @@ module ML::GGUF
       private def gelu_mul_pipeline : ML::Metal::ComputePipeline
         @@gelu_mul_pipeline ||= ML::Metal::PipelineCache.get("gemma4_gelu_mul") {
           ML::Metal::ComputePipeline.new("gemma4_gelu_mul", GEMMA4_SOURCE)
+        }
+      end
+
+      private def softcap_pipeline : ML::Metal::ComputePipeline
+        @@softcap_pipeline ||= ML::Metal::PipelineCache.get("gemma4_logit_softcap") {
+          ML::Metal::ComputePipeline.new("gemma4_logit_softcap", GEMMA4_SOURCE)
         }
       end
     {% end %}

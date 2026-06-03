@@ -162,6 +162,29 @@ def gemma4_expect_forward_layer_parity(w : ML::GGUF::Gemma4Weights,
   gemma4_metal_expect_close("#{label}_v_cache", cpu_v, metal_v_cache)
 end
 
+def gemma4_expect_logits_topk_parity(w : ML::GGUF::Gemma4Weights,
+                                     label : String) : Nil
+  state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
+  x = ML::GGUF::Gemma4CPU.scaled_embedding_lookup(w, 42)
+  hidden = ML::GGUF::Gemma4CPU.forward_layer(w, 0, x, 0, state)
+
+  cpu_logits = ML::GGUF::Gemma4CPU.forward_logits_from_hidden(w, hidden)
+  gpu_logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(w, hidden).not_nil!
+  cpu_top = ML::GGUF::Gemma4CPU.top_k(cpu_logits, 5)
+  gpu_top = ML::GGUF::Gemma4CPU.top_k(gpu_logits, 5)
+  puts "  [#{label}] cpu_top=#{cpu_top.map(&.[0])}, gpu_top=#{gpu_top.map(&.[0])}"
+
+  cpu_ids = cpu_top.map(&.[0])
+  gpu_ids = gpu_top.map(&.[0])
+  gpu_ids.sort.should eq(cpu_ids.sort)
+  cpu_top.each_with_index do |pair, i|
+    token_id = pair[0]
+    score_diff = (gpu_logits[token_id] - pair[1]).abs
+    puts "  [#{label}_score_#{i}] token=#{token_id}, cpu=#{pair[1]}, gpu=#{gpu_logits[token_id]}, |d|=#{score_diff}"
+    score_diff.should be < 0.02_f32
+  end
+end
+
 describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
@@ -306,5 +329,11 @@ describe "Gemma4 Metal primitives" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_forward_layer_parity(w, 5, "gemma4_full_forward_layer")
+  end
+
+  it "projects a hidden vector through output norm, tied head, and softcap like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_logits_topk_parity(w, "gemma4_logits_topk")
   end
 end

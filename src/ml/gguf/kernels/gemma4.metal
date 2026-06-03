@@ -239,3 +239,13 @@ kernel void gemma4_gelu_mul(
     const float gelu = 0.5f * x * (1.0f + tanh(arg));
     out[gid] = gelu * up[gid];
 }
+
+kernel void gemma4_logit_softcap(
+    device       float* x     [[buffer(0)]],
+    constant     uint&  count [[buffer(1)]],
+    constant     float& cap   [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count || cap <= 0.0f) return;
+    x[gid] = tanh(x[gid] / cap) * cap;
+}
