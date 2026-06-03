@@ -18560,3 +18560,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This only makes K/V cache storage resident for the tested prefix. Hidden vectors and most projection/tail intermediates still round-trip through host arrays, and the full spec now takes about 3.5 minutes. This is not a speed claim.
 **LTP/WBA:** Window is the K/V cache upload/readback boundary inside the prefix decode corridor; transport carries cached K/V as Metal buffers across token positions; legal move updates cache in place and reads it only at the verification boundary. Potential `Phi=(cache_roundtrip_boundary, resident_state_gap, prefix_cache_parity_gap, full_resident_area)` decreased. Next legal move should carry hidden/intermediate buffers resident instead of adding broader host-array tests.
 **next_gate:** Add targeted resident-prefix perf/profiling that compares host-array `forward_hidden` versus resident-cache `forward_hidden_resident_cache`, then use attribution to choose hidden-buffer residency or command-buffer fusion.
+
+### [LM-COGNIGEMMA-22] Gemma4 resident K/V cache prefix profiling shows useful speedup when state is reused
+**status:** verified
+**trust:** {F:0.82, G:narrow, R:0.82}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "For the tested Gemma4 stop-layer 2, two-token prefix at `max_seq=1024`, resident K/V cache reuse is faster than the host-array cache path when state allocation is excluded from timed samples."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_prefix_profile_build crystal build --no-codegen bin/gemma4_metal_prefix_profile.cr --error-trace`; `/tmp/gemma4_metal_prefix_profile --stop-layer 2 --max-seq 1024 --tokens 42,43 --warmups 1 --runs 5 --mode both` under `scripts/run_safe.sh` -> host p50 `62.434ms`, resident p50 `31.636ms`, resident-vs-host p50 speedup `1.9735x`; separate mode runs -> resident p50 `28.085ms`, host p50 `51.133ms` (`~1.82x`)
+  verified_at: 2026-06-03
+  decay_trigger: probe rewrite, resident cache implementation rewrite, Metal pipeline warmup behavior change, or moving to resident hidden/intermediate buffers
+- refutation: "Including resident state allocation in the timed sample makes the resident path slower."
+  source: first profile with state allocation inside timed runs -> host p50 `49.701ms`, resident p50 `120.604ms`, resident-vs-host p50 speedup `0.4121x`
+  verified_at: 2026-06-03
+  decay_trigger: buffer-pool allocation strategy change or persistent session-state allocation policy change
+**boundary:** This is a prefix microprofile, not full Gemma4 decode speed. It compares current host-array cache vs resident-cache scaffold while hidden/intermediate tensors still round-trip through host arrays. The speedup applies only when K/V state is allocated once and reused across decode steps.
+**LTP/WBA:** Window is the `max_seq`-scaled cache transfer boundary; transport keeps K/V in resident Metal buffers across token positions; legal move excludes one-time allocation from the recurrent decode potential and lowers repeated cache upload/readback work. Potential `Phi=(repeated_cache_transfer, allocation_tax, hidden_roundtrip, full_resident_area)` decreased for reused session state. Dual frame: if state allocation is in the hot path, resident cache is currently worse and must use pooling or exact host-cache fallback.
+**next_gate:** Carry hidden and FFN/attention intermediates as resident buffers for the same prefix, or add a buffer-pool/persistent-session policy so resident state allocation is never charged per token/request.
