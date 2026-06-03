@@ -23,12 +23,24 @@ module ML::GGUF
                                         rope_freqs : Array(Float32)? = nil) : Gemma4CPU::AttentionProjection?
         nil
       end
+
+      def attention_context_from_projection(proj : Gemma4CPU::AttentionProjection,
+                                            hp : Gemma4Hparams,
+                                            il : Int32,
+                                            pos : Int32,
+                                            max_seq : Int32,
+                                            k_cache : Array(Float32),
+                                            v_cache : Array(Float32)) : NamedTuple(context: Array(Float32), k_cache: Array(Float32), v_cache: Array(Float32))?
+        nil
+      end
     {% else %}
       GEMMA4_SOURCE = {{ read_file("#{__DIR__}/kernels/gemma4.metal") }}
 
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_plain_pipeline : ML::Metal::ComputePipeline?
       @@rope_pipeline : ML::Metal::ComputePipeline?
+      @@kv_write_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_pipeline : ML::Metal::ComputePipeline?
 
       def available? : Bool
         ML::Metal::Device.init!
@@ -80,6 +92,54 @@ module ML::GGUF
         )
       end
 
+      def attention_context_from_projection(proj : Gemma4CPU::AttentionProjection,
+                                            hp : Gemma4Hparams,
+                                            il : Int32,
+                                            pos : Int32,
+                                            max_seq : Int32,
+                                            k_cache : Array(Float32),
+                                            v_cache : Array(Float32)) : NamedTuple(context: Array(Float32), k_cache: Array(Float32), v_cache: Array(Float32))?
+        return nil unless available?
+
+        n_head = hp.n_head
+        n_head_kv = hp.n_head_kv(il)
+        head_dim = hp.head_dim_for_layer(il)
+        kv_dim = n_head_kv * head_dim
+        q_dim = n_head * head_dim
+        heads_per_group = n_head // n_head_kv
+        raise ArgumentError.new("position #{pos} exceeds max_seq #{max_seq}") if pos < 0 || pos >= max_seq
+        raise ArgumentError.new("q projection size mismatch at layer #{il}") unless proj.q.size == q_dim
+        raise ArgumentError.new("k projection size mismatch at layer #{il}") unless proj.k.size == kv_dim
+        raise ArgumentError.new("v projection size mismatch at layer #{il}") unless proj.v.size == kv_dim
+        raise ArgumentError.new("k_cache size mismatch") unless k_cache.size == max_seq * kv_dim
+        raise ArgumentError.new("v_cache size mismatch") unless v_cache.size == max_seq * kv_dim
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+
+        start_pos = hp.attention_start_pos(il, pos)
+        len = pos - start_pos + 1
+        q_buf = ML::MetalBuffer.from_array(proj.q)
+        k_buf = ML::MetalBuffer.from_array(proj.k)
+        v_buf = ML::MetalBuffer.from_array(proj.v)
+        k_cache_buf = ML::MetalBuffer.from_array(k_cache)
+        v_cache_buf = ML::MetalBuffer.from_array(v_cache)
+        out_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_kv_write_one(enc, k_buf, v_buf, k_cache_buf, v_cache_buf, pos, kv_dim)
+        encode_attention_context_one(enc, q_buf, k_cache_buf, v_cache_buf, out_buf,
+          start_pos, len, n_head, n_head_kv, head_dim, heads_per_group)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+
+        {
+          context: out_buf.read(q_dim),
+          k_cache: k_cache_buf.read(k_cache.size),
+          v_cache: v_cache_buf.read(v_cache.size),
+        }
+      end
+
       private def encode_rmsnorm_weighted(enc : ML::Metal::ComputeEncoder,
                                           x_buf : ML::MetalBuffer,
                                           weight_buf : ML::MetalBuffer,
@@ -126,6 +186,48 @@ module ML::GGUF
         enc.dispatch_threadgroups({n_heads, 1, 1}, {32, 1, 1})
       end
 
+      private def encode_kv_write_one(enc : ML::Metal::ComputeEncoder,
+                                      k_buf : ML::MetalBuffer,
+                                      v_buf : ML::MetalBuffer,
+                                      k_cache_buf : ML::MetalBuffer,
+                                      v_cache_buf : ML::MetalBuffer,
+                                      pos : Int32,
+                                      kv_dim : Int32) : Nil
+        enc.set_pipeline(kv_write_pipeline)
+        enc.set_buffer(k_buf, 0)
+        enc.set_buffer(v_buf, 1)
+        enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(v_cache_buf, 3, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_value(pos.to_u32, 4)
+        enc.set_value(kv_dim.to_u32, 5)
+        enc.dispatch_1d(kv_dim, 256)
+      end
+
+      private def encode_attention_context_one(enc : ML::Metal::ComputeEncoder,
+                                               q_buf : ML::MetalBuffer,
+                                               k_cache_buf : ML::MetalBuffer,
+                                               v_cache_buf : ML::MetalBuffer,
+                                               out_buf : ML::MetalBuffer,
+                                               start_pos : Int32,
+                                               len : Int32,
+                                               n_head : Int32,
+                                               n_head_kv : Int32,
+                                               head_dim : Int32,
+                                               heads_per_group : Int32) : Nil
+        enc.set_pipeline(attn_context_pipeline)
+        enc.set_buffer(q_buf, 0)
+        enc.set_buffer(k_cache_buf, 1)
+        enc.set_buffer(v_cache_buf, 2)
+        enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(start_pos.to_u32, 4)
+        enc.set_value(len.to_u32, 5)
+        enc.set_value(n_head.to_u32, 6)
+        enc.set_value(n_head_kv.to_u32, 7)
+        enc.set_value(head_dim.to_u32, 8)
+        enc.set_value(heads_per_group.to_u32, 9)
+        enc.dispatch_threadgroups({n_head, 1, 1}, {32, 1, 1})
+      end
+
       private def rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline
         @@rmsnorm_weighted_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_heads_weighted") {
           ML::Metal::ComputePipeline.new("gemma4_rmsnorm_heads_weighted", GEMMA4_SOURCE)
@@ -141,6 +243,18 @@ module ML::GGUF
       private def rope_pipeline : ML::Metal::ComputePipeline
         @@rope_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rope_neox") {
           ML::Metal::ComputePipeline.new("gemma4_rope_neox", GEMMA4_SOURCE)
+        }
+      end
+
+      private def kv_write_pipeline : ML::Metal::ComputePipeline
+        @@kv_write_pipeline ||= ML::Metal::PipelineCache.get("gemma4_kv_write_one") {
+          ML::Metal::ComputePipeline.new("gemma4_kv_write_one", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_one") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_one", GEMMA4_SOURCE)
         }
       end
     {% end %}

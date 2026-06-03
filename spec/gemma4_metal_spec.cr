@@ -37,6 +37,46 @@ def gemma4_metal_expect_close(label : String, cpu : Array(Float32), gpu : Array(
   diff.should be < 0.02_f32 * scale
 end
 
+def gemma4_cpu_norm_rope_projection(w : ML::GGUF::Gemma4Weights,
+                                    il : Int32,
+                                    token_id : Int32,
+                                    pos : Int32) : ML::GGUF::Gemma4CPU::AttentionProjection
+  x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, token_id)
+  lw = w.layers[il]
+  proj = ML::GGUF::Gemma4CPU.attention_project_normed(lw, x, w.hparams, il)
+  ML::GGUF::Gemma4CPU.apply_rope_to_qk!(proj, w.hparams, il, pos, w.hparams.full_attention?(il) ? w.rope_freqs : nil)
+  proj
+end
+
+def gemma4_expect_context_parity(w : ML::GGUF::Gemma4Weights,
+                                 il : Int32,
+                                 token_ids : Array(Int32),
+                                 label : String) : Nil
+  max_seq = 8
+  hp = w.hparams
+  kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
+  cpu_state = ML::GGUF::Gemma4CPU::LayerState.new
+  metal_k_cache = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+  metal_v_cache = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+
+  token_ids.each_with_index do |token_id, pos|
+    proj = gemma4_cpu_norm_rope_projection(w, il, token_id, pos)
+    cpu_ctx = ML::GGUF::Gemma4CPU.attention_context_from_projection!(proj, hp, il, pos, cpu_state, max_seq)
+    metal = ML::GGUF::Gemma4Metal.attention_context_from_projection(
+      proj, hp, il, pos, max_seq, metal_k_cache, metal_v_cache).not_nil!
+    metal_k_cache = metal[:k_cache]
+    metal_v_cache = metal[:v_cache]
+
+    if pos == token_ids.size - 1
+      gemma4_metal_expect_close("#{label}_ctx", cpu_ctx, metal[:context])
+      cpu_k = cpu_state.k_cache.not_nil![0, metal_k_cache.size]
+      cpu_v = cpu_state.v_cache.not_nil![0, metal_v_cache.size]
+      gemma4_metal_expect_close("#{label}_k_cache", cpu_k, metal_k_cache)
+      gemma4_metal_expect_close("#{label}_v_cache", cpu_v, metal_v_cache)
+    end
+  end
+end
+
 describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
@@ -133,5 +173,17 @@ describe "Gemma4 Metal primitives" do
     gemma4_metal_expect_close("gemma4_full_norm_rope_q", cpu.q, gpu.q)
     gemma4_metal_expect_close("gemma4_full_norm_rope_k", cpu.k, gpu.k)
     gemma4_metal_expect_close("gemma4_full_norm_rope_v", cpu.v, gpu.v)
+  end
+
+  it "computes ungated SWA GQA attention context like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_context_parity(w, 0, [42, 43, 44], "gemma4_swa_attn")
+  end
+
+  it "computes ungated full-layer GQA attention context like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_context_parity(w, 5, [42, 43, 44], "gemma4_full_attn")
   end
 end

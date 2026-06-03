@@ -18442,3 +18442,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This proves projection post-processing parity only. It does not yet write KV cache, compute attention scores/context, run output projection, FFN, output norm/head, or tokenizer/chat-template parity.
 **LTP/WBA:** Window is the normalized projection group before KV-cache write; transport is Q/K/V through a single command-buffer corridor; legal moves are per-head RMSNorm and RoPE only, preserving full-layer V-from-K semantics. Potential `Phi=(semantic_mismatch, CPU_postprocess, launch_gap, parity_gap)` decreased under focused specs.
 **next_gate:** Add the Gemma4 ungated GQA one-token attention context kernel for SWA `head_dim=256,n_kv=8` and full `head_dim=512,n_kv=1`, then compare against CPU attention context.
+
+### [LM-COGNIGEMMA-15] Gemma4 ungated Metal GQA attention context verified
+**status:** verified
+**trust:** {F:0.87, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Metal.attention_context_from_projection` writes the current K/V row and computes ungated one-token GQA attention context with CPU parity for SWA layer 0."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_metal_attn_build crystal build --no-codegen src/ml/gguf/gemma4_metal.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 300 20000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `8 examples, 0 failures`; SWA `pos=2` context `cos=1.0`, max abs diff `1.9073486e-6`, K/V cache max diff `0.0`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 attention semantics change, GQA grouping rewrite, SWA window rewrite, or cache layout rewrite
+- claim: "The same attention helper handles full-attention layer 5 (`head_dim=512`, `n_head_kv=1`) with CPU parity at non-trivial context length."
+  source: same spec command; full `pos=2` context `cos=1.0`, max abs diff `1.1622906e-6`, K/V cache max diff `0.0`
+  verified_at: 2026-06-03
+  decay_trigger: full-layer KV sharing semantics change or kernel max-head-dim assumptions change
+**boundary:** This proves attention context only from already-normalized/RoPE'd projections. It does not yet fuse projection+norm+RoPE+attention, run attention output projection, FFN, output norm/head, tokenizer, or multimodal mmproj.
+**LTP/WBA:** Window is the current token's normalized/RoPE projection; transport writes K/V into the cache corridor and reads the legal attention span; legal move is ungated GQA online softmax with exact cache boundary. Potential `Phi=(cache_write_gap, GQA_uncertainty, softmax_parity_gap, remaining_layer_tail)` decreased under SWA/full specs.
+**next_gate:** Compose projection -> norm/RoPE -> attention context -> attention output projection for one Gemma4 layer, then compare the projected attention output against CPU before adding FFN tail.
