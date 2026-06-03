@@ -187,6 +187,11 @@ def main() -> None:
     ap.add_argument("--shortlist-ms", default="20,50,100")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--fail-report", type=Path)
+    ap.add_argument(
+        "--guard-thresholds",
+        default="",
+        help="Comma-separated codec top1-top2 score gaps that trigger exact rerank fallback",
+    )
     args = ap.parse_args()
 
     module = load_clustered_pg_eval(args.clustered_pg)
@@ -208,8 +213,11 @@ def main() -> None:
     for codec in codecs:
         codec.fit(base)
 
+    guard_thresholds = [float(x) for x in args.guard_thresholds.split(",") if x.strip()]
+
     print("shortlist\tM\tcodec\tbytes_per_vec\thit1\trecall@k\tshortlist_miss\trerank_miss\tavg_exact_margin_loss")
     report_lines = ["query\tshortlist\tM\tcodec\texact_top1\tchosen\texact_top1_score\tchosen_exact_score\tmargin_loss\tshortlist_has_exact"]
+    guard_rows: list[tuple[str, int, str, float, int, float, float]] = []
 
     for sl_name in [x.strip() for x in args.shortlists.split(",") if x.strip()]:
         method = build_shortlist_method(module, sl_name, args.seed)
@@ -224,6 +232,7 @@ def main() -> None:
                 recall_total = 0.0
                 rerank_miss = 0
                 margin_losses: list[float] = []
+                guard_stats = {threshold: {"fallbacks": 0, "hit1": 0} for threshold in guard_thresholds}
                 for qi, (ids, gt, gt_score_row) in enumerate(zip(shortlists, gt_ids, gt_scores)):
                     scores = codec.scores(ids, queries[qi])
                     chosen_local = topk(scores, min(args.k, ids.size))
@@ -243,6 +252,17 @@ def main() -> None:
                                 f"{float(exact_scores[0]):.9f}\t{float(exact_scores[1]):.9f}\t{loss:.9f}\t"
                                 f"{1 if exact_top1 in set(ids.tolist()) else 0}"
                             )
+                    if guard_thresholds:
+                        codec_gap = float(scores[chosen_local[0]] - scores[chosen_local[1]]) if chosen_local.size > 1 else float("inf")
+                        exact_short_scores = base[ids] @ queries[qi]
+                        exact_short_top = int(ids[topk(exact_short_scores, 1)[0]])
+                        for threshold, stats in guard_stats.items():
+                            guarded = chosen
+                            if codec_gap <= threshold:
+                                stats["fallbacks"] += 1
+                                guarded = exact_short_top
+                            if guarded == exact_top1:
+                                stats["hit1"] += 1
                     recall_total += len(set(found.tolist()) & set(gt.tolist())) / float(args.k)
                 n = len(queries)
                 row = ProbeRow(
@@ -261,6 +281,28 @@ def main() -> None:
                     f"{row.hit1:.2f}\t{row.recall:.2f}\t{row.shortlist_miss}\t{row.rerank_miss}\t"
                     f"{row.avg_exact_margin_loss:.9f}"
                 )
+                n = len(queries)
+                for threshold, stats in guard_stats.items():
+                    guard_rows.append(
+                        (
+                            row.shortlist,
+                            row.shortlist_m,
+                            row.codec,
+                            threshold,
+                            int(stats["fallbacks"]),
+                            100.0 * int(stats["fallbacks"]) / n,
+                            100.0 * int(stats["hit1"]) / n,
+                        )
+                    )
+
+    if guard_rows:
+        print("\nGuarded exact-fallback simulation")
+        print("shortlist\tM\tcodec\tthreshold\tfallbacks\tfallback_pct\tguarded_hit1")
+        for shortlist, m, codec_name, threshold, fallbacks, fallback_pct, guarded_hit1 in guard_rows:
+            print(
+                f"{shortlist}\t{m}\t{codec_name}\t{threshold:.9g}\t"
+                f"{fallbacks}\t{fallback_pct:.2f}\t{guarded_hit1:.2f}"
+            )
 
     if args.fail_report:
         args.fail_report.write_text("\n".join(report_lines) + "\n")
