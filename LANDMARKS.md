@@ -18136,3 +18136,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is `codec_margin <= exact_fallback_gap`. Transport is the compressed shortlist/rerank result plus a call-level ambiguity certificate. Legal move marks low-margin rows with `needs_exact` while preserving the old scan ABI. Dual frame is an external exact rerank over the returned candidate band. Potential `Phi=(codec_miss_risk, exact_fallback_area, live_store_bytes, ABI_breakage)` decreases risk without increasing ABI breakage.
 - trust: {F=.88,G=.34,R=.84}
 - decay_trigger: store format rewrite, exact-vector sidecar integration, SQL wrapper that performs exact fallback, larger live benchmark, or block16-I8 payload format addition
+
+**LM-812 FlashHadamard margin SQL smoke passes on a temp Postgres cluster [codex-f/ml]**
+- status: VERIFIED runtime smoke for margin surface; still not a full exact-rerank wrapper
+- evidence: In `/Users/sergey/Projects/C/clustered_pg`, commit `44d130f test: add FlashHadamard margin smoke` adds `scripts/test_flashhadamard_margin.sh`. The script starts a temporary PostgreSQL 18 cluster, loads pgvector, binds repo-local `pg_sorted_heap.dylib` functions by absolute path, builds a 5-row `vector(8)` FlashHadamard store, compares `flashhadamard_store_scan` with `flashhadamard_store_scan_margin`, and checks default/forced guard behavior. Runtime result: `flashhadamard_margin_smoke status=ok`; rows returned `plain_count=3`, `margin_count=3`, default `needs_exact=false`, forced high threshold `needs_exact=true`.
+- diagnosis: The SQL-visible low-margin window is not only compiled/exported; it works through a live backend. This verifies the boundary API needed for a future exact rerank wrapper. The remaining missing piece is exact-vector access for `needs_exact=true` windows.
+- LTP/WBA: Window is observed in SQL as `codec_margin`; legal move is to emit `needs_exact` without changing existing scan output. Dual frame remains an external exact rerank. Potential `Phi=(runtime_symbol_risk, SQL_binding_risk, guard_signal_risk, exact_fallback_missing)` decreased on the first three components; the fourth remains open.
+- trust: {F=.90,G=.30,R=.86}
+- decay_trigger: PostgreSQL version change, pgvector ABI change, store path hardening commit, function signature change, or exact-rerank wrapper implementation
