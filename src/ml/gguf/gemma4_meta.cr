@@ -87,6 +87,10 @@ module ML::GGUF
       @n_head_kv_by_layer[il]
     end
 
+    def has_kv?(il : Int32) : Bool
+      il < @n_layer - @shared_kv_layers
+    end
+
     def head_dim_for_layer(il : Int32) : Int32
       sliding_window?(il) ? @head_dim_swa : @head_dim
     end
@@ -105,6 +109,12 @@ module ML::GGUF
 
     def sliding_window_layers : Array(Int32)
       (0...@n_layer).select { |il| sliding_window?(il) }
+    end
+
+    def attention_start_pos(il : Int32, pos : Int32) : Int32
+      return 0 unless sliding_window?(il)
+
+      Math.max(0, pos - @sliding_window + 1)
     end
 
     private def req_int(g : GGUFFile, key : String) : Int32

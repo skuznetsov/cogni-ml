@@ -139,4 +139,41 @@ describe ML::GGUF::Gemma4CPU do
     proj.k.should_not eq(k0)
     proj.v.should eq(v0)
   end
+
+  it "computes a one-token SWA attention context and projected output" do
+    pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
+
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+
+    ctx = ML::GGUF::Gemma4CPU.attention_context(w, 0, x, 0, state)
+    ctx.size.should eq(16 * 256)
+    ctx.all? { |v| v.finite? }.should be_true
+    ctx.count { |v| v != 0.0_f32 }.should be > 100
+    state.layers[0].position.should eq(1)
+    state.layers[0].k_cache.not_nil!.size.should eq(8 * 8 * 256)
+    state.layers[0].v_cache.not_nil!.size.should eq(8 * 8 * 256)
+
+    out = ML::GGUF::Gemma4CPU.attention_projected_output(w, 0, x, 1, state)
+    out.size.should eq(w.hparams.n_embd)
+    out.all? { |v| v.finite? }.should be_true
+    state.layers[0].position.should eq(2)
+  end
+
+  it "computes full-layer attention context with normalized K-as-V cache split" do
+    pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
+
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+
+    ctx = ML::GGUF::Gemma4CPU.attention_context(w, 5, x, 0, state)
+    ctx.size.should eq(16 * 512)
+    ctx.all? { |v| v.finite? }.should be_true
+    state.layers[5].position.should eq(1)
+    state.layers[5].k_cache.not_nil!.size.should eq(8 * 1 * 512)
+    state.layers[5].v_cache.not_nil!.size.should eq(8 * 1 * 512)
+    state.layers[5].k_cache.not_nil![0, 512].should_not eq(state.layers[5].v_cache.not_nil![0, 512])
+  end
 end

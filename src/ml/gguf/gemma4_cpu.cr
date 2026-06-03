@@ -21,6 +21,24 @@ module ML::GGUF
       end
     end
 
+    class LayerState
+      property k_cache : Array(Float32)?
+      property v_cache : Array(Float32)?
+      property position : Int32 = 0
+
+      def initialize
+      end
+    end
+
+    class State
+      getter layers : Array(LayerState)
+      getter max_seq : Int32
+
+      def initialize(hp : Gemma4Hparams, @max_seq : Int32 = 1024)
+        @layers = Array(LayerState).new(hp.n_layer) { LayerState.new }
+      end
+    end
+
     # RMSNorm with learned weight: y[i] = x[i] * rsqrt(mean(x^2) + eps) * w[i].
     def rms_norm(x : Array(Float32), w : Array(Float32), eps : Float32 = 1.0e-6_f32) : Array(Float32)
       raise ArgumentError.new("rms_norm weight size mismatch: #{w.size} != #{x.size}") unless w.size == x.size
@@ -155,6 +173,90 @@ module ML::GGUF
       hp.n_head_kv(il).times do |h|
         rope_neox_slice!(proj.k, h * head_dim, n_rot, head_dim, pos, base, rope_freqs)
       end
+    end
+
+    def attention_context(weights : Gemma4Weights, il : Int32, x : Array(Float32),
+                          pos : Int32, state : State) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("layer #{il} does not own KV cache") unless hp.has_kv?(il)
+      raise ArgumentError.new("position #{pos} exceeds state max_seq #{state.max_seq}") if pos < 0 || pos >= state.max_seq
+
+      proj = attention_project_normed(lw, x, hp, il)
+      apply_rope_to_qk!(proj, hp, il, pos, hp.full_attention?(il) ? weights.rope_freqs : nil)
+      attention_context_from_projection!(proj, hp, il, pos, state.layers[il], state.max_seq)
+    end
+
+    def attention_projected_output(weights : Gemma4Weights, il : Int32, x : Array(Float32),
+                                   pos : Int32, state : State) : Array(Float32)
+      ctx = attention_context(weights, il, x, pos, state)
+      matmul(weights.layers[il].attn_output_qw, ctx)
+    end
+
+    def attention_context_from_projection!(proj : AttentionProjection, hp : Gemma4Hparams,
+                                           il : Int32, pos : Int32,
+                                           lstate : LayerState, max_seq : Int32) : Array(Float32)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      head_dim = hp.head_dim_for_layer(il)
+      kv_dim = n_head_kv * head_dim
+      q_dim = n_head * head_dim
+      heads_per_group = n_head // n_head_kv
+
+      k_cache = lstate.k_cache ||= Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+      v_cache = lstate.v_cache ||= Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+      base = pos * kv_dim
+      kv_dim.times do |i|
+        k_cache[base + i] = proj.k[i]
+        v_cache[base + i] = proj.v[i]
+      end
+      lstate.position = Math.max(lstate.position, pos + 1)
+
+      start_pos = hp.attention_start_pos(il, pos)
+      len = pos - start_pos + 1
+      out = Array(Float32).new(q_dim, 0.0_f32)
+      scores = Array(Float32).new(len, 0.0_f32)
+
+      n_head.times do |h|
+        kvh = h // heads_per_group
+        q_off = h * head_dim
+        len.times do |idx|
+          p = start_pos + idx
+          k_off = p * kv_dim + kvh * head_dim
+          score = 0.0_f32
+          head_dim.times { |d| score += proj.q[q_off + d] * k_cache[k_off + d] }
+          scores[idx] = score
+        end
+        softmax_slice!(scores, 0, len)
+
+        out_off = h * head_dim
+        len.times do |idx|
+          p = start_pos + idx
+          v_off = p * kv_dim + kvh * head_dim
+          w = scores[idx]
+          head_dim.times { |d| out[out_off + d] += w * v_cache[v_off + d] }
+        end
+      end
+      out
+    end
+
+    def softmax_slice!(x : Array(Float32), offset : Int32, len : Int32) : Nil
+      raise ArgumentError.new("softmax empty slice") unless len > 0
+      raise ArgumentError.new("softmax slice out of bounds") if offset < 0 || offset + len > x.size
+
+      maxv = x[offset]
+      len.times do |i|
+        v = x[offset + i]
+        maxv = v if v > maxv
+      end
+      sum = 0.0_f32
+      len.times do |i|
+        e = Math.exp(x[offset + i] - maxv)
+        x[offset + i] = e
+        sum += e
+      end
+      inv = 1.0_f32 / sum
+      len.times { |i| x[offset + i] *= inv }
     end
 
     # Default ggml RoPE path for text-mode Gemma4 short-context probes. This is

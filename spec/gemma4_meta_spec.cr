@@ -30,6 +30,10 @@ describe ML::GGUF::Gemma4Hparams do
       hp.sliding_window_layers.size.should eq(40)
       hp.n_head_kv_by_layer.count(8).should eq(40)
       hp.n_head_kv_by_layer.count(1).should eq(8)
+      hp.has_kv?(0).should be_true
+      hp.has_kv?(47).should be_true
+      hp.attention_start_pos(0, 1500).should eq(477)
+      hp.attention_start_pos(5, 1500).should eq(0)
     ensure
       g.close
     end

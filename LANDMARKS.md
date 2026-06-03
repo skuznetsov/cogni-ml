@@ -18322,3 +18322,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: model file or GGUF layout change
 **boundary:** This is a short-context/default-scaling RoPE gate. It does not prove YaRN/extrapolated long-context parity or multimodal M-RoPE.
 **next_gate:** Implement one-token SWA attention cache/update with sliding-window bounds, then full-layer attention using K-as-V cache semantics.
+
+### [LM-COGNIGEMMA-8] Gemma4 one-token attention context corridor verified
+**status:** verified
+**trust:** {F:0.84, G:narrow, R:0.86}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4CPU.attention_context` writes per-layer K/V cache rows, applies SWA span bounds, performs GQA attention with Gemma4's upstream `f_attention_scale=1.0`, and returns an unprojected attention context."
+  source: `crystal spec spec/gemma4_meta_spec.cr spec/gemma4_cpu_spec.cr --error-trace` (`14 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: attention parity mismatch, upstream Gemma4 attention scale change, cache layout rewrite, or Metal attention port
+- claim: "SWA layer 0 and full layer 5 both produce finite one-token contexts on real local GGUF weights; full layer 5 keeps K/V cache rows distinct after normalized K-as-V branching."
+  source: same spec command
+  verified_at: 2026-06-03
+  decay_trigger: model file or full-layer V semantics change
+**boundary:** This proves cache/context mechanics only. It does not yet prove attention output projection parity, residual/post-attention norm, FFN, output softcap, tokenizer parity, or full logits/top1 parity.
+**LTP/WBA:** Window is one decoded token at one layer; transport is `(Q,K,V)` into a bounded KV cache corridor; legal move updates only the current row and reads `[max(0,pos-window+1)..pos]` for SWA. Potential `Phi=(cache_layout_uncertainty, window_overread, scale_mismatch, context_nonfinite, parity_risk)` decreased under focused specs.
+**next_gate:** Implement the Gemma4 block tail: `attn_output -> post_attention_norm -> residual -> GELU-parallel FFN -> post_ffw_norm/layer_output_scale`, then compare first-token top1 against llama.cpp.
