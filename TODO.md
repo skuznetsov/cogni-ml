@@ -29,6 +29,7 @@
 - [ ] Reframe Hadamard from token-window continuation to session/template trajectory sketches where n-gram has no certified corridor.
 - [ ] Productize the full-depth Nomic compressed-index lane after shallow-depth route refutation.
   - [x] Add `scripts/nomic_export_tsv_to_npy.py` and run a bounded FlashHadamard/TurboQuant smoke on full-depth Nomic vectors (`256` docs / `128` queries, dim768). Evidence: `sq8_linear` hit@1 `100.00`, recall@10 `99.38`; FlashHadamard packed4+SQ8 rerank hit@1 `100.00`, recall@10 `99.77-99.84` at 12 bits/dim. Boundary: small corpus only, no latency promotion; next gate is 10K-100K vectors or direct `pg_sorted_heap` ingestion.
+  - [x] Run a stronger recursive Markdown gate (`742` docs / `742` queries). Evidence: `sq8_linear` preserved hit@1 `100.00`, recall@10 `99.60`; 4-bit Hadamard shortlist alone lost top1 (`97.84-98.92`); Hadamard+SQ8 rerank stayed near but below exact top1 (`99.73`); Hadamard+resident fp32 rerank20/50 recovered hit@1 `100.00` and recall@10 `99.99/100.00`. Boundary: shortlist quality is promising, but SQ8 rerank is not exact-top1 safe; next branch is exact resident rerank or a better rerank codec inside `pg_sorted_heap`.
 
 **Current harness integration frontier (2026-05-21):**
 - [x] Add Qwen XML-to-JSON function-calling bridge for CrystalBall-style harnesses. The model still receives Qwen-native XML tool instructions, but host output can now be normalized as `{"content":...,"tool_calls":[{"name":...,"arguments":{...}}]}` via `QWEN35_TOOL_RESPONSE_JSON=simple`, or OpenAI wrappers via `openai`.
