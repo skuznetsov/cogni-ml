@@ -221,6 +221,7 @@ queries_tsv = nil.as(String?)
 rerank_k = 3
 depths_arg = nil.as(String?)
 show_economics = false
+candidate_report_path = nil.as(String?)
 
 OptionParser.parse do |p|
   p.banner = "Usage: nomic_encoder_tricks_probe [options]"
@@ -236,6 +237,7 @@ OptionParser.parse do |p|
   p.on("--batched", "Use embed_batch_depth for each requested depth") { use_batched = true }
   p.on("--batch-size=N", "Override embed_batch_depth microbatch size for --batched probes") { |v| batch_size_override = v.to_i }
   p.on("--economics", "Print rough two-stage retrieval economics after quality metrics") { show_economics = true }
+  p.on("--candidate-report=PATH", "Write per-query shallow top-K/full-rerank TSV rows") { |v| candidate_report_path = v }
   p.on("--summary-only", "Suppress per-query mismatch details") { summary_only = true }
   p.on("--show-results", "Print per-query top1/top3 details instead of compact mismatches") { show_results = true }
   p.on("-h", "--help", "Show help") do
@@ -344,6 +346,8 @@ puts "load_ms=#{load_ms.round(3)} docs=#{docs.size} queries=#{queries.size} laye
 puts "depth\tms_total\tms_per_text\tfull_cos_mean\tfull_cos_min\tinvalid_vecs\tzeroish_vecs\tlabel_top1\tlabel_top3\tfull_top1_agree\tfull_top3_contains_depth_top1\tshallow_has_label@k\tshallow_has_full@k\tfull_rerank_label@k\tfull_rerank_full@k\tcandidate_union@k\tcandidate_doc_pct\tlazy_full_doc_savings_pct\tdetails"
 
 retrieval_metrics = [] of DepthRetrievalMetrics
+candidate_report = candidate_report_path.try { |path| File.open(path, "w") }
+candidate_report.try &.puts("depth\tquery\texpected_doc\tshallow_top1\tfull_top1\trerank_top1\tshallow_has_expected\tshallow_has_full\trerank_matches_full\tcandidate_count\tcandidates")
 
 eval_depths.each do |depth|
   current_depth_i = depth_index[depth]
@@ -398,6 +402,21 @@ eval_depths.each do |depth|
     shallow_has_full_k += 1 if topk.includes?(full_pred)
     full_rerank_label_k += 1 if rerank_pred == queries[qi].expected_doc
     full_rerank_full_k += 1 if rerank_pred == full_pred
+    candidate_report.try do |io|
+      io.puts [
+        depth,
+        queries[qi].name,
+        queries[qi].expected_doc,
+        pred,
+        full_pred,
+        rerank_pred,
+        topk.includes?(queries[qi].expected_doc) ? 1 : 0,
+        topk.includes?(full_pred) ? 1 : 0,
+        rerank_pred == full_pred ? 1 : 0,
+        topk.size,
+        topk.join(","),
+      ].join('\t')
+    end
     result_parts << "#{queries[qi].name}:#{pred}:#{score.round(4)}:top3=#{top3.join("|")}:rerank=#{rerank_pred}"
     if pred != queries[qi].expected_doc || pred != full_pred || rerank_pred != full_pred
       mismatch_parts << "#{queries[qi].name}:pred=#{pred}:expected=#{queries[qi].expected_doc}:full=#{full_pred}:rerank=#{rerank_pred}:top3=#{top3.join("|")}:topk=#{topk.join("|")}"
@@ -471,3 +490,4 @@ if show_economics
     puts "#{m.depth}\t#{rerank_k}\t#{quality_gate}\t#{m.candidate_union_size}/#{docs.size}\t#{candidate_doc_pct.round(2)}\t#{cold_lazy_ms.round(3)}\t#{cold_lazy_speedup.round(3)}\t#{hot_query_extra_embed_ms.round(3)}\t#{reduced_doc_scan_pct.round(2)}\t#{verdict}"
   end
 end
+candidate_report.try &.close
