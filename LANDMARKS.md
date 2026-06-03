@@ -18425,3 +18425,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This proves raw projection parity only. It does not prove per-head Q/K learned RMSNorm, plain V RMSNorm, RoPE, KV-cache write, attention context, output projection, FFN, or logits parity.
 **LTP/WBA:** Window is the per-layer projection group after `attn_norm`; transport is Q/K/V rows through one `matmul_many` corridor; legal move reuses exact quant GEMV without changing Gemma4 semantics; boundary safety keeps full-layer K-as-V outside the projection shortcut. Potential `Phi=(separate_syncs, projection_uncertainty, weight_uploads, parity_gap)` decreased under the focused spec.
 **next_gate:** Add Gemma4-specific Metal normalization/RoPE parity, including full-layer `rope_freqs.weight` factors, before introducing ungated attention.
+
+### [LM-COGNIGEMMA-14] Gemma4 Metal Q/K/V normalization and RoPE parity verified
+**status:** verified
+**trust:** {F:0.87, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Metal.normalize_and_rope_projection` matches CPU per-head Q learned RMSNorm, K learned RMSNorm, V plain RMSNorm, and SWA text RoPE."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_metal_norm_build crystal build --no-codegen src/ml/gguf/gemma4_metal.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 240 18000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `6 examples, 0 failures`; SWA norm/RoPE rows had `cos=1.0`, max abs diffs <= `5.2452087e-6`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 CPU norm/RoPE rewrite, Metal helper rewrite, or long-context/multimodal RoPE change
+- claim: "The same helper handles full-attention layer proportional RoPE with `rope_freqs.weight` factors and K-as-V normalization boundary."
+  source: same spec command; full norm/RoPE rows had `cos=1.0`, max abs diffs <= `2.041459e-6`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 full-layer RoPE-factor semantics change or local GGUF layout change
+**boundary:** This proves projection post-processing parity only. It does not yet write KV cache, compute attention scores/context, run output projection, FFN, output norm/head, or tokenizer/chat-template parity.
+**LTP/WBA:** Window is the normalized projection group before KV-cache write; transport is Q/K/V through a single command-buffer corridor; legal moves are per-head RMSNorm and RoPE only, preserving full-layer V-from-K semantics. Potential `Phi=(semantic_mismatch, CPU_postprocess, launch_gap, parity_gap)` decreased under focused specs.
+**next_gate:** Add the Gemma4 ungated GQA one-token attention context kernel for SWA `head_dim=256,n_kv=8` and full `head_dim=512,n_kv=1`, then compare against CPU attention context.

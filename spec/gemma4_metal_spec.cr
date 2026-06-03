@@ -1,5 +1,6 @@
 require "./spec_helper"
 require "../src/ml/gguf/gemma4_cpu"
+require "../src/ml/gguf/gemma4_metal"
 require "../src/ml/gguf/qwen35_metal"
 
 GEMMA4_METAL_12B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
@@ -98,5 +99,39 @@ describe "Gemma4 Metal primitives" do
 
     gemma4_metal_expect_close("gemma4_full_q_proj", cpu[0], gpu[0])
     gemma4_metal_expect_close("gemma4_full_k_proj", cpu[1], gpu[1])
+  end
+
+  it "normalizes and RoPEs a SWA projection like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    lw = w.layers[0]
+    x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
+    pre = ML::GGUF::Gemma4CPU.attention_project_pre_norm(lw, x_norm)
+
+    cpu = ML::GGUF::Gemma4CPU::AttentionProjection.new(pre.q.dup, pre.k.dup, pre.v.dup, pre.reused_k_as_v)
+    ML::GGUF::Gemma4CPU.normalize_attention_projection!(cpu, lw, w.hparams, 0)
+    ML::GGUF::Gemma4CPU.apply_rope_to_qk!(cpu, w.hparams, 0, 7)
+    gpu = ML::GGUF::Gemma4Metal.normalize_and_rope_projection(pre, lw, w.hparams, 0, 7).not_nil!
+
+    gemma4_metal_expect_close("gemma4_swa_norm_rope_q", cpu.q, gpu.q)
+    gemma4_metal_expect_close("gemma4_swa_norm_rope_k", cpu.k, gpu.k)
+    gemma4_metal_expect_close("gemma4_swa_norm_rope_v", cpu.v, gpu.v)
+  end
+
+  it "normalizes and RoPEs a full-attention projection with Gemma4 frequency factors" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    lw = w.layers[5]
+    x_norm = ML::GGUF::Gemma4CPU.rms_norm(x, lw.attn_norm, w.hparams.rms_eps)
+    pre = ML::GGUF::Gemma4CPU.attention_project_pre_norm(lw, x_norm)
+
+    cpu = ML::GGUF::Gemma4CPU::AttentionProjection.new(pre.q.dup, pre.k.dup, pre.v.dup, pre.reused_k_as_v)
+    ML::GGUF::Gemma4CPU.normalize_attention_projection!(cpu, lw, w.hparams, 5)
+    ML::GGUF::Gemma4CPU.apply_rope_to_qk!(cpu, w.hparams, 5, 7, w.rope_freqs)
+    gpu = ML::GGUF::Gemma4Metal.normalize_and_rope_projection(pre, lw, w.hparams, 5, 7, w.rope_freqs).not_nil!
+
+    gemma4_metal_expect_close("gemma4_full_norm_rope_q", cpu.q, gpu.q)
+    gemma4_metal_expect_close("gemma4_full_norm_rope_k", cpu.k, gpu.k)
+    gemma4_metal_expect_close("gemma4_full_norm_rope_v", cpu.v, gpu.v)
   end
 end
