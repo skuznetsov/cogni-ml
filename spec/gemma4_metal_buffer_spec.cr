@@ -1,5 +1,6 @@
 require "./spec_helper"
 require "../src/ml/gguf/gemma4_cpu"
+require "../src/ml/gguf/gemma4_metal"
 require "../src/ml/gguf/qwen35_metal"
 
 GEMMA4_METAL_BUFFER_12B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
@@ -42,5 +43,37 @@ describe "Gemma4 resident Metal matmul buffers" do
 
     ctx = Array(Float32).new(lw.ffn_down_qw.in_dim) { |i| Math.sin(i.to_f32 * 0.013_f32).to_f32 * 0.25_f32 }
     gemma4_expect_resident_matmul_matches("gemma4_resident_q6_ffn_down", lw.ffn_down_qw, ctx)
+  end
+
+  it "runs the Gemma4 layer tail through resident intermediate buffers like the array path" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    lw = w.layers[0]
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    scale = Math.sqrt(w.hparams.n_embd.to_f64).to_f32
+    x.size.times { |i| x[i] *= scale }
+    attn_projected = Array(Float32).new(w.hparams.n_embd) { |i| Math.sin(i.to_f32 * 0.017_f32).to_f32 * 0.125_f32 }
+
+    expected = ML::GGUF::Gemma4Metal.layer_tail(x, attn_projected, lw, w.hparams).not_nil!
+    actual = ML::GGUF::Gemma4Metal.layer_tail_resident_buffers(x, attn_projected, lw, w.hparams).not_nil!
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    puts "  [gemma4_resident_layer_tail] max|d|=#{diff}"
+    diff.should be <= 1.0e-5_f32
+  end
+
+  it "keeps the stop-layer resident-cache hidden path aligned after resident tail promotion" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)
+    resident_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    host = [] of Float32
+    resident = [] of Float32
+
+    [42, 43].each_with_index do |token_id, pos|
+      host = ML::GGUF::Gemma4Metal.forward_hidden(w, token_id, pos, host_state, 2).not_nil!
+      resident = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(w, token_id, pos, resident_state, 2).not_nil!
+    end
+
+    diff = gemma4_buffer_max_abs_diff(host, resident)
+    puts "  [gemma4_resident_stop2_hidden] max|d|=#{diff}"
+    diff.should be <= 1.0e-5_f32
   end
 end

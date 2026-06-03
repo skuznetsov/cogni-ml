@@ -297,6 +297,68 @@ module ML::GGUF
         add_scaled_vec(attn_out, ffn_normed, scale)
       end
 
+      def layer_tail_resident_buffers(x : Array(Float32),
+                                      attn_projected : Array(Float32),
+                                      lw : Gemma4LayerWeights,
+                                      hp : Gemma4Hparams) : Array(Float32)?
+        return nil unless available?
+
+        hidden_dim = hp.n_embd
+        raise ArgumentError.new("layer_tail x size mismatch") unless x.size == hidden_dim
+        raise ArgumentError.new("layer_tail attn_projected size mismatch") unless attn_projected.size == hidden_dim
+        raise ArgumentError.new("layer_tail post_attention_norm size mismatch") unless lw.post_attention_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail ffn_norm size mismatch") unless lw.ffn_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail post_ffw_norm size mismatch") unless lw.post_ffw_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail ffn gate/up mismatch") unless lw.ffn_gate_qw.in_dim == hidden_dim && lw.ffn_up_qw.in_dim == hidden_dim && lw.ffn_gate_qw.out_dim == lw.ffn_up_qw.out_dim
+        raise ArgumentError.new("layer_tail ffn down mismatch") unless lw.ffn_down_qw.in_dim == lw.ffn_gate_qw.out_dim && lw.ffn_down_qw.out_dim == hidden_dim
+
+        x_buf = ML::MetalBuffer.from_array(x)
+        attn_buf = ML::MetalBuffer.from_array(attn_projected)
+        post_attn_w = ML::MetalBuffer.from_array(lw.post_attention_norm)
+        ffn_w = ML::MetalBuffer.from_array(lw.ffn_norm)
+        post_ffw_w = ML::MetalBuffer.from_array(lw.post_ffw_norm)
+
+        attn_normed_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        attn_out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        ffn_in_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        gate_buf = ML::MetalBuffer.new(lw.ffn_gate_qw.out_dim.to_i64 * sizeof(Float32))
+        up_buf = ML::MetalBuffer.new(lw.ffn_up_qw.out_dim.to_i64 * sizeof(Float32))
+        combined_buf = ML::MetalBuffer.new(lw.ffn_down_qw.in_dim.to_i64 * sizeof(Float32))
+        ffn_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        ffn_normed_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_rmsnorm_weighted_out(enc, attn_buf, post_attn_w, attn_normed_buf, hidden_dim, hp.rms_eps)
+        encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, hidden_dim)
+        encode_rmsnorm_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, hp.rms_eps)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+
+        return nil unless Qwen35Metal.matmul_many_to_buffers([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
+
+        cmd2 = ML::Metal::CommandBuffer.new
+        enc2 = ML::Metal::ComputeEncoder.new(cmd2)
+        encode_gelu_mul(enc2, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
+        enc2.end_encoding
+        cmd2.commit
+        cmd2.wait
+
+        return nil unless Qwen35Metal.matmul_to_buffer(lw.ffn_down_qw, combined_buf, ffn_buf, 1)
+
+        scale = lw.layer_output_scale.first? || 1.0_f32
+        cmd3 = ML::Metal::CommandBuffer.new
+        enc3 = ML::Metal::ComputeEncoder.new(cmd3)
+        encode_rmsnorm_weighted_out(enc3, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
+        encode_add_scaled_vec(enc3, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
+        enc3.end_encoding
+        cmd3.commit
+        cmd3.wait
+        out_buf.read(hidden_dim)
+      end
+
       def forward_layer(weights : Gemma4Weights,
                         il : Int32,
                         x : Array(Float32),
@@ -371,7 +433,7 @@ module ML::GGUF
         ctx = attention_context_from_projection_resident(proj, hp, il, pos, state.layers[il]).not_nil!
         attn_projected = Qwen35Metal.matmul(lw.attn_output_qw, ctx, 1)
         return nil unless attn_projected
-        layer_tail(x, attn_projected, lw, hp)
+        layer_tail_resident_buffers(x, attn_projected, lw, hp)
       end
 
       def forward_logits_from_hidden(weights : Gemma4Weights,

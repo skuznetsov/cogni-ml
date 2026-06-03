@@ -18607,3 +18607,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is not a speed claim and does not yet fuse command buffers. It proves the resident transport primitive needed before moving Gemma4 hidden/intermediate arrays off host.
 **trust:** {F:0.88,G:0.45,R:0.86}
 **next_gate:** Use `matmul_to_buffer` inside a Gemma4 resident hidden/intermediate layer corridor, then profile against the resident-K/V prefix baseline.
+
+### [LM-COGNIGEMMA-25] Gemma4 resident layer-tail corridor verified and promoted
+**context:** ml (CogniGemma native port)
+**state:** verified for correctness, promising/noisy for speed
+**claims:**
+- claim: "`Gemma4Metal.layer_tail_resident_buffers` keeps the post-attention residual/norm plus GELU FFN tail corridor on Metal buffers and matches the existing array path exactly on the focused Gemma4 layer0 probe."
+  source: `spec/gemma4_metal_buffer_spec.cr`; guarded focused spec (`3 examples, 0 failures`), stdout `gemma4_resident_layer_tail max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 tail math rewrite, quant matmul transport rewrite, or Metal kernel change
+- claim: "Promoting the resident tail inside `forward_layer_resident_cache` preserves stop-layer2 resident hidden parity against the host-array scaffold (`max|d|=0.0`)."
+  source: `spec/gemma4_metal_buffer_spec.cr`, stdout `gemma4_resident_stop2_hidden max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: resident forward path rewrite or cache-state layout change
+- claim: "The isolated resident tail corridor is materially faster than the host-array tail in local profile runs, while the stop-layer2 full-prefix speed signal remains noisy."
+  source: `bin/gemma4_metal_tail_profile.cr` layer0 runs7: resident-vs-host p50 speedup `1.7607x` then `2.9818x`; prefix profile combined run p50 `44.131ms host / 25.085ms resident`, resident-only rerun p50 `30.953ms`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host A/B replacement, profile harness rewrite, or full resident layer integration
+**LTP/WBA:** Window is the layer-tail host seam after attention output. Transport is the FFN/residual corridor over resident buffers. Legal move preserves exact math and final hidden boundary while dropping intermediate readbacks. Potential `Phi=(tail_readbacks, gate_up_command_splits, residual_host_materialization, remaining_layer_seams)` decreases, but recompute safety still requires profiling because the current wrapper waits between matmul phases.
+**boundary:** This is not yet a fully fused or fully resident Gemma4 layer. Projection/norm/RoPE and attention-output seams remain, and current speed evidence is local/noisy rather than a public benchmark.
+**trust:** {F:0.88,G:0.42,R:0.80}
+**next_gate:** Move attention projection/norm/RoPE and attention output projection into resident buffers, then run quiet-host prefix A/B before claiming full decode speed.
