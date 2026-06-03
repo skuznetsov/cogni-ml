@@ -18339,3 +18339,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This proves cache/context mechanics only. It does not yet prove attention output projection parity, residual/post-attention norm, FFN, output softcap, tokenizer parity, or full logits/top1 parity.
 **LTP/WBA:** Window is one decoded token at one layer; transport is `(Q,K,V)` into a bounded KV cache corridor; legal move updates only the current row and reads `[max(0,pos-window+1)..pos]` for SWA. Potential `Phi=(cache_layout_uncertainty, window_overread, scale_mismatch, context_nonfinite, parity_risk)` decreased under focused specs.
 **next_gate:** Implement the Gemma4 block tail: `attn_output -> post_attention_norm -> residual -> GELU-parallel FFN -> post_ffw_norm/layer_output_scale`, then compare first-token top1 against llama.cpp.
+
+### [LM-COGNIGEMMA-9] Gemma4 single-layer block tail verified
+**status:** verified
+**trust:** {F:0.83, G:narrow, R:0.85}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4CPU.forward_layer` implements the text-only non-MoE Gemma4 layer tail: attention output projection, `attn_post_norm`, residual add, `ffn_norm`, parallel GELU gate/up FFN, down projection, `ffn_post_norm`, residual add, and scalar `layer_output_scale`."
+  source: `crystal spec spec/gemma4_meta_spec.cr spec/gemma4_cpu_spec.cr --error-trace` (`15 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp Gemma4 FFN graph rewrite, MoE/per-layer-input path activation, or full logits parity mismatch
+- claim: "A real local GGUF layer 0 pass returns finite nontrivial output and advances KV state."
+  source: same spec command; elapsed about 10.75s for combined Gemma specs
+  verified_at: 2026-06-03
+  decay_trigger: model file, quant matmul, or primitive rewrite
+**boundary:** This is one-layer structural/numerical sanity, not full-model logits parity. It omits multimodal per-layer input, MoE expert path, and any shared-KV layer reuse path because the local text model has `shared_kv_layers=0` and no active `inp_per_layer`.
+**next_gate:** Add a slow/manual whole-model CPU first-token top1 probe and compare against llama.cpp before moving to Metal.

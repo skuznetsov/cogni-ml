@@ -176,4 +176,18 @@ describe ML::GGUF::Gemma4CPU do
     state.layers[5].v_cache.not_nil!.size.should eq(8 * 1 * 512)
     state.layers[5].k_cache.not_nil![0, 512].should_not eq(state.layers[5].v_cache.not_nil![0, 512])
   end
+
+  it "runs one Gemma4 layer through attention, FFN, residuals, and layer scale" do
+    pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
+
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    y = ML::GGUF::Gemma4CPU.forward_layer(w, 0, x, 0, state)
+
+    y.size.should eq(w.hparams.n_embd)
+    y.all? { |v| v.finite? }.should be_true
+    y.should_not eq(x)
+    state.layers[0].position.should eq(1)
+  end
 end

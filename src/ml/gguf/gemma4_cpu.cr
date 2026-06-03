@@ -193,6 +193,31 @@ module ML::GGUF
       matmul(weights.layers[il].attn_output_qw, ctx)
     end
 
+    def forward_layer(weights : Gemma4Weights, il : Int32, x : Array(Float32),
+                      pos : Int32, state : State) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      n_embd = hp.n_embd
+      raise ArgumentError.new("forward_layer input size mismatch") unless x.size == n_embd
+
+      attn_projected = attention_projected_output(weights, il, x, pos, state)
+      attn_normed = rms_norm(attn_projected, lw.post_attention_norm, hp.rms_eps)
+      attn_out = Array(Float32).new(n_embd) { |i| x[i] + attn_normed[i] }
+
+      ffn_in = rms_norm(attn_out, lw.ffn_norm, hp.rms_eps)
+      up = matmul(lw.ffn_up_qw, ffn_in)
+      gate = matmul(lw.ffn_gate_qw, ffn_in)
+      gate.size.times { |i| gate[i] = gelu(gate[i]) * up[i] }
+      ffn = matmul(lw.ffn_down_qw, gate)
+      ffn = rms_norm(ffn, lw.post_ffw_norm, hp.rms_eps)
+
+      out = Array(Float32).new(n_embd) { |i| attn_out[i] + ffn[i] }
+      if scale = lw.layer_output_scale.first?
+        out.size.times { |i| out[i] *= scale }
+      end
+      out
+    end
+
     def attention_context_from_projection!(proj : AttentionProjection, hp : Gemma4Hparams,
                                            il : Int32, pos : Int32,
                                            lstate : LayerState, max_seq : Int32) : Array(Float32)
