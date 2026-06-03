@@ -134,6 +134,34 @@ def gemma4_expect_layer_tail_parity(w : ML::GGUF::Gemma4Weights,
   gemma4_metal_expect_close(label, cpu, gpu)
 end
 
+def gemma4_expect_forward_layer_parity(w : ML::GGUF::Gemma4Weights,
+                                       il : Int32,
+                                       label : String) : Nil
+  max_seq = 8
+  hp = w.hparams
+  kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
+  cpu_state = ML::GGUF::Gemma4CPU::State.new(hp, max_seq)
+  metal_k_cache = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+  metal_v_cache = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+  cpu_out = [] of Float32
+  metal_out = [] of Float32
+
+  [42, 43, 44].each_with_index do |token_id, pos|
+    x = ML::GGUF::Gemma4CPU.scaled_embedding_lookup(w, token_id)
+    cpu_out = ML::GGUF::Gemma4CPU.forward_layer(w, il, x, pos, cpu_state)
+    metal = ML::GGUF::Gemma4Metal.forward_layer(w, il, x, pos, max_seq, metal_k_cache, metal_v_cache).not_nil!
+    metal_out = metal[:out]
+    metal_k_cache = metal[:k_cache]
+    metal_v_cache = metal[:v_cache]
+  end
+
+  gemma4_metal_expect_close("#{label}_out", cpu_out, metal_out)
+  cpu_k = cpu_state.layers[il].k_cache.not_nil![0, metal_k_cache.size]
+  cpu_v = cpu_state.layers[il].v_cache.not_nil![0, metal_v_cache.size]
+  gemma4_metal_expect_close("#{label}_k_cache", cpu_k, metal_k_cache)
+  gemma4_metal_expect_close("#{label}_v_cache", cpu_v, metal_v_cache)
+end
+
 describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
@@ -266,5 +294,17 @@ describe "Gemma4 Metal primitives" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_layer_tail_parity(w, 5, "gemma4_full_layer_tail")
+  end
+
+  it "runs one composed SWA layer like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_forward_layer_parity(w, 0, "gemma4_swa_forward_layer")
+  end
+
+  it "runs one composed full-attention layer like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_forward_layer_parity(w, 5, "gemma4_full_forward_layer")
   end
 end

@@ -18496,3 +18496,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This proves the tail from a supplied attention output projection. It does not yet prove a single GPU-resident composed layer path, full logits/top1 parity, tokenizer/chat-template behavior, or multimodal mmproj integration.
 **LTP/WBA:** Window is the post-attention projected vector; transport is the bounded residual/norm/FFN corridor through existing quant matmul and Gemma4-specific vector kernels; legal moves are out-of-place RMSNorm, residual add, clamped GELU multiply, FFN down projection, and scaled residual add. Boundary safety preserves exact Gemma4 residual semantics and keeps the attention context/projection boundary explicit. Potential `Phi=(NaN_tail, CPU_tail_gap, residual_uncertainty, complete_layer_gap)` decreased under SWA/full parity specs.
 **next_gate:** Compose projection -> norm/RoPE -> attention context -> output projection -> tail for one complete Gemma4 layer, then compare layer output against CPU before moving to full text logits.
+
+### [LM-COGNIGEMMA-18] Gemma4 composed one-layer Metal parity verified
+**status:** verified
+**trust:** {F:0.88, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Metal.forward_layer` composes attention norm, Q/K/V projection, Q/K/V post-processing, KV-cache write, ungated GQA attention, output projection, post-attention residual/norm, GELU FFN, post-FFN norm, and scaled residual with CPU parity for SWA layer 0 over a 3-token sequence."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_metal_layer_build crystal build --no-codegen src/ml/gguf/gemma4_metal.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 480 24000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `14 examples, 0 failures`; SWA composed layer output `cos=1.0`, max abs diff `1.21593475e-5`; K-cache max diff `2.3841858e-7`; V-cache max diff `1.4305115e-6`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 layer semantics rewrite, cache layout rewrite, Metal composition rewrite, or quant matmul route rewrite
+- claim: "The same composed helper matches CPU parity for full-attention layer 5 over a 3-token sequence, preserving absent-V K-as-V semantics."
+  source: same guarded Metal-linked spec command; full composed layer output `cos=1.0`, max abs diff `2.9802322e-6`; K-cache max diff `7.4505806e-8`; V-cache max diff `1.1920929e-6`
+  verified_at: 2026-06-03
+  decay_trigger: full-layer V reuse semantics change, full-layer RoPE-factor change, or GQA grouping rewrite
+**boundary:** This is a correctness-first composed helper with host-visible arrays and multiple command buffers. It does not prove GPU-resident 48-layer decode, output norm/head logits, tokenizer/chat-template parity, multimodal mmproj integration, or speed versus llama.cpp.
+**LTP/WBA:** Window is one layer at one token position; transport is the full local layer corridor from input hidden to output hidden plus K/V cache boundary; legal moves compose already-verified exact kernels without altering residual/state semantics. Boundary safety is checked by output parity and K/V cache parity over a multi-token sequence. Potential `Phi=(uncomposed_layer_gap, state_boundary_uncertainty, semantic_mismatch, full_decode_area)` decreased; remaining area is resident multi-layer decode plus logits/head.
+**next_gate:** Remove host readback boundaries by adding GPU-resident composed layer/wave plumbing, then add output norm+tied-head+softcap top-k parity before full text decode.

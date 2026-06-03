@@ -41,6 +41,16 @@ module ML::GGUF
                      hp : Gemma4Hparams) : Array(Float32)?
         nil
       end
+
+      def forward_layer(weights : Gemma4Weights,
+                        il : Int32,
+                        x : Array(Float32),
+                        pos : Int32,
+                        max_seq : Int32,
+                        k_cache : Array(Float32),
+                        v_cache : Array(Float32)) : NamedTuple(out: Array(Float32), k_cache: Array(Float32), v_cache: Array(Float32))?
+        nil
+      end
     {% else %}
       GEMMA4_SOURCE = {{ read_file("#{__DIR__}/kernels/gemma4.metal") }}
 
@@ -178,6 +188,51 @@ module ML::GGUF
         ffn_normed = rms_norm(ffn, lw.post_ffw_norm, hp.rms_eps).not_nil!
         scale = lw.layer_output_scale.first? || 1.0_f32
         add_scaled_vec(attn_out, ffn_normed, scale)
+      end
+
+      def forward_layer(weights : Gemma4Weights,
+                        il : Int32,
+                        x : Array(Float32),
+                        pos : Int32,
+                        max_seq : Int32,
+                        k_cache : Array(Float32),
+                        v_cache : Array(Float32)) : NamedTuple(out: Array(Float32), k_cache: Array(Float32), v_cache: Array(Float32))?
+        return nil unless available?
+
+        hp = weights.hparams
+        lw = weights.layers[il]
+        hidden_dim = hp.n_embd
+        head_dim = hp.head_dim_for_layer(il)
+        kv_dim = hp.n_head_kv(il) * head_dim
+        raise ArgumentError.new("forward_layer input size mismatch") unless x.size == hidden_dim
+        raise ArgumentError.new("forward_layer k_cache size mismatch") unless k_cache.size == max_seq * kv_dim
+        raise ArgumentError.new("forward_layer v_cache size mismatch") unless v_cache.size == max_seq * kv_dim
+
+        x_norm = rms_norm(x, lw.attn_norm, hp.rms_eps).not_nil!
+        raw = if v_qw = lw.attn_v_qw
+                Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm)
+              else
+                Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw], x_norm)
+              end
+        return nil unless raw
+
+        pre = if raw.size == 3
+                Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[2], false)
+              else
+                Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[1].dup, true)
+              end
+        proj = normalize_and_rope_projection(pre, lw, hp, il, pos, hp.full_attention?(il) ? weights.rope_freqs : nil).not_nil!
+        attn = attention_context_from_projection(proj, hp, il, pos, max_seq, k_cache, v_cache).not_nil!
+        attn_projected = Qwen35Metal.matmul(lw.attn_output_qw, attn[:context], 1)
+        return nil unless attn_projected
+        out = layer_tail(x, attn_projected, lw, hp)
+        return nil unless out
+
+        {
+          out: out,
+          k_cache: attn[:k_cache],
+          v_cache: attn[:v_cache],
+        }
       end
 
       def rms_norm(x : Array(Float32), weight : Array(Float32), eps : Float32) : Array(Float32)?
