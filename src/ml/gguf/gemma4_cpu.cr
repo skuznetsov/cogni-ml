@@ -218,6 +218,45 @@ module ML::GGUF
       out
     end
 
+    def forward_hidden(weights : Gemma4Weights, token_id : Int32, pos : Int32,
+                       state : State, stop_layer : Int32? = nil) : Array(Float32)
+      x = scaled_embedding_lookup(weights, token_id)
+      layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+      layer_count.times do |il|
+        x = forward_layer(weights, il, x, pos, state)
+      end
+      x
+    end
+
+    def forward_logits(weights : Gemma4Weights, token_id : Int32, pos : Int32,
+                       state : State) : Array(Float32)
+      hidden = forward_hidden(weights, token_id, pos, state)
+      forward_logits_from_hidden(weights, hidden)
+    end
+
+    def forward_logits_from_hidden(weights : Gemma4Weights, hidden : Array(Float32)) : Array(Float32)
+      x = rms_norm(hidden, weights.output_norm, weights.hparams.rms_eps)
+      logits = matmul(weights.token_embd, x)
+      logit_softcap!(logits, weights.hparams.final_logit_softcapping)
+      logits
+    end
+
+    def top_k(logits : Array(Float32), k : Int32) : Array({Int32, Float32})
+      raise ArgumentError.new("top_k k must be positive") unless k > 0
+
+      best = [] of {Int32, Float32}
+      logits.each_with_index do |v, i|
+        if best.size < k
+          best << {i, v}
+          best.sort_by! { |pair| -pair[1] }
+        elsif v > best[-1][1]
+          best[-1] = {i, v}
+          best.sort_by! { |pair| -pair[1] }
+        end
+      end
+      best
+    end
+
     def attention_context_from_projection!(proj : AttentionProjection, hp : Gemma4Hparams,
                                            il : Int32, pos : Int32,
                                            lstate : LayerState, max_seq : Int32) : Array(Float32)
@@ -333,6 +372,13 @@ module ML::GGUF
 
       row_slice = Bytes.new(token_embd.raw.to_unsafe + offset, row_bytes, read_only: true)
       Dequant.dequantize(row_slice, t, n_embd)
+    end
+
+    def scaled_embedding_lookup(weights : Gemma4Weights, token_id : Int32) : Array(Float32)
+      x = embedding_lookup(weights.token_embd, token_id)
+      scale = Math.sqrt(weights.hparams.n_embd.to_f64).to_f32
+      x.size.times { |i| x[i] *= scale }
+      x
     end
 
     def quant_row_bytes(t : TensorType, n : Int32) : Int32

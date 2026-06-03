@@ -70,6 +70,24 @@ describe ML::GGUF::Gemma4CPU do
     end
   end
 
+  it "scales token embeddings by sqrt(n_embd) for Gemma4 token input" do
+    pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
+
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_CPU_12B_Q4KM)
+    raw = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    scaled = ML::GGUF::Gemma4CPU.scaled_embedding_lookup(w, 42)
+    factor = Math.sqrt(w.hparams.n_embd.to_f64).to_f32
+
+    scaled[0].should be_close(raw[0] * factor, 1.0e-5_f32)
+    scaled.size.should eq(raw.size)
+  end
+
+  it "selects top-k logits deterministically" do
+    logits = [0.1_f32, 3.0_f32, -1.0_f32, 2.5_f32]
+
+    ML::GGUF::Gemma4CPU.top_k(logits, 2).should eq([{1, 3.0_f32}, {3, 2.5_f32}])
+  end
+
   it "projects and normalizes SWA layer Q/K/V with explicit V" do
     pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_CPU_12B_Q4KM)
 

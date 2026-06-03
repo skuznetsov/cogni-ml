@@ -18355,3 +18355,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: model file, quant matmul, or primitive rewrite
 **boundary:** This is one-layer structural/numerical sanity, not full-model logits parity. It omits multimodal per-layer input, MoE expert path, and any shared-KV layer reuse path because the local text model has `shared_kv_layers=0` and no active `inp_per_layer`.
 **next_gate:** Add a slow/manual whole-model CPU first-token top1 probe and compare against llama.cpp before moving to Metal.
+
+### [LM-COGNIGEMMA-10] Gemma4 CPU full-model parity is diagnostic-only
+**status:** verified bounded timing/probe gate; full parity still pending
+**trust:** {F:0.82, G:narrow, R:0.84}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "llama.cpp `llama-debug --save-logits` provides a token/logit oracle for Gemma4; prompt `Hello` tokenized to `[2,9259]` and oracle top1 was token `236772`."
+  source: `/tmp/gemma4_llama_debug_oracle/llamacpp-gemma-4-12B-it-Q4_K_M.txt`; command `llama-debug ... -p "Hello" --save-logits`
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp rebuild, model file change, tokenizer/chat-template change, or prompt change
+- claim: "`bin/gemma4_cpu_probe.cr` can run direct token-id probes and partial-layer hidden passes; one-layer two-token run `[2,9259]` took about `3925ms` and `3981ms` per token in Crystal reference mode."
+  source: `crystal run bin/gemma4_cpu_probe.cr -- --tokens 2,9259 --stop-layer 1 --no-head --max-seq 16`
+  verified_at: 2026-06-03
+  decay_trigger: CPU primitive optimization, compiler flags, host load, or Metal path implementation
+**decision:** Whole-model CPU top1 parity is too slow for the routine gate. Keep CPU probe as a diagnostic/slow oracle, but move exact parity work to smaller layer probes and then Metal-resident forward.
+**next_gate:** Start Metal port from verified corridors: embedding row, Q/K/V projection+norm+RoPE, attention context/output, then FFN block tail.
