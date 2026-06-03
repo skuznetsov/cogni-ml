@@ -486,6 +486,59 @@ struct block_q6_K_56 {
     half    d;
 };
 
+kernel void embed_q6k_f32_from_token_id(
+    device const uint8_t* w_raw       [[buffer(0)]],
+    device const uint*    token_ids   [[buffer(1)]],
+    device       float*   output      [[buffer(2)]],
+    constant     uint&    hidden_dim  [[buffer(3)]],
+    constant     uint&    vocab_size  [[buffer(4)]],
+    constant     uint&    token_index [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= hidden_dim) return;
+
+    const uint token_id = token_ids[token_index];
+    if (token_id >= vocab_size) {
+        output[tid] = 0.0f;
+        return;
+    }
+
+    const uint nb = hidden_dim / Q56K_QK_K;
+    const uint row_bytes = nb * 210;
+    const uint block_id = tid / Q56K_QK_K;
+    const uint within = tid - block_id * Q56K_QK_K;
+    const uint half_id = within / 128;
+    const uint rem = within - half_id * 128;
+    const uint seg = rem / 32;
+    const uint lane = rem - seg * 32;
+    const uint ql_base = half_id * 64;
+    const uint qh_base = half_id * 32;
+    const uint sc_base = half_id * 8;
+    const uint is = lane / 16;
+
+    device const block_q6_K_56 * row = (device const block_q6_K_56 *)(w_raw + token_id * row_bytes);
+    device const block_q6_K_56 * blk = row + block_id;
+    const uint8_t qh = blk->qh[qh_base + lane];
+
+    int q = 0;
+    int8_t sc = 0;
+    if (seg == 0) {
+        q = int((blk->ql[ql_base + lane] & 0x0F) | ((qh & 0x03) << 4)) - 32;
+        sc = blk->scales[sc_base + is];
+    } else if (seg == 1) {
+        q = int((blk->ql[ql_base + 32 + lane] & 0x0F) | ((qh & 0x0C) << 2)) - 32;
+        sc = blk->scales[sc_base + is + 2];
+    } else if (seg == 2) {
+        q = int((blk->ql[ql_base + lane] >> 4) | (qh & 0x30)) - 32;
+        sc = blk->scales[sc_base + is + 4];
+    } else {
+        q = int((blk->ql[ql_base + 32 + lane] >> 4) | ((qh & 0xC0) >> 2)) - 32;
+        sc = blk->scales[sc_base + is + 6];
+    }
+
+    output[tid] = float(blk->d) * float(sc) * float(q);
+}
+
 // Q6_K uses one row per simdgroup. On Apple M2 Max this reduces register
 // pressure enough to slightly beat the extra input-load amortization from NR0=2.
 constant short MV6_NSG = 2;

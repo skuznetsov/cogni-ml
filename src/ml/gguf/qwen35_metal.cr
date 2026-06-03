@@ -186,6 +186,7 @@ module ML
         @@mv_pipeline   : ML::Metal::ComputePipeline?
         @@mv_add_pipeline : ML::Metal::ComputePipeline?
         @@embed_q4k_pipeline : ML::Metal::ComputePipeline?
+        @@embed_q6k_pipeline : ML::Metal::ComputePipeline?
         @@mm_pipeline   : ML::Metal::ComputePipeline?
         @@mm_h16_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b48_pipeline : ML::Metal::ComputePipeline?
@@ -809,6 +810,35 @@ module ML
           cmd.wait
         end
 
+        def self.embedding_q6k_from_token_id(token_embd_qw : QuantWeight,
+                                             token_id : Int32) : Array(Float32)?
+          return nil unless token_embd_qw.type.q6_k?
+          token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+          token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
+          out_buf = ML::MetalBuffer.new(token_embd_qw.in_dim.to_i64 * sizeof(Float32))
+          embedding_q6k_from_token_id_buf(token_embd_qw, token_buf, out_buf)
+          out_buf.read(token_embd_qw.in_dim)
+        end
+
+        def self.embedding_q6k_from_token_id_buf(token_embd_qw : QuantWeight,
+                                                 token_ids_buf : ML::MetalBuffer,
+                                                 out_buf : ML::MetalBuffer,
+                                                 token_index : Int32 = 0,
+                                                 command_queue_name : String? = nil) : Nil
+          raise "embedding_q6k_from_token_id_buf requires Q6_K token embeddings" unless token_embd_qw.type.q6_k?
+          raise "embedding dim #{token_embd_qw.in_dim} must be divisible by #{QK_K}" unless token_embd_qw.in_dim % QK_K == 0
+
+          w_buf, w_off = weight_slot(token_embd_qw)
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
+          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue)
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_embedding_q6k_from_token_id(enc, w_buf, w_off, token_ids_buf, out_buf,
+            token_embd_qw.in_dim, token_embd_qw.out_dim, token_index)
+          enc.end_encoding
+          cmd.commit
+          cmd.wait
+        end
+
         private def self.encode_embedding_q4k_from_token_id(enc : ML::Metal::ComputeEncoder,
                                                             w_buf : ML::MetalBuffer,
                                                             w_off : Int64,
@@ -818,6 +848,24 @@ module ML
                                                             vocab_size : Int32,
                                                             token_index : Int32) : Nil
           enc.set_pipeline(embed_q4k_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(token_ids_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(hidden_dim.to_u32, 3)
+          enc.set_value(vocab_size.to_u32, 4)
+          enc.set_value(token_index.to_u32, 5)
+          enc.dispatch_1d(hidden_dim, 256)
+        end
+
+        private def self.encode_embedding_q6k_from_token_id(enc : ML::Metal::ComputeEncoder,
+                                                            w_buf : ML::MetalBuffer,
+                                                            w_off : Int64,
+                                                            token_ids_buf : ML::MetalBuffer,
+                                                            out_buf : ML::MetalBuffer,
+                                                            hidden_dim : Int32,
+                                                            vocab_size : Int32,
+                                                            token_index : Int32) : Nil
+          enc.set_pipeline(embed_q6k_pipeline)
           enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
           enc.set_buffer(token_ids_buf, 1)
           enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
@@ -843,6 +891,12 @@ module ML
         private def self.embed_q4k_pipeline : ML::Metal::ComputePipeline
           @@embed_q4k_pipeline ||= ML::Metal::PipelineCache.get("embed_q4k_f32_from_token_id") {
             ML::Metal::ComputePipeline.new("embed_q4k_f32_from_token_id", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.embed_q6k_pipeline : ML::Metal::ComputePipeline
+          @@embed_q6k_pipeline ||= ML::Metal::PipelineCache.get("embed_q6k_f32_from_token_id") {
+            ML::Metal::ComputePipeline.new("embed_q6k_f32_from_token_id", GEMM_Q56K_SOURCE)
           }
         end
 

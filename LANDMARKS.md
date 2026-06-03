@@ -18391,3 +18391,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: first Metal implementation benchmark
 **LTP/WBA:** Windows are the verified CPU corridors: embedding, Q/K/V projection+norm+RoPE, attention context/output, FFN block tail, and LM head. Transport is resident Metal buffers through one decode-wave command corridor. Legal moves reuse exact quant matmul where semantics match and introduce Gemma kernels only at semantic mismatches. Potential `Phi=(host_syncs, CPU_work, semantic_mismatch, bytes_read, launch_count)` should decrease without weakening CPU fallback.
 **next_gate:** Implement the smallest Metal-backed Gemma helper first: Q6_K embedding row from token id or Q4/Q6 projection wrapper with CPU parity spec, then add ungated attention decode.
+
+### [LM-COGNIGEMMA-12] Gemma4 Q6_K token embedding Metal row parity verified
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`embed_q6k_f32_from_token_id` dequantizes one Gemma4 Q6_K token embedding row on Metal with exact CPU parity."
+  source: `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 240 18000 spec spec/gemma4_meta_spec.cr spec/gemma4_cpu_spec.cr spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `19 examples, 0 failures`; runtime row parity `cos=1.0`, `max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: Q6_K layout rewrite, Metal bridge rewrite, Gemma4 embedding quant type change, or neutral quant-Metal module refactor
+- claim: "Gemma4 weights now register the GGUF mmap with the existing Metal zero-copy buffer path, avoiding a separate token-embedding upload in this primitive route."
+  source: same spec command plus local source change in `src/ml/gguf/gemma4_weights.cr`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4Weights loader rewrite or Qwen35Metal mmap registration API change
+**boundary:** This proves only token-id to hidden-vector embedding dequant for Q6_K. It does not prove Gemma4 Q/K/V projection, attention, FFN, logits, tokenizer, multimodal projector, or full decode parity.
+**LTP/WBA:** Window is a single token id into a Q6_K embedding row; transport is the bounded `hidden_dim` row corridor on the registered mmap buffer; legal move is dequant-only extraction with out-of-range zeroing; boundary safety is no model state mutation and CPU-row parity. Potential `Phi=(vocab_materialization, missing_metal_primitive, row_stride_uncertainty, parity_gap)` decreased under the focused spec.
+**next_gate:** Add Gemma4 Metal Q/K/V projection+norm+RoPE parity for one SWA and one full-attention layer, then introduce the ungated GQA decode attention kernel.

@@ -1,6 +1,9 @@
 require "./reader"
 require "./compute"
 require "./gemma4_meta"
+{% unless flag?(:cpu_only) %}
+  require "./qwen35_metal"
+{% end %}
 
 # Structural Gemma4 GGUF weight loader.
 #
@@ -69,6 +72,14 @@ module ML::GGUF
       @layers = Array(Gemma4LayerWeights).new(@hparams.n_layer) do |il|
         load_layer(@gguf, il)
       end
+      {% unless flag?(:cpu_only) %}
+        if Qwen35Metal.available?
+          if region = @gguf.mmap_region
+            base, size = region
+            Qwen35Metal.register_mmap(base, size)
+          end
+        end
+      {% end %}
     end
 
     def self.from_gguf(path : String) : Gemma4Weights
