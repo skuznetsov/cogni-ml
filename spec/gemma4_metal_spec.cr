@@ -77,6 +77,30 @@ def gemma4_expect_context_parity(w : ML::GGUF::Gemma4Weights,
   end
 end
 
+def gemma4_cpu_context_for_tokens(w : ML::GGUF::Gemma4Weights,
+                                  il : Int32,
+                                  token_ids : Array(Int32)) : Array(Float32)
+  max_seq = 8
+  state = ML::GGUF::Gemma4CPU::LayerState.new
+  ctx = [] of Float32
+  token_ids.each_with_index do |token_id, pos|
+    proj = gemma4_cpu_norm_rope_projection(w, il, token_id, pos)
+    ctx = ML::GGUF::Gemma4CPU.attention_context_from_projection!(proj, w.hparams, il, pos, state, max_seq)
+  end
+  ctx
+end
+
+def gemma4_expect_attn_output_projection_parity(w : ML::GGUF::Gemma4Weights,
+                                                il : Int32,
+                                                label : String) : Nil
+  ctx = gemma4_cpu_context_for_tokens(w, il, [42, 43, 44])
+  lw = w.layers[il]
+  cpu = ML::GGUF::Gemma4CPU.matmul(lw.attn_output_qw, ctx)
+  gpu = ML::GGUF::Qwen35Metal.matmul(lw.attn_output_qw, ctx, 1).not_nil!
+
+  gemma4_metal_expect_close(label, cpu, gpu)
+end
+
 describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
@@ -185,5 +209,17 @@ describe "Gemma4 Metal primitives" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_context_parity(w, 5, [42, 43, 44], "gemma4_full_attn")
+  end
+
+  it "projects SWA attention context through the output weight like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_attn_output_projection_parity(w, 0, "gemma4_swa_attn_out_proj")
+  end
+
+  it "projects full-attention context through the output weight like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_attn_output_projection_parity(w, 5, "gemma4_full_attn_out_proj")
   end
 end

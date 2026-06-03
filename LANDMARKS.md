@@ -18459,3 +18459,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This proves attention context only from already-normalized/RoPE'd projections. It does not yet fuse projection+norm+RoPE+attention, run attention output projection, FFN, output norm/head, tokenizer, or multimodal mmproj.
 **LTP/WBA:** Window is the current token's normalized/RoPE projection; transport writes K/V into the cache corridor and reads the legal attention span; legal move is ungated GQA online softmax with exact cache boundary. Potential `Phi=(cache_write_gap, GQA_uncertainty, softmax_parity_gap, remaining_layer_tail)` decreased under SWA/full specs.
 **next_gate:** Compose projection -> norm/RoPE -> attention context -> attention output projection for one Gemma4 layer, then compare the projected attention output against CPU before adding FFN tail.
+
+### [LM-COGNIGEMMA-16] Gemma4 Metal attention output projection parity verified
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.87}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "Existing `Qwen35Metal.matmul` projects Gemma4 SWA attention context through `attn_output.weight` with CPU parity."
+  source: `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 300 20000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `10 examples, 0 failures`; SWA output projection `cos=1.0`, max abs diff `9.536743e-7`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 output projection layout change, Qwen35Metal.matmul rewrite, or attention context helper rewrite
+- claim: "The same route projects full-attention layer 5 context (`head_dim=512,n_head_kv=1`) with CPU parity."
+  source: same spec command; full output projection `cos=1.0`, max abs diff `1.9073486e-6`
+  verified_at: 2026-06-03
+  decay_trigger: full-layer context layout change or QuantWeight matmul route change
+**boundary:** This uses CPU-generated attention context as input to isolate output-projection parity. It does not yet prove a single GPU-resident composed layer path, post-attention norm/residual, FFN, or logits parity.
+**next_gate:** Add Metal parity for post-attention residual/RMSNorm and Gemma4 GELU-parallel FFN tail, then compare one complete layer output against CPU.
