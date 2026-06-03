@@ -18475,3 +18475,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: full-layer context layout change or QuantWeight matmul route change
 **boundary:** This uses CPU-generated attention context as input to isolate output-projection parity. It does not yet prove a single GPU-resident composed layer path, post-attention norm/residual, FFN, or logits parity.
 **next_gate:** Add Metal parity for post-attention residual/RMSNorm and Gemma4 GELU-parallel FFN tail, then compare one complete layer output against CPU.
+
+### [LM-COGNIGEMMA-17] Gemma4 Metal post-attention and FFN tail parity verified
+**status:** verified
+**trust:** {F:0.87, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Metal.layer_tail` matches CPU post-attention RMSNorm/residual, GELU-parallel FFN, post-FFN RMSNorm, and layer-output scaling for SWA layer 0."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_metal_tail_build2 crystal build --no-codegen src/ml/gguf/gemma4_metal.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 420 22000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `12 examples, 0 failures`; SWA tail `cos=1.0`, max abs diff `4.2915344e-6`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 FFN semantics rewrite, GELU approximation rewrite, residual/norm scaling rewrite, or Qwen35Metal matmul route rewrite
+- claim: "The same tail helper matches CPU parity for full-attention layer 5."
+  source: same guarded Metal-linked spec command; full tail `cos=1.0`, max abs diff `2.1457672e-6`
+  verified_at: 2026-06-03
+  decay_trigger: full-layer weight layout change or layer-output-scale semantics change
+- refutation: "Unclamped Metal tanh-GELU is unsafe for Gemma4 gates."
+  source: pre-fix probe showed `combined: finite=14782/15360 nan=578` and `ffn: finite=0/3840 nan=3840`; clamping the tanh-GELU argument to `[-10,10]` removed the NaN path while preserving saturated tanh semantics within verified tolerance
+  verified_at: 2026-06-03
+  decay_trigger: Metal math intrinsic behavior change or GELU implementation rewrite
+**boundary:** This proves the tail from a supplied attention output projection. It does not yet prove a single GPU-resident composed layer path, full logits/top1 parity, tokenizer/chat-template behavior, or multimodal mmproj integration.
+**LTP/WBA:** Window is the post-attention projected vector; transport is the bounded residual/norm/FFN corridor through existing quant matmul and Gemma4-specific vector kernels; legal moves are out-of-place RMSNorm, residual add, clamped GELU multiply, FFN down projection, and scaled residual add. Boundary safety preserves exact Gemma4 residual semantics and keeps the attention context/projection boundary explicit. Potential `Phi=(NaN_tail, CPU_tail_gap, residual_uncertainty, complete_layer_gap)` decreased under SWA/full parity specs.
+**next_gate:** Compose projection -> norm/RoPE -> attention context -> output projection -> tail for one complete Gemma4 layer, then compare layer output against CPU before moving to full text logits.

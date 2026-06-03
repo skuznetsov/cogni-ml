@@ -24,6 +24,37 @@ kernel void gemma4_rmsnorm_heads_weighted(
     }
 }
 
+kernel void gemma4_rmsnorm_vec_weighted(
+    device const float* x        [[buffer(0)]],
+    device const float* weight   [[buffer(1)]],
+    device       float* out      [[buffer(2)]],
+    constant     uint&  count    [[buffer(3)]],
+    constant     float& eps      [[buffer(4)]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    threadgroup float partial[256];
+
+    float ss = 0.0f;
+    for (uint i = tid; i < count; i += 256) {
+        const float v = x[i];
+        ss += v * v;
+    }
+    partial[tid] = ss;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (ushort stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            partial[tid] += partial[tid + stride];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    const float inv = rsqrt(partial[0] / float(count) + eps);
+    for (uint i = tid; i < count; i += 256) {
+        out[i] = x[i] * inv * weight[i];
+    }
+}
+
 kernel void gemma4_rmsnorm_heads_plain(
     device       float* x        [[buffer(0)]],
     constant     uint&  head_dim [[buffer(1)]],
@@ -170,4 +201,41 @@ kernel void gemma4_attn_context_one(
         if (d >= head_dim) break;
         out[h * head_dim + d] = o[dl] * inv_l;
     }
+}
+
+kernel void gemma4_add_vec(
+    device const float* a      [[buffer(0)]],
+    device const float* b      [[buffer(1)]],
+    device       float* out    [[buffer(2)]],
+    constant     uint&  count  [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count) return;
+    out[gid] = a[gid] + b[gid];
+}
+
+kernel void gemma4_add_scaled_vec(
+    device const float* a      [[buffer(0)]],
+    device const float* b      [[buffer(1)]],
+    device       float* out    [[buffer(2)]],
+    constant     uint&  count  [[buffer(3)]],
+    constant     float& scale  [[buffer(4)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count) return;
+    out[gid] = (a[gid] + b[gid]) * scale;
+}
+
+kernel void gemma4_gelu_mul(
+    device const float* gate  [[buffer(0)]],
+    device const float* up    [[buffer(1)]],
+    device       float* out   [[buffer(2)]],
+    constant     uint&  count [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count) return;
+    const float x = gate[gid];
+    const float arg = clamp(0.7978845608028654f * x * (1.0f + 0.044715f * x * x), -10.0f, 10.0f);
+    const float gelu = 0.5f * x * (1.0f + tanh(arg));
+    out[gid] = gelu * up[gid];
 }

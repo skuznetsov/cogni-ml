@@ -1,4 +1,5 @@
 require "./gemma4_cpu"
+require "./qwen35_metal"
 
 {% unless flag?(:cpu_only) %}
   require "../metal/device"
@@ -33,14 +34,25 @@ module ML::GGUF
                                             v_cache : Array(Float32)) : NamedTuple(context: Array(Float32), k_cache: Array(Float32), v_cache: Array(Float32))?
         nil
       end
+
+      def layer_tail(x : Array(Float32),
+                     attn_projected : Array(Float32),
+                     lw : Gemma4LayerWeights,
+                     hp : Gemma4Hparams) : Array(Float32)?
+        nil
+      end
     {% else %}
       GEMMA4_SOURCE = {{ read_file("#{__DIR__}/kernels/gemma4.metal") }}
 
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
+      @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_plain_pipeline : ML::Metal::ComputePipeline?
       @@rope_pipeline : ML::Metal::ComputePipeline?
       @@kv_write_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_pipeline : ML::Metal::ComputePipeline?
+      @@add_vec_pipeline : ML::Metal::ComputePipeline?
+      @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
+      @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
 
       def available? : Bool
         ML::Metal::Device.init!
@@ -140,6 +152,98 @@ module ML::GGUF
         }
       end
 
+      def layer_tail(x : Array(Float32),
+                     attn_projected : Array(Float32),
+                     lw : Gemma4LayerWeights,
+                     hp : Gemma4Hparams) : Array(Float32)?
+        return nil unless available?
+
+        hidden_dim = hp.n_embd
+        raise ArgumentError.new("layer_tail x size mismatch") unless x.size == hidden_dim
+        raise ArgumentError.new("layer_tail attn_projected size mismatch") unless attn_projected.size == hidden_dim
+        raise ArgumentError.new("layer_tail post_attention_norm size mismatch") unless lw.post_attention_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail ffn_norm size mismatch") unless lw.ffn_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail post_ffw_norm size mismatch") unless lw.post_ffw_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail ffn gate/up mismatch") unless lw.ffn_gate_qw.in_dim == hidden_dim && lw.ffn_up_qw.in_dim == hidden_dim && lw.ffn_gate_qw.out_dim == lw.ffn_up_qw.out_dim
+        raise ArgumentError.new("layer_tail ffn down mismatch") unless lw.ffn_down_qw.in_dim == lw.ffn_gate_qw.out_dim && lw.ffn_down_qw.out_dim == hidden_dim
+
+        attn_normed = rms_norm(attn_projected, lw.post_attention_norm, hp.rms_eps).not_nil!
+        attn_out = add_vec(x, attn_normed).not_nil!
+        ffn_in = rms_norm(attn_out, lw.ffn_norm, hp.rms_eps).not_nil!
+        gate_up = Qwen35Metal.matmul_many([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in)
+        return nil unless gate_up
+        combined = gelu_mul(gate_up[0], gate_up[1]).not_nil!
+        ffn = Qwen35Metal.matmul(lw.ffn_down_qw, combined, 1)
+        return nil unless ffn
+        ffn_normed = rms_norm(ffn, lw.post_ffw_norm, hp.rms_eps).not_nil!
+        scale = lw.layer_output_scale.first? || 1.0_f32
+        add_scaled_vec(attn_out, ffn_normed, scale)
+      end
+
+      def rms_norm(x : Array(Float32), weight : Array(Float32), eps : Float32) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("rms_norm weight size mismatch") unless x.size == weight.size
+
+        x_buf = ML::MetalBuffer.from_array(x)
+        w_buf = ML::MetalBuffer.from_array(weight)
+        out_buf = ML::MetalBuffer.new(x.size.to_i64 * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_rmsnorm_weighted_out(enc, x_buf, w_buf, out_buf, x.size, eps)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(x.size)
+      end
+
+      def add_vec(a : Array(Float32), b : Array(Float32)) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("add_vec size mismatch") unless a.size == b.size
+
+        a_buf = ML::MetalBuffer.from_array(a)
+        b_buf = ML::MetalBuffer.from_array(b)
+        out_buf = ML::MetalBuffer.new(a.size.to_i64 * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_add_vec(enc, a_buf, b_buf, out_buf, a.size)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(a.size)
+      end
+
+      def add_scaled_vec(a : Array(Float32), b : Array(Float32), scale : Float32) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("add_scaled_vec size mismatch") unless a.size == b.size
+
+        a_buf = ML::MetalBuffer.from_array(a)
+        b_buf = ML::MetalBuffer.from_array(b)
+        out_buf = ML::MetalBuffer.new(a.size.to_i64 * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_add_scaled_vec(enc, a_buf, b_buf, out_buf, a.size, scale)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(a.size)
+      end
+
+      def gelu_mul(gate : Array(Float32), up : Array(Float32)) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("gelu_mul size mismatch") unless gate.size == up.size
+
+        gate_buf = ML::MetalBuffer.from_array(gate)
+        up_buf = ML::MetalBuffer.from_array(up)
+        out_buf = ML::MetalBuffer.new(gate.size.to_i64 * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_gelu_mul(enc, gate_buf, up_buf, out_buf, gate.size)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(gate.size)
+      end
+
       private def encode_rmsnorm_weighted(enc : ML::Metal::ComputeEncoder,
                                           x_buf : ML::MetalBuffer,
                                           weight_buf : ML::MetalBuffer,
@@ -152,6 +256,21 @@ module ML::GGUF
         enc.set_value(head_dim.to_u32, 2)
         enc.set_value(eps, 3)
         enc.dispatch_threadgroups({n_heads, 1, 1}, {32, 1, 1})
+      end
+
+      private def encode_rmsnorm_weighted_out(enc : ML::Metal::ComputeEncoder,
+                                              x_buf : ML::MetalBuffer,
+                                              weight_buf : ML::MetalBuffer,
+                                              out_buf : ML::MetalBuffer,
+                                              count : Int32,
+                                              eps : Float32) : Nil
+        enc.set_pipeline(rmsnorm_vec_weighted_pipeline)
+        enc.set_buffer(x_buf, 0)
+        enc.set_buffer(weight_buf, 1)
+        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+        enc.set_value(count.to_u32, 3)
+        enc.set_value(eps, 4)
+        enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
       end
 
       private def encode_rmsnorm_plain(enc : ML::Metal::ComputeEncoder,
@@ -228,9 +347,56 @@ module ML::GGUF
         enc.dispatch_threadgroups({n_head, 1, 1}, {32, 1, 1})
       end
 
+      private def encode_add_vec(enc : ML::Metal::ComputeEncoder,
+                                 a_buf : ML::MetalBuffer,
+                                 b_buf : ML::MetalBuffer,
+                                 out_buf : ML::MetalBuffer,
+                                 count : Int32) : Nil
+        enc.set_pipeline(add_vec_pipeline)
+        enc.set_buffer(a_buf, 0)
+        enc.set_buffer(b_buf, 1)
+        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+        enc.set_value(count.to_u32, 3)
+        enc.dispatch_1d(count, 256)
+      end
+
+      private def encode_add_scaled_vec(enc : ML::Metal::ComputeEncoder,
+                                        a_buf : ML::MetalBuffer,
+                                        b_buf : ML::MetalBuffer,
+                                        out_buf : ML::MetalBuffer,
+                                        count : Int32,
+                                        scale : Float32) : Nil
+        enc.set_pipeline(add_scaled_vec_pipeline)
+        enc.set_buffer(a_buf, 0)
+        enc.set_buffer(b_buf, 1)
+        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+        enc.set_value(count.to_u32, 3)
+        enc.set_value(scale, 4)
+        enc.dispatch_1d(count, 256)
+      end
+
+      private def encode_gelu_mul(enc : ML::Metal::ComputeEncoder,
+                                  gate_buf : ML::MetalBuffer,
+                                  up_buf : ML::MetalBuffer,
+                                  out_buf : ML::MetalBuffer,
+                                  count : Int32) : Nil
+        enc.set_pipeline(gelu_mul_pipeline)
+        enc.set_buffer(gate_buf, 0)
+        enc.set_buffer(up_buf, 1)
+        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+        enc.set_value(count.to_u32, 3)
+        enc.dispatch_1d(count, 256)
+      end
+
       private def rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline
         @@rmsnorm_weighted_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_heads_weighted") {
           ML::Metal::ComputePipeline.new("gemma4_rmsnorm_heads_weighted", GEMMA4_SOURCE)
+        }
+      end
+
+      private def rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline
+        @@rmsnorm_vec_weighted_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_vec_weighted") {
+          ML::Metal::ComputePipeline.new("gemma4_rmsnorm_vec_weighted", GEMMA4_SOURCE)
         }
       end
 
@@ -255,6 +421,24 @@ module ML::GGUF
       private def attn_context_pipeline : ML::Metal::ComputePipeline
         @@attn_context_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_one") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_one", GEMMA4_SOURCE)
+        }
+      end
+
+      private def add_vec_pipeline : ML::Metal::ComputePipeline
+        @@add_vec_pipeline ||= ML::Metal::PipelineCache.get("gemma4_add_vec") {
+          ML::Metal::ComputePipeline.new("gemma4_add_vec", GEMMA4_SOURCE)
+        }
+      end
+
+      private def add_scaled_vec_pipeline : ML::Metal::ComputePipeline
+        @@add_scaled_vec_pipeline ||= ML::Metal::PipelineCache.get("gemma4_add_scaled_vec") {
+          ML::Metal::ComputePipeline.new("gemma4_add_scaled_vec", GEMMA4_SOURCE)
+        }
+      end
+
+      private def gelu_mul_pipeline : ML::Metal::ComputePipeline
+        @@gelu_mul_pipeline ||= ML::Metal::PipelineCache.get("gemma4_gelu_mul") {
+          ML::Metal::ComputePipeline.new("gemma4_gelu_mul", GEMMA4_SOURCE)
         }
       end
     {% end %}

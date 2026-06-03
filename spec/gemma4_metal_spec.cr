@@ -101,6 +101,39 @@ def gemma4_expect_attn_output_projection_parity(w : ML::GGUF::Gemma4Weights,
   gemma4_metal_expect_close(label, cpu, gpu)
 end
 
+def gemma4_cpu_layer_tail(w : ML::GGUF::Gemma4Weights,
+                          il : Int32,
+                          x : Array(Float32),
+                          attn_projected : Array(Float32)) : Array(Float32)
+  lw = w.layers[il]
+  hp = w.hparams
+  attn_normed = ML::GGUF::Gemma4CPU.rms_norm(attn_projected, lw.post_attention_norm, hp.rms_eps)
+  attn_out = Array(Float32).new(hp.n_embd) { |i| x[i] + attn_normed[i] }
+  ffn_in = ML::GGUF::Gemma4CPU.rms_norm(attn_out, lw.ffn_norm, hp.rms_eps)
+  up = ML::GGUF::Gemma4CPU.matmul(lw.ffn_up_qw, ffn_in)
+  gate = ML::GGUF::Gemma4CPU.matmul(lw.ffn_gate_qw, ffn_in)
+  gate.size.times { |i| gate[i] = ML::GGUF::Gemma4CPU.gelu(gate[i]) * up[i] }
+  ffn = ML::GGUF::Gemma4CPU.matmul(lw.ffn_down_qw, gate)
+  ffn = ML::GGUF::Gemma4CPU.rms_norm(ffn, lw.post_ffw_norm, hp.rms_eps)
+  out = Array(Float32).new(hp.n_embd) { |i| attn_out[i] + ffn[i] }
+  if scale = lw.layer_output_scale.first?
+    out.size.times { |i| out[i] *= scale }
+  end
+  out
+end
+
+def gemma4_expect_layer_tail_parity(w : ML::GGUF::Gemma4Weights,
+                                    il : Int32,
+                                    label : String) : Nil
+  x = ML::GGUF::Gemma4CPU.scaled_embedding_lookup(w, 42)
+  state = ML::GGUF::Gemma4CPU::State.new(w.hparams, 8)
+  attn_projected = ML::GGUF::Gemma4CPU.attention_projected_output(w, il, x, 0, state)
+  cpu = gemma4_cpu_layer_tail(w, il, x, attn_projected)
+  gpu = ML::GGUF::Gemma4Metal.layer_tail(x, attn_projected, w.layers[il], w.hparams).not_nil!
+
+  gemma4_metal_expect_close(label, cpu, gpu)
+end
+
 describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
@@ -221,5 +254,17 @@ describe "Gemma4 Metal primitives" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_attn_output_projection_parity(w, 5, "gemma4_full_attn_out_proj")
+  end
+
+  it "runs the SWA post-attention and GELU FFN tail like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_layer_tail_parity(w, 0, "gemma4_swa_layer_tail")
+  end
+
+  it "runs the full-attention post-attention and GELU FFN tail like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_layer_tail_parity(w, 5, "gemma4_full_layer_tail")
   end
 end
