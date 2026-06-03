@@ -18060,3 +18060,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - LTP/WBA: Window is fixed depth/K candidate transport. Recomputing on a larger corpus increases `miss_count` before reducing `Area`; K50 also increases area to near full scan. The legal move therefore fails the lexicographic potential. Dual frame: full-depth fallback, trace-conditioned route selection, or a different shallow transform.
 - trust: {F=.88,G=.44,R=.86}
 - decay_trigger: human/user trace queries, larger but cleaner relevance labels, different Nomic query construction, learned router, or alternate shallow embedding transform
+
+**LM-803 Title-aware Markdown queries improve Nomic shallow containment but still refute fixed depth/K defaults [codex-f/ml]**
+- status: MEASURED refutation extension
+- evidence: Regenerated the `256` doc / `128` query clustered_pg Markdown corpus with `--query-mode=title-lead`. Compared to lead-only, title-lead improved containment but did not reach a safe route. Depth1/K20: `shallow_has_full=117/128`, `full_rerank_full=117/128`, `candidate_union=224/256`, verdict `quality_fail`. Depth1/K50: `122/128`, `candidate_union=248/256`, still `quality_fail`. Depth2/K50: `121/128`, `candidate_union=244/256`, also `quality_fail`. All runs had `invalid_vecs=0`, `zeroish_vecs=0`.
+- diagnosis: Query wording was part of the earlier failure, but not the root. Adding title intent helps shallow embeddings substantially (`99/128 -> 117/128` at K20), yet the route still misses too often and nearly collapses to full scan by K50. Fixed shallow depth/K is not the next product path for this corpus. The better next frames are trace-conditioned routing, a learned shallow transform, or full-depth compressed indexing.
+- LTP/WBA: Window is query construction. Title tokens reduce miss-count but do not make the transport corridor legal: recomputation at K50 still has nonzero miss-count and high area. Potential fails before Collapse, so the dual frame stays full-depth fallback or learned/trace-conditioned routing.
+- trust: {F=.88,G=.42,R=.86}
+- decay_trigger: human trace queries, alternate query prompts, learned route selector, or full-depth compressed-index integration
