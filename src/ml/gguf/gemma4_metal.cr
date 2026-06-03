@@ -11,6 +11,28 @@ module ML::GGUF
   module Gemma4Metal
     extend self
 
+    class LayerState
+      property k_cache : Array(Float32)
+      property v_cache : Array(Float32)
+
+      def initialize(kv_dim : Int32, max_seq : Int32)
+        @k_cache = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+        @v_cache = Array(Float32).new(max_seq * kv_dim, 0.0_f32)
+      end
+    end
+
+    class State
+      getter layers : Array(LayerState)
+      getter max_seq : Int32
+
+      def initialize(hp : Gemma4Hparams, @max_seq : Int32 = 1024)
+        @layers = Array(LayerState).new(hp.n_layer) do |il|
+          kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
+          LayerState.new(kv_dim, @max_seq)
+        end
+      end
+    end
+
     {% if flag?(:cpu_only) %}
       def available? : Bool
         false
@@ -54,6 +76,14 @@ module ML::GGUF
 
       def forward_logits_from_hidden(weights : Gemma4Weights,
                                      hidden : Array(Float32)) : Array(Float32)?
+        nil
+      end
+
+      def forward_hidden(weights : Gemma4Weights,
+                         token_id : Int32,
+                         pos : Int32,
+                         state : State,
+                         stop_layer : Int32? = nil) : Array(Float32)?
         nil
       end
     {% else %}
@@ -252,6 +282,29 @@ module ML::GGUF
         return nil unless logits
         softcap!(logits, hp.final_logit_softcapping)
         logits
+      end
+
+      def forward_hidden(weights : Gemma4Weights,
+                         token_id : Int32,
+                         pos : Int32,
+                         state : State,
+                         stop_layer : Int32? = nil) : Array(Float32)?
+        hp = weights.hparams
+        x = Qwen35Metal.embedding_q6k_from_token_id(weights.token_embd, token_id)
+        return nil unless x
+        scale = Math.sqrt(hp.n_embd.to_f64).to_f32
+        x.size.times { |i| x[i] *= scale }
+
+        layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+        layer_count.times do |il|
+          lstate = state.layers[il]
+          result = forward_layer(weights, il, x, pos, state.max_seq, lstate.k_cache, lstate.v_cache)
+          return nil unless result
+          x = result[:out]
+          lstate.k_cache = result[:k_cache]
+          lstate.v_cache = result[:v_cache]
+        end
+        x
       end
 
       def rms_norm(x : Array(Float32), weight : Array(Float32), eps : Float32) : Array(Float32)?

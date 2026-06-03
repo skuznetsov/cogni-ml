@@ -185,6 +185,29 @@ def gemma4_expect_logits_topk_parity(w : ML::GGUF::Gemma4Weights,
   end
 end
 
+def gemma4_expect_forward_hidden_parity(w : ML::GGUF::Gemma4Weights,
+                                        stop_layer : Int32,
+                                        label : String) : Nil
+  max_seq = 8
+  cpu_state = ML::GGUF::Gemma4CPU::State.new(w.hparams, max_seq)
+  metal_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, max_seq)
+  cpu_hidden = [] of Float32
+  metal_hidden = [] of Float32
+
+  [42, 43].each_with_index do |token_id, pos|
+    cpu_hidden = ML::GGUF::Gemma4CPU.forward_hidden(w, token_id, pos, cpu_state, stop_layer)
+    metal_hidden = ML::GGUF::Gemma4Metal.forward_hidden(w, token_id, pos, metal_state, stop_layer).not_nil!
+  end
+
+  gemma4_metal_expect_close("#{label}_hidden", cpu_hidden, metal_hidden)
+  stop_layer.times do |il|
+    cpu_l = cpu_state.layers[il]
+    metal_l = metal_state.layers[il]
+    gemma4_metal_expect_close("#{label}_layer#{il}_k_cache", cpu_l.k_cache.not_nil!, metal_l.k_cache)
+    gemma4_metal_expect_close("#{label}_layer#{il}_v_cache", cpu_l.v_cache.not_nil!, metal_l.v_cache)
+  end
+end
+
 describe "Gemma4 Metal primitives" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
@@ -335,5 +358,11 @@ describe "Gemma4 Metal primitives" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
 
     gemma4_expect_logits_topk_parity(w, "gemma4_logits_topk")
+  end
+
+  it "runs a bounded multi-layer hidden pass like the CPU reference" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_12B_Q4KM)
+
+    gemma4_expect_forward_hidden_parity(w, 6, "gemma4_stop6_forward_hidden")
   end
 end

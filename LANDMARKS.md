@@ -18530,3 +18530,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This proves the terminal head path on one synthetic one-layer hidden vector as top-5 set parity, not exact greedy top-1 parity. Full text decode still needs resident multi-layer state, tokenizer/chat-template handling, and an exact top-1 gate on realistic final hidden states.
 **LTP/WBA:** Window is the terminal hidden vector; transport is output RMSNorm -> tied Q6_K head -> softcap -> top-k readback; legal move isolates the head boundary without full 48-layer decode. Boundary safety is limited by saturated logits, so the dual frame is top-k set/score-drift evidence until a realistic hidden gives a non-tied top-1 margin. Potential `Phi=(missing_head_gate, softcap_uncertainty, topk_set_gap, full_decode_area)` decreased; exact top-1 remains a later margin-sensitive gate.
 **next_gate:** Add a resident decode scaffold that carries hidden/KV through multiple layers, then run output-head top-1 parity on realistic final hidden states with margin diagnostics.
+
+### [LM-COGNIGEMMA-20] Gemma4 bounded multi-layer Metal hidden parity verified
+**status:** verified
+**trust:** {F:0.88, G:narrow, R:0.88}
+**context:** ml (CogniGemma native port)
+**evidence:**
+- claim: "`Gemma4Metal.forward_hidden` carries token embedding, layer outputs, and per-layer K/V caches through a bounded stop-layer 6 path with CPU parity over two token positions."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_metal_hidden_build crystal build --no-codegen src/ml/gguf/gemma4_metal.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `16 examples, 0 failures`; stop6 hidden `cos=1.0`, max abs diff `3.4570694e-6`; layers 0-5 K/V cache cosines `1.0`, max abs diffs <= `7.1525574e-6`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4Metal state layout rewrite, forward_layer rewrite, cache ownership change, or CPU reference semantics change
+- claim: "The bounded path crosses the first full-attention layer (`il=5`) and preserves its K-as-V/full RoPE semantics inside a multi-layer sequence."
+  source: same spec command; layer5 K-cache max diff `2.0116568e-7`, V-cache max diff `3.33786e-6`
+  verified_at: 2026-06-03
+  decay_trigger: full-layer cadence/semantics change or stop-layer parity gate change
+**boundary:** This is a correctness-first host-array scaffold. It proves multi-layer state continuity and SWA/full-layer composition, but not resident GPU execution, full 48-layer decode, exact greedy top1, tokenizer/chat-template, multimodal projector, or speed.
+**LTP/WBA:** Window is a bounded layer prefix; transport carries hidden and K/V state across layers 0-5 and two token positions; legal move composes verified local layer corridors while preserving per-layer cache ownership. Boundary safety is hidden parity plus per-layer cache parity. Potential `Phi=(state_continuity_gap, full_layer_boundary_gap, prefix_decode_gap, resident_area)` decreased; remaining area is converting the proven prefix corridor into resident GPU buffers/waves.
+**next_gate:** Build resident buffer/state plumbing for the same stop-layer prefix, using this host-array scaffold as oracle; then profile sync/readback collapse before expanding to 48 layers.
