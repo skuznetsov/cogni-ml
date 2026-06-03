@@ -18590,3 +18590,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is still a stop-layer 2, two-token prefix microprofile. It supports the cache-transfer LTP but does not prove full decode speed or resident hidden/intermediate benefits.
 **LTP/WBA:** Window is the cache span. Transport cost descends more as `max_seq` grows, while a short-context win remains because resident cache also avoids per-step cache array materialization/readback overhead. Potential `Phi=(cache_span_transfer, cache_array_materialization, hidden_roundtrip, resident_area)` points next to resident hidden/intermediate buffers after K/V.
 **next_gate:** Implement or profile hidden-buffer residency for the same stop-layer 2 prefix; keep the resident K/V path as the baseline corridor.
+
+### [LM-COGNIGEMMA-24] Qwen35Metal resident matmul transport verified for Gemma4
+**context:** ml (CogniGemma native port)
+**state:** verified
+**claims:**
+- claim: "`Qwen35Metal.matmul_to_buffer` accepts resident Metal input/output buffers and reuses the existing quantized matmul encoder/routing for Q4/Q5/Q6/Q8/IQ4/F32 weights."
+  source: `src/ml/gguf/qwen35_metal.cr`; no-codegen build of `spec/gemma4_metal_buffer_spec.cr`; guarded focused Metal spec `spec/gemma4_metal_buffer_spec.cr` (`1 example, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: Qwen35Metal matmul encoder/routing rewrite or Gemma4 resident forward rewrite
+- claim: "On the local Gemma4 12B Q4_K_M GGUF, the resident-buffer helper matched the existing public Metal array path exactly for layer0 Q4 attention-Q and Q6 FFN-down projections (`max|d|=0.0`)."
+  source: focused spec stdout `[gemma4_resident_q4_attn_q] max|d|=0.0`, `[gemma4_resident_q6_ffn_down] max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: quant kernel rewrite, GGUF replacement, or Metal bridge change
+**LTP/WBA:** Window is the host-visible hidden/intermediate vector around Gemma4 matmul calls; transport is the quantized matmul corridor over Metal buffers; legal move exposes the existing encoder without changing kernel semantics; boundary safety is explicit buffer-size checks plus the same weight-slot routing. Potential `Phi=(host roundtrips, public API surface, routing divergence risk, remaining resident ops)` decreases for the next resident-hidden branch.
+**boundary:** This is not a speed claim and does not yet fuse command buffers. It proves the resident transport primitive needed before moving Gemma4 hidden/intermediate arrays off host.
+**trust:** {F:0.88,G:0.45,R:0.86}
+**next_gate:** Use `matmul_to_buffer` inside a Gemma4 resident hidden/intermediate layer corridor, then profile against the resident-K/V prefix baseline.

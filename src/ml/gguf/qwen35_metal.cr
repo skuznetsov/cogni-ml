@@ -10511,6 +10511,32 @@ module ML
             nil
           end
         end
+
+        # Resident-buffer matmul transport for callers that already keep the
+        # input vector on Metal. This intentionally reuses the same encoder and
+        # routing as `matmul` so new resident paths cannot silently diverge from
+        # the established Q4/Q5/Q6/Q8/IQ4/F32 kernels.
+        def self.matmul_to_buffer(qw : QuantWeight,
+                                  x_buf : ML::MetalBuffer,
+                                  out_buf : ML::MetalBuffer,
+                                  batch : Int32 = 1) : Bool
+          return false if batch <= 0
+          return false if x_buf.size < batch.to_i64 * qw.in_dim * sizeof(Float32)
+          return false if out_buf.size < batch.to_i64 * qw.out_dim * sizeof(Float32)
+
+          ML::Metal::Device.init!
+          pipeline = gemv_pipeline_for(qw)
+          return false if pipeline.nil?
+          w_buf, w_off = weight_slot(qw)
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+          enc.end_encoding
+          cmd.commit
+          cmd.wait
+          true
+        end
       {% end %}
     end
   end
