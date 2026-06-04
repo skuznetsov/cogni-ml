@@ -19236,3 +19236,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The all-Q4 tensor-op Spike failed boundary recomputation: local kernel speed reduced one area term but increased semantic drift. The legal corridor is narrower: only large FFN-sized projections, and only when the downstream fused GELU consumer is absent. The potential descends only weakly as `Phi=(Q4 FFN projection time, command interactions, hidden drift, full pp wall)`, so this remains an experimental Diamond rather than a Collapse/default.
 **boundary:** Do not combine `QWEN35_Q4K_TENSOR_MM=1` with `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`; the code now hard-guards that combination. A later explicit `enc.memory_barrier` experiment between tensor gate and fused GELU/up did not fix parity: pp256 still changed top1 `236770 -> 258882`, hidden max diff stayed `6.474887`, and logits max diff stayed `55.13526`.
 **next_gate:** If returning to tensor+GELU, test a stronger command-buffer split or rewrite the fused consumer to use the same tensor-op frame. Do not retry a simple buffer-scope memory barrier; it is refuted.
+
+### [LM-COGNIGEMMA-52] Shared-H16 multi-projection conversion reduced theory but regressed pp wall
+**context:** ml / CogniGemma Metal prefill
+**state:** refuted; runtime code reverted
+
+- claim: "A shared-H16 activation conversion across `encode_matmul_many_to_buffers` is parity-safe on Gemma4 row specs but regresses pp256 wall on the sampled host."
+  source: temporary default-on shared-H16 route in `src/ml/gguf/qwen35_metal.cr`; `spec/gemma4_metal_buffer_spec.cr` runtime passed (`7 examples, 0 failures`), but pp256 no-fuse row prefill measured shared `146.383` and `142.587 tok/s` versus disabled `164.455 tok/s`, with matching sampled ids `first_id=236770 last_id=11751`.
+  verified_at: 2026-06-03
+  decay_trigger: command scheduling rewrite, conversion kernel rewrite, or direct timestamped kernel timing for shared-H16 many path
+  trust: {F:0.76,G:0.26,R:0.72}
+
+**LTP/WBA:** The conversion-sharing Ladder looked legal because the same F32 activation is transported through multiple H16 GEMM projections, reducing logical conversion traffic. Recomputed potential increased at the wall-clock layer: fewer conversion bytes did not offset worse scheduling/Scratch/kernel composition. This is a `LOCAL_OPTIMIZATION` refutation.
+**boundary:** Do not default-enable shared-H16 many-projection conversion. If revisited, it needs per-kernel timestamp attribution showing conversion wait dominates and a command layout that does not regress full pp.
+**next_gate:** Profile with GPU timestamps or build a direct op-attribution harness for actual Gemma4 attention/FFN projection bands before touching conversion sharing again.
