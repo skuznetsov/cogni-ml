@@ -18864,3 +18864,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Prompt token identity is still not exactly matched to llama-bench synthetic tokens. Treat the 1.9x tg gap as directional until a token-matched benchmark is added.
 **trust:** {F:0.84,G:0.42,R:0.80}
 **next_gate:** Focus on FFN up/gate/down exact routes and batch prefill; do not optimize logits/top1 first.
+
+### [LM-COGNIGEMMA-38] Gemma4 FFN batch matmul route validated
+**context:** ml (CogniGemma native port)
+**state:** verified microbench; supports batch-prefill branch
+**claims:**
+- claim: "Existing Qwen35Metal batch matmul routes already accelerate Gemma4 FFN gate/up projections for batch prompt rows."
+  source: `bin/gemma4_ffn_batch_micro.cr`; batch16 run_safe microbench on layer0: serial p50 `9.180ms`, batch p50 `2.369ms`, speedup `3.8755x`
+  verified_at: 2026-06-03
+  decay_trigger: Qwen35 matmul route rewrite, Gemma4 weight layout change, or threshold policy change
+- claim: "For pp8 scale, lowering the GEMM threshold lets batch8 use the faster route: default batch8 speedup `1.6711x`; `QWEN35_GEMM_BATCH_THRESHOLD=4` batch8 speedup `2.7316x`."
+  source: run_safe batch8 microbench: default serial/batch p50 `4.760ms/2.848ms`, threshold4 `4.185ms/1.532ms`
+  verified_at: 2026-06-03
+  decay_trigger: threshold retune, q4_h16 route rewrite, or quiet-host rerun
+- claim: "Batch FFN gate/up parity drift versus serial GEMV is small but not bit-exact when GEMM/H16 route is used."
+  source: batch16 max abs gate `0.0001523`, up `0.0002939`; threshold4 batch8 max abs gate `0.0001412`, up `0.0002939`; default batch8 GEMV route max abs `0.0`
+  verified_at: 2026-06-03
+  decay_trigger: numerical tolerance policy change or exactness requirement for Gemma4 batch prefill
+**LTP/WBA:** Window is repeated FFN up/gate per prompt token. Transport is a prompt-row batch through existing q4/q6 GEMM corridors. Legal move for benchmarking lowers byte/work potential substantially, but production prefill must decide whether H16 GEMM drift is acceptable or whether the default exact-GEMV batch route is required. Potential for pp branch: `Phi=(serial_FFN_rows, threshold_blocked_batch8, FFN_down_batch_route, attention_rows)`.
+**boundary:** This validates the FFN batch route only. It is not yet integrated into Gemma4 full prefill and does not cover attention/KV causality.
+**trust:** {F:0.87,G:0.46,R:0.82}
+**next_gate:** Implement a bounded Gemma4 layer-batch FFN/prefill prototype or retune threshold under strict parity gates; if exact parity is mandatory, keep default GEMV-batch route first.
