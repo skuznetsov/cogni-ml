@@ -19778,3 +19778,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was adjacent full-attention prompt rows sharing nearly identical K/V prefixes. Transport carried the K/V tile across two row-local online-softmax streams. The move was exact and boundary-safe, but recomputed potential `Phi=(row_KV_rereads, register_pressure, occupancy, pp_wall)` did not descend. Like GQA4, it reduced logical rereads but paid them back in pressure/occupancy. This is another Diamond conflict, not a useful Ladder.
 **boundary:** Do not retry small stream-count fusion variants (`GQA4`, adjacent-row pair) as the next exact route. The remaining exact path needs a qualitatively different block/FlashAttention schedule that amortizes K/V loads over a query tile while keeping register pressure bounded, or a non-attention corridor such as FFN conversion/fusion.
+
+### [LM-COGNIGEMMA-81] Exact Gemma split-K full-attention prefill scaffold is implemented but not promoted
+**context:** ml / CogniGemma Metal prefill / full-attention / split-K block scheduling
+**state:** implemented default-off; correctness passed; speed not promoted
+
+- claim: "CogniGemma now has a default-off exact F32 split-K row-prefill attention scaffold for full-attention layers: `GEMMA4_ROW_PREFILL_ATTN_SPLITK=1`, with tile knobs `GEMMA4_ROW_PREFILL_ATTN_SPLITK_QTILE` and `GEMMA4_ROW_PREFILL_ATTN_SPLITK_CHUNK`. The route keeps F32 KV authoritative, computes per-query-tile/per-context-block online-softmax summaries `(m,l,o)`, and reduces them exactly into the existing context buffer. It does not affect default, H16 KV, or H16 output-projection routes."
+  source: implementation in `src/ml/gguf/kernels/gemma4.metal`, `src/ml/gguf/gemma4_metal.cr`, and wrapper mode in `scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: attention scheduling rewrite, row-prefill scratch layout rewrite, Metal kernel ABI change, or split-K default-policy change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "Correctness gates passed for both default and split-K opt-in focused Gemma Metal specs: `spec/gemma4_metal_buffer_spec.cr` completed `8 examples, 0 failures` in default and with `GEMMA4_ROW_PREFILL_ATTN_SPLITK=1`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_splitk_spec_default ... scripts/run_safe.sh crystal ... spec/gemma4_metal_buffer_spec.cr`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_splitk_spec_on GEMMA4_ROW_PREFILL_ATTN_SPLITK=1 ...`.
+  verified_at: 2026-06-04
+  decay_trigger: focused spec rewrite, split-K kernel rewrite, or Gemma row-prefill route rewrite
+  trust: {F:0.88,G:0.26,R:0.86}
+
+- claim: "The initial speed gate does not justify promotion. Default tile settings regressed pp512 (`1968.115ms` default vs `2238.584ms` split-K). Tuned `QTILE=64,CHUNK=128` was only near-neutral/slightly positive at pp1024 (`5248.628ms` default vs `5245.144ms` split-K), below a meaningful promotion threshold. A pp2048 run could not complete under the safe memory cap because the default route exceeded the 8GB tree limit before a comparable row was produced."
+  source: wrapper logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.oSgYZL/`, `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.58AB2k/`, `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.3qHb2R/`, and pp2048 kill log `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.XT1GZX/pp2048_default.log`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA sweep, larger safe memory cap with sequential pp2048, split-K tile rewrite, or command-buffer fusion rewrite
+  trust: {F:0.82,G:0.20,R:0.78}
+
+**LTP/WBA:** Window is full-attention prompt rows where context scanning dominates. Transport is now a true block corridor over context chunks and bounded query tiles, carrying exact online-softmax summaries `(m,l,o)` to a reduction kernel. This avoids the GQA4/rowpair mistake of simply packing more streams into one simdgroup. Current potential `Phi=(serial_context_span, partial_scratch, dispatch_count, occupancy, pp_wall)` descends algebraically but not yet materially in wall time; stage overhead and partial scratch traffic still consume the expected win. Dual frame remains the default row scan.
+**boundary:** Keep default-off. Next split-K work should not be more stream fusion; if reopened, test larger prompt spans under a safe memory cap, reduce stage overhead, or fuse query-tile stage1/stage2 scheduling. Otherwise pivot to FFN/conversion traffic or approximate draft lanes.
