@@ -19513,3 +19513,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The proposed Ladder was `batch>=256 -> share Q4 gate/up conversion`. The local duplicate-conversion potential descended in theory, but recomputed wall potential did not descend at the promotion batch under current sequential evidence. Boundary-safe move is Collapse back to the exact/default matmul-many route and keep the pair corridor only behind explicit `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1`.
 **boundary:** Do not add `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_MIN_BATCH` or any automatic threshold until a quiet-host ABBA gate shows stable pp64 non-regression and pp256/pp1024 median wins in the same benchmark mode used for public comparisons.
+
+### [LM-COGNIGEMMA-65] Gemma pp benchmark mode must force ALLOW_GEMM for apples-to-apples rows
+**context:** ml / CogniGemma Metal prefill / benchmark hygiene
+**state:** verified by source inspection; wrapper added
+
+- claim: "Recent low absolute pp rows were not comparable to earlier high-throughput Gemma pp rows because they omitted `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`. In `prefill_tokens_last_hidden_resident_rows`, that env changes the default chunk cap from `8` to `512`; without it, requested pp256 chunks are clamped into the slow exact small-chunk corridor."
+  source: `bin/gemma4_metal_decode_profile.cr` help says `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512`; `src/ml/gguf/gemma4_metal.cr` sets `default_chunk_cap = ENV["GEMMA4_ROW_PREFILL_ALLOW_GEMM"]? == "1" ? 512 : 8` and also clamps to `QWEN35_GEMM_BATCH_THRESHOLD` unless the env is set. Earlier LM-62 wall rows explicitly used `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`; the negative threshold rerun did not.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma row-prefill exactness policy, chunk cap logic, or benchmark harness rewrite
+  trust: {F:0.88,G:0.30,R:0.86}
+
+- claim: "`scripts/gemma4_prefill_ab.sh` now encodes the safe benchmark corridor: sequential runs only, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` forced, `scripts/run_safe.sh` memory-pressure guard, and comparable tab-separated pp/mode/p50 rows."
+  source: shell checks passed: `bash -n scripts/gemma4_prefill_ab.sh`; `scripts/gemma4_prefill_ab.sh --help`; `git diff --check -- scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: script rewrite or profile CLI option changes
+  trust: {F:0.82,G:0.24,R:0.80}
+
+**LTP/WBA:** Window is the local benchmark-mode mismatch. Transport is the bounded pp benchmark corridor carrying `(chunk_size, env, mode, log)` through sequential runs. Legal move forces the prior apples-to-apples `ALLOW_GEMM` boundary and forbids parallel Crystal/Metal work. Potential `Phi=(mode_mismatch, parallel_pressure_risk, stale_log_risk, comparison_noise)` descends before any new performance claim.
+**boundary:** Treat Gemma pp numbers without `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` as exact-corridor/debug rows, not public apples-to-apples pp rows.
