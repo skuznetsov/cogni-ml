@@ -19430,3 +19430,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the activation transport between GELU and FFN-down. The legal move appeared to reduce `Phi=(activation_bytes, conversion_kernel, ffn_down_wait, wall)`, but recomputation showed `ffn_down_wait` and wall increased. This is a failed Spike: removing the conversion exposed a worse H16-consumer corridor. The dual frame is the existing F32 combined buffer followed by Qwen's current down GEMM conversion.
 **boundary:** Do not retry plain GELU-to-H16 for Gemma unless the down GEMM consumer changes. A true candidate would need a fused GELU+down kernel or a retuned H16 down kernel, not just moving the conversion boundary.
+
+### [LM-COGNIGEMMA-61] Q4 pair FFN remains opt-in after high-variance ABBA gate
+**context:** ml / CogniGemma Metal prefill / benchmark gating
+**state:** non-promotion; opt-in remains available
+
+- claim: "The Q4 pair FFN path should not be auto-enabled from the current evidence. A stronger ABBA gate showed high host variance and no stable pp256/pp1024 dominance, even though earlier short runs showed small long-pp wins."
+  source: ABBA logs `/tmp/gemma4_q4_pair_abba_pp256_default_1780584315.log` median `1170.452ms`, `/tmp/gemma4_q4_pair_abba_pp256_pair_1780584325.log` median `1140.920ms`, `/tmp/gemma4_q4_pair_abba_pp256_pair_1780584334.log` median `1201.139ms`, `/tmp/gemma4_q4_pair_abba_pp256_default_1780584344.log` median `1265.047ms`; pp1024 logs `/tmp/gemma4_q4_pair_abba_pp1024_default_1780584354.log` median `7343.782ms`, `/tmp/gemma4_q4_pair_abba_pp1024_pair_1780584405.log` median `7276.649ms`, `/tmp/gemma4_q4_pair_abba_pp1024_pair_1780584454.log` median `8428.884ms`, `/tmp/gemma4_q4_pair_abba_pp1024_default_1780584512.log` median `9168.594ms`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host rerun, lower memory pressure, better benchmark isolation, or chunk scheduler rewrite
+  trust: {F:0.76,G:0.20,R:0.70}
+
+**LTP/WBA:** The candidate Ladder `batch>=large -> shared Q4 conversion` lowers one local potential component, but recomputed wall potential is not monotone under realistic host variance. Boundary-safe decision is to keep the dual frame explicit: default exact matmul-many, opt-in pair for controlled experiments.
+**boundary:** Do not add an automatic Q4-pair threshold until quiet-host ABBA shows stable median win with low variance. Use `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` manually for experiments.
