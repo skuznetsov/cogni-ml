@@ -19372,3 +19372,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is per-token Q6_K embedding before the resident layer corridor. Transport carries a token-id span into a contiguous hidden-row buffer. Legal move uses the same Q6_K dequantization and Gemma embedding scale in one Metal kernel. Boundary safety is the old per-token fallback when the resident corridor is disabled. Potential descends from `Phi=(embedding_command_waits, CPU_row_concat, embedding_readbacks, bytes, remaining_body_work)`; the first three components collapse strongly, while full pp is still dominated by layer body matmuls/attention.
 **boundary:** This does not yet close the llama.cpp pp gap and should not be sold as a full-pp win. It removes a glaring local spike and gives an attribution tool for the next bottleneck: quantized Gemm/attention body throughput.
+
+### [LM-COGNIGEMMA-58] Warm Gemma row-prefill profile localizes remaining pp gap inside layer body
+**context:** ml / CogniGemma Metal prefill attribution
+**state:** verified instrumentation; next gate is intra-layer phase splitting
+
+- claim: "Warm pp256 resident row-prefill is dominated by the all-layer command corridor, not embedding or final readback. With `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, pp256 measured `prefill_p50_ms=1078.264` / `237.419 tok/s`; grouped profile reported `gemma4.rows.layers wait=1073.42ms`, `embedding wait=0.74ms`, final read `0.46ms`, and `total metal syncs=3`."
+  source: `/tmp/gemma4_profile_groups_pp256_warm2.log`; command used `/tmp/gemma4_metal_decode_profile_profile_groups2` under `scripts/run_safe.sh`, `--prefill-mode rows --prefill-chunk 256 --body-only --prefill-no-head --runs 1 --warmups 1 --max-seq 512 --profile`, run outside sandbox because sandboxed Metal device creation failed.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma4 resident row-prefill command grouping, profile accounting, or Metal sandbox/runtime behavior change
+  trust: {F:0.84,G:0.28,R:0.80}
+
+- claim: "Warm profile-only per-layer pp64 checkpointing shows broadly flat layer cost rather than one pathological layer. The 48 layer waits summed to `295.64ms`, with mean `6.159ms`, p50 `6.15ms`, and top waits around `7.2-7.7ms` (`layer17`, `layer5`, `layer22`, `layer47`, `layer13`). Embedding was `0.37ms`, final read `0.08ms`, and grouped sync accounting reported `50` syncs."
+  source: `/tmp/gemma4_profile_layers_pp64_warm2.log`; command used `GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1`, pp64, warmups=1, runs=1, body-only pure prefill profile.
+  verified_at: 2026-06-04
+  decay_trigger: per-layer profile mode rewrite, layer composition rewrite, host thermal/memory rerun, or batch-size change
+  trust: {F:0.80,G:0.24,R:0.76}
+
+**LTP/WBA:** Window is now the opaque `gemma4.rows.layers` corridor, not token embedding or final readback. Transport is the hidden-row buffer across 48 layer bodies. Legal profile move splits the corridor into per-layer command buffers only when `GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1`, preserving default production grouping. Potential descends from `Phi=(unknown_layer_body, embedding_tax, readback_tax, sync_count)` to `Phi=(intra_layer_phase_unknown, layer_body_wait, sync_count)`.
+**boundary:** Do not optimize embedding/readback further for pp. The next high-leverage branch is intra-layer phase attribution inside `encode_forward_layer_resident_cache_rows`: attention context rows vs Q4 gate/up pair vs Q6/Q4 down vs conversion/norm glue. Standalone op attribution is secondary because readback/copy artifacts can mislead.

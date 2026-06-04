@@ -115,6 +115,10 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF"]? != "1"
       end
 
+      private def row_prefill_profile_layers_enabled? : Bool
+        ENV["GEMMA4_ROW_PREFILL_PROFILE_LAYERS"]? == "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -771,21 +775,68 @@ module ML::GGUF
             hidden_bytes = batch.to_i64 * hidden_dim * sizeof(Float32)
             in_buf = ML::MetalBuffer.new(hidden_bytes)
             out_buf = ML::MetalBuffer.new(hidden_bytes)
+            embed_t0 = Time.instant if Qwen35Metal::Profile.enabled?
             Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, token_ids[offset, batch], in_buf, scale)
-            cmd = ML::Metal::CommandBuffer.new
-            enc = ML::Metal::ComputeEncoder.new(cmd)
-            layer_count.times do |il|
-              ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, base_pos, batch, state)
-              unless ok
-                enc.end_encoding
-                return nil
-              end
-              in_buf, out_buf = out_buf, in_buf
+            if Qwen35Metal::Profile.enabled?
+              embed_done = Time.instant
+              Qwen35Metal::Profile.bump_group("gemma4.rows.embedding", 0_i64,
+                (embed_done - embed_t0.not_nil!).total_nanoseconds.to_i64, 0_i64)
+              Qwen35Metal::Profile.bump_group_transfer("gemma4.rows.embedding", token_ids.size.to_i64 * sizeof(UInt32), 0_i64)
             end
-            enc.end_encoding
-            cmd.commit
-            cmd.wait
+
+            if Qwen35Metal::Profile.enabled? && row_prefill_profile_layers_enabled?
+              layer_count.times do |il|
+                layer_t0 = Time.instant
+                cmd = ML::Metal::CommandBuffer.new
+                enc = ML::Metal::ComputeEncoder.new(cmd)
+                ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, base_pos, batch, state)
+                unless ok
+                  enc.end_encoding
+                  return nil
+                end
+                enc.end_encoding
+                layer_tenc = Time.instant
+                cmd.commit
+                cmd.wait
+                layer_wait = Time.instant
+                Qwen35Metal::Profile.bump_group("gemma4.rows.layer#{il}",
+                  (layer_tenc - layer_t0).total_nanoseconds.to_i64,
+                  (layer_wait - layer_tenc).total_nanoseconds.to_i64,
+                  0_i64)
+                in_buf, out_buf = out_buf, in_buf
+              end
+            else
+              layer_t0 = Time.instant if Qwen35Metal::Profile.enabled?
+              cmd = ML::Metal::CommandBuffer.new
+              enc = ML::Metal::ComputeEncoder.new(cmd)
+              layer_count.times do |il|
+                ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, base_pos, batch, state)
+                unless ok
+                  enc.end_encoding
+                  return nil
+                end
+                in_buf, out_buf = out_buf, in_buf
+              end
+              enc.end_encoding
+              layer_tenc = Time.instant if Qwen35Metal::Profile.enabled?
+              cmd.commit
+              cmd.wait
+              layer_wait = Time.instant if Qwen35Metal::Profile.enabled?
+              if Qwen35Metal::Profile.enabled?
+                Qwen35Metal::Profile.bump_group("gemma4.rows.layers",
+                  (layer_tenc.not_nil! - layer_t0.not_nil!).total_nanoseconds.to_i64,
+                  (layer_wait.not_nil! - layer_tenc.not_nil!).total_nanoseconds.to_i64,
+                  0_i64)
+              end
+            end
+            read_t0 = Time.instant if Qwen35Metal::Profile.enabled?
             x_rows = in_buf.read(batch * hidden_dim)
+            if Qwen35Metal::Profile.enabled?
+              read_done = Time.instant
+              Qwen35Metal::Profile.bump_group("gemma4.rows.read", 0_i64, 0_i64,
+                (read_done - read_t0.not_nil!).total_nanoseconds.to_i64)
+              Qwen35Metal::Profile.bump_group_transfer("gemma4.rows.read", 0_i64, hidden_bytes)
+            end
           else
             x_rows = [] of Float32
             batch.times do |r|

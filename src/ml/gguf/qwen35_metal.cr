@@ -468,7 +468,8 @@ module ML
 
           def self.report_io : String
             String.build do |s|
-              total_syncs = @@gemv_count + @@gemm_count + @@dn_count + @@attn_count + @@wave_count
+              total_group_syncs = @@group_counts.values.sum
+              total_syncs = @@gemv_count + @@gemm_count + @@dn_count + @@attn_count + @@wave_count + total_group_syncs
               s << "── Qwen35Metal.Profile report ──\n"
               s << sprintf("  gemv:  %d calls  encode %.2f ms  wait %.2f ms  read %.2f ms\n",
                            @@gemv_count, @@gemv_encode_ns / 1_000_000.0,
