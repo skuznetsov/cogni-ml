@@ -19494,3 +19494,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is adjacent query heads in a full-attention layer sharing one KV head. The local phase potential descends, but recomputed wall potential is not robust enough for default promotion. Legal move remains available as a controlled Ladder via `GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1`; the default dual frame keeps only SWA-pair reuse.
 **boundary:** Do not default-enable full-pair without quiet-host ABBA. SWA pair remains default because its pp64/256/1024 wall gains were stronger and fallback specs passed.
+
+### [LM-COGNIGEMMA-64] Q4 pair FFN batch-threshold promotion refuted after GQA2 default
+**context:** ml / CogniGemma Metal prefill / Q4_K FFN gate-up / promotion gate
+**state:** refuted for default promotion; code reverted to explicit opt-in
+
+- claim: "After SWA GQA2 became default, auto-enabling Q4 pair FFN at `batch>=256` is not justified by current reproducible evidence. The local threshold patch passed focused default/OFF specs, but the current sequential pp256 wall A/B was negative: threshold default `prefill_p50_ms=5467.354` / `46.823 tok/s` versus `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_OFF=1` `prefill_p50_ms=5379.812` / `47.585 tok/s`. pp64 rerun did not show a small-batch regression after the cold/stale run was discarded, but pp256 is the promotion target and failed."
+  source: default spec with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_q4pair_threshold_spec COGNI_RUN_SAFE_MIN_FREE_PCT=12 COGNI_SPEC_MAX_RSS_MB=4096 scripts/run_safe.sh /opt/homebrew/bin/crystal 240 4096 spec spec/gemma4_metal_buffer_spec.cr ...` -> `8 examples, 0 failures`; OFF fallback spec with `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_OFF=1` -> `8 examples, 0 failures`; pp64 rerun `/tmp/gemma4_q4pair_threshold_pp64_default_rerun.log` `1395.340ms` vs `/tmp/gemma4_q4pair_threshold_pp64_off.log` `1493.784ms`; pp256 `/tmp/gemma4_q4pair_threshold_pp256_default.log` `5467.354ms` vs `/tmp/gemma4_q4pair_threshold_pp256_off.log` `5379.812ms`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, benchmark harness parity with the earlier high-throughput pp mode, Q4 pair kernel retune, or chunk scheduler rewrite
+  trust: {F:0.78,G:0.18,R:0.76}
+
+- claim: "The earlier post-GQA2 positive retest logs for Q4 pair FFN were not available in `/tmp`, so they cannot be used as current promotion evidence. The correct boundary remains LM-61: keep `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` as a manual experimental corridor, not a default or thresholded route."
+  source: checked `/tmp/gemma4_gqa2_q4pair_retest_pp256_default.log`, `/tmp/gemma4_gqa2_q4pair_retest_pp256_pair.log`, `/tmp/gemma4_gqa2_q4pair_retest_pp1024_default.log`, `/tmp/gemma4_gqa2_q4pair_retest_pp1024_pair.log`; all missing. Threshold patch in `src/ml/gguf/gemma4_metal.cr` was reverted before commit.
+  verified_at: 2026-06-04
+  decay_trigger: recovered logs or fresh reproducible ABBA gate
+  trust: {F:0.84,G:0.16,R:0.82}
+
+**LTP/WBA:** The proposed Ladder was `batch>=256 -> share Q4 gate/up conversion`. The local duplicate-conversion potential descended in theory, but recomputed wall potential did not descend at the promotion batch under current sequential evidence. Boundary-safe move is Collapse back to the exact/default matmul-many route and keep the pair corridor only behind explicit `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1`.
+**boundary:** Do not add `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_MIN_BATCH` or any automatic threshold until a quiet-host ABBA gate shows stable pp64 non-regression and pp256/pp1024 median wins in the same benchmark mode used for public comparisons.
