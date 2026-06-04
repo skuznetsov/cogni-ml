@@ -19614,3 +19614,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is a grouped `matmul_many` call where multiple quantized weights share the same F32 input buffer. Transport is a single H16 conversion buffer across the bounded group, then H16-fed GEMM per output. Legal move preserves output precision semantics because existing Q4/Q5/Q6 batch GEMM paths already internally consume H16 inputs. Potential `Phi=(duplicate_input_conversions, conversion_traffic, pp_wall, semantic_delta)` descends for pp256/pp1024 while pp64 remains below the threshold and falls back to the old route.
 **boundary:** Keep the threshold at `256` unless ABBA suggests otherwise. This is a default prefill optimization, not a decode claim; recheck Qwen paths if enabling public Qwen benchmarks because the helper is generic.
+
+### [LM-COGNIGEMMA-72] Shared-H16 route reduces measured conversion traffic in pp256 profile
+**context:** ml / CogniGemma Metal prefill / conversion reuse / post-promotion profile
+**state:** verified profile follow-up
+
+- claim: "After the shared-H16 matmul-many route became default for batch>=256, pp256 phase profiling shows the intended conversion-traffic reduction: conversion logical traffic dropped from the pre-change `2766.00 MiB` / `18.14%` mix to `1956.00 MiB` / `13.55%`. The new shared conversion row is `f32_to_f16 matmul_many_shared_input 3840 b256` with `96` calls and `540.00 MiB` logical traffic."
+  source: pre-change profile `/tmp/gemma4_current_phase_pp256.log`; post-change profile `/tmp/gemma4_shared_h16_phase_pp256.log` using `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1 GEMMA4_ROW_PREFILL_PROFILE_PHASES=1 ... --prefill-chunk 256 --runs 1 --warmups 1 --profile`.
+  verified_at: 2026-06-04
+  decay_trigger: profile accounting rewrite, matmul-many route rewrite, or conversion traffic model change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+**LTP/WBA:** The shared-H16 transport lowered the local conversion component of `Phi=(duplicate_input_conversions, conversion_traffic, pp_wall, semantic_delta)` exactly where predicted. Remaining large conversion rows are FFN-down/activation-width paths (`15360`) and non-grouped projection widths (`4096`, `8192`), so the next candidate windows are shape-specific Q6 down conversion elimination or retuned Q4/Q6 GEMM kernels rather than more pair-only FFN gate/up sharing.
