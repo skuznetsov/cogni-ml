@@ -19443,3 +19443,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The candidate Ladder `batch>=large -> shared Q4 conversion` lowers one local potential component, but recomputed wall potential is not monotone under realistic host variance. Boundary-safe decision is to keep the dual frame explicit: default exact matmul-many, opt-in pair for controlled experiments.
 **boundary:** Do not add an automatic Q4-pair threshold until quiet-host ABBA shows stable median win with low variance. Use `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` manually for experiments.
+
+### [LM-COGNIGEMMA-62] GQA2 SWA row attention is default-on and improves Gemma prefill
+**context:** ml / CogniGemma Metal prefill / attention context
+**state:** implemented, default-on with `GEMMA4_ROW_PREFILL_ATTN_GQA2_OFF=1` fallback
+
+- claim: "Gemma SWA row attention has an exact two-query-head reuse corridor because SWA layers use `n_head=16`, `n_head_kv=8`, `heads_per_group=2`, and `head_dim=256`. The new `gemma4_attn_context_rows_gqa2` kernel computes both sibling query heads for one KV head in one threadgroup, preserving independent online softmax states while loading shared K/V once."
+  source: `bin/gemma4_inventory.cr` reports `swa_layers=40`, `heads=16`, `n_head_kv_hist=8:40,1:8`, `head_dim_swa=256`; implementation in `src/ml/gguf/kernels/gemma4.metal` and routing in `src/ml/gguf/gemma4_metal.cr`.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma hparams/layout change, attention row kernel rewrite, or GQA routing change
+  trust: {F:0.86,G:0.34,R:0.84}
+
+- claim: "Correctness gates passed for both default GQA2 and OFF fallback. `bin/gemma4_metal_decode_profile.cr` builds with bridge link flags; `spec/gemma4_metal_buffer_spec.cr` passes `8 examples, 0 failures` with default-on GQA2 and with `GEMMA4_ROW_PREFILL_ATTN_GQA2_OFF=1`."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_gqa2_default_build ... build bin/gemma4_metal_decode_profile.cr` -> exit 0; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_gqa2_default_spec ... spec/gemma4_metal_buffer_spec.cr` -> `8 examples, 0 failures`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_gqa2_off_spec GEMMA4_ROW_PREFILL_ATTN_GQA2_OFF=1 ... spec/gemma4_metal_buffer_spec.cr` -> `8 examples, 0 failures`.
+  verified_at: 2026-06-04
+  decay_trigger: spec coverage change, GQA2 route rewrite, Metal compiler/runtime update
+  trust: {F:0.88,G:0.30,R:0.86}
+
+- claim: "GQA2 improves row-prefill wall speed, especially at longer prompts. Unprofiled warmed wall A/B measured pp64 default-off `238.897ms / 267.898 tok/s` vs GQA2 `235.620ms / 271.623 tok/s`; pp256 `946.265ms / 270.537 tok/s` vs `881.483ms / 290.420 tok/s`; pp1024 `6142.587ms / 166.705 tok/s` vs `5245.282ms / 195.223 tok/s`. A post-promotion pp256 sanity measured default GQA2 `904.839ms / 282.923 tok/s` vs OFF fallback `960.342ms / 266.572 tok/s`."
+  source: `/tmp/gemma4_gqa2_wall_pp64_default.log`, `/tmp/gemma4_gqa2_wall_pp64_gqa2.log`, `/tmp/gemma4_gqa2_wall_pp256_default.log`, `/tmp/gemma4_gqa2_wall_pp256_gqa2.log`, `/tmp/gemma4_gqa2_wall_pp1024_default.log`, `/tmp/gemma4_gqa2_wall_pp1024_gqa2.log`, `/tmp/gemma4_gqa2_promote_pp256_default.log`, `/tmp/gemma4_gqa2_promote_pp256_off.log`; all under `scripts/run_safe.sh` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, body-only pure prefill.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host rerun, memory pressure change, chunk scheduler rewrite, or attention kernel retune
+  trust: {F:0.84,G:0.28,R:0.82}
+
+- claim: "Phase profiling confirms the win is in the intended LTP/WBA window. pp256 `attn_ctx` dropped from `256.11ms` to `180.76ms`; SWA contribution dropped from `188.35ms` to `115.00ms`, while full-attention contribution stayed roughly flat (`67.76ms` to `65.76ms`)."
+  source: `/tmp/gemma4_gqa2_phase_pp256_default.log`, `/tmp/gemma4_gqa2_phase_pp256_gqa2.log` with `GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1 GEMMA4_ROW_PREFILL_PROFILE_PHASES=1`.
+  verified_at: 2026-06-04
+  decay_trigger: phase profiler rewrite or attention kernel rewrite
+  trust: {F:0.82,G:0.24,R:0.80}
+
+**LTP/WBA:** Window is the local GQA SWA pair where two Q heads share one KV head. Transport is the bounded `(kv_head,row)` corridor carrying K/V tiles once while maintaining two independent softmax/output states. Legal move preserves causal/sliding-window boundaries and does not affect full-attention layers. Potential `Phi=(SWA_KV_loads, attn_ctx_wait, pp_wall, semantic_delta)` descends with specs showing semantic delta within existing tolerances. The dual frame is `GEMMA4_ROW_PREFILL_ATTN_GQA2_OFF=1`.
+**boundary:** This is exact for Gemma SWA `heads_per_group=2`; do not generalize to full layers or other models without checking GQA shape and specs.
+**next_gate:** Repeat the same reuse idea for full layers only if a safe multi-query grouping can fit threadgroup/register budgets; otherwise the next leverage is Q4/Q6 GEMM retune or llama.cpp-style `kernel_mul_mm_q*_K` shape parity.

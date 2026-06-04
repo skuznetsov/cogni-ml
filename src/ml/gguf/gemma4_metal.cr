@@ -115,6 +115,10 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_Q4_PAIR_FFN"]? == "1"
       end
 
+      private def attn_gqa2_enabled? : Bool
+        ENV["GEMMA4_ROW_PREFILL_ATTN_GQA2_OFF"]? != "1"
+      end
+
       private def row_prefill_resident_corridor_enabled? : Bool
         ENV["GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF"]? != "1"
       end
@@ -139,6 +143,7 @@ module ML::GGUF
       @@kv_write_rows_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline?
       @@add_vec_pipeline : ML::Metal::ComputePipeline?
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
@@ -1550,7 +1555,12 @@ module ML::GGUF
         enc.set_value(head_dim.to_u32, 8)
         enc.set_value(heads_per_group.to_u32, 9)
         enc.set_value(sliding_window.to_u32, 10)
-        enc.dispatch_threadgroups({n_head, rows, 1}, {32, 1, 1})
+        if attn_gqa2_enabled? && heads_per_group == 2
+          enc.set_pipeline(attn_context_rows_gqa2_pipeline)
+          enc.dispatch_threadgroups({n_head_kv, rows, 1}, {32, 1, 1})
+        else
+          enc.dispatch_threadgroups({n_head, rows, 1}, {32, 1, 1})
+        end
       end
 
       private def encode_add_vec(enc : ML::Metal::ComputeEncoder,
@@ -1674,6 +1684,12 @@ module ML::GGUF
       private def attn_context_rows_pipeline : ML::Metal::ComputePipeline
         @@attn_context_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_gqa2_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_gqa2") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_gqa2", GEMMA4_SOURCE)
         }
       end
 
