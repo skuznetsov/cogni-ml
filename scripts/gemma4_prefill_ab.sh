@@ -35,7 +35,7 @@ usage: scripts/gemma4_prefill_ab.sh
 
 Environment:
   GEMMA4_PREFILL_AB_PPS=64,256,1024       prompt lengths to test
-  GEMMA4_PREFILL_AB_MODES=default,q4pair  modes: default,q4pair,sharedh16,sharedoff,fullpair,allpair
+  GEMMA4_PREFILL_AB_MODES=default,q4pair  modes: default,q4pair,sharedh16,sharedoff,ctxh16,ctxh16off,fullpair,allpair
   GEMMA4_PREFILL_AB_RUNS=3                measured runs per row
   GEMMA4_PREFILL_AB_WARMUPS=1             warmup runs per row
   GEMMA4_PREFILL_AB_FORCE_BUILD=1         rebuild profile binary
@@ -129,6 +129,8 @@ env_for_mode() {
     q4pair) printf '%s\n' "GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1" ;;
     sharedh16) printf '%s\n' "QWEN35_MATMUL_MANY_SHARED_H16=1" ;;
     sharedoff) printf '%s\n' "QWEN35_MATMUL_MANY_SHARED_H16_OFF=1" ;;
+    ctxh16) printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ=1" ;;
+    ctxh16off) printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_OFF=1" ;;
     fullpair) printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1" ;;
     allpair)
       printf '%s\n' "GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1"
@@ -170,6 +172,9 @@ for pp in "${pp_items[@]}"; do
     [[ -z "${mode}" ]] && continue
     log="${log_dir}/pp${pp}_${mode}.log"
     echo "RUN pp=${pp} mode=${mode} log=${log}" >&2
+    if [[ "${allow_busy}" != "1" ]]; then
+      check_busy_host
+    fi
     env_args=(
       COGNI_RUN_SAFE_MIN_FREE_PCT="${min_free_pct}"
       GEMMA4_ROW_PREFILL_ALLOW_GEMM=1

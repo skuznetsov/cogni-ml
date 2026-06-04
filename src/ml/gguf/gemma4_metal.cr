@@ -123,6 +123,11 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL"]? == "1"
       end
 
+      private def attn_ctx_h16_oproj_enabled? : Bool
+        return false if ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_OFF"]? == "1"
+        ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ"]? == "1"
+      end
+
       private def row_prefill_resident_corridor_enabled? : Bool
         ENV["GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF"]? != "1"
       end
@@ -148,6 +153,8 @@ module ML::GGUF
       @@attn_context_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_h16_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_gqa2_h16_pipeline : ML::Metal::ComputePipeline?
       @@add_vec_pipeline : ML::Metal::ComputePipeline?
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
@@ -705,6 +712,8 @@ module ML::GGUF
         k_buf = scratch.get("rows.k", batch.to_i64 * kv_dim * sizeof(Float32))
         v_buf = scratch.get("rows.v", batch.to_i64 * kv_dim * sizeof(Float32))
         ctx_buf = scratch.get("rows.ctx", batch.to_i64 * q_dim * sizeof(Float32))
+        ctx_h16_oproj = attn_ctx_h16_oproj_enabled? && batch > 8
+        ctx_h16_buf = ctx_h16_oproj ? scratch.get("rows.ctx_h16", batch.to_i64 * q_dim * 2_i64) : nil
         attn_projected_buf = scratch.get("rows.attn_projected", hidden_bytes)
         attn_normed_buf = scratch.get("rows.attn_normed", hidden_bytes)
         attn_out_buf = scratch.get("rows.attn_out", hidden_bytes)
@@ -736,13 +745,22 @@ module ML::GGUF
         end
 
         return false unless profile_rows_phase("#{prefix}.attn_ctx") do |enc|
-          encode_attention_context_rows(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_buf,
-            base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
+          if ctx_h16_buf
+            encode_attention_context_rows_h16(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_h16_buf,
+              base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
+          else
+            encode_attention_context_rows(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_buf,
+              base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
+          end
           true
         end
 
         return false unless profile_rows_phase("#{prefix}.attn_out") do |enc|
-          Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
+          if ctx_h16_buf
+            Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_output_qw, ctx_h16_buf, attn_projected_buf, batch)
+          else
+            Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
+          end
         end
 
         return false unless profile_rows_phase("#{prefix}.ffn_in") do |enc|
@@ -826,6 +844,8 @@ module ML::GGUF
         k_buf = scratch.get("rows.k", batch.to_i64 * kv_dim * sizeof(Float32))
         v_buf = scratch.get("rows.v", batch.to_i64 * kv_dim * sizeof(Float32))
         ctx_buf = scratch.get("rows.ctx", batch.to_i64 * q_dim * sizeof(Float32))
+        ctx_h16_oproj = attn_ctx_h16_oproj_enabled? && batch > 8
+        ctx_h16_buf = ctx_h16_oproj ? scratch.get("rows.ctx_h16", batch.to_i64 * q_dim * 2_i64) : nil
         attn_projected_buf = scratch.get("rows.attn_projected", hidden_bytes)
         attn_normed_buf = scratch.get("rows.attn_normed", hidden_bytes)
         attn_out_buf = scratch.get("rows.attn_out", hidden_bytes)
@@ -850,9 +870,15 @@ module ML::GGUF
         encode_rope_rows(enc, q_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, batch)
         encode_rope_rows(enc, k_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head_kv(il), batch)
         encode_kv_write_rows(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, base_pos, kv_dim, batch)
-        encode_attention_context_rows(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_buf,
-          base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
-        return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
+        if ctx_h16_buf
+          encode_attention_context_rows_h16(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_h16_buf,
+            base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
+          return false unless Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_output_qw, ctx_h16_buf, attn_projected_buf, batch)
+        else
+          encode_attention_context_rows(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_buf,
+            base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
+          return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
+        end
 
         encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
         encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
@@ -1569,6 +1595,40 @@ module ML::GGUF
         end
       end
 
+      private def encode_attention_context_rows_h16(enc : ML::Metal::ComputeEncoder,
+                                                    q_buf : ML::MetalBuffer,
+                                                    k_cache_buf : ML::MetalBuffer,
+                                                    v_cache_buf : ML::MetalBuffer,
+                                                    out16_buf : ML::MetalBuffer,
+                                                    base_pos : Int32,
+                                                    rows : Int32,
+                                                    n_head : Int32,
+                                                    n_head_kv : Int32,
+                                                    head_dim : Int32,
+                                                    heads_per_group : Int32,
+                                                    sliding_window : Int32) : Nil
+        enc.set_pipeline(attn_context_rows_h16_pipeline)
+        enc.set_buffer(q_buf, 0)
+        enc.set_buffer(k_cache_buf, 1)
+        enc.set_buffer(v_cache_buf, 2)
+        enc.set_buffer(out16_buf, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(base_pos.to_u32, 4)
+        enc.set_value(rows.to_u32, 5)
+        enc.set_value(n_head.to_u32, 6)
+        enc.set_value(n_head_kv.to_u32, 7)
+        enc.set_value(head_dim.to_u32, 8)
+        enc.set_value(heads_per_group.to_u32, 9)
+        enc.set_value(sliding_window.to_u32, 10)
+        use_gqa_pair = attn_gqa2_enabled? &&
+          (heads_per_group == 2 || (attn_gqa_pair_full_enabled? && heads_per_group > 2 && heads_per_group.even?))
+        if use_gqa_pair
+          enc.set_pipeline(attn_context_rows_gqa2_h16_pipeline)
+          enc.dispatch_threadgroups({n_head // 2, rows, 1}, {32, 1, 1})
+        else
+          enc.dispatch_threadgroups({n_head, rows, 1}, {32, 1, 1})
+        end
+      end
+
       private def encode_add_vec(enc : ML::Metal::ComputeEncoder,
                                  a_buf : ML::MetalBuffer,
                                  b_buf : ML::MetalBuffer,
@@ -1696,6 +1756,18 @@ module ML::GGUF
       private def attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline
         @@attn_context_rows_gqa2_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_gqa2") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_gqa2", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_h16_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_h16_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_h16") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_h16", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_gqa2_h16_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_gqa2_h16_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_gqa2_h16") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_gqa2_h16", GEMMA4_SOURCE)
         }
       end
 

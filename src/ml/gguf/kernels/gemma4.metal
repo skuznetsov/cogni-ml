@@ -554,6 +554,214 @@ kernel void gemma4_attn_context_rows_gqa2(
     }
 }
 
+
+kernel void gemma4_attn_context_rows_h16(
+    device const float* q             [[buffer(0)]],
+    device const float* k_cache       [[buffer(1)]],
+    device const float* v_cache       [[buffer(2)]],
+    device       half*  out           [[buffer(3)]],
+    constant     uint&  base_pos      [[buffer(4)]],
+    constant     uint&  n_tokens      [[buffer(5)]],
+    constant     uint&  n_head        [[buffer(6)]],
+    constant     uint&  n_head_kv     [[buffer(7)]],
+    constant     uint&  head_dim      [[buffer(8)]],
+    constant     uint&  heads_per_group [[buffer(9)]],
+    constant     uint&  sliding_window [[buffer(10)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint h = tgpig.x;
+    const uint t = tgpig.y;
+    if (h >= n_head || t >= n_tokens || head_dim > GEMMA4_ATTN_MAX_HD) return;
+
+    const uint row_pos = base_pos + t;
+    const uint start_pos = (sliding_window == 0 || row_pos + 1 <= sliding_window)
+        ? 0
+        : row_pos + 1 - sliding_window;
+    const uint len = row_pos - start_pos + 1;
+    const uint kv_h = h / heads_per_group;
+    const uint kv_dim = n_head_kv * head_dim;
+    const uint lane = tiisg;
+
+    threadgroup float q_tg[GEMMA4_ATTN_MAX_HD];
+    threadgroup float tile_scores[GEMMA4_ATTN_SG];
+
+    for (uint d = lane; d < head_dim; d += GEMMA4_ATTN_SG) {
+        q_tg[d] = q[(t * n_head + h) * head_dim + d];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m = -INFINITY;
+    float l = 0.0f;
+    float o[GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG];
+    for (uint i = 0; i < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++i) {
+        o[i] = 0.0f;
+    }
+
+    for (uint tile_start = 0; tile_start < len; tile_start += GEMMA4_ATTN_SG) {
+        const uint local_j = tile_start + lane;
+        const uint pos = start_pos + local_j;
+
+        float score = -INFINITY;
+        if (local_j < len) {
+            float dot = 0.0f;
+            for (uint d = 0; d < head_dim; ++d) {
+                dot += q_tg[d] * k_cache[pos * kv_dim + kv_h * head_dim + d];
+            }
+            score = dot;
+        }
+
+        const float tile_max = simd_max(score);
+        const float m_new = max(m, tile_max);
+        const float correction = exp(m - m_new);
+        const float p = (local_j < len) ? exp(score - m_new) : 0.0f;
+        l = l * correction + simd_sum(p);
+
+        tile_scores[lane] = p;
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+
+        const uint tile_len = min(tile_start + GEMMA4_ATTN_SG, len) - tile_start;
+        for (uint dl = 0; dl < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++dl) {
+            const uint d = lane + dl * GEMMA4_ATTN_SG;
+            if (d >= head_dim) break;
+            float acc = 0.0f;
+            for (uint s = 0; s < tile_len; ++s) {
+                const uint ppos = start_pos + tile_start + s;
+                acc += tile_scores[s] * v_cache[ppos * kv_dim + kv_h * head_dim + d];
+            }
+            o[dl] = o[dl] * correction + acc;
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        m = m_new;
+    }
+
+    const float inv_l = (l > 0.0f) ? 1.0f / l : 0.0f;
+    for (uint dl = 0; dl < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++dl) {
+        const uint d = lane + dl * GEMMA4_ATTN_SG;
+        if (d >= head_dim) break;
+        out[(t * n_head + h) * head_dim + d] = half(o[dl] * inv_l);
+    }
+}
+
+
+kernel void gemma4_attn_context_rows_gqa2_h16(
+    device const float* q             [[buffer(0)]],
+    device const float* k_cache       [[buffer(1)]],
+    device const float* v_cache       [[buffer(2)]],
+    device       half*  out           [[buffer(3)]],
+    constant     uint&  base_pos      [[buffer(4)]],
+    constant     uint&  n_tokens      [[buffer(5)]],
+    constant     uint&  n_head        [[buffer(6)]],
+    constant     uint&  n_head_kv     [[buffer(7)]],
+    constant     uint&  head_dim      [[buffer(8)]],
+    constant     uint&  heads_per_group [[buffer(9)]],
+    constant     uint&  sliding_window [[buffer(10)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint pair_idx = tgpig.x;
+    const uint t = tgpig.y;
+    if (heads_per_group < 2 || (heads_per_group & 1) != 0 || t >= n_tokens || head_dim > GEMMA4_ATTN_MAX_HD) return;
+
+    const uint h0 = pair_idx * 2;
+    const uint h1 = h0 + 1;
+    if (h1 >= n_head) return;
+    const uint kv_h = h0 / heads_per_group;
+    if (kv_h >= n_head_kv) return;
+
+    const uint row_pos = base_pos + t;
+    const uint start_pos = (sliding_window == 0 || row_pos + 1 <= sliding_window)
+        ? 0
+        : row_pos + 1 - sliding_window;
+    const uint len = row_pos - start_pos + 1;
+    const uint kv_dim = n_head_kv * head_dim;
+    const uint lane = tiisg;
+
+    threadgroup float q0_tg[GEMMA4_ATTN_MAX_HD];
+    threadgroup float q1_tg[GEMMA4_ATTN_MAX_HD];
+    threadgroup float tile_scores0[GEMMA4_ATTN_SG];
+    threadgroup float tile_scores1[GEMMA4_ATTN_SG];
+
+    for (uint d = lane; d < head_dim; d += GEMMA4_ATTN_SG) {
+        q0_tg[d] = q[(t * n_head + h0) * head_dim + d];
+        q1_tg[d] = q[(t * n_head + h1) * head_dim + d];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m0 = -INFINITY;
+    float m1 = -INFINITY;
+    float l0 = 0.0f;
+    float l1 = 0.0f;
+    float o0[GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG];
+    float o1[GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG];
+    for (uint i = 0; i < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++i) {
+        o0[i] = 0.0f;
+        o1[i] = 0.0f;
+    }
+
+    for (uint tile_start = 0; tile_start < len; tile_start += GEMMA4_ATTN_SG) {
+        const uint local_j = tile_start + lane;
+        const uint pos = start_pos + local_j;
+
+        float score0 = -INFINITY;
+        float score1 = -INFINITY;
+        if (local_j < len) {
+            float dot0 = 0.0f;
+            float dot1 = 0.0f;
+            for (uint d = 0; d < head_dim; ++d) {
+                const float kval = k_cache[pos * kv_dim + kv_h * head_dim + d];
+                dot0 += q0_tg[d] * kval;
+                dot1 += q1_tg[d] * kval;
+            }
+            score0 = dot0;
+            score1 = dot1;
+        }
+
+        const float tile_max0 = simd_max(score0);
+        const float tile_max1 = simd_max(score1);
+        const float m0_new = max(m0, tile_max0);
+        const float m1_new = max(m1, tile_max1);
+        const float correction0 = exp(m0 - m0_new);
+        const float correction1 = exp(m1 - m1_new);
+        const float p0 = (local_j < len) ? exp(score0 - m0_new) : 0.0f;
+        const float p1 = (local_j < len) ? exp(score1 - m1_new) : 0.0f;
+        l0 = l0 * correction0 + simd_sum(p0);
+        l1 = l1 * correction1 + simd_sum(p1);
+
+        tile_scores0[lane] = p0;
+        tile_scores1[lane] = p1;
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+
+        const uint tile_len = min(tile_start + GEMMA4_ATTN_SG, len) - tile_start;
+        for (uint dl = 0; dl < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++dl) {
+            const uint d = lane + dl * GEMMA4_ATTN_SG;
+            if (d >= head_dim) break;
+            float acc0 = 0.0f;
+            float acc1 = 0.0f;
+            for (uint s = 0; s < tile_len; ++s) {
+                const uint ppos = start_pos + tile_start + s;
+                const float vval = v_cache[ppos * kv_dim + kv_h * head_dim + d];
+                acc0 += tile_scores0[s] * vval;
+                acc1 += tile_scores1[s] * vval;
+            }
+            o0[dl] = o0[dl] * correction0 + acc0;
+            o1[dl] = o1[dl] * correction1 + acc1;
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        m0 = m0_new;
+        m1 = m1_new;
+    }
+
+    const float inv_l0 = (l0 > 0.0f) ? 1.0f / l0 : 0.0f;
+    const float inv_l1 = (l1 > 0.0f) ? 1.0f / l1 : 0.0f;
+    for (uint dl = 0; dl < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++dl) {
+        const uint d = lane + dl * GEMMA4_ATTN_SG;
+        if (d >= head_dim) break;
+        out[(t * n_head + h0) * head_dim + d] = half(o0[dl] * inv_l0);
+        out[(t * n_head + h1) * head_dim + d] = half(o1[dl] * inv_l1);
+    }
+}
+
 kernel void gemma4_add_vec(
     device const float* a      [[buffer(0)]],
     device const float* b      [[buffer(1)]],

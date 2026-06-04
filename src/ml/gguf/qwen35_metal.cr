@@ -10728,6 +10728,20 @@ module ML
           true
         end
 
+        def self.encode_matmul_from_h16_to_buffer(enc : ML::Metal::ComputeEncoder,
+                                                  qw : QuantWeight,
+                                                  x16_buf : ML::MetalBuffer,
+                                                  out_buf : ML::MetalBuffer,
+                                                  batch : Int32 = 1) : Bool
+          return false if batch <= 0
+          return false if x16_buf.size < batch.to_i64 * qw.in_dim * 2_i64
+          return false if out_buf.size < batch.to_i64 * qw.out_dim * sizeof(Float32)
+
+          ML::Metal::Device.init!
+          w_buf, w_off = weight_slot(qw)
+          encode_matmul_from_h16(enc, qw, x16_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+        end
+
         def self.matmul_many_to_buffers(qws : Array(QuantWeight),
                                         x_buf : ML::MetalBuffer,
                                         out_bufs : Array(ML::MetalBuffer),
