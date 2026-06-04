@@ -19677,3 +19677,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local transport reduces one producer-consumer conversion boundary, but recomputed wall potential descends only for larger prompt spans and by a small amount. `Phi=(pp256_regression, pp512_noise, pp1024_wall, promotion_risk)` does not justify default-on. Dual frame remains the F32-context default route.
 **boundary:** Do not promote `ctxh16` default-on without a stronger quiet-host ABBA sweep, preferably including pp1024/2048 repeats. If long-pp repeats strengthen, consider a thresholded controller; otherwise keep it as opt-in or remove.
+
+### [LM-COGNIGEMMA-76] Gemma ctxh16 opt-in is thresholded at batch >=512
+**context:** ml / CogniGemma Metal prefill / ctxh16 controller
+**state:** implemented opt-in threshold; default route unchanged
+
+- claim: "The default-off `GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ=1` route now only activates at `batch >= GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MIN_BATCH`, default `512`, matching the clean gate where pp256 lost while pp512/pp1024 showed small wins."
+  source: implementation in `src/ml/gguf/gemma4_metal.cr`; wrapper help in `scripts/gemma4_prefill_ab.sh`; prior clean gate logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.g3hqC2/`.
+  verified_at: 2026-06-04
+  decay_trigger: ctxh16 A/B repeat, route rewrite, or wrapper/controller rewrite
+  trust: {F:0.82,G:0.22,R:0.80}
+
+- claim: "Correctness gates pass for both default and thresholded opt-in route: focused `spec/gemma4_metal_buffer_spec.cr` completed `8 examples, 0 failures` in both modes after the threshold change."
+  source: `/tmp/gemma4_ctx_h16_threshold_spec_default_20260604140837.log`; `/tmp/gemma4_ctx_h16_threshold_spec_ctxh16_20260604140907.log`; `bash -n scripts/gemma4_prefill_ab.sh`; `git diff --check` for touched files; no-codegen build of focused spec.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma focused spec rewrite, threshold condition rewrite, or Metal kernel ABI change
+  trust: {F:0.88,G:0.24,R:0.86}
+
+**LTP/WBA:** Window is the local producer-consumer context-to-output-projection corridor, but only when the prompt batch is large enough for the conversion boundary to matter. Transport is bounded by `MIN_BATCH`, preserving the default F32 route for the pp256 losing window. Potential `Phi=(known_small_batch_regression, conversion_boundary, pp_wall, promotion_risk)` descends relative to the unthresholded opt-in route.
+**boundary:** This is still opt-in. Do not promote default-on until a stronger quiet-host repeat confirms the thresholded mode across pp512/1024/2048.

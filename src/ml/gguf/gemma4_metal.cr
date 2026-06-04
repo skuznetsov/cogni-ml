@@ -123,9 +123,11 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL"]? == "1"
       end
 
-      private def attn_ctx_h16_oproj_enabled? : Bool
+      private def attn_ctx_h16_oproj_enabled?(batch : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_OFF"]? == "1"
-        ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ"]? == "1"
+        return false unless ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ"]? == "1"
+        min_batch = (ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MIN_BATCH"]? || "512").to_i32
+        batch >= min_batch
       end
 
       private def row_prefill_resident_corridor_enabled? : Bool
@@ -712,7 +714,7 @@ module ML::GGUF
         k_buf = scratch.get("rows.k", batch.to_i64 * kv_dim * sizeof(Float32))
         v_buf = scratch.get("rows.v", batch.to_i64 * kv_dim * sizeof(Float32))
         ctx_buf = scratch.get("rows.ctx", batch.to_i64 * q_dim * sizeof(Float32))
-        ctx_h16_oproj = attn_ctx_h16_oproj_enabled? && batch > 8
+        ctx_h16_oproj = attn_ctx_h16_oproj_enabled?(batch)
         ctx_h16_buf = ctx_h16_oproj ? scratch.get("rows.ctx_h16", batch.to_i64 * q_dim * 2_i64) : nil
         attn_projected_buf = scratch.get("rows.attn_projected", hidden_bytes)
         attn_normed_buf = scratch.get("rows.attn_normed", hidden_bytes)
@@ -844,7 +846,7 @@ module ML::GGUF
         k_buf = scratch.get("rows.k", batch.to_i64 * kv_dim * sizeof(Float32))
         v_buf = scratch.get("rows.v", batch.to_i64 * kv_dim * sizeof(Float32))
         ctx_buf = scratch.get("rows.ctx", batch.to_i64 * q_dim * sizeof(Float32))
-        ctx_h16_oproj = attn_ctx_h16_oproj_enabled? && batch > 8
+        ctx_h16_oproj = attn_ctx_h16_oproj_enabled?(batch)
         ctx_h16_buf = ctx_h16_oproj ? scratch.get("rows.ctx_h16", batch.to_i64 * q_dim * 2_i64) : nil
         attn_projected_buf = scratch.get("rows.attn_projected", hidden_bytes)
         attn_normed_buf = scratch.get("rows.attn_normed", hidden_bytes)
