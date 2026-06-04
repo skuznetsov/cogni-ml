@@ -455,16 +455,19 @@ module ML::GGUF
         out_buf.read(hidden_dim)
       end
 
-      def layer_tail_resident_buffer_inputs(x_buf : ML::MetalBuffer,
-                                            attn_projected_buf : ML::MetalBuffer,
-                                            lw : Gemma4LayerWeights,
-                                            hp : Gemma4Hparams,
-                                            scratch : ResidentScratch? = nil) : ML::MetalBuffer?
-        return nil unless available?
+      def encode_layer_tail_resident_buffer_inputs(enc : ML::Metal::ComputeEncoder,
+                                                   x_buf : ML::MetalBuffer,
+                                                   attn_projected_buf : ML::MetalBuffer,
+                                                   out_buf : ML::MetalBuffer,
+                                                   lw : Gemma4LayerWeights,
+                                                   hp : Gemma4Hparams,
+                                                   scratch : ResidentScratch? = nil) : Bool
+        return false unless available?
 
         hidden_dim = hp.n_embd
         raise ArgumentError.new("layer_tail x buffer too small") if x_buf.size < hidden_dim.to_i64 * sizeof(Float32)
         raise ArgumentError.new("layer_tail attn_projected buffer too small") if attn_projected_buf.size < hidden_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("layer_tail out buffer too small") if out_buf.size < hidden_dim.to_i64 * sizeof(Float32)
         raise ArgumentError.new("layer_tail post_attention_norm size mismatch") unless lw.post_attention_norm.size == hidden_dim
         raise ArgumentError.new("layer_tail ffn_norm size mismatch") unless lw.ffn_norm.size == hidden_dim
         raise ArgumentError.new("layer_tail post_ffw_norm size mismatch") unless lw.post_ffw_norm.size == hidden_dim
@@ -483,26 +486,34 @@ module ML::GGUF
         combined_buf = scratch ? scratch.not_nil!.get("tail.combined", lw.ffn_down_qw.in_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(lw.ffn_down_qw.in_dim.to_i64 * sizeof(Float32))
         ffn_buf = scratch ? scratch.not_nil!.get("tail.ffn", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
         ffn_normed_buf = scratch ? scratch.not_nil!.get("tail.ffn_normed", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+
+        encode_rmsnorm_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, hp.rms_eps)
+        encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, hidden_dim)
+        encode_rmsnorm_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, hp.rms_eps)
+        return false unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
+        encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
+        return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, 1)
+        scale = lw.layer_output_scale.first? || 1.0_f32
+        encode_rmsnorm_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
+        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
+        true
+      end
+
+      def layer_tail_resident_buffer_inputs(x_buf : ML::MetalBuffer,
+                                            attn_projected_buf : ML::MetalBuffer,
+                                            lw : Gemma4LayerWeights,
+                                            hp : Gemma4Hparams,
+                                            scratch : ResidentScratch? = nil) : ML::MetalBuffer?
+        return nil unless available?
+
+        hidden_dim = hp.n_embd
         out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
 
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
-        encode_rmsnorm_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, hp.rms_eps)
-        encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, hidden_dim)
-        encode_rmsnorm_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, hp.rms_eps)
-        unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
-          enc.end_encoding
-          return nil
-        end
-        encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
-        unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, 1)
-          enc.end_encoding
-          return nil
-        end
-        scale = lw.layer_output_scale.first? || 1.0_f32
-        encode_rmsnorm_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
-        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
+        ok = encode_layer_tail_resident_buffer_inputs(enc, x_buf, attn_projected_buf, out_buf, lw, hp, scratch)
         enc.end_encoding
+        return nil unless ok
         cmd.commit
         cmd.wait
         out_buf
@@ -623,6 +634,7 @@ module ML::GGUF
         v_buf = scratch ? scratch.not_nil!.get("layer.v", kv_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
         ctx_buf = scratch ? scratch.not_nil!.get("attn.ctx", q_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
         attn_projected_buf = scratch ? scratch.not_nil!.get("layer.attn_projected", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
 
         q_weight = ML::MetalBuffer.from_array(lw.attn_q_norm)
         k_weight = ML::MetalBuffer.from_array(lw.attn_k_norm)
@@ -663,12 +675,13 @@ module ML::GGUF
           enc.end_encoding
           return nil
         end
+        unless encode_layer_tail_resident_buffer_inputs(enc, x_buf, attn_projected_buf, out_buf, lw, hp, scratch)
+          enc.end_encoding
+          return nil
+        end
         enc.end_encoding
         cmd.commit
         cmd.wait
-
-        out_buf = layer_tail_resident_buffer_inputs(x_buf, attn_projected_buf, lw, hp, scratch)
-        return nil unless out_buf
         out_buf
       end
 

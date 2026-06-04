@@ -18750,3 +18750,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Evidence is still a stop-layer resident-prefix microprofile, not an end-to-end Gemma4 decode benchmark. The next exact lever is full-layer single-command fusion by inlining the tail corridor into the same encoder, or adding a quiet full-prefix/decode benchmark before more kernel changes.
 **trust:** {F:0.90,G:0.45,R:0.84}
 **next_gate:** Try whole-layer single-command fusion only if strict parity remains exact; otherwise freeze the two-command layer corridor and move to full prefix/decode benchmarking.
+
+### [LM-COGNIGEMMA-32] Gemma4 whole resident layer single-command corridor verified
+**context:** ml (CogniGemma native port)
+**state:** verified local speed improvement on resident prefix microprofile
+**claims:**
+- claim: "The resident Gemma4 FFN tail is now available as an appendable encoder segment, and `forward_layer_resident_cache_buf` appends it to the attention-side command so the whole resident layer executes as one ordered Metal compute command."
+  source: `src/ml/gguf/gemma4_metal.cr`; focused no-codegen compile passed
+  verified_at: 2026-06-03
+  decay_trigger: resident tail rewrite, output-buffer pooling policy change, or Metal command-ordering behavior change
+- claim: "The output hidden buffer remains unpooled, preserving the prior scratch-pool anti-aliasing boundary while eliminating the attention-to-tail command fence."
+  source: `src/ml/gguf/gemma4_metal.cr`; strict focused spec `4 examples, 0 failures`
+  verified_at: 2026-06-03
+  decay_trigger: resident scratch/hidden lifetime rewrite
+- claim: "Whole-layer single-command fusion preserves exact parity through stop-layer6/full-attention layer 5 and improves local resident prefix p50 versus the two-command attention+tail baseline."
+  source: strict spec stdout `gemma4_resident_stop6_hidden max|d|=0.0`; stop-layer6 paired profile `host_p50_ms=95.698 resident_p50_ms=21.260 speedup=4.5013`; stop-layer6 resident-only p50 `24.957ms`; stop-layer2 paired profile `host_p50_ms=41.742 resident_p50_ms=10.780 speedup=3.8722`. Two-command baseline was stop-layer6 `29.975ms` paired / `28.345ms` resident-only and stop-layer2 `13.147ms`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host ABBA rerun, full decode integration, or profiler harness change
+**LTP/WBA:** Window was the attention-to-tail command fence. Transport now spans the full layer corridor from input hidden to output hidden over resident buffers. Legal move preserves KV/session boundaries, full-attention K-as-V semantics, and output anti-aliasing. Potential descends to `Phi=(small_weight_uploads, final_readback, remaining_unfused_area)` for this microprofile; command-fence phase waits inside the layer are collapsed.
+**boundary:** This still measures a two-token resident-prefix stop-layer probe, not the full Gemma4 pp/tg path. Remaining performance work should move from intra-layer fences to full-prefix/decode integration, weight-upload attribution, and full-model benchmarking.
+**trust:** {F:0.91,G:0.46,R:0.85}
+**next_gate:** Benchmark full resident prefix/decode path and compare against llama.cpp/Gemma4 where available; only return to micro-fusion if the full benchmark points to a specific remaining fence or upload bucket.
