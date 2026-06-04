@@ -19050,3 +19050,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The batch8 row corridor descends native serial work but leaves the active global maximizer untouched versus llama.cpp. Recomputed potential is now `Phi=(exact_chunk_limit_8, missing_large_batch_GEMM_parity, per-layer command overhead, Gemma attention kernel quality, tg_GEMV_gap)`. Spike/Ladder succeeded locally; the next Diamond is reconciling larger batch GEMM speed with acceptable/exact parity, or finding a rowpack route that keeps batch16+ exact enough.
 **boundary:** Do not claim CogniGemma beats llama.cpp pp for Gemma4. Current verified claim is native serial-to-row pp acceleration only. Next speed gate must benchmark pp64/pp256 apples-to-apples against llama.cpp after any chunk/GEMM change.
 **next_gate:** Investigate exact large-row route: force GEMV batch8 chunks vs GEMM batch16 drift, try rowpack/Kahan/F32 accumulation variants, and measure whether batch16+ can preserve top1/logit tolerance while approaching llama.cpp pp.
+
+### [LM-COGNIGEMMA-46] Gemma4 exact row-prefill chunk ladder validated up to 128
+**context:** ml / CogniGemma Metal prefill
+**state:** verified exact configurable chunk cap; speed sweet spot around 128 on pp256 probe
+
+- claim: "Gemma4 row prefill can use larger exact chunks when Qwen batch GEMM is kept out of the route by setting `QWEN35_GEMM_BATCH_THRESHOLD` to at least the requested chunk size."
+  source: temporary full-path parity probes with `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=N QWEN35_GEMM_BATCH_THRESHOLD=N` for `N=16,32,64,128,256`; all reported `last_diff=0.0 next_diff=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: Qwen35 matmul threshold semantics change, Gemma4 row-prefill cap rewrite, or batch GEMV kernel rewrite
+  trust: {F:0.82,G:0.42,R:0.78}
+
+- claim: "The helper now clamps the exact row-prefill chunk cap to `min(GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX, QWEN35_GEMM_BATCH_THRESHOLD)` so setting only the Gemma cap cannot silently enter the drifting GEMM route."
+  source: `src/ml/gguf/gemma4_metal.cr`; default strict spec passed after clamp with `7 examples, 0 failures`; chunk128 parity probe passed with `last_diff=0.0 next_diff=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: route policy rewrite or public exact/approximate prefill split
+  trust: {F:0.90,G:0.50,R:0.86}
+
+- claim: "On pp256 body-only probes, larger exact chunks improved native row prefill over chunk8: chunk8 `39.667 tok/s`, chunk16 `46.242 tok/s`, chunk32 `51.989 tok/s`, chunk64 `53.473 tok/s`, chunk128 `55.255 tok/s`, chunk256 `54.600 tok/s`."
+  source: `/tmp/gemma4_metal_decode_profile_rows16 --tokens 256 --generate 1 --body-only --prefill-mode rows --prefill-chunk N` with matching env caps and thresholds; run_safe stdout
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, text-token harness, or row/GEMV scheduler rewrite
+  trust: {F:0.76,G:0.36,R:0.72}
+
+- claim: "llama.cpp still remains far ahead on same-GGUF pp256: `385.32 ± 0.58 tok/s` versus CogniGemma best observed exact row-prefill `55.255 tok/s`."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/build/bin/llama-bench -m ~/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf -p 256 -n 1 -r 3 -ngl 99 -fa auto -o md`
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp update, Apple memory-pressure change, or CogniGemma batch-GEMM parity breakthrough
+  trust: {F:0.84,G:0.50,R:0.82}
+
+**LTP/WBA:** Window is exact prompt-row chunk size. Transport remains the same resident layer-row corridor, but the legal move increases area carried per chunk while preserving the exact GEMV frame. Potential descends as `Phi=(chunk_count, per_layer_command_replay, host_row_overhead, active_exact_route)` until about chunk128 on pp256, then flattens/regresses at chunk256. The dual frame is approximate/H16 GEMM, but that is not legal for exact prefill without a separate tolerance/top1 gate.
+**boundary:** Current exact row-prefill still uses GEMV-style batch lanes, not llama.cpp-class large-batch GEMM throughput. The remaining pp gap likely requires a parity-safe high-throughput GEMM route, better row-major graph scheduling, or a different exact quantized matmul implementation.
+**next_gate:** Benchmark chunk128 on pp512/pp1024 if memory allows, then inspect llama.cpp Metal batch matmul/graph scheduling for why its pp256 is ~7x faster on the same GGUF.
