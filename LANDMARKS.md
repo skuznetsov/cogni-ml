@@ -18771,3 +18771,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This still measures a two-token resident-prefix stop-layer probe, not the full Gemma4 pp/tg path. Remaining performance work should move from intra-layer fences to full-prefix/decode integration, weight-upload attribution, and full-model benchmarking.
 **trust:** {F:0.91,G:0.46,R:0.85}
 **next_gate:** Benchmark full resident prefix/decode path and compare against llama.cpp/Gemma4 where available; only return to micro-fusion if the full benchmark points to a specific remaining fence or upload bucket.
+
+### [LM-COGNIGEMMA-33] Gemma4 full resident prefix+head profile established
+**context:** ml (CogniGemma native port)
+**state:** verified local full-hidden/profile harness evidence
+**claims:**
+- claim: "`bin/gemma4_metal_prefix_profile.cr` can now include the final output RMSNorm/lm-head through `--with-head`, allowing bounded prompt-prefix timing with or without final logits."
+  source: `bin/gemma4_metal_prefix_profile.cr`; build command `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_profile_head_build crystal build bin/gemma4_metal_prefix_profile.cr -o /tmp/gemma4_metal_prefix_profile_with_head ...` passed
+  verified_at: 2026-06-03
+  decay_trigger: profiler rewrite or Gemma4 final-head path change
+- claim: "On the local 8-token/48-layer resident prefix profile, adding the final tied output head is not the dominant bottleneck within current noise."
+  source: no-head resident full-prefix p50 `495.185ms` / `16.156 tok/s`; with-head resident full-prefix p50 `489.604ms` / `16.340 tok/s` using tokens `42..49`, stop-layer48, max_seq1024, warmups1, runs5
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, final-head kernel rewrite, or full decode harness replacement
+- claim: "The full 48-layer resident path is much faster than the obsolete host-array scaffold on the two-token probe, but this is not yet a llama.cpp comparison or a full generation benchmark."
+  source: stop-layer48 two-token profile with warmups0/runs3: host p50 `916.912ms`, resident p50 `132.379ms`, speedup `6.9264x`; first host sample showed large initialization noise
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host paired rerun, full decode benchmark, or host scaffold removal
+**LTP/WBA:** Window shifted from intra-layer command fences to full-prefix layer-body throughput. Transport spans all 48 resident layer corridors plus optional final head. Potential now appears dominated by repeated layer-body work rather than final head readout: `Phi=(layer_body_bytes, remaining_layer_overheads, final_head_noise, benchmark_scope_gap)`.
+**boundary:** This is a local CogniGemma resident prefix harness. It does not yet measure autoregressive generation, multimodal projection, or apples-to-apples llama.cpp Gemma4.
+**trust:** {F:0.84,G:0.38,R:0.78}
+**next_gate:** Add or reuse a real decode/generation benchmark with tokenizer prompt input and compare CogniGemma against llama.cpp on the same Gemma4 GGUF before claiming external speed.

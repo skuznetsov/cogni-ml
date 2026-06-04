@@ -12,9 +12,10 @@ warmups = 1
 runs = 3
 mode = "both"
 include_state_init = false
+with_head = false
 
 OptionParser.parse(ARGV) do |p|
-  p.banner = "usage: gemma4_metal_prefix_profile [--tokens 42,43] [--stop-layer 2] [--max-seq 1024] [--runs 3] [--mode host|resident|both]"
+  p.banner = "usage: gemma4_metal_prefix_profile [--tokens 42,43] [--stop-layer 2] [--max-seq 1024] [--runs 3] [--mode host|resident|both] [--with-head]"
   p.on("--model PATH", "Gemma4 GGUF path") { |v| model = v }
   p.on("--tokens IDS", "Comma-separated token ids") { |v| tokens = v.split(',').reject(&.empty?).map(&.to_i) }
   p.on("--stop-layer N", "Layer prefix length") { |v| stop_layer = v.to_i }
@@ -23,6 +24,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--runs N", "Measured iterations") { |v| runs = v.to_i }
   p.on("--mode MODE", "host, resident, or both") { |v| mode = v }
   p.on("--include-state-init", "Include state allocation in timed samples") { include_state_init = true }
+  p.on("--with-head", "Run final output RMSNorm/lm-head on the last hidden state") { with_head = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -50,20 +52,22 @@ def summarize(label : String, samples : Array(Float64), token_count : Int32) : N
 end
 
 def run_host_with_state(weights : ML::GGUF::Gemma4Weights, tokens : Array(Int32), stop_layer : Int32,
-                        state : ML::GGUF::Gemma4Metal::State) : Array(Float32)
+                        state : ML::GGUF::Gemma4Metal::State, with_head : Bool) : Array(Float32)
   hidden = [] of Float32
   tokens.each_with_index do |token_id, pos|
     hidden = ML::GGUF::Gemma4Metal.forward_hidden(weights, token_id, pos, state, stop_layer).not_nil!
   end
+  ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil! if with_head
   hidden
 end
 
 def run_resident_with_state(weights : ML::GGUF::Gemma4Weights, tokens : Array(Int32), stop_layer : Int32,
-                            state : ML::GGUF::Gemma4Metal::ResidentState) : Array(Float32)
+                            state : ML::GGUF::Gemma4Metal::ResidentState, with_head : Bool) : Array(Float32)
   hidden = [] of Float32
   tokens.each_with_index do |token_id, pos|
     hidden = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos, state, stop_layer).not_nil!
   end
+  ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil! if with_head
   hidden
 end
 
@@ -72,7 +76,7 @@ weights = ML::GGUF::Gemma4Weights.from_gguf(model)
 load_ms = (Time.instant - started).total_milliseconds
 raise "Metal not available" unless ML::GGUF::Gemma4Metal.available?
 
-puts "model=#{File.basename(model)} tokens=#{tokens.join(',')} stop_layer=#{stop_layer} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} include_state_init=#{include_state_init} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} tokens=#{tokens.join(',')} stop_layer=#{stop_layer} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} include_state_init=#{include_state_init} with_head=#{with_head} load_ms=#{load_ms.round(3)}"
 
 host_samples = [] of Float64
 resident_samples = [] of Float64
@@ -80,16 +84,16 @@ resident_samples = [] of Float64
 if mode == "host" || mode == "both"
   warmups.times do
     state = ML::GGUF::Gemma4Metal::State.new(weights.hparams, max_seq)
-    run_host_with_state(weights, tokens, stop_layer, state)
+    run_host_with_state(weights, tokens, stop_layer, state, with_head)
   end
   runs.times do
     state = ML::GGUF::Gemma4Metal::State.new(weights.hparams, max_seq) unless include_state_init
     t0 = Time.instant
     if include_state_init
       state = ML::GGUF::Gemma4Metal::State.new(weights.hparams, max_seq)
-      run_host_with_state(weights, tokens, stop_layer, state)
+      run_host_with_state(weights, tokens, stop_layer, state, with_head)
     else
-      run_host_with_state(weights, tokens, stop_layer, state.not_nil!)
+      run_host_with_state(weights, tokens, stop_layer, state.not_nil!, with_head)
     end
     host_samples << (Time.instant - t0).total_milliseconds
   end
@@ -99,16 +103,16 @@ end
 if mode == "resident" || mode == "both"
   warmups.times do
     state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
-    run_resident_with_state(weights, tokens, stop_layer, state)
+    run_resident_with_state(weights, tokens, stop_layer, state, with_head)
   end
   runs.times do
     state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq) unless include_state_init
     t0 = Time.instant
     if include_state_init
       state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
-      run_resident_with_state(weights, tokens, stop_layer, state)
+      run_resident_with_state(weights, tokens, stop_layer, state, with_head)
     else
-      run_resident_with_state(weights, tokens, stop_layer, state.not_nil!)
+      run_resident_with_state(weights, tokens, stop_layer, state.not_nil!, with_head)
     end
     resident_samples << (Time.instant - t0).total_milliseconds
   end
