@@ -18847,3 +18847,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Attribution is logical byte accounting plus wall timing, not a GPU hardware counter. It is sufficient for branch priority, not for public throughput claims.
 **trust:** {F:0.86,G:0.43,R:0.81}
 **next_gate:** Implement either Gemma4 batched prefill for FFN-heavy layers or an FFN-specific Q4/Q6 GEMV route; avoid more final-head work unless later attribution changes.
+
+### [LM-COGNIGEMMA-37] Gemma4 body-only tg comparison keeps kernel gap alive
+**context:** ml (CogniGemma native port)
+**state:** verified benchmark hygiene update
+**claims:**
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--body-only`, which measures generated-token resident state updates from fixed synthetic token ids without final logits/top1 during the measured generation suffix."
+  source: build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_decode_profile_body_build crystal build bin/gemma4_metal_decode_profile.cr -o /tmp/gemma4_metal_decode_profile_body ...` passed
+  verified_at: 2026-06-03
+  decay_trigger: decode profiler rewrite or generation harness replacement
+- claim: "Body-only tg8 remains substantially slower than llama.cpp tg8 on the same GGUF scale: CogniGemma body-only tg8 p50 `17.161 tok/s` vs llama.cpp tg8 `32.22 +/- 0.79 tok/s`."
+  source: run_safe body-only prompt8/generate8 warmups1/runs3: decode p50 `466.179ms`, `58.272ms/token`; prior llama-bench pp8/tg8 baseline
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host paired rerun, true token-id-matched llama benchmark, or kernel route rewrite
+**LTP/WBA:** Window is exact decoder body throughput. Removing final-head/top1 from the measured suffix lowers `Phi` only slightly, so the active sticky terms remain FFN GEMV throughput and missing batched prompt processing. Next legal moves must reduce layer-body byte/work potential, not sampler/head overhead.
+**boundary:** Prompt token identity is still not exactly matched to llama-bench synthetic tokens. Treat the 1.9x tg gap as directional until a token-matched benchmark is added.
+**trust:** {F:0.84,G:0.42,R:0.80}
+**next_gate:** Focus on FFN up/gate/down exact routes and batch prefill; do not optimize logits/top1 first.

@@ -10,6 +10,7 @@ max_seq = 1024
 warmups = 1
 runs = 3
 profile = false
+decode_mode = "top1"
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
@@ -20,6 +21,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--warmups N", "Warmup runs") { |v| warmups = v.to_i }
   p.on("--runs N", "Measured runs") { |v| runs = v.to_i }
   p.on("--profile", "Print shared Metal matmul/profile attribution for the final measured run") { profile = true }
+  p.on("--body-only", "During measured generation, update resident state from fixed synthetic tokens without final logits/top1") { decode_mode = "body" }
+  p.on("--top1", "During measured generation, run exact greedy top1 chain (default)") { decode_mode = "top1" }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -64,8 +67,12 @@ def forward_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos : Int3
   top1_id(logits)
 end
 
+def synthetic_decode_token(i : Int32) : Int32
+  ((i * 13 + 11751) % 32000).to_i32
+end
+
 def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate : Int32,
-             max_seq : Int32, profile : Bool = false) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32)
+             max_seq : Int32, decode_mode : String, profile : Bool = false) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
   ML::GGUF::Qwen35Metal::Profile.reset if profile
@@ -83,7 +90,13 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   decode_t0 = Time.instant
   cur = next_id
   generate.times do |i|
-    cur = forward_top1(weights, cur, (prompt.size + i).to_i32, state)
+    pos = (prompt.size + i).to_i32
+    if decode_mode == "body"
+      cur = synthetic_decode_token(i)
+      ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, weights.hparams.n_layer).not_nil!
+    else
+      cur = forward_top1(weights, cur, pos, state)
+    end
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
 
@@ -100,16 +113,18 @@ weights = ML::GGUF::Gemma4Weights.from_gguf(model)
 load_ms = (Time.instant - started).total_milliseconds
 raise "Metal not available" unless ML::GGUF::Gemma4Metal.available?
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} profile=#{profile} load_ms=#{load_ms.round(3)}"
+raise "decode mode must be top1 or body" unless {"top1", "body"}.includes?(decode_mode)
 
-warmups.times { run_once(weights, prompt, generate, max_seq) }
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} profile=#{profile} load_ms=#{load_ms.round(3)}"
+
+warmups.times { run_once(weights, prompt, generate, max_seq, decode_mode) }
 
 prefill_samples = [] of Float64
 decode_samples = [] of Float64
 first_id = 0_i32
 last_id = 0_i32
 runs.times do
-  result = run_once(weights, prompt, generate, max_seq, profile && runs == 1)
+  result = run_once(weights, prompt, generate, max_seq, decode_mode, profile && runs == 1)
   prefill_samples << result[:prefill_ms]
   decode_samples << result[:decode_ms]
   first_id = result[:first_id]
