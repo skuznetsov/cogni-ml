@@ -13,6 +13,7 @@
 # below the threshold. This catches unified-memory/Metal/compressor pressure
 # that is not always visible in the child RSS alone.
 set -u
+set -m 2>/dev/null || true
 
 BINARY="${1:-}"
 TIMEOUT="${2:-120}"
@@ -34,6 +35,11 @@ WATCHDOG_PID=""
 PASSTHROUGH_STDIO="${RUN_SAFE_PASSTHROUGH_STDIO:-0}"
 MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-0}"
 PID=""
+PGID=""
+CAN_KILL_PGID=0
+SEEN_PIDS=""
+PARENT_DONE=0
+PARENT_EXIT=0
 
 log_line() {
   if [ "$PASSTHROUGH_STDIO" = "1" ]; then
@@ -86,11 +92,48 @@ children_of() {
   echo "$all"
 }
 
+pids_in_pgid() {
+  if [ -z "$PGID" ]; then
+    return 0
+  fi
+  ps -axo pid=,pgid= 2>/dev/null | awk -v pg="$PGID" '$2 == pg {print $1}'
+}
+
 process_tree() {
+  local roots p c
   if [ -z "$PID" ]; then
     return 0
   fi
-  echo "$PID $(children_of "$PID")"
+  roots="$PID $SEEN_PIDS $(pids_in_pgid)"
+  for p in $roots; do
+    if kill -0 "$p" 2>/dev/null; then
+      echo "$p"
+    fi
+    for c in $(children_of "$p"); do
+      if kill -0 "$c" 2>/dev/null; then
+        echo "$c"
+      fi
+    done
+  done | awk 'NF && !seen[$1]++ {print $1}'
+}
+
+remember_tree() {
+  local p
+  for p in $(process_tree); do
+    case " $SEEN_PIDS " in
+      *" $p "*) ;;
+      *) SEEN_PIDS="$SEEN_PIDS $p" ;;
+    esac
+  done
+}
+
+live_tree_without_parent() {
+  local p
+  for p in $(process_tree); do
+    if [ "$p" != "$PID" ] && kill -0 "$p" 2>/dev/null; then
+      echo "$p"
+    fi
+  done
 }
 
 rss_tree_kb() {
@@ -151,9 +194,15 @@ fd_tree_count() {
 kill_tree_briefly() {
   local pids
   pids=$(process_tree | tr ' ' '\n' | awk 'NF {print}' | sort -rn)
+  if [ "$CAN_KILL_PGID" -eq 1 ] && [ -n "$PGID" ]; then
+    kill -TERM "-$PGID" 2>/dev/null || true
+  fi
   if [ -n "$pids" ]; then
     kill -TERM $pids 2>/dev/null || true
     sleep 0.5
+    if [ "$CAN_KILL_PGID" -eq 1 ] && [ -n "$PGID" ]; then
+      kill -9 "-$PGID" 2>/dev/null || true
+    fi
     kill -9 $pids 2>/dev/null || true
   fi
 }
@@ -164,11 +213,22 @@ else
   "$BINARY" "$@" > "$STDOUT_TMP" 2> "$STDERR_TMP" &
 fi
 PID=$!
+PGID="$PID"
+actual_pgid=$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ')
+if [ -n "$actual_pgid" ]; then
+  PGID="$actual_pgid"
+fi
+SELF_PGID=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
+if [ -n "$PGID" ] && [ "$PGID" != "$SELF_PGID" ]; then
+  CAN_KILL_PGID=1
+fi
+set +m 2>/dev/null || true
 RUN_SAFE_PID=$$
 
 (
   sleep $((TIMEOUT + 2))
-  if kill -0 "$PID" 2>/dev/null; then
+  remember_tree
+  if [ -n "$(process_tree)" ]; then
     FD_COUNT=$(fd_tree_count)
     RSS=$(rss_tree_kb)
     log_line "[KILL] Timeout after ${TIMEOUT}s (tree FDs: ${FD_COUNT:-?}, tree RSS: ${RSS:-?}KB)"
@@ -182,15 +242,21 @@ WATCHDOG_PID=$!
 HALF_SECS=0
 MAX_HALF_SECS=$((TIMEOUT * 2))
 while [ $HALF_SECS -lt $MAX_HALF_SECS ]; do
-  if ! kill -0 "$PID" 2>/dev/null; then
+  remember_tree
+
+  if [ "$PARENT_DONE" -eq 0 ] && ! kill -0 "$PID" 2>/dev/null; then
     wait "$PID"
-    EXIT=$?
+    PARENT_EXIT=$?
+    PARENT_DONE=1
+  fi
+
+  if [ "$PARENT_DONE" -eq 1 ] && [ -z "$(live_tree_without_parent)" ]; then
     dump_captured_output
-    if [ $EXIT -eq 139 ]; then log_line "[CRASH] Segfault (exit 139)"; fi
-    if [ $EXIT -eq 134 ]; then log_line "[CRASH] Abort (exit 134)"; fi
+    if [ $PARENT_EXIT -eq 139 ]; then log_line "[CRASH] Segfault (exit 139)"; fi
+    if [ $PARENT_EXIT -eq 134 ]; then log_line "[CRASH] Abort (exit 134)"; fi
     SECS=$((HALF_SECS / 2))
-    log_line "[EXIT: $EXIT] after ~${SECS}s"
-    exit $EXIT
+    log_line "[EXIT: $PARENT_EXIT] after ~${SECS}s"
+    exit $PARENT_EXIT
   fi
 
   FD_COUNT=$(fd_tree_count)

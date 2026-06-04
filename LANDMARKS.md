@@ -19340,3 +19340,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The graph-boundary Ladder helped, but the recomputed potential now has a different dominant term: `Phi=(quantized_GEMM_wall, conversion_traffic, final_head_tax, remaining_syncs)`. Additional graph fusion is lower leverage until op attribution shows a boundary term again.
 **boundary:** Do not claim native CogniGemma beats llama.cpp pp. The current verified state is: native fastcap improved substantially, but llama.cpp pure pp is still faster on this host/build.
 **next_gate:** Build shape-level op attribution for `q4_h16_gemm Q4_K 3840x15360 b256`, `q6_gemm Q6_K 15360x3840 b256`, and row-attention context cost. Only then decide whether to port llama's `kernel_mul_mm_q4_K_f32/q6_K_f32` template, retune our H16 kernels, or introduce chunk-major attention scheduling.
+
+### [LM-COGNIGEMMA-56] Heavy Crystal/Metal runs need process-group safe wrapper monitoring
+**context:** ml / local safety / heavy Metal specs
+**state:** verified wrapper hardening; use `run_safe.sh` for heavy Crystal/Metal commands
+
+- claim: "`scripts/run_safe.sh` now tracks the launched process group plus remembered descendants, so reparented children such as `crystal-run-spec.tmp` remain visible to timeout, RSS, FD, and system-memory-pressure guards after the direct parent exits. It only sends process-group kills when the launched child is in a distinct process group; otherwise it kills the known PID set."
+  source: `bash -n scripts/run_safe.sh`; `scripts/run_safe.sh /bin/echo 10 128 hello` -> `[EXIT: 0]`; `scripts/run_safe.sh /bin/bash 1 128 -c 'sleep 20 &'` -> timeout kill and `orphan_rc=1`; `ps ... | rg 'sleep 20'` -> no leftover; `COGNI_RUN_SAFE_MIN_FREE_PCT=99 scripts/run_safe.sh /bin/sleep 20 128 5` -> pressure kill and `pressure_rc=1`.
+  verified_at: 2026-06-04
+  decay_trigger: `scripts/run_safe.sh` process-tree logic rewrite, shell portability change, or new heavy-test launcher
+  trust: {F:0.88,G:0.42,R:0.84}
+
+**LTP/WBA:** Window is a direct Crystal parent exiting while heavy child work continues. Transport is the process-group/descendant corridor. Legal move remembers and monitors all PIDs in the bounded launched group, then kills the group and known descendants on timeout, RSS, FD, or memory-pressure violation. Boundary safety is preserving normal exit/stdout behavior. Potential descends from `Phi=(escaped_children, unbounded_RSS, FD_count, timeout_tail)` to no leftover child after forced orphan test.
+**boundary:** Do not run heavy Gemma/Qwen specs directly. Use `COGNI_RUN_SAFE_MIN_FREE_PCT=12 COGNI_SPEC_MAX_RSS_MB=4096 scripts/run_safe.sh /opt/homebrew/bin/crystal ...` or an equivalent bounded wrapper.
+
+### [LM-COGNIGEMMA-57] Batch-scaled Q6_K token embedding removes Gemma row-prefill stop-layer-0 spike
+**context:** ml / CogniGemma Metal prefill
+**state:** implemented and locally measured; modest full-pp win, large attribution win
+
+- claim: "A batch Q6_K embedding kernel for token-id spans removes the old per-token embedding/readback loop before resident row prefill. On pp1024 with `--stop-layer 0`, embedding-only prefill dropped to `67.067ms` / `15268.276 tok/s`; the previous stop-layer-0 attribution sample was about `977.828ms`."
+  source: `/tmp/gemma4_metal_decode_profile_batch_embed` under `scripts/run_safe.sh`, pp1024 token ids, `--prefill-mode rows --prefill-chunk 1024 --generate 1 --body-only --prefill-no-head --stop-layer 0 --runs 3 --warmups 1 --max-seq 1280`.
+  verified_at: 2026-06-04
+  decay_trigger: token embedding kernel rewrite, Gemma4 prefill route rewrite, or benchmark harness change
+  trust: {F:0.82,G:0.28,R:0.78}
+
+- claim: "With the correct fast-mode env (`GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`), full pure pp impact is smaller and currently noisy. One earlier pp1024 sample measured `6317.776ms` / `162.082 tok/s`, but a later guarded rerun measured `6810.567ms` / `150.355 tok/s`; pp256 measured `1009.013ms` / `253.713 tok/s` versus earlier about `252.276 tok/s`. Treat the full-pp effect as inconclusive until quiet-host ABBA, while the stop-layer-0 embedding spike removal is verified."
+  source: `/tmp/gemma4_metal_decode_profile_batch_embed` and `/tmp/gemma4_metal_decode_profile_batch_embed_current` under `scripts/run_safe.sh`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, `--prefill-mode rows`, `--body-only --prefill-no-head`, runs/warmups as recorded in session notes.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host rerun, fast-mode env omission, row-prefill chunk policy change, or kernel rewrite
+  trust: {F:0.76,G:0.20,R:0.68}
+
+**LTP/WBA:** Window is per-token Q6_K embedding before the resident layer corridor. Transport carries a token-id span into a contiguous hidden-row buffer. Legal move uses the same Q6_K dequantization and Gemma embedding scale in one Metal kernel. Boundary safety is the old per-token fallback when the resident corridor is disabled. Potential descends from `Phi=(embedding_command_waits, CPU_row_concat, embedding_readbacks, bytes, remaining_body_work)`; the first three components collapse strongly, while full pp is still dominated by layer body matmuls/attention.
+**boundary:** This does not yet close the llama.cpp pp gap and should not be sold as a full-pp win. It removes a glaring local spike and gives an attribution tool for the next bottleneck: quantized Gemm/attention body throughput.
