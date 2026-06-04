@@ -9,6 +9,7 @@ generate = 8
 max_seq = 1024
 warmups = 1
 runs = 3
+profile = false
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
@@ -18,6 +19,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--max-seq N", "KV cache sequence capacity") { |v| max_seq = v.to_i }
   p.on("--warmups N", "Warmup runs") { |v| warmups = v.to_i }
   p.on("--runs N", "Measured runs") { |v| runs = v.to_i }
+  p.on("--profile", "Print shared Metal matmul/profile attribution for the final measured run") { profile = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -63,14 +65,19 @@ def forward_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos : Int3
 end
 
 def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate : Int32,
-             max_seq : Int32) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32)
+             max_seq : Int32, profile : Bool = false) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
+  ML::GGUF::Qwen35Metal::Profile.reset if profile
+  ML::GGUF::Qwen35Metal::Profile.enable! if profile
+
   prefill_t0 = Time.instant
-  next_id = 0_i32
+  hidden = [] of Float32
   prompt.each_with_index do |token_id, pos|
-    next_id = forward_top1(weights, token_id, pos.to_i32, state)
+    hidden = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos.to_i32, state, weights.hparams.n_layer).not_nil!
   end
+  logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
+  next_id = top1_id(logits)
   prefill_ms = (Time.instant - prefill_t0).total_milliseconds
 
   decode_t0 = Time.instant
@@ -80,6 +87,11 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
 
+  if profile
+    ML::GGUF::Qwen35Metal::Profile.disable!
+    puts ML::GGUF::Qwen35Metal::Profile.report_io
+  end
+
   {prefill_ms: prefill_ms, decode_ms: decode_ms, first_id: next_id, last_id: cur}
 end
 
@@ -88,7 +100,7 @@ weights = ML::GGUF::Gemma4Weights.from_gguf(model)
 load_ms = (Time.instant - started).total_milliseconds
 raise "Metal not available" unless ML::GGUF::Gemma4Metal.available?
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} profile=#{profile} load_ms=#{load_ms.round(3)}"
 
 warmups.times { run_once(weights, prompt, generate, max_seq) }
 
@@ -97,7 +109,7 @@ decode_samples = [] of Float64
 first_id = 0_i32
 last_id = 0_i32
 runs.times do
-  result = run_once(weights, prompt, generate, max_seq)
+  result = run_once(weights, prompt, generate, max_seq, profile && runs == 1)
   prefill_samples << result[:prefill_ms]
   decode_samples << result[:decode_ms]
   first_id = result[:first_id]

@@ -18826,3 +18826,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** The comparison is not perfectly apples-to-apples in prompt token identity because llama-bench uses synthetic benchmark tokens while CogniGemma used explicit ids, but both use the same GGUF, Metal backend, pp8/tg8 scale, and full model work. Treat as strong direction, not final public benchmark.
 **trust:** {F:0.82,G:0.42,R:0.80}
 **next_gate:** Highest leverage is Gemma4 batch/prefill path for pp, then GEMV/attention attribution for tg. Do not spend more effort on tiny command-fence or final-head tweaks until attribution shifts.
+
+### [LM-COGNIGEMMA-36] Gemma4 decode profiler corrected and FFN-dominance attribution verified
+**context:** ml (CogniGemma native port)
+**state:** verified benchmark correction and attribution anchor
+**claims:**
+- claim: "`bin/gemma4_metal_decode_profile.cr` now models prompt prefill correctly: it runs final logits/top1 only on the last prompt hidden to seed generation, instead of running the head on every prompt token."
+  source: corrected harness build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_decode_profile_fixed_build crystal build bin/gemma4_metal_decode_profile.cr -o /tmp/gemma4_metal_decode_profile_fixed ...`; run_safe prompt8/generate8 completed
+  verified_at: 2026-06-03
+  decay_trigger: decode harness rewrite or tokenizer prompt integration
+- claim: "Correcting prompt-head usage did not close the pp/tg gap; prompt8/generate8 remained about pp `16.392 tok/s`, tg `14.323 tok/s` in a noisy local run."
+  source: run_safe prompt tokens `42..49`, generate8, warmups1, runs3: prefill p50 `488.033ms`; decode p50 `558.553ms`; `decode_ms_per_token_p50=69.819`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, full benchmark harness replacement, or kernel rewrite
+- claim: "Corrected attribution shows Gemma4 full-path work is FFN-dominated: up/gate `3840x15360` is 47.33% logical weights, FFN down paths are about 29.09% combined, and final head is only 2.73% for prompt8+gen1."
+  source: `--profile` run_safe prompt8/generate1: total logical matmul `57756.09 MiB`; `Q4_K 3840x15360` 47.33%, `Q6_K 15360x3840` 17.26%, `Q4_K 15360x3840` 11.83%, `Q6_K 3840x262144` 2.73%; `cpu_fallback matvecs: 0`
+  verified_at: 2026-06-03
+  decay_trigger: quant route rewrite, full batch-prefill implementation, or weight-layout change
+**LTP/WBA:** Window is the FFN body bandwidth corridor, not final head or small fences. Legal next moves should lower `Phi=(FFN_upgate_bytes, FFN_down_bytes, missing_prefill_batching, attention_tail_bytes)` before touching head or norm caches again. For pp, batch/prefill is still the largest structural gap versus llama.cpp; for tg, exact GEMV throughput and FFN-specific routes are the largest kernel gap.
+**boundary:** Attribution is logical byte accounting plus wall timing, not a GPU hardware counter. It is sufficient for branch priority, not for public throughput claims.
+**trust:** {F:0.86,G:0.43,R:0.81}
+**next_gate:** Implement either Gemma4 batched prefill for FFN-heavy layers or an FFN-specific Q4/Q6 GEMV route; avoid more final-head work unless later attribution changes.
