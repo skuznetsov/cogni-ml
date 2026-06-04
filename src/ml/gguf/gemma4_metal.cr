@@ -126,8 +126,9 @@ module ML::GGUF
       private def attn_ctx_h16_oproj_enabled?(batch : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_OFF"]? == "1"
         return false unless ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ"]? == "1"
-        min_batch = (ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MIN_BATCH"]? || "512").to_i32
-        batch >= min_batch
+        min_batch = (ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MIN_BATCH"]? || "1024").to_i32
+        max_batch = (ENV["GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MAX_BATCH"]? || "1024").to_i32
+        batch >= min_batch && (max_batch <= 0 || batch <= max_batch)
       end
 
       private def row_prefill_resident_corridor_enabled? : Bool

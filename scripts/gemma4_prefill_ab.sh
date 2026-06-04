@@ -43,7 +43,8 @@ Environment:
   GEMMA4_PREFILL_AB_LOG_DIR=/tmp/...      keep logs in a chosen directory
   GEMMA4_PREFILL_AB_ALLOW_BUSY=1          skip other-heavy-process preflight
   GEMMA4_PREFILL_AB_WAIT_BUSY_SEC=600     wait up to N seconds for quiet host
-  GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MIN_BATCH=512
+  GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MIN_BATCH=1024
+  GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MAX_BATCH=1024  use 0 for no max
   COGNI_RUN_SAFE_MIN_FREE_PCT=12          system memory-pressure kill threshold
 
 Notes:

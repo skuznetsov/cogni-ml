@@ -19696,3 +19696,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the local producer-consumer context-to-output-projection corridor, but only when the prompt batch is large enough for the conversion boundary to matter. Transport is bounded by `MIN_BATCH`, preserving the default F32 route for the pp256 losing window. Potential `Phi=(known_small_batch_regression, conversion_boundary, pp_wall, promotion_risk)` descends relative to the unthresholded opt-in route.
 **boundary:** This is still opt-in. Do not promote default-on until a stronger quiet-host repeat confirms the thresholded mode across pp512/1024/2048.
+
+### [LM-COGNIGEMMA-77] Gemma ctxh16 range tightened after pp2048 refutation
+**context:** ml / CogniGemma Metal prefill / ctxh16 controller / refutation
+**state:** opt-in range tightened; default route unchanged
+
+- claim: "The thresholded `ctxh16` route is unsafe as a broad long-pp default. A guarded run with rebuilt threshold binary measured pp512 `2209.046ms` default vs `2210.766ms` ctxh16 (loss), pp1024 `5694.484ms` vs `5667.246ms` (small win), and pp2048 `17192.620ms` vs `33933.145ms` (catastrophic regression)."
+  source: wrapper run with `GEMMA4_PREFILL_AB_BIN=/tmp/gemma4_metal_decode_profile_ctx_h16_threshold`, `GEMMA4_PREFILL_AB_PPS=512,1024,2048`, logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.l6fKBx/`.
+  verified_at: 2026-06-04
+  decay_trigger: ctxh16 kernel rewrite, stronger ABBA repeat, or benchmark harness rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "The opt-in controller now defaults to the only surviving measured window: `MIN_BATCH=1024`, `MAX_BATCH=1024`. Operators can override `GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MAX_BATCH=0` for exploratory no-max runs, but the default opt-in no longer activates at pp512 or pp2048."
+  source: implementation in `src/ml/gguf/gemma4_metal.cr`; wrapper help in `scripts/gemma4_prefill_ab.sh`; `bash -n`; `git diff --check`; no-codegen build; focused default and opt-in specs `/tmp/gemma4_ctx_h16_range_spec_default_20260604184641.log` and `/tmp/gemma4_ctx_h16_range_spec_ctxh16_20260604184721.log` both `8 examples, 0 failures`.
+  verified_at: 2026-06-04
+  decay_trigger: controller rewrite, route removal, or new ABBA evidence
+  trust: {F:0.88,G:0.24,R:0.86}
+
+**LTP/WBA:** Recomputed potential exposed a sticky regime at pp2048. Legal move is a Diamond normalization of the transport corridor: restrict the H16 context move to the certified local window rather than extending the ladder blindly. Potential `Phi=(pp512_loss, pp2048_regression, promotion_risk, remaining_experiment_area)` descends by excluding bad spans while preserving an explicit override dual frame for exploration.
+**boundary:** Do not use `ctxh16` as a broad long-context accelerator. Treat it as a narrow pp1024 experiment unless new evidence changes the kernel behavior.
