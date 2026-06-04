@@ -716,9 +716,11 @@ module ML::GGUF
         hidden_dim = hp.n_embd
         exact_chunk_cap = ENV["GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX"]?.try(&.to_i?) || 8
         exact_chunk_cap = 8 if exact_chunk_cap <= 0
-        qwen_gemm_threshold = ENV["QWEN35_GEMM_BATCH_THRESHOLD"]?.try(&.to_i?) || 8
-        qwen_gemm_threshold = 8 if qwen_gemm_threshold <= 0
-        exact_chunk_cap = Math.min(exact_chunk_cap, qwen_gemm_threshold)
+        unless ENV["GEMMA4_ROW_PREFILL_ALLOW_GEMM"]? == "1"
+          qwen_gemm_threshold = ENV["QWEN35_GEMM_BATCH_THRESHOLD"]?.try(&.to_i?) || 8
+          qwen_gemm_threshold = 8 if qwen_gemm_threshold <= 0
+          exact_chunk_cap = Math.min(exact_chunk_cap, qwen_gemm_threshold)
+        end
         exact_chunk = Math.min(chunk_size, exact_chunk_cap)
         layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
         scale = Math.sqrt(hidden_dim.to_f64).to_f32

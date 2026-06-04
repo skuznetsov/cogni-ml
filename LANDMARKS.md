@@ -19082,3 +19082,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window is exact prompt-row chunk size. Transport remains the same resident layer-row corridor, but the legal move increases area carried per chunk while preserving the exact GEMV frame. Potential descends as `Phi=(chunk_count, per_layer_command_replay, host_row_overhead, active_exact_route)` until about chunk128 on pp256, then flattens/regresses at chunk256. The dual frame is approximate/H16 GEMM, but that is not legal for exact prefill without a separate tolerance/top1 gate.
 **boundary:** Current exact row-prefill still uses GEMV-style batch lanes, not llama.cpp-class large-batch GEMM throughput. The remaining pp gap likely requires a parity-safe high-throughput GEMM route, better row-major graph scheduling, or a different exact quantized matmul implementation.
 **next_gate:** Benchmark chunk128 on pp512/pp1024 if memory allows, then inspect llama.cpp Metal batch matmul/graph scheduling for why its pp256 is ~7x faster on the same GGUF.
+
+### [LM-COGNIGEMMA-47] Gemma4 approximate Q4 F32 GEMM prefill gate gives large pp win
+**context:** ml / CogniGemma Metal prefill
+**state:** default-off approximate accelerator gate; top1-smoke passed, exactness not claimed
+
+- claim: "The existing Q4_K F32 GEMM route is much faster than serial Q4 GEMV on Gemma4 FFN gate projection, with small per-projection drift."
+  source: temporary microprobe on layer0 `ffn_gate_qw`, batch128, `QWEN35_Q4K_H16_GEMM_OFF=1`: serial GEMV `725.164ms`, batch GEMM `7.560ms`, `max_diff=0.0004313439`, `mean_diff=4.679e-5`
+  verified_at: 2026-06-03
+  decay_trigger: Q4 GEMM kernel rewrite, Q4_H16 route policy change, or different model quant
+  trust: {F:0.78,G:0.34,R:0.74}
+
+- claim: "`GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` now allows row prefill to cross Qwen's GEMM threshold; default behavior remains exact-clamped unless the gate is explicitly set."
+  source: `src/ml/gguf/gemma4_metal.cr`; default strict spec still passed with `7 examples, 0 failures`
+  verified_at: 2026-06-03
+  decay_trigger: prefill route policy rewrite or exact/approx mode split
+  trust: {F:0.88,G:0.48,R:0.84}
+
+- claim: "With approximate GEMM mode and Q4 H16 disabled, CogniGemma pp256 improved to `203.934 tok/s`, versus exact chunk128 `55.255 tok/s` and llama.cpp pp256 `385.32 ± 0.58 tok/s`."
+  source: `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256 QWEN35_Q4K_H16_GEMM_OFF=1 ... /tmp/gemma4_metal_decode_profile_rows16 --tokens 256 --generate 1 --body-only --prefill-mode rows --prefill-chunk 256`; run_safe stdout `prefill_p50_tok_s=203.934`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, llama.cpp update, text-token harness, or GEMM kernel retune
+  trust: {F:0.78,G:0.38,R:0.74}
+
+- claim: "A small top1 sweep for approximate GEMM mode passed for prompt lengths 32/64/128/256, but hidden drift is not bounded tightly enough for exact claims."
+  source: temporary sweep with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256 QWEN35_Q4K_H16_GEMM_OFF=1`: top1 matched for all lengths; drift rows were `0.0021204948`, `0.011296272`, `0.0027872324`, `0.20623681`
+  verified_at: 2026-06-03
+  decay_trigger: broader prompt suite, real text prompts, tokenizer path, or generation-quality eval
+  trust: {F:0.70,G:0.24,R:0.68}
+
+**LTP/WBA:** Window is the prefill matmul threshold crossing. Transport switches the row corridor from exact GEMV to high-throughput Q4/Q6 GEMM. This lowers performance potential sharply, but changes the legality class: it is no longer exact state transport. Boundary safety is maintained only by explicit opt-in plus top1/quality gates. The dual frame remains exact GEMV chunks for correctness-critical paths.
+**boundary:** Do not enable approximate GEMM by default. Next work needs a broader top1/quality suite and/or a parity-safer llama.cpp-style `kernel_mul_mm_q4_K_f32` adaptation before presenting this as production-safe.
+**next_gate:** Compare our `simd_mm_q4k_f32` against llama.cpp `kernel_mul_mm_q4_K_f32` and inspect why llama.cpp still gets about 1.9x higher pp256 throughput than our approximate GEMM mode.
