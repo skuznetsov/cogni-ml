@@ -18967,3 +18967,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window was duplicated input-vector loading in adjacent FFN gate/up Q4_K GEMVs. Transport carried the same hidden vector through a fused dual-output row corridor while preserving exact output boundaries. Recomputed potential did not descend: input-read duplication was not the active maximizer; `Phi=(FFN_weight_bytes, Q4_row_work, attention/body_overhead, input_reload)` stayed dominated by weight bytes and row work. This is a Spike refutation: remove the local input-reuse kernel rather than laddering more variants.
 
 **boundary:** Do not reattempt pure input-reuse dual Q4 GEMV for Gemma4 decode unless the new branch also changes weight traffic, row schedule, or fuses post-GEMV activation/downstream work in a way measured on live body decode. Next exact branch should target body-wide FFN work, attention-side row batching for prefill, or a different Q4 algorithm rather than another two-output GEMV wrapper.
+
+### [LM-COGNIGEMMA-43] Gemma4 post-fusion small-weight cache re-probe refuted
+
+**state:** refuted again as speed optimization; code removed
+**context:** ml / CogniGemma Metal decode
+
+- claim: "A default-off `GEMMA4_RESIDENT_WEIGHT_CACHE=1` re-probe that cached immutable resident F32 norm/RoPE buffers in `ResidentScratch` preserved strict Gemma4 resident-path correctness after whole-layer command fusion."
+  source: temporary branch experiment; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_weightcache_reprobe_build crystal build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace`; `GEMMA4_RESIDENT_LAYER_STRICT=1 GEMMA4_RESIDENT_WEIGHT_CACHE=1 COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `5 examples, 0 failures`, all reported `max|d|=0.0`
+  trust: {F:0.90,G:0.30,R:0.85}
+  decay_trigger: Gemma4 resident scratch rewrite, Metal buffer allocation/upload semantics change, or new full-layer scheduler
+
+- claim: "After whole-layer command fusion, small immutable norm/RoPE buffer caching still did not improve live Gemma4 body-only decode and should not be kept."
+  source: `/tmp/gemma4_metal_decode_profile_weightcache` sequential gen32 body-only smoke with `warmups=1 runs=2`: cache-off `decode_p50_ms=1863.543`, cache-on `1941.359`; the following cache-off row drifted to `2143.157` and is treated as host-noise evidence, not as a rescue. The opt-in row was already slower than its preceding off row.
+  trust: {F:0.72,G:0.30,R:0.68}
+  decay_trigger: quiet-host ABBA replacement, memory allocator change, or moving constants into long-lived model-owned buffers without per-call cache lookup
+
+**LTP/WBA:** Window was the post-fusion small-weight upload corridor. Transport cached immutable norm/RoPE vectors through `ResidentScratch` without crossing activation/KV boundaries. Legal move preserved exactness, but recomputed wall potential did not descend; `Phi=(FFN_weight_bytes, Q4/Q6_row_work, attention_context_work, constant_uploads)` remains dominated by body matmul/attention work, and cache lookup/lifetime overhead is not a proven win.
+
+**boundary:** Do not reintroduce per-call scratch hash caching for Gemma4 constants. If constants are revisited, use model-owned prebuilt Metal buffers at load time plus a quiet-host ABBA gate; otherwise keep focus on FFN/body algorithms and attention-side row batching.
