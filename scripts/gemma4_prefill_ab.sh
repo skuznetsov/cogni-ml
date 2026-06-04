@@ -24,6 +24,8 @@ max_mem_mb="${GEMMA4_PREFILL_AB_MAX_MEM_MB:-8192}"
 min_free_pct="${COGNI_RUN_SAFE_MIN_FREE_PCT:-12}"
 log_dir="${GEMMA4_PREFILL_AB_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gemma4-prefill-ab.XXXXXX")}"
 modes="${GEMMA4_PREFILL_AB_MODES:-default,q4pair}"
+allow_busy="${GEMMA4_PREFILL_AB_ALLOW_BUSY:-0}"
+busy_pattern="${GEMMA4_PREFILL_AB_BUSY_PATTERN:-crystal spec|/tmp/adamas|regression_tests/run_combined|gemma4_metal_decode_profile|benchmark_qwen|qwen35}"
 
 usage() {
   cat <<'EOF'
@@ -37,10 +39,12 @@ Environment:
   GEMMA4_PREFILL_AB_FORCE_BUILD=1         rebuild profile binary
   GEMMA4_PREFILL_AB_BIN=/tmp/...          profile binary path
   GEMMA4_PREFILL_AB_LOG_DIR=/tmp/...      keep logs in a chosen directory
+  GEMMA4_PREFILL_AB_ALLOW_BUSY=1          skip other-heavy-process preflight
   COGNI_RUN_SAFE_MIN_FREE_PCT=12          system memory-pressure kill threshold
 
 Notes:
   - Runs are sequential by design. Do not wrap this script in parallel runners.
+  - By default, it refuses to run beside obvious Crystal/Metal/Adamas jobs.
   - GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 is forced for comparable high-throughput pp.
 EOF
 }
@@ -48,6 +52,27 @@ EOF
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
+fi
+
+check_busy_host() {
+  local self_pid="$$"
+  local matches
+  matches="$(
+    ps -axo pid=,rss=,args= |
+      awk -v self="${self_pid}" '$1 != self {print}' |
+      grep -E "${busy_pattern}" |
+      grep -v -E "grep -E|scripts/gemma4_prefill_ab.sh|${profile_bin//\//\\/}$" || true
+  )"
+  if [[ -n "${matches}" ]]; then
+    echo "refusing to run Gemma prefill A/B while other heavy jobs are active:" >&2
+    echo "${matches}" >&2
+    echo "Set GEMMA4_PREFILL_AB_ALLOW_BUSY=1 to override after checking memory pressure." >&2
+    exit 3
+  fi
+}
+
+if [[ "${allow_busy}" != "1" ]]; then
+  check_busy_host
 fi
 
 if [[ ! -f "${repo_root}/build/bridge.o" && "${link_flags}" == *"build/bridge.o"* ]]; then

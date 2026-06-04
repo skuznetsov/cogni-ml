@@ -19545,3 +19545,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The wrapper fixed the benchmark transport boundary first, then the Q4 pair local FFN window showed a small pp256 descent. Potential `Phi=(mode_mismatch, pp256_wall, promotion_risk, pressure_risk)` descends only for the measured pp256 cell. The legal move is still opt-in because pp64 and pp1024 were not rerun in the same clean window.
 **boundary:** Do not promote Q4 pair FFN from this single point. Next required gate is `scripts/gemma4_prefill_ab.sh` with `GEMMA4_PREFILL_AB_PPS=64,256,1024` on a quiet host and no other Crystal/Adamas jobs.
+
+### [LM-COGNIGEMMA-67] Gemma pp wrapper refuses to run beside active heavy jobs
+**context:** ml / CogniGemma Metal prefill / benchmark safety
+**state:** implemented in benchmark wrapper
+
+- claim: "`scripts/gemma4_prefill_ab.sh` now fails closed when obvious Crystal/Metal/Adamas jobs are active, unless `GEMMA4_PREFILL_AB_ALLOW_BUSY=1` is explicitly set. This prevents the recurring parallel-run memory pressure pattern from corrupting measurements or freezing the host."
+  source: `bash -n scripts/gemma4_prefill_ab.sh` passed; `scripts/gemma4_prefill_ab.sh --help` documents `GEMMA4_PREFILL_AB_ALLOW_BUSY=1`; guarded run while an Adamas ASAN build was active exited `3` and printed the matching heavy processes.
+  verified_at: 2026-06-04
+  decay_trigger: wrapper preflight rewrite or process naming changes
+  trust: {F:0.86,G:0.24,R:0.84}
+
+**LTP/WBA:** Window is an active external heavy-process signature before the benchmark corridor starts. Transport is the process table and RSS signal into a binary run/no-run decision. Legal move is refusal, preserving repo and GPU state. Potential `Phi=(parallel_pressure_risk, corrupted_measurement_risk, freeze_recovery_cost)` descends to zero for the current wrapper invocation; override is the explicit dual frame for operator-controlled exceptions.
