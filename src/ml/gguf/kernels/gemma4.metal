@@ -451,13 +451,15 @@ kernel void gemma4_attn_context_rows_gqa2(
     uint3  tgpig [[threadgroup_position_in_grid]],
     ushort tiisg [[thread_index_in_simdgroup]])
 {
-    const uint kv_h = tgpig.x;
+    const uint pair_idx = tgpig.x;
     const uint t = tgpig.y;
-    if (heads_per_group != 2 || kv_h >= n_head_kv || t >= n_tokens || head_dim > GEMMA4_ATTN_MAX_HD) return;
+    if (heads_per_group < 2 || (heads_per_group & 1) != 0 || t >= n_tokens || head_dim > GEMMA4_ATTN_MAX_HD) return;
 
-    const uint h0 = kv_h * 2;
+    const uint h0 = pair_idx * 2;
     const uint h1 = h0 + 1;
     if (h1 >= n_head) return;
+    const uint kv_h = h0 / heads_per_group;
+    if (kv_h >= n_head_kv) return;
 
     const uint row_pos = base_pos + t;
     const uint start_pos = (sliding_window == 0 || row_pos + 1 <= sliding_window)

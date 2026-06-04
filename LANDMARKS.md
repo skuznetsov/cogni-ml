@@ -19475,3 +19475,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window is the local GQA SWA pair where two Q heads share one KV head. Transport is the bounded `(kv_head,row)` corridor carrying K/V tiles once while maintaining two independent softmax/output states. Legal move preserves causal/sliding-window boundaries and does not affect full-attention layers. Potential `Phi=(SWA_KV_loads, attn_ctx_wait, pp_wall, semantic_delta)` descends with specs showing semantic delta within existing tolerances. The dual frame is `GEMMA4_ROW_PREFILL_ATTN_GQA2_OFF=1`.
 **boundary:** This is exact for Gemma SWA `heads_per_group=2`; do not generalize to full layers or other models without checking GQA shape and specs.
 **next_gate:** Repeat the same reuse idea for full layers only if a safe multi-query grouping can fit threadgroup/register budgets; otherwise the next leverage is Q4/Q6 GEMM retune or llama.cpp-style `kernel_mul_mm_q*_K` shape parity.
+
+### [LM-COGNIGEMMA-63] Full-attention GQA pair reuse is opt-in, not default
+**context:** ml / CogniGemma Metal prefill / full-attention context
+**state:** implemented as opt-in `GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1`; default promotion rejected
+
+- claim: "The GQA pair attention kernel was generalized from SWA `heads_per_group=2` to adjacent query-head pairs. For full layers (`heads_per_group=16`) it is exact and passes focused Gemma Metal specs when enabled, but it remains opt-in because the wall-speed signal is modest and promotion sanity was unstable."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_gqapair_build ... build bin/gemma4_metal_decode_profile.cr` -> exit 0; default spec `/tmp/cogni_ml_gemma_gqapair_default_spec` -> `8 examples, 0 failures`; opt-in full-pair spec with `GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1` -> `8 examples, 0 failures`; final default spec `/tmp/cogni_ml_gemmagqapair_final_spec` -> `8 examples, 0 failures`.
+  verified_at: 2026-06-04
+  decay_trigger: GQA pair routing rewrite, Gemma attention shape change, or spec coverage change
+  trust: {F:0.84,G:0.28,R:0.82}
+
+- claim: "Full-pair improves the intended phase but is not stable enough for default-on. pp256 phase with default SWA-pair only: full `attn_ctx=66.43ms`, total `attn_ctx=182.26ms`, prefill `1027.703ms`; with `GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1`: full `attn_ctx=43.43ms`, total `attn_ctx=158.82ms`, prefill `1010.879ms`. Initial unprofiled wall A/B was positive: pp64 `271.176->272.920 tok/s`, pp256 `293.213->299.099 tok/s`, pp1024 `197.099->207.088 tok/s`. However, a post-promotion sanity run reversed at pp256: default full-pair `252.729 tok/s`, full-off `273.942 tok/s`; therefore full-pair is opt-in only."
+  source: `/tmp/gemma4_gqapair_phase_pp256_default.log`, `/tmp/gemma4_gqapair_phase_pp256_fullpair.log`, `/tmp/gemma4_gqapair_wall_pp64_default.log`, `/tmp/gemma4_gqapair_wall_pp64_fullpair.log`, `/tmp/gemma4_gqapair_wall_pp256_default.log`, `/tmp/gemma4_gqapair_wall_pp256_fullpair.log`, `/tmp/gemma4_gqapair_wall_pp1024_default.log`, `/tmp/gemma4_gqapair_wall_pp1024_fullpair.log`, `/tmp/gemma4_gqapair_promote_pp256_default.log`, `/tmp/gemma4_gqapair_promote_pp256_fulloff.log`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, memory pressure change, full-pair kernel retune, or thermal state change
+  trust: {F:0.78,G:0.20,R:0.72}
+
+**LTP/WBA:** Window is adjacent query heads in a full-attention layer sharing one KV head. The local phase potential descends, but recomputed wall potential is not robust enough for default promotion. Legal move remains available as a controlled Ladder via `GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1`; the default dual frame keeps only SWA-pair reuse.
+**boundary:** Do not default-enable full-pair without quiet-host ABBA. SWA pair remains default because its pp64/256/1024 wall gains were stronger and fallback specs passed.
