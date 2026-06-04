@@ -19569,3 +19569,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.86,G:0.24,R:0.84}
 
 **LTP/WBA:** Window is the active heavy-process preflight. Transport is bounded time waiting over process-table samples. Legal move is wait-only; it does not start Metal work until the boundary is clean. Potential `Phi=(parallel_pressure_risk, retry_overhead, stale_benchmark_risk)` decreases when the host clears; if it does not clear inside the budget, the wrapper collapses to the existing refusal dual frame.
+
+### [LM-COGNIGEMMA-69] Busy-host override invalidates Gemma pp promotion gates
+**context:** ml / CogniGemma Metal prefill / benchmark validity
+**state:** refuted busy-host perf promotion; threshold patch not committed
+
+- claim: "Even when the competing workload is nominally CPU-only Adamas, overriding the busy-host guard can invalidate CogniGemma pp promotion measurements. A thresholded Q4-pair patch passed build and focused specs, but the default-vs-off pp gate under active Adamas load produced an impossible control mismatch: pp64 default and q4off should have used the same non-pair code path, yet measured `290.858ms` vs `336.368ms`. Absolute pp256/pp1024 also collapsed versus the clean wrapper run, so the A/B cannot support promotion."
+  source: build `/tmp/gemma4_metal_decode_profile_q4pair_threshold` passed; focused `spec/gemma4_metal_buffer_spec.cr` default and `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_OFF=1` each passed `8 examples, 0 failures`; busy override wrapper run `GEMMA4_PREFILL_AB_ALLOW_BUSY=1 GEMMA4_PREFILL_AB_BIN=/tmp/gemma4_metal_decode_profile_q4pair_threshold GEMMA4_PREFILL_AB_PPS=64,256,1024 GEMMA4_PREFILL_AB_MODES=default,q4off ... scripts/gemma4_prefill_ab.sh` produced pp64 `290.858ms` vs `336.368ms`, pp256 `2115.326ms` vs `1993.065ms`, pp1024 `11463.661ms` vs `11201.639ms`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host rerun, benchmark harness rewrite, or isolation policy change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+**LTP/WBA:** The proposed override broke boundary safety. The local window was a CPU-only background job, but the transport corridor includes CPU-side Metal encoding, unified memory pressure, scheduler/thermal state, and benchmark wall time. Recomputed potential increased: `Phi=(control_mismatch, wall_variance, promotion_risk)` did not descend. Legal move is to restore the wait/fail-closed busy-host guard for promotion gates.
+**boundary:** Do not promote Gemma perf defaults from `GEMMA4_PREFILL_AB_ALLOW_BUSY=1` runs. Busy override is acceptable for correctness/smoke or exploratory traces only, not for speed claims or default flips.
