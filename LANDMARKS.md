@@ -18792,3 +18792,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is a local CogniGemma resident prefix harness. It does not yet measure autoregressive generation, multimodal projection, or apples-to-apples llama.cpp Gemma4.
 **trust:** {F:0.84,G:0.38,R:0.78}
 **next_gate:** Add or reuse a real decode/generation benchmark with tokenizer prompt input and compare CogniGemma against llama.cpp on the same Gemma4 GGUF before claiming external speed.
+
+### [LM-COGNIGEMMA-34] Gemma4 resident greedy decode proxy established
+**context:** ml (CogniGemma native port)
+**state:** verified local decode-profile harness evidence
+**claims:**
+- claim: "`bin/gemma4_metal_decode_profile.cr` measures resident Gemma4 prompt prefill and autoregressive greedy decode separately using exact full-layer hidden passes plus final logits/top1 on every consumed token."
+  source: `bin/gemma4_metal_decode_profile.cr`; build command `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_decode_profile_build crystal build bin/gemma4_metal_decode_profile.cr -o /tmp/gemma4_metal_decode_profile ...` passed
+  verified_at: 2026-06-03
+  decay_trigger: decode harness rewrite, tokenizer integration, or Gemma4 top1/head rewrite
+- claim: "On the local 8-token prompt / 8-token generation proxy, CogniGemma resident greedy decode runs around 15-16 tok/s after current single-command layer fusion."
+  source: run_safe profile with prompt tokens `42..49`, generate8, warmups1, runs3: prefill p50 `490.285ms` / `16.317 tok/s`; decode p50 `511.465ms` / `15.641 tok/s`; `decode_ms_per_token_p50=63.933`; first_id `236761`, last_id `84750`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, real tokenizer prompt, full sampling path, or llama.cpp apples-to-apples comparison
+**LTP/WBA:** Window moved from resident-prefix microkernels to end-to-end greedy token consumption. Transport spans exact resident state plus final logits/top1 for each token. Potential indicates the remaining bottleneck is full 48-layer body repetition per generated token: `Phi=(generated_layer_body_work, prompt_layer_body_work, final_head_top1_readout, tokenizer/sampler_scope_gap)`.
+**boundary:** This is token-id based, not text-tokenizer based, and it does not compare to llama.cpp on identical prompt/sampling settings. It is sufficient to prevent mistaking stop-layer microprofile speed for full decode throughput.
+**trust:** {F:0.84,G:0.36,R:0.79}
+**next_gate:** Add text tokenizer integration or use llama.cpp token IDs for apples-to-apples Gemma4 pp/tg comparison; then decide whether to optimize full-layer body math, prompt batching, or draft/speculative paths.
