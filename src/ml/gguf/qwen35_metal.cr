@@ -10575,6 +10575,28 @@ module ML
           elapsed
         end
 
+        # Pair-only Q4_K FFN projection: share one F32->F16 input conversion
+        # across gate/up while preserving the caller's activation path.
+        def self.encode_q4k_gemm_h16_pair_to_buffers(enc : ML::Metal::ComputeEncoder,
+                                                      gate_qw : QuantWeight,
+                                                      up_qw : QuantWeight,
+                                                      x_buf : ML::MetalBuffer,
+                                                      gate_buf : ML::MetalBuffer,
+                                                      up_buf : ML::MetalBuffer,
+                                                      batch : Int32) : Bool
+          return false unless q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch)
+          return false if x_buf.size < batch.to_i64 * gate_qw.in_dim * sizeof(Float32)
+          return false if gate_buf.size < batch.to_i64 * gate_qw.out_dim * sizeof(Float32)
+          return false if up_buf.size < batch.to_i64 * up_qw.out_dim * sizeof(Float32)
+
+          gate_w_buf, gate_w_off = weight_slot(gate_qw)
+          up_w_buf, up_w_off = weight_slot(up_qw)
+          encode_q4k_gemm_h16_pair(enc, x_buf, gate_buf, up_buf,
+            gate_w_buf, gate_w_off, up_w_buf, up_w_off,
+            gate_qw.in_dim, gate_qw.out_dim, batch)
+          true
+        end
+
         # Gemma-style FFN producer-consumer fusion: gate is materialized as F32,
         # up is consumed tile-local, and the output is GELU(gate) * up.
         def self.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc : ML::Metal::ComputeEncoder,

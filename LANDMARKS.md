@@ -19391,3 +19391,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is now the opaque `gemma4.rows.layers` corridor, not token embedding or final readback. Transport is the hidden-row buffer across 48 layer bodies. Legal profile move splits the corridor into per-layer command buffers only when `GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1`, preserving default production grouping. Potential descends from `Phi=(unknown_layer_body, embedding_tax, readback_tax, sync_count)` to `Phi=(intra_layer_phase_unknown, layer_body_wait, sync_count)`.
 **boundary:** Do not optimize embedding/readback further for pp. The next high-leverage branch is intra-layer phase attribution inside `encode_forward_layer_resident_cache_rows`: attention context rows vs Q4 gate/up pair vs Q6/Q4 down vs conversion/norm glue. Standalone op attribution is secondary because readback/copy artifacts can mislead.
+
+### [LM-COGNIGEMMA-59] Pair-only Q4 FFN conversion sharing is a small long-pp opt-in, not a default Gemma win
+**context:** ml / CogniGemma Metal prefill / Q4_K FFN gate-up
+**state:** implemented behind `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1`; verified correct; performance mixed
+
+- claim: "A public `Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers` wrapper lets Gemma row-prefill share one F32->F16 conversion across Q4_K FFN gate/up projections while preserving the existing GELU and down-projection path. Focused Gemma Metal specs pass with and without the opt-in."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_q4_pair_build COGNI_RUN_SAFE_MIN_FREE_PCT=12 scripts/run_safe.sh /opt/homebrew/bin/crystal 240 8192 build bin/gemma4_metal_decode_profile.cr ...` -> exit 0; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_q4_pair_spec COGNI_RUN_SAFE_MIN_FREE_PCT=12 COGNI_SPEC_MAX_RSS_MB=4096 scripts/run_safe.sh /opt/homebrew/bin/crystal 240 4096 spec spec/gemma4_metal_buffer_spec.cr ...` -> `8 examples, 0 failures`; same spec with `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` -> `8 examples, 0 failures`.
+  verified_at: 2026-06-04
+  decay_trigger: Q4_K H16 GEMM rewrite, Gemma FFN activation route rewrite, or resident row-prefill buffer layout change
+  trust: {F:0.86,G:0.30,R:0.84}
+
+- claim: "The pair-only path is not a pp64 win and should not be default-enabled. Warm unprofiled wall A/B measured pp64 default `270.241ms / 236.826 tok/s` versus pair `273.223ms / 234.241 tok/s`. It becomes a small positive at larger chunks: pp256 default `1089.640ms / 234.940 tok/s` versus pair `1074.080ms / 238.344 tok/s`; pp1024 default `6723.105ms / 152.311 tok/s` versus pair `6622.073ms / 154.634 tok/s`."
+  source: `/tmp/gemma4_q4_pair_wall_pp64_default.log`, `/tmp/gemma4_q4_pair_wall_pp64_pair.log`, `/tmp/gemma4_q4_pair_wall_pp256_default.log`, `/tmp/gemma4_q4_pair_wall_pp256_pair.log`, `/tmp/gemma4_q4_pair_wall_pp1024_default.log`, `/tmp/gemma4_q4_pair_wall_pp1024_pair.log`; all via `/tmp/gemma4_metal_decode_profile_q4_pair` under `scripts/run_safe.sh`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, warmed runs=3.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, thermal/memory pressure change, chunk scheduler rewrite, or Q4 pair min-batch retune
+  trust: {F:0.78,G:0.22,R:0.74}
+
+- claim: "Phase profiling confirms the next major Gemma pp levers remain FFN and attention context. pp256 phase sums were default: `ffn_upgate=428.32ms`, `attn_ctx=277.50ms`, `ffn_down=230.74ms`; pair-only: `ffn_upgate=409.50ms`, `attn_ctx=276.84ms`, `ffn_down=243.87ms`. The pair path reduces upgate but can perturb adjacent phases."
+  source: `/tmp/gemma4_q4_pair_phase_pp256_default.log`, `/tmp/gemma4_q4_pair_phase_pp256_pair.log`, profile mode with `GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1 GEMMA4_ROW_PREFILL_PROFILE_PHASES=1`.
+  verified_at: 2026-06-04
+  decay_trigger: phase profiler rewrite, command-buffer scheduling change, or Metal driver/runtime update
+  trust: {F:0.78,G:0.20,R:0.72}
+
+**LTP/WBA:** Window is a local FFN gate/up pair with identical Q4_K shape, input, and batch. Transport is the bounded `ffn_in -> {gate,up}` corridor inside one layer. Legal move shares the F32->F16 conversion and leaves activation/down/residual boundaries unchanged. Potential `Phi=(duplicate_conversions, ffn_upgate_wait, wall, semantic_delta)` descends on duplicate conversions and long-pp wall, but not on pp64; therefore the dual frame is exact/default matmul-many unless `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` is explicitly selected.
+**boundary:** Keep pair-only Q4 FFN as an opt-in benchmarking/long-pp corridor. Do not promote to default until ABBA shows stable wins across pp64/256/1024 or a chunk-size controller chooses it only where it helps.
+**next_gate:** Attack `attn_ctx` and Q4/Q6 GEMM kernel throughput. Candidate corridors: chunk-major attention context, better Q4/Q6 row GEMM kernels, and adaptive pp chunk controller that selects pair-only only for larger prompt chunks.
