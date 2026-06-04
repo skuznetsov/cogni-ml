@@ -192,6 +192,7 @@ module ML
         @@mm_h16_b48_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b64_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b64_swiglu_pipeline : ML::Metal::ComputePipeline?
+        @@mm_h16_b64_gelu_mul_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b64_swiglu_h16_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b80_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b96_pipeline : ML::Metal::ComputePipeline?
@@ -927,6 +928,12 @@ module ML
         private def self.mm_h16_b64_swiglu_pipeline : ML::Metal::ComputePipeline
           @@mm_h16_b64_swiglu_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b64_swiglu") {
             ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b64_swiglu", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.mm_h16_b64_gelu_mul_pipeline : ML::Metal::ComputePipeline
+          @@mm_h16_b64_gelu_mul_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b64_gelu_mul") {
+            ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b64_gelu_mul", GEMM_Q4K_SOURCE)
           }
         end
 
@@ -1885,6 +1892,31 @@ module ML
                                                                  out_dim : Int32,
                                                                  batch : Int32) : Nil
           enc.set_pipeline(mm_h16_b64_swiglu_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x16_buf, 1)
+          enc.set_buffer(gate_buf, 2)
+          enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 4)
+          enc.set_value(out_dim.to_u32, 5)
+          enc.set_value(batch.to_u32, 6)
+          enc.set_threadgroup_memory(MM64_SHMEM, 0)
+          enc.dispatch_threadgroups({
+            (batch + MM64_NR1 - 1) // MM64_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }, {MM64_TG, 1, 1})
+        end
+
+        private def self.encode_q4k_gemm_h16_b64_gelu_mul_from_h16(enc : ML::Metal::ComputeEncoder,
+                                                                   x16_buf : ML::MetalBuffer,
+                                                                   gate_buf : ML::MetalBuffer,
+                                                                   out_buf : ML::MetalBuffer,
+                                                                   w_buf : ML::MetalBuffer,
+                                                                   w_offset : Int64,
+                                                                   in_dim : Int32,
+                                                                   out_dim : Int32,
+                                                                   batch : Int32) : Nil
+          enc.set_pipeline(mm_h16_b64_gelu_mul_pipeline)
           enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
           enc.set_buffer(x16_buf, 1)
           enc.set_buffer(gate_buf, 2)
@@ -10463,6 +10495,39 @@ module ML
             end
           end
           elapsed
+        end
+
+        # Gemma-style FFN producer-consumer fusion: gate is materialized as F32,
+        # up is consumed tile-local, and the output is GELU(gate) * up.
+        def self.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc : ML::Metal::ComputeEncoder,
+                                                        gate_qw : QuantWeight,
+                                                        up_qw : QuantWeight,
+                                                        x_buf : ML::MetalBuffer,
+                                                        gate_buf : ML::MetalBuffer,
+                                                        act_buf : ML::MetalBuffer,
+                                                        batch : Int32) : Bool
+          return false unless q4_pair_h16_gemm_candidate?(gate_qw, up_qw, batch)
+          return false unless q4_h16_b64_gemm_enabled?
+          return false unless q4_h16_b64_swiglu_batch_candidate?(batch)
+          return false unless (up_qw.out_dim % MM_NR0) == 0
+          return false if x_buf.size < batch.to_i64 * gate_qw.in_dim * sizeof(Float32)
+          return false if gate_buf.size < batch.to_i64 * gate_qw.out_dim * sizeof(Float32)
+          return false if act_buf.size < batch.to_i64 * gate_qw.out_dim * sizeof(Float32)
+
+          gate_w_buf, gate_w_off = weight_slot(gate_qw)
+          up_w_buf, up_w_off = weight_slot(up_qw)
+          x16_buf = Scratch.get(:mm4_pair_gelu_x16, (batch * gate_qw.in_dim).to_i64 * 2_i64)
+
+          Profile.bump_conversion("f32_to_f16 q4_pair_gelu_input #{gate_qw.in_dim} b#{batch}", (batch * gate_qw.in_dim).to_i64 * 6_i64)
+          enc.set_pipeline(f32_to_f16_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
+          enc.set_value((batch * gate_qw.in_dim).to_u32, 2)
+          enc.dispatch_1d(batch * gate_qw.in_dim, 256)
+
+          encode_q4k_gemm_h16_from_h16(enc, x16_buf, gate_buf, gate_w_buf, gate_w_off, gate_qw.in_dim, gate_qw.out_dim, batch)
+          encode_q4k_gemm_h16_b64_gelu_mul_from_h16(enc, x16_buf, gate_buf, act_buf, up_w_buf, up_w_off, up_qw.in_dim, up_qw.out_dim, batch)
+          true
         end
 
         def self.matmul(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)?

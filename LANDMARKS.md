@@ -19114,3 +19114,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window is the prefill matmul threshold crossing. Transport switches the row corridor from exact GEMV to high-throughput Q4/Q6 GEMM. This lowers performance potential sharply, but changes the legality class: it is no longer exact state transport. Boundary safety is maintained only by explicit opt-in plus top1/quality gates. The dual frame remains exact GEMV chunks for correctness-critical paths.
 **boundary:** Do not enable approximate GEMM by default. Next work needs a broader top1/quality suite and/or a parity-safer llama.cpp-style `kernel_mul_mm_q4_K_f32` adaptation before presenting this as production-safe.
 **next_gate:** Compare our `simd_mm_q4k_f32` against llama.cpp `kernel_mul_mm_q4_K_f32` and inspect why llama.cpp still gets about 1.9x higher pp256 throughput than our approximate GEMM mode.
+
+### [LM-COGNIGEMMA-48] Gemma4 Q4 GELU consumer fusion gives small opt-in pp win
+**context:** ml / CogniGemma Metal prefill
+**state:** implemented default-off approximate FFN fusion; useful but not a breakthrough
+
+- claim: "A shared-H16 Q4 gate/up pair route without activation fusion is not a meaningful Gemma4 prefill lever."
+  source: temporary layer0 microprobe on `ffn_gate_qw`/`ffn_up_qw`, same synthetic input: batch64 separate `2.473ms` vs pair `2.544ms` (`0.972x`), batch128 `3.745ms` vs `3.735ms` (`1.003x`), batch256 `7.054ms` vs `6.715ms` (`1.051x`).
+  verified_at: 2026-06-03
+  decay_trigger: Q4 H16 pair kernel rewrite, Gemma4 FFN route rewrite, or different Metal backend
+  trust: {F:0.78,G:0.34,R:0.74}
+
+- claim: "Gemma4 now has a default-off Q4_K H16 B64 `GELU(gate) * up` consumer fusion (`GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`) for approximate row prefill. The exact/default route remains unchanged."
+  source: `src/ml/gguf/kernels/gemm_q4k.metal`, `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/gemma4_metal.cr`; default strict spec passed with `7 examples, 0 failures`.
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 activation rewrite, Q4 GEMM helper rewrite, or row-prefill exact/approx policy change
+  trust: {F:0.86,G:0.46,R:0.84}
+
+- claim: "On a pp256 body-only paired smoke, the opt-in GELU fusion improved approximate row prefill from `198.553 tok/s` to `209.556 tok/s` while preserving the sampled first/last ids in that run."
+  source: `/tmp/gemma4_metal_decode_profile_gelu_fuse --tokens 42..297 --generate 1 --body-only --prefill-mode rows --prefill-chunk 256`; no-fuse env `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256 QWEN35_Q4K_H16_GEMM_OFF=1`; fused env `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, profiler rewrite, or Q4/Q6 GEMM route change
+  trust: {F:0.74,G:0.30,R:0.70}
+
+- claim: "A short top1 smoke matched exact serial ids for the sampled pp64/gen2 pattern: both paths reported `first_id=236761 last_id=1`; fused rows prefill was `60.848 tok/s` versus serial `14.763 tok/s` in that smoke."
+  source: `/tmp/gemma4_metal_decode_profile_gelu_fuse --tokens 42..105 --generate 2 --top1`; exact serial run vs fused rows run with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=64`.
+  verified_at: 2026-06-03
+  decay_trigger: broader prompt/tokenizer suite, text-code prompts, or hidden-drift gate failure
+  trust: {F:0.70,G:0.22,R:0.68}
+
+**LTP/WBA:** The pure pair route failed because the active potential stayed dominated by Q4/Q6 projection bytes and downstream activation materialization. The legal Spike that helped is narrower: after the gate projection is materialized, transport the up-projection tile through the existing B64 corridor and collapse directly into `GELU(gate) * up`, removing the `up_buf` write/read and separate GELU kernel. Potential descends modestly as `Phi=(FFN activation materialization, per-layer FFN kernels, Q4/Q6 projection bytes, llama.cpp kernel-quality gap)`, but the last two terms remain dominant.
+**boundary:** This is approximate and default-off. Do not use it for exact prefill claims. It improves native approximate pp but remains far behind llama.cpp pp256 (`385.32 tok/s` prior baseline). Next high-leverage work is Q4/Q6 GEMM kernel quality or a llama.cpp-style `kernel_mul_mm_q4_K_f32` adaptation, not more small pair-only fusions.
+**next_gate:** Run broader text-token top1/quality suite for `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`, then profile Q4/Q6 GEMM kernels against llama.cpp-style matmul scheduling.

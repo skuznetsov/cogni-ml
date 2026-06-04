@@ -107,6 +107,10 @@ module ML::GGUF
     {% else %}
       GEMMA4_SOURCE = {{ read_file("#{__DIR__}/kernels/gemma4.metal") }}
 
+      private def q4_gelu_fuse_enabled? : Bool
+        ENV["GEMMA4_ROW_PREFILL_Q4_GELU_FUSE"]? == "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -580,11 +584,15 @@ module ML::GGUF
         encode_rmsnorm_rows_weighted_out(enc, attn_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
         encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
         encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
-        unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
-          enc.end_encoding
-          return nil
+        fused_gelu = q4_gelu_fuse_enabled? &&
+          Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
+        unless fused_gelu
+          unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+            enc.end_encoding
+            return nil
+          end
+          encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
         end
-        encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
         unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)
           enc.end_encoding
           return nil
@@ -683,11 +691,15 @@ module ML::GGUF
         encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
         encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
         encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
-        unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
-          enc.end_encoding
-          return nil
+        fused_gelu = q4_gelu_fuse_enabled? &&
+          Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
+        unless fused_gelu
+          unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+            enc.end_encoding
+            return nil
+          end
+          encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
         end
-        encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
         unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)
           enc.end_encoding
           return nil
