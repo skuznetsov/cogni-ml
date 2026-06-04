@@ -19227,11 +19227,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: Q4 tensor gate rewrite, Gemma4 GELU fusion rewrite, or broader prompt/token drift gate
   trust: {F:0.84,G:0.32,R:0.80}
 
-- claim: "The safe no-fuse tensor corridor is only a marginal pp256 improvement in the sampled run: no-fuse default `192.101 tok/s`, no-fuse tensor `193.848 tok/s`, same sampled first/last ids. This is not enough evidence to make it default."
-  source: immediate pp256 body-only A/B with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256`; tensor run additionally set `QWEN35_Q4K_TENSOR_MM=1`.
+- claim: "The safe no-fuse tensor corridor is worth keeping default-off but not making default. Initial pp256 A/B showed `192.101 tok/s` default vs `193.848 tok/s` tensor. A later ABBA sweep with matching sampled ids reported pp128 `169.794 -> 174.506 tok/s` (+2.78%), pp256 `158.442 -> 163.857 tok/s` (+3.42%), and pp512 `97.160 -> 110.881 tok/s` (+14.12%), but the pp512 sequence had strong host drift (`A1 120.832`, `A2 73.488`)."
+  source: `/tmp/gemma4_q4_tensor_abba.sh` logs under `/tmp/gemma4_q4_tensor_abba`, body-only row prefill with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=$pp`; tensor slots additionally set `QWEN35_Q4K_TENSOR_MM=1`.
   verified_at: 2026-06-03
-  decay_trigger: quiet-host ABBA rerun, command scheduling change, or exact/fused FFN route rewrite
-  trust: {F:0.70,G:0.24,R:0.66}
+  decay_trigger: quiet-host rerun, command scheduling change, exact/fused FFN route rewrite, or p50 calculation change for two-sample runs
+  trust: {F:0.74,G:0.30,R:0.70}
 
 **LTP/WBA:** The all-Q4 tensor-op Spike failed boundary recomputation: local kernel speed reduced one area term but increased semantic drift. The legal corridor is narrower: only large FFN-sized projections, and only when the downstream fused GELU consumer is absent. The potential descends only weakly as `Phi=(Q4 FFN projection time, command interactions, hidden drift, full pp wall)`, so this remains an experimental Diamond rather than a Collapse/default.
 **boundary:** Do not combine `QWEN35_Q4K_TENSOR_MM=1` with `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`; the code now hard-guards that combination. If returning to this branch, first test a command-buffer split or explicit memory barrier between tensor gate and fused GELU/up before considering re-enable.
