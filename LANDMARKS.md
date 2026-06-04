@@ -19582,3 +19582,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The proposed override broke boundary safety. The local window was a CPU-only background job, but the transport corridor includes CPU-side Metal encoding, unified memory pressure, scheduler/thermal state, and benchmark wall time. Recomputed potential increased: `Phi=(control_mismatch, wall_variance, promotion_risk)` did not descend. Legal move is to restore the wait/fail-closed busy-host guard for promotion gates.
 **boundary:** Do not promote Gemma perf defaults from `GEMMA4_PREFILL_AB_ALLOW_BUSY=1` runs. Busy override is acceptable for correctness/smoke or exploratory traces only, not for speed claims or default flips.
+
+### [LM-COGNIGEMMA-70] Q4 pair FFN threshold remains refuted; keep opt-in only
+**context:** ml / CogniGemma Metal prefill / Q4_K FFN gate-up / promotion gate
+**state:** refuted for default promotion; code reverted
+
+- claim: "Q4 pair FFN has useful but unstable long-pp signal and should remain explicit opt-in, not default-thresholded. A clean full gate after waiting for heavy jobs showed `q4pair` lost pp64 (`239.136ms -> 243.145ms`), lost pp256 (`885.841ms -> 893.067ms`), and won pp1024 (`5770.524ms -> 5607.221ms`). A focused pp1024 repeat also won (`5376.768ms -> 5308.322ms`). However, when testing a `batch>=1024` threshold against OFF fallback, pp1024 default lost slightly (`5537.898ms` vs `5515.856ms`)."
+  source: clean wrapper gate `/tmp/gemma4_prefill_ab_quiet_full.tsv`; focused pp1024 repeat `/tmp/gemma4_prefill_ab_pp1024_repeat.tsv`; threshold build `/tmp/gemma4_metal_decode_profile_q4pair_1024`; focused default and `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_OFF=1` specs passed `8 examples, 0 failures`; promotion A/B `/tmp/gemma4_prefill_ab_q4pair_1024_default_vs_off.tsv`.
+  verified_at: 2026-06-04
+  decay_trigger: Q4 pair kernel retune, cleaner ABBA gate, larger prompt sweep, or benchmark harness rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+**LTP/WBA:** The local Q4 gate/up conversion-sharing window sometimes reduces long-pp wall, but the thresholded transport does not monotonically reduce recomputed wall potential. `Phi=(pp64_regression, pp256_instability, pp1024_wall, promotion_risk)` does not descend enough for default. Legal move is to keep the corridor manually selectable via `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` and continue optimizing higher-leverage attention/GEMM paths.
+**boundary:** Do not add `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_MIN_BATCH` or OFF fallback until a stronger ABBA/shape-controller gate beats current default at pp64/256/1024. Current default remains exact matmul-many plus default SWA GQA2.
