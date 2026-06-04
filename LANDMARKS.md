@@ -18948,3 +18948,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Do not reattempt host-materialized layerwise batch-tail prefill. The next viable pp branch must batch or resident-pack the attention-side row corridor too, or use a full layer-row command corridor.
 **trust:** {F:0.86,G:0.44,R:0.81}
 **next_gate:** Either build attention-side row batching/resident row transport first, or pivot to tg GEMV kernel attribution/optimization.
+
+### [LM-COGNIGEMMA-42] Gemma4 Q4 dual-GEMV input-reuse branch refuted
+
+**state:** refuted as speed optimization; code removed
+**context:** ml / CogniGemma Metal decode
+
+- claim: "A default-off `QWEN35_Q4_DUAL_GEMV=1` probe that fused matching Q4_K FFN gate/up GEMVs into one kernel preserved strict Gemma4 resident-path correctness."
+  source: temporary branch experiment; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_q4dual_build crystal build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace`; `GEMMA4_RESIDENT_LAYER_STRICT=1 QWEN35_Q4_DUAL_GEMV=1 COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `5 examples, 0 failures`, all reported `max|d|=0.0`
+  trust: {F:0.90,G:0.30,R:0.85}
+  decay_trigger: Gemma4 FFN route rewrite, Q4_K GEMV kernel rewrite, or different GPU architecture
+
+- claim: "The same Q4 dual-GEMV branch did not reliably improve Gemma4 body-only decode wall time and therefore should not be promoted."
+  source: `/tmp/gemma4_metal_decode_profile_q4dual` sequential gen32 body-only ABBA with `warmups=1 runs=2`: off `decode_p50_ms=1863.166`, on `1870.787`, on2 `1868.716`, off2 `1869.451`; one shorter gen8 smoke was only weak/noisy (`437.134 / 432.800 / 450.634ms`). Profile confirmed the route was active (`gemv Q4_K dual 3840x15360 b1`), so the failure is not a routing miss.
+  trust: {F:0.80,G:0.35,R:0.75}
+  decay_trigger: quiet-host rerun, changed Gemma4 decode scheduler, or a dual-GEMV design that also reduces weight traffic/activation work
+
+**LTP/WBA:** Window was duplicated input-vector loading in adjacent FFN gate/up Q4_K GEMVs. Transport carried the same hidden vector through a fused dual-output row corridor while preserving exact output boundaries. Recomputed potential did not descend: input-read duplication was not the active maximizer; `Phi=(FFN_weight_bytes, Q4_row_work, attention/body_overhead, input_reload)` stayed dominated by weight bytes and row work. This is a Spike refutation: remove the local input-reuse kernel rather than laddering more variants.
+
+**boundary:** Do not reattempt pure input-reuse dual Q4 GEMV for Gemma4 decode unless the new branch also changes weight traffic, row schedule, or fuses post-GEMV activation/downstream work in a way measured on live body decode. Next exact branch should target body-wide FFN work, attention-side row batching for prefill, or a different Q4 algorithm rather than another two-output GEMV wrapper.
