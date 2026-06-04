@@ -19250,3 +19250,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The conversion-sharing Ladder looked legal because the same F32 activation is transported through multiple H16 GEMM projections, reducing logical conversion traffic. Recomputed potential increased at the wall-clock layer: fewer conversion bytes did not offset worse scheduling/Scratch/kernel composition. This is a `LOCAL_OPTIMIZATION` refutation.
 **boundary:** Do not default-enable shared-H16 many-projection conversion. If revisited, it needs per-kernel timestamp attribution showing conversion wait dominates and a command layout that does not regress full pp.
 **next_gate:** Profile with GPU timestamps or build a direct op-attribution harness for actual Gemma4 attention/FFN projection bands before touching conversion sharing again.
+
+### [LM-COGNIGEMMA-53] Gemma4 row prefill resident corridor removes per-layer CPU boundaries
+**context:** ml / CogniGemma Metal prefill
+**state:** promoted default route with escape hatch `GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF=1`
+
+- claim: "The old Gemma4 row prefill path had a hard layer-boundary CPU roundtrip: `forward_layer_resident_cache_rows` uploaded `x_rows`, committed and waited one command buffer, then read `out_buf`; `prefill_tokens_last_hidden_resident_rows` repeated that per layer."
+  source: `src/ml/gguf/gemma4_metal.cr` before this change, lines around `x_buf = ML::MetalBuffer.from_array(x_rows)`, `cmd.wait`, and `out_buf.read`, plus local source inspection on 2026-06-03.
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 row prefill scheduler rewrite
+  trust: {F:0.86,G:0.42,R:0.82}
+
+- claim: "llama.cpp's Metal backend submits whole compute graphs with queued/asynchronously encoded command buffers and does not normally wait per graph node; its batch matmul route also switches to tensor-op `kernel_mul_mm_q*_K_f32` when batch rows exceed the small-mv threshold."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-context.m:453-550`, `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-ops.cpp:2057-2167`, and `ggml-metal.metal:9907-9912,10220-10222`.
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp Metal graph scheduler or matmul route rewrite
+  trust: {F:0.84,G:0.38,R:0.80}
+
+- claim: "The promoted resident corridor keeps the prompt-row hidden buffer on GPU across all Gemma4 layers in a chunk, using ping-pong hidden buffers and scratch-owned intermediates, then reads only the final chunk hidden. Focused correctness passed with exact row parity."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_resident_corridor_default crystal build bin/gemma4_metal_decode_profile.cr ...`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_resident_corridor_default_spec crystal spec spec/gemma4_metal_buffer_spec.cr ...` -> `7 examples, 0 failures`.
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 row prefill code, resident scratch ownership, or Metal command ordering rewrite
+  trust: {F:0.86,G:0.34,R:0.82}
+
+- claim: "Default resident corridor improves sampled Gemma4 row-prefill wall time versus the old per-layer route. Prompt64 p50 changed `372.979ms OFF -> 324.236ms default` with matching ids; prompt256 p50 changed `1440.744ms OFF -> 1328.221ms default` with matching ids. Earlier opt-in runs showed stronger first-pass wins (`391.194ms -> 312.808ms` at pp64 and `1399.659ms -> 1077.243ms` at pp256), so final public claims still need quiet-host ABBA."
+  source: `/tmp/gemma4_metal_decode_profile_corridor_default` runs under `scripts/run_safe.sh`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=64/256`, with and without `GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF=1`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, Gemma4 benchmark harness rewrite, host memory/thermal load, or row-prefill chunk policy change
+  trust: {F:0.78,G:0.28,R:0.74}
+
+**LTP/WBA:** Window was the per-layer row-prefill boundary. Transport carries the whole prompt-row hidden state through a bounded layer corridor. Legal move keeps exact K/V state order and exact layer math while eliminating repeated CPU readback/upload/wait boundaries. Potential descends from `Phi=(layer_readbacks, layer_uploads, layer_waits, bytes, kernels)` to one chunk boundary read. Dual frame is `GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF=1`, which restores the old per-layer path.
+**boundary:** This is a verified local speed/correctness improvement for CogniGemma row prefill, not yet an apples-to-apples public claim against llama.cpp. Next gates are quiet-host native-vs-llama pp64/pp256/pp1024 and then moving the same graph-boundary idea into final top1/head and multimodal prefill paths.
+**next_gate:** Run quiet-host ABBA against llama.cpp for Gemma4 pp64/pp256/pp1024 with row prefill enabled, then inspect whether remaining gap is Q4/Q6 matmul throughput or final-head/scheduler plumbing.

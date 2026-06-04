@@ -111,6 +111,10 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_Q4_GELU_FUSE"]? == "1"
       end
 
+      private def row_prefill_resident_corridor_enabled? : Bool
+        ENV["GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF"]? != "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -606,13 +610,22 @@ module ML::GGUF
         out_buf.read(batch * hidden_dim)
       end
 
-      def forward_layer_resident_cache_rows(weights : Gemma4Weights,
-                                            il : Int32,
-                                            x_rows : Array(Float32),
-                                            base_pos : Int32,
-                                            batch : Int32,
-                                            state : ResidentState) : Array(Float32)?
-        return nil unless available?
+      private def write_scratch_f32(scratch : ResidentScratch, name : String, data : Array(Float32)) : ML::MetalBuffer
+        buf = scratch.get(name, data.size.to_i64 * sizeof(Float32))
+        buf.write(data)
+        buf
+      end
+
+      def encode_forward_layer_resident_cache_rows_to_buffer(enc : ML::Metal::ComputeEncoder,
+                                                             weights : Gemma4Weights,
+                                                             il : Int32,
+                                                             x_buf : ML::MetalBuffer,
+                                                             out_buf : ML::MetalBuffer,
+                                                             base_pos : Int32,
+                                                             batch : Int32,
+                                                             state : ResidentState,
+                                                             scratch : ResidentScratch = state.scratch) : Bool
+        return false unless available?
 
         hp = weights.hparams
         lw = weights.layers[il]
@@ -622,8 +635,10 @@ module ML::GGUF
         q_dim = hp.n_head * head_dim
         kv_dim = hp.n_head_kv(il) * head_dim
         ffn_dim = lw.ffn_gate_qw.out_dim
+        hidden_bytes = batch.to_i64 * hidden_dim * sizeof(Float32)
         raise ArgumentError.new("batch must be positive") unless batch > 0
-        raise ArgumentError.new("forward_layer_resident_cache_rows input size mismatch") unless x_rows.size == batch * hidden_dim
+        raise ArgumentError.new("forward_layer_resident_cache_rows input buffer too small") if x_buf.size < hidden_bytes
+        raise ArgumentError.new("forward_layer_resident_cache_rows output buffer too small") if out_buf.size < hidden_bytes
         raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
         raise ArgumentError.new("rope_dim #{rope_dim} must be even") unless rope_dim.even?
         raise ArgumentError.new("base_pos #{base_pos} exceeds max_seq #{state.layers[il].max_seq}") if base_pos < 0 || base_pos + batch > state.layers[il].max_seq
@@ -631,49 +646,42 @@ module ML::GGUF
         lstate = state.layers[il]
         raise ArgumentError.new("resident kv_dim mismatch") unless lstate.kv_dim == kv_dim
 
-        x_buf = ML::MetalBuffer.from_array(x_rows)
-        attn_norm_w = ML::MetalBuffer.from_array(lw.attn_norm)
-        post_attn_w = ML::MetalBuffer.from_array(lw.post_attention_norm)
-        ffn_w = ML::MetalBuffer.from_array(lw.ffn_norm)
-        post_ffw_w = ML::MetalBuffer.from_array(lw.post_ffw_norm)
-        q_weight = ML::MetalBuffer.from_array(lw.attn_q_norm)
-        k_weight = ML::MetalBuffer.from_array(lw.attn_k_norm)
+        attn_norm_w = write_scratch_f32(scratch, "rows.attn_norm_w.#{il}", lw.attn_norm)
+        post_attn_w = write_scratch_f32(scratch, "rows.post_attn_w.#{il}", lw.post_attention_norm)
+        ffn_w = write_scratch_f32(scratch, "rows.ffn_w.#{il}", lw.ffn_norm)
+        post_ffw_w = write_scratch_f32(scratch, "rows.post_ffw_w.#{il}", lw.post_ffw_norm)
+        q_weight = write_scratch_f32(scratch, "rows.q_norm_w.#{il}", lw.attn_q_norm)
+        k_weight = write_scratch_f32(scratch, "rows.k_norm_w.#{il}", lw.attn_k_norm)
         rope_freqs = hp.full_attention?(il) ? weights.rope_freqs : nil
         factors = (hp.full_attention?(il) && rope_freqs) ? rope_freqs.not_nil! : [1.0_f32]
-        factor_buf = ML::MetalBuffer.from_array(factors)
+        factor_buf = write_scratch_f32(scratch, "rows.rope_factors.#{il}", factors)
         use_factors = (hp.full_attention?(il) && rope_freqs) ? 1_u32 : 0_u32
         base = hp.rope_freq_base_for_layer(il)
         heads_per_group = hp.n_head // hp.n_head_kv(il)
         sliding_window = hp.sliding_window?(il) ? hp.sliding_window : 0
 
-        x_norm_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
-        q_buf = ML::MetalBuffer.new(batch.to_i64 * q_dim * sizeof(Float32))
-        k_buf = ML::MetalBuffer.new(batch.to_i64 * kv_dim * sizeof(Float32))
-        v_buf = ML::MetalBuffer.new(batch.to_i64 * kv_dim * sizeof(Float32))
-        ctx_buf = ML::MetalBuffer.new(batch.to_i64 * q_dim * sizeof(Float32))
-        attn_projected_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
-        attn_normed_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
-        attn_out_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
-        ffn_in_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
-        gate_buf = ML::MetalBuffer.new(batch.to_i64 * ffn_dim * sizeof(Float32))
-        up_buf = ML::MetalBuffer.new(batch.to_i64 * ffn_dim * sizeof(Float32))
-        combined_buf = ML::MetalBuffer.new(batch.to_i64 * ffn_dim * sizeof(Float32))
-        ffn_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
-        ffn_normed_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
-        out_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        x_norm_buf = scratch.get("rows.x_norm", hidden_bytes)
+        q_buf = scratch.get("rows.q", batch.to_i64 * q_dim * sizeof(Float32))
+        k_buf = scratch.get("rows.k", batch.to_i64 * kv_dim * sizeof(Float32))
+        v_buf = scratch.get("rows.v", batch.to_i64 * kv_dim * sizeof(Float32))
+        ctx_buf = scratch.get("rows.ctx", batch.to_i64 * q_dim * sizeof(Float32))
+        attn_projected_buf = scratch.get("rows.attn_projected", hidden_bytes)
+        attn_normed_buf = scratch.get("rows.attn_normed", hidden_bytes)
+        attn_out_buf = scratch.get("rows.attn_out", hidden_bytes)
+        ffn_in_buf = scratch.get("rows.ffn_in", hidden_bytes)
+        gate_buf = scratch.get("rows.gate", batch.to_i64 * ffn_dim * sizeof(Float32))
+        up_buf = scratch.get("rows.up", batch.to_i64 * ffn_dim * sizeof(Float32))
+        combined_buf = scratch.get("rows.combined", batch.to_i64 * ffn_dim * sizeof(Float32))
+        ffn_buf = scratch.get("rows.ffn", hidden_bytes)
+        ffn_normed_buf = scratch.get("rows.ffn_normed", hidden_bytes)
 
-        cmd = ML::Metal::CommandBuffer.new
-        enc = ML::Metal::ComputeEncoder.new(cmd)
         encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
         projected = if v_qw = lw.attn_v_qw
                       Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
                     else
                       Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
                     end
-        unless projected
-          enc.end_encoding
-          return nil
-        end
+        return false unless projected
 
         encode_rmsnorm_weighted_rows(enc, q_buf, q_weight, head_dim, hp.rms_eps, hp.n_head, batch)
         encode_rmsnorm_weighted_rows(enc, k_buf, k_weight, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
@@ -683,10 +691,7 @@ module ML::GGUF
         encode_kv_write_rows(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, base_pos, kv_dim, batch)
         encode_attention_context_rows(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_buf,
           base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
-        unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
-          enc.end_encoding
-          return nil
-        end
+        return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
 
         encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
         encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
@@ -694,20 +699,34 @@ module ML::GGUF
         fused_gelu = q4_gelu_fuse_enabled? &&
           Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
         unless fused_gelu
-          unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
-            enc.end_encoding
-            return nil
-          end
+          return false unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
           encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
         end
-        unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)
-          enc.end_encoding
-          return nil
-        end
+        return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)
         scale = lw.layer_output_scale.first? || 1.0_f32
         encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
         encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        true
+      end
+
+      def forward_layer_resident_cache_rows(weights : Gemma4Weights,
+                                            il : Int32,
+                                            x_rows : Array(Float32),
+                                            base_pos : Int32,
+                                            batch : Int32,
+                                            state : ResidentState) : Array(Float32)?
+        return nil unless available?
+
+        hidden_dim = weights.hparams.n_embd
+        raise ArgumentError.new("forward_layer_resident_cache_rows input size mismatch") unless x_rows.size == batch * hidden_dim
+
+        x_buf = ML::MetalBuffer.from_array(x_rows)
+        out_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, x_buf, out_buf, base_pos, batch, state)
         enc.end_encoding
+        return nil unless ok
         cmd.commit
         cmd.wait
         out_buf.read(batch * hidden_dim)
@@ -752,10 +771,30 @@ module ML::GGUF
             x_rows.concat(x)
           end
 
-          layer_count.times do |il|
-            next_rows = forward_layer_resident_cache_rows(weights, il, x_rows, base_pos, batch, state)
-            return nil unless next_rows
-            x_rows = next_rows
+          if row_prefill_resident_corridor_enabled? && layer_count > 0
+            hidden_bytes = batch.to_i64 * hidden_dim * sizeof(Float32)
+            in_buf = ML::MetalBuffer.from_array(x_rows)
+            out_buf = ML::MetalBuffer.new(hidden_bytes)
+            cmd = ML::Metal::CommandBuffer.new
+            enc = ML::Metal::ComputeEncoder.new(cmd)
+            layer_count.times do |il|
+              ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, base_pos, batch, state)
+              unless ok
+                enc.end_encoding
+                return nil
+              end
+              in_buf, out_buf = out_buf, in_buf
+            end
+            enc.end_encoding
+            cmd.commit
+            cmd.wait
+            x_rows = in_buf.read(batch * hidden_dim)
+          else
+            layer_count.times do |il|
+              next_rows = forward_layer_resident_cache_rows(weights, il, x_rows, base_pos, batch, state)
+              return nil unless next_rows
+              x_rows = next_rows
+            end
           end
 
           last_hidden = x_rows[((batch - 1) * hidden_dim)...(batch * hidden_dim)].to_a
