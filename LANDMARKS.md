@@ -19308,3 +19308,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window is prompt-row chunk length. Transport is the hidden/KV state corridor across rows and layers. Too large a corridor increases attention/scratch/command stickiness; too small a corridor pays boundary tax. Recomputed potential `Phi=(chunk_boundaries, attention_stickiness, bytes, waits)` descends best at 512 rows on the sampled host. This is a Ladder-to-Collapse policy only for explicit fast mode, because exact hidden parity across the GEMM route is not yet fully proven.
 **boundary:** Exact default remains protected by the existing GEMM threshold clamp. `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` now defaults to a measured 512-row cap unless `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX` overrides it.
 **next_gate:** Run quiet-host native-vs-llama pp64/pp256/pp1024 with the single-env fast mode. If pp4096 remains weak, build attribution around `gemma4_attn_context_rows` before changing matmul kernels.
+
+### [LM-COGNIGEMMA-55] Fresh llama.cpp pp refutes the earlier "native beats pp" comparison
+**context:** ml / CogniGemma Metal prefill
+**state:** active refutation; next bottleneck is quantized GEMM throughput/attribution
+
+- claim: "The previous relaxed llama.cpp pp comparison was stale/noisy. A fresh same-session llama-bench run on the local Gemma4 Q4_K_M model measured pp64 `322.982 tok/s`, pp256 `386.051 tok/s`, and pp1024 `391.204 tok/s`, while native single-env fastcap measured pp64 `238.192 tok/s`, pp256 `251.535 tok/s`, and pp1024 `156.649 tok/s`."
+  source: native logs `/tmp/gemma4_native_fastcap_pp64_20260603232205.log`, `/tmp/gemma4_native_fastcap_pp256_20260603232217.log`, `/tmp/gemma4_native_fastcap_pp1024_20260603232231.log`; llama log `/tmp/gemma4_llama_pp64_256_1024_20260603232319.jsonlog`, `llama-bench -p 64,256,1024 -n 1 -r 3 -ngl 99 -fa auto -t 8 -o json`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, llama.cpp build update, native harness pure-pp mode, or Gemma4 row-prefill kernel rewrite
+  trust: {F:0.82,G:0.30,R:0.78}
+
+- claim: "Native pp timing includes one final tied-head/top1 after prompt hidden, while llama-bench pp rows have `n_gen=0`; this makes the comparison conservative against native but does not explain the full pp gap."
+  source: `bin/gemma4_metal_decode_profile.cr` measures `forward_logits_from_hidden` inside `prefill_t0..prefill_ms`; llama JSON rows report `n_gen=0` for pp tests and a separate `n_prompt=0 n_gen=1` tg row.
+  verified_at: 2026-06-03
+  decay_trigger: benchmark harness rewrite or pure-pp native mode addition
+  trust: {F:0.88,G:0.38,R:0.84}
+
+- claim: "A pure native pp mode confirms the final head/top1 tax is not the main gap. With `--prefill-no-head --body-only`, native fastcap measured pp64 `241.964 tok/s`, pp256 `252.276 tok/s`, and pp1024 `156.300 tok/s`, nearly identical to the head-included rows and still behind fresh llama.cpp pp."
+  source: `/tmp/gemma4_native_purepp_64_20260603232609.log`, `/tmp/gemma4_native_purepp_256_20260603232613.log`, `/tmp/gemma4_native_purepp_1024_20260603232619.log`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_purepp_build crystal build bin/gemma4_metal_decode_profile.cr ...` and `spec/gemma4_metal_buffer_spec.cr` passed (`7 examples, 0 failures`).
+  verified_at: 2026-06-03
+  decay_trigger: pure-pp harness rewrite, row-prefill scheduler rewrite, or quiet-host rerun
+  trust: {F:0.84,G:0.30,R:0.80}
+
+- claim: "Current native profile no longer points primarily at CPU/GPU sync. A pp256 profiled run had only `2` total Metal syncs and reported `14.06 GiB` logical matmul traffic plus `2.77 GiB` conversion traffic; the largest traffic rows are Q4/Q6 batch GEMM and the final tied-head/top1."
+  source: `/tmp/gemma4_native_fastcap_pp256_profile_20260603232400.log`, `--profile`, pp256, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`.
+  verified_at: 2026-06-03
+  decay_trigger: profiler accounting rewrite, row-prefill scheduler rewrite, or op-level timing harness addition
+  trust: {F:0.78,G:0.28,R:0.72}
+
+**LTP/WBA:** The graph-boundary Ladder helped, but the recomputed potential now has a different dominant term: `Phi=(quantized_GEMM_wall, conversion_traffic, final_head_tax, remaining_syncs)`. Additional graph fusion is lower leverage until op attribution shows a boundary term again.
+**boundary:** Do not claim native CogniGemma beats llama.cpp pp. The current verified state is: native fastcap improved substantially, but llama.cpp pure pp is still faster on this host/build.
+**next_gate:** Build shape-level op attribution for `q4_h16_gemm Q4_K 3840x15360 b256`, `q6_gemm Q6_K 15360x3840 b256`, and row-attention context cost. Only then decide whether to port llama's `kernel_mul_mm_q4_K_f32/q6_K_f32` template, retune our H16 kernels, or introduce chunk-major attention scheduling.
