@@ -18986,3 +18986,67 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window was the post-fusion small-weight upload corridor. Transport cached immutable norm/RoPE vectors through `ResidentScratch` without crossing activation/KV boundaries. Legal move preserved exactness, but recomputed wall potential did not descend; `Phi=(FFN_weight_bytes, Q4/Q6_row_work, attention_context_work, constant_uploads)` remains dominated by body matmul/attention work, and cache lookup/lifetime overhead is not a proven win.
 
 **boundary:** Do not reintroduce per-call scratch hash caching for Gemma4 constants. If constants are revisited, use model-owned prebuilt Metal buffers at load time plus a quiet-host ABBA gate; otherwise keep focus on FFN/body algorithms and attention-side row batching.
+
+### [LM-COGNIGEMMA-44] Gemma4 exact resident layer-row corridor verified
+**context:** ml / CogniGemma Metal prefill
+**state:** verified exact primitive; not yet wired into end-to-end prompt prefill
+
+- claim: "Gemma4 now has resident row kernels for attention-side transport: per-head weighted/plain RMSNorm rows, RoPE rows with optional full-attention frequency factors, KV cache row writes, and causal attention-context rows with per-row sliding-window starts."
+  source: `src/ml/gguf/kernels/gemma4.metal`, `src/ml/gguf/gemma4_metal.cr`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 attention math rewrite, Qwen35 matmul route rewrite, or sliding-window metadata change
+  trust: {F:0.88,G:0.42,R:0.84}
+
+- claim: "Focused strict spec proves the layer-row path matches serial resident layer steps for both sliding layer 0 and full-attention layer 5 at batch4 with `max|d|=0.0`."
+  source: `GEMMA4_RESIDENT_LAYER_STRICT=1 COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` -> `6 examples, 0 failures`; stdout `gemma4_resident_layer_rows_l0 max|d|=0.0`, `gemma4_resident_layer_rows_l5 max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: spec fixture change, row kernel rewrite, or resident cache semantics change
+  trust: {F:0.92,G:0.48,R:0.88}
+
+- claim: "A scratch isolated layer probe showed exact batch4/8 layer-row speedups versus serial resident rows: layer0 batch4 `1.613x`, layer5 batch4 `2.979x`, layer0 batch8 `2.056x`, layer5 batch8 `2.182x`, all with `diff=0.0`."
+  source: temporary repo-root Crystal probe removed after run; run_safe stdout from `/tmp/gemma4_layer_rows_probe`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, end-to-end prefill integration, or route threshold change
+  trust: {F:0.72,G:0.36,R:0.68}
+
+- claim: "Batch16 is not promoted as exact: the same scratch probe reported higher speedups but `diff≈0.007..0.009`, consistent with crossing the Q4 batch-GEMM route."
+  source: temporary probe stdout: layer0 batch16 `speedup=6.735 diff=0.008714676`, layer5 batch16 `speedup=4.399 diff=0.0074567795`
+  verified_at: 2026-06-03
+  decay_trigger: exact batch-GEMM route, tolerance-policy change, or separate approximate-prefill gate
+  trust: {F:0.72,G:0.30,R:0.68}
+
+**LTP/WBA:** Window is contiguous prompt rows entering one Gemma layer. Transport carries the row band resident through attention norm, Q/K/V, per-head norms, RoPE, KV write, causal attention, output projection, and FFN tail. Legal move preserves serial resident cache boundaries and causal masks. Potential descends from `Phi=(serial_layer_rows, per_row_command_buffers, host_materialization, tail_serial_work)` to `Phi=(layer_chunks_remaining, exact_batch_limit, model_prefill_runner_missing, tg_GEMV_gap)` for exact batch sizes up to the current GEMM threshold.
+**boundary:** This does not yet make full prompt prefill faster until a Gemma prompt runner uses `forward_layer_resident_cache_rows` layer-by-layer. Keep exact production chunks at `batch <= QWEN35_GEMM_BATCH_THRESHOLD` unless a separate approximate/tolerance gate is accepted.
+**next_gate:** Add Gemma token-row prefill that embeds prompt chunks, applies `forward_layer_resident_cache_rows` across all layers with exact chunk size <=8, verifies next-token parity, then benchmark pp8/pp64/pp256 against llama.cpp.
+
+### [LM-COGNIGEMMA-45] Gemma4 row-prefill harness improves native pp but remains behind llama.cpp
+**context:** ml / CogniGemma Metal prefill benchmark
+**state:** verified local improvement; relative gap remains
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now has `--prefill-mode serial|rows` and `--prefill-chunk N`, allowing direct A/B of serial prompt processing versus exact resident row-prefill chunks."
+  source: `bin/gemma4_metal_decode_profile.cr`; build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_profile_rows_build crystal build bin/gemma4_metal_decode_profile.cr -o /tmp/gemma4_metal_decode_profile_rows --error-trace ...` passed
+  verified_at: 2026-06-03
+  decay_trigger: profile harness rewrite or Gemma prefill API rewrite
+  trust: {F:0.86,G:0.45,R:0.82}
+
+- claim: "On prompt8/body8 with identical synthetic token ids, row-prefill nearly doubled native pp: serial p50 `416.418ms / 19.211 tok/s`, rows p50 `211.0ms / 37.915 tok/s`; both reported `first_id=236761`."
+  source: `/tmp/gemma4_metal_decode_profile_rows --tokens 42..49 --generate 8 --body-only --prefill-mode serial|rows --runs 3`; run_safe stdout
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, tokenizer/text prompt benchmark, or row chunk policy change
+  trust: {F:0.78,G:0.36,R:0.74}
+
+- claim: "On prompt64/body1, row-prefill improved native pp by about `2.54x`: serial p50 `3772.921ms / 16.963 tok/s`, rows p50 `1485.574ms / 43.081 tok/s`."
+  source: `/tmp/gemma4_metal_decode_profile_rows --tokens 42..105 --generate 1 --body-only --prefill-mode serial|rows --runs 2`; run_safe stdout
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, longer prompt sweep, or full text-token harness
+  trust: {F:0.76,G:0.36,R:0.72}
+
+- claim: "Same-GGUF llama.cpp pp64 remains much faster: `318.94 ± 1.52 tok/s` on M2 Max Metal. CogniGemma row-prefill is a native win, not yet a llama.cpp pp win."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/build/bin/llama-bench -m ~/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf -p 64 -n 1 -r 3 -ngl 99 -fa auto -o md`
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp update, apples-to-apples tokenizer/text harness, or CogniGemma chunk-size/GEMM route change
+  trust: {F:0.84,G:0.48,R:0.82}
+
+**LTP/WBA:** The batch8 row corridor descends native serial work but leaves the active global maximizer untouched versus llama.cpp. Recomputed potential is now `Phi=(exact_chunk_limit_8, missing_large_batch_GEMM_parity, per-layer command overhead, Gemma attention kernel quality, tg_GEMV_gap)`. Spike/Ladder succeeded locally; the next Diamond is reconciling larger batch GEMM speed with acceptable/exact parity, or finding a rowpack route that keeps batch16+ exact enough.
+**boundary:** Do not claim CogniGemma beats llama.cpp pp for Gemma4. Current verified claim is native serial-to-row pp acceleration only. Next speed gate must benchmark pp64/pp256 apples-to-apples against llama.cpp after any chunk/GEMM change.
+**next_gate:** Investigate exact large-row route: force GEMV batch8 chunks vs GEMM batch16 drift, try rowpack/Kahan/F32 accumulation variants, and measure whether batch16+ can preserve top1/logit tolerance while approaching llama.cpp pp.

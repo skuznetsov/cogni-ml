@@ -64,6 +64,24 @@ module ML::GGUF
         nil
       end
 
+      def forward_layer_resident_cache_rows(weights : Gemma4Weights,
+                                            il : Int32,
+                                            x_rows : Array(Float32),
+                                            base_pos : Int32,
+                                            batch : Int32,
+                                            state : ResidentState) : Array(Float32)?
+        nil
+      end
+
+      def prefill_tokens_last_hidden_resident_rows(weights : Gemma4Weights,
+                                                   token_ids : Array(Int32),
+                                                   start_pos : Int32,
+                                                   state : ResidentState,
+                                                   chunk_size : Int32 = 8,
+                                                   stop_layer : Int32? = nil) : Array(Float32)?
+        nil
+      end
+
       def forward_layer(weights : Gemma4Weights,
                         il : Int32,
                         x : Array(Float32),
@@ -93,9 +111,14 @@ module ML::GGUF
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_plain_pipeline : ML::Metal::ComputePipeline?
+      @@rmsnorm_heads_weighted_rows_pipeline : ML::Metal::ComputePipeline?
+      @@rmsnorm_heads_plain_rows_pipeline : ML::Metal::ComputePipeline?
       @@rope_pipeline : ML::Metal::ComputePipeline?
+      @@rope_rows_pipeline : ML::Metal::ComputePipeline?
       @@kv_write_pipeline : ML::Metal::ComputePipeline?
+      @@kv_write_rows_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_pipeline : ML::Metal::ComputePipeline?
       @@add_vec_pipeline : ML::Metal::ComputePipeline?
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
@@ -575,6 +598,154 @@ module ML::GGUF
         out_buf.read(batch * hidden_dim)
       end
 
+      def forward_layer_resident_cache_rows(weights : Gemma4Weights,
+                                            il : Int32,
+                                            x_rows : Array(Float32),
+                                            base_pos : Int32,
+                                            batch : Int32,
+                                            state : ResidentState) : Array(Float32)?
+        return nil unless available?
+
+        hp = weights.hparams
+        lw = weights.layers[il]
+        hidden_dim = hp.n_embd
+        head_dim = hp.head_dim_for_layer(il)
+        rope_dim = hp.rope_dim_for_layer(il)
+        q_dim = hp.n_head * head_dim
+        kv_dim = hp.n_head_kv(il) * head_dim
+        ffn_dim = lw.ffn_gate_qw.out_dim
+        raise ArgumentError.new("batch must be positive") unless batch > 0
+        raise ArgumentError.new("forward_layer_resident_cache_rows input size mismatch") unless x_rows.size == batch * hidden_dim
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+        raise ArgumentError.new("rope_dim #{rope_dim} must be even") unless rope_dim.even?
+        raise ArgumentError.new("base_pos #{base_pos} exceeds max_seq #{state.layers[il].max_seq}") if base_pos < 0 || base_pos + batch > state.layers[il].max_seq
+
+        lstate = state.layers[il]
+        raise ArgumentError.new("resident kv_dim mismatch") unless lstate.kv_dim == kv_dim
+
+        x_buf = ML::MetalBuffer.from_array(x_rows)
+        attn_norm_w = ML::MetalBuffer.from_array(lw.attn_norm)
+        post_attn_w = ML::MetalBuffer.from_array(lw.post_attention_norm)
+        ffn_w = ML::MetalBuffer.from_array(lw.ffn_norm)
+        post_ffw_w = ML::MetalBuffer.from_array(lw.post_ffw_norm)
+        q_weight = ML::MetalBuffer.from_array(lw.attn_q_norm)
+        k_weight = ML::MetalBuffer.from_array(lw.attn_k_norm)
+        rope_freqs = hp.full_attention?(il) ? weights.rope_freqs : nil
+        factors = (hp.full_attention?(il) && rope_freqs) ? rope_freqs.not_nil! : [1.0_f32]
+        factor_buf = ML::MetalBuffer.from_array(factors)
+        use_factors = (hp.full_attention?(il) && rope_freqs) ? 1_u32 : 0_u32
+        base = hp.rope_freq_base_for_layer(il)
+        heads_per_group = hp.n_head // hp.n_head_kv(il)
+        sliding_window = hp.sliding_window?(il) ? hp.sliding_window : 0
+
+        x_norm_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        q_buf = ML::MetalBuffer.new(batch.to_i64 * q_dim * sizeof(Float32))
+        k_buf = ML::MetalBuffer.new(batch.to_i64 * kv_dim * sizeof(Float32))
+        v_buf = ML::MetalBuffer.new(batch.to_i64 * kv_dim * sizeof(Float32))
+        ctx_buf = ML::MetalBuffer.new(batch.to_i64 * q_dim * sizeof(Float32))
+        attn_projected_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        attn_normed_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        attn_out_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        ffn_in_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        gate_buf = ML::MetalBuffer.new(batch.to_i64 * ffn_dim * sizeof(Float32))
+        up_buf = ML::MetalBuffer.new(batch.to_i64 * ffn_dim * sizeof(Float32))
+        combined_buf = ML::MetalBuffer.new(batch.to_i64 * ffn_dim * sizeof(Float32))
+        ffn_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        ffn_normed_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+        out_buf = ML::MetalBuffer.new(batch.to_i64 * hidden_dim * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
+        projected = if v_qw = lw.attn_v_qw
+                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+                    else
+                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+                    end
+        unless projected
+          enc.end_encoding
+          return nil
+        end
+
+        encode_rmsnorm_weighted_rows(enc, q_buf, q_weight, head_dim, hp.rms_eps, hp.n_head, batch)
+        encode_rmsnorm_weighted_rows(enc, k_buf, k_weight, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
+        encode_rmsnorm_plain_rows(enc, v_buf, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
+        encode_rope_rows(enc, q_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, batch)
+        encode_rope_rows(enc, k_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head_kv(il), batch)
+        encode_kv_write_rows(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, base_pos, kv_dim, batch)
+        encode_attention_context_rows(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_buf,
+          base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
+          enc.end_encoding
+          return nil
+        end
+
+        encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
+        encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
+        encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
+        unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+          enc.end_encoding
+          return nil
+        end
+        encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)
+          enc.end_encoding
+          return nil
+        end
+        scale = lw.layer_output_scale.first? || 1.0_f32
+        encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
+        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(batch * hidden_dim)
+      end
+
+      def prefill_tokens_last_hidden_resident_rows(weights : Gemma4Weights,
+                                                   token_ids : Array(Int32),
+                                                   start_pos : Int32,
+                                                   state : ResidentState,
+                                                   chunk_size : Int32 = 8,
+                                                   stop_layer : Int32? = nil) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("prefill token_ids must not be empty") if token_ids.empty?
+        raise ArgumentError.new("prefill start_pos must be non-negative") if start_pos < 0
+        raise ArgumentError.new("prefill chunk_size must be positive") unless chunk_size > 0
+
+        hp = weights.hparams
+        hidden_dim = hp.n_embd
+        exact_chunk = Math.min(chunk_size, 8)
+        layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+        scale = Math.sqrt(hidden_dim.to_f64).to_f32
+        last_hidden = [] of Float32
+
+        offset = 0
+        while offset < token_ids.size
+          batch = Math.min(exact_chunk, token_ids.size - offset)
+          base_pos = start_pos + offset
+          raise ArgumentError.new("prefill chunk exceeds max_seq") if base_pos + batch > state.max_seq
+
+          x_rows = [] of Float32
+          batch.times do |r|
+            x = Qwen35Metal.embedding_q6k_from_token_id(weights.token_embd, token_ids[offset + r])
+            return nil unless x
+            x.size.times { |i| x[i] *= scale }
+            x_rows.concat(x)
+          end
+
+          layer_count.times do |il|
+            next_rows = forward_layer_resident_cache_rows(weights, il, x_rows, base_pos, batch, state)
+            return nil unless next_rows
+            x_rows = next_rows
+          end
+
+          last_hidden = x_rows[((batch - 1) * hidden_dim)...(batch * hidden_dim)].to_a
+          offset += batch
+        end
+
+        last_hidden
+      end
+
       def forward_layer(weights : Gemma4Weights,
                         il : Int32,
                         x : Array(Float32),
@@ -939,6 +1110,23 @@ module ML::GGUF
         enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
       end
 
+      private def encode_rmsnorm_weighted_rows(enc : ML::Metal::ComputeEncoder,
+                                               x_buf : ML::MetalBuffer,
+                                               weight_buf : ML::MetalBuffer,
+                                               head_dim : Int32,
+                                               eps : Float32,
+                                               n_heads : Int32,
+                                               rows : Int32) : Nil
+        enc.set_pipeline(rmsnorm_heads_weighted_rows_pipeline)
+        enc.set_buffer(x_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(weight_buf, 1)
+        enc.set_value(head_dim.to_u32, 2)
+        enc.set_value(eps, 3)
+        enc.set_value(n_heads.to_u32, 4)
+        enc.set_value(rows.to_u32, 5)
+        enc.dispatch_threadgroups({n_heads, rows, 1}, {32, 1, 1})
+      end
+
       private def encode_rmsnorm_plain(enc : ML::Metal::ComputeEncoder,
                                        x_buf : ML::MetalBuffer,
                                        head_dim : Int32,
@@ -949,6 +1137,21 @@ module ML::GGUF
         enc.set_value(head_dim.to_u32, 1)
         enc.set_value(eps, 2)
         enc.dispatch_threadgroups({n_heads, 1, 1}, {32, 1, 1})
+      end
+
+      private def encode_rmsnorm_plain_rows(enc : ML::Metal::ComputeEncoder,
+                                            x_buf : ML::MetalBuffer,
+                                            head_dim : Int32,
+                                            eps : Float32,
+                                            n_heads : Int32,
+                                            rows : Int32) : Nil
+        enc.set_pipeline(rmsnorm_heads_plain_rows_pipeline)
+        enc.set_buffer(x_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_value(head_dim.to_u32, 1)
+        enc.set_value(eps, 2)
+        enc.set_value(n_heads.to_u32, 3)
+        enc.set_value(rows.to_u32, 4)
+        enc.dispatch_threadgroups({n_heads, rows, 1}, {32, 1, 1})
       end
 
       private def encode_rope(enc : ML::Metal::ComputeEncoder,
@@ -971,6 +1174,29 @@ module ML::GGUF
         enc.dispatch_threadgroups({n_heads, 1, 1}, {32, 1, 1})
       end
 
+      private def encode_rope_rows(enc : ML::Metal::ComputeEncoder,
+                                   x_buf : ML::MetalBuffer,
+                                   factors_buf : ML::MetalBuffer,
+                                   head_dim : Int32,
+                                   rope_dim : Int32,
+                                   base_pos : Int32,
+                                   freq_base : Float32,
+                                   use_factors : UInt32,
+                                   n_heads : Int32,
+                                   rows : Int32) : Nil
+        enc.set_pipeline(rope_rows_pipeline)
+        enc.set_buffer(x_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(factors_buf, 1)
+        enc.set_value(head_dim.to_u32, 2)
+        enc.set_value(rope_dim.to_u32, 3)
+        enc.set_value(base_pos.to_u32, 4)
+        enc.set_value(freq_base, 5)
+        enc.set_value(use_factors, 6)
+        enc.set_value(n_heads.to_u32, 7)
+        enc.set_value(rows.to_u32, 8)
+        enc.dispatch_threadgroups({n_heads, rows, 1}, {32, 1, 1})
+      end
+
       private def encode_kv_write_one(enc : ML::Metal::ComputeEncoder,
                                       k_buf : ML::MetalBuffer,
                                       v_buf : ML::MetalBuffer,
@@ -986,6 +1212,25 @@ module ML::GGUF
         enc.set_value(pos.to_u32, 4)
         enc.set_value(kv_dim.to_u32, 5)
         enc.dispatch_1d(kv_dim, 256)
+      end
+
+      private def encode_kv_write_rows(enc : ML::Metal::ComputeEncoder,
+                                       k_buf : ML::MetalBuffer,
+                                       v_buf : ML::MetalBuffer,
+                                       k_cache_buf : ML::MetalBuffer,
+                                       v_cache_buf : ML::MetalBuffer,
+                                       base_pos : Int32,
+                                       kv_dim : Int32,
+                                       rows : Int32) : Nil
+        enc.set_pipeline(kv_write_rows_pipeline)
+        enc.set_buffer(k_buf, 0)
+        enc.set_buffer(v_buf, 1)
+        enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(v_cache_buf, 3, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_value(base_pos.to_u32, 4)
+        enc.set_value(kv_dim.to_u32, 5)
+        enc.set_value(rows.to_u32, 6)
+        enc.dispatch_1d(rows * kv_dim, 256)
       end
 
       private def encode_attention_context_one(enc : ML::Metal::ComputeEncoder,
@@ -1011,6 +1256,33 @@ module ML::GGUF
         enc.set_value(head_dim.to_u32, 8)
         enc.set_value(heads_per_group.to_u32, 9)
         enc.dispatch_threadgroups({n_head, 1, 1}, {32, 1, 1})
+      end
+
+      private def encode_attention_context_rows(enc : ML::Metal::ComputeEncoder,
+                                                q_buf : ML::MetalBuffer,
+                                                k_cache_buf : ML::MetalBuffer,
+                                                v_cache_buf : ML::MetalBuffer,
+                                                out_buf : ML::MetalBuffer,
+                                                base_pos : Int32,
+                                                rows : Int32,
+                                                n_head : Int32,
+                                                n_head_kv : Int32,
+                                                head_dim : Int32,
+                                                heads_per_group : Int32,
+                                                sliding_window : Int32) : Nil
+        enc.set_pipeline(attn_context_rows_pipeline)
+        enc.set_buffer(q_buf, 0)
+        enc.set_buffer(k_cache_buf, 1)
+        enc.set_buffer(v_cache_buf, 2)
+        enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(base_pos.to_u32, 4)
+        enc.set_value(rows.to_u32, 5)
+        enc.set_value(n_head.to_u32, 6)
+        enc.set_value(n_head_kv.to_u32, 7)
+        enc.set_value(head_dim.to_u32, 8)
+        enc.set_value(heads_per_group.to_u32, 9)
+        enc.set_value(sliding_window.to_u32, 10)
+        enc.dispatch_threadgroups({n_head, rows, 1}, {32, 1, 1})
       end
 
       private def encode_add_vec(enc : ML::Metal::ComputeEncoder,
@@ -1089,9 +1361,27 @@ module ML::GGUF
         }
       end
 
+      private def rmsnorm_heads_weighted_rows_pipeline : ML::Metal::ComputePipeline
+        @@rmsnorm_heads_weighted_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_heads_weighted_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_rmsnorm_heads_weighted_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def rmsnorm_heads_plain_rows_pipeline : ML::Metal::ComputePipeline
+        @@rmsnorm_heads_plain_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_heads_plain_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_rmsnorm_heads_plain_rows", GEMMA4_SOURCE)
+        }
+      end
+
       private def rope_pipeline : ML::Metal::ComputePipeline
         @@rope_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rope_neox") {
           ML::Metal::ComputePipeline.new("gemma4_rope_neox", GEMMA4_SOURCE)
+        }
+      end
+
+      private def rope_rows_pipeline : ML::Metal::ComputePipeline
+        @@rope_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rope_neox_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_rope_neox_rows", GEMMA4_SOURCE)
         }
       end
 
@@ -1101,9 +1391,21 @@ module ML::GGUF
         }
       end
 
+      private def kv_write_rows_pipeline : ML::Metal::ComputePipeline
+        @@kv_write_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_kv_write_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_kv_write_rows", GEMMA4_SOURCE)
+        }
+      end
+
       private def attn_context_pipeline : ML::Metal::ComputePipeline
         @@attn_context_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_one") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_one", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows", GEMMA4_SOURCE)
         }
       end
 

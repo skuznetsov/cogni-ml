@@ -85,6 +85,63 @@ describe "Gemma4 resident Metal matmul buffers" do
     diff.should be <= 1.0e-5_f32
   end
 
+  it "runs Gemma4 resident layer rows like serial resident layer steps" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    batch = 4
+    hidden = w.hparams.n_embd
+    scale = Math.sqrt(hidden.to_f64).to_f32
+    layers = [0]
+    if full_il = w.hparams.full_attention_layers.first?
+      layers << full_il unless full_il == 0
+    end
+
+    layers.each do |il|
+      x_rows = [] of Float32
+      batch.times do |r|
+        x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42 + r)
+        x.size.times { |i| x[i] *= scale }
+        x_rows.concat(x)
+      end
+
+      serial_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 16)
+      expected = [] of Float32
+      batch.times do |r|
+        row = x_rows[(r * hidden)...((r + 1) * hidden)].to_a
+        expected.concat(ML::GGUF::Gemma4Metal.forward_layer_resident_cache(w, il, row, r, serial_state).not_nil!)
+      end
+
+      row_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 16)
+      actual = ML::GGUF::Gemma4Metal.forward_layer_resident_cache_rows(w, il, x_rows, 0, batch, row_state).not_nil!
+      diff = gemma4_buffer_max_abs_diff(expected, actual)
+      puts "  [gemma4_resident_layer_rows_l#{il}] max|d|=#{diff}"
+      diff.should be <= 1.0e-5_f32
+    end
+  end
+
+  it "prefills Gemma4 prompt chunks through resident layer rows like serial resident prefill" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    prompt = [42_i32, 43_i32, 44_i32, 45_i32, 46_i32, 47_i32, 48_i32, 49_i32]
+    stop_layer = 6
+
+    serial_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 16)
+    serial_last = [] of Float32
+    prompt.each_with_index do |token_id, pos|
+      serial_last = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(w, token_id, pos, serial_state, stop_layer).not_nil!
+    end
+
+    row_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 16)
+    row_last = ML::GGUF::Gemma4Metal.prefill_tokens_last_hidden_resident_rows(w, prompt, 0, row_state, chunk_size: 4, stop_layer: stop_layer).not_nil!
+    last_diff = gemma4_buffer_max_abs_diff(serial_last, row_last)
+    puts "  [gemma4_resident_prefill_rows_stop6_last] max|d|=#{last_diff}"
+    last_diff.should be <= 1.0e-5_f32
+
+    serial_next = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(w, 50, prompt.size, serial_state, stop_layer).not_nil!
+    row_next = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(w, 50, prompt.size, row_state, stop_layer).not_nil!
+    next_diff = gemma4_buffer_max_abs_diff(serial_next, row_next)
+    puts "  [gemma4_resident_prefill_rows_stop6_next] max|d|=#{next_diff}"
+    next_diff.should be <= 1.0e-5_f32
+  end
+
   it "keeps the stop-layer resident-cache hidden path aligned after resident tail promotion" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)
