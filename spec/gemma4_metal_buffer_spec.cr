@@ -32,6 +32,27 @@ describe "Gemma4 resident Metal matmul buffers" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_BUFFER_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
+  it "embeds Q6 token-id batches like the existing per-token Metal path" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    token_ids = [42_i32, 43_i32, 44_i32, 45_i32]
+    hidden = w.hparams.n_embd
+    scale = Math.sqrt(hidden.to_f64).to_f32
+    expected = [] of Float32
+
+    token_ids.each do |token_id|
+      row = ML::GGUF::Qwen35Metal.embedding_q6k_from_token_id(w.token_embd, token_id).not_nil!
+      row.size.times { |i| row[i] *= scale }
+      expected.concat(row)
+    end
+
+    out_buf = ML::MetalBuffer.new(token_ids.size.to_i64 * hidden * sizeof(Float32))
+    ML::GGUF::Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(w.token_embd, token_ids, out_buf, scale)
+    actual = out_buf.read(token_ids.size * hidden)
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    puts "  [gemma4_batch_q6_embedding] max|d|=#{diff}"
+    diff.should be <= 1.0e-6_f32
+  end
+
   it "projects Q4 and Q6 Gemma4 weights from resident input buffers like the array path" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)

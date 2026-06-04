@@ -14,6 +14,7 @@ decode_mode = "top1"
 prefill_mode = "serial"
 prefill_chunk = 8
 prefill_head = true
+stop_layer = nil.as(Int32?)
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
@@ -27,6 +28,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--prefill-mode MODE", "Prompt prefill mode: serial or rows (default: serial)") { |v| prefill_mode = v }
   p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--prefill-no-head", "Measure pure prompt body only; requires --body-only because no next-token seed is computed") { prefill_head = false }
+  p.on("--stop-layer N", "Run only the first N layers for attribution (default: all)") { |v| stop_layer = v.to_i }
   p.on("--body-only", "During measured generation, update resident state from fixed synthetic tokens without final logits/top1") { decode_mode = "body" }
   p.on("--top1", "During measured generation, run exact greedy top1 chain (default)") { decode_mode = "top1" }
   p.on("-h", "--help", "Show help") { puts p; exit }
@@ -80,6 +82,7 @@ end
 def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate : Int32,
              max_seq : Int32, decode_mode : String, prefill_mode : String, prefill_chunk : Int32,
              prefill_head : Bool = true,
+             stop_layer : Int32? = nil,
              profile : Bool = false) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
@@ -91,11 +94,11 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
            when "serial"
              last = [] of Float32
              prompt.each_with_index do |token_id, pos|
-               last = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos.to_i32, state, weights.hparams.n_layer).not_nil!
+               last = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos.to_i32, state, stop_layer || weights.hparams.n_layer).not_nil!
              end
              last
            when "rows"
-             ML::GGUF::Gemma4Metal.prefill_tokens_last_hidden_resident_rows(weights, prompt, 0, state, chunk_size: prefill_chunk, stop_layer: weights.hparams.n_layer).not_nil!
+             ML::GGUF::Gemma4Metal.prefill_tokens_last_hidden_resident_rows(weights, prompt, 0, state, chunk_size: prefill_chunk, stop_layer: stop_layer || weights.hparams.n_layer).not_nil!
            else
              raise "prefill mode must be serial or rows"
            end
@@ -112,7 +115,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     pos = (prompt.size + i).to_i32
     if decode_mode == "body"
       cur = synthetic_decode_token(i)
-      ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, weights.hparams.n_layer).not_nil!
+      ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, stop_layer || weights.hparams.n_layer).not_nil!
     else
       cur = forward_top1(weights, cur, pos, state)
     end
@@ -136,17 +139,21 @@ raise "decode mode must be top1 or body" unless {"top1", "body"}.includes?(decod
 raise "prefill mode must be serial or rows" unless {"serial", "rows"}.includes?(prefill_mode)
 raise "prefill chunk must be positive" unless prefill_chunk > 0
 raise "--prefill-no-head requires --body-only" if !prefill_head && decode_mode != "body"
+if sl = stop_layer
+  raise "--stop-layer must be non-negative" if sl < 0
+  raise "--stop-layer exceeds model layer count" if sl > weights.hparams.n_layer
+end
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} profile=#{profile} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} load_ms=#{load_ms.round(3)}"
 
-warmups.times { run_once(weights, prompt, generate, max_seq, decode_mode, prefill_mode, prefill_chunk, prefill_head) }
+warmups.times { run_once(weights, prompt, generate, max_seq, decode_mode, prefill_mode, prefill_chunk, prefill_head, stop_layer) }
 
 prefill_samples = [] of Float64
 decode_samples = [] of Float64
 first_id = 0_i32
 last_id = 0_i32
 runs.times do
-  result = run_once(weights, prompt, generate, max_seq, decode_mode, prefill_mode, prefill_chunk, prefill_head, profile && runs == 1)
+  result = run_once(weights, prompt, generate, max_seq, decode_mode, prefill_mode, prefill_chunk, prefill_head, stop_layer, profile && runs == 1)
   prefill_samples << result[:prefill_ms]
   decode_samples << result[:decode_ms]
   first_id = result[:first_id]

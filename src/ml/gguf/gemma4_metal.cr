@@ -767,18 +767,11 @@ module ML::GGUF
           base_pos = start_pos + offset
           raise ArgumentError.new("prefill chunk exceeds max_seq") if base_pos + batch > state.max_seq
 
-          x_rows = [] of Float32
-          batch.times do |r|
-            x = Qwen35Metal.embedding_q6k_from_token_id(weights.token_embd, token_ids[offset + r])
-            return nil unless x
-            x.size.times { |i| x[i] *= scale }
-            x_rows.concat(x)
-          end
-
-          if row_prefill_resident_corridor_enabled? && layer_count > 0
+          if row_prefill_resident_corridor_enabled?
             hidden_bytes = batch.to_i64 * hidden_dim * sizeof(Float32)
-            in_buf = ML::MetalBuffer.from_array(x_rows)
+            in_buf = ML::MetalBuffer.new(hidden_bytes)
             out_buf = ML::MetalBuffer.new(hidden_bytes)
+            Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, token_ids[offset, batch], in_buf, scale)
             cmd = ML::Metal::CommandBuffer.new
             enc = ML::Metal::ComputeEncoder.new(cmd)
             layer_count.times do |il|
@@ -794,6 +787,13 @@ module ML::GGUF
             cmd.wait
             x_rows = in_buf.read(batch * hidden_dim)
           else
+            x_rows = [] of Float32
+            batch.times do |r|
+              x = Qwen35Metal.embedding_q6k_from_token_id(weights.token_embd, token_ids[offset + r])
+              return nil unless x
+              x.size.times { |i| x[i] *= scale }
+              x_rows.concat(x)
+            end
             layer_count.times do |il|
               next_rows = forward_layer_resident_cache_rows(weights, il, x_rows, base_pos, batch, state)
               return nil unless next_rows

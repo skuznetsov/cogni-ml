@@ -190,6 +190,7 @@ module ML
         @@mv_add_pipeline : ML::Metal::ComputePipeline?
         @@embed_q4k_pipeline : ML::Metal::ComputePipeline?
         @@embed_q6k_pipeline : ML::Metal::ComputePipeline?
+        @@embed_q6k_rows_scaled_pipeline : ML::Metal::ComputePipeline?
         @@mm_pipeline   : ML::Metal::ComputePipeline?
         @@mm_h16_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b48_pipeline : ML::Metal::ComputePipeline?
@@ -844,6 +845,37 @@ module ML
           cmd.wait
         end
 
+        def self.embedding_q6k_rows_scaled_to_buffer(token_embd_qw : QuantWeight,
+                                                     token_ids : Array(Int32),
+                                                     out_buf : ML::MetalBuffer,
+                                                     scale : Float32 = 1.0_f32,
+                                                     command_queue_name : String? = nil) : Nil
+          raise "embedding_q6k_rows_scaled_to_buffer requires Q6_K token embeddings" unless token_embd_qw.type.q6_k?
+          raise "embedding dim #{token_embd_qw.in_dim} must be divisible by #{QK_K}" unless token_embd_qw.in_dim % QK_K == 0
+          raise "token_ids must not be empty" if token_ids.empty?
+
+          token_buf = ML::MetalBuffer.new(token_ids.size.to_i64 * sizeof(UInt32))
+          ptr = token_buf.contents.as(Pointer(UInt32))
+          token_ids.each_with_index { |id, i| ptr[i] = id.to_u32 }
+
+          w_buf, w_off = weight_slot(token_embd_qw)
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
+          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue)
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          enc.set_pipeline(embed_q6k_rows_scaled_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(token_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(token_embd_qw.in_dim.to_u32, 3)
+          enc.set_value(token_embd_qw.out_dim.to_u32, 4)
+          enc.set_value(token_ids.size.to_u32, 5)
+          enc.set_value(scale, 6)
+          enc.dispatch_1d(token_embd_qw.in_dim * token_ids.size, 256)
+          enc.end_encoding
+          cmd.commit
+          cmd.wait
+        end
+
         private def self.encode_embedding_q4k_from_token_id(enc : ML::Metal::ComputeEncoder,
                                                             w_buf : ML::MetalBuffer,
                                                             w_off : Int64,
@@ -902,6 +934,12 @@ module ML
         private def self.embed_q6k_pipeline : ML::Metal::ComputePipeline
           @@embed_q6k_pipeline ||= ML::Metal::PipelineCache.get("embed_q6k_f32_from_token_id") {
             ML::Metal::ComputePipeline.new("embed_q6k_f32_from_token_id", GEMM_Q56K_SOURCE)
+          }
+        end
+
+        private def self.embed_q6k_rows_scaled_pipeline : ML::Metal::ComputePipeline
+          @@embed_q6k_rows_scaled_pipeline ||= ML::Metal::PipelineCache.get("embed_q6k_f32_from_token_ids_scaled") {
+            ML::Metal::ComputePipeline.new("embed_q6k_f32_from_token_ids_scaled", GEMM_Q56K_SOURCE)
           }
         end
 
