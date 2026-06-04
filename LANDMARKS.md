@@ -19532,3 +19532,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the local benchmark-mode mismatch. Transport is the bounded pp benchmark corridor carrying `(chunk_size, env, mode, log)` through sequential runs. Legal move forces the prior apples-to-apples `ALLOW_GEMM` boundary and forbids parallel Crystal/Metal work. Potential `Phi=(mode_mismatch, parallel_pressure_risk, stale_log_risk, comparison_noise)` descends before any new performance claim.
 **boundary:** Treat Gemma pp numbers without `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` as exact-corridor/debug rows, not public apples-to-apples pp rows.
+
+### [LM-COGNIGEMMA-66] Wrapper reproduces high-throughput Gemma pp256 and Q4 pair remains a small opt-in win
+**context:** ml / CogniGemma Metal prefill / Q4_K FFN gate-up / wrapper validation
+**state:** verified narrow pp256 point; broader promotion still open
+
+- claim: "With the corrected high-throughput benchmark corridor (`GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`), pp256 returns to the earlier ~290 tok/s regime. The sequential wrapper measured default `prefill_p50_ms=879.795` / `290.977 tok/s` and opt-in `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` `prefill_p50_ms=866.848` / `295.323 tok/s`, a small +1.49% pp256 win."
+  source: `GEMMA4_PREFILL_AB_FORCE_BUILD=1 GEMMA4_PREFILL_AB_PPS=256 GEMMA4_PREFILL_AB_MODES=default,q4pair GEMMA4_PREFILL_AB_RUNS=3 GEMMA4_PREFILL_AB_WARMUPS=1 COGNI_RUN_SAFE_MIN_FREE_PCT=12 scripts/gemma4_prefill_ab.sh`; summary saved in `/tmp/gemma4_prefill_ab_pp256.tsv`, logs in `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.g1dXvk/`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, pp64/pp1024 wrapper run, Q4 pair route rewrite, or profile CLI rewrite
+  trust: {F:0.82,G:0.16,R:0.80}
+
+**LTP/WBA:** The wrapper fixed the benchmark transport boundary first, then the Q4 pair local FFN window showed a small pp256 descent. Potential `Phi=(mode_mismatch, pp256_wall, promotion_risk, pressure_risk)` descends only for the measured pp256 cell. The legal move is still opt-in because pp64 and pp1024 were not rerun in the same clean window.
+**boundary:** Do not promote Q4 pair FFN from this single point. Next required gate is `scripts/gemma4_prefill_ab.sh` with `GEMMA4_PREFILL_AB_PPS=64,256,1024` on a quiet host and no other Crystal/Adamas jobs.
