@@ -25,6 +25,8 @@ min_free_pct="${COGNI_RUN_SAFE_MIN_FREE_PCT:-12}"
 log_dir="${GEMMA4_PREFILL_AB_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gemma4-prefill-ab.XXXXXX")}"
 modes="${GEMMA4_PREFILL_AB_MODES:-default,q4pair}"
 allow_busy="${GEMMA4_PREFILL_AB_ALLOW_BUSY:-0}"
+wait_busy_sec="${GEMMA4_PREFILL_AB_WAIT_BUSY_SEC:-0}"
+wait_busy_poll_sec="${GEMMA4_PREFILL_AB_WAIT_BUSY_POLL_SEC:-10}"
 busy_pattern="${GEMMA4_PREFILL_AB_BUSY_PATTERN:-crystal spec|/tmp/adamas|regression_tests/run_combined|gemma4_metal_decode_profile|benchmark_qwen|qwen35}"
 
 usage() {
@@ -40,6 +42,7 @@ Environment:
   GEMMA4_PREFILL_AB_BIN=/tmp/...          profile binary path
   GEMMA4_PREFILL_AB_LOG_DIR=/tmp/...      keep logs in a chosen directory
   GEMMA4_PREFILL_AB_ALLOW_BUSY=1          skip other-heavy-process preflight
+  GEMMA4_PREFILL_AB_WAIT_BUSY_SEC=600     wait up to N seconds for quiet host
   COGNI_RUN_SAFE_MIN_FREE_PCT=12          system memory-pressure kill threshold
 
 Notes:
@@ -64,9 +67,28 @@ check_busy_host() {
       grep -v -E "grep -E|scripts/gemma4_prefill_ab.sh|${profile_bin//\//\\/}$" || true
   )"
   if [[ -n "${matches}" ]]; then
+    if [[ "${wait_busy_sec}" =~ ^[0-9]+$ && "${wait_busy_sec}" -gt 0 ]]; then
+      local waited=0
+      while [[ -n "${matches}" && "${waited}" -lt "${wait_busy_sec}" ]]; do
+        echo "waiting for quiet host (${waited}/${wait_busy_sec}s); active heavy jobs:" >&2
+        echo "${matches}" >&2
+        sleep "${wait_busy_poll_sec}"
+        waited=$((waited + wait_busy_poll_sec))
+        matches="$(
+          ps -axo pid=,rss=,args= |
+            awk -v self="${self_pid}" '$1 != self {print}' |
+            grep -E "${busy_pattern}" |
+            grep -v -E "grep -E|scripts/gemma4_prefill_ab.sh|${profile_bin//\//\\/}$" || true
+        )"
+      done
+      if [[ -z "${matches}" ]]; then
+        return 0
+      fi
+    fi
     echo "refusing to run Gemma prefill A/B while other heavy jobs are active:" >&2
     echo "${matches}" >&2
     echo "Set GEMMA4_PREFILL_AB_ALLOW_BUSY=1 to override after checking memory pressure." >&2
+    echo "Or set GEMMA4_PREFILL_AB_WAIT_BUSY_SEC=N to wait for a quiet host." >&2
     exit 3
   fi
 }

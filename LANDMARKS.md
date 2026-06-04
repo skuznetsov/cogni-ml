@@ -19557,3 +19557,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.86,G:0.24,R:0.84}
 
 **LTP/WBA:** Window is an active external heavy-process signature before the benchmark corridor starts. Transport is the process table and RSS signal into a binary run/no-run decision. Legal move is refusal, preserving repo and GPU state. Potential `Phi=(parallel_pressure_risk, corrupted_measurement_risk, freeze_recovery_cost)` descends to zero for the current wrapper invocation; override is the explicit dual frame for operator-controlled exceptions.
+
+### [LM-COGNIGEMMA-68] Gemma pp wrapper can wait for quiet host instead of manual retry loops
+**context:** ml / CogniGemma Metal prefill / benchmark safety
+**state:** implemented in benchmark wrapper
+
+- claim: "`scripts/gemma4_prefill_ab.sh` now supports `GEMMA4_PREFILL_AB_WAIT_BUSY_SEC=N` and `GEMMA4_PREFILL_AB_WAIT_BUSY_POLL_SEC=N`, so benchmark runs can wait for external Crystal/Adamas jobs to finish instead of starting in parallel or requiring manual retry loops."
+  source: `bash -n scripts/gemma4_prefill_ab.sh` passed; help output documents `GEMMA4_PREFILL_AB_WAIT_BUSY_SEC`; a forced short wait smoke with `GEMMA4_PREFILL_AB_WAIT_BUSY_SEC=1 GEMMA4_PREFILL_AB_WAIT_BUSY_POLL_SEC=1` printed the active Adamas/llc jobs, waited once, then exited `3` as expected.
+  verified_at: 2026-06-04
+  decay_trigger: wrapper preflight rewrite or process naming changes
+  trust: {F:0.86,G:0.24,R:0.84}
+
+**LTP/WBA:** Window is the active heavy-process preflight. Transport is bounded time waiting over process-table samples. Legal move is wait-only; it does not start Metal work until the boundary is clean. Potential `Phi=(parallel_pressure_risk, retry_overhead, stale_benchmark_risk)` decreases when the host clears; if it does not clear inside the budget, the wrapper collapses to the existing refusal dual frame.
