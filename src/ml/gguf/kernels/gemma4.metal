@@ -55,6 +55,40 @@ kernel void gemma4_rmsnorm_vec_weighted(
     }
 }
 
+kernel void gemma4_rmsnorm_rows_weighted(
+    device const float* x        [[buffer(0)]],
+    device const float* weight   [[buffer(1)]],
+    device       float* out      [[buffer(2)]],
+    constant     uint&  row_dim  [[buffer(3)]],
+    constant     float& eps      [[buffer(4)]],
+    uint   row [[threadgroup_position_in_grid]],
+    ushort tid [[thread_index_in_threadgroup]])
+{
+    device const float* src = x + row * row_dim;
+    device       float* dst = out + row * row_dim;
+    threadgroup float partial[256];
+
+    float ss = 0.0f;
+    for (uint i = tid; i < row_dim; i += 256) {
+        const float v = src[i];
+        ss += v * v;
+    }
+    partial[tid] = ss;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (ushort stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            partial[tid] += partial[tid + stride];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    const float inv = rsqrt(partial[0] / float(row_dim) + eps);
+    for (uint i = tid; i < row_dim; i += 256) {
+        dst[i] = src[i] * inv * weight[i];
+    }
+}
+
 kernel void gemma4_rmsnorm_heads_plain(
     device       float* x        [[buffer(0)]],
     constant     uint&  head_dim [[buffer(1)]],

@@ -60,6 +60,31 @@ describe "Gemma4 resident Metal matmul buffers" do
     diff.should be <= 1.0e-5_f32
   end
 
+  it "runs the Gemma4 layer tail over prompt rows like serial resident tails" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    lw = w.layers[0]
+    batch = 4
+    hidden = w.hparams.n_embd
+    scale = Math.sqrt(hidden.to_f64).to_f32
+    x_rows = [] of Float32
+    attn_rows = [] of Float32
+    expected = [] of Float32
+
+    batch.times do |r|
+      x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42 + r)
+      x.size.times { |i| x[i] *= scale }
+      attn_projected = Array(Float32).new(hidden) { |i| Math.sin((i + r * 17).to_f32 * 0.017_f32).to_f32 * 0.125_f32 }
+      x_rows.concat(x)
+      attn_rows.concat(attn_projected)
+      expected.concat(ML::GGUF::Gemma4Metal.layer_tail_resident_buffers(x, attn_projected, lw, w.hparams).not_nil!)
+    end
+
+    actual = ML::GGUF::Gemma4Metal.layer_tail_batch(x_rows, attn_rows, lw, w.hparams, batch).not_nil!
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    puts "  [gemma4_batch_layer_tail] max|d|=#{diff}"
+    diff.should be <= 1.0e-5_f32
+  end
+
   it "keeps the stop-layer resident-cache hidden path aligned after resident tail promotion" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)

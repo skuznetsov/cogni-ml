@@ -18906,3 +18906,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Still a projection-only microbench. Full Gemma4 batch prefill must add row RMSNorm, GELU, residual, KV causal attention, and final parity/quality checks.
 **trust:** {F:0.87,G:0.47,R:0.82}
 **next_gate:** Build a bounded Gemma4 FFN-batch layer prototype, first for tail-only parity/speed, then integrate with layerwise prompt prefill if drift is acceptable.
+
+### [LM-COGNIGEMMA-40] Gemma4 batched FFN tail corridor verified exact and fast
+**context:** ml (CogniGemma native port)
+**state:** verified exact tail-batch prototype
+**claims:**
+- claim: "Gemma4 now has a batched FFN-tail corridor (`layer_tail_batch`) with row RMSNorm, batched gate/up, GELU, batched down, final row RMSNorm, and scaled residual."
+  source: `src/ml/gguf/gemma4_metal.cr`, `src/ml/gguf/kernels/gemma4.metal`; focused no-codegen compile passed
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 tail math rewrite, row RMSNorm kernel rewrite, or Qwen35 batch matmul route rewrite
+- claim: "The strict focused spec verifies batch-tail parity against serial resident tails at batch4 with `max|d|=0.0`."
+  source: `GEMMA4_RESIDENT_LAYER_STRICT=1 ... scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_buffer_spec.cr ...`; stdout `gemma4_batch_layer_tail max|d|=0.0`, `5 examples, 0 failures`
+  verified_at: 2026-06-03
+  decay_trigger: spec fixture change or Metal kernel change
+- claim: "On a batch8 tail profile with default exact routes, the batched tail is much faster than serial resident tails while staying bit-aligned on the fixture."
+  source: scratch profile batch8 default: serial p50 `20.034ms`, batch p50 `3.413ms`, speedup `5.8700x`, `max_abs=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, threshold policy change, or full prefill integration
+- claim: "For the full batched tail, forcing GEMM at batch8 via `QWEN35_GEMM_BATCH_THRESHOLD=4` introduced larger drift and was slower than the default route in this profile."
+  source: scratch profile batch8 threshold4: `max_abs=0.007591`, serial/batch p50 `20.245ms/4.128ms`, speedup `4.9044x`
+  verified_at: 2026-06-03
+  decay_trigger: kernel retune or tolerance-policy change
+**LTP/WBA:** Window is the prompt-row FFN tail corridor. Transport carries multiple prompt rows through row-local norms and shared batched quant matmuls. Legal move preserves exact serial-tail outputs under default routes and collapses repeated row work. Potential descends from `Phi=(serial_tail_rows, FFN_upgate_bytes, FFN_down_bytes, row_norm_overhead)` to `Phi=(attention_rows, layer_batch_integration, remaining_serial_layers)` for the tail section.
+**boundary:** This is tail-only. Full prefill still needs attention/KV row handling and layer-to-layer batch state, but the dominant FFN section now has a verified exact batch corridor.
+**trust:** {F:0.90,G:0.48,R:0.84}
+**next_gate:** Integrate layerwise prompt prefill enough to call `layer_tail_batch` for prompt chunks, while preserving causal attention/KV correctness.
