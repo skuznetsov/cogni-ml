@@ -745,7 +745,11 @@ module ML::GGUF
 
         hp = weights.hparams
         hidden_dim = hp.n_embd
-        exact_chunk_cap = ENV["GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX"]?.try(&.to_i?) || 8
+        # Exact default remains clamped to the Qwen GEMM threshold below.
+        # When the operator explicitly allows GEMM drift, use the measured
+        # Gemma4 row-prefill sweet spot unless overridden.
+        default_chunk_cap = ENV["GEMMA4_ROW_PREFILL_ALLOW_GEMM"]? == "1" ? 512 : 8
+        exact_chunk_cap = ENV["GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX"]?.try(&.to_i?) || default_chunk_cap
         exact_chunk_cap = 8 if exact_chunk_cap <= 0
         unless ENV["GEMMA4_ROW_PREFILL_ALLOW_GEMM"]? == "1"
           qwen_gemm_threshold = ENV["QWEN35_GEMM_BATCH_THRESHOLD"]?.try(&.to_i?) || 8

@@ -24,7 +24,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--runs N", "Measured runs") { |v| runs = v.to_i }
   p.on("--profile", "Print shared Metal matmul/profile attribution for the final measured run") { profile = true }
   p.on("--prefill-mode MODE", "Prompt prefill mode: serial or rows (default: serial)") { |v| prefill_mode = v }
-  p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8 (default: 8)") { |v| prefill_chunk = v.to_i }
+  p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--body-only", "During measured generation, update resident state from fixed synthetic tokens without final logits/top1") { decode_mode = "body" }
   p.on("--top1", "During measured generation, run exact greedy top1 chain (default)") { decode_mode = "top1" }
   p.on("-h", "--help", "Show help") { puts p; exit }

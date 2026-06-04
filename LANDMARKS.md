@@ -19282,3 +19282,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window was the per-layer row-prefill boundary. Transport carries the whole prompt-row hidden state through a bounded layer corridor. Legal move keeps exact K/V state order and exact layer math while eliminating repeated CPU readback/upload/wait boundaries. Potential descends from `Phi=(layer_readbacks, layer_uploads, layer_waits, bytes, kernels)` to one chunk boundary read. Dual frame is `GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF=1`, which restores the old per-layer path.
 **boundary:** This is a verified local speed/correctness improvement for CogniGemma row prefill, not yet an apples-to-apples public claim against llama.cpp. Next gates are quiet-host native-vs-llama pp64/pp256/pp1024 and then moving the same graph-boundary idea into final top1/head and multimodal prefill paths.
 **next_gate:** Run quiet-host ABBA against llama.cpp for Gemma4 pp64/pp256/pp1024 with row prefill enabled, then inspect whether remaining gap is Q4/Q6 matmul throughput or final-head/scheduler plumbing.
+
+### [LM-COGNIGEMMA-54] Gemma4 pp1024 prefill prefers a bounded 512-row resident corridor
+**context:** ml / CogniGemma Metal prefill
+**state:** promoted fast-mode policy; exact default remains clamped
+
+- claim: "The pp1024 resident row-prefill slowdown was primarily a corridor-length issue, not a global row-prefill failure. On the noisy local M2 Max host, chunk128 recovered pp1024 from the earlier monolithic `80.745 tok/s` to `110.367 tok/s`, chunk256 reached `133.601 tok/s`, and chunk512 reached `145.035 tok/s` with matching sampled ids `first_id=236748 last_id=494`."
+  source: `/tmp/gemma4_metal_decode_profile_corridor_default` under `scripts/run_safe.sh`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, pp1024 token ids `42..1065`, `--prefill-mode rows`, `--generate 1`, `--runs 2 --warmups 1`, caps/chunks `128/256/512`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, row-prefill scheduler rewrite, attention-context kernel rewrite, or benchmark harness change
+  trust: {F:0.78,G:0.28,R:0.74}
+
+- claim: "The exact-clamped row route remains much slower for pp1024 but agrees at the sampled generated-token boundary: cap8 single run measured `30.156 tok/s`, `first_id=236748 last_id=494`, matching cap512's sampled ids. Full serial pp1024 parity was abandoned after exceeding the useful evidence budget."
+  source: cap8 exact-row smoke with `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=8`, no `GEMMA4_ROW_PREFILL_ALLOW_GEMM`, pp1024 token ids `42..1065`, `--prefill-mode rows --prefill-chunk 512 --generate 1 --runs 1 --warmups 0`; stale serial pp1024 benchmark process was terminated after over two minutes.
+  verified_at: 2026-06-03
+  decay_trigger: exact-clamp implementation change, hidden/logit parity harness addition, or longer-prompt semantic regression
+  trust: {F:0.66,G:0.22,R:0.66}
+
+- claim: "After changing the fast-mode default cap to 512, setting only `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` is enough to select the bounded fast corridor. A pp1024 smoke with `--prefill-chunk 1024` and no explicit `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX` measured `prefill_p50_tok_s=155.951`, `first_id=236748 last_id=494`."
+  source: rebuilt `/tmp/gemma4_metal_decode_profile_fastcap`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_fastcap_spec crystal spec spec/gemma4_metal_buffer_spec.cr ...` passed (`7 examples, 0 failures`); pp1024 run under `scripts/run_safe.sh` with only `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`.
+  verified_at: 2026-06-03
+  decay_trigger: fast-cap policy rewrite, benchmark harness change, or quiet-host rerun
+  trust: {F:0.82,G:0.28,R:0.78}
+
+**LTP/WBA:** Window is prompt-row chunk length. Transport is the hidden/KV state corridor across rows and layers. Too large a corridor increases attention/scratch/command stickiness; too small a corridor pays boundary tax. Recomputed potential `Phi=(chunk_boundaries, attention_stickiness, bytes, waits)` descends best at 512 rows on the sampled host. This is a Ladder-to-Collapse policy only for explicit fast mode, because exact hidden parity across the GEMM route is not yet fully proven.
+**boundary:** Exact default remains protected by the existing GEMM threshold clamp. `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` now defaults to a measured 512-row cap unless `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX` overrides it.
+**next_gate:** Run quiet-host native-vs-llama pp64/pp256/pp1024 with the single-env fast mode. If pp4096 remains weak, build attribution around `gemma4_attn_context_rows` before changing matmul kernels.
