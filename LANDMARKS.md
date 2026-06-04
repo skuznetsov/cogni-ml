@@ -19417,3 +19417,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window is a local FFN gate/up pair with identical Q4_K shape, input, and batch. Transport is the bounded `ffn_in -> {gate,up}` corridor inside one layer. Legal move shares the F32->F16 conversion and leaves activation/down/residual boundaries unchanged. Potential `Phi=(duplicate_conversions, ffn_upgate_wait, wall, semantic_delta)` descends on duplicate conversions and long-pp wall, but not on pp64; therefore the dual frame is exact/default matmul-many unless `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` is explicitly selected.
 **boundary:** Keep pair-only Q4 FFN as an opt-in benchmarking/long-pp corridor. Do not promote to default until ABBA shows stable wins across pp64/256/1024 or a chunk-size controller chooses it only where it helps.
 **next_gate:** Attack `attn_ctx` and Q4/Q6 GEMM kernel throughput. Candidate corridors: chunk-major attention context, better Q4/Q6 row GEMM kernels, and adaptive pp chunk controller that selects pair-only only for larger prompt chunks.
+
+### [LM-COGNIGEMMA-60] GELU-to-H16 FFN-down corridor is refuted for Gemma row-prefill
+**context:** ml / CogniGemma Metal prefill / FFN down
+**state:** refuted; code removed before commit
+
+- claim: "Writing `GELU(gate)*up` directly to an H16 buffer and feeding FFN-down from H16 is slower than the existing F32-combined route, despite avoiding an explicit F32->F16 conversion before down GEMM."
+  source: attempted opt-in `GEMMA4_ROW_PREFILL_FFN_H16_DOWN=1` branch with `gemma4_gelu_mul_h16` and public Qwen H16 matmul wrapper; build passed and focused spec passed after adding a small-batch H16-candidate guard, but pp256 phase and wall both lost. Phase pp256 default from `/tmp/gemma4_q4_pair_phase_pp256_default.log`: `ffn_down=230.74ms`, `prefill=1307.950ms`; H16-down `/tmp/gemma4_h16_down_phase_pp256_h16.log`: `ffn_down=251.69ms`, `prefill=1316.687ms`; H16-down+pair `/tmp/gemma4_h16_down_phase_pp256_combo.log`: `ffn_down=252.94ms`, `prefill=1371.569ms`. Unprofiled pp256 default `/tmp/gemma4_q4_pair_wall_pp256_default.log`: `1089.640ms / 234.940 tok/s`; H16-down `/tmp/gemma4_h16_down_wall_pp256_h16.log`: `1175.094ms / 217.855 tok/s`; H16-down+pair `/tmp/gemma4_h16_down_wall_pp256_combo.log`: `1153.390ms / 221.954 tok/s`.
+  verified_at: 2026-06-04
+  decay_trigger: new FFN-down kernel, changed H16 GEMM tile shape, or fused GELU+down kernel that avoids the current H16 route's overhead
+  trust: {F:0.82,G:0.24,R:0.78}
+
+**LTP/WBA:** Window was the activation transport between GELU and FFN-down. The legal move appeared to reduce `Phi=(activation_bytes, conversion_kernel, ffn_down_wait, wall)`, but recomputation showed `ffn_down_wait` and wall increased. This is a failed Spike: removing the conversion exposed a worse H16-consumer corridor. The dual frame is the existing F32 combined buffer followed by Qwen's current down GEMM conversion.
+**boundary:** Do not retry plain GELU-to-H16 for Gemma unless the down GEMM consumer changes. A true candidate would need a fused GELU+down kernel or a retuned H16 down kernel, not just moving the conversion boundary.
