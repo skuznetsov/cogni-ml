@@ -607,36 +607,65 @@ module ML::GGUF
         lw = weights.layers[il]
         hidden_dim = hp.n_embd
         head_dim = hp.head_dim_for_layer(il)
+        rope_dim = hp.rope_dim_for_layer(il)
         q_dim = hp.n_head * head_dim
         kv_dim = hp.n_head_kv(il) * head_dim
         raise ArgumentError.new("forward_layer_resident_cache input buffer too small") if x_buf.size < hidden_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+        raise ArgumentError.new("rope_dim #{rope_dim} must be even") unless rope_dim.even?
+        raise ArgumentError.new("position #{pos} exceeds max_seq #{state.layers[il].max_seq}") if pos < 0 || pos >= state.layers[il].max_seq
 
         attn_norm_w = ML::MetalBuffer.from_array(lw.attn_norm)
         x_norm_buf = scratch ? scratch.not_nil!.get("layer.x_norm", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
-        cmd = ML::Metal::CommandBuffer.new
-        enc = ML::Metal::ComputeEncoder.new(cmd)
-        encode_rmsnorm_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, hp.rms_eps)
-        enc.end_encoding
-        cmd.commit
-        cmd.wait
 
         q_buf = scratch ? scratch.not_nil!.get("layer.q", q_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
         k_buf = scratch ? scratch.not_nil!.get("layer.k", kv_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
         v_buf = scratch ? scratch.not_nil!.get("layer.v", kv_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
+        ctx_buf = scratch ? scratch.not_nil!.get("attn.ctx", q_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+        attn_projected_buf = scratch ? scratch.not_nil!.get("layer.attn_projected", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+
+        q_weight = ML::MetalBuffer.from_array(lw.attn_q_norm)
+        k_weight = ML::MetalBuffer.from_array(lw.attn_k_norm)
+        rope_freqs = hp.full_attention?(il) ? weights.rope_freqs : nil
+        factors = (hp.full_attention?(il) && rope_freqs) ? rope_freqs.not_nil! : [1.0_f32]
+        factor_buf = ML::MetalBuffer.from_array(factors)
+        use_factors = (hp.full_attention?(il) && rope_freqs) ? 1_u32 : 0_u32
+        base = hp.rope_freq_base_for_layer(il)
+        heads_per_group = hp.n_head // hp.n_head_kv(il)
+        start_pos = hp.attention_start_pos(il, pos)
+        attn_len = pos - start_pos + 1
+        lstate = state.layers[il]
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_rmsnorm_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, hp.rms_eps)
         projected = if v_qw = lw.attn_v_qw
-                      Qwen35Metal.matmul_many_to_buffers([lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
+                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
                     else
                       # Full-attention Gemma4 layers reuse pre-normalized K as V.
                       # Project K twice so K can receive learned K-norm+RoPE while V
                       # receives plain RMSNorm and no RoPE.
-                      Qwen35Metal.matmul_many_to_buffers([lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
+                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
                     end
-        return nil unless projected
-        return nil unless normalize_and_rope_projection_buffers(q_buf, k_buf, v_buf, lw, hp, il, pos, hp.full_attention?(il) ? weights.rope_freqs : nil)
-
-        ctx_buf = attention_context_from_projection_resident_buffers(q_buf, k_buf, v_buf, hp, il, pos, state.layers[il], scratch).not_nil!
-        attn_projected_buf = scratch ? scratch.not_nil!.get("layer.attn_projected", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
-        return nil unless Qwen35Metal.matmul_to_buffer(lw.attn_output_qw, ctx_buf, attn_projected_buf, 1)
+        unless projected
+          enc.end_encoding
+          return nil
+        end
+        encode_rmsnorm_weighted(enc, q_buf, q_weight, head_dim, hp.rms_eps, hp.n_head)
+        encode_rmsnorm_weighted(enc, k_buf, k_weight, head_dim, hp.rms_eps, hp.n_head_kv(il))
+        encode_rmsnorm_plain(enc, v_buf, head_dim, hp.rms_eps, hp.n_head_kv(il))
+        encode_rope(enc, q_buf, factor_buf, head_dim, rope_dim, pos, base, use_factors, hp.n_head)
+        encode_rope(enc, k_buf, factor_buf, head_dim, rope_dim, pos, base, use_factors, hp.n_head_kv(il))
+        encode_kv_write_one(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, pos, kv_dim)
+        encode_attention_context_one(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, ctx_buf,
+          start_pos, attn_len, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group)
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, 1)
+          enc.end_encoding
+          return nil
+        end
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
 
         out_buf = layer_tail_resident_buffer_inputs(x_buf, attn_projected_buf, lw, hp, scratch)
         return nil unless out_buf

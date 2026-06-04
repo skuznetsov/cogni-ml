@@ -18729,3 +18729,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is a local resident-prefix microprofile, not a full Gemma4 decode benchmark. The next speed lever is applying the same appendable-command pattern to attention projection/norm/RoPE/context/output, or building a full-layer command corridor if Metal command ordering remains exact.
 **trust:** {F:0.90,G:0.44,R:0.84}
 **next_gate:** Fuse the attention-side resident layer phases with the same appendable encoder pattern, then run strict parity and stop-layer6 profiles before full prefix/decode claims.
+
+### [LM-COGNIGEMMA-31] Gemma4 resident attention-side super-command verified
+**context:** ml (CogniGemma native port)
+**state:** verified local speed improvement on resident prefix microprofile
+**claims:**
+- claim: "`Gemma4Metal.forward_layer_resident_cache_buf` now encodes attention RMSNorm, Q/K/V projections, Q/K/V norm+RoPE, resident KV write, attention context, and attention output projection into one ordered Metal compute command before entering the already fused FFN tail."
+  source: `src/ml/gguf/gemma4_metal.cr`; focused no-codegen compile passed
+  verified_at: 2026-06-03
+  decay_trigger: resident layer rewrite, Metal command-ordering behavior change, or appendable matmul encoder rewrite
+- claim: "The full-attention missing-V semantics remain exact across layer 5: K is still projected into separate K/V buffers before learned K norm+RoPE and plain V RMSNorm, and strict stop-layer6 parity remains `max|d|=0.0`."
+  source: strict focused spec `GEMMA4_RESIDENT_LAYER_STRICT=1 ... scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_buffer_spec.cr ...`; stdout `gemma4_resident_stop6_hidden max|d|=0.0`, `4 examples, 0 failures`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 full-attention semantics rewrite or KV-cache layout change
+- claim: "Attention super-command compounds the tail-fusion win on local resident prefix profiles."
+  source: stop-layer6 paired profile `host_p50_ms=127.416 resident_p50_ms=29.975 speedup=4.2507`; stop-layer6 resident-only p50 `28.345ms`; stop-layer2 paired profile `host_p50_ms=38.099 resident_p50_ms=13.147 speedup=2.8980`. Tail-fused baseline was stop-layer6 `35.006ms` paired / `36.987ms` resident-only and stop-layer2 `17.448ms`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host ABBA rerun, full decode integration, or profiler harness change
+**LTP/WBA:** Window was the attention-side phase-wait ladder. Transport carries the hidden vector through `x_norm -> q/k/v -> normalized/RoPE q/k/v -> KV cache/context -> attn_projected` without intermediate command-buffer fences. Legal move preserves exact KV/session boundaries and full-attention K-as-V semantics. Potential descends to `Phi=(layer_tail_wait, small_weight_uploads, final_readback, remaining_unfused_area)` for the layer corridor, with only the separate tail command and final readback still visible in this microprofile.
+**boundary:** Evidence is still a stop-layer resident-prefix microprofile, not an end-to-end Gemma4 decode benchmark. The next exact lever is full-layer single-command fusion by inlining the tail corridor into the same encoder, or adding a quiet full-prefix/decode benchmark before more kernel changes.
+**trust:** {F:0.90,G:0.45,R:0.84}
+**next_gate:** Try whole-layer single-command fusion only if strict parity remains exact; otherwise freeze the two-command layer corridor and move to full prefix/decode benchmarking.
