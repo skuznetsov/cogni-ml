@@ -63,6 +63,9 @@ module ML
       MM112_NR1   =   112
       MM112_TG    =   448 # threads per threadgroup (14 simdgroups × 32)
       MM112_SHMEM = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
+      Q4_TENSOR_NR1   =   128
+      Q4_TENSOR_TG    =   128 # 4 simdgroups × 32, matches simd_mm_q4k_tensor_f32out
+      Q4_TENSOR_SHMEM =  4096 # one 64×32 H16 dequantized A tile
 
       # Above this batch, use GEMM. At or below, GEMV is faster.
       # The default is deliberately conservative; small speculative verifier
@@ -197,6 +200,7 @@ module ML
         @@mm_h16_b80_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b96_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b112_pipeline : ML::Metal::ComputePipeline?
+        @@mm_q4_tensor_f32out_pipeline : ML::Metal::ComputePipeline?
         @@mm5_pipeline  : ML::Metal::ComputePipeline?
         @@mm6_pipeline  : ML::Metal::ComputePipeline?
         @@mm5_f32out_pipeline : ML::Metal::ComputePipeline?
@@ -958,6 +962,12 @@ module ML
         private def self.mm_h16_b112_pipeline : ML::Metal::ComputePipeline
           @@mm_h16_b112_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b112") {
             ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b112", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.mm_q4_tensor_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm_q4_tensor_f32out_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_tensor_f32out") {
+            ML::Metal::ComputePipeline.new("simd_mm_q4k_tensor_f32out", GEMM_Q4K_SOURCE)
           }
         end
 
@@ -1756,6 +1766,23 @@ module ML
                                                       in_dim : Int32,
                                                       out_dim : Int32,
                                                       batch : Int32) : Nil
+          if q4_tensor_mm_enabled? && q4_tensor_ffn_candidate?(out_dim) && batch >= Q4_TENSOR_NR1
+            enc.set_pipeline(mm_q4_tensor_f32out_pipeline)
+            enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+            enc.set_buffer(x16_buf, 1)
+            enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+            enc.set_value(in_dim.to_u32, 3)
+            enc.set_value(out_dim.to_u32, 4)
+            enc.set_value(batch.to_u32, 5)
+            enc.set_threadgroup_memory(Q4_TENSOR_SHMEM, 0)
+            enc.dispatch_threadgroups({
+              (batch + Q4_TENSOR_NR1 - 1) // Q4_TENSOR_NR1,
+              (out_dim + MM_NR0 - 1) // MM_NR0,
+              1,
+            }, {Q4_TENSOR_TG, 1, 1})
+            return
+          end
+
           if q4_h16_b48_gemm_enabled? && batch == MM48_NR1
             enc.set_pipeline(mm_h16_b48_pipeline)
             enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
@@ -2513,6 +2540,18 @@ module ML
 
         private def self.q4_h16_gemm_enabled? : Bool
           ENV["QWEN35_Q4K_H16_GEMM_OFF"]? != "1"
+        end
+
+        private def self.q4_tensor_mm_enabled? : Bool
+          ENV["QWEN35_Q4K_TENSOR_MM"]? == "1" &&
+            ENV["GEMMA4_ROW_PREFILL_Q4_GELU_FUSE"]? != "1"
+        end
+
+        private def self.q4_tensor_ffn_candidate?(out_dim : Int32) : Bool
+          # Keep this experimental route to large FFN gate/up projections.
+          # Smaller attention-sized projections and the Gemma GELU-fuse
+          # composition are not promoted by the current evidence.
+          out_dim >= 8192
         end
 
         private def self.q4_h16_b64_gemm_enabled? : Bool

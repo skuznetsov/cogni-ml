@@ -19204,3 +19204,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The Q6 tensor-op Spike reduced a local micro-window but failed recomputed global potential. Full pp still has larger active maximizers: Q4 gate/up, command scheduling, and MPP tensor-op integration overhead. Legal future move is not to promote Q6 alone, but to test a coherent Q4+Q6 tensor-op corridor or a resident command-scheduling change that avoids mixing manual and MPP kernels inside the same FFN band.
 **boundary:** Do not enable or resurrect `QWEN35_TENSOR_MM=1` for Q6-only full prefill without a quiet ABBA that beats default full pp. The temporary code was intentionally reverted before commit.
 **next_gate:** If returning to tensor ops, port Q4 gate/up first or build a standalone apples-to-apples llama.cpp microbench for the exact Gemma4 FFN-down shape to separate MPP overhead from our command scheduling.
+
+### [LM-COGNIGEMMA-51] Q4 tensor-op FFN corridor is exact only outside GELU-fuse composition
+**context:** ml / CogniGemma Metal prefill
+**state:** default-off experimental route; GELU-fuse combination guarded/refuted
+
+- claim: "A Q4_K tensor-op kernel using llama.cpp-style `mpp::tensor_ops::matmul2d` compiles in Cogni's Metal runtime and is now wired behind `QWEN35_Q4K_TENSOR_MM=1` for large FFN-sized H16 projections only."
+  source: temporary compile probe printed `q4_tensor_compile_ok=true`; implementation in `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr`.
+  verified_at: 2026-06-03
+  decay_trigger: Metal SDK change, Q4 GEMM route rewrite, or FFN projection shape policy change
+  trust: {F:0.82,G:0.36,R:0.78}
+
+- claim: "Applying the Q4 tensor-op route to all Q4 H16 projections is not boundary-safe: pp256 fused-row prefill changed `first_id` from `236770` to `258882`, and full hidden/logit compare showed hidden max diff `6.474887`, logits max diff `55.13526`."
+  source: `/tmp/gemma4_metal_decode_profile` and `/tmp/gemma4_tensor_prefill_compare` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256 QWEN35_Q4K_TENSOR_MM=1`.
+  verified_at: 2026-06-03
+  decay_trigger: tensor-op kernel rewrite, command-buffer boundary insertion, or fused GELU route rewrite
+  trust: {F:0.84,G:0.32,R:0.80}
+
+- claim: "Restricting Q4 tensor-op to FFN-sized projections and disabling it under `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1` restores exact fused-row parity: pp256 full hidden/logit compare reported same top1 `236770`, hidden max `0.0`, logits max `0.0`."
+  source: guarded `/tmp/gemma4_tensor_prefill_compare` run after adding `ENV[\"GEMMA4_ROW_PREFILL_Q4_GELU_FUSE\"]? != \"1\"` to the tensor gate.
+  verified_at: 2026-06-03
+  decay_trigger: Q4 tensor gate rewrite, Gemma4 GELU fusion rewrite, or broader prompt/token drift gate
+  trust: {F:0.84,G:0.32,R:0.80}
+
+- claim: "The safe no-fuse tensor corridor is only a marginal pp256 improvement in the sampled run: no-fuse default `192.101 tok/s`, no-fuse tensor `193.848 tok/s`, same sampled first/last ids. This is not enough evidence to make it default."
+  source: immediate pp256 body-only A/B with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256`; tensor run additionally set `QWEN35_Q4K_TENSOR_MM=1`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host ABBA rerun, command scheduling change, or exact/fused FFN route rewrite
+  trust: {F:0.70,G:0.24,R:0.66}
+
+**LTP/WBA:** The all-Q4 tensor-op Spike failed boundary recomputation: local kernel speed reduced one area term but increased semantic drift. The legal corridor is narrower: only large FFN-sized projections, and only when the downstream fused GELU consumer is absent. The potential descends only weakly as `Phi=(Q4 FFN projection time, command interactions, hidden drift, full pp wall)`, so this remains an experimental Diamond rather than a Collapse/default.
+**boundary:** Do not combine `QWEN35_Q4K_TENSOR_MM=1` with `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`; the code now hard-guards that combination. If returning to this branch, first test a command-buffer split or explicit memory barrier between tensor gate and fused GELU/up before considering re-enable.
+**next_gate:** Run quiet ABBA for no-fuse tensor versus no-fuse default at pp128/pp256/pp512. If gains stay below noise, revert the runtime route and keep only the refutation landmark.

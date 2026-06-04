@@ -15,6 +15,8 @@
 
 #include <metal_stdlib>
 #include <metal_simdgroup_matrix>
+#include <metal_tensor>
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
 using namespace metal;
 
 #define FOR_UNROLL _Pragma("clang loop unroll(full)")
@@ -1891,4 +1893,93 @@ kernel void simd_mm_q4k_h16_b112(
         const int j = idx / nr0;
         output[(r1 + j) * out_dim + r0 + i] = temp[j * MM112_NR0 + i];
     }
+}
+
+// ============================================================================
+// simd_mm_q4k_tensor_f32out — optional llama.cpp-style tensor_ops GEMM.
+// Default-off. The legacy simdgroup kernels above remain the production route
+// unless QWEN35_Q4K_TENSOR_MM=1 selects this path.
+// ============================================================================
+constant int TQ4_SZ_SIMDGROUP = 16;
+constant int TQ4_N_MM_NK = 2;
+constant int TQ4_N_MM_NK_TOTAL = 32;
+constant int TQ4_N_MM_BLOCK_X = 4;
+constant int TQ4_N_MM_BLOCK_Y = 2;
+constant int TQ4_N_MM_SIMD_GROUP_X = 2;
+constant int TQ4_N_MM_SIMD_GROUP_Y = 2;
+constant int TQ4_NRB = TQ4_SZ_SIMDGROUP * TQ4_N_MM_BLOCK_X * TQ4_N_MM_SIMD_GROUP_X; // 128 batch columns
+constant int TQ4_NRA = TQ4_SZ_SIMDGROUP * TQ4_N_MM_BLOCK_Y * TQ4_N_MM_SIMD_GROUP_Y; // 64 output rows
+constant int TQ4_A_WORK_ITEMS = TQ4_NRA*TQ4_N_MM_NK;
+constant int TQ4_NUM_THREADS = 32*TQ4_N_MM_SIMD_GROUP_X*TQ4_N_MM_SIMD_GROUP_Y;
+
+kernel void simd_mm_q4k_tensor_f32out(
+    device const uint8_t* w_raw [[buffer(0)]],
+    device const half* x [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    constant uint& in_dim [[buffer(3)]],
+    constant uint& out_dim [[buffer(4)]],
+    constant uint& batch [[buffer(5)]],
+    threadgroup char* shmem [[threadgroup(0)]],
+    uint3 tgpig [[threadgroup_position_in_grid]],
+    ushort tiitg [[thread_index_in_threadgroup]])
+{
+    constexpr int NRB = TQ4_NRB;
+    constexpr int NRA = TQ4_NRA;
+    constexpr int NK  = TQ4_N_MM_NK_TOTAL;
+    const int M = int(out_dim);
+    const int N = int(batch);
+    const int K = int(in_dim);
+    const int ra = int(tgpig.y) * NRA;
+    const int rb = int(tgpig.x) * NRB;
+    if (ra >= M || rb >= N) return;
+
+    threadgroup half* sa = (threadgroup half*)shmem;
+    const uint row_bytes = (in_dim / QK_K) * 144u;
+
+    auto tA = tensor(sa, dextents<int32_t, 2>(NK, NRA));
+    device half* ptrB = (device half*)x;
+    auto tB = tensor(ptrB, dextents<int32_t, 2>(K, N), array<int, 2>({1, K}));
+
+    mpp::tensor_ops::matmul2d<
+        mpp::tensor_ops::matmul2d_descriptor(
+            NRB, NRA, NK, false, true, true,
+            mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate),
+        execution_simdgroups<TQ4_N_MM_SIMD_GROUP_X * TQ4_N_MM_SIMD_GROUP_Y>> mm;
+
+    auto cT = mm.get_destination_cooperative_tensor<decltype(tB), decltype(tA), float>();
+
+    for (int loop_k = 0; loop_k < K; loop_k += NK) {
+        for (int work = int(tiitg); work < TQ4_A_WORK_ITEMS; work += TQ4_NUM_THREADS) {
+            const int row = work / TQ4_N_MM_NK;
+            const int k_chunk = work % TQ4_N_MM_NK;
+            const int k_pos = loop_k + k_chunk * 16;
+            const short k_base = short(k_chunk * 16);
+            threadgroup half* dst = sa + int(k_base) * NRA + row;
+
+            if (ra + row < M) {
+                const int block_idx = k_pos / int(QK_K);
+                const short il = short((k_pos / 16) & 15);
+                device const block_q4_K* row_ptr = (device const block_q4_K*)(w_raw + uint(ra + row) * row_bytes);
+                half4x4 temp_a;
+                dequantize_q4_K_fn(row_ptr + block_idx, il, temp_a);
+                FOR_UNROLL for (short i = 0; i < 16; i++) {
+                    dst[int(i) * NRA] = (k_pos + int(i) < K) ? temp_a[i/4][i%4] : half(0.0h);
+                }
+            } else {
+                FOR_UNROLL for (short i = 0; i < 16; i++) {
+                    dst[int(i) * NRA] = half(0.0h);
+                }
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        auto mA = tA.slice(0, 0);
+        auto mB = tB.slice(loop_k, rb);
+        mm.run(mB, mA, cT);
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    auto tD = tensor(output, dextents<int32_t, 2>(M, N), array<int, 2>({1, M}));
+    cT.store(tD.slice(ra, rb));
 }
