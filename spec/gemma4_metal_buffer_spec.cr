@@ -76,4 +76,21 @@ describe "Gemma4 resident Metal matmul buffers" do
     puts "  [gemma4_resident_stop2_hidden] max|d|=#{diff}"
     diff.should be <= 1.0e-5_f32
   end
+
+  it "keeps full-attention K-as-V semantics aligned in the resident hidden path" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)
+    resident_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    host = [] of Float32
+    resident = [] of Float32
+
+    [42, 43].each_with_index do |token_id, pos|
+      host = ML::GGUF::Gemma4Metal.forward_hidden(w, token_id, pos, host_state, 6).not_nil!
+      resident = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(w, token_id, pos, resident_state, 6).not_nil!
+    end
+
+    diff = gemma4_buffer_max_abs_diff(host, resident)
+    puts "  [gemma4_resident_stop6_hidden] max|d|=#{diff}"
+    diff.should be <= 1.0e-5_f32
+  end
 end

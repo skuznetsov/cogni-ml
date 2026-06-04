@@ -182,6 +182,45 @@ module ML::GGUF
         )
       end
 
+      def normalize_and_rope_projection_buffers(q_buf : ML::MetalBuffer,
+                                                k_buf : ML::MetalBuffer,
+                                                v_buf : ML::MetalBuffer,
+                                                lw : Gemma4LayerWeights,
+                                                hp : Gemma4Hparams,
+                                                il : Int32,
+                                                pos : Int32,
+                                                rope_freqs : Array(Float32)? = nil) : Bool
+        return false unless available?
+
+        head_dim = hp.head_dim_for_layer(il)
+        rope_dim = hp.rope_dim_for_layer(il)
+        n_head = hp.n_head
+        n_head_kv = hp.n_head_kv(il)
+        return false if q_buf.size < n_head.to_i64 * head_dim * sizeof(Float32)
+        return false if k_buf.size < n_head_kv.to_i64 * head_dim * sizeof(Float32)
+        return false if v_buf.size < n_head_kv.to_i64 * head_dim * sizeof(Float32)
+        raise ArgumentError.new("rope_dim #{rope_dim} must be even") unless rope_dim.even?
+
+        q_weight = ML::MetalBuffer.from_array(lw.attn_q_norm)
+        k_weight = ML::MetalBuffer.from_array(lw.attn_k_norm)
+        factors = (hp.full_attention?(il) && rope_freqs) ? rope_freqs.not_nil! : [1.0_f32]
+        factor_buf = ML::MetalBuffer.from_array(factors)
+        use_factors = (hp.full_attention?(il) && rope_freqs) ? 1_u32 : 0_u32
+        base = hp.rope_freq_base_for_layer(il)
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_rmsnorm_weighted(enc, q_buf, q_weight, head_dim, hp.rms_eps, n_head)
+        encode_rmsnorm_weighted(enc, k_buf, k_weight, head_dim, hp.rms_eps, n_head_kv)
+        encode_rmsnorm_plain(enc, v_buf, head_dim, hp.rms_eps, n_head_kv)
+        encode_rope(enc, q_buf, factor_buf, head_dim, rope_dim, pos, base, use_factors, n_head)
+        encode_rope(enc, k_buf, factor_buf, head_dim, rope_dim, pos, base, use_factors, n_head_kv)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        true
+      end
+
       def attention_context_from_projection(proj : Gemma4CPU::AttentionProjection,
                                             hp : Gemma4Hparams,
                                             il : Int32,
@@ -267,6 +306,43 @@ module ML::GGUF
         cmd.wait
 
         out_buf.read(q_dim)
+      end
+
+      def attention_context_from_projection_resident_buffers(q_buf : ML::MetalBuffer,
+                                                             k_buf : ML::MetalBuffer,
+                                                             v_buf : ML::MetalBuffer,
+                                                             hp : Gemma4Hparams,
+                                                             il : Int32,
+                                                             pos : Int32,
+                                                             lstate : ResidentLayerState) : ML::MetalBuffer?
+        return nil unless available?
+
+        n_head = hp.n_head
+        n_head_kv = hp.n_head_kv(il)
+        head_dim = hp.head_dim_for_layer(il)
+        kv_dim = n_head_kv * head_dim
+        q_dim = n_head * head_dim
+        heads_per_group = n_head // n_head_kv
+        raise ArgumentError.new("position #{pos} exceeds max_seq #{lstate.max_seq}") if pos < 0 || pos >= lstate.max_seq
+        raise ArgumentError.new("resident kv_dim mismatch") unless lstate.kv_dim == kv_dim
+        raise ArgumentError.new("q projection buffer too small at layer #{il}") if q_buf.size < q_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("k projection buffer too small at layer #{il}") if k_buf.size < kv_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("v projection buffer too small at layer #{il}") if v_buf.size < kv_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+
+        start_pos = hp.attention_start_pos(il, pos)
+        len = pos - start_pos + 1
+        out_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_kv_write_one(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, pos, kv_dim)
+        encode_attention_context_one(enc, q_buf, lstate.k_cache_buf, lstate.v_cache_buf, out_buf,
+          start_pos, len, n_head, n_head_kv, head_dim, heads_per_group)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf
       end
 
       def layer_tail(x : Array(Float32),
@@ -359,6 +435,66 @@ module ML::GGUF
         out_buf.read(hidden_dim)
       end
 
+      def layer_tail_resident_buffer_inputs(x_buf : ML::MetalBuffer,
+                                            attn_projected_buf : ML::MetalBuffer,
+                                            lw : Gemma4LayerWeights,
+                                            hp : Gemma4Hparams) : ML::MetalBuffer?
+        return nil unless available?
+
+        hidden_dim = hp.n_embd
+        raise ArgumentError.new("layer_tail x buffer too small") if x_buf.size < hidden_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("layer_tail attn_projected buffer too small") if attn_projected_buf.size < hidden_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("layer_tail post_attention_norm size mismatch") unless lw.post_attention_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail ffn_norm size mismatch") unless lw.ffn_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail post_ffw_norm size mismatch") unless lw.post_ffw_norm.size == hidden_dim
+        raise ArgumentError.new("layer_tail ffn gate/up mismatch") unless lw.ffn_gate_qw.in_dim == hidden_dim && lw.ffn_up_qw.in_dim == hidden_dim && lw.ffn_gate_qw.out_dim == lw.ffn_up_qw.out_dim
+        raise ArgumentError.new("layer_tail ffn down mismatch") unless lw.ffn_down_qw.in_dim == lw.ffn_gate_qw.out_dim && lw.ffn_down_qw.out_dim == hidden_dim
+
+        post_attn_w = ML::MetalBuffer.from_array(lw.post_attention_norm)
+        ffn_w = ML::MetalBuffer.from_array(lw.ffn_norm)
+        post_ffw_w = ML::MetalBuffer.from_array(lw.post_ffw_norm)
+
+        attn_normed_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        attn_out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        ffn_in_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        gate_buf = ML::MetalBuffer.new(lw.ffn_gate_qw.out_dim.to_i64 * sizeof(Float32))
+        up_buf = ML::MetalBuffer.new(lw.ffn_up_qw.out_dim.to_i64 * sizeof(Float32))
+        combined_buf = ML::MetalBuffer.new(lw.ffn_down_qw.in_dim.to_i64 * sizeof(Float32))
+        ffn_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        ffn_normed_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_rmsnorm_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, hp.rms_eps)
+        encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, hidden_dim)
+        encode_rmsnorm_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, hp.rms_eps)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+
+        return nil unless Qwen35Metal.matmul_many_to_buffers([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
+
+        cmd2 = ML::Metal::CommandBuffer.new
+        enc2 = ML::Metal::ComputeEncoder.new(cmd2)
+        encode_gelu_mul(enc2, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
+        enc2.end_encoding
+        cmd2.commit
+        cmd2.wait
+
+        return nil unless Qwen35Metal.matmul_to_buffer(lw.ffn_down_qw, combined_buf, ffn_buf, 1)
+
+        scale = lw.layer_output_scale.first? || 1.0_f32
+        cmd3 = ML::Metal::CommandBuffer.new
+        enc3 = ML::Metal::ComputeEncoder.new(cmd3)
+        encode_rmsnorm_weighted_out(enc3, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
+        encode_add_scaled_vec(enc3, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
+        enc3.end_encoding
+        cmd3.commit
+        cmd3.wait
+        out_buf
+      end
+
       def forward_layer(weights : Gemma4Weights,
                         il : Int32,
                         x : Array(Float32),
@@ -414,26 +550,67 @@ module ML::GGUF
         hp = weights.hparams
         lw = weights.layers[il]
         hidden_dim = hp.n_embd
+        head_dim = hp.head_dim_for_layer(il)
+        q_dim = hp.n_head * head_dim
+        kv_dim = hp.n_head_kv(il) * head_dim
         raise ArgumentError.new("forward_layer_resident_cache input size mismatch") unless x.size == hidden_dim
 
-        x_norm = rms_norm(x, lw.attn_norm, hp.rms_eps).not_nil!
-        raw = if v_qw = lw.attn_v_qw
-                Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm)
-              else
-                Qwen35Metal.matmul_many([lw.attn_q_qw, lw.attn_k_qw], x_norm)
-              end
-        return nil unless raw
+        x_buf = ML::MetalBuffer.from_array(x)
+        attn_norm_w = ML::MetalBuffer.from_array(lw.attn_norm)
+        x_norm_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_rmsnorm_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, hp.rms_eps)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
 
-        pre = if raw.size == 3
-                Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[2], false)
-              else
-                Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[1].dup, true)
-              end
-        proj = normalize_and_rope_projection(pre, lw, hp, il, pos, hp.full_attention?(il) ? weights.rope_freqs : nil).not_nil!
-        ctx = attention_context_from_projection_resident(proj, hp, il, pos, state.layers[il]).not_nil!
-        attn_projected = Qwen35Metal.matmul(lw.attn_output_qw, ctx, 1)
-        return nil unless attn_projected
-        layer_tail_resident_buffers(x, attn_projected, lw, hp)
+        q_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+        k_buf = ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
+        v_buf = ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
+        projected = if v_qw = lw.attn_v_qw
+                      Qwen35Metal.matmul_many_to_buffers([lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
+                    else
+                      # Full-attention Gemma4 layers reuse pre-normalized K as V.
+                      # Project K twice so K can receive learned K-norm+RoPE while V
+                      # receives plain RMSNorm and no RoPE.
+                      Qwen35Metal.matmul_many_to_buffers([lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
+                    end
+        return nil unless projected
+        return nil unless normalize_and_rope_projection_buffers(q_buf, k_buf, v_buf, lw, hp, il, pos, hp.full_attention?(il) ? weights.rope_freqs : nil)
+
+        ctx_buf = attention_context_from_projection_resident_buffers(q_buf, k_buf, v_buf, hp, il, pos, state.layers[il]).not_nil!
+        attn_projected_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        return nil unless Qwen35Metal.matmul_to_buffer(lw.attn_output_qw, ctx_buf, attn_projected_buf, 1)
+
+        out_buf = layer_tail_resident_buffer_inputs(x_buf, attn_projected_buf, lw, hp)
+        return nil unless out_buf
+        out_buf.read(hidden_dim)
+      rescue ex
+        if ENV["GEMMA4_RESIDENT_LAYER_STRICT"]? == "1"
+          raise ex
+        else
+          hp_fallback = weights.hparams
+          lw_fallback = weights.layers[il]
+          x_norm = rms_norm(x, lw_fallback.attn_norm, hp_fallback.rms_eps).not_nil!
+          raw = if v_qw = lw_fallback.attn_v_qw
+                  Qwen35Metal.matmul_many([lw_fallback.attn_q_qw, lw_fallback.attn_k_qw, v_qw], x_norm)
+                else
+                  Qwen35Metal.matmul_many([lw_fallback.attn_q_qw, lw_fallback.attn_k_qw], x_norm)
+                end
+          return nil unless raw
+
+          pre = if raw.size == 3
+                  Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[2], false)
+                else
+                  Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[1].dup, true)
+                end
+          proj = normalize_and_rope_projection(pre, lw_fallback, hp_fallback, il, pos, hp_fallback.full_attention?(il) ? weights.rope_freqs : nil).not_nil!
+          ctx = attention_context_from_projection_resident(proj, hp_fallback, il, pos, state.layers[il]).not_nil!
+          attn_projected = Qwen35Metal.matmul(lw_fallback.attn_output_qw, ctx, 1)
+          return nil unless attn_projected
+          layer_tail_resident_buffers(x, attn_projected, lw_fallback, hp_fallback)
+        end
       end
 
       def forward_logits_from_hidden(weights : Gemma4Weights,

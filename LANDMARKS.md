@@ -18628,3 +18628,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is not yet a fully fused or fully resident Gemma4 layer. Projection/norm/RoPE and attention-output seams remain, and current speed evidence is local/noisy rather than a public benchmark.
 **trust:** {F:0.88,G:0.42,R:0.80}
 **next_gate:** Move attention projection/norm/RoPE and attention output projection into resident buffers, then run quiet-host prefix A/B before claiming full decode speed.
+
+### [LM-COGNIGEMMA-26] Gemma4 full resident single-layer corridor verified
+**context:** ml (CogniGemma native port)
+**state:** verified for correctness, promoted internally for resident-cache path
+**claims:**
+- claim: "`forward_layer_resident_cache` now keeps attention RMSNorm, Q/K/V projection, Q/K/V norm+RoPE, resident KV write/context, attention output projection, and the FFN tail on Metal buffers until the layer output read."
+  source: `src/ml/gguf/gemma4_metal.cr`; strict focused spec `spec/gemma4_metal_buffer_spec.cr` (`4 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: resident layer rewrite, Gemma4 graph rewrite, or quant matmul transport change
+- claim: "Full-attention Gemma4 no-V semantics are preserved by projecting K twice into separate K/V buffers before K learned norm+RoPE and V plain RMSNorm."
+  source: strict stop-layer6 resident hidden parity crossing layer 5, stdout `gemma4_resident_stop6_hidden max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: full-attention missing-V semantics change or resident projection rewrite
+- claim: "Local prefix profiles show the full resident single-layer corridor roughly halves stop-layer6 prefix wall versus the host-array scaffold on the two-token probe."
+  source: `bin/gemma4_metal_prefix_profile.cr`, strict stop-layer6/max_seq1024 runs5: host p50 `140.679ms`, resident p50 `69.229ms`, speedup `2.0321x`; stop-layer2 combined run p50 `48.145ms / 26.709ms`, resident-only p50 `31.217ms`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, buffer-pool rewrite, or full decode integration
+**LTP/WBA:** Window is the whole Gemma4 layer host seam. Transport is the layer corridor over resident buffers from input hidden to output hidden. Legal move preserves exact per-phase math and K-as-V boundary while removing intermediate CPU materialization. Potential `Phi=(layer_internal_readbacks, phase_host_uploads, K-as-V semantic risk, allocation_noise, remaining_band_host_handoffs)` decreases; remaining sticky component is layer-to-layer hidden readback/allocation.
+**boundary:** This still reads the hidden vector after each layer and allocates scratch buffers per layer call. It is not yet a band-resident decode loop or public full-model benchmark.
+**trust:** {F:0.90,G:0.45,R:0.84}
+**next_gate:** Implement a resident hidden-buffer loop across multiple layers and/or a reusable buffer pool, then profile stop-layer6/longer prefixes under quiet-host conditions.
