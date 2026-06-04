@@ -19172,3 +19172,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The local B-tile ladder no longer decreases the recomputed potential. The active window is the quantized batch matmul primitive class: manual simdgroup tiles versus llama.cpp's tensor-op corridor. Legal next move is a Diamond-compatible backend experiment, not more B64/B112 retuning: add default-off Q5/Q6 or Q4 tensor-op kernels with the same external buffers, compare against current kernels, and collapse only if both speed and bounded drift gates pass.
 **boundary:** Do not claim Gemma4 pp parity from the fused approximate route. Current best verified direction is an mpp/tensor-op GEMM branch. The first implementation should be default-off and scoped to one quant/shape before touching product prefill policy.
 **next_gate:** Implement `QWEN35_TENSOR_MM=1` for one Q6_K down-projection shape first, because Q6 uses the shared `gemm_mm` route and is large in Gemma FFN-down; then run microbench + pp body-only A/B. If Q6 tensor-op fails to beat current `mm6_f32out`, porting Q4 is lower priority.
+
+### [LM-COGNIGEMMA-50] Q6 tensor-op GEMM micro-win refuted for full Gemma4 pp
+**context:** ml / CogniGemma Metal prefill
+**state:** refuted as current full-prefill route; keep as future backend research
+
+- claim: "A llama.cpp-style Q6_K tensor-op kernel can compile in Cogni's Metal runtime after matching llama.cpp's mutable B tensor operand type."
+  source: temporary `/tmp/gemm_mm_tensor_probe.metal` plus `build/tmp_probes/q6_tensor_compile_probe.cr`; first attempt failed on `const device half`, second attempt compiled and printed `q6_tensor_compile_ok=true`.
+  verified_at: 2026-06-03
+  decay_trigger: Metal SDK change, MPP tensor API change, or source-compile wrapper rewrite
+  trust: {F:0.82,G:0.36,R:0.78}
+
+- claim: "The temporary default-off Q6 tensor-op route improved isolated Gemma4 layer0 FFN-down microbench but only modestly: batch128 p50 `3.281ms -> 2.936ms`, batch256 p50 `5.868ms -> 5.237ms`."
+  source: temporary `QWEN35_TENSOR_MM=1` route in `qwen35_metal.cr` plus `/tmp/gemma4_q6_down_probe_tensor`; sequential default/tensor runs under `run_safe.sh`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, Q6 tensor-op route rewrite, or direct llama.cpp microbench comparison
+  trust: {F:0.72,G:0.28,R:0.68}
+
+- claim: "Q6 tensor-op output drift versus the current Q6 f32out route was small on the sampled FFN-down shape: batch128 and batch256 both had max diff about `2.44e-4`, mean diff about `1.2e-5`."
+  source: temporary `/tmp/gemma4_q6_tensor_parity_probe`, comparing default route vs `QWEN35_TENSOR_MM=1` on identical input.
+  verified_at: 2026-06-03
+  decay_trigger: broader prompt/token sweep or tensor-op kernel rewrite
+  trust: {F:0.76,G:0.28,R:0.72}
+
+- claim: "Despite the isolated Q6 micro-win, the temporary Q6 tensor-op route regressed full Gemma4 approximate pp256 fused-row prefill: tensor run `153.261 tok/s`; immediate default rerun `182.151 tok/s`. The code path was not committed."
+  source: `/tmp/gemma4_metal_decode_profile_gelu_fuse` pp256 body-only, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`; tensor run additionally set `QWEN35_TENSOR_MM=1`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host ABBA, full Q4+Q6 tensor-op port, or command scheduling rewrite
+  trust: {F:0.72,G:0.24,R:0.68}
+
+**LTP/WBA:** The Q6 tensor-op Spike reduced a local micro-window but failed recomputed global potential. Full pp still has larger active maximizers: Q4 gate/up, command scheduling, and MPP tensor-op integration overhead. Legal future move is not to promote Q6 alone, but to test a coherent Q4+Q6 tensor-op corridor or a resident command-scheduling change that avoids mixing manual and MPP kernels inside the same FFN band.
+**boundary:** Do not enable or resurrect `QWEN35_TENSOR_MM=1` for Q6-only full prefill without a quiet ABBA that beats default full pp. The temporary code was intentionally reverted before commit.
+**next_gate:** If returning to tensor ops, port Q4 gate/up first or build a standalone apples-to-apples llama.cpp microbench for the exact Gemma4 FFN-down shape to separate MPP overhead from our command scheduling.
