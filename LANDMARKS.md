@@ -19595,3 +19595,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local Q4 gate/up conversion-sharing window sometimes reduces long-pp wall, but the thresholded transport does not monotonically reduce recomputed wall potential. `Phi=(pp64_regression, pp256_instability, pp1024_wall, promotion_risk)` does not descend enough for default. Legal move is to keep the corridor manually selectable via `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` and continue optimizing higher-leverage attention/GEMM paths.
 **boundary:** Do not add `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN_MIN_BATCH` or OFF fallback until a stronger ABBA/shape-controller gate beats current default at pp64/256/1024. Current default remains exact matmul-many plus default SWA GQA2.
+
+### [LM-COGNIGEMMA-71] Shared-H16 matmul-many input conversion is default-on for batch >=256
+**context:** ml / CogniGemma Metal prefill / conversion reuse / Q4-Q6 GEMM
+**state:** implemented, default-on thresholded with OFF fallback
+
+- claim: "`encode_matmul_many_to_buffers` now has a boundary-safe shared-H16 input corridor. When every grouped quantized matmul can consume H16 and `batch>=QWEN35_MATMUL_MANY_SHARED_H16_MIN_BATCH` (default `256`), it converts the common F32 input once and feeds all outputs via `encode_matmul_from_h16`. Force-on is `QWEN35_MATMUL_MANY_SHARED_H16=1`; fallback is `QWEN35_MATMUL_MANY_SHARED_H16_OFF=1`."
+  source: implementation in `src/ml/gguf/qwen35_metal.cr`; wrapper modes `sharedh16` and `sharedoff` in `scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: matmul-many routing rewrite, H16 GEMM route rewrite, or Scratch buffer lifetime changes
+  trust: {F:0.84,G:0.34,R:0.82}
+
+- claim: "Correctness gates passed for the default route and OFF fallback: `spec/gemma4_metal_buffer_spec.cr` completed `8 examples, 0 failures` in both cases. The promotion A/B with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` measured pp64 control noise (`235.266ms` default vs `233.745ms` OFF), pp256 win (`872.518ms` default vs `888.156ms` OFF), and pp1024 win (`5170.114ms` default vs `5264.387ms` OFF)."
+  source: build `/tmp/gemma4_metal_decode_profile_shared_h16_default`; default spec `/tmp/cogni_ml_shared_h16_default_spec`; OFF spec `/tmp/cogni_ml_shared_h16_default_off_spec`; benchmark `/tmp/gemma4_prefill_ab_shared_h16_default_vs_off.tsv` with logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.AblZht/`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, model quant layout change, or benchmark harness rewrite
+  trust: {F:0.86,G:0.28,R:0.84}
+
+**LTP/WBA:** Window is a grouped `matmul_many` call where multiple quantized weights share the same F32 input buffer. Transport is a single H16 conversion buffer across the bounded group, then H16-fed GEMM per output. Legal move preserves output precision semantics because existing Q4/Q5/Q6 batch GEMM paths already internally consume H16 inputs. Potential `Phi=(duplicate_input_conversions, conversion_traffic, pp_wall, semantic_delta)` descends for pp256/pp1024 while pp64 remains below the threshold and falls back to the old route.
+**boundary:** Keep the threshold at `256` unless ABBA suggests otherwise. This is a default prefill optimization, not a decode claim; recheck Qwen paths if enabling public Qwen benchmarks because the helper is generic.

@@ -35,7 +35,7 @@ usage: scripts/gemma4_prefill_ab.sh
 
 Environment:
   GEMMA4_PREFILL_AB_PPS=64,256,1024       prompt lengths to test
-  GEMMA4_PREFILL_AB_MODES=default,q4pair  modes: default,q4pair,fullpair,allpair
+  GEMMA4_PREFILL_AB_MODES=default,q4pair  modes: default,q4pair,sharedh16,sharedoff,fullpair,allpair
   GEMMA4_PREFILL_AB_RUNS=3                measured runs per row
   GEMMA4_PREFILL_AB_WARMUPS=1             warmup runs per row
   GEMMA4_PREFILL_AB_FORCE_BUILD=1         rebuild profile binary
@@ -127,6 +127,8 @@ env_for_mode() {
   case "$1" in
     default) printf '%s\n' ;;
     q4pair) printf '%s\n' "GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1" ;;
+    sharedh16) printf '%s\n' "QWEN35_MATMUL_MANY_SHARED_H16=1" ;;
+    sharedoff) printf '%s\n' "QWEN35_MATMUL_MANY_SHARED_H16_OFF=1" ;;
     fullpair) printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1" ;;
     allpair)
       printf '%s\n' "GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1"

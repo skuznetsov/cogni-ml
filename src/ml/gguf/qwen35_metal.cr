@@ -2316,6 +2316,13 @@ module ML
           prefill_swiglu_h16_down_enabled? && h16_batch_gemm_candidate?(qw, batch)
         end
 
+        private def self.matmul_many_shared_h16_enabled?(batch : Int32) : Bool
+          return false if ENV["QWEN35_MATMUL_MANY_SHARED_H16_OFF"]? == "1"
+          return true if ENV["QWEN35_MATMUL_MANY_SHARED_H16"]? == "1"
+          min_batch = (ENV["QWEN35_MATMUL_MANY_SHARED_H16_MIN_BATCH"]? || "256").to_i32
+          batch >= min_batch
+        end
+
         private def self.h16_batch_gemm_candidate?(qw : QuantWeight, batch : Int32) : Bool
           return false unless batch > GEMM_BATCH_THRESHOLD
           force_small_q4_gemv = small_q4_gemv_enabled? && qw.type.q4_k? && qw.out_dim <= 64
@@ -10775,6 +10782,21 @@ module ML
           end
 
           ML::Metal::Device.init!
+          if matmul_many_shared_h16_enabled?(batch) && batch > GEMM_BATCH_THRESHOLD && qws.all? { |qw| h16_batch_gemm_candidate?(qw, batch) }
+            x16_buf = Scratch.get(:matmul_many_x16, batch.to_i64 * in_dim * 2_i64)
+            Profile.bump_conversion("f32_to_f16 matmul_many_shared_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
+            enc.set_pipeline(f32_to_f16_pipeline)
+            enc.set_buffer(x_buf, 0)
+            enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
+            enc.set_value((batch * in_dim).to_u32, 2)
+            enc.dispatch_1d(batch * in_dim, 256)
+
+            slots.each do |_pipeline, w_buf, w_off, qw, out_buf|
+              return false unless encode_matmul_from_h16(enc, qw, x16_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+            end
+            return true
+          end
+
           slots.each do |pipeline, w_buf, w_off, qw, out_buf|
             encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
           end
