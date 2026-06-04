@@ -19645,3 +19645,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local window is now clearer: FFN up/gate remains the largest body-only reader, but Q4-pair transport does not monotonically lower recomputed wall potential across prompt spans. `Phi=(body_weighted_wait, pp_wall, shape_instability, promotion_risk)` descends in some windows and rises in others, so the legal move is profile-only/opt-in use, not default promotion. Next candidate corridors are broader FFN/body algorithms or attention projection batching, not another simple Q4-pair threshold.
 **boundary:** Keep `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` opt-in. Do not re-open simple threshold tuning unless a new kernel/shape-controller changes the transport semantics and passes ABBA.
+
+### [LM-COGNIGEMMA-74] Default-off Gemma H16 attention-context projection experiment is correctness-gated, perf pending
+**context:** ml / CogniGemma Metal prefill / attention context / producer-consumer H16 corridor
+**state:** implemented default-off; performance not promoted
+
+- claim: "CogniGemma now has a default-off row-prefill experiment `GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ=1` that writes attention context rows as H16 and feeds `attn_output` through `Qwen35Metal.encode_matmul_from_h16_to_buffer`. The default route is unchanged; `GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_OFF=1` is available for explicit fallback."
+  source: commit `bc54ba6`; implementation in `src/ml/gguf/gemma4_metal.cr`, `src/ml/gguf/kernels/gemma4.metal`, `src/ml/gguf/qwen35_metal.cr`; wrapper modes `ctxh16` and `ctxh16off` in `scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma row-prefill context/output route rewrite, Qwen H16 GEMM semantics change, or Metal kernel ABI change
+  trust: {F:0.82,G:0.24,R:0.80}
+
+- claim: "Correctness/build gates passed for the route, but speed promotion is pending. Focused default and opt-in `spec/gemma4_metal_buffer_spec.cr` runs each passed `8 examples, 0 failures`; final touched-file `git diff --check` passed; no-codegen build of the focused spec passed. A speed A/B attempt was invalidated because Adamas/Crystal jobs started after the initial benchmark preflight; the wrapper now checks quiet-host status before every row to prevent this class of polluted matrix."
+  source: `/tmp/gemma4_ctx_h16_spec_default_20260604133637.log`; `/tmp/gemma4_ctx_h16_spec_h16_20260604133703.log`; final command `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_ctx_h16_build3 crystal build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace`; polluted logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.zWo2NM/`; per-row wrapper guard verified with short wait/refusal smoke exit `3`.
+  verified_at: 2026-06-04
+  decay_trigger: clean quiet-host A/B, wrapper rewrite, or background-load policy change
+  trust: {F:0.84,G:0.20,R:0.78}
+
+**LTP/WBA:** Window is an attention-context producer immediately followed by a quantized output projection that already rounds F32 input to H16. Transport is the bounded row context buffer from `attn_ctx` to `attn_out`. Legal move is to carry H16 through that corridor under an explicit opt-in without invalidating K/V cache, residual state, or default semantics. Potential target is `Phi=(context_f32_write, f32_to_h16_conversion, attn_out_wall, semantic_delta)`, but wall descent is not verified yet. Dual frame is the default F32 context route.
+**boundary:** Do not claim a speed win or promote default-on until a clean quiet-host A/B beats default across the relevant pp windows. If clean A/B remains mixed, remove or keep this route only as a controlled experiment.
