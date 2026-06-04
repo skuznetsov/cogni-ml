@@ -19759,3 +19759,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was full-layer GQA K/V reuse. Transport tried to carry one K/V tile across four query heads. The move was legal and exact, but the recomputed potential `Phi=(KV_reads, register_pressure, occupancy, pp_wall)` did not descend: reducing K/V reads increased register/threadgroup pressure enough to lose wall time. This is a Diamond conflict, not a Ladder opportunity.
 **boundary:** Do not reintroduce larger per-threadgroup query-head fusion as the next exact path. The next exact attention direction should be FlashAttention/block scheduling over query/context tiles, or another layout that explicitly controls occupancy and register pressure.
+
+### [LM-COGNIGEMMA-80] Exact Gemma adjacent-row full-attention reuse is refuted
+**context:** ml / CogniGemma Metal prefill / full-attention / row blocking
+**state:** refuted; code removed; evidence retained
+
+- claim: "An exact adjacent-row full-attention rowpair kernel passed focused correctness gates but did not improve wall time. The route reused one K/V tile across two adjacent query rows for a single head and only activated on full-attention layers (`sliding_window == 0`). Default and opt-in specs both passed (`8 examples, 0 failures`), but sequential A/B regressed: pp512 median `2260.245ms` default vs `2287.049ms` rowpair, pp1024 median `5867.190ms` default vs `5894.982ms` rowpair."
+  source: release build `/tmp/gemma4_metal_decode_profile_rowpair`; focused specs under `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_rowpair_spec_default` and `/tmp/cogni_ml_gemma_rowpair_spec_on`; wrapper logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.hYc2BG/`.
+  verified_at: 2026-06-04
+  decay_trigger: attention kernel layout rewrite, true block/FlashAttention implementation, Metal compiler behavior change, or stronger quiet-host ABBA evidence
+  trust: {F:0.86,G:0.22,R:0.84}
+
+- claim: "A phase-level pp1024 profile still confirms attention-context as the dominant exact prefill target: full-attention layers measured roughly `101-124ms` each for `attn_ctx`, SWA layers roughly `41-57ms`, while FFN up/gate is roughly `30-38ms` per layer."
+  source: `/tmp/gemma4_current_phase_pp1024_real_20260604192906.log` with `GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1`, `GEMMA4_ROW_PREFILL_PROFILE_PHASES=1`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, pp1024 real token list.
+  verified_at: 2026-06-04
+  decay_trigger: profile harness rewrite, row-prefill scheduling rewrite, or stronger quiet-host profile repeat
+  trust: {F:0.82,G:0.22,R:0.78}
+
+**LTP/WBA:** Window was adjacent full-attention prompt rows sharing nearly identical K/V prefixes. Transport carried the K/V tile across two row-local online-softmax streams. The move was exact and boundary-safe, but recomputed potential `Phi=(row_KV_rereads, register_pressure, occupancy, pp_wall)` did not descend. Like GQA4, it reduced logical rereads but paid them back in pressure/occupancy. This is another Diamond conflict, not a useful Ladder.
+**boundary:** Do not retry small stream-count fusion variants (`GQA4`, adjacent-row pair) as the next exact route. The remaining exact path needs a qualitatively different block/FlashAttention schedule that amortizes K/V loads over a query tile while keeping register pressure bounded, or a non-attention corridor such as FFN conversion/fusion.
