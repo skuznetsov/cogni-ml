@@ -19746,3 +19746,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the local attention-context read of K/V during Gemma row-prefill, especially full-attention layers with `head_dim=512` and long prompt spans. Transport is a bounded H16 side-cache corridor from post-norm/RoPE K/V write to the active row-prefill attention scan, while the F32 KV cache remains the authoritative session/decode boundary. Legal move halves K/V read bytes for the active window without invalidating exact fallback state. Potential `Phi=(F32_KV_read_bytes, attn_ctx_wait, pp_wall, semantic_delta, state_boundary_risk)` descends for pp512/1024 only when semantic delta is allowed; for exact inference the `semantic_delta` component blocks promotion. Dual frame is default F32 KV attention. `kvh16fullpair` is a refuted Diamond conflict: after K/V read pressure is reduced, pair-head reuse raises enough local work/variance that wall potential increases.
 **boundary:** Keep `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1` default-off. Use it for draft/surrogate experiments or explicit approximate prefill probes only. Do not use it for exact public comparisons against llama.cpp unless the comparison also uses approximate KV semantics and quality gates. Next exact path should target a true F32/GQA attention algorithm or FlashAttention-style row/block scheduling; next approximate path should test whether H16 KV improves self-draft/no-validator quality-speed tradeoffs.
+
+### [LM-COGNIGEMMA-79] Exact Gemma GQA4 full-attention head grouping is refuted
+**context:** ml / CogniGemma Metal prefill / full-attention / GQA head grouping
+**state:** refuted; code removed; evidence retained
+
+- claim: "A larger exact GQA4 full-attention row-prefill kernel is correctness-safe but slower than the current GQA2/default route on the measured pp512/pp1024 windows. The route passed focused default and opt-in exact specs, but wall time regressed: pp512 median `2040.759ms` default vs `2085.230ms` GQA4, pp1024 median `5311.377ms` default vs `5558.149ms` GQA4."
+  source: build `/tmp/gemma4_metal_decode_profile_gqa4`; focused default and opt-in `spec/gemma4_metal_buffer_spec.cr` both `8 examples, 0 failures`; wrapper logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.J86ysh/`.
+  verified_at: 2026-06-04
+  decay_trigger: attention kernel layout rewrite, flash/block attention implementation, benchmark harness rewrite, or stronger quiet-host ABBA evidence
+  trust: {F:0.86,G:0.22,R:0.84}
+
+**LTP/WBA:** Window was full-layer GQA K/V reuse. Transport tried to carry one K/V tile across four query heads. The move was legal and exact, but the recomputed potential `Phi=(KV_reads, register_pressure, occupancy, pp_wall)` did not descend: reducing K/V reads increased register/threadgroup pressure enough to lose wall time. This is a Diamond conflict, not a Ladder opportunity.
+**boundary:** Do not reintroduce larger per-threadgroup query-head fusion as the next exact path. The next exact attention direction should be FlashAttention/block scheduling over query/context tiles, or another layout that explicitly controls occupancy and register pressure.
