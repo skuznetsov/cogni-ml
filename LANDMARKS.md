@@ -18885,3 +18885,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This validates the FFN batch route only. It is not yet integrated into Gemma4 full prefill and does not cover attention/KV causality.
 **trust:** {F:0.87,G:0.46,R:0.82}
 **next_gate:** Implement a bounded Gemma4 layer-batch FFN/prefill prototype or retune threshold under strict parity gates; if exact parity is mandatory, keep default GEMV-batch route first.
+
+### [LM-COGNIGEMMA-39] Gemma4 FFN down batch route validated
+**context:** ml (CogniGemma native port)
+**state:** verified microbench; strengthens batch-prefill priority
+**claims:**
+- claim: "Existing batch matmul routes also accelerate Gemma4 FFN down projection, not only gate/up."
+  source: expanded `bin/gemma4_ffn_batch_micro.cr`; batch16 run_safe microbench: down serial p50 `8.141ms`, down batch p50 `1.682ms`, speedup `4.8387x`
+  verified_at: 2026-06-03
+  decay_trigger: Qwen35 matmul route rewrite, Gemma4 FFN quant layout change, or quiet-host rerun
+- claim: "At pp8 scale with `QWEN35_GEMM_BATCH_THRESHOLD=4`, both FFN up/gate and down routes are strongly faster: upgate `3.5605x`, down `3.8297x`."
+  source: batch8 threshold4 run_safe microbench: upgate p50 `6.274ms/1.762ms`; down p50 `5.317ms/1.388ms`
+  verified_at: 2026-06-03
+  decay_trigger: threshold retune or q4/q6 GEMM route rewrite
+- claim: "GEMM/H16 batch routes remain approximate relative to serial GEMV, with observed down max abs drift around `2.85e-4` at batch8 and `3.63e-4` at batch16."
+  source: expanded microbench stdout `down_max_abs=0.00028497` batch8 threshold4 and `0.00036275` batch16
+  verified_at: 2026-06-03
+  decay_trigger: numerical parity policy or exact batch route implementation
+**LTP/WBA:** Window is the full FFN batch corridor: rows enter gate/up, activation, then down. Transport through existing batch matmul routes can cut the dominant FFN logical byte/work potential by about 3.5-4.8x on the microbench. Boundary issue is numerical drift from H16/GEMM routes; an exact production gate must either tolerate drift for prefill or use a bit-closer route.
+**boundary:** Still a projection-only microbench. Full Gemma4 batch prefill must add row RMSNorm, GELU, residual, KV causal attention, and final parity/quality checks.
+**trust:** {F:0.87,G:0.47,R:0.82}
+**next_gate:** Build a bounded Gemma4 FFN-batch layer prototype, first for tail-only parity/speed, then integrate with layerwise prompt prefill if drift is acceptable.
