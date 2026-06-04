@@ -18931,3 +18931,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is tail-only. Full prefill still needs attention/KV row handling and layer-to-layer batch state, but the dominant FFN section now has a verified exact batch corridor.
 **trust:** {F:0.90,G:0.48,R:0.84}
 **next_gate:** Integrate layerwise prompt prefill enough to call `layer_tail_batch` for prompt chunks, while preserving causal attention/KV correctness.
+
+### [LM-COGNIGEMMA-41] Gemma4 naive layerwise batch-tail prefill refuted
+**context:** ml (CogniGemma native port)
+**state:** refuted for current implementation strategy; code not kept
+**claims:**
+- claim: "A naive layerwise prompt prefill prototype that serializes attention/KV per row and then calls the exact batched FFN tail preserves parity, but does not materially speed the full path."
+  source: temporary uncommitted prototype `forward_hidden_prefill_batch_tail`; strict spec passed with `gemma4_prefill_batch_tail_stop2 max|d|=0.0`; scratch profiles showed stop2 speedup `0.9693x`, stop6 `1.0355x`, full48 `1.0175x`, all with `max_abs=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: attention-side row batching, resident row-buffer transport, or full layer-batch implementation
+- claim: "The verified `layer_tail_batch` remains useful, but the naive integration loses its win to attention-side per-row allocation/readback and layer-to-layer row materialization."
+  source: contrast with `LM-COGNIGEMMA-40` tail-only batch8 speedup `5.87x` vs naive full48 `1.0175x`
+  verified_at: 2026-06-03
+  decay_trigger: row-resident attention batching or prefill command-corridor rewrite
+**LTP/WBA:** Window selected was correct (FFN tail rows), but transport corridor was wrong: it carried rows through host arrays between attention and tail and rebuilt per-row attention buffers. The potential did not descend globally because `Phi=(attention_row_overhead, host_row_materialization, serial_KV_updates, layer_body_bytes)` stayed dominated by non-tail costs.
+**boundary:** Do not reattempt host-materialized layerwise batch-tail prefill. The next viable pp branch must batch or resident-pack the attention-side row corridor too, or use a full layer-row command corridor.
+**trust:** {F:0.86,G:0.44,R:0.81}
+**next_gate:** Either build attention-side row batching/resident row transport first, or pivot to tg GEMV kernel attribution/optimization.
