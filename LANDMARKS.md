@@ -19664,3 +19664,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is an attention-context producer immediately followed by a quantized output projection that already rounds F32 input to H16. Transport is the bounded row context buffer from `attn_ctx` to `attn_out`. Legal move is to carry H16 through that corridor under an explicit opt-in without invalidating K/V cache, residual state, or default semantics. Potential target is `Phi=(context_f32_write, f32_to_h16_conversion, attn_out_wall, semantic_delta)`, but wall descent is not verified yet. Dual frame is the default F32 context route.
 **boundary:** Do not claim a speed win or promote default-on until a clean quiet-host A/B beats default across the relevant pp windows. If clean A/B remains mixed, remove or keep this route only as a controlled experiment.
+
+### [LM-COGNIGEMMA-75] Gemma H16 context projection has only small long-pp signal; keep opt-in
+**context:** ml / CogniGemma Metal prefill / attention context / ctxh16 A/B
+**state:** clean gate completed; not promoted
+
+- claim: "A clean guarded `default` vs `ctxh16` A/B after the per-row quiet-host guard showed mixed prompt-span behavior: pp256 slightly lost (`857.252ms` default vs `859.485ms` ctxh16), pp512 slightly won (`1946.757ms` vs `1941.781ms`), and pp1024 won by about 1% (`5218.329ms` vs `5167.373ms`). This is enough to keep `GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ=1` as a controlled long-pp experiment, but not enough for default promotion."
+  source: guarded wrapper run with `GEMMA4_PREFILL_AB_BIN=/tmp/gemma4_metal_decode_profile_ctx_h16`, `GEMMA4_PREFILL_AB_PPS=256,512,1024`, `GEMMA4_PREFILL_AB_MODES=default,ctxh16`, logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.g3hqC2/`.
+  verified_at: 2026-06-04
+  decay_trigger: stronger ABBA repeat, route rewrite, benchmark harness rewrite, or quiet-host policy change
+  trust: {F:0.80,G:0.22,R:0.78}
+
+**LTP/WBA:** The local transport reduces one producer-consumer conversion boundary, but recomputed wall potential descends only for larger prompt spans and by a small amount. `Phi=(pp256_regression, pp512_noise, pp1024_wall, promotion_risk)` does not justify default-on. Dual frame remains the F32-context default route.
+**boundary:** Do not promote `ctxh16` default-on without a stronger quiet-host ABBA sweep, preferably including pp1024/2048 repeats. If long-pp repeats strengthen, consider a thresholded controller; otherwise keep it as opt-in or remove.
