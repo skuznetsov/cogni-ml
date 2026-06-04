@@ -19715,3 +19715,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Recomputed potential exposed a sticky regime at pp2048. Legal move is a Diamond normalization of the transport corridor: restrict the H16 context move to the certified local window rather than extending the ladder blindly. Potential `Phi=(pp512_loss, pp2048_regression, promotion_risk, remaining_experiment_area)` descends by excluding bad spans while preserving an explicit override dual frame for exploration.
 **boundary:** Do not use `ctxh16` as a broad long-context accelerator. Treat it as a narrow pp1024 experiment unless new evidence changes the kernel behavior.
+
+### [LM-COGNIGEMMA-78] llama.cpp Gemma4 inspection points to H16 KV attention as an approximate prefill corridor
+**context:** ml / CogniGemma Metal prefill / llama.cpp comparison / attention context
+**state:** implemented default-off; exact default preserved; approximate opt-in only
+
+- claim: "Local llama.cpp Gemma4 code does not expose a shared-KV advantage for the current local Gemma4 12B Q4_K_M model because the GGUF reports `shared_kv_layers=0`. llama.cpp does, however, route attention through `ggml_flash_attn_ext`, casting F32 K/V to F16 when needed, and its Metal backend has F16/BF16/quantized flash-attention specializations including `dk512/dv512`. Our pp1024 profile showed `attn_ctx` as the dominant CogniGemma row-prefill phase, so H16 K/V attention is the directly comparable local window."
+  source: local llama.cpp `src/models/gemma4.cpp`, `src/llama-graph.cpp`, `ggml/src/ggml-metal/ggml-metal.metal`; local inventory `/tmp/gemma4_inventory` (`shared_kv_layers=0`, full layers `5,11,17,23,29,35,41,47`); CogniGemma profile `/tmp/gemma4_current_phase_pp1024_20260604184928.log` (`attn_ctx=3377.92ms`).
+  verified_at: 2026-06-04
+  decay_trigger: llama.cpp Gemma4 graph rewrite, local GGUF change, CogniGemma attention route rewrite, or profile harness rewrite
+  trust: {F:0.86,G:0.26,R:0.84}
+
+- claim: "CogniGemma now has a default-off `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1` route. It writes the normal F32 KV cache for state continuity and also writes an H16 side-cache used only by row-prefill `attn_ctx`; `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE_OFF=1` is the explicit kill switch. Wrapper modes `kvh16` and `kvh16fullpair` were added for reproducible gates."
+  source: implementation in `src/ml/gguf/gemma4_metal.cr`, `src/ml/gguf/kernels/gemma4.metal`, and `scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: KV cache layout rewrite, row-prefill state semantics change, or wrapper mode rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "The H16 KV route is not exact and must not be default-promoted as exact inference. Focused default specs pass (`8 examples, 0 failures`), but opt-in exact specs fail hidden parity with bounded drift: layer rows `max|d|=0.002019167`, prompt prefill last hidden `max|d|=0.00082314014`. This makes it a draft/surrogate/approximate-serving candidate, not an exact CogniGemma route."
+  source: default focused spec `COGNI_RUN_SAFE_MIN_FREE_PCT=12 ... spec/gemma4_metal_buffer_spec.cr ...` passed after boundary fix; opt-in spec with `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1` failed exact tolerances in `/tmp/cogni_ml_gemma_kvh16_spec_optin2` run output.
+  verified_at: 2026-06-04
+  decay_trigger: H16 KV numerical route rewrite, tolerance/gate rewrite, or exactness policy change
+  trust: {F:0.88,G:0.24,R:0.86}
+
+- claim: "Boundary-fixed H16 KV produced a clean guarded prefill wall-speed win on a quiet host: pp512 median `3174.659ms -> 2926.673ms` (~7.8%) and pp1024 median `7170.652ms -> 6307.481ms` (~12.1%) for `default` vs `kvh16`. Direct pp1024 before the boundary fix was also positive but less trusted. Combining `kvh16` with `fullpair` was refuted at pp1024 (`5455.889ms` median vs direct default `5158.762ms`), so the two attention moves interfere rather than compose."
+  source: guarded wrapper logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.Mcm2gh/`; direct combo log `/tmp/gemma4_kvh16_fullpair_wall_pp1024_20260604190434.log`; direct default/kvh16 log `/tmp/gemma4_kvh16_wall_pp1024_20260604190127.log`.
+  verified_at: 2026-06-04
+  decay_trigger: H16 KV side-cache rewrite, larger ABBA gate, memory-pressure/quiet-host policy change, or benchmark binary rewrite
+  trust: {F:0.82,G:0.20,R:0.80}
+
+**LTP/WBA:** Window is the local attention-context read of K/V during Gemma row-prefill, especially full-attention layers with `head_dim=512` and long prompt spans. Transport is a bounded H16 side-cache corridor from post-norm/RoPE K/V write to the active row-prefill attention scan, while the F32 KV cache remains the authoritative session/decode boundary. Legal move halves K/V read bytes for the active window without invalidating exact fallback state. Potential `Phi=(F32_KV_read_bytes, attn_ctx_wait, pp_wall, semantic_delta, state_boundary_risk)` descends for pp512/1024 only when semantic delta is allowed; for exact inference the `semantic_delta` component blocks promotion. Dual frame is default F32 KV attention. `kvh16fullpair` is a refuted Diamond conflict: after K/V read pressure is reduced, pair-head reuse raises enough local work/variance that wall potential increases.
+**boundary:** Keep `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1` default-off. Use it for draft/surrogate experiments or explicit approximate prefill probes only. Do not use it for exact public comparisons against llama.cpp unless the comparison also uses approximate KV semantics and quality gates. Next exact path should target a true F32/GQA attention algorithm or FlashAttention-style row/block scheduling; next approximate path should test whether H16 KV improves self-draft/no-validator quality-speed tradeoffs.
