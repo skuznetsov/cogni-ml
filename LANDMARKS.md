@@ -18691,3 +18691,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** The next speed lever is phase fusion or caching norm-weight Metal buffers; scratch reuse alone does not remove command-buffer waits.
 **trust:** {F:0.88,G:0.42,R:0.82}
 **next_gate:** Cache per-layer norm weight buffers or fuse adjacent resident phases; profile under the same strict stop-layer6 gate.
+
+### [LM-COGNIGEMMA-29] Gemma4 norm-weight buffer cache refuted as local speed lever
+**context:** ml (CogniGemma native port)
+**state:** refuted for performance; correctness preserved in experiment
+**claims:**
+- claim: "Caching small per-layer norm and RoPE-factor Metal buffers inside `Gemma4Metal::ResidentScratch` preserved exact resident-path parity in the focused Gemma4 Metal spec."
+  source: temporary branch experiment; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_weightcache_build crystal build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace`; strict focused spec `GEMMA4_RESIDENT_LAYER_STRICT=1 ... scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_buffer_spec.cr ...` reported `4 examples, 0 failures` and stop-layer6 `max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: resident scratch policy rewrite, Metal buffer upload path change, or quiet-host profile replacement
+- claim: "The same cache did not improve the local resident prefix wall time and regressed the measured resident p50 versus the prior scratch-pool landmark."
+  source: stop-layer6 paired profile after cache `host_p50_ms=137.737 resident_p50_ms=66.840 speedup=2.0607`; resident-only rerun `resident_p50_ms=73.889`; stop-layer2 paired `resident_p50_ms=30.416`; resident-only `resident_p50_ms=28.441`. Prior scratch-pool landmark was stop-layer6 `resident_p50_ms=58.454` and stop-layer2 `resident_p50_ms=24.805`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host ABBA rerun, full decode integration, or allocator/driver behavior change
+**LTP/WBA:** Window was repeated small norm/RoPE weight uploads. Transport attempted to carry immutable weight buffers through the resident scratch corridor keyed by source array identity. Legal move preserved exact state, but recompute showed the lexicographic potential did not descend in wall-clock terms: `Phi=(phase_waits, weight-buffer_uploads, final_readback, remaining_unfused_area)` remained dominated by phase waits and scheduling noise, while cache lookup/lifetime overhead was not a net win.
+**boundary:** Do not reintroduce per-array norm-weight caching as a speed branch unless a future attribution run shows weight uploads as a dominant bucket. Keep the next speed gate on phase fusion / command-buffer wave compaction, not small immutable-buffer caching.
+**trust:** {F:0.84,G:0.36,R:0.78}
+**next_gate:** Try fusing resident phase command buffers or moving from per-phase waits to chunk-major command-buffer corridors before touching small buffer caching again.
