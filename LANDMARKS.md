@@ -18809,3 +18809,20 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This is token-id based, not text-tokenizer based, and it does not compare to llama.cpp on identical prompt/sampling settings. It is sufficient to prevent mistaking stop-layer microprofile speed for full decode throughput.
 **trust:** {F:0.84,G:0.36,R:0.79}
 **next_gate:** Add text tokenizer integration or use llama.cpp token IDs for apples-to-apples Gemma4 pp/tg comparison; then decide whether to optimize full-layer body math, prompt batching, or draft/speculative paths.
+
+### [LM-COGNIGEMMA-35] Gemma4 llama.cpp baseline exposes full-path gap
+**context:** ml (CogniGemma native port)
+**state:** verified local external baseline; optimization target updated
+**claims:**
+- claim: "Local llama.cpp build `94a220cd6 (9496)` can run the same Gemma4 Q4_K_M GGUF on Metal."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/build/bin/llama-bench -m ~/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf -p 8 -n 8 -r 3 -ngl 99 -fa auto -o md`
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp rebuild, model file change, or Metal backend change
+- claim: "On pp8/tg8, llama.cpp is currently much faster than CogniGemma resident full-path proxy: llama.cpp pp8 `61.99 +/- 1.00 tok/s`, tg8 `32.22 +/- 0.79 tok/s`; CogniGemma resident prompt8/generate8 proxy p50 pp `16.317 tok/s`, tg `15.641 tok/s`."
+  source: llama-bench output above; CogniGemma `bin/gemma4_metal_decode_profile.cr` run_safe prompt tokens `42..49`, generate8, warmups1, runs3
+  verified_at: 2026-06-03
+  decay_trigger: apples-to-apples text tokenizer benchmark, CogniGemma batch prefill, or kernel-route rewrite
+**LTP/WBA:** Window is no longer intra-layer command fences; full-path comparison shows the active potential is `Phi=(missing_batched_prefill, GEMV_body_gap, attention_kernel_gap, benchmark_scope_gap)`. For pp, llama.cpp wins mainly by processing prompt as a batch/ubatch, while CogniGemma still consumes tokens serially. For tg, the remaining gap is likely body GEMV/kernel quality and attention implementation rather than final head.
+**boundary:** The comparison is not perfectly apples-to-apples in prompt token identity because llama-bench uses synthetic benchmark tokens while CogniGemma used explicit ids, but both use the same GGUF, Metal backend, pp8/tg8 scale, and full model work. Treat as strong direction, not final public benchmark.
+**trust:** {F:0.82,G:0.42,R:0.80}
+**next_gate:** Highest leverage is Gemma4 batch/prefill path for pp, then GEMV/attention attribution for tg. Do not spend more effort on tiny command-fence or final-head tweaks until attribution shifts.
