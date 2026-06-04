@@ -19803,3 +19803,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is full-attention prompt rows where context scanning dominates. Transport is now a true block corridor over context chunks and bounded query tiles, carrying exact online-softmax summaries `(m,l,o)` to a reduction kernel. This avoids the GQA4/rowpair mistake of simply packing more streams into one simdgroup. Current potential `Phi=(serial_context_span, partial_scratch, dispatch_count, occupancy, pp_wall)` descends algebraically but not yet materially in wall time; stage overhead and partial scratch traffic still consume the expected win. Dual frame remains the default row scan.
 **boundary:** Keep default-off. Next split-K work should not be more stream fusion; if reopened, test larger prompt spans under a safe memory cap, reduce stage overhead, or fuse query-tile stage1/stage2 scheduling. Otherwise pivot to FFN/conversion traffic or approximate draft lanes.
+
+### [LM-COGNIGEMMA-82] Gemma RMSNorm F32+H16 projection corridor is exact but not promoted
+**context:** ml / CogniGemma Metal prefill / conversion traffic / FFN and attention projections
+**state:** implemented default-off; correctness passed; mixed speed gate
+
+- claim: "CogniGemma now has a default-off `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1` route that fuses RMSNorm with F32+H16 output for row-prefill attention input and FFN input. Projection kernels can consume the H16 side output directly while F32 buffers remain available for downstream exact consumers. The route exposes Qwen's existing `qwen35_rmsnorm_rows_f32_h16` encoder as a public helper and adds wrapper mode `normh16`."
+  source: implementation in `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/gemma4_metal.cr`, and `scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: RMSNorm kernel rewrite, Gemma row-prefill projection rewrite, shared-H16 matmul rewrite, or default-policy change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "Correctness passed for default and opt-in `normh16`: focused `spec/gemma4_metal_buffer_spec.cr` completed `8 examples, 0 failures` in both modes."
+  source: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_normh16_spec_default ... scripts/run_safe.sh crystal ...`; `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_normh16_spec_on ...`.
+  verified_at: 2026-06-04
+  decay_trigger: focused spec rewrite, route rewrite, or tolerance policy change
+  trust: {F:0.88,G:0.26,R:0.86}
+
+- claim: "Initial speed gate is mixed: pp512 improved slightly (`2211.918ms` default vs `2180.228ms` normh16, about 1.4%), but pp1024 regressed slightly (`5725.180ms` default vs `5739.261ms` normh16). This is not enough for default promotion."
+  source: sequential wrapper logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.yUqgyh/` using release binary `/tmp/gemma4_metal_decode_profile_normh16`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA repeat, phase-profile repeat, or route retune
+  trust: {F:0.82,G:0.20,R:0.78}
+
+**LTP/WBA:** Window is the producer-consumer seam `RMSNorm(F32) -> F32-to-H16 conversion -> Q4/Q6 GEMM`. Transport carries an H16 side output from the same RMSNorm move while preserving the F32 boundary for exact downstream consumers. This is a valid Spike/Ladder candidate because it eliminates a separate conversion kernel without changing the projection input rounding relative to the existing H16 GEMM route. Recomputed potential `Phi=(conversion_traffic, extra_h16_write, occupancy, pp_wall)` descends at pp512 but not pp1024, so the move remains local/opt-in.
+**boundary:** Keep default-off. Reopen only with stronger ABBA evidence, narrower batch window, or after combining with a phase that increases reuse of the H16 normalized buffer.

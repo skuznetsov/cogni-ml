@@ -115,6 +115,12 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_Q4_PAIR_FFN"]? == "1"
       end
 
+      private def rmsnorm_h16_proj_enabled?(batch : Int32) : Bool
+        return false if ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_OFF"]? == "1"
+        return false unless ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ"]? == "1"
+        batch > 8
+      end
+
       private def attn_gqa2_enabled? : Bool
         ENV["GEMMA4_ROW_PREFILL_ATTN_GQA2_OFF"]? != "1"
       end
@@ -749,6 +755,8 @@ module ML::GGUF
         sliding_window = hp.sliding_window?(il) ? hp.sliding_window : 0
 
         x_norm_buf = scratch.get("rows.x_norm", hidden_bytes)
+        norm_h16_proj = rmsnorm_h16_proj_enabled?(batch)
+        x_norm_h16_buf = norm_h16_proj ? scratch.get("rows.x_norm_h16", batch.to_i64 * hidden_dim * 2_i64) : nil
         q_buf = scratch.get("rows.q", batch.to_i64 * q_dim * sizeof(Float32))
         k_buf = scratch.get("rows.k", batch.to_i64 * kv_dim * sizeof(Float32))
         v_buf = scratch.get("rows.v", batch.to_i64 * kv_dim * sizeof(Float32))
@@ -759,6 +767,7 @@ module ML::GGUF
         attn_normed_buf = scratch.get("rows.attn_normed", hidden_bytes)
         attn_out_buf = scratch.get("rows.attn_out", hidden_bytes)
         ffn_in_buf = scratch.get("rows.ffn_in", hidden_bytes)
+        ffn_in_h16_buf = norm_h16_proj ? scratch.get("rows.ffn_in_h16", batch.to_i64 * hidden_dim * 2_i64) : nil
         gate_buf = scratch.get("rows.gate", batch.to_i64 * ffn_dim * sizeof(Float32))
         up_buf = scratch.get("rows.up", batch.to_i64 * ffn_dim * sizeof(Float32))
         combined_buf = scratch.get("rows.combined", batch.to_i64 * ffn_dim * sizeof(Float32))
@@ -767,11 +776,21 @@ module ML::GGUF
 
         prefix = "gemma4.rows.layer#{il}"
         return false unless profile_rows_phase("#{prefix}.attn_qkv") do |enc|
-          encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
-          if v_qw = lw.attn_v_qw
-            Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+          if x16 = x_norm_h16_buf
+            Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, x_buf, attn_norm_w, x_norm_buf, x16, hidden_dim, batch, hp.rms_eps)
+            projected = if v_qw = lw.attn_v_qw
+                          Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
+                            Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
+                            Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, v_qw, x16, v_buf, batch)
+                        else
+                          Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
+                            Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
+                            Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, v_buf, batch)
+                        end
+            projected || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, (lw.attn_v_qw || lw.attn_k_qw)], x_norm_buf, [q_buf, k_buf, v_buf], batch)
           else
-            Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+            encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
+            Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, (lw.attn_v_qw || lw.attn_k_qw)], x_norm_buf, [q_buf, k_buf, v_buf], batch)
           end
         end
 
@@ -816,7 +835,11 @@ module ML::GGUF
         return false unless profile_rows_phase("#{prefix}.ffn_in") do |enc|
           encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
           encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
-          encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
+          if ffn16 = ffn_in_h16_buf
+            Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, attn_out_buf, ffn_w, ffn_in_buf, ffn16, hidden_dim, batch, hp.rms_eps)
+          else
+            encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
+          end
           true
         end
 
@@ -824,9 +847,14 @@ module ML::GGUF
           fused_gelu = q4_gelu_fuse_enabled? &&
             Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
           unless fused_gelu
-            ok = (q4_pair_ffn_enabled? &&
-              Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)) ||
-              Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+            ok = if ffn16 = ffn_in_h16_buf
+                   Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_gate_qw, ffn16, gate_buf, batch) &&
+                     Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_up_qw, ffn16, up_buf, batch)
+                 else
+                   (q4_pair_ffn_enabled? &&
+                     Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)) ||
+                     Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+                 end
             next false unless ok
             encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
           end
@@ -892,6 +920,8 @@ module ML::GGUF
         sliding_window = hp.sliding_window?(il) ? hp.sliding_window : 0
 
         x_norm_buf = scratch.get("rows.x_norm", hidden_bytes)
+        norm_h16_proj = rmsnorm_h16_proj_enabled?(batch)
+        x_norm_h16_buf = norm_h16_proj ? scratch.get("rows.x_norm_h16", batch.to_i64 * hidden_dim * 2_i64) : nil
         q_buf = scratch.get("rows.q", batch.to_i64 * q_dim * sizeof(Float32))
         k_buf = scratch.get("rows.k", batch.to_i64 * kv_dim * sizeof(Float32))
         v_buf = scratch.get("rows.v", batch.to_i64 * kv_dim * sizeof(Float32))
@@ -902,20 +932,33 @@ module ML::GGUF
         attn_normed_buf = scratch.get("rows.attn_normed", hidden_bytes)
         attn_out_buf = scratch.get("rows.attn_out", hidden_bytes)
         ffn_in_buf = scratch.get("rows.ffn_in", hidden_bytes)
+        ffn_in_h16_buf = norm_h16_proj ? scratch.get("rows.ffn_in_h16", batch.to_i64 * hidden_dim * 2_i64) : nil
         gate_buf = scratch.get("rows.gate", batch.to_i64 * ffn_dim * sizeof(Float32))
         up_buf = scratch.get("rows.up", batch.to_i64 * ffn_dim * sizeof(Float32))
         combined_buf = scratch.get("rows.combined", batch.to_i64 * ffn_dim * sizeof(Float32))
         ffn_buf = scratch.get("rows.ffn", hidden_bytes)
         ffn_normed_buf = scratch.get("rows.ffn_normed", hidden_bytes)
 
-        encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
-        projected = if v_qw = lw.attn_v_qw
-                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
-                    else
-                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
-                    end
-        return false unless projected
-
+        if x16 = x_norm_h16_buf
+          Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, x_buf, attn_norm_w, x_norm_buf, x16, hidden_dim, batch, hp.rms_eps)
+          projected = if v_qw = lw.attn_v_qw
+                        Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
+                          Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
+                          Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, v_qw, x16, v_buf, batch)
+                      else
+                        Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
+                          Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
+                          Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, v_buf, batch)
+                      end
+          return false unless projected || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, (lw.attn_v_qw || lw.attn_k_qw)], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+        else
+          encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
+          if v_qw = lw.attn_v_qw
+            Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+          else
+            Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+          end
+        end
         encode_rmsnorm_weighted_rows(enc, q_buf, q_weight, head_dim, hp.rms_eps, hp.n_head, batch)
         encode_rmsnorm_weighted_rows(enc, k_buf, k_weight, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
         encode_rmsnorm_plain_rows(enc, v_buf, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
@@ -945,13 +988,23 @@ module ML::GGUF
 
         encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
         encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
-        encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
+        if ffn16 = ffn_in_h16_buf
+          Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, attn_out_buf, ffn_w, ffn_in_buf, ffn16, hidden_dim, batch, hp.rms_eps)
+        else
+          encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
+        end
         fused_gelu = q4_gelu_fuse_enabled? &&
           Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
         unless fused_gelu
-          pair_q4 = q4_pair_ffn_enabled? &&
-            Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)
-          return false unless pair_q4 || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+          ok = if ffn16 = ffn_in_h16_buf
+                 Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_gate_qw, ffn16, gate_buf, batch) &&
+                   Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_up_qw, ffn16, up_buf, batch)
+               else
+                 pair_q4 = q4_pair_ffn_enabled? &&
+                   Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)
+                 pair_q4 || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+               end
+          return false unless ok
           encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
         end
         return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)

@@ -10742,6 +10742,18 @@ module ML
           encode_matmul_from_h16(enc, qw, x16_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
         end
 
+        def self.encode_rmsnorm_rows_f32_h16_to_buffers(enc : ML::Metal::ComputeEncoder,
+                                                        x_buf : ML::MetalBuffer,
+                                                        weight_buf : ML::MetalBuffer,
+                                                        out_buf : ML::MetalBuffer,
+                                                        out_h16_buf : ML::MetalBuffer,
+                                                        dim : Int32,
+                                                        n_rows : Int32,
+                                                        eps : Float32) : Nil
+          return if n_rows <= 0
+          encode_rmsnorm_rows_f32_h16(enc, x_buf, weight_buf, out_buf, out_h16_buf, dim, n_rows, eps)
+        end
+
         def self.matmul_many_to_buffers(qws : Array(QuantWeight),
                                         x_buf : ML::MetalBuffer,
                                         out_bufs : Array(ML::MetalBuffer),

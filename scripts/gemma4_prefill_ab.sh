@@ -135,6 +135,7 @@ env_for_mode() {
     ctxh16off) printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_OFF=1" ;;
     kvh16) printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1" ;;
     splitk) printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_SPLITK=1" ;;
+    normh16) printf '%s\n' "GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1" ;;
     kvh16fullpair)
       printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1"
       printf '%s\n' "GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL=1"
