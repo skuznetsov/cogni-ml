@@ -548,14 +548,55 @@ module ML::GGUF
         return nil unless available?
 
         hp = weights.hparams
+        hidden_dim = hp.n_embd
+        raise ArgumentError.new("forward_layer_resident_cache input size mismatch") unless x.size == hidden_dim
+
+        x_buf = ML::MetalBuffer.from_array(x)
+        out_buf = forward_layer_resident_cache_buf(weights, il, x_buf, pos, state)
+        return nil unless out_buf
+        out_buf.read(hidden_dim)
+      rescue ex
+        if ENV["GEMMA4_RESIDENT_LAYER_STRICT"]? == "1"
+          raise ex
+        else
+          hp_fallback = weights.hparams
+          lw_fallback = weights.layers[il]
+          x_norm = rms_norm(x, lw_fallback.attn_norm, hp_fallback.rms_eps).not_nil!
+          raw = if v_qw = lw_fallback.attn_v_qw
+                  Qwen35Metal.matmul_many([lw_fallback.attn_q_qw, lw_fallback.attn_k_qw, v_qw], x_norm)
+                else
+                  Qwen35Metal.matmul_many([lw_fallback.attn_q_qw, lw_fallback.attn_k_qw], x_norm)
+                end
+          return nil unless raw
+
+          pre = if raw.size == 3
+                  Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[2], false)
+                else
+                  Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[1].dup, true)
+                end
+          proj = normalize_and_rope_projection(pre, lw_fallback, hp_fallback, il, pos, hp_fallback.full_attention?(il) ? weights.rope_freqs : nil).not_nil!
+          ctx = attention_context_from_projection_resident(proj, hp_fallback, il, pos, state.layers[il]).not_nil!
+          attn_projected = Qwen35Metal.matmul(lw_fallback.attn_output_qw, ctx, 1)
+          return nil unless attn_projected
+          layer_tail_resident_buffers(x, attn_projected, lw_fallback, hp_fallback)
+        end
+      end
+
+      def forward_layer_resident_cache_buf(weights : Gemma4Weights,
+                                           il : Int32,
+                                           x_buf : ML::MetalBuffer,
+                                           pos : Int32,
+                                           state : ResidentState) : ML::MetalBuffer?
+        return nil unless available?
+
+        hp = weights.hparams
         lw = weights.layers[il]
         hidden_dim = hp.n_embd
         head_dim = hp.head_dim_for_layer(il)
         q_dim = hp.n_head * head_dim
         kv_dim = hp.n_head_kv(il) * head_dim
-        raise ArgumentError.new("forward_layer_resident_cache input size mismatch") unless x.size == hidden_dim
+        raise ArgumentError.new("forward_layer_resident_cache input buffer too small") if x_buf.size < hidden_dim.to_i64 * sizeof(Float32)
 
-        x_buf = ML::MetalBuffer.from_array(x)
         attn_norm_w = ML::MetalBuffer.from_array(lw.attn_norm)
         x_norm_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
         cmd = ML::Metal::CommandBuffer.new
@@ -585,32 +626,7 @@ module ML::GGUF
 
         out_buf = layer_tail_resident_buffer_inputs(x_buf, attn_projected_buf, lw, hp)
         return nil unless out_buf
-        out_buf.read(hidden_dim)
-      rescue ex
-        if ENV["GEMMA4_RESIDENT_LAYER_STRICT"]? == "1"
-          raise ex
-        else
-          hp_fallback = weights.hparams
-          lw_fallback = weights.layers[il]
-          x_norm = rms_norm(x, lw_fallback.attn_norm, hp_fallback.rms_eps).not_nil!
-          raw = if v_qw = lw_fallback.attn_v_qw
-                  Qwen35Metal.matmul_many([lw_fallback.attn_q_qw, lw_fallback.attn_k_qw, v_qw], x_norm)
-                else
-                  Qwen35Metal.matmul_many([lw_fallback.attn_q_qw, lw_fallback.attn_k_qw], x_norm)
-                end
-          return nil unless raw
-
-          pre = if raw.size == 3
-                  Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[2], false)
-                else
-                  Gemma4CPU::AttentionProjection.new(raw[0], raw[1], raw[1].dup, true)
-                end
-          proj = normalize_and_rope_projection(pre, lw_fallback, hp_fallback, il, pos, hp_fallback.full_attention?(il) ? weights.rope_freqs : nil).not_nil!
-          ctx = attention_context_from_projection_resident(proj, hp_fallback, il, pos, state.layers[il]).not_nil!
-          attn_projected = Qwen35Metal.matmul(lw_fallback.attn_output_qw, ctx, 1)
-          return nil unless attn_projected
-          layer_tail_resident_buffers(x, attn_projected, lw_fallback, hp_fallback)
-        end
+        out_buf
       end
 
       def forward_logits_from_hidden(weights : Gemma4Weights,
@@ -660,12 +676,31 @@ module ML::GGUF
         scale = Math.sqrt(hp.n_embd.to_f64).to_f32
         x.size.times { |i| x[i] *= scale }
 
+        x_buf = ML::MetalBuffer.from_array(x)
         layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
         layer_count.times do |il|
-          x = forward_layer_resident_cache(weights, il, x, pos, state)
-          return nil unless x
+          next_buf = forward_layer_resident_cache_buf(weights, il, x_buf, pos, state)
+          return nil unless next_buf
+          x_buf = next_buf
         end
-        x
+        x_buf.read(hp.n_embd)
+      rescue ex
+        if ENV["GEMMA4_RESIDENT_LAYER_STRICT"]? == "1"
+          raise ex
+        else
+          hp_fallback = weights.hparams
+          x_fallback = Qwen35Metal.embedding_q6k_from_token_id(weights.token_embd, token_id)
+          return nil unless x_fallback
+          scale = Math.sqrt(hp_fallback.n_embd.to_f64).to_f32
+          x_fallback.size.times { |i| x_fallback[i] *= scale }
+
+          layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+          layer_count.times do |il|
+            x_fallback = forward_layer_resident_cache(weights, il, x_fallback, pos, state)
+            return nil unless x_fallback
+          end
+          x_fallback
+        end
       end
 
       def rms_norm(x : Array(Float32), weight : Array(Float32), eps : Float32) : Array(Float32)?

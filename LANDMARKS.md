@@ -18649,3 +18649,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** This still reads the hidden vector after each layer and allocates scratch buffers per layer call. It is not yet a band-resident decode loop or public full-model benchmark.
 **trust:** {F:0.90,G:0.45,R:0.84}
 **next_gate:** Implement a resident hidden-buffer loop across multiple layers and/or a reusable buffer pool, then profile stop-layer6/longer prefixes under quiet-host conditions.
+
+### [LM-COGNIGEMMA-27] Gemma4 band-resident hidden loop verified but not an incremental speed win yet
+**context:** ml (CogniGemma native port)
+**state:** verified for correctness, speed-neutral vs previous resident layer corridor
+**claims:**
+- claim: "`forward_hidden_resident_cache` now carries a Metal hidden buffer across the requested resident layer band, with final host readback only after the stop layer."
+  source: `src/ml/gguf/gemma4_metal.cr`; strict focused spec `spec/gemma4_metal_buffer_spec.cr` (`4 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: resident hidden-loop rewrite or buffer lifetime change
+- claim: "Band residency preserves exact parity through stop-layer6, including the full-attention K-as-V layer, with `max|d|=0.0`."
+  source: strict focused spec stdout `gemma4_resident_stop6_hidden max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: full-attention layer semantics or resident projection path changes
+- claim: "Removing layer-to-layer hidden readback did not produce an additional wall-clock breakthrough over the previous resident single-layer corridor on the current profile."
+  source: strict prefix profile: stop-layer6 p50 host/resident `127.748ms / 70.518ms` (`1.8116x`), stop-layer2 `52.498ms / 30.513ms`; prior single-layer corridor stop-layer6 resident p50 was `69.229ms`
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host rerun, buffer-pool implementation, or command-buffer fusion
+**LTP/WBA:** Window was the layer-to-layer hidden handoff. Transport now spans a layer band in resident hidden buffers. Legal move lowers host handoff potential, but recompute shows the dominant sticky terms are allocation and phase waits. Potential after this move is `Phi=(phase_waits, scratch_allocations, weight-buffer_uploads, final_readback, remaining_unfused_area)`.
+**boundary:** Keep the band-resident path as exact infrastructure, but do not claim incremental speedup beyond the previous resident layer corridor. Next speed move must reduce allocation/wait potential, not just remove another readback.
+**trust:** {F:0.90,G:0.42,R:0.82}
+**next_gate:** Add a reusable Gemma4 resident scratch/pool object or fuse adjacent resident phases before more profile claims.
