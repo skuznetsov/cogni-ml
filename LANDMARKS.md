@@ -19146,3 +19146,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The pure pair route failed because the active potential stayed dominated by Q4/Q6 projection bytes and downstream activation materialization. The legal Spike that helped is narrower: after the gate projection is materialized, transport the up-projection tile through the existing B64 corridor and collapse directly into `GELU(gate) * up`, removing the `up_buf` write/read and separate GELU kernel. Potential descends modestly as `Phi=(FFN activation materialization, per-layer FFN kernels, Q4/Q6 projection bytes, llama.cpp kernel-quality gap)`, but the last two terms remain dominant.
 **boundary:** This is approximate and default-off. Do not use it for exact prefill claims. It improves native approximate pp but remains far behind llama.cpp pp256 (`385.32 tok/s` prior baseline). Next high-leverage work is Q4/Q6 GEMM kernel quality or a llama.cpp-style `kernel_mul_mm_q4_K_f32` adaptation, not more small pair-only fusions.
 **next_gate:** Run broader text-token top1/quality suite for `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`, then profile Q4/Q6 GEMM kernels against llama.cpp-style matmul scheduling.
+
+### [LM-COGNIGEMMA-49] Gemma4 pp gap points to Metal tensor-op GEMM, not B-tile retuning
+**context:** ml / CogniGemma Metal prefill
+**state:** branch-selection landmark; no runtime code change
+
+- claim: "The local Metal wrapper can compile sources that include `<metal_tensor>` and reference `mpp::tensor_ops`, so a llama.cpp-style tensor-op matmul port is technically reachable in this project."
+  source: temporary compile probe `build/tmp_probes/metal_mpp_tensor_probe.cr` built and ran `/tmp/metal_mpp_tensor_probe`, printing `mpp_tensor_pipeline_ok=true`.
+  verified_at: 2026-06-03
+  decay_trigger: Metal wrapper compile-option rewrite, Xcode/Metal SDK change, or deployment to older macOS/Metal runtime
+  trust: {F:0.82,G:0.42,R:0.78}
+
+- claim: "llama.cpp HEAD's `kernel_mul_mm_q4_K_f32` and `kernel_mul_mm_q6_K_f32` instantiate the generic `kernel_mul_mm` path that uses `mpp::tensor_ops::matmul2d`; its configured tile geometry is `NRA=64`, `NRB=128`, `N_MM_NK_TOTAL=32`, with 4 execution simdgroups."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal.metal:9423-9530,10220-10222`; `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-impl.h:8-15`; independent read-only Spark explorer reached the same conclusion.
+  verified_at: 2026-06-03
+  decay_trigger: llama.cpp update, Metal backend compile macro change, or local build switching off tensor-op path
+  trust: {F:0.86,G:0.50,R:0.82}
+
+- claim: "Existing Gemma4 approximate chunk retuning does not show a new B80/B96/B112 sweet spot worth promoting. Direct fused rows on this host measured pp112/chunk112 `161.84 tok/s`, pp128/chunk128 `161.82 tok/s`, and pp256/chunk256 `183.11 tok/s`; prior better pp256 fused smoke was `209.56 tok/s`, showing host variance but no route-level B112 breakthrough."
+  source: direct `/tmp/gemma4_metal_decode_profile_gelu_fuse` runs with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1`, body-only, warmups=1, runs=2.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host ABBA rerun, B-tile routing rewrite, or hidden top1/quality gate change
+  trust: {F:0.66,G:0.24,R:0.62}
+
+**LTP/WBA:** The local B-tile ladder no longer decreases the recomputed potential. The active window is the quantized batch matmul primitive class: manual simdgroup tiles versus llama.cpp's tensor-op corridor. Legal next move is a Diamond-compatible backend experiment, not more B64/B112 retuning: add default-off Q5/Q6 or Q4 tensor-op kernels with the same external buffers, compare against current kernels, and collapse only if both speed and bounded drift gates pass.
+**boundary:** Do not claim Gemma4 pp parity from the fused approximate route. Current best verified direction is an mpp/tensor-op GEMM branch. The first implementation should be default-off and scoped to one quant/shape before touching product prefill policy.
+**next_gate:** Implement `QWEN35_TENSOR_MM=1` for one Q6_K down-projection shape first, because Q6 uses the shared `gemm_mm` route and is large in Gemma FFN-down; then run microbench + pp body-only A/B. If Q6 tensor-op fails to beat current `mm6_f32out`, porting Q4 is lower priority.
