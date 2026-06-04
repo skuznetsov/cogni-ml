@@ -120,15 +120,30 @@ module ML::GGUF
         end
       end
 
+      class ResidentScratch
+        @buffers = {} of String => ML::MetalBuffer
+
+        def get(name : String, byte_size : Int64) : ML::MetalBuffer
+          if buf = @buffers[name]?
+            return buf if buf.size >= byte_size
+          end
+          buf = ML::MetalBuffer.new(byte_size)
+          @buffers[name] = buf
+          buf
+        end
+      end
+
       class ResidentState
         getter layers : Array(ResidentLayerState)
         getter max_seq : Int32
+        getter scratch : ResidentScratch
 
         def initialize(hp : Gemma4Hparams, @max_seq : Int32 = 1024)
           @layers = Array(ResidentLayerState).new(hp.n_layer) do |il|
             kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
             ResidentLayerState.new(kv_dim, @max_seq)
           end
+          @scratch = ResidentScratch.new
         end
       end
 
@@ -314,7 +329,8 @@ module ML::GGUF
                                                              hp : Gemma4Hparams,
                                                              il : Int32,
                                                              pos : Int32,
-                                                             lstate : ResidentLayerState) : ML::MetalBuffer?
+                                                             lstate : ResidentLayerState,
+                                                             scratch : ResidentScratch? = nil) : ML::MetalBuffer?
         return nil unless available?
 
         n_head = hp.n_head
@@ -332,7 +348,11 @@ module ML::GGUF
 
         start_pos = hp.attention_start_pos(il, pos)
         len = pos - start_pos + 1
-        out_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+        out_buf = if scratch
+                    scratch.not_nil!.get("attn.ctx", q_dim.to_i64 * sizeof(Float32))
+                  else
+                    ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+                  end
 
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -438,7 +458,8 @@ module ML::GGUF
       def layer_tail_resident_buffer_inputs(x_buf : ML::MetalBuffer,
                                             attn_projected_buf : ML::MetalBuffer,
                                             lw : Gemma4LayerWeights,
-                                            hp : Gemma4Hparams) : ML::MetalBuffer?
+                                            hp : Gemma4Hparams,
+                                            scratch : ResidentScratch? = nil) : ML::MetalBuffer?
         return nil unless available?
 
         hidden_dim = hp.n_embd
@@ -454,14 +475,14 @@ module ML::GGUF
         ffn_w = ML::MetalBuffer.from_array(lw.ffn_norm)
         post_ffw_w = ML::MetalBuffer.from_array(lw.post_ffw_norm)
 
-        attn_normed_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
-        attn_out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
-        ffn_in_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
-        gate_buf = ML::MetalBuffer.new(lw.ffn_gate_qw.out_dim.to_i64 * sizeof(Float32))
-        up_buf = ML::MetalBuffer.new(lw.ffn_up_qw.out_dim.to_i64 * sizeof(Float32))
-        combined_buf = ML::MetalBuffer.new(lw.ffn_down_qw.in_dim.to_i64 * sizeof(Float32))
-        ffn_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
-        ffn_normed_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        attn_normed_buf = scratch ? scratch.not_nil!.get("tail.attn_normed", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        attn_out_buf = scratch ? scratch.not_nil!.get("tail.attn_out", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        ffn_in_buf = scratch ? scratch.not_nil!.get("tail.ffn_in", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        gate_buf = scratch ? scratch.not_nil!.get("tail.gate", lw.ffn_gate_qw.out_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(lw.ffn_gate_qw.out_dim.to_i64 * sizeof(Float32))
+        up_buf = scratch ? scratch.not_nil!.get("tail.up", lw.ffn_up_qw.out_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(lw.ffn_up_qw.out_dim.to_i64 * sizeof(Float32))
+        combined_buf = scratch ? scratch.not_nil!.get("tail.combined", lw.ffn_down_qw.in_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(lw.ffn_down_qw.in_dim.to_i64 * sizeof(Float32))
+        ffn_buf = scratch ? scratch.not_nil!.get("tail.ffn", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        ffn_normed_buf = scratch ? scratch.not_nil!.get("tail.ffn_normed", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
         out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
 
         cmd = ML::Metal::CommandBuffer.new
@@ -586,7 +607,8 @@ module ML::GGUF
                                            il : Int32,
                                            x_buf : ML::MetalBuffer,
                                            pos : Int32,
-                                           state : ResidentState) : ML::MetalBuffer?
+                                           state : ResidentState,
+                                           scratch : ResidentScratch? = state.scratch) : ML::MetalBuffer?
         return nil unless available?
 
         hp = weights.hparams
@@ -598,7 +620,7 @@ module ML::GGUF
         raise ArgumentError.new("forward_layer_resident_cache input buffer too small") if x_buf.size < hidden_dim.to_i64 * sizeof(Float32)
 
         attn_norm_w = ML::MetalBuffer.from_array(lw.attn_norm)
-        x_norm_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        x_norm_buf = scratch ? scratch.not_nil!.get("layer.x_norm", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
         encode_rmsnorm_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, hp.rms_eps)
@@ -606,9 +628,9 @@ module ML::GGUF
         cmd.commit
         cmd.wait
 
-        q_buf = ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
-        k_buf = ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
-        v_buf = ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
+        q_buf = scratch ? scratch.not_nil!.get("layer.q", q_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32))
+        k_buf = scratch ? scratch.not_nil!.get("layer.k", kv_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
+        v_buf = scratch ? scratch.not_nil!.get("layer.v", kv_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(kv_dim.to_i64 * sizeof(Float32))
         projected = if v_qw = lw.attn_v_qw
                       Qwen35Metal.matmul_many_to_buffers([lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
                     else
@@ -620,11 +642,11 @@ module ML::GGUF
         return nil unless projected
         return nil unless normalize_and_rope_projection_buffers(q_buf, k_buf, v_buf, lw, hp, il, pos, hp.full_attention?(il) ? weights.rope_freqs : nil)
 
-        ctx_buf = attention_context_from_projection_resident_buffers(q_buf, k_buf, v_buf, hp, il, pos, state.layers[il]).not_nil!
-        attn_projected_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+        ctx_buf = attention_context_from_projection_resident_buffers(q_buf, k_buf, v_buf, hp, il, pos, state.layers[il], scratch).not_nil!
+        attn_projected_buf = scratch ? scratch.not_nil!.get("layer.attn_projected", hidden_dim.to_i64 * sizeof(Float32)) : ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
         return nil unless Qwen35Metal.matmul_to_buffer(lw.attn_output_qw, ctx_buf, attn_projected_buf, 1)
 
-        out_buf = layer_tail_resident_buffer_inputs(x_buf, attn_projected_buf, lw, hp)
+        out_buf = layer_tail_resident_buffer_inputs(x_buf, attn_projected_buf, lw, hp, scratch)
         return nil unless out_buf
         out_buf
       end

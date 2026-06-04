@@ -18670,3 +18670,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Keep the band-resident path as exact infrastructure, but do not claim incremental speedup beyond the previous resident layer corridor. Next speed move must reduce allocation/wait potential, not just remove another readback.
 **trust:** {F:0.90,G:0.42,R:0.82}
 **next_gate:** Add a reusable Gemma4 resident scratch/pool object or fuse adjacent resident phases before more profile claims.
+
+### [LM-COGNIGEMMA-28] Gemma4 resident scratch pool reduces allocation potential
+**context:** ml (CogniGemma native port)
+**state:** verified local speed improvement on resident prefix microprofile
+**claims:**
+- claim: "`Gemma4Metal::ResidentScratch` reuses resident intermediate Metal buffers for the Gemma4 resident layer corridor while keeping the returned hidden output unpooled to avoid input/output aliasing."
+  source: `src/ml/gguf/gemma4_metal.cr`; strict focused spec `spec/gemma4_metal_buffer_spec.cr` (`4 examples, 0 failures`)
+  verified_at: 2026-06-03
+  decay_trigger: resident scratch rewrite, hidden-output pooling, or layer corridor refactor
+- claim: "Scratch reuse preserves strict stop-layer6 parity through the full-attention K-as-V layer (`max|d|=0.0`)."
+  source: strict focused spec stdout `gemma4_resident_stop6_hidden max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: full-attention semantics or resident buffer aliasing changes
+- claim: "On the local stop-layer microprofile, scratch reuse improves resident p50 versus the previous band-resident run."
+  source: strict prefix profile after scratch: stop-layer6 p50 host/resident `120.540ms / 58.454ms` (`2.0621x`); stop-layer2 `37.850ms / 24.805ms`; previous band-resident resident p50s were `70.518ms` stop-layer6 and `30.513ms` stop-layer2
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host A/B rerun, full decode integration, or buffer-pool policy change
+**LTP/WBA:** Window was resident scratch allocation. Transport reuses stable intermediate buffers across the layer band without crossing the hidden-output boundary. Legal move lowers `scratch_allocations` while preserving exact K/V/session state. Potential moves from `Phi=(phase_waits, scratch_allocations, weight-buffer_uploads, final_readback, remaining_unfused_area)` to `Phi=(phase_waits, weight-buffer_uploads, final_readback, remaining_unfused_area)`.
+**boundary:** The next speed lever is phase fusion or caching norm-weight Metal buffers; scratch reuse alone does not remove command-buffer waits.
+**trust:** {F:0.88,G:0.42,R:0.82}
+**next_gate:** Cache per-layer norm weight buffers or fuse adjacent resident phases; profile under the same strict stop-layer6 gate.
