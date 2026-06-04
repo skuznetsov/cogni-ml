@@ -19626,3 +19626,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.84,G:0.24,R:0.82}
 
 **LTP/WBA:** The shared-H16 transport lowered the local conversion component of `Phi=(duplicate_input_conversions, conversion_traffic, pp_wall, semantic_delta)` exactly where predicted. Remaining large conversion rows are FFN-down/activation-width paths (`15360`) and non-grouped projection widths (`4096`, `8192`), so the next candidate windows are shape-specific Q6 down conversion elimination or retuned Q4/Q6 GEMM kernels rather than more pair-only FFN gate/up sharing.
+
+### [LM-COGNIGEMMA-73] Gemma body-only attribution keeps Q4-pair threshold refuted after shared-H16
+**context:** ml / CogniGemma Metal prefill / attribution / Q4 pair FFN
+**state:** attribution improved; Q4-pair threshold still not promotion-safe
+
+- claim: "`gemma4_op_attribution` now separates tied output-head cost from body-only prefill cost via `--exclude-output-head` and a category summary. On the local Gemma4 12B Q4_K_M GGUF, body-only wait attribution at `batch=256` splits roughly as FFN up/gate `2.088ms`, FFN-down `1.076ms`, and attention projections `1.559ms` weighted wait. The tied output head is therefore not the next first-run prefill lever when benchmarking `--prefill-no-head`."
+  source: committed `bin/gemma4_op_attribution.cr`; `git diff --check -- bin/gemma4_op_attribution.cr` passed before commit; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_attr_build2 crystal build --no-codegen bin/gemma4_op_attribution.cr --error-trace` passed; guarded run `/tmp/gemma4_op_attr_b256_body_20260604132814.log`.
+  verified_at: 2026-06-04
+  decay_trigger: attribution tool rewrite, Gemma row-prefill route rewrite, or model quant/layout change
+  trust: {F:0.84,G:0.26,R:0.82}
+
+- claim: "After shared-H16 became default, the Q4 gate/up pair route still should not be promoted by a simple threshold. A refreshed clean wrapper pass found mixed results: first pp256 check won (`869.778ms` default vs `852.696ms` q4pair) but a repeated pp256 check lost (`869.570ms` vs `872.720ms`); pp128 won (`440.827ms` vs `434.955ms`), pp512 was near-neutral (`1953.064ms` vs `1951.884ms`), while pp768 and pp1024 lost (`3457.260ms` vs `3470.849ms`, `5156.091ms` vs `5174.481ms`)."
+  source: wrapper logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.t7XRUj/` and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.JQPkaf/`, run with `GEMMA4_PREFILL_AB_BIN=/tmp/gemma4_metal_decode_profile_shared_h16_default`, modes `default,q4pair`, sequential quiet-host wait mode.
+  verified_at: 2026-06-04
+  decay_trigger: Q4 pair kernel rewrite, stronger ABBA gate, benchmark harness rewrite, or new shape-controller implementation
+  trust: {F:0.78,G:0.22,R:0.76}
+
+**LTP/WBA:** The local window is now clearer: FFN up/gate remains the largest body-only reader, but Q4-pair transport does not monotonically lower recomputed wall potential across prompt spans. `Phi=(body_weighted_wait, pp_wall, shape_instability, promotion_risk)` descends in some windows and rises in others, so the legal move is profile-only/opt-in use, not default promotion. Next candidate corridors are broader FFN/body algorithms or attention projection batching, not another simple Q4-pair threshold.
+**boundary:** Keep `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` opt-in. Do not re-open simple threshold tuning unless a new kernel/shape-controller changes the transport semantics and passes ABBA.
