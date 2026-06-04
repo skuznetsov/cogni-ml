@@ -490,29 +490,21 @@ module ML::GGUF
         encode_rmsnorm_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, hp.rms_eps)
         encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, hidden_dim)
         encode_rmsnorm_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, hp.rms_eps)
+        unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
+          enc.end_encoding
+          return nil
+        end
+        encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, 1)
+          enc.end_encoding
+          return nil
+        end
+        scale = lw.layer_output_scale.first? || 1.0_f32
+        encode_rmsnorm_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
+        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
         enc.end_encoding
         cmd.commit
         cmd.wait
-
-        return nil unless Qwen35Metal.matmul_many_to_buffers([lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
-
-        cmd2 = ML::Metal::CommandBuffer.new
-        enc2 = ML::Metal::ComputeEncoder.new(cmd2)
-        encode_gelu_mul(enc2, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
-        enc2.end_encoding
-        cmd2.commit
-        cmd2.wait
-
-        return nil unless Qwen35Metal.matmul_to_buffer(lw.ffn_down_qw, combined_buf, ffn_buf, 1)
-
-        scale = lw.layer_output_scale.first? || 1.0_f32
-        cmd3 = ML::Metal::CommandBuffer.new
-        enc3 = ML::Metal::ComputeEncoder.new(cmd3)
-        encode_rmsnorm_weighted_out(enc3, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
-        encode_add_scaled_vec(enc3, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
-        enc3.end_encoding
-        cmd3.commit
-        cmd3.wait
         out_buf
       end
 

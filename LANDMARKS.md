@@ -18708,3 +18708,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Do not reintroduce per-array norm-weight caching as a speed branch unless a future attribution run shows weight uploads as a dominant bucket. Keep the next speed gate on phase fusion / command-buffer wave compaction, not small immutable-buffer caching.
 **trust:** {F:0.84,G:0.36,R:0.78}
 **next_gate:** Try fusing resident phase command buffers or moving from per-phase waits to chunk-major command-buffer corridors before touching small buffer caching again.
+
+### [LM-COGNIGEMMA-30] Gemma4 resident FFN tail super-command reduces phase-wait potential
+**context:** ml (CogniGemma native port)
+**state:** verified local speed improvement on resident prefix microprofile
+**claims:**
+- claim: "`Qwen35Metal.encode_matmul_to_buffer` and `encode_matmul_many_to_buffers` expose appendable quantized matmul dispatches for callers that already own a Metal compute encoder, while the existing wait-sealed `matmul*_to_buffer` helpers remain available."
+  source: `src/ml/gguf/qwen35_metal.cr`; focused Gemma4 no-codegen compile passed
+  verified_at: 2026-06-03
+  decay_trigger: Qwen35 quant matmul routing rewrite or encoder API change
+- claim: "`Gemma4Metal.layer_tail_resident_buffer_inputs` now encodes post-attention norm/residual, FFN gate/up matmuls, GELU, FFN down matmul, final norm, and scaled residual into one ordered compute encoder instead of several command-buffer waits."
+  source: `src/ml/gguf/gemma4_metal.cr`; strict focused spec `GEMMA4_RESIDENT_LAYER_STRICT=1 ... scripts/run_safe.sh /opt/homebrew/bin/crystal 1200 30000 spec spec/gemma4_metal_buffer_spec.cr ...` reported `4 examples, 0 failures`, layer-tail/stop-layer2/stop-layer6 `max|d|=0.0`
+  verified_at: 2026-06-03
+  decay_trigger: Gemma4 tail rewrite, Metal command ordering semantics change, or quant matmul append helper rewrite
+- claim: "Tail super-command materially improves the resident prefix microprofile versus the prior scratch-pool landmark."
+  source: stop-layer6 paired profile `host_p50_ms=110.123 resident_p50_ms=35.006 speedup=3.1458`; stop-layer6 resident-only p50 `36.987ms`; stop-layer2 paired profile `host_p50_ms=34.701 resident_p50_ms=17.448 speedup=1.9888`. Prior scratch-pool resident p50s were stop-layer6 `58.454ms` and stop-layer2 `24.805ms`.
+  verified_at: 2026-06-03
+  decay_trigger: quiet-host ABBA rerun, full decode integration, or command-buffer scheduler behavior change
+**LTP/WBA:** Window was the resident FFN tail phase-wait ladder. Transport is the ordered compute-dispatch corridor over `attn_out -> ffn_in -> gate/up -> combined -> ffn -> out` resident buffers. Legal move preserves exact hidden/KV boundaries and only collapses command-buffer fences. Potential descends from `Phi=(phase_waits, weight-buffer_uploads, final_readback, remaining_unfused_area)` to `Phi=(attention_phase_waits, weight-buffer_uploads, final_readback, remaining_unfused_area)` for the tail corridor.
+**boundary:** This is a local resident-prefix microprofile, not a full Gemma4 decode benchmark. The next speed lever is applying the same appendable-command pattern to attention projection/norm/RoPE/context/output, or building a full-layer command corridor if Metal command ordering remains exact.
+**trust:** {F:0.90,G:0.44,R:0.84}
+**next_gate:** Fuse the attention-side resident layer phases with the same appendable encoder pattern, then run strict parity and stop-layer6 profiles before full prefix/decode claims.

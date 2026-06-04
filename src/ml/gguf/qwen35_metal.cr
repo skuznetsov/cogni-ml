@@ -10538,6 +10538,24 @@ module ML
           true
         end
 
+        def self.encode_matmul_to_buffer(enc : ML::Metal::ComputeEncoder,
+                                         qw : QuantWeight,
+                                         x_buf : ML::MetalBuffer,
+                                         out_buf : ML::MetalBuffer,
+                                         batch : Int32 = 1) : Bool
+          return false if batch <= 0
+          return false if x_buf.size < batch.to_i64 * qw.in_dim * sizeof(Float32)
+          return false if out_buf.size < batch.to_i64 * qw.out_dim * sizeof(Float32)
+
+          ML::Metal::Device.init!
+          pipeline = gemv_pipeline_for(qw)
+          return false if pipeline.nil?
+          w_buf, w_off = weight_slot(qw)
+
+          encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+          true
+        end
+
         def self.matmul_many_to_buffers(qws : Array(QuantWeight),
                                         x_buf : ML::MetalBuffer,
                                         out_bufs : Array(ML::MetalBuffer),
@@ -10567,6 +10585,34 @@ module ML
           enc.end_encoding
           cmd.commit
           cmd.wait
+          true
+        end
+
+        def self.encode_matmul_many_to_buffers(enc : ML::Metal::ComputeEncoder,
+                                               qws : Array(QuantWeight),
+                                               x_buf : ML::MetalBuffer,
+                                               out_bufs : Array(ML::MetalBuffer),
+                                               batch : Int32 = 1) : Bool
+          return false if batch <= 0
+          return false if qws.empty? || qws.size != out_bufs.size
+          in_dim = qws[0].in_dim
+          return false if x_buf.size < batch.to_i64 * in_dim * sizeof(Float32)
+
+          slots = [] of {ML::Metal::ComputePipeline, ML::MetalBuffer, Int64, QuantWeight, ML::MetalBuffer}
+          qws.each_with_index do |qw, i|
+            return false unless qw.in_dim == in_dim
+            out_buf = out_bufs[i]
+            return false if out_buf.size < batch.to_i64 * qw.out_dim * sizeof(Float32)
+            pipeline = gemv_pipeline_for(qw)
+            return false if pipeline.nil?
+            w_buf, w_off = weight_slot(qw)
+            slots << {pipeline, w_buf, w_off, qw, out_buf}
+          end
+
+          ML::Metal::Device.init!
+          slots.each do |pipeline, w_buf, w_off, qw, out_buf|
+            encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+          end
           true
         end
       {% end %}
