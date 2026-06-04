@@ -27,6 +27,14 @@ record BenchRow,
   weighted_wait_ms : Float64,
   names : Array(String)
 
+private def row_category(row : BenchRow) : String
+  return "head" if row.names.any? { |name| name == "output.full_logits_equiv" }
+  return "ffn_upgate" if row.names.any? { |name| name.includes?(".ffn.g") || name.includes?(".ffn.u") }
+  return "ffn_down" if row.names.any? { |name| name.includes?(".ffn.d") }
+  return "attn_proj" if row.names.any? { |name| name.includes?(".attn.") }
+  "other"
+end
+
 record PairRef,
   gate_name : String,
   up_name : String,
@@ -170,15 +178,17 @@ batch = 256
 profile_wait = false
 prefill_q4_pair_wait = false
 prefill_q4_pair_only = false
+exclude_output_head = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--prefill-q4-pair-wait] [--prefill-q4-pair-only]"
+  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--exclude-output-head] [--prefill-q4-pair-wait] [--prefill-q4-pair-only]"
   p.on("--model=PATH", "Gemma4 GGUF model path") { |v| model = v }
   p.on("--warmup=N", "Warmup runs per shape (default: 2)") { |v| warmup = v.to_i }
   p.on("--runs=N", "Measured runs per shape (default: 5)") { |v| runs = v.to_i }
   p.on("--limit=N", "Only benchmark top-N dense-MAC shapes (default: all)") { |v| limit = v.to_i }
   p.on("--batch=N", "Rows per matmul call (default: 256)") { |v| batch = v.to_i }
   p.on("--profile-wait", "Also report Metal command wait time, excluding host-side input write/readback") { profile_wait = true }
+  p.on("--exclude-output-head", "Exclude tied full-logits head from the benchmark rows and totals") { exclude_output_head = true }
   p.on("--prefill-q4-pair-wait", "Also benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true }
   p.on("--prefill-q4-pair-only", "Only benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true; prefill_q4_pair_only = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
@@ -189,14 +199,17 @@ raise "--batch must be positive" unless batch > 0
 raise "model not found: #{model}" unless File.exists?(model)
 
 w = ML::GGUF::Gemma4Weights.from_gguf(model)
-stats = shape_stats(collect_ops(w))
+ops = collect_ops(w)
+ops = ops.reject { |op| op.name == "output.full_logits_equiv" } if exclude_output_head
+stats = shape_stats(ops)
 stats = stats.sort_by { |s| -(s.in_dim.to_i64 * s.out_dim * s.count) }
 stats = stats.first(limit) if limit > 0
 
 puts "Gemma4 op attribution"
 puts "model=#{model}"
 puts "warmup=#{warmup} runs=#{runs} batch=#{batch}"
-puts "note: output.full_logits_equiv uses token_embd as tied full Q6_K lm-head matmul."
+puts "note: output.full_logits_equiv uses token_embd as tied full Q6_K lm-head matmul." unless exclude_output_head
+puts "note: output.full_logits_equiv excluded from rows/totals." if exclude_output_head
 puts "note: v_reuse_k entries count the actual full-attention K-as-V projection route."
 puts "note: p50_ms is standalone matmul latency for the whole batch; weighted_ms=(p50/batch)*calls."
 puts "note: wait_ms is Metal command wait time only, excluding host-side input write/readback." if profile_wait
@@ -235,3 +248,24 @@ end
 puts
 printf "total_weighted_measured_ms=%.3f\n", rows.sum(&.weighted_ms)
 printf "total_weighted_wait_ms=%.3f\n", rows.sum(&.weighted_wait_ms) if profile_wait
+
+puts
+puts "Category summary"
+category_order = ["ffn_upgate", "ffn_down", "attn_proj", "head", "other"]
+by_category = rows.group_by { |row| row_category(row) }
+category_order.each do |category|
+  category_rows = by_category[category]? || next
+  measured = category_rows.sum(&.weighted_ms)
+  wait = category_rows.sum(&.weighted_wait_ms)
+  if profile_wait
+    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_wait_ms=%8.3f\n",
+      category, category_rows.size, measured, wait
+  else
+    printf "  %-10s rows=%2d weighted_ms=%8.3f\n",
+      category, category_rows.size, measured
+  end
+end
+
+body_rows = rows.reject { |row| row_category(row) == "head" }
+printf "body_no_head_weighted_measured_ms=%.3f\n", body_rows.sum(&.weighted_ms)
+printf "body_no_head_weighted_wait_ms=%.3f\n", body_rows.sum(&.weighted_wait_ms) if profile_wait
