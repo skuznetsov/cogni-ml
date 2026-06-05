@@ -21448,3 +21448,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The verifier window is now certified for exact `gamma<=8` chunks: transport is a candidate span through row-prefill hidden rows, legal move is row-top1 comparison with exact fallback, and boundary safety holds by snapshot prefix capture. Recomputed potential descends only under high proposal coverage. When proposal coverage is poor, verifier/commit tax increases earlier potential components. High-batch GEMM is a separate sticky corridor because exactness fails; it needs a Diamond before it can be used as verifier transport.
 **boundary:** Keep `--batch-verify` and `--oracle-exact-proposals` as diagnostics. Do not promote real n-gram batch verification for Gemma yet. Next speed path is better proposal generation or exact high-batch row-prefill, with gates: parity first, then ABBA wall versus exact decode.
+
+### [LM-COGNIGEMMA-129] Gemma high-batch verifier must be guarded; n-gram remains the wrong proposal source
+**context:** ml / CogniGemma Metal / high-batch row verifier / exact fallback / LTP-WBA
+**state:** guarded fallback implemented; high-batch route remains diagnostic-only
+
+- claim: "`--batch-verify` now restores the verifier snapshot and falls back to serial exact verification whenever the high-batch row verifier rejects, and always serial-confirms real non-oracle proposals. This prevents approximate row-prefill top1 from committing an illegal reject token."
+  source: `bin/gemma4_ngram_chunk_probe.cr`; `crystal build --no-codegen bin/gemma4_ngram_chunk_probe.cr --error-trace` exited 0; guarded linked build exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: verifier scheduler rewrite, removal of high-batch approximate routes, or exact high-batch row-prefill proof
+  trust: {F:0.84,G:0.10,R:0.80}
+
+- claim: "The guarded high-batch oracle case that previously failed parity now preserves exact output: `gamma=16`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, `--oracle-exact-proposals --batch-verify` produced `32/32` parity and `1.0595x` speedup versus exact. Verify time was `909.203ms`, so serial fallback tax still consumes most of the theoretical multi-RHS win."
+  source: guarded `/tmp/gemma4_ngram_chunk_probe --gen 32 --gamma 16 --oracle-exact-proposals --batch-verify --max-seq 192 --prefill-chunk 128` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: exact high-batch route, prompt suite rerun, or lower false-reject high-batch verifier
+  trust: {F:0.82,G:0.07,R:0.76}
+
+- claim: "Real n-gram proposals remain speed-negative even with guarded high-batch verification: `accept_rate=25%`, `32/32` parity, but wall `1709.851ms` (`0.6439x`) versus exact `1100.950ms`."
+  source: guarded `/tmp/gemma4_ngram_chunk_probe --gen 32 --gamma 8 --min-candidates 1 --no-risk-gate --batch-verify --max-seq 192 --prefill-chunk 128` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: different proposal source, session-copy prompt suite, or n-gram route with much higher accepted span density
+  trust: {F:0.80,G:0.07,R:0.74}
+
+**LTP/WBA:** The Diamond correction is explicit: approximate high-batch transport may be used as a filter only behind an exact state-boundary fallback. The lexicographic potential improves from BROKEN/parity-fail to parity-safe, but the dominant wait bucket does not descend enough under current proposal coverage and false-reject rate. Dual frame is exact serial verifier on uncertainty. The next legal speed move is not more n-gram tuning; it is a higher-quality proposal corridor, or an exact high-batch row route that can remove the fallback tax.
+**boundary:** Keep high-batch batch-verify diagnostic-only. Production promotion requires `parity=true` plus ABBA wall improvement on real prompts. The promising route remains Gemma MTP/self-draft/surrogate proposals feeding the exact-cap batch verifier, not current n-gram proposals.

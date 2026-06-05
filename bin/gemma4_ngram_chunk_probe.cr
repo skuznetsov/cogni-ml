@@ -202,6 +202,29 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
           break
         end
       end
+
+      # High-batch row-prefill can be a fast filter, but it is not an exact
+      # verifier for every route. Fall back to serial exact verification on
+      # batch rejection, and always confirm real (non-oracle) proposals.
+      if reject_expected || oracle_ids.nil?
+        ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
+        verify_current = current
+        verify_pos = pos
+        local_accept = 0
+        reject_expected = nil.as(Int32?)
+        candidates.each do |cand|
+          expected = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, verify_current, verify_pos.to_i32, side_state, weights.hparams.n_layer).not_nil!
+          if cand == expected
+            local_accept += 1
+            verify_current = cand
+            verify_pos += 1
+          else
+            reject_expected = expected
+            verify_pos += 1
+            break
+          end
+        end
+      end
     else
       candidates.each do |cand|
         expected = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, verify_current, verify_pos.to_i32, side_state, weights.hparams.n_layer).not_nil!
