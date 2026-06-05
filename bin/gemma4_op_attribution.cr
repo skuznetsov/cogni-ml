@@ -223,15 +223,15 @@ private def print_prefill_q4_pair_table(w : ML::GGUF::Gemma4Weights, warmup : In
   puts
   puts "Gemma4 Q4_H16 FFN gate+up pair route"
   puts "note: pair route is the actual fused gate/up corridor used by row prefill when enabled."
-  printf "%7s %8s %5s %5s %10s %10s %14s  %s\n",
-    "in", "out", "pairs", "batch", "pair_wait", "per_row", "weighted_pair", "examples"
+  printf "%7s %8s %5s %5s %10s %10s %12s %14s  %s\n",
+    "in", "out", "pairs", "batch", "pair_wait", "batch_wait", "per_row", "weighted_pair", "examples"
   by_shape.to_a.sort_by { |(shape, shape_pairs)| -(shape[0].to_i64 * shape[1] * shape_pairs.size) }.each do |shape, shape_pairs|
     p50 = bench_q4_h16_pair(shape_pairs.first, warmup, runs, batch)
     weighted = (p50 / batch) * shape_pairs.size
     examples = shape_pairs.first(3).map { |p| "#{p.gate_name}+#{p.up_name}" }.join(",")
     examples += ",..." if shape_pairs.size > 3
-    printf "%7d %8d %5d %5d %10.3f %10.3f %14.3f  %s\n",
-      shape[0], shape[1], shape_pairs.size, batch, p50, p50 / batch, weighted, examples
+    printf "%7d %8d %5d %5d %10.3f %10.3f %12.3f %14.3f  %s\n",
+      shape[0], shape[1], shape_pairs.size, batch, p50, p50 * shape_pairs.size, p50 / batch, weighted, examples
   end
 end
 
@@ -359,6 +359,7 @@ puts "note: output.full_logits_equiv uses token_embd as tied full Q6_K lm-head m
 puts "note: output.full_logits_equiv excluded from rows/totals." if exclude_output_head
 puts "note: v_reuse_k entries count the actual full-attention K-as-V projection route."
 puts "note: p50_ms is standalone matmul latency for the whole batch; weighted_ms=(p50/batch)*calls."
+puts "note: batch_total_ms=(p50_ms*calls) estimates full prompt-prefill wall contribution for this shape."
 puts "note: weight_mib is quantized weight traffic per standalone call; weighted_mib=(weight_mib/batch)*calls."
 puts "note: wait_ms is Metal command wait time only, excluding host-side input write/readback." if profile_wait
 puts
@@ -377,25 +378,27 @@ rows = stats.map { |s| bench_shape(s, warmup, runs, batch, profile_wait) }
 rows.sort_by! { |r| profile_wait ? -r.weighted_wait_ms : -r.weighted_ms }
 
 if profile_wait
-  printf "%-8s %7s %8s %5s %5s %10s %10s %10s %11s %10s %12s %12s %9s  %s\n",
-    "type", "in", "out", "calls", "batch", "p50_ms", "wait_ms", "per_row", "weight_mib", "eff_gbps", "weighted_ms", "weighted_wait", "w_mib", "examples"
+  printf "%-8s %7s %8s %5s %5s %10s %10s %10s %10s %10s %11s %10s %12s %12s %9s  %s\n",
+    "type", "in", "out", "calls", "batch", "p50_ms", "wait_ms", "batch_ms", "batch_wait", "per_row", "weight_mib", "eff_gbps", "weighted_ms", "weighted_wait", "w_mib", "examples"
 else
-  printf "%-8s %7s %8s %5s %5s %10s %10s %11s %10s %12s %9s  %s\n",
-    "type", "in", "out", "calls", "batch", "p50_ms", "per_row", "weight_mib", "eff_gbps", "weighted_ms", "w_mib", "examples"
+  printf "%-8s %7s %8s %5s %5s %10s %10s %10s %11s %10s %12s %9s  %s\n",
+    "type", "in", "out", "calls", "batch", "p50_ms", "batch_ms", "per_row", "weight_mib", "eff_gbps", "weighted_ms", "w_mib", "examples"
 end
 rows.each do |r|
   examples = r.names.first(3).join(",")
   examples += ",..." if r.names.size > 3
   weighted_bytes = r.weight_bytes.to_f64 * r.count / r.batch
+  batch_total_ms = r.p50_ms * r.count
+  batch_wait_ms = r.wait_ms * r.count
   if profile_wait
-    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %10.3f %11.2f %10.1f %12.3f %12.3f %9.1f  %s\n",
+    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %10.3f %10.3f %10.3f %11.2f %10.1f %12.3f %12.3f %9.1f  %s\n",
       r.type, r.in_dim, r.out_dim, r.count, r.batch, r.p50_ms, r.wait_ms,
-      r.per_row_ms, mib(r.weight_bytes), gbps(r.weight_bytes, r.wait_ms),
+      batch_total_ms, batch_wait_ms, r.per_row_ms, mib(r.weight_bytes), gbps(r.weight_bytes, r.wait_ms),
       r.weighted_ms, r.weighted_wait_ms, mib(weighted_bytes), examples
   else
-    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %11.2f %10.1f %12.3f %9.1f  %s\n",
+    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %10.3f %11.2f %10.1f %12.3f %9.1f  %s\n",
       r.type, r.in_dim, r.out_dim, r.count, r.batch, r.p50_ms,
-      r.per_row_ms, mib(r.weight_bytes), gbps(r.weight_bytes, r.p50_ms),
+      batch_total_ms, r.per_row_ms, mib(r.weight_bytes), gbps(r.weight_bytes, r.p50_ms),
       r.weighted_ms, mib(weighted_bytes), examples
   end
 end
@@ -403,14 +406,22 @@ end
 puts
 printf "total_weighted_measured_ms=%.3f\n", rows.sum(&.weighted_ms)
 printf "total_weighted_wait_ms=%.3f\n", rows.sum(&.weighted_wait_ms) if profile_wait
+printf "total_batch_measured_ms=%.3f\n", rows.sum { |row| row.p50_ms * row.count }
+printf "total_batch_wait_ms=%.3f\n", rows.sum { |row| row.wait_ms * row.count } if profile_wait
 total_weighted_bytes = rows.sum { |row| row.weight_bytes.to_f64 * row.count / row.batch }
+total_batch_bytes = rows.sum { |row| row.weight_bytes.to_f64 * row.count }
 printf "total_weighted_weight_mib=%.3f\n", mib(total_weighted_bytes)
+printf "total_batch_weight_mib=%.3f\n", mib(total_batch_bytes)
 if profile_wait
   total_wait = rows.sum(&.weighted_wait_ms)
   printf "total_weighted_effective_gbps=%.3f\n", gbps(total_weighted_bytes, total_wait) if total_wait > 0.0
+  total_batch_wait = rows.sum { |row| row.wait_ms * row.count }
+  printf "total_batch_effective_gbps=%.3f\n", gbps(total_batch_bytes, total_batch_wait) if total_batch_wait > 0.0
 else
   total_ms = rows.sum(&.weighted_ms)
   printf "total_weighted_effective_gbps=%.3f\n", gbps(total_weighted_bytes, total_ms) if total_ms > 0.0
+  total_batch_ms = rows.sum { |row| row.p50_ms * row.count }
+  printf "total_batch_effective_gbps=%.3f\n", gbps(total_batch_bytes, total_batch_ms) if total_batch_ms > 0.0
 end
 
 puts
@@ -422,17 +433,26 @@ category_order.each do |category|
   measured = category_rows.sum(&.weighted_ms)
   wait = category_rows.sum(&.weighted_wait_ms)
   category_bytes = category_rows.sum { |row| row.weight_bytes.to_f64 * row.count / row.batch }
+  category_batch_ms = category_rows.sum { |row| row.p50_ms * row.count }
+  category_batch_wait = category_rows.sum { |row| row.wait_ms * row.count }
+  category_batch_bytes = category_rows.sum { |row| row.weight_bytes.to_f64 * row.count }
   if profile_wait
-    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_wait_ms=%8.3f weighted_mib=%8.1f eff_gbps=%7.1f\n",
-      category, category_rows.size, measured, wait, mib(category_bytes), gbps(category_bytes, wait)
+    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_wait_ms=%8.3f weighted_mib=%8.1f batch_ms=%9.3f batch_wait_ms=%9.3f batch_mib=%9.1f eff_gbps=%7.1f\n",
+      category, category_rows.size, measured, wait, mib(category_bytes),
+      category_batch_ms, category_batch_wait, mib(category_batch_bytes), gbps(category_batch_bytes, category_batch_wait)
   else
-    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_mib=%8.1f eff_gbps=%7.1f\n",
-      category, category_rows.size, measured, mib(category_bytes), gbps(category_bytes, measured)
+    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_mib=%8.1f batch_ms=%9.3f batch_mib=%9.1f eff_gbps=%7.1f\n",
+      category, category_rows.size, measured, mib(category_bytes),
+      category_batch_ms, mib(category_batch_bytes), gbps(category_batch_bytes, category_batch_ms)
   end
 end
 
 body_rows = rows.reject { |row| row_category(row) == "head" }
 body_weighted_bytes = body_rows.sum { |row| row.weight_bytes.to_f64 * row.count / row.batch }
+body_batch_bytes = body_rows.sum { |row| row.weight_bytes.to_f64 * row.count }
 printf "body_no_head_weighted_measured_ms=%.3f\n", body_rows.sum(&.weighted_ms)
 printf "body_no_head_weighted_wait_ms=%.3f\n", body_rows.sum(&.weighted_wait_ms) if profile_wait
 printf "body_no_head_weighted_weight_mib=%.3f\n", mib(body_weighted_bytes)
+printf "body_no_head_batch_measured_ms=%.3f\n", body_rows.sum { |row| row.p50_ms * row.count }
+printf "body_no_head_batch_wait_ms=%.3f\n", body_rows.sum { |row| row.wait_ms * row.count } if profile_wait
+printf "body_no_head_batch_weight_mib=%.3f\n", mib(body_batch_bytes)

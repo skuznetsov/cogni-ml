@@ -20632,3 +20632,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the pp256 FFN projection corridor, especially Q4 gate/up and Q6/Q4 down. Tested legal moves that only alter local producer-consumer seams do not reduce recomputed wall potential enough. `shared-H16` remains a valid Ladder, but `q4pair`, `tensor`, and `downadd` fail to Collapse. Current potential `Phi=(ffn_upgate_wait, ffn_down_wait, conversion_traffic, sync_count, pp_wall_gap)` requires a larger move than another narrow opt-in: likely a new Q4/Q6 GEMM body, stronger algebraic FFN fusion, or a better command-buffer/phase schedule.
 **boundary:** Do not retest `q4pair`, `tensor`, or `downadd` on pp256 without a code-path change. Next exact branch should target kernel-body attribution against llama.cpp or a larger FFN corridor rewrite; session-cache work is separate and already strong.
+
+### [LM-COGNIGEMMA-93] Gemma op attribution now separates per-token and full-prefill wall estimates
+**context:** ml / CogniGemma first-run prefill / hot-shape attribution / LTP-WBA measurement hygiene
+**state:** implemented; build and guarded attribution smoke passed
+
+- claim: "`bin/gemma4_op_attribution.cr` now prints both per-token weighted costs and full-batch prompt-prefill estimates (`batch_ms`, `batch_wait`, category `batch_*`, and body `batch_*`). This prevents using `(p50/batch)*calls` as a pp wall proxy."
+  source: implementation in `bin/gemma4_op_attribution.cr`; guarded build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_op_attr_build3 scripts/run_safe.sh /opt/homebrew/bin/crystal ... build bin/gemma4_op_attribution.cr` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: op-attribution harness rewrite, prefill route rewrite, or profiling semantics change
+  trust: {F:0.86,G:0.34,R:0.84}
+
+- claim: "The fused Q4_H16 FFN gate+up route at pp256 measured `pair_wait=6.683ms` for one layer pair and `batch_wait=320.776ms` across 48 pairs in a guarded smoke. This is close to the earlier pp256 phase-profile `ffn_upgate=353.20ms`, so the attribution harness now exposes the actual corridor instead of only separate unfused Q4 calls."
+  source: guarded run `/tmp/gemma4_op_attr_pair_patch_pp256_*.log` with `--batch=256 --profile-wait --exclude-output-head --prefill-q4-pair-wait --limit=4`.
+  verified_at: 2026-06-05
+  decay_trigger: Q4_H16 pair kernel rewrite, row-prefill controller rewrite, or quiet-host repeat
+  trust: {F:0.78,G:0.18,R:0.76}
+
+**LTP/WBA:** Window is the pp256 FFN hot corridor where previous attribution mixed token-rate and wall-rate potentials. Legal move is measurement normalization only: carry the same shape measurements along two corridors, per-token and full-prefill. Potential `Phi=(misattribution_risk, ffn_phase_uncertainty, kernel_body_uncertainty, wall_gap)` descends because the fused gate/up corridor now matches the phase-profile scale. Dual frame remains the full phase profiler when standalone attribution and integrated phase timing diverge.
+**boundary:** This is not a speedup. It is a guardrail for the next kernel/scheduling branch. Do not promote a kernel rewrite from weighted per-token rows alone; require full-batch wait or integrated phase evidence.
