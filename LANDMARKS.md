@@ -20321,3 +20321,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window remains SWA shared-KV attention, but the wider GQA8 corridor is sticky: it reduces threadgroups/KV rereads locally while increasing register pressure enough that recomputed `Phi=(prefill_wall, decode_wall, register_pressure, remaining_rows)` does not descend. Dual frame is committed GQA4 for prefill and existing per-head route for decode.
 **boundary:** Do not retry wider static GQA grouping without first reducing per-head accumulator/register cost or moving to llama-style vectorized QK/V accumulation.
+
+### [LM-GEMMA4-GQA4-SWA256-REFUTE] Smaller static SWA256 GQA4 footprint is not a robust speed win
+**context:** ml / Gemma4 Metal / sliding-window attention / register footprint
+**state:** refuted as standalone experiment; code removed
+
+- refutation: "A compact `head_dim==256` GQA4 SWA kernel reduced the static Q/O footprint relative to the generic `GEMMA4_ATTN_MAX_HD=512` GQA4 kernel and preserved the synthetic pp256/tg32 token trace, but it did not produce a robust full-corridor win. In the forced A/B, default GQA4 measured `828.771ms` prefill and `73.777 ms/tok` decode; compact SWA256 measured `822.189ms` prefill and `74.032 ms/tok` decode. Since committed GQA4 already measured around `822.672ms` prefill in the prior gate and compact decode regressed, the experiment failed promotion."
+  source: local sequential `scripts/run_safe.sh` A/B with `/tmp/gemma4_metal_decode_profile_swa256` and `GEMMA4_ROW_PREFILL_ATTN_GQA4_SWA256=1`; code removed after failed promotion gate.
+  verified_at: 2026-06-05
+  decay_trigger: lower-register vectorized attention design, larger prompt suite showing stable prefill gain, or dedicated decode-only SWA kernel rewrite
+  trust: {F:0.76,G:0.24,R:0.72}
+
+**LTP/WBA:** Window was the SWA GQA4 register/threadgroup footprint. Legal move reduced local array area for `head_dim=256`, but recomputed potential did not strictly descend once decode and prior GQA4 variance were included. Dual frame remains committed generic GQA4 for prefill.
+**boundary:** Static footprint shaving is not enough; next attention work should change the computation structure, e.g. llama-style vectorized QK/V accumulation, not only constants.
