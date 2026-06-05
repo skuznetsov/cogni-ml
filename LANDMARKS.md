@@ -20677,3 +20677,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was real (`pp512` conversion share `23.88%`), but the legal transport (`RMSNorm F32+H16 side output`) does not lower recomputed wall potential on the current code. This is a Diamond conflict between reduced conversion bytes and extra H16 write/occupancy pressure. Dual frame remains default F32 RMSNorm plus shared-H16 matmul conversion.
 **boundary:** Keep `normh16` opt-in/range-controlled only. Do not promote based on conversion traffic alone; next branch should target attention context/FA or real Q4/Q6 batch-GEMM body, not another H16 staging flag.
+
+### [LM-COGNIGEMMA-96] Gemma SWA256 vector attention is already essential; tile16 widening regresses
+**context:** ml / CogniGemma Metal prefill / attention / llama.cpp FA comparison / LTP-WBA
+**state:** measured; tile16 experiment removed after refutation
+
+- claim: "CogniGemma does have FlashAttention-like streaming-softmax attention kernels (`m/l` online rescaling) for Gemma rows, including specialized SWA256 vector and GQA2 routes. Disabling `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC` at pp512 regressed first-run prefill from `1510.838ms` to `1774.406ms` and decode from `48.519` to `109.663 ms/tok`, so this corridor is already a major default win."
+  source: guarded sequential logs under `/tmp/gemma4-swa256-current-1780667799` using `/tmp/gemma4_metal_decode_profile_current`.
+  verified_at: 2026-06-05
+  decay_trigger: SWA attention kernel rewrite, row-prefill controller rewrite, or quiet-host repeat
+  trust: {F:0.80,G:0.22,R:0.78}
+
+- claim: "The GQA2 sub-route is also useful at pp512. With `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_GQA2_OFF=1`, prefill measured `1540.608ms`; force-on/default GQA2 measured `1509.595ms`."
+  source: guarded sequential logs under `/tmp/gemma4-swa256-gqa2-current-1780667823`.
+  verified_at: 2026-06-05
+  decay_trigger: SWA GQA2 route rewrite or quiet-host repeat
+  trust: {F:0.78,G:0.18,R:0.76}
+
+- claim: "A temporary default-off `gemma4_attn_context_rows_swa256_vec_gqa2_tile16` widened the SWA256 GQA2 tile from 8 to 16 keys per loop. Focused Gemma Metal buffer specs passed (`9 examples, 0 failures`), but pp512 wall regressed sharply: default `1508.030ms`, tile16 `1679.613ms`. The experiment was removed before commit."
+  source: temporary implementation in `src/ml/gguf/kernels/gemma4.metal` and `src/ml/gguf/gemma4_metal.cr`; guarded logs `/tmp/gemma4-swa-tile16-1780667988`.
+  verified_at: 2026-06-05
+  decay_trigger: new FA-vector implementation, different tile geometry, or Apple GPU architecture change
+  trust: {F:0.82,G:0.18,R:0.80}
+
+**LTP/WBA:** Window is the SWA256 attention context corridor. Existing Spike/Ladder moves (`swa256_vec`, `swa256_vec_gqa2`) already reduce attention area. The attempted tile16 transport increased occupancy/threadgroup pressure enough that recomputed wall potential increased, so it is a refuted Diamond. Dual frame is either the current tile8 GQA2 kernel or a larger llama.cpp-style FA vector/reduction redesign, not a simple tile-width bump.
+**boundary:** Do not retry tile16 widening without a substantially different reduction model. The next attention branch should compare against llama.cpp's FA vector/reduction structure or target full-attention split/reduction, not just increase local tile width.
