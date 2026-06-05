@@ -21858,3 +21858,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is the first successful dual-frame move after local Spike failures. The trigger was the dominant Q4 GEMV corridor; transport stayed inside the existing Q4 weight/vector/output boundary; legal move changed the simdgroup row/reduction frame. Recomputed body and top1 corridors descended without trace drift.
 **boundary:** Keep `QWEN35_Q4K_GEMV_X16` opt-in until Qwen 9B/27B and longer Gemma prompt suites pass. Default promotion requires broader ABBA and no regressions on non-Gemma Q4 shapes.
+
+### [LM-COGNIGRAPH-011] Q4 x16 and Q6 layout composition conflicts
+**context:** ml / CogniGraph / Gemma4 / Q4_K x16 / Q6_K layout / LTP-WBA Diamond
+**state:** refuted composition
+
+- claim: "Composing the successful `QWEN35_Q4K_GEMV_X16=1` route with `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` regressed body-only gen64 in both ABBA legs: Q4-only/combo/Q4-only/combo p50 tok/s was `28.449 / 24.924 / 27.715 / 23.498`."
+  source: guarded logs `/tmp/gemma4_q4x16_q6combo_{q4x16,combo,q4x16b,combob}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Q6 layout rewrite, quiet-host contradiction, or Q4 x16 route rewrite changing scheduling interaction
+  trust: {F:0.84,G:0.10,R:0.80}
+
+**LTP/WBA:** This is a failed Diamond: two individually plausible frame changes are not compatible. Q4 x16 changes the dominant row/reduction schedule; adding the old Q6 layout worsens the recomputed corridor potential.
+**boundary:** Do not stack `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` with `QWEN35_Q4K_GEMV_X16=1`. A future Q6 optimization should use the same x16/row-lane principle rather than the old `{4,2}` layout.
