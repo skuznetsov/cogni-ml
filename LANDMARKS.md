@@ -20734,3 +20734,53 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the exact producer-consumer seam `ffn_down -> post_ffw_rmsnorm -> scaled_add`. The legal move preserved the boundary formula `(residual + rmsnorm(ffn)) * scale` and reduced one intermediate buffer/write/read corridor. Recomputed wall potential did not descend enough: the removed memory pass is smaller than the active FFN weight corridor and phase scheduling noise. Dual frame is to fuse a larger corridor, such as Q6 FFN-down plus norm summary transport, or to reduce/avoid FFN body work through proposal/surrogate acceptance.
 **boundary:** Do not reintroduce standalone post-FFN norm+add fusion as a speed path. It may be reconsidered only as part of a larger FFN-down/norm corridor or a memory-pressure-specific cleanup with a separate memory metric gate.
+
+### [LM-COGNIGEMMA-99] Current Gemma gap is FFN body, not tensor route, tail row-strip, or per-layer embeddings
+**context:** ml / CogniGemma Metal / Gemma4 12B Q4_K_M / llama.cpp comparison / LTP-WBA
+**state:** measured; schedule-side suspects narrowed
+
+- claim: "Fresh apples-to-apples llama-bench-compatible benchmark on the current binary still shows a first-run pp gap and a smaller body-tg gap: CogniGemma pp256 `343.2 tok/s` versus llama.cpp `386.19 tok/s` (`-11.13%`), and body tg64 `31.45 tok/s` versus llama.cpp `34.52 tok/s` (`-8.9%`)."
+  source: guarded sequential run `/tmp/gemma4_vs_llama_current_pp256_tg64.log` using `/tmp/gemma4_metal_decode_profile_current`, `bin/benchmark_gemma4_vs_llama.cr --prompt=256 --gen=64 --native-mode=body` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: benchmark harness rewrite, llama.cpp rebuild, Gemma kernel rewrite, or host-load rerun
+  trust: {F:0.84,G:0.28,R:0.80}
+
+- claim: "llama.cpp's Metal tensor-op route is not the likely M2 Max advantage for this comparison: current llama.cpp enables `GGML_METAL_HAS_TENSOR` only when the device reports `MTLGPUFamilyMetal4`, while M2 Max is below that family. Existing CogniGemma `QWEN35_Q4K_TENSOR_MM=1` is also not exact-safe for Gemma row prefill per earlier token-trace refutations."
+  source: source inspection of `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-device.m` (`has_tensor = supportsFamily:MTLGPUFamilyMetal4_GGML`) and current `LANDMARKS.md` tensor-route refutations.
+  verified_at: 2026-06-05
+  decay_trigger: Apple GPU family change, llama.cpp tensor gating change, or Cogni tensor route rewrite with fresh parity
+  trust: {F:0.82,G:0.30,R:0.80}
+
+- claim: "Two graph-level llama.cpp Gemma4 suspicions do not apply to the local 12B GGUF. The model reports `shared_kv_layers=0`, so llama.cpp's 'strip unused token after last KV layer' optimization has no tail to strip. The same GGUF reports `embedding_length_per_layer_input=0` and no per-layer tensors, so CogniGemma is not missing llama.cpp's per-layer embedding branch for this model."
+  source: temporary local metadata probes against `~/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf` reported `n_layer=48 shared_kv_layers=0` and `metadata embedding_length_per_layer_input=0`; source anchor `/Users/sergey/SrcArchives/AI/llama.cpp/src/models/gemma4.cpp`.
+  verified_at: 2026-06-05
+  decay_trigger: switching to Gemma4 31B/26B/A4B or another GGUF with shared KV or per-layer embeddings
+  trust: {F:0.86,G:0.22,R:0.84}
+
+- claim: "Current phase attribution points back to FFN batch-GEMM body as the active first-run pp maximizer: pp256 diagnostic profile showed `ffn_upgate` around `6.7 ms/layer` and `ffn_down` around `4.1 ms/layer`, with logical traffic dominated by matmul (`86.44%`) rather than conversion (`13.56%`)."
+  source: guarded pp256 attribution log `/tmp/gemma4_pp256_phase_current.log` using `GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1 GEMMA4_ROW_PREFILL_PROFILE_PHASES=1`.
+  verified_at: 2026-06-05
+  decay_trigger: FFN kernel rewrite, attention rewrite changing phase balance, or benchmark prompt/chunk policy change
+  trust: {F:0.78,G:0.20,R:0.76}
+
+**LTP/WBA:** The active window is no longer command-buffer fences, tensor-route availability, per-layer embeddings, or row-strip scheduling. Those corridors either do not apply to this GGUF or are already refuted by boundary checks. Recomputed potential is `Phi=(FFN_upgate_weight_corridor, FFN_down_weight_corridor, pp_wall_gap, tg_wall_gap, promotion_risk)`. Legal next moves must change the Q4/Q6 batch-GEMM body or reduce exact FFN body work through a larger verified surrogate/proposal corridor; retoggling H16 staging, Q4 pair, GELU fusion, tensor, or split-K does not decrease the current potential.
+**boundary:** Keep exact Gemma comparisons on `benchmark_gemma4_vs_llama` body semantics. For this 12B GGUF, do not chase shared-KV tail stripping or per-layer embedding implementation as speed fixes. If switching to a Gemma4 variant with `shared_kv_layers>0` or `embedding_length_per_layer_input>0`, reopen those as correctness/perf work.
+
+### [LM-COGNIGEMMA-100] Gemma FFN-down H16 carry into post-FFN RMSNorm is exact-safe but not faster
+**context:** ml / CogniGemma Metal prefill / FFN-down producer-consumer corridor / LTP-WBA
+**state:** refuted for promotion; experimental code removed
+
+- claim: "A temporary default-off route carried Gemma FFN-down output as H16 and computed post-FFN RMSNorm from H16 in F32. Focused Gemma Metal buffer spec passed with the opt-in env (`9 examples, 0 failures`), so the corridor was numerically safe on the focused resident-row gate."
+  source: temporary implementation in `src/ml/gguf/kernels/gemma4.metal`, `src/ml/gguf/gemma4_metal.cr`, and `src/ml/gguf/qwen35_metal.cr`; guarded command `GEMMA4_ROW_PREFILL_FFN_DOWN_H16_OUT=1 scripts/run_safe.sh /opt/homebrew/bin/crystal 420 8000 spec spec/gemma4_metal_buffer_spec.cr --link-flags=... -- --fail-fast`.
+  verified_at: 2026-06-05
+  decay_trigger: Q6 FFN-down kernel rewrite, RMSNorm kernel rewrite, or a larger FFN-down+RMSNorm fused-kernel implementation
+  trust: {F:0.82,G:0.18,R:0.80}
+
+- claim: "The same route did not improve pp256 wall speed. Sequential guarded A/B measured default pp256 p50 `743.964ms` (`344.103 tok/s`) versus H16-down p50 `744.272ms` (`343.960 tok/s`). Decode was also not improved (`40.759ms/tok` default versus `41.060ms/tok` H16 in the same short body smoke)."
+  source: guarded direct binary A/B using `/tmp/gemma4_metal_decode_profile_h16_down`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, `--tokens 42..297 --prefill-mode rows --prefill-chunk 256 --generate 1 --body-only --prefill-no-head --runs 3 --warmups 1 --max-seq 512`.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host multi-run repeat, Q6 FFN-down body rewrite, or moving RMSNorm into the Q6 kernel instead of carrying an H16 intermediate
+  trust: {F:0.80,G:0.18,R:0.78}
+
+**LTP/WBA:** Window was the exact `ffn_down -> post_ffw_rmsnorm` seam. Transport carried half-rounded FFN-down rows across one layer-local corridor, with boundary safety preserved by computing RMSNorm sums in F32 from `half` inputs and leaving residual/add/scale F32 outputs unchanged. Recomputed potential did not descend: saved output traffic was too small relative to the active Q6 weight/GEMM corridor and extra H16 handling. Dual frame is either the existing F32-output Q6 FFN-down path or a materially larger fused Q6-down+RMSNorm kernel; simple H16 carry is refuted.
+**boundary:** Do not reintroduce standalone `GEMMA4_ROW_PREFILL_FFN_DOWN_H16_OUT` or H16-source post-FFN RMSNorm as a speed path. Reopen only if the Q6 FFN-down kernel itself is rewritten to compute the next RMSNorm statistics without emitting a separate full row.
