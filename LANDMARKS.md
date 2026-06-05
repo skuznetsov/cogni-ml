@@ -21795,3 +21795,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window (`ffn_down`) is correct, but the current Q6 layout move fails recompute safety. It sometimes lowers local wait, but after ABBA the corridor potential is flat/mixed. This remains a candidate flag for future route matrices, not a default legal move.
 **boundary:** Do not enable `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` by default for Gemma based on the current evidence. Revisit only with quiet-host ABBA across longer prompts/generation or a Q6 kernel rewrite that reliably lowers the phase-family wait.
+
+### [LM-COGNIGRAPH-008] Gemma Q4 FFN-down 1x2 layout is near-flat and not enough for generic default
+**context:** ml / CogniGraph / Gemma4 / Q4_K FFN-down layout / LTP-WBA
+**state:** near-flat; prototype reverted
+
+- claim: "Temporarily changing generic Q4 shape layout `{15360,3840}` from `{2,3}` to `{1,2}` produced mixed body-only ABBA for Gemma gen64: base/candidate/base/candidate p50 tok/s was `26.161 / 29.573 / 29.548 / 29.145`. The first base run had a slow outlier, so this is not strong promotion evidence."
+  source: guarded logs `/tmp/gemma4_q4down12_abba_{base1,cand1,base2,cand2}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, Q4 layout kernel rewrite, or model-specific shape routing
+  trust: {F:0.84,G:0.10,R:0.80}
+
+- claim: "A longer gen128 body-only check was near-flat: baseline `28.866 tok/s`, candidate `{1,2}` `29.077 tok/s` (`+0.7%`). Candidate top1 gen16 kept the expected short token trace. The source change was reverted because the generic Q4 layout table would affect non-Gemma routes and the measured descent was too small."
+  source: guarded logs `/tmp/gemma4_q4down12_base_body_g128.log`, `/tmp/gemma4_q4down12_cand_body_g128.log`, and `/tmp/gemma4_q4down12_cand_top1_g16.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: model-specific layout dispatch, larger prompt suite win, or Q4 GEMV kernel rewrite
+  trust: {F:0.84,G:0.12,R:0.80}
+
+**LTP/WBA:** The local candidate may slightly reduce the `ffn_down` corridor, but it does not strictly lower the recomputed potential enough to justify changing a shared generic Q4 route. This is a Diamond boundary issue: Gemma-specific gain must not silently perturb Qwen/Nomic-like consumers of the same Q4 shape table.
+**boundary:** Do not change `{15360,3840}` Q4 default globally based on this evidence. If revisited, make the route model/workload-specific or require a larger ABBA win across Gemma and Qwen.
