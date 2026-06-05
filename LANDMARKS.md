@@ -19969,3 +19969,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is an exact repeated prompt/session prefix. Transport carries authoritative F32 K/V rows through either durable `.gkv` artifact restore or already-loaded snapshot restore. Legal move preserves model/tokenizer/prompt/token hash and shape boundaries; any mismatch falls back to full prefill. Recomputed potential `Phi=(prefill_rows_to_run, artifact_validation_risk, restore_bytes, fallback_cost)` descends: cold prefill area collapses by `6.9x-11.9x` through durable restore and by roughly `150x` through hot in-memory restore on these initial rows. The next Diamond is product-cache composition: durable artifact validation vs resident decoded template, so hot servers should avoid rereading/re-hashing when the artifact has already been certified.
 **boundary:** pp1024 is a single-run smoke due memory-pressure discipline; repeat before public claims. This is session-cache/product-latency evidence, not first-run pp superiority over llama.cpp.
+
+### [LM-COGNIGEMMA-92] Gemma Store resident snapshot cache removes durable restore reread/hash cost
+**context:** ml / CogniGemma / exact session-prefix cache / same-process hot cache
+**state:** implemented; default-off by byte/entry budget
+
+- claim: "`Gemma4PromptCache::Store` now supports a bounded resident decoded-snapshot cache. The cache is disabled by default unless both `snapshot_cache_byte_limit` and `snapshot_cache_entry_limit` are positive. On restore, the Store first validates metadata and the artifact stat fingerprint; a matching cached snapshot skips durable reread/checksum/decode and restores exact K/V bytes into the target resident state. If artifact size/mtime changes, the cached snapshot is dropped and the durable checksum path is used."
+  source: implementation in `src/ml/gguf/gemma4_prompt_cache.cr`; focused spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_prompt_cache_spec_cache2 scripts/run_safe.sh /opt/homebrew/bin/crystal 180 7000 spec spec/gemma4_state_snapshot_spec.cr spec/gemma4_prompt_cache_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed (`8 examples, 0 failures`), including same-size artifact mutation invalidation.
+  verified_at: 2026-06-04
+  decay_trigger: prompt-cache artifact fingerprint semantics change, Gemma snapshot restore rewrite, or Store cache policy rewrite
+  trust: {F:0.90,G:0.44,R:0.88}
+
+- claim: "`bin/gemma4_prompt_cache_bench.cr` now reports a fourth route, `cached_store_restore`, which measures validated Store snapshot-cache hits separately from durable artifact restore and raw snapshot lower bound. Guarded M2 Max Gemma4 12B Q4_K_M rows with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` show the new route is close to the raw snapshot lower bound and much faster than durable restore: pp64 cached p50 `1.424ms` vs artifact `26.757ms` (`18.79x` artifact-to-cached); pp256 cached `7.438ms` vs artifact `135.924ms` (`18.27x`); pp1024 single-run cached `39.619ms` vs artifact `483.093ms` (`12.19x`)."
+  source: release build `/tmp/gemma4_prompt_cache_bench_cache` passed with Metal bridge; guarded commands used `--snapshot-cache-mib 256` for pp64, `512` for pp256, and `1024` for pp1024 under `scripts/run_safe.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host repeat, bench rewrite, memory-pressure policy change, or resident cache policy rewrite
+  trust: {F:0.82,G:0.28,R:0.78}
+
+**LTP/WBA:** Window is a repeated same-process exact prompt/session hit after the durable `.gkv` artifact has already been certified. Transport is the immutable artifact identity corridor plus decoded F32 K/V snapshot bytes. Legal move is stat-fingerprint validated reuse; boundary safety requires runtime/model/tokenizer/prompt/token/shape metadata and artifact size/mtime fingerprint to remain compatible, otherwise the cache drops to durable checksum restore or full prefill. Recomputed potential `Phi=(durable_read_hash_decode, restore_bytes, fingerprint_conflict, fallback_cost)` descends from durable artifact restore to stat+restore: `12x-19x` versus durable restore on initial pp64/256/1024 rows. Dual frame remains durable checksum restore, then full prefill.
+**boundary:** This is not a cryptographic validation replacement for adversarial artifact tampering; it is a same-process performance cache guarded by file stat fingerprint after prior checksum validation. Public claims need quiet-host repeats and memory-budget policy for pp4096+.

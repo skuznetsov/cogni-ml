@@ -14,6 +14,8 @@ warmups = 1
 runs = 3
 cache_root = nil.as(String?)
 keep_cache = false
+snapshot_cache_mib = 0
+snapshot_cache_entries = 1
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_prompt_cache_bench [--prompt-len 256] [--runs 3]"
@@ -25,6 +27,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--warmups N", "Warmup iterations for each measured route") { |v| warmups = v.to_i }
   p.on("--runs N", "Measured iterations for each route") { |v| runs = v.to_i }
   p.on("--cache-root PATH", "Prompt-cache root; default temp dir") { |v| cache_root = v }
+  p.on("--snapshot-cache-mib N", "Enable Store resident snapshot cache with this byte budget in MiB") { |v| snapshot_cache_mib = v.to_i }
+  p.on("--snapshot-cache-entries N", "Resident snapshot cache entry limit") { |v| snapshot_cache_entries = v.to_i }
   p.on("--keep-cache", "Do not remove the temp cache root") { keep_cache = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
@@ -34,6 +38,8 @@ raise "prompt_len must be positive" unless prompt_len > 0
 raise "prefill_chunk must be positive" unless prefill_chunk > 0
 raise "runs must be positive" unless runs > 0
 raise "warmups must be non-negative" unless warmups >= 0
+raise "snapshot_cache_mib must be non-negative" unless snapshot_cache_mib >= 0
+raise "snapshot_cache_entries must be non-negative" unless snapshot_cache_entries >= 0
 
 prompt = if arg = tokens_arg
            arg.split(',').reject(&.empty?).map(&.to_i32)
@@ -109,16 +115,37 @@ begin
     store.restore(hit, reuse_state: target)
   end
 
+  cached_store = ML::GGUF::Gemma4PromptCache::Store.new(
+    root,
+    snapshot_cache_byte_limit: snapshot_cache_mib.to_i64 * 1024_i64 * 1024_i64,
+    snapshot_cache_entry_limit: snapshot_cache_entries,
+  )
+  cached_hit = cached_store.lookup_prompt(File.basename(model), "synthetic-token-ids", "", prompt)
+  cached_prime_ms = nil.as(Float64?)
+  if cached_store.snapshot_cache_enabled? && cached_hit
+    target = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
+    cached_t0 = Time.instant
+    cached_store.restore(cached_hit, reuse_state: target)
+    cached_prime_ms = (Time.instant - cached_t0).total_milliseconds
+  end
+
   snapshot = ML::GGUF::Gemma4StateSnapshot.read_artifact(hit.artifact_path, expected_sha256: hit.artifact_sha256)
   warmups.times do
     target = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
     ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, target)
+  end
+  if cached_store.snapshot_cache_enabled? && (cached = cached_hit)
+    warmups.times do
+      target = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
+      cached_store.restore(cached, reuse_state: target)
+    end
   end
 
   warmups.times { prefill_once(weights, prompt, max_seq, prefill_chunk) }
 
   prefill_samples = [] of Float64
   artifact_restore_samples = [] of Float64
+  cached_store_restore_samples = [] of Float64
   snapshot_restore_samples = [] of Float64
 
   runs.times do
@@ -129,6 +156,13 @@ begin
     store.restore(hit, reuse_state: artifact_target)
     artifact_restore_samples << (Time.instant - artifact_t0).total_milliseconds
 
+    if cached_store.snapshot_cache_enabled? && (cached = cached_hit)
+      cached_target = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
+      cached_t0 = Time.instant
+      cached_store.restore(cached, reuse_state: cached_target)
+      cached_store_restore_samples << (Time.instant - cached_t0).total_milliseconds
+    end
+
     snapshot_target = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
     snapshot_t0 = Time.instant
     ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, snapshot_target)
@@ -137,10 +171,16 @@ begin
 
   puts "model=#{File.basename(model)} prompt_len=#{prompt.size} max_seq=#{max_seq} prefill_chunk=#{prefill_chunk} warmups=#{warmups} runs=#{runs} load_ms=#{load_ms.round(3)}"
   puts "cache_root=#{root} artifact_path=#{entry.artifact_path} artifact_bytes=#{entry.artifact_byte_size} state_bytes=#{entry.state_byte_size} save_ms=#{save_ms.round(3)}"
+  puts "snapshot_cache_mib=#{snapshot_cache_mib} snapshot_cache_entries=#{snapshot_cache_entries} snapshot_cache_enabled=#{cached_store.snapshot_cache_enabled?} cached_prime_ms=#{cached_prime_ms.try(&.round(3)) || "disabled"} snapshot_cache_bytes=#{cached_store.snapshot_cache_bytes} snapshot_cache_hits=#{cached_store.snapshot_cache_hits} snapshot_cache_misses=#{cached_store.snapshot_cache_misses}"
   prefill_p50 = summarize("cold_prefill", prefill_samples, prompt.size)
   artifact_p50 = summarize("artifact_restore", artifact_restore_samples, prompt.size)
+  cached_store_p50 = cached_store_restore_samples.empty? ? nil : summarize("cached_store_restore", cached_store_restore_samples, prompt.size)
   snapshot_p50 = summarize("snapshot_restore", snapshot_restore_samples, prompt.size)
   puts "artifact_restore_speedup_vs_cold=#{(prefill_p50 / artifact_p50).round(4)}"
+  if cached = cached_store_p50
+    puts "cached_store_restore_speedup_vs_cold=#{(prefill_p50 / cached).round(4)}"
+    puts "cached_store_restore_speedup_vs_artifact=#{(artifact_p50 / cached).round(4)}"
+  end
   puts "snapshot_restore_speedup_vs_cold=#{(prefill_p50 / snapshot_p50).round(4)}"
 ensure
   FileUtils.rm_rf(root) if !keep_cache && cache_root.nil? && File.exists?(root)

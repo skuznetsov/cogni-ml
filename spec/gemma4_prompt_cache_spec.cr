@@ -118,4 +118,46 @@ describe "Gemma4PromptCache" do
       FileUtils.rm_rf(dir) if File.exists?(dir)
     end
   end
+
+  it "reuses validated snapshots in-process and invalidates them when the artifact changes" do
+    dir = File.tempname("gemma4-prompt-cache")
+    FileUtils.mkdir_p(dir)
+    begin
+      store = ML::GGUF::Gemma4PromptCache::Store.new(
+        dir,
+        snapshot_cache_byte_limit: 1_000_000_i64,
+        snapshot_cache_entry_limit: 1,
+      )
+      source = ML::GGUF::Gemma4Metal::ResidentState.new([2, 3], 8)
+      gemma4_prompt_cache_fill(source)
+      token_ids = [2_i32, 10_i32, 20_i32]
+
+      saved = store.save_resident_state(source, token_ids, model_id: "m", tokenizer_id: "t")
+      target1 = ML::GGUF::Gemma4Metal::ResidentState.new([2, 3], 8)
+      store.restore(saved, reuse_state: target1)
+      store.snapshot_cache_misses.should eq(1)
+      store.snapshot_cache_hits.should eq(0)
+      store.snapshot_cache_bytes.should eq(saved.state_byte_size)
+
+      target2 = ML::GGUF::Gemma4Metal::ResidentState.new([2, 3], 8)
+      store.restore(saved, reuse_state: target2)
+      store.snapshot_cache_hits.should eq(1)
+      gemma4_prompt_cache_prefix_equal?(target2, source, token_ids.size).should be_true
+
+      sleep 20.milliseconds
+      File.open(saved.artifact_path, "r+") do |file|
+        file.seek(saved.artifact_byte_size - 1)
+        byte = file.read_byte.not_nil!
+        file.seek(saved.artifact_byte_size - 1)
+        file.write_byte(byte ^ 0xff_u8)
+      end
+
+      target3 = ML::GGUF::Gemma4Metal::ResidentState.new([2, 3], 8)
+      expect_raises(ArgumentError, /checksum mismatch/) do
+        store.restore(saved, reuse_state: target3)
+      end
+    ensure
+      FileUtils.rm_rf(dir) if File.exists?(dir)
+    end
+  end
 end

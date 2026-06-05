@@ -56,19 +56,48 @@ module ML::GGUF
 
     class Store
       getter root : String
+      getter snapshot_cache_byte_limit : Int64
+      getter snapshot_cache_entry_limit : Int32
+      getter snapshot_cache_bytes : Int64
+      getter snapshot_cache_hits : Int64
+      getter snapshot_cache_misses : Int64
 
       @entry_manifest_fingerprint : ManifestFingerprint?
       @entry_manifest_cache : Array(Entry)
       @entry_exact_index : Hash(Tuple(String, String, String, Int32), Array(Entry))
       @entry_prefix_index : Hash(Tuple(String, String, Int32, String), Array(Entry))
+      @snapshot_cache : Hash(String, CachedSnapshot)
 
-      def initialize(@root : String)
+      private class CachedSnapshot
+        property fingerprint : ArtifactFingerprint
+        property snapshot : Gemma4StateSnapshot::Snapshot
+        property byte_size : Int64
+        property last_used : UInt64
+
+        def initialize(@fingerprint : ArtifactFingerprint,
+                       @snapshot : Gemma4StateSnapshot::Snapshot,
+                       @byte_size : Int64,
+                       @last_used : UInt64)
+        end
+      end
+
+      def initialize(@root : String,
+                     @snapshot_cache_byte_limit : Int64 = 0_i64,
+                     @snapshot_cache_entry_limit : Int32 = 0)
+        raise ArgumentError.new("snapshot_cache_byte_limit must be non-negative") if @snapshot_cache_byte_limit < 0
+        raise ArgumentError.new("snapshot_cache_entry_limit must be non-negative") if @snapshot_cache_entry_limit < 0
+
         FileUtils.mkdir_p(File.join(@root, "artifacts"))
         @manifest_path = File.join(@root, "manifest.jsonl")
         @entry_manifest_fingerprint = nil
         @entry_manifest_cache = [] of Entry
         @entry_exact_index = {} of Tuple(String, String, String, Int32) => Array(Entry)
         @entry_prefix_index = {} of Tuple(String, String, Int32, String) => Array(Entry)
+        @snapshot_cache = {} of String => CachedSnapshot
+        @snapshot_cache_bytes = 0_i64
+        @snapshot_cache_hits = 0_i64
+        @snapshot_cache_misses = 0_i64
+        @snapshot_cache_clock = 0_u64
       end
 
       def save_resident_state(state : Gemma4Metal::ResidentState,
@@ -173,11 +202,13 @@ module ML::GGUF
         Gemma4PromptCache.validate_restorable_artifact!(entry)
 
         fingerprint = artifact_fingerprint(entry)
-        snapshot = Gemma4StateSnapshot.read_artifact(entry.artifact_path, expected_sha256: entry.artifact_sha256)
-        ensure_artifact_unchanged!(entry, fingerprint)
-        raise ArgumentError.new("prompt-cache max_seq mismatch") unless snapshot.max_seq == entry.max_seq
-        raise ArgumentError.new("prompt-cache prefix_len mismatch") unless snapshot.prefix_len == entry.prefix_len
-        raise ArgumentError.new("prompt-cache layer count mismatch") unless snapshot.layer_count == entry.layer_count
+        snapshot = cached_snapshot(entry, fingerprint) || begin
+          loaded = Gemma4StateSnapshot.read_artifact(entry.artifact_path, expected_sha256: entry.artifact_sha256)
+          ensure_artifact_unchanged!(entry, fingerprint)
+          remember_snapshot(entry, fingerprint, loaded)
+          loaded
+        end
+        validate_snapshot_for_entry!(snapshot, entry)
 
         if state = reuse_state
           Gemma4StateSnapshot.restore_into(snapshot, state)
@@ -189,6 +220,17 @@ module ML::GGUF
 
       def entries : Array(Entry)
         clone_entries(manifest_entries)
+      end
+
+      def snapshot_cache_enabled? : Bool
+        @snapshot_cache_byte_limit > 0 && @snapshot_cache_entry_limit > 0
+      end
+
+      def clear_snapshot_cache : Nil
+        @snapshot_cache.clear
+        @snapshot_cache_bytes = 0_i64
+        @snapshot_cache_hits = 0_i64
+        @snapshot_cache_misses = 0_i64
       end
 
       private def append_manifest(entry : Entry) : Nil
@@ -268,6 +310,76 @@ module ML::GGUF
         return if artifact_fingerprint(entry) == fingerprint
 
         raise ArgumentError.new("prompt-cache artifact changed during restore")
+      end
+
+      private def cached_snapshot(entry : Entry, fingerprint : ArtifactFingerprint) : Gemma4StateSnapshot::Snapshot?
+        return nil unless snapshot_cache_enabled?
+
+        key = snapshot_cache_key(entry)
+        cached = @snapshot_cache[key]?
+        unless cached
+          @snapshot_cache_misses += 1
+          return nil
+        end
+
+        unless cached.fingerprint == fingerprint
+          drop_cached_snapshot(key)
+          @snapshot_cache_misses += 1
+          return nil
+        end
+
+        @snapshot_cache_clock += 1
+        cached.last_used = @snapshot_cache_clock
+        @snapshot_cache_hits += 1
+        cached.snapshot
+      end
+
+      private def remember_snapshot(entry : Entry,
+                                    fingerprint : ArtifactFingerprint,
+                                    snapshot : Gemma4StateSnapshot::Snapshot) : Nil
+        return unless snapshot_cache_enabled?
+
+        byte_size = snapshot.byte_size
+        return if byte_size > @snapshot_cache_byte_limit
+
+        key = snapshot_cache_key(entry)
+        drop_cached_snapshot(key)
+        @snapshot_cache_clock += 1
+        @snapshot_cache[key] = CachedSnapshot.new(fingerprint, snapshot, byte_size, @snapshot_cache_clock)
+        @snapshot_cache_bytes += byte_size
+        evict_snapshot_cache
+      end
+
+      private def evict_snapshot_cache : Nil
+        while @snapshot_cache.size > @snapshot_cache_entry_limit || @snapshot_cache_bytes > @snapshot_cache_byte_limit
+          victim_key = nil.as(String?)
+          victim_last_used = UInt64::MAX
+          @snapshot_cache.each do |key, cached|
+            if cached.last_used < victim_last_used
+              victim_key = key
+              victim_last_used = cached.last_used
+            end
+          end
+          break unless key = victim_key
+
+          drop_cached_snapshot(key)
+        end
+      end
+
+      private def drop_cached_snapshot(key : String) : Nil
+        if cached = @snapshot_cache.delete(key)
+          @snapshot_cache_bytes -= cached.byte_size
+        end
+      end
+
+      private def snapshot_cache_key(entry : Entry) : String
+        "#{entry.artifact_path}\0#{entry.artifact_sha256.downcase}\0#{entry.artifact_byte_size}"
+      end
+
+      private def validate_snapshot_for_entry!(snapshot : Gemma4StateSnapshot::Snapshot, entry : Entry) : Nil
+        raise ArgumentError.new("prompt-cache max_seq mismatch") unless snapshot.max_seq == entry.max_seq
+        raise ArgumentError.new("prompt-cache prefix_len mismatch") unless snapshot.prefix_len == entry.prefix_len
+        raise ArgumentError.new("prompt-cache layer count mismatch") unless snapshot.layer_count == entry.layer_count
       end
 
       private def manifest_fingerprint(path : String) : ManifestFingerprint?
