@@ -21517,3 +21517,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** We now have two incompatible partial windows: semantic partial-layer transport has coverage but no cost descent; memory transport has cost descent but no chunk/span transport. The Diamond synthesis is to carry spans through memory, not single tokens: store feature-to-future-token-span entries and use the exact-threshold batch verifier from LM-COGNIGEMMA-130 as the boundary certificate. Potential target: reduce proposal body cost while creating `gamma=8..16` accepted verifier rows.
 **boundary:** Do not build a production scheduler on partial surrogate replay or one-token memory alone. Next legal experiment is a span-memory proposal probe with exact batch verification and parity gate.
+
+### [LM-COGNIGEMMA-132] Adaptive prefix verification reduces bad-span batch verifier area but does not rescue n-gram
+**context:** ml / CogniGemma Metal / adaptive prefix verifier / n-gram proposal / LTP-WBA
+**state:** diagnostic implemented; useful area reducer, not a speed win with current n-gram
+
+- claim: "`bin/gemma4_ngram_chunk_probe.cr` now supports `--adaptive-prefix-verify LIST`, which verifies candidate prefixes such as `4,8,16` and stops on the first rejecting prefix. It preserves the existing full-span batch verifier when the option is absent."
+  source: `crystal build --no-codegen bin/gemma4_ngram_chunk_probe.cr --error-trace` exited 0; guarded linked build exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: n-gram verifier scheduler rewrite or batch verifier API rewrite
+  trust: {F:0.82,G:0.10,R:0.78}
+
+- claim: "On the copy-like prompt with exact-threshold16 and trusted batch accepts, adaptive `4,8,16` reduced verifier time from `2927.730ms` to `1545.287ms` and improved wall from `0.3311x` to `0.5034x`, while preserving `32/32` parity and the same accepted span count (`15/97`, one full-accept chunk)."
+  source: guarded copy prompt A/B on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: different prompt/proposal distribution, proposal source with higher full-chunk acceptance, or adaptive verifier route rewrite
+  trust: {F:0.80,G:0.08,R:0.74}
+
+**LTP/WBA:** This is a legal Ladder on the verifier corridor: the active window is a proposed span; transport is prefix blocks; the legal move stops after the first bad prefix, reducing bad-span area without changing output state. The recomputed potential descends inside the verifier bucket, but total wall remains speed-negative because the proposal trigger is weak.
+**boundary:** Keep adaptive prefix verification as a diagnostic and future scheduler component. Do not promote current n-gram; next speed branch still needs a stronger span proposal source.
