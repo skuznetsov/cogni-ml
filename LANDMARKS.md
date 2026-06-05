@@ -19866,3 +19866,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Windows are real individually, but their transports compete for the same memory/occupancy corridor rather than forming a longer ladder. The combined legal move preserves exactness, but recomputed potential `Phi=(ctx_conversion, norm_conversion, extra_h16_writes, occupancy, pp1024_wall)` does not descend; wall increases for both individual widened routes and the combo. This is a Diamond conflict, so the boundary-safe dual frame is to keep the routes separate and windowed.
 **boundary:** Do not add a `ctxnormh16` wrapper mode or broad H16-stack controller from current evidence. Future H16 composition needs a fused kernel or a new consumer that removes dispatch/traffic, not just two env gates active at once.
+
+### [LM-COGNIGEMMA-85] Gemma last-row-only readback Spike is refuted
+**context:** ml / CogniGemma Metal prefill / readback boundary / LTP-WBA Spike
+**state:** refuted; code reverted before commit
+
+- claim: "Changing row-prefill return handling from full-batch `in_buf.read(batch * hidden_dim)` followed by CPU slicing to direct unified-memory last-row slicing is exact but slower in corrected pp1024 A/B, so it should not be promoted. Forward order measured old/new p50 `5132.439ms / 5492.958ms`; reversed order measured new/old p50 `5446.381ms / 5167.578ms`."
+  source: forward logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-lastrow-ab.iQsDYx/`; reversed logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-lastrow-ab-rev.WEse1z/`; old binary `/tmp/gemma4_metal_decode_profile_normh16`, new test binary `/tmp/gemma4_metal_decode_profile_lastrow`.
+  verified_at: 2026-06-04
+  decay_trigger: MetalBuffer read implementation rewrite, row-prefill return API rewrite, or direct offset read helper in bridge
+  trust: {F:0.82,G:0.18,R:0.78}
+
+**LTP/WBA:** The proposed Spike targeted a visible waste: reading `batch * hidden_dim` rows when only the final hidden row is returned. Boundary safety was good, but recomputed potential `Phi=(readback_bytes, CPU_copy_path, pp1024_wall)` did not descend. Direct `contents` slicing likely loses to the existing bridge read path and/or the full read is not material in the current wall budget. This is a useful falsifier: not every byte-count reduction is a legal performance descent after recomputation.
+**boundary:** Keep the full readback path for now. Reopen only if the API grows an offset-aware `MetalBuffer.read` backed by the bridge or if product code keeps the final hidden resident and avoids CPU readback entirely.
