@@ -19988,3 +19988,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is a repeated same-process exact prompt/session hit after the durable `.gkv` artifact has already been certified. Transport is the immutable artifact identity corridor plus decoded F32 K/V snapshot bytes. Legal move is stat-fingerprint validated reuse; boundary safety requires runtime/model/tokenizer/prompt/token/shape metadata and artifact size/mtime fingerprint to remain compatible, otherwise the cache drops to durable checksum restore or full prefill. Recomputed potential `Phi=(durable_read_hash_decode, restore_bytes, fingerprint_conflict, fallback_cost)` descends from durable artifact restore to stat+restore: `12x-19x` versus durable restore on initial pp64/256/1024 rows. Dual frame remains durable checksum restore, then full prefill.
 **boundary:** This is not a cryptographic validation replacement for adversarial artifact tampering; it is a same-process performance cache guarded by file stat fingerprint after prior checksum validation. Public claims need quiet-host repeats and memory-budget policy for pp4096+.
+
+### [LM-COGNIGEMMA-93] Gemma profile path has exact prompt-cache hit route; next bottleneck is last-token replay/head
+**context:** ml / CogniGemma / exact prompt-cache integration / profile CLI
+**state:** implemented in profile path; not yet full chat CLI
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now has an exact prompt-cache route controlled by `--prompt-cache-root`, `--prompt-cache-snapshot-mib`, and `--prompt-cache-snapshot-entries`. On a cache miss it runs the configured prefill mode and saves the resident K/V snapshot. On a cache hit it restores exact K/V into the resident state and replays only the final prompt token at `pos=prompt_len-1` to recover the exact next-token hidden/logits before decode. This preserves first/last token parity in the focused smokes."
+  source: implementation in `bin/gemma4_metal_decode_profile.cr`; no-codegen build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_profile_cache_build2 scripts/run_safe.sh /opt/homebrew/bin/crystal 180 5000 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` passed; release build `/tmp/gemma4_metal_decode_profile_cache2` passed with Metal bridge.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma profile CLI rewrite, prompt-cache artifact format change, or Gemma decode-state semantics change
+  trust: {F:0.86,G:0.34,R:0.84}
+
+- claim: "Same-path profile measurements show the cache route is a real product-latency win, but K/V restore is no longer the dominant hot-hit cost. With `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, pp64 hot cache (`warmups=2`, `runs=1`) reported prefill+head `75.682ms`, cache restore `1.563ms`, and route `hit_replay_last`; pp256 hot cache reported prefill+head `133.390ms`, cache restore `6.388ms`, same `first_id=254632` and `last_id=208669` as the cold no-cache pp256 row. A same-profile pp256 no-cache row measured prefill+head `984.981ms`, so hot cache collapsed that slice by about `7.38x`, but the remaining `~127ms` is last-token replay plus LM-head/decode plumbing."
+  source: guarded runs of `/tmp/gemma4_metal_decode_profile_cache2` and `/tmp/gemma4_metal_decode_profile_cache` under `scripts/run_safe.sh`; pp64/pp256 cache runs used explicit prompt-cache roots and snapshot budgets; no-cache pp256 row used the same prompt/generate/max_seq/prefill settings without cache.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host repeat, LM-head route rewrite, final-hidden cache addition, or profile harness rewrite
+  trust: {F:0.80,G:0.26,R:0.78}
+
+**LTP/WBA:** Window is a repeated prompt in the real profile/decode path. Transport carries exact K/V over the session artifact corridor, then a one-token replay corridor recovers the boundary hidden/logits. Legal move preserves K/V state and overwrites the same final prompt row with the same token/position. Recomputed potential `Phi=(N_prompt_rows, KV_restore_cost, final_hidden_recovery, decode_work)` descends strongly for pp256 (`984.981ms` to `133.390ms`), but the active maximizer shifts from KV restore to final hidden/logit recovery. The next Spike is to cache the final prompt hidden or logits alongside K/V so hot prefix hits do not need last-token replay.
+**boundary:** This is integrated into the Gemma profile path, not the full user-facing Gemma chat/structured CLI. The cache is full-layer only; stop-layer cache use is blocked to avoid shape/semantic aliasing.
