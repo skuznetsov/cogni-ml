@@ -20359,3 +20359,42 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the SWA `head_dim=256` attention context, where the prior per-lane scalar dot made SWA the dominant active maximizer. Transport corridor is the bounded SWA KV span for one row or large row batch. Legal move changes local computation structure, not model semantics: dot work is transported across simd lanes and output accumulation across 256 threads while preserving cache/state boundaries and falling back via `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_OFF=1`. Potential descends in `(SWA_attn_ctx_wait, per-lane_dot_serial_depth, output_dim_serial_depth, wall_ms, remaining_work)`. Recompute safety is enforced by keeping small row batches on the old route, because forced use on `batch=4` exceeded the strict parity spec by `~2.5e-7` over threshold due to dot-order drift.
 **boundary:** This is the attention-structure breakthrough. Do not keep tuning GQA width. Next exact speed work should target the new active maximizers: FFN upgate/down traffic, or full resident-wave scheduling once FFN pressure is understood.
+
+### [LM-GEMMA4-FFN-H16-PROJ-PARKED] Gemma row H16 projection is parity-safe but noise-level today
+**context:** ml / Gemma4 Metal / FFN body traffic / H16 activation corridor
+**state:** parked; existing opt-in env remains available via `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1`
+
+- claim: "Opt-in Gemma row H16 projection preserved the synthetic pp256/tg32 token trace but did not produce a promotion-worthy speed win after SWA256 vector attention. Default measured prefill `767.531ms` / decode `43.141 ms/tok`; `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1 GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_MIN_BATCH=128` measured prefill `765.528ms` / decode `42.927 ms/tok` with the same token trace. The delta is about 0.3-0.5%, within run noise."
+  source: local sequential `scripts/run_safe.sh` A/B with `/tmp/gemma4_metal_decode_profile_swa256_vec_default`, log `/tmp/gemma4_h16_proj_ab_1780660855.log`.
+  verified_at: 2026-06-05
+  decay_trigger: FFN down H16 input rewrite, broader prompt suite, quiet-host repeat with larger `reps`, or changed Q4/Q6 GEMM kernels
+  trust: {F:0.74,G:0.20,R:0.70}
+
+**LTP/WBA:** Window was the FFN activation transport from RMSNorm into Q4/Q6 GEMM. Legal move kept an F32 boundary output while adding H16 transport for projection inputs. Recomputed potential barely descends and does not justify default promotion. Dual frame remains default F32 activation transport.
+**boundary:** Revisit only if a later H16-down or fused GELU/H16 route makes the H16 corridor remove a larger copy/conversion boundary.
+
+### [LM-GEMMA4-Q4-TENSOR-MM-REFUTE] Q4 tensor MM is not valid for Gemma exact row prefill today
+**context:** ml / Gemma4 Metal / Q4_K FFN gate-up prefill / tensor-op experiment
+**state:** refuted as default/opt-in speed candidate for current exact route
+
+- refutation: "Enabling `QWEN35_Q4K_TENSOR_MM=1` for Gemma row prefill regressed prefill and changed the generated token trace on the synthetic pp256/tg32 top1 row. Default measured prefill `807.992ms`, decode `44.608 ms/tok`, trace starting `254632,208669,...`; tensor MM measured prefill `838.949ms`, decode `44.549 ms/tok`, trace starting `258882,258882,236771,...`."
+  source: local sequential `scripts/run_safe.sh` A/B with `/tmp/gemma4_metal_decode_profile_swa256_vec_default`, log `/tmp/gemma4_q4_tensor_mm_ab_1780660939.log`.
+  verified_at: 2026-06-05
+  decay_trigger: tensor MM numerical fix, Gemma-specific tensor route, broad acceptance of approximate mode, or Q4_K kernel rewrite
+  trust: {F:0.82,G:0.24,R:0.78}
+
+**LTP/WBA:** Window was the large Q4 FFN gate/up prefill corridor. Tensor transport changed arithmetic/order enough that boundary safety failed at token trace level and did not reduce wall. Legal move rejected; dual frame remains existing Q4 H16/F32 GEMM routes.
+**boundary:** Do not use `QWEN35_Q4K_TENSOR_MM=1` for exact Gemma benchmarks.
+
+### [LM-GEMMA4-PREFILL-CHUNK512-STILL-BEST] Gemma row-prefill chunk 512 remains the best tested transport width
+**context:** ml / Gemma4 Metal / row prefill scheduling / LTP-WBA transport width
+**state:** verified as scheduling anchor for current SWA256 vector kernel; no code change needed because `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` internally caps at 512
+
+- claim: "After SWA256 vector attention, native-only body-prefill chunk sweep still favors the widest tested row corridor. On pp256, chunk128/256/512 measured `890.456/785.147/783.353ms` p50. On pp1024, chunk128/256/512 measured `4574.687/4209.051/4000.888ms` p50."
+  source: local sequential `scripts/run_safe.sh` sweep with `/tmp/gemma4_metal_decode_profile_swa256_vec_default`, log `/tmp/gemma4_prefill_chunk_sweep_1780661026.log`.
+  verified_at: 2026-06-05
+  decay_trigger: row-prefill graph scheduler rewrite, memory-pressure change, larger prompt sweep, or new FFN/prefill kernel route
+  trust: {F:0.78,G:0.30,R:0.74}
+
+**LTP/WBA:** Window was row-prefill transport width. Smaller chunks reduce local memory pressure but increase graph/command/replay area. Recomputed potential descends with chunk 512 for pp256 and pp1024, so chunk shrinking is not the next lever.
+**boundary:** Keep comparing against llama.cpp with fresh native rebuilds; do not infer decode speed from `gen=1` body-prefill sweeps.
