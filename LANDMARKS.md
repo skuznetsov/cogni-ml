@@ -20263,3 +20263,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is full-attention decode context with split-K as the active corridor. Legal move shrinks the reduction transport chunk from 64 to 32 while preserving the query tile and exact output boundary. The lexicographic potential descends in decode wall and does not touch prefill chunking or sliding-window layers.
 **boundary:** This is a small retune, not the main decode gap closer. Further work should inspect why body-only tg remains far behind llama.cpp even after split-K, likely graph scheduling/attention kernel efficiency/head path rather than FFN micro-fusions.
+
+### [LM-GEMMA4-H16KV-SPLITK-OPTIN] H16 KV plus split-K is faster but not exact enough for default
+**context:** ml / Gemma4 Metal / approximate KV compression / decode attention
+**state:** implemented as explicit opt-in under `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1`; not default
+
+- claim: "Combining the existing H16 KV cache path with split-K attention is a valid opt-in speed experiment. On pp256/gen32 body-only, it improved decode p50 from `71.608 ms/tok` default to `70.198 ms/tok`; a full token-trace diagnostic on the synthetic top1 prompt matched the F32 default trace exactly for that row."
+  source: local sequential safe runs with `/tmp/gemma4_metal_decode_profile_h16_splitk`; `--print-generated-ids` traces matched for default and H16+splitK on the synthetic pp256/gen32 prompt.
+  verified_at: 2026-06-05
+  decay_trigger: H16 KV cache semantics, split-K kernel rewrite, broader prompt parity suite, or Gemma quant/model change
+  trust: {F:0.78,G:0.20,R:0.74}
+
+- refutation: "H16 KV is not exact relative to the F32 resident spec and must not be promoted to default under the current exactness bar. With `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1`, focused Gemma buffer spec failed with drift around `8e-4..2e-3`; the default env spec still passed."
+  source: `GEMMA4_ROW_PREFILL_ATTN_KV_H16_CACHE=1 crystal spec spec/gemma4_metal_buffer_spec.cr` failed 3 examples; default `crystal spec spec/gemma4_metal_buffer_spec.cr` passed `9 examples, 0 failures`.
+  verified_at: 2026-06-05
+  decay_trigger: spec tolerance policy change, exact H16 compensation, or a broad quality/parity gate proving acceptable approximate mode
+  trust: {F:0.86,G:0.38,R:0.82}
+
+**LTP/WBA:** Window is the decode attention KV bandwidth corridor. Legal move is only opt-in transport through half KV with split-K reduction; boundary safety is default-off exact F32 fallback. Recomputed potential descends slightly in body decode, but exactness potential fails under the spec, so the dual frame is mandatory F32 default.
+**boundary:** Useful for future approximate/quality-gated Gemma speed modes and for ideas to revisit in Qwen MTP/self-draft, not for exact baseline comparisons.

@@ -195,6 +195,7 @@ module ML::GGUF
       @@attn_context_rows_kv_h16_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_kv_h16_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_splitk_kv_h16_stage1_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_splitk_stage1_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_splitk_stage2_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_h16_pipeline : ML::Metal::ComputePipeline?
@@ -826,7 +827,10 @@ module ML::GGUF
         end
 
         return false unless profile_rows_phase("#{prefix}.attn_ctx") do |enc|
-          if kv_h16_cache
+          if kv_h16_cache && attn_splitk_enabled?(batch, sliding_window)
+            encode_attention_context_rows_splitk_kv_h16(enc, scratch, q_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, ctx_buf,
+              base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group)
+          elsif kv_h16_cache
             encode_attention_context_rows_kv_h16(enc, q_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, ctx_buf,
               base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
           elsif ctx_h16_buf
@@ -986,7 +990,11 @@ module ML::GGUF
         if kv_h16_cache
           encode_kv_write_rows_h16(enc, k_buf, v_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, base_pos, kv_dim, batch)
         end
-        if kv_h16_cache
+        if kv_h16_cache && attn_splitk_enabled?(batch, sliding_window)
+          encode_attention_context_rows_splitk_kv_h16(enc, scratch, q_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, ctx_buf,
+            base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group)
+          return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
+        elsif kv_h16_cache
           encode_attention_context_rows_kv_h16(enc, q_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, ctx_buf,
             base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group, sliding_window)
           return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
@@ -1958,6 +1966,64 @@ module ML::GGUF
         end
       end
 
+      private def encode_attention_context_rows_splitk_kv_h16(enc : ML::Metal::ComputeEncoder,
+                                                              scratch : ResidentScratch,
+                                                              q_buf : ML::MetalBuffer,
+                                                              k_cache_buf : ML::MetalBuffer,
+                                                              v_cache_buf : ML::MetalBuffer,
+                                                              out_buf : ML::MetalBuffer,
+                                                              base_pos : Int32,
+                                                              rows : Int32,
+                                                              n_head : Int32,
+                                                              n_head_kv : Int32,
+                                                              head_dim : Int32,
+                                                              heads_per_group : Int32) : Nil
+        chunk = attn_splitk_chunk_size
+        qtile = Math.min(attn_splitk_query_tile, rows)
+        max_context = base_pos + rows
+        n_blocks = (max_context + chunk - 1) // chunk
+        partial_o = scratch.get("rows.attn_splitk_h16.o", qtile.to_i64 * n_head * n_blocks * head_dim * sizeof(Float32))
+        partial_m = scratch.get("rows.attn_splitk_h16.m", qtile.to_i64 * n_head * n_blocks * sizeof(Float32))
+        partial_l = scratch.get("rows.attn_splitk_h16.l", qtile.to_i64 * n_head * n_blocks * sizeof(Float32))
+
+        query_start = 0
+        while query_start < rows
+          query_count = Math.min(qtile, rows - query_start)
+
+          enc.set_pipeline(attn_context_rows_splitk_kv_h16_stage1_pipeline)
+          enc.set_buffer(q_buf, 0)
+          enc.set_buffer(k_cache_buf, 1)
+          enc.set_buffer(v_cache_buf, 2)
+          enc.set_buffer(partial_o, 3, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(partial_m, 4, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(partial_l, 5, ML::Metal::BufferAccess::Write)
+          enc.set_value(base_pos.to_u32, 6)
+          enc.set_value(query_start.to_u32, 7)
+          enc.set_value(query_count.to_u32, 8)
+          enc.set_value(n_head.to_u32, 9)
+          enc.set_value(n_head_kv.to_u32, 10)
+          enc.set_value(head_dim.to_u32, 11)
+          enc.set_value(heads_per_group.to_u32, 12)
+          enc.set_value(chunk.to_u32, 13)
+          enc.set_value(n_blocks.to_u32, 14)
+          enc.dispatch_threadgroups({n_head, query_count, n_blocks}, {32, 1, 1})
+
+          enc.set_pipeline(attn_context_rows_splitk_stage2_pipeline)
+          enc.set_buffer(partial_o, 0)
+          enc.set_buffer(partial_m, 1)
+          enc.set_buffer(partial_l, 2)
+          enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(query_start.to_u32, 4)
+          enc.set_value(query_count.to_u32, 5)
+          enc.set_value(n_head.to_u32, 6)
+          enc.set_value(head_dim.to_u32, 7)
+          enc.set_value(n_blocks.to_u32, 8)
+          enc.dispatch_threadgroups({n_head, query_count, 1}, {32, 1, 1})
+
+          query_start += query_count
+        end
+      end
+
       private def encode_attention_context_rows_kv_h16(enc : ML::Metal::ComputeEncoder,
                                                        q_buf : ML::MetalBuffer,
                                                        k_cache_buf : ML::MetalBuffer,
@@ -2177,6 +2243,12 @@ module ML::GGUF
       private def attn_context_rows_splitk_stage1_pipeline : ML::Metal::ComputePipeline
         @@attn_context_rows_splitk_stage1_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_splitk_stage1") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_splitk_stage1", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_splitk_kv_h16_stage1_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_splitk_kv_h16_stage1_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_splitk_kv_h16_stage1") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_splitk_kv_h16_stage1", GEMMA4_SOURCE)
         }
       end
 

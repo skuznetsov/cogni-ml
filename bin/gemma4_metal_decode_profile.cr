@@ -12,6 +12,7 @@ warmups = 1
 runs = 3
 profile = false
 profile_decode_only = false
+print_generated_ids = false
 decode_mode = "top1"
 decode_wave = ENV["GEMMA4_DECODE_WAVE_OFF"]? != "1"
 top1_wave_resident = ENV["GEMMA4_TOP1_WAVE_RESIDENT"]? == "1"
@@ -34,6 +35,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--runs N", "Measured runs") { |v| runs = v.to_i }
   p.on("--profile", "Print shared Metal matmul/profile attribution for the final measured run") { profile = true }
   p.on("--profile-decode-only", "Reset profile counters after prefill and report only generated-token work") { profile_decode_only = true }
+  p.on("--print-generated-ids", "Print seed + generated token ids for parity diagnostics") { print_generated_ids = true }
   p.on("--decode-wave", "Use one command buffer per decode token instead of one wait per layer (default)") { decode_wave = true }
   p.on("--decode-layerwise", "Use legacy one-wait-per-layer decode path") { decode_wave = false }
   p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer") { top1_wave_resident = true }
@@ -140,7 +142,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              prompt_cache_store : ML::GGUF::Gemma4PromptCache::Store? = nil,
              prompt_cache_model_id : String = "",
              prompt_cache_tokenizer_id : String = "synthetic-token-ids",
-             prompt_cache_session_id : String = "profile") : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, cache_route: String, cache_restore_ms: Float64)
+             prompt_cache_session_id : String = "profile") : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
   ML::GGUF::Qwen35Metal::Profile.reset if profile
@@ -209,6 +211,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
 
   decode_t0 = Time.instant
   cur = prefill_head ? next_id : synthetic_decode_token(0)
+  token_trace = [cur]
   generate.times do |i|
     pos = (prompt.size + i).to_i32
     if decode_mode == "body"
@@ -221,6 +224,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     else
       cur = forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident)
     end
+    token_trace << cur
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
 
@@ -229,7 +233,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     puts ML::GGUF::Qwen35Metal::Profile.report_io
   end
 
-  {prefill_ms: prefill_ms, decode_ms: decode_ms, first_id: next_id, last_id: cur, cache_route: cache_route, cache_restore_ms: cache_restore_ms}
+  {prefill_ms: prefill_ms, decode_ms: decode_ms, first_id: next_id, last_id: cur, token_trace: token_trace, cache_route: cache_route, cache_restore_ms: cache_restore_ms}
 end
 
 started = Time.instant
@@ -281,6 +285,7 @@ cache_restore_samples = [] of Float64
 cache_route_counts = Hash(String, Int32).new(0)
 first_id = 0_i32
 last_id = 0_i32
+last_token_trace = [] of Int32
 runs.times do
   result = run_once(
     weights, prompt, generate, max_seq, decode_mode, prefill_mode, prefill_chunk, prefill_head, stop_layer, profile && runs == 1,
@@ -298,6 +303,7 @@ runs.times do
   cache_restore_samples << result[:cache_restore_ms] if result[:cache_restore_ms] > 0.0
   first_id = result[:first_id]
   last_id = result[:last_id]
+  last_token_trace = result[:token_trace]
 end
 
 summarize("prefill", prefill_samples, prompt.size)
@@ -305,6 +311,7 @@ summarize("decode", decode_samples, generate)
 summarize("cache_restore", cache_restore_samples, prompt.size) unless cache_restore_samples.empty?
 decode_p50 = percentile(decode_samples.sort, 0.50)
 puts "decode_ms_per_token_p50=#{(decode_p50 / generate).round(3)} first_id=#{first_id} last_id=#{last_id}"
+puts "token_trace=#{last_token_trace.join(',')}" if print_generated_ids
 unless cache_route_counts.empty?
   route_summary = cache_route_counts.map { |route, count| "#{route}:#{count}" }.join(",")
   puts "prompt_cache_routes=#{route_summary}"

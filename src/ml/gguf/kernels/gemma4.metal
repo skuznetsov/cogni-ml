@@ -878,6 +878,103 @@ kernel void gemma4_attn_context_rows_splitk_stage1(
     }
 }
 
+kernel void gemma4_attn_context_rows_splitk_kv_h16_stage1(
+    device const float* q             [[buffer(0)]],
+    device const half*  k_cache       [[buffer(1)]],
+    device const half*  v_cache       [[buffer(2)]],
+    device       float* partial_o     [[buffer(3)]],
+    device       float* partial_m     [[buffer(4)]],
+    device       float* partial_l     [[buffer(5)]],
+    constant     uint&  base_pos      [[buffer(6)]],
+    constant     uint&  query_start   [[buffer(7)]],
+    constant     uint&  query_count   [[buffer(8)]],
+    constant     uint&  n_head        [[buffer(9)]],
+    constant     uint&  n_head_kv     [[buffer(10)]],
+    constant     uint&  head_dim      [[buffer(11)]],
+    constant     uint&  heads_per_group [[buffer(12)]],
+    constant     uint&  chunk_size    [[buffer(13)]],
+    constant     uint&  n_blocks      [[buffer(14)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint h = tgpig.x;
+    const uint qt = tgpig.y;
+    const uint block = tgpig.z;
+    if (h >= n_head || qt >= query_count || block >= n_blocks || head_dim > GEMMA4_ATTN_MAX_HD) return;
+
+    const uint t = query_start + qt;
+    const uint row_pos = base_pos + t;
+    const uint block_start = block * chunk_size;
+    const uint block_end = min(block_start + chunk_size, row_pos + 1);
+    const uint kv_h = h / heads_per_group;
+    if (kv_h >= n_head_kv) return;
+
+    const uint kv_dim = n_head_kv * head_dim;
+    const uint lane = tiisg;
+
+    threadgroup float q_tg[GEMMA4_ATTN_MAX_HD];
+    threadgroup float tile_scores[GEMMA4_ATTN_SG];
+
+    for (uint d = lane; d < head_dim; d += GEMMA4_ATTN_SG) {
+        q_tg[d] = q[(t * n_head + h) * head_dim + d];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m = -1.0e30f;
+    float l = 0.0f;
+    float o[GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG];
+    for (uint i = 0; i < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++i) o[i] = 0.0f;
+
+    for (uint tile_start = block_start; tile_start < block_end; tile_start += GEMMA4_ATTN_SG) {
+        const uint j = tile_start + lane;
+
+        float score = -1.0e30f;
+        if (j < block_end) {
+            float dot = 0.0f;
+            for (uint d = 0; d < head_dim; ++d) {
+                dot += q_tg[d] * float(k_cache[j * kv_dim + kv_h * head_dim + d]);
+            }
+            score = dot;
+        }
+
+        const float tile_max = simd_max(score);
+        const float m_new = max(m, tile_max);
+        const float correction = exp(m - m_new);
+        const float p = (j < block_end) ? exp(score - m_new) : 0.0f;
+        l = l * correction + simd_sum(p);
+
+        tile_scores[lane] = p;
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+
+        const uint tile_len = min(tile_start + GEMMA4_ATTN_SG, block_end) - tile_start;
+        for (uint dl = 0; dl < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++dl) {
+            const uint d = lane + dl * GEMMA4_ATTN_SG;
+            if (d >= head_dim) break;
+            float acc = 0.0f;
+            for (uint s = 0; s < tile_len; ++s) {
+                const uint ppos = tile_start + s;
+                acc += tile_scores[s] * float(v_cache[ppos * kv_dim + kv_h * head_dim + d]);
+            }
+            o[dl] = o[dl] * correction + acc;
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        m = m_new;
+    }
+
+    const uint mb = ((qt * n_head + h) * n_blocks) + block;
+    if (lane == 0) {
+        partial_m[mb] = m;
+        partial_l[mb] = l;
+    }
+    const uint out_base = mb * head_dim;
+    for (uint dl = 0; dl < (GEMMA4_ATTN_MAX_HD / GEMMA4_ATTN_SG); ++dl) {
+        const uint d = lane + dl * GEMMA4_ATTN_SG;
+        if (d >= head_dim) break;
+        partial_o[out_base + d] = o[dl];
+    }
+}
+
+
 kernel void gemma4_attn_context_rows_splitk_stage2(
     device const float* partial_o     [[buffer(0)]],
     device const float* partial_m     [[buffer(1)]],
