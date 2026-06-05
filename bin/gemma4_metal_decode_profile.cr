@@ -119,7 +119,8 @@ def prefill_prompt_hidden(weights : ML::GGUF::Gemma4Weights,
                           state : ML::GGUF::Gemma4Metal::ResidentState,
                           prefill_mode : String,
                           prefill_chunk : Int32,
-                          stop_layer : Int32?) : Array(Float32)
+                          stop_layer : Int32?,
+                          read_last_hidden : Bool = true) : Array(Float32)
   case prefill_mode
   when "serial"
     last = [] of Float32
@@ -128,7 +129,7 @@ def prefill_prompt_hidden(weights : ML::GGUF::Gemma4Weights,
     end
     last
   when "rows"
-    ML::GGUF::Gemma4Metal.prefill_tokens_last_hidden_resident_rows(weights, prompt, 0, state, chunk_size: prefill_chunk, stop_layer: stop_layer || weights.hparams.n_layer).not_nil!
+    ML::GGUF::Gemma4Metal.prefill_tokens_last_hidden_resident_rows(weights, prompt, 0, state, chunk_size: prefill_chunk, stop_layer: stop_layer || weights.hparams.n_layer, read_last_hidden: read_last_hidden).not_nil!
   else
     raise "prefill mode must be serial or rows"
   end
@@ -190,11 +191,11 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   if decode_only_seed
     # Decode-only mode mirrors llama-bench tg: empty KV state, no prompt ingest.
   elsif cache_route == "miss"
-    hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer)
+    hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer, prefill_head)
     save_cache_after_head = true
     cache_route = "miss_save"
   elsif cache_route == "none"
-    hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer)
+    hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer, prefill_head)
   end
   if prefill_head && next_id < 0
     logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!

@@ -78,7 +78,8 @@ module ML::GGUF
                                                    start_pos : Int32,
                                                    state : ResidentState,
                                                    chunk_size : Int32 = 8,
-                                                   stop_layer : Int32? = nil) : Array(Float32)?
+                                                   stop_layer : Int32? = nil,
+                                                   read_last_hidden : Bool = true) : Array(Float32)?
         nil
       end
 
@@ -1132,7 +1133,8 @@ module ML::GGUF
                                                    start_pos : Int32,
                                                    state : ResidentState,
                                                    chunk_size : Int32 = 8,
-                                                   stop_layer : Int32? = nil) : Array(Float32)?
+                                                   stop_layer : Int32? = nil,
+                                                   read_last_hidden : Bool = true) : Array(Float32)?
         return nil unless available?
         raise ArgumentError.new("prefill token_ids must not be empty") if token_ids.empty?
         raise ArgumentError.new("prefill start_pos must be non-negative") if start_pos < 0
@@ -1229,13 +1231,17 @@ module ML::GGUF
                   0_i64)
               end
             end
-            read_t0 = Time.instant if Qwen35Metal::Profile.enabled?
-            x_rows = in_buf.read(batch * hidden_dim)
-            if Qwen35Metal::Profile.enabled?
-              read_done = Time.instant
-              Qwen35Metal::Profile.bump_group("gemma4.rows.read", 0_i64, 0_i64,
-                (read_done - read_t0.not_nil!).total_nanoseconds.to_i64)
-              Qwen35Metal::Profile.bump_group_transfer("gemma4.rows.read", 0_i64, hidden_bytes)
+            if read_last_hidden
+              read_t0 = Time.instant if Qwen35Metal::Profile.enabled?
+              x_rows = in_buf.read(batch * hidden_dim)
+              if Qwen35Metal::Profile.enabled?
+                read_done = Time.instant
+                Qwen35Metal::Profile.bump_group("gemma4.rows.read", 0_i64, 0_i64,
+                  (read_done - read_t0.not_nil!).total_nanoseconds.to_i64)
+                Qwen35Metal::Profile.bump_group_transfer("gemma4.rows.read", 0_i64, hidden_bytes)
+              end
+            else
+              x_rows = [] of Float32
             end
           else
             x_rows = [] of Float32
@@ -1252,7 +1258,9 @@ module ML::GGUF
             end
           end
 
-          last_hidden = x_rows[((batch - 1) * hidden_dim)...(batch * hidden_dim)].to_a
+          if read_last_hidden
+            last_hidden = x_rows[((batch - 1) * hidden_dim)...(batch * hidden_dim)].to_a
+          end
           offset += batch
         end
 

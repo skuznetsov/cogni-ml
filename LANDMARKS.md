@@ -20508,3 +20508,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Decision: Promote no-read body wave for benchmark/body-update paths. Do not present it as product greedy top1 acceleration; top1/structured/sampling routes still need head or constrained-head logic.
 - LTP/WBA: Window = body-only decode where hidden output is unused; Transport = token/state corridor through resident wave; Legal move = skip final hidden readback while preserving K/V cache writes and exact fallback for top1 paths; Potential descends in `(readback_bytes, read_group, encode/read overhead, tg_wall)`.
 - Trust: {F=.88,G=.42,R=.84}; exact for body-only Gemma Metal decode on local M2 Max.
+
+[LM-GEMMA4-PREFILL-NOREAD-NEUTRAL] Body-only Gemma prefill hidden readback is not the pp bottleneck
+- Date: 2026-06-05
+- Context: ml/perf/Gemma4 Metal llama-bench-compatible prompt processing
+- Claim: `prefill_tokens_last_hidden_resident_rows(..., read_last_hidden: false)` now allows body-only prompt ingestion to skip the final hidden readback, matching llama-bench `test_prompt` semantics more closely. The boundary is removed, but pp256 wall does not materially improve, so the remaining pp gap is in row-prefill body kernels/scheduling rather than final hidden readback.
+- Evidence: llama.cpp `tools/llama-bench/llama-bench.cpp` `test_prompt` uses `llama_batch_get_one(tokens.data(), n_tokens)` and synchronizes without requesting logits. Local no-read profile removed `gemma4.rows.read` and all group readback, reporting `gemma4.rows.layers wait 742.76ms` and pp256 `744.748ms / 343.74 tok/s`. Corrected guarded benchmark with the patched binary measured native pp `343.43 tok/s` vs llama.cpp `386.09 tok/s` (`-11.05%`), essentially unchanged from the prior pp row.
+- Decision: Keep the no-read option for correct body-only benchmark semantics. Do not spend more time on prompt-hidden readback for first-run pp; next pp work must target row-prefill body traffic or compare concrete llama.cpp kernel scheduling.
+- LTP/WBA: Window = body-only prompt ingest where the hidden output is unused; Transport = prompt token chunk through resident K/V/state corridor; Legal move = skip final hidden materialization while preserving top1/cache paths through the existing read-last dual frame; Potential descends in `(readback_bytes, read_group)` but not in `(pp_wall)`, so this branch is neutral for speed.
+- Trust: {F=.86,G=.45,R=.82}; exact for Gemma4 body-only benchmark path on local M2 Max.
