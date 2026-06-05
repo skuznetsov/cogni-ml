@@ -21574,3 +21574,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is high-batch pp; the transport split is exact caps vs approximate GEMM. The legal move is not to promote `ALLOW_GEMM`; it changes the boundary. The next exact speed branch must either make the fast GEMM route numerically safe enough for top1/logit certification or build a new exact high-batch kernel path with the same row-packing economics.
 **boundary:** Do not use `ALLOW_GEMM` for exact verifier/published apples-to-apples claims. Use it only as an approximate diagnostic and as an oracle for the speed target of a future exact high-batch route.
+
+### [LM-COGNIGEMMA-135] Gemma fast GEMM reaches llama-class pp but must be gated by output parity, not hidden equality
+**context:** ml / CogniGemma Metal / Gemma4 pp / llama.cpp comparison / numeric backend corridor / LTP-WBA
+**state:** measured; promote only as a numeric backend route after broader output-parity gates
+
+- claim: "Forcing GEMV while keeping large row chunks restores serial-hidden alignment, while batched GEMM remains the source of high-batch hidden drift. Current code with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 QWEN35_GEMM_BATCH_THRESHOLD=512` reproduced the near-exact drift class: prompt16 stop32 `0.0001335144`, prompt32 stop48 `2.4318695e-5`. Current `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` stayed in the drift class: prompt16 stop32 `0.23360062`, prompt32 stop48 `0.026108265`."
+  source: guarded temporary `/tmp/gemma4_prefill_drift_probe_fix` runs on 2026-06-05 after reverting the misleading scoped `EXACT_GEMM` patch.
+  verified_at: 2026-06-05
+  decay_trigger: Q4/Q6 batched GEMM kernel rewrite, Gemma row-prefill route rewrite, or serial baseline definition change
+  trust: {F:0.86,G:0.14,R:0.82}
+
+- claim: "Despite hidden drift, fast GEMM preserved greedy token traces in two narrow smokes: synthetic pp256/gen32 and a real Crystal-code chat prompt/gen64. The pp256 body-only warmed fast route measured `746.303ms` p50, `343.024 tok/s`, close to the reported llama.cpp-class `~330 TPS` Gemma4 pp number; strict hidden-exact pp256/gen32 measured `6109.869ms`, `41.899 tok/s`, while fast-GEMM pp256/gen32 measured `1491.855ms`, `171.598 tok/s` with identical token trace."
+  source: guarded `/tmp/gemma4_metal_decode_profile_exact_gemm_fix` runs on 2026-06-05; logs `/tmp/gemma4_fast_body_pp256_after_fix.log`, `/tmp/gemma4_strict_gen32_ids.log`, `/tmp/gemma4_fast_gemm_gen32_ids.log`, `/tmp/gemma4_strict_code_gen64_ids.log`, `/tmp/gemma4_fast_code_gen64_ids.log`.
+  verified_at: 2026-06-05
+  decay_trigger: broader prompt-suite parity failure, output-head/logit route rewrite, tokenizer/chat-template change, or llama.cpp benchmark method change
+  trust: {F:0.82,G:0.08,R:0.78}
+
+**LTP/WBA:** The window is Gemma pp wall time. The exact hidden-equality corridor is sticky: it preserves the boundary but cannot enter the high-batch GEMM speed class. The dual frame is a numeric-backend corridor with an output-level certificate: greedy token parity / logit margin / task-quality gates rather than hidden-vector equality. This is only legal if recomputed potential descends globally: pp wall falls without increasing output divergence, rollback tax, or decode variance.
+**boundary:** Do not call the current fast route hidden-exact. For llama.cpp apples-to-apples, compare `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` as a backend-numeric route and report parity evidence. Next move: build a 20-50 prompt ABBA output-parity and pp/tg suite against strict CogniGemma and llama.cpp before default promotion.
