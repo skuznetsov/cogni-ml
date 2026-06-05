@@ -877,6 +877,28 @@ module ML
           cmd.wait
         end
 
+        def self.encode_embedding_q6k_rows_scaled_to_buffer(enc : ML::Metal::ComputeEncoder,
+                                                            token_embd_qw : QuantWeight,
+                                                            token_ids_buf : ML::MetalBuffer,
+                                                            out_buf : ML::MetalBuffer,
+                                                            rows : Int32,
+                                                            scale : Float32 = 1.0_f32) : Nil
+          raise "encode_embedding_q6k_rows_scaled_to_buffer requires Q6_K token embeddings" unless token_embd_qw.type.q6_k?
+          raise "embedding dim #{token_embd_qw.in_dim} must be divisible by #{QK_K}" unless token_embd_qw.in_dim % QK_K == 0
+          raise "embedding rows must be positive" unless rows > 0
+
+          w_buf, w_off = weight_slot(token_embd_qw)
+          enc.set_pipeline(embed_q6k_rows_scaled_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(token_ids_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(token_embd_qw.in_dim.to_u32, 3)
+          enc.set_value(token_embd_qw.out_dim.to_u32, 4)
+          enc.set_value(rows.to_u32, 5)
+          enc.set_value(scale, 6)
+          enc.dispatch_1d(token_embd_qw.in_dim * rows, 256)
+        end
+
         private def self.encode_embedding_q4k_from_token_id(enc : ML::Metal::ComputeEncoder,
                                                             w_buf : ML::MetalBuffer,
                                                             w_off : Int64,

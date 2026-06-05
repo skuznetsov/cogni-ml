@@ -1481,19 +1481,15 @@ module ML::GGUF
         raise ArgumentError.new("position #{pos} exceeds max_seq #{state.max_seq}") if pos < 0 || pos >= state.max_seq
 
         scale = Math.sqrt(hidden_dim.to_f64).to_f32
-        in_buf = ML::MetalBuffer.new(hidden_bytes)
-        out_buf = ML::MetalBuffer.new(hidden_bytes)
-        embed_t0 = Time.instant if Qwen35Metal::Profile.enabled?
-        Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, [token_id], in_buf, scale)
-        if Qwen35Metal::Profile.enabled?
-          embed_done = Time.instant
-          Qwen35Metal::Profile.bump_group("gemma4.decode_wave.embedding", 0_i64,
-            (embed_done - embed_t0.not_nil!).total_nanoseconds.to_i64, 0_i64)
-          Qwen35Metal::Profile.bump_group_transfer("gemma4.decode_wave.embedding", sizeof(UInt32).to_i64, 0_i64)
-        end
+        scratch = state.scratch
+        in_buf = scratch.get("decode.wave.in", hidden_bytes)
+        out_buf = scratch.get("decode.wave.out", hidden_bytes)
+        token_buf = scratch.get("decode.wave.token", sizeof(UInt32).to_i64)
+        token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
 
         layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
         if Qwen35Metal::Profile.enabled? && decode_profile_phases_enabled?
+          Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, [token_id], in_buf, scale)
           layer_count.times do |il|
             ok = forward_layer_resident_cache_rows_profile_phases_to_buffer(weights, il, in_buf, out_buf, pos, 1, state)
             return nil unless ok
@@ -1511,6 +1507,7 @@ module ML::GGUF
         layer_t0 = Time.instant if Qwen35Metal::Profile.enabled?
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
+        Qwen35Metal.encode_embedding_q6k_rows_scaled_to_buffer(enc, weights.token_embd, token_buf, in_buf, 1, scale)
         layer_count.times do |il|
           ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, pos, 1, state)
           unless ok
@@ -1563,14 +1560,8 @@ module ML::GGUF
         scratch = state.scratch
         in_buf = scratch.get("decode.top1.in", hidden_bytes)
         out_buf = scratch.get("decode.top1.out", hidden_bytes)
-        embed_t0 = Time.instant if Qwen35Metal::Profile.enabled?
-        Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, [token_id], in_buf, scale)
-        if Qwen35Metal::Profile.enabled?
-          embed_done = Time.instant
-          Qwen35Metal::Profile.bump_group("gemma4.decode_wave_top1.embedding", 0_i64,
-            (embed_done - embed_t0.not_nil!).total_nanoseconds.to_i64, 0_i64)
-          Qwen35Metal::Profile.bump_group_transfer("gemma4.decode_wave_top1.embedding", sizeof(UInt32).to_i64, 0_i64)
-        end
+        token_buf = scratch.get("decode.top1.token", sizeof(UInt32).to_i64)
+        token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
 
         layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
         norm_w_buf = write_scratch_f32(scratch, "decode.top1.output_norm", weights.output_norm)
@@ -1584,6 +1575,7 @@ module ML::GGUF
         t0 = Time.instant if Qwen35Metal::Profile.enabled?
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
+        Qwen35Metal.encode_embedding_q6k_rows_scaled_to_buffer(enc, weights.token_embd, token_buf, in_buf, 1, scale)
         layer_count.times do |il|
           ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, pos, 1, state)
           unless ok

@@ -20424,3 +20424,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is SWA row-prefill where pairs of query heads share one KV head. Transport corridor is the bounded SWA KV span for two heads at a time. Legal move shares K/V transport while keeping each head's softmax state independent and keeping decode `batch=1` on the one-head vector route unless explicitly forced. Potential descends in `(SWA_KV_rereads, threadgroups, prefill_wall, remaining_rows)` for `rows>=128`.
 **boundary:** Do not force this as a decode optimization; earlier opt-in decode-inclusive A/B showed decode was not improved. The default policy is prefill-only via min batch 128.
+
+### [LM-GEMMA4-DECODE-EMBED-WAVE] Gemma decode embedding is folded into the resident wave
+**context:** ml / Gemma4 Metal / decode scheduling / host-boundary collapse / LTP-WBA Spike
+**state:** implemented for production hidden-wave and top1-wave decode paths
+
+- claim: "Gemma decode no longer pays a separate command-buffer wait for token embedding before the resident layer/head wave. `Qwen35Metal` now exposes an encode-level Q6_K scaled embedding helper, and Gemma decode wave writes the token id into resident scratch and encodes embedding in the same command buffer as the layer wave. This preserved the synthetic pp256/tg64 token trace and improved top1 decode from `45.008 ms/tok` to `44.427 ms/tok` p50 in a sequential old-vs-new A/B."
+  source: local sequential `scripts/run_safe.sh` A/B comparing `/tmp/gemma4_metal_decode_profile_bench` against `/tmp/gemma4_metal_decode_profile_embed_wave`, log `/tmp/gemma4_embed_wave_ab_1780662120.log`; focused Gemma Metal spec passed `9 examples, 0 failures`.
+  verified_at: 2026-06-05
+  decay_trigger: embedding kernel rewrite, decode-wave scheduler rewrite, prompt-profile path rewrite, or broader token-trace parity failure
+  trust: {F:0.84,G:0.34,R:0.80}
+
+**LTP/WBA:** Window is the per-token embedding host/GPU boundary. Transport is the token id through resident scratch into the decode wave. Legal move fuses embedding into the same command-buffer corridor as layers/head without changing model arithmetic. Potential descends in `(command waits, embedding boundary, wall_ms, remaining_tokens)`.
+**boundary:** Phase-profile mode intentionally keeps its split command buffers for attribution. This is a small exact scheduling win, not a body-kernel breakthrough.
