@@ -19937,3 +19937,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is a repeated prompt/session prefix. Transport carries exact F32 K/V rows over the bounded prefix corridor. Legal move is serialize/restore authoritative K/V only; H16 side-cache and scratch buffers stay outside the boundary. Recomputed potential `Phi=(prefill_rows_to_run, artifact_bytes, validation_risk, fallback_cost)` descends for hot-session reuse because prefill rows can collapse to restore bytes while checksum/shape gates keep fallback exact. Dual frame is full Gemma prefill if checksum, layer count, max sequence, prefix length, or KV dimensions do not match.
 **boundary:** This is not yet a product-level prompt cache. Next step is a small Gemma cache/store adapter or CLI path that keys by model/tokenizer/prompt-token hash and restores the `.gkv` artifact before decode.
+
+### [LM-COGNIGEMMA-90] Gemma exact prompt-cache Store adapter exists
+**context:** ml / CogniGemma / exact session-prefix cache / product adapter
+**state:** implemented; not wired into Gemma CLI yet
+
+- claim: "CogniGemma now has a minimal exact prompt-cache Store adapter. It saves a resident K/V prefix snapshot, records model/tokenizer/prompt/token hashes plus KV dimensions in a JSONL manifest, supports exact prompt, longest token-prefix, and session lookup, and restores `.gkv` artifacts into new or reusable resident states. Corrupt manifest lines are ignored, model/tokenizer mismatches miss, artifact size/checksum changes fail closed, and reusable-state restore preserves the resident object."
+  source: implementation in `src/ml/gguf/gemma4_prompt_cache.cr`; focused spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_prompt_cache_spec2 scripts/run_safe.sh /opt/homebrew/bin/crystal 180 6000 spec spec/gemma4_state_snapshot_spec.cr spec/gemma4_prompt_cache_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed (`7 examples, 0 failures`). No-codegen build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_prompt_cache_build scripts/run_safe.sh /opt/homebrew/bin/crystal 180 4000 build --no-codegen spec/gemma4_prompt_cache_spec.cr --error-trace` passed; `git diff --check` passed.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma prompt-cache schema change, resident-state layout rewrite, artifact format change, or CLI integration rewrite
+  trust: {F:0.88,G:0.42,R:0.86}
+
+**LTP/WBA:** Window is an exact repeated session/prompt prefix. Transport carries validated `.gkv` K/V rows from durable artifact to resident state. Legal move requires runtime/model/tokenizer/prompt/token hash and shape metadata to match before restore. Recomputed potential `Phi=(prompt_rows_to_prefill, artifact_validation_risk, restore_bytes, fallback_cost)` descends for hot repeated prefixes while preserving exact fallback. Dual frame remains full Gemma prefill if lookup, checksum, size, layer count, max_seq, prefix_len, or KV dimensions fail.
+**boundary:** This is a library/store primitive only. Next gate is wiring a Gemma benchmark/generate path that seeds a prompt state, restores it on the second request, and reports cold pp versus hot restore sequentially through `scripts/run_safe.sh`.
