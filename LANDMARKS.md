@@ -21631,3 +21631,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Recomputed potential after splitting benchmark corridors is `(dominant_wait_bucket=tg gap, tied_routes=pp close/tg behind, conflict=fast-GEMM output certificate, area=decode layer kernels)`. The next legal optimization should target decode wave/operator attribution before more pp label work. pp still has a 10% gap, but tg is the larger stable deficit and affects every generated token.
 **boundary:** Do not claim Gemma4 beats llama.cpp yet. Current status: pp is close in the fast numeric corridor; tg is behind. Next move is decode WBA attribution against llama.cpp-style fused graph/kernel choices.
+
+### [LM-COGNIGEMMA-138] llama-bench tg is body decode, not greedy top1 generation
+**context:** ml / CogniGemma Metal / llama.cpp comparison / tg benchmark semantics / LTP-WBA
+**state:** source-verified; earlier tg gap needs remeasurement with matched body-only boundary
+
+- claim: "`llama-bench` `tg` does not sample or compute greedy top1 for the next token. `test_gen` calls `llama_decode(ctx, llama_batch_get_one(&token, 1))`, synchronizes, then sets `token = std::rand() % n_vocab`. Therefore its `tg` row measures random-token body/KV decode throughput, not full greedy generation with a vocab head and sampler."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/tools/llama-bench/llama-bench.cpp:2116-2135` inspected on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: llama.cpp llama-bench generation loop rewrite or `llama_batch_get_one` logits semantics change
+  trust: {F:0.92,G:0.30,R:0.90}
+
+- claim: "CogniGemma `mode=top1` decode rows include the resident full-vocab top1 head every token. Profile attribution for gen16 showed `head_top1_no_norm_resident Q6_K 3840x262144 b1` at `12600 MiB` logical weights, `11.22%` of decode logical matmul traffic, so comparing this row directly to llama-bench `tg` overstates the CogniGemma tg gap."
+  source: `/tmp/gemma4_decode_only_profile_tg16.log` profile from 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: CogniGemma benchmark mode rewrite, top1 head fusion/removal, or profile accounting change
+  trust: {F:0.86,G:0.18,R:0.82}
+
+**LTP/WBA:** This is a Diamond normalization of the benchmark boundary. The active window was a false tg gap; the legal move splits `body decode` from `greedy top1 decode`. Recomputed potential must use matched corridors: llama-bench tg vs Cogni `--body-only`, and real generation vs a llama.cpp sampler/generation path that computes logits.
+**boundary:** Do not use `mode=top1` CogniGemma rows against llama-bench `tg` as apples-to-apples. Next measurement must be body-only Cogni vs llama-bench, and separately real greedy/sample generation vs llama.cpp CLI/server.
