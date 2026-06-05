@@ -21103,3 +21103,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The Ladder transported the proposal hidden into the verifier instead of recomputing lower layers. Boundary safety held because proposal wrote lower-layer cache rows on the exact state and continuation only updated upper layers for the same consumed token/position. Recomputed potential removes the verifier duplicate-work bucket, but the active dominant bucket becomes proposal partial-layer cost. The next legal move must reduce the proposal layer count or fuse/compress proposal computation; verifier continuation itself is no longer the main blocker.
 **boundary:** This is still an oracle diagnostic path, not production speed. Promotion requires a real non-oracle verifier/fallback scheduler and a cheaper candidate generator. Next falsifiers: lower stop-layer/rank/route sweep with continuation, or a fused GPU-resident surrogate/head that avoids full partial-layer replay.
+
+### [LM-COGNIGEMMA-114] Gemma stop-layer sweep shows no current speed-positive proposal depth
+**context:** ml / CogniGemma Metal / Gemma4 proposal depth sweep / top-k verifier economics / LTP-WBA
+**state:** depth sweep measured; current static late-band proposal depth has no speed-positive sweet spot
+
+- claim: "With `--proposal-main-state` and `--verifier-continue-from-proposal`, shallower Gemma proposal layers reduce partial-layer cost but lose top-k rescue coverage. On the Crystal `fib` prompt, layer 24 had `rescue_rate=0.0` with `proposal_ms_per_step=27.252`; layer 32 had `rescue_rate=0.125` with `proposal_ms_per_step=32.559`; layer 40 had `rescue_rate=0.375` with `proposal_ms_per_step=37.503`; layer 46 had `rescue_rate=0.625` with `proposal_ms_per_step=41.644`. All exact-fallback runs preserved `token_match_count=32/32`, but all printed optimistic speedups below 1.0."
+  source: guarded logs `/tmp/gemma4_sweep_code_l24.log`, `/tmp/gemma4_sweep_code_l32.log`, `/tmp/gemma4_sweep_code_l40.log`, `/tmp/gemma4_sweep_code_l46.log`, all using `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: larger code suite, new proposal basis, fused candidate head, or different top-k/verifier policy
+  trust: {F:0.78,G:0.14,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, the same tradeoff held. Layer 32 had `rescue_rate=0.375`, `proposal_ms_per_step=34.323`; layer 40 had `rescue_rate=0.625`, `proposal_ms_per_step=38.93`; layer 46 had `rescue_rate=0.75`, `proposal_ms_per_step=41.967`. All exact-fallback runs preserved `32/32`, but optimistic speedup stayed below 1.0 (`0.6293`, `0.6844`, `0.703`)."
+  source: guarded logs `/tmp/gemma4_sweep_reason_l32.log`, `/tmp/gemma4_sweep_reason_l40.log`, `/tmp/gemma4_sweep_reason_l46.log`, same probe options with reasoning prompt.
+  verified_at: 2026-06-05
+  decay_trigger: larger reasoning suite, new proposal basis, fused candidate head, or different top-k/verifier policy
+  trust: {F:0.78,G:0.14,R:0.76}
+
+**LTP/WBA:** The sweep recomputed the active window after verifier continuation. The legal stop-layer Ladder does not find a descent: lowering proposal depth decreases `Area` (partial layer bytes) but increases an earlier component (`fallback rows`/candidate miss conflicts). Raising depth improves rescue coverage but reintroduces proposal cost. This is a Diamond conflict between candidate quality and proposal cost, not a scalar tuning problem. The dual frame is a different proposal representation: mixture/impact-basis residuals, fused GPU-resident candidate head, or prompt/phase routing that skips proposal on low-value rows.
+**boundary:** Do not keep sweeping static stop layers as the primary path. Current Gemma/full-transformer sweet spot is not a single fixed stop-layer. Next branch should change the candidate generator itself: reduce head/top-k/proposal partial work, improve candidate quality at lower layers, or use a router that only attempts proposals in high-coverage phases.
