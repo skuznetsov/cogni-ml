@@ -20454,3 +20454,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Adversary: public Gemma-vs-llama run during this slice was load-noisy (`llama.cpp` also slowed), so it is not used as the promotion gate; claim is limited to isolated native A/B.
 - LTP/WBA: Window = missing-V layer where K projection is duplicated; Transport = pre-normalized K buffer into V buffer; Legal move = GPU copy before K/V norms; Boundary safety = K norm/RoPE still mutate K only after copy, V plain norm remains separate; Potential = `(duplicate_weight_reads, GEMM/GEMV calls, decode_work)` decreases.
 - Trust: {F=.84,G=.45,R=.78}; exact but small measured effect, specific to Gemma4 missing-V layers.
+
+[LM-Q4K-SHAPE-LAYOUT-GEMMA] Q4_K GEMV layout should be shape-triggered for Gemma decode (shared)
+- Date: 2026-06-05
+- Context: ml/perf/Metal Q4_K GEMV layout selection
+- Claim: The existing Q4_K alternate-layout pipeline is now default-enabled for measured Gemma4 shapes, using `15360x3840 -> 2x3`, `3840x4096 -> 2x3`, `4096x3840 -> 1x3`, and `3840x2048 -> 4x2`; kill switch: `QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF=1` or `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=0`.
+- Evidence: `bin/gemma4_op_attribution --q4-layout-sweep=...` showed those layouts beating or matching the old default for the targeted shapes; focused Gemma Metal spec -> `9 examples, 0 failures`; Qwen35 Metal matmul spec -> `9 examples, 0 failures`; pp256/tg32 off-switch A/B preserved token trace and improved decode from `50.525` to `49.548 ms/tok` p50 under the same load slice.
+- Adversary: A/B absolute numbers were load-slow, so the trusted claim is default-vs-off relative improvement plus spec correctness, not cross-run absolute speed.
+- LTP/WBA: Window = `(quant=Q4_K, in_dim,out_dim,batch<=threshold)` shape trigger; Transport = same weight/input corridor through a shape-specific pipeline variant; Legal move = choose NSG/NR0 variant without changing arithmetic; Boundary safety = Qwen/Gemma matmul specs passed and off-switch exists; Potential = `(per-shape wait_ms, weighted_decode_area)` decreases.
+- Trust: {F=.86,G=.50,R=.82}; applies to measured Q4_K Metal GEMV shapes, not Q6/head.

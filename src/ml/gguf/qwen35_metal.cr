@@ -956,20 +956,20 @@ module ML
         end
 
         private def self.q4_gemv_shape_layout_enabled? : Bool
-          ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT"]? == "1" &&
-            ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF"]? != "1"
+          ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF"]? != "1" &&
+            ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT"]? != "0"
         end
 
         private def self.q4_gemv_shape_layout(in_dim : Int32, out_dim : Int32) : {Int32, Int32}?
           case {in_dim, out_dim}
           when {15360, 3840}
-            {2, 4}
-          when {3840, 4096}
-            {2, 1}
-          when {4096, 3840}
-            {2, 4}
-          when {3840, 2048}
             {2, 3}
+          when {3840, 4096}
+            {2, 3}
+          when {4096, 3840}
+            {1, 3}
+          when {3840, 2048}
+            {4, 2}
           else
             nil
           end
