@@ -22,6 +22,7 @@ recursive = true
 risk_gate = true
 batch_verify = false
 oracle_exact_proposals = false
+trust_batch_accepts = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: gemma4_ngram_chunk_probe [options]"
@@ -38,6 +39,7 @@ OptionParser.parse do |p|
   p.on("--no-risk-gate", "Disable NgramDraft.risky_candidate_shape? gate") { risk_gate = false }
   p.on("--batch-verify", "Verify proposed spans with row-prefill + row-top1 instead of serial top1") { batch_verify = true }
   p.on("--oracle-exact-proposals", "Diagnostic: propose exact greedy spans to isolate verifier economics") { oracle_exact_proposals = true }
+  p.on("--trust-batch-accepts", "Diagnostic: do not serial-confirm batch accepts for real proposals") { trust_batch_accepts = true }
   p.on("--max-seq N", "Resident state sequence capacity, default 256") { |v| max_seq = v.to_i }
   p.on("--prefill-chunk N", "Prefill chunk size, default 128") { |v| prefill_chunk = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit }
@@ -110,7 +112,8 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
                    gamma : Int32, min_ngram : Int32, max_ngram : Int32,
                    min_candidates : Int32, recursive : Bool, risk_gate : Bool,
                    batch_verify : Bool,
-                   oracle_ids : Array(Int32)? = nil) : NgramRun
+                   oracle_ids : Array(Int32)? = nil,
+                   trust_batch_accepts : Bool = false) : NgramRun
   main_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   side_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   prefill_prefix!(weights, ids, main_state, prefill_chunk)
@@ -206,7 +209,7 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
       # High-batch row-prefill can be a fast filter, but it is not an exact
       # verifier for every route. Fall back to serial exact verification on
       # batch rejection, and always confirm real (non-oracle) proposals.
-      if reject_expected || oracle_ids.nil?
+      if reject_expected || (oracle_ids.nil? && !trust_batch_accepts)
         ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
         verify_current = current
         verify_pos = pos
@@ -273,10 +276,10 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
     cycles, proposed, accepted, full_accept_chunks, rejected_chunks, exact_fallback_tokens, skipped_risk, skipped_empty)
 end
 
-puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive=#{recursive} risk_gate=#{risk_gate} batch_verify=#{batch_verify} oracle_exact_proposals=#{oracle_exact_proposals} max_seq=#{max_seq}"
+puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive=#{recursive} risk_gate=#{risk_gate} batch_verify=#{batch_verify} oracle_exact_proposals=#{oracle_exact_proposals} trust_batch_accepts=#{trust_batch_accepts} max_seq=#{max_seq}"
 exact_ids, exact_ms = generate_exact(weights, ids, gen, max_seq, prefill_chunk)
 oracle_ids = oracle_exact_proposals ? exact_ids : nil
-ngram = generate_ngram(weights, ids, gen, max_seq, prefill_chunk, gamma, min_ngram, max_ngram, min_candidates, recursive, risk_gate, batch_verify, oracle_ids)
+ngram = generate_ngram(weights, ids, gen, max_seq, prefill_chunk, gamma, min_ngram, max_ngram, min_candidates, recursive, risk_gate, batch_verify, oracle_ids, trust_batch_accepts)
 
 matches = 0
 exact_ids.each_with_index { |id, i| matches += 1 if ngram.ids[i]? == id }

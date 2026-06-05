@@ -21473,3 +21473,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The Diamond correction is explicit: approximate high-batch transport may be used as a filter only behind an exact state-boundary fallback. The lexicographic potential improves from BROKEN/parity-fail to parity-safe, but the dominant wait bucket does not descend enough under current proposal coverage and false-reject rate. Dual frame is exact serial verifier on uncertainty. The next legal speed move is not more n-gram tuning; it is a higher-quality proposal corridor, or an exact high-batch row route that can remove the fallback tax.
 **boundary:** Keep high-batch batch-verify diagnostic-only. Production promotion requires `parity=true` plus ABBA wall improvement on real prompts. The promising route remains Gemma MTP/self-draft/surrogate proposals feeding the exact-cap batch verifier, not current n-gram proposals.
+
+### [LM-COGNIGEMMA-130] Gemma exact-threshold batch verifier has a 1.5x oracle ceiling, but n-gram proposals do not feed it
+**context:** ml / CogniGemma Metal / exact-threshold batch verifier / n-gram proposal quality / LTP-WBA
+**state:** verifier corridor confirmed; n-gram proposal source refuted for current prompts
+
+- claim: "Raising the exact row-prefill cap and GEMM threshold to 16 gives a parity-safe oracle verifier corridor without the drift-prone GEMM override. With `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=16 QWEN35_GEMM_BATCH_THRESHOLD=16`, `gamma=16 --oracle-exact-proposals --batch-verify` preserved `32/32` parity and improved diagnostic wall to `738.316ms` (`1.4927x`) versus exact `1102.115ms`."
+  source: guarded `/tmp/gemma4_ngram_chunk_probe --gen 32 --gamma 16 --oracle-exact-proposals --batch-verify --max-seq 192 --prefill-chunk 16` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: row-prefill route changes, Qwen GEMM threshold semantics change, broader prompt/model rerun
+  trust: {F:0.84,G:0.10,R:0.78}
+
+- claim: "Current n-gram proposals do not provide enough accepted spans for Gemma. On a deliberately copy-like prompt, no-risk n-gram had only `15.46%` acceptance (`15/97`) with one full-accept chunk and remained speed-negative (`0.6753x` serial verifier). Risk gating reduced useful accepts (`9/91`, no full chunks) and stayed speed-negative (`0.6762x`)."
+  source: guarded copy-prompt runs with `--gen 32 --gamma 16 --min-ngram 2 --max-ngram 16 --min-candidates 4`, serial verifier rows on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: different prompt distribution, session-history proposal source, or improved n-gram risk/candidate policy
+  trust: {F:0.80,G:0.08,R:0.74}
+
+- claim: "Batch-verifying weak n-gram spans is counterproductive because it pays for the whole proposed span even when the first mismatch is early. On the copy prompt, trusted exact-threshold batch verification preserved parity but regressed to `0.3366x` no-risk and `0.3360x` risk-gated."
+  source: guarded copy-prompt `--batch-verify --trust-batch-accepts` runs with exact-threshold env on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: proposal source with high full-chunk accept rate or verifier implementation that stops early inside a batch cheaply
+  trust: {F:0.80,G:0.08,R:0.74}
+
+**LTP/WBA:** The verifier corridor is valid only when the proposal window is already strong. With weak n-gram spans, the batch verifier increases the dominant wait bucket by transporting too much bad span area. This is a Diamond result: do not stack batching on a poor proposal source. The next legal move is to replace the trigger/proposal window, not to tune batch verification.
+**boundary:** Keep `--trust-batch-accepts` diagnostic-only. The exact speed path should target Gemma surrogate/MTP/self-draft proposals that can produce high-accept chunks for the proven exact-threshold batch verifier.
