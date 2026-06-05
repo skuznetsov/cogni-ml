@@ -20199,3 +20199,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Recomputed potential after attention-prep experiments is `Phi=(FFN_weight_traffic, FFN_down_wait, output_head_wait, host_boundary, attention_prep_work)`. Attention prep no longer appears as the active maximizer. Legal next moves should target FFN body corridors or output-head scheduling; K-as-V and static Q4 row-layout branches are parked until a new profile moves them back up.
 **boundary:** Do not use resident-top1 profile rows alone as a default-policy signal because they are noisy and prompt-sensitive. Use them as evidence that head-boundary removal is not enough unless the body corridor is also improved.
+
+### [LM-COGNIGEMMA-106] Gemma decode phase attribution refutes local FFN micro-fusions
+**context:** ml / CogniGemma / decode tg / phase attribution / LTP-WBA refutations
+**state:** diagnostics implemented; local micro-fusions parked
+
+- claim: "CogniGemma now has a diagnostics-only decode phase profiler. With `QWEN35_METAL_PROFILE=1 GEMMA4_DECODE_PROFILE_PHASES=1`, `forward_hidden_resident_cache_wave` routes each decode layer through the existing row-phase profiler at `batch=1`. This deliberately breaks the production wave into phase command buffers and is for attribution only, not speed measurement. Focused no-codegen build, Gemma Metal buffer spec, and `git diff --check` passed."
+  source: implementation in `src/ml/gguf/gemma4_metal.cr`; final gates `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_decode_phase_final_build scripts/run_safe.sh /opt/homebrew/bin/crystal 240 8000 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace`, `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_decode_phase_final_spec scripts/run_safe.sh /opt/homebrew/bin/crystal 240 8000 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` (`9 examples, 0 failures`), and `git diff --check`.
+  verified_at: 2026-06-04
+  decay_trigger: decode-wave scheduler rewrite, row-phase profiler rewrite, or Gemma layer encoder rewrite
+  trust: {F:0.88,G:0.34,R:0.86}
+
+- claim: "A guarded gen4 decode phase profile ranked the current batch=1 phase windows as `ffn_upgate` wait `148.36ms`, `ffn_down` `113.42ms`, `attn_qkv` `86.57ms`, `attn_out` `68.75ms`, `attn_ctx` `68.32ms`, `attn_prep` `68.16ms`, `ffn_in` `60.86ms`, and `ffn_out` `58.32ms` over 192 layer-phase calls. The diagnostic route reported `decode_ms_per_token_p50=181.84` because it intentionally serializes phases; only phase proportions are meaningful."
+  source: guarded log `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-decode-phase-profile.U51tP8/phase.log`, aggregated by phase suffix.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host repeat, profile route rewrite, or successful FFN/attention fusion
+  trust: {F:0.80,G:0.24,R:0.76}
+
+- claim: "Existing Q4_H16 FFN gate+up pair fusion is not a decode lever on this model. Batch sweep with `--prefill-q4-pair-wait` showed the pair route slower than separate Q4 GEMVs at batch `1/16/64/256`: pair per-row `3.144/0.198/0.059/0.029ms` versus separate gate/up weighted per-row equivalent `0.696/0.292/0.072/0.040ms` for two calls. A separate in-place GELU experiment preserved exact ids but did not improve top1 ABBA (`default 38.479/38.655`, `inplace 38.598/40.576 ms/tok`), and a fused post-FFN RMSNorm+scaled residual experiment preserved exact ids but did not improve top1 ABBA (`default 38.801/37.987`, `fused 40.657/38.282 ms/tok`). Both experimental fusion code paths were removed before commit."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-ffn-pair-batch-sweep.nS1eDi/summary.log`, `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-gelu-inplace-abba.Kcto8q/summary.log`, and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-ffn-out-fused-abba.mJog8o/summary.log`.
+  verified_at: 2026-06-04
+  decay_trigger: redesigned lower-register FFN fusion, changed Q4/Q6 GEMV kernels, or longer quiet-host gen128 repeat
+  trust: {F:0.82,G:0.28,R:0.78}
+
+**LTP/WBA:** Window recomputation after host-wave collapse shows `ffn_upgate` and `ffn_down` as active phase maximizers. The legal local moves tested here (`pair gate/up`, `GELU inplace`, `post-down RMSNorm+add fusion`) either increased or failed to decrease the full top1 potential. This is a Diamond conflict: local buffer/pass reductions do not lower `Phi=(top1_wall, FFN_weight_traffic, register/dispatch overhead, scheduling variance, remaining_work)` once the whole decode boundary is recomputed. Dual frame is the default decode-wave with phase attribution enabled only when diagnosing.
+**boundary:** Do not retry small local FFN micro-fusions as standalone speed work. Next exact branch should either reduce the dominant FFN weight corridor itself, change proposal/self-draft work so the full FFN corridor is not paid every accepted token, or compare against llama.cpp/MLX kernels for the same hot shapes before another Metal rewrite.

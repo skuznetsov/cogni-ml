@@ -174,6 +174,10 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_PROFILE_PHASES"]? == "1"
       end
 
+      private def decode_profile_phases_enabled? : Bool
+        ENV["GEMMA4_DECODE_PROFILE_PHASES"]? == "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -1443,6 +1447,21 @@ module ML::GGUF
         end
 
         layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+        if Qwen35Metal::Profile.enabled? && decode_profile_phases_enabled?
+          layer_count.times do |il|
+            ok = forward_layer_resident_cache_rows_profile_phases_to_buffer(weights, il, in_buf, out_buf, pos, 1, state)
+            return nil unless ok
+            in_buf, out_buf = out_buf, in_buf
+          end
+          read_t0 = Time.instant
+          result = in_buf.read(hidden_dim)
+          read_done = Time.instant
+          Qwen35Metal::Profile.bump_group("gemma4.decode_wave.read", 0_i64, 0_i64,
+            (read_done - read_t0).total_nanoseconds.to_i64)
+          Qwen35Metal::Profile.bump_group_transfer("gemma4.decode_wave.read", 0_i64, hidden_bytes)
+          return result
+        end
+
         layer_t0 = Time.instant if Qwen35Metal::Profile.enabled?
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
