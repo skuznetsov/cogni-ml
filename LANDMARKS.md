@@ -21751,3 +21751,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local Spike removed two intermediate buffers and one GELU dispatch, but recomputed body wall did not descend. The probable conflict is register/occupancy pressure plus doubled per-row work inside one simdgroup, so the Diamond did not normalize the shared `x` transport cheaply enough.
 **boundary:** Do not add b1 upgate fusion unless it is redesigned as an occupancy-aware kernel and wins body-only ABBA. The current evidence says materialization removal alone is insufficient; next candidates should target graph-level phase scheduling, down/residual fusion, or a different quant layout/repack rather than a naive per-row dual dot.
+
+### [LM-COGNIGRAPH-006] Gemma post-FFW RMSNorm+add fusion is exact but not a stable wall win
+**context:** ml / CogniGraph / Gemma4 / post-FFW fusion / LTP-WBA
+**state:** mixed/refuted for promotion; prototype reverted
+
+- claim: "An opt-in exact fusion of Gemma post-FFW `rmsnorm(ffn_buf, post_ffw_w)` plus `add_scaled(attn_out, ffn_normed)` preserved the short top1 token trace for `--decode-only-seed 42 --generate 8`; the first smoke improved `27.121 -> 29.570 tok/s`."
+  source: guarded logs `/tmp/gemma4_postffw_off_top1_gen8.log` and `/tmp/gemma4_postffw_on_top1_gen8.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma add-scaled semantics change, larger parity contradiction, or kernel rewrite
+  trust: {F:0.82,G:0.06,R:0.78}
+
+- claim: "Matched body-only gen32 initially improved from `29.095` to `30.386 tok/s`, but a gen64 ABBA sequence did not confirm descent: off/on/off/on p50 tok/s was `25.466 / 25.676 / 26.256 / 25.587`. Single-run profile also contradicted the win (`wait 261.73ms` off vs `290.78ms` on for gen8). The source prototype was reverted."
+  source: guarded logs `/tmp/gemma4_postffw_{off,on}_body_tg32.log`, `/tmp/gemma4_postffw_abba_{off1,on1,off2,on2}.log`, and `/tmp/gemma4_postffw_{off,on}_body_profile.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, profile-atlas parser change, or better fused kernel lowering wait without variance
+  trust: {F:0.84,G:0.12,R:0.80}
+
+**LTP/WBA:** This was a legal algebraic candidate but failed recompute safety: the small local dispatch/materialization Spike did not reliably lower the full decode-wave potential. It should not be promoted unless a larger ABBA shows stable descent.
+**boundary:** Exact elementwise/postnorm fusion remains possible, but the current two-kernel removal is too small/noisy relative to dominant Q4/Q6 GEMV traffic. Prefer larger graph moves or routes that change dominant wait buckets.
