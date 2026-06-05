@@ -20411,3 +20411,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is repeated immutable F32 scratch writes. Transport is stable source arrays through resident scratch slots. Legal move skips the write only when `(slot, source pointer, size)` matches; if the source changes, the boundary rewrites. Potential descends slightly in `(CPU writes, shared-memory traffic, encoding work, wall_ms)`, but this is not a major FFN/body lever.
 **boundary:** Keep the kill switch. Do not claim this closes the llama.cpp gap; it only removes small repeated setup work.
+
+### [LM-GEMMA4-SWA256-VEC-GQA2-PREFILL] SWA256 vector GQA2 is a prefill-only Gemma speed lever
+**context:** ml / Gemma4 Metal / SWA attention / prefill GQA transport / LTP-WBA
+**state:** implemented as default for SWA `head_dim==256` row-prefill batches `>=128`; kill switch `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_GQA2_OFF=1`; forced enable `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_GQA2=1`
+
+- claim: "A GQA2 variant of the SWA256 vector attention kernel is a useful prefill transport-width move but not a decode move. It computes two query heads sharing the same SWA KV head in one 256-thread threadgroup, preserving per-head tile order while sharing K/V loads. On pp1024 body-prefill, default GQA2 measured `3802.536ms` p50 versus kill-switch `3932.807ms` p50 (~3.4% faster). On pp256/tg32 top1, token traces matched; default measured prefill `785.953ms` p50 and decode `44.438 ms/tok`, kill-switch measured prefill `800.295ms` p50 and decode `44.618 ms/tok`."
+  source: local sequential `scripts/run_safe.sh` A/B with `/tmp/gemma4_metal_decode_profile_swa256_gqa2_default`, log `/tmp/gemma4_swa256_gqa2_default_gate_1780661785.log`; focused Gemma Metal spec passed `9 examples, 0 failures` under default policy.
+  verified_at: 2026-06-05
+  decay_trigger: SWA attention kernel rewrite, row-prefill batch policy change, broader prompt suite regression, or Metal compiler/runtime change
+  trust: {F:0.86,G:0.34,R:0.82}
+
+**LTP/WBA:** Window is SWA row-prefill where pairs of query heads share one KV head. Transport corridor is the bounded SWA KV span for two heads at a time. Legal move shares K/V transport while keeping each head's softmax state independent and keeping decode `batch=1` on the one-head vector route unless explicitly forced. Potential descends in `(SWA_KV_rereads, threadgroups, prefill_wall, remaining_rows)` for `rows>=128`.
+**boundary:** Do not force this as a decode optimization; earlier opt-in decode-inclusive A/B showed decode was not improved. The default policy is prefill-only via min batch 128.
