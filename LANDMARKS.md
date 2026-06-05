@@ -21713,3 +21713,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a refuted Spike for immediate promotion: local `Area` shrank, but recomputed wall potential did not materially descend. The useful clue is that FFN upgate has removable logical work, but the current transport pays conversion/occupancy costs. Next legal move is a different FFN upgate Diamond: either b1 Q4 dual-GEMV for decode, or pp pair fusion that also removes/stabilizes conversion and preserves occupancy.
 **boundary:** Do not default-enable `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN` for Gemma based on logical traffic alone. Revisit only with ABBA wall wins or a changed kernel that reduces both area and wait.
+
+### [LM-COGNIGRAPH-004] Gemma b1 Q4 layout microbench win failed whole-corridor decode
+**context:** ml / CogniGraph / Gemma4 / Q4_K GEMV layout / LTP-WBA
+**state:** refuted; do not promote standalone layout sweeps without decode ABBA
+
+- claim: "A batch-1 Q4 layout sweep found a local p50_wait improvement for the dominant Gemma FFN up/gate shape `3840x15360`: `3x2` measured `0.274ms` versus current `2x2` at `0.345ms` in the standalone layout sweep."
+  source: guarded `/tmp/gemma4_op_attribution --batch 1 --warmup 1 --runs 3 --limit 8 --exclude-output-head --q4-layout-sweep=1x1,1x2,1x3,2x1,2x2,2x3,2x4,3x1,3x2,4x1,4x2` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: layout bench harness rewrite, Metal compiler/runtime change, or quiet-host sweep contradiction
+  trust: {F:0.82,G:0.08,R:0.78}
+
+- claim: "Adding `{3840,15360}->{3,2}` to `q4_gemv_shape_layout` and rebuilding regressed matched decode-body throughput from baseline `26.123 tok/s` (`38.28ms/tok`) to candidate `16.356 tok/s` (`61.14ms/tok`) for `--decode-only-seed 42 --generate 32 --body-only`; the source change was reverted."
+  source: guarded logs `/tmp/gemma4_q4layout_baseline_body_tg32.log` and `/tmp/gemma4_q4layout_candidate_body_tg32.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger ABBA contradicts this, shape-layout runtime rewrite, or new dual-GEMV kernel avoids the same occupancy/scheduling failure
+  trust: {F:0.84,G:0.12,R:0.80}
+
+**LTP/WBA:** This is a failed Ladder: the local window (`3840x15360` standalone GEMV) descended, but after recomputing the active corridor (`decode_wave` body), wall-time potential increased. The move is illegal for promotion because it worsens an earlier potential component despite shrinking a local wait metric.
+**boundary:** Treat standalone Q4 layout sweeps as candidate generators only. Promotion requires body-only decode ABBA and profile-atlas recomputation. The next valid route is not a layout-table tweak; it is either a true b1 dual-GEMV/upgate fusion or graph-level elimination of materialization/synchronization with whole-corridor evidence.
