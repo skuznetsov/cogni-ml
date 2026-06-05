@@ -180,6 +180,23 @@ describe "Gemma4 resident Metal matmul buffers" do
     diff.should be <= 1.0e-5_f32
   end
 
+  it "keeps the one-command-buffer decode wave aligned with resident decode" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    resident_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    wave_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    resident = [] of Float32
+    wave = [] of Float32
+
+    [42, 43].each_with_index do |token_id, pos|
+      resident = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(w, token_id, pos, resident_state, 6).not_nil!
+      wave = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(w, token_id, pos, wave_state, 6).not_nil!
+    end
+
+    diff = gemma4_buffer_max_abs_diff(resident, wave)
+    puts "  [gemma4_decode_wave_stop6_hidden] max|d|=#{diff}"
+    diff.should be <= 1.0e-5_f32
+  end
+
   it "keeps full-attention K-as-V semantics aligned in the resident hidden path" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)

@@ -1418,6 +1418,70 @@ module ML::GGUF
         end
       end
 
+      def forward_hidden_resident_cache_wave(weights : Gemma4Weights,
+                                             token_id : Int32,
+                                             pos : Int32,
+                                             state : ResidentState,
+                                             stop_layer : Int32? = nil) : Array(Float32)?
+        return nil unless available?
+
+        hp = weights.hparams
+        hidden_dim = hp.n_embd
+        hidden_bytes = hidden_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("position #{pos} exceeds max_seq #{state.max_seq}") if pos < 0 || pos >= state.max_seq
+
+        scale = Math.sqrt(hidden_dim.to_f64).to_f32
+        in_buf = ML::MetalBuffer.new(hidden_bytes)
+        out_buf = ML::MetalBuffer.new(hidden_bytes)
+        embed_t0 = Time.instant if Qwen35Metal::Profile.enabled?
+        Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, [token_id], in_buf, scale)
+        if Qwen35Metal::Profile.enabled?
+          embed_done = Time.instant
+          Qwen35Metal::Profile.bump_group("gemma4.decode_wave.embedding", 0_i64,
+            (embed_done - embed_t0.not_nil!).total_nanoseconds.to_i64, 0_i64)
+          Qwen35Metal::Profile.bump_group_transfer("gemma4.decode_wave.embedding", sizeof(UInt32).to_i64, 0_i64)
+        end
+
+        layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+        layer_t0 = Time.instant if Qwen35Metal::Profile.enabled?
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        layer_count.times do |il|
+          ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, pos, 1, state)
+          unless ok
+            enc.end_encoding
+            return nil
+          end
+          in_buf, out_buf = out_buf, in_buf
+        end
+        enc.end_encoding
+        layer_tenc = Time.instant if Qwen35Metal::Profile.enabled?
+        cmd.commit
+        cmd.wait
+        layer_wait = Time.instant if Qwen35Metal::Profile.enabled?
+        if Qwen35Metal::Profile.enabled?
+          Qwen35Metal::Profile.bump_group("gemma4.decode_wave.layers",
+            (layer_tenc.not_nil! - layer_t0.not_nil!).total_nanoseconds.to_i64,
+            (layer_wait.not_nil! - layer_tenc.not_nil!).total_nanoseconds.to_i64,
+            0_i64)
+        end
+        read_t0 = Time.instant if Qwen35Metal::Profile.enabled?
+        result = in_buf.read(hidden_dim)
+        if Qwen35Metal::Profile.enabled?
+          read_done = Time.instant
+          Qwen35Metal::Profile.bump_group("gemma4.decode_wave.read", 0_i64, 0_i64,
+            (read_done - read_t0.not_nil!).total_nanoseconds.to_i64)
+          Qwen35Metal::Profile.bump_group_transfer("gemma4.decode_wave.read", 0_i64, hidden_bytes)
+        end
+        result
+      rescue ex
+        if ENV["GEMMA4_RESIDENT_LAYER_STRICT"]? == "1"
+          raise ex
+        else
+          nil
+        end
+      end
+
       def rms_norm(x : Array(Float32), weight : Array(Float32), eps : Float32) : Array(Float32)?
         return nil unless available?
         raise ArgumentError.new("rms_norm weight size mismatch") unless x.size == weight.size

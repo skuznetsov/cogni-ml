@@ -20026,3 +20026,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is a repeated greedy prompt prefix with certified K/V and a cached next-token boundary value. Transport carries K/V through the snapshot corridor and carries the scalar next-token id through the manifest corridor. Legal move is only valid for exact greedy seed recovery under matching model/tokenizer/prompt-token hash and non-negative token metadata. Recomputed potential `Phi=(N_prompt_rows, final_replay_head, KV_restore, decode_work)` descends: the previous active maximizer `final_replay_head` is eliminated, leaving KV restore as the hot-prefix seed cost. Dual frame is replay-last if metadata is absent/invalid, then full prefill if artifact restore fails.
 **boundary:** This optimizes the prompt seed for greedy/top1 paths. Sampling or structured decoding needs logits/final-hidden metadata or must use replay-last. Decode token generation speed is unchanged.
+
+### [LM-COGNIGEMMA-95] Gemma decode-wave collapses per-layer host waits for tg
+**context:** ml / CogniGemma / decode tg / LTP-WBA command-buffer wave
+**state:** implemented as opt-in profile route `--decode-wave`; not default-promoted yet
+
+- claim: "CogniGemma now has `Gemma4Metal.forward_hidden_resident_cache_wave`, an exact decode body route that reuses the existing row-prefill layer encoder at `batch=1` and encodes all layers into one command buffer per generated token. The profile CLI exposes it as `--decode-wave`. The old route remains default for A/B."
+  source: implementation in `src/ml/gguf/gemma4_metal.cr` and `bin/gemma4_metal_decode_profile.cr`; focused no-codegen build passed; focused Gemma Metal buffer spec passed under `scripts/run_safe.sh` (`9 examples, 0 failures`) including wave-vs-resident hidden parity `max|d|=4.7683716e-6` at stop6.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma row encoder rewrite, decode-wave default promotion, scratch-buffer aliasing rewrite, or Metal command-buffer semantics change
+  trust: {F:0.88,G:0.40,R:0.86}
+
+- claim: "Initial guarded A/B shows decode-wave improves Gemma tg by collapsing host layer waits. Body-only decode at pp64/gen8 improved from `68.407ms/tok` to `52.106ms/tok`; top1 improved from `78.137ms/tok` to `60.042ms/tok`. Final instrumented top1 wave row measured `59.648ms/tok`. Decode-only profile for one body token reports `gemma4.decode_wave.layers` encode `5.10ms`, wait `49.36ms`, readback `0.01ms`, and `6242.34 MiB` logical matmul weights, so the active maximizer after this move is GEMV/weight-traffic, not CPU readback or LM-head."
+  source: guarded `/tmp/gemma4_metal_decode_profile_wave` and `/tmp/gemma4_metal_decode_profile_wave2` runs under `scripts/run_safe.sh`; final decode-only profile used `--profile --profile-decode-only --decode-wave --body-only --prefill-no-head`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA repeat, GEMV kernel rewrite, decode profile rewrite, or default policy change
+  trust: {F:0.82,G:0.30,R:0.80}
+
+**LTP/WBA:** Window is the host boundary between 48 dependent decode layers. Transport carries the hidden state through a single command-buffer corridor using existing exact row-layer kernels at `batch=1`. Legal move preserves layer order, resident K/V writes, and exact fallback; scratch reuse is safe only because commands are ordered inside one command buffer. Recomputed potential `Phi=(host_layer_waits, command_buffers, GEMV_weight_bytes, readback, remaining_decode_work)` descends by eliminating 47 host waits per token. After recomputation, `GEMV_weight_bytes` becomes the active maximizer: about `6.24 GiB` logical matmul traffic per Gemma4 12B token.
+**boundary:** Keep as opt-in until a larger ABBA gate over gen32/64 and prompts confirms stability. Next exact tg frontier is Q4/Q6 GEMV kernel/body optimization or reducing repeated weight traffic; LM-head is secondary (~8ms/token before wave).
