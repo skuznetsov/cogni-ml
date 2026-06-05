@@ -19853,3 +19853,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the measured `RMSNorm(F32)->H16 projection` seam where conversion removal pays only for medium prompt batches. Transport carries the H16 side buffer from the fused RMSNorm move through the attention/FFN projection corridor while preserving exact F32 state boundaries. Legal move is a bounded controller, not broad enablement. Recomputed potential `Phi=(pp256_loss, pp512_win, pp768_win, pp1024_uncertainty, promotion_risk)` descends by excluding the losing pp256 and uncertain pp1024 bands while retaining the two measured winning bands. Dual frame remains default F32 conversion outside the window.
 **boundary:** Keep default-off until quiet-host ABBA evidence justifies promotion. If reopened, test pp512/768/1024 sequentially with higher run count and no overlapping benchmark/spec work; then consider combining with other H16 consumers to improve reuse.
+
+### [LM-COGNIGEMMA-84] Gemma ctxh16 plus normh16 does not compose at pp1024
+**context:** ml / CogniGemma Metal prefill / H16 corridor composition / LTP-WBA Diamond conflict
+**state:** refuted; no code change
+
+- claim: "Combining the two exact H16 producer-consumer corridors (`ctxh16` and widened `normh16`) is not a pp1024 win in the corrected row-prefill benchmark path. The valid run used a 1024-token prompt list with `--prefill-mode rows --body-only --prefill-no-head`, not the invalid `--tokens=1024` single-token setup. Default p50 was `5344.813ms`; `ctxh16` regressed to `5683.245ms`; widened `normh16` regressed to `5761.259ms`; combined `ctxh16+normh16` regressed to `5720.741ms`."
+  source: corrected direct pp1024 logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-combo-h16-pp1024.nIRfFF/`; release binary `/tmp/gemma4_metal_decode_profile_normh16`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, H16 route rewrite, command-buffer scheduling rewrite, or wrapper mode addition
+  trust: {F:0.80,G:0.18,R:0.76}
+
+**LTP/WBA:** Windows are real individually, but their transports compete for the same memory/occupancy corridor rather than forming a longer ladder. The combined legal move preserves exactness, but recomputed potential `Phi=(ctx_conversion, norm_conversion, extra_h16_writes, occupancy, pp1024_wall)` does not descend; wall increases for both individual widened routes and the combo. This is a Diamond conflict, so the boundary-safe dual frame is to keep the routes separate and windowed.
+**boundary:** Do not add a `ctxnormh16` wrapper mode or broad H16-stack controller from current evidence. Future H16 composition needs a fused kernel or a new consumer that removes dispatch/traffic, not just two env gates active at once.
