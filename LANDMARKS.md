@@ -21028,3 +21028,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is LM-109's quality-preserving top-k corridor. Recomputed potential exposes the dominant bucket as candidate generation cost, not acceptance. The current legal move preserves exact state, but it does not descend globally because `proposal_ms_per_step` is larger than exact decode. The dual frame is exact decode until a cheaper candidate transport exists. The next legal Spike/Ladder is to eliminate snapshot/readback/CPU residual work: fused native candidate generation, GPU-resident residual projection, or a cheaper prompt/phase router that avoids computing candidates on low-value rows.
 **boundary:** Do not build a production verifier scheduler on the current probe path. Build a cheaper candidate generator first, then re-run the same economics rows. For Gemma/full-transformer self-draft, the present sweet spot is likely `top-k proposal + exact fallback`, not no-validator top1; but speed requires candidate cost well below exact decode.
+
+### [LM-COGNIGEMMA-111] Gemma candidate generator bottleneck is snapshot plus partial-layer replay
+**context:** ml / CogniGemma Metal / Gemma4 proposal phase attribution / candidate generator / LTP-WBA
+**state:** granular attribution implemented; next optimization window identified
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now splits proposal timing into `snapshot`, `restore`, `partial_layers`, `residual`, `head`, and `topk` per post-warmup surrogate step. This is diagnostic instrumentation around the existing oracle top-k/fallback path and does not change generated tokens."
+  source: `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: proposal path rewrite, resident-state snapshot rewrite, native fused candidate kernel, or moving residual/head fully GPU-resident
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, proposal cost is dominated by snapshot and partial-layer replay: `proposal_ms_per_step=77.318`, with per-step phases `snapshot=33.099`, `partial_layers=33.558`, `head=6.311`, `topk=2.09`, `residual=1.501`, `restore=0.758`. Exact decode baseline was `35.853 ms/token`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger code suite, different max_seq/context, or eliminating snapshot/partial replay
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, the shape is the same: `proposal_ms_per_step=78.998`, with `snapshot=34.791`, `partial_layers=33.698`, `head=6.283`, `topk=2.076`, `residual=1.483`, `restore=0.665`; exact decode baseline was `35.69 ms/token`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger reasoning suite, different max_seq/context, or eliminating snapshot/partial replay
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Recomputed potential identifies two tied dominant buckets: snapshot copy and partial-layer replay. Residual projection and LM-head are not the first bottleneck. Legal next moves must reduce earlier potential components without invalidating exact state: (1) Spike/cancel proposal-side full-state snapshot by changing ownership so candidate reads from exact state and verifier/fallback owns the exact advance, (2) Ladder/chunk multiple candidate rows to amortize snapshot and command-buffer costs, or (3) fuse proposal partial layers with verifier work so shared prefix/layer data is transported once. Blindly optimizing residual math is now lower priority.
+**boundary:** The current top-k proposal is quality-promising but speed-negative. The next branch should attack snapshot/partial replay, not margin gates or residual rank. Any promoted change must re-run `proposal_phases_per_step` and exact-vs-candidate economics.

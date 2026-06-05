@@ -100,7 +100,9 @@ record Sample, input_token : Int32, exact_top1 : Int32, h_layer : Array(Float32)
 record RiskRow, step : Int32, exact_top1 : Int32, surrogate_top1 : Int32, chosen_token : Int32,
   exact_rank : Int32, margin : Float32, top5_contains_exact : Bool, oracle_rescued : Bool
 record WildStats, ids : Array(Int32), ms : Float64, surrogate_steps : Int32,
-  risk_rows : Array(RiskRow), proposal_ms : Float64, verifier_ms : Float64
+  risk_rows : Array(RiskRow), proposal_ms : Float64, verifier_ms : Float64,
+  snapshot_ms : Float64, restore_ms : Float64, partial_ms : Float64,
+  residual_ms : Float64, head_ms : Float64, topk_ms : Float64
 
 # Deterministic Rademacher projection. This keeps the probe cheap and removes
 # a separate PCA pass while preserving a fixed low-rank residual basis.
@@ -319,6 +321,12 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
   risk_rows = [] of RiskRow
   proposal_ms = 0.0
   verifier_ms = 0.0
+  snapshot_ms = 0.0
+  restore_ms = 0.0
+  partial_ms = 0.0
+  residual_ms = 0.0
+  head_ms = 0.0
+  topk_ms = 0.0
   t0 = Time.instant
 
   steps.times do |step|
@@ -333,14 +341,26 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     end
 
     proposal_t0 = Time.instant
+    phase_t0 = Time.instant
     snapshot = ML::GGUF::Gemma4StateSnapshot.capture(main_state, prefix_len: pos.to_i32)
+    snapshot_ms += (Time.instant - phase_t0).total_milliseconds
+    phase_t0 = Time.instant
     ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
+    restore_ms += (Time.instant - phase_t0).total_milliseconds
+    phase_t0 = Time.instant
     h_layer = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
       weights, current_token, pos.to_i32, side_state, surrogate_layer
     ).not_nil!
+    partial_ms += (Time.instant - phase_t0).total_milliseconds
+    phase_t0 = Time.instant
     h_hat = surrogate.predict(h_layer)
+    residual_ms += (Time.instant - phase_t0).total_milliseconds
+    phase_t0 = Time.instant
     logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_hat).not_nil!
+    head_ms += (Time.instant - phase_t0).total_milliseconds
+    phase_t0 = Time.instant
     top_ids = top_k_ids(logits, Math.max(5, oracle_topk_rescue))
+    topk_ms += (Time.instant - phase_t0).total_milliseconds
     surrogate_top1 = top_ids[0]
     next_token = surrogate_top1
     proposal_ms += (Time.instant - proposal_t0).total_milliseconds
@@ -373,7 +393,8 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     surrogate_steps += 1
   end
 
-  WildStats.new(generated_ids, (Time.instant - t0).total_milliseconds, surrogate_steps, risk_rows, proposal_ms, verifier_ms)
+  WildStats.new(generated_ids, (Time.instant - t0).total_milliseconds, surrogate_steps, risk_rows, proposal_ms, verifier_ms,
+    snapshot_ms, restore_ms, partial_ms, residual_ms, head_ms, topk_ms)
 end
 
 puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} max_seq=#{max_seq}"
@@ -419,6 +440,7 @@ if surrogate_steps > 0
   verifier_per_step = wild_stats.verifier_ms / surrogate_steps
   exact_per_token = exact_ms / wild_n
   puts "economics_current proposal_ms=#{wild_stats.proposal_ms.round(3)} proposal_ms_per_step=#{proposal_per_step.round(3)} verifier_ms=#{wild_stats.verifier_ms.round(3)} verifier_ms_per_step=#{verifier_per_step.round(3)} exact_ms_per_token=#{exact_per_token.round(3)}"
+  puts "proposal_phases_per_step snapshot=#{(wild_stats.snapshot_ms / surrogate_steps).round(3)} restore=#{(wild_stats.restore_ms / surrogate_steps).round(3)} partial_layers=#{(wild_stats.partial_ms / surrogate_steps).round(3)} residual=#{(wild_stats.residual_ms / surrogate_steps).round(3)} head=#{(wild_stats.head_ms / surrogate_steps).round(3)} topk=#{(wild_stats.topk_ms / surrogate_steps).round(3)}"
 end
 puts "token_match_prefix=#{match_prefix}/#{limit} token_match_count=#{same_count}/#{limit}"
 puts "collect_exact_ids=#{collected_exact_ids.join(',')}"
