@@ -21342,3 +21342,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the dominant Q4_K FFN body, and the candidate transport was llama.cpp's ext q4x4 lane partition. The legal move failed after active-window recomputation: it moved work from packed integer accumulation to float4x4 dequant/dot and improved only a smaller down-shape corridor while increasing the dominant up/gate bucket. Full wall also increased, so the lexicographic potential worsened at the first component. This is a Diamond/Collapse refutation: llama.cpp ext q4x4 is relevant for chunk/multi-RHS corridors, not current b1 eager decode.
 **boundary:** Do not retry a plain b1 q4x4 port as an exact eager-gen speed path. Revisit only if the active route becomes multi-token RHS (`ne11>=4`) or if we use a shape-selective down-only experiment with a full ABBA gate. Next exact-speed focus should be larger producer-consumer fusion (`gate/up -> activation -> down`), output-head specialization, or scheduling/cache corridors rather than another local Q4 lane retune.
+
+### [LM-COGNIGEMMA-124] Gemma GELU-inside-FFN-down GEMV preserves parity but regresses eager decode
+**context:** ml / CogniGemma Metal / exact decode / FFN producer-consumer fusion / LTP-WBA
+**state:** temporary default-off fusion refuted; code removed
+
+- claim: "A default-off exact fusion of Gemma `GELU(gate) * up` into the FFN-down GEMV preserved greedy token trace but worsened eager decode wall time. The experiment added temporary Q4_K/Q6_K `simd_mv_*_gelu_f32` kernels and routed `gate/up` directly into the down GEMV without folding Gemma's residual, preserving the `down -> post_ffw_norm -> scaled residual add` boundary."
+  source: temporary `QWEN35_GEMMA_GELU_DOWN_FUSED=1` patch; no-codegen build and guarded linked build both exited 0; smoke with `--decode-only-seed 236761 --generate 8 --top1-wave-resident --decode-wave --print-generated-ids` emitted the same repeated token trace.
+  verified_at: 2026-06-05
+  decay_trigger: new tile-streamed FFN algorithm, different GELU approximation, precompiled Metal library, or GPU architecture with materially different tanh/register behavior
+  trust: {F:0.78,G:0.08,R:0.74}
+
+- claim: "Paired sequential ABBA-style rows rejected the fusion for current M2 Max eager decode. Baseline `gen=16/runs=2` rows measured p50 `535.004ms` and `536.359ms`; fused rows measured p50 `602.445ms` and `615.373ms`, with identical token traces. The fused profile showed `gemv_gelu Q6_K 15360x3840 b1` and `gemv_gelu Q4_K 15360x3840 b1` replacing the ordinary down GEMVs, but decode remained slower (`~38.3 ms/tok` vs baseline `~33.8 ms/tok`)."
+  source: guarded sequential log `/tmp/gemma4_gelu_down_pair_20260605163023.log`; fused profile run `QWEN35_GEMMA_GELU_DOWN_FUSED=1 ... --profile --profile-decode-only` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun with different result, shape-selective fusion limited to smaller down shapes, or a redesigned fusion that avoids evaluating GELU/tanh inside the dequant/dot hot loop
+  trust: {F:0.82,G:0.08,R:0.78}
+
+**LTP/WBA:** The window and corridor were valid: FFN activation/down is a real producer-consumer diamond, and removing the standalone activation buffer write/read is a legal local reduction. The move failed after recomputing global potential because the dominant wait bucket worsened: evaluating GELU/tanh in the GEMV hot loop increased ALU/register pressure more than it saved in dispatch and activation traffic. This refines the next fusion frame: do not fuse expensive nonlinear activation into per-output-row GEMV lanes; if revisited, use tile-streaming that computes each activation once per input tile and reuses it across output rows.
+**boundary:** No `GELU-inside-down-GEMV` code is promoted. The next exact eager-gen fusion should either reduce dominant gate/up weight traffic, tile-stream activation once across multiple down rows, or move to a different LTP/WBA frame such as session-cache replay or multi-token RHS verification.
