@@ -21688,3 +21688,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The current graph window is not a generic command-buffer scheduler issue. The first repeated dominant shape is FFN up/gate Q4 traffic. Candidate legal moves should target an operator Diamond around `ffn_upgate`: pair/fuse, shared activation staging, graph-level scratch lifetime, or a new Q4 GEMV/GEMM route. Recompute `Phi` after each move; do not promote local traffic reductions that worsen wall or parity.
 **boundary:** The smoke uses tiny prompt/gen settings and proves harness plumbing plus qualitative dominance only. Run full `--prompt 256 --gen 8` or larger on a quiet host before making performance claims.
+
+### [LM-COGNIGRAPH-003] Gemma Q4 pair FFN reduces pp logical area but is not a proven wall win
+**context:** ml / CogniGraph / Gemma4 / FFN upgate operator Diamond / LTP-WBA
+**state:** measured; keep as clue, not promotion
+
+- claim: "`GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` does not affect Gemma decode b1 because the shared Q4 pair route is gated by `QWEN35_Q4K_PAIR_H16_MIN_BATCH` / `Q4_PAIR_H16_MIN_BATCH=64`. A top1 gen16 smoke preserved token trace but was slightly slower (`12.216 -> 11.905 tok/s`) and the atlas was unchanged."
+  source: `src/ml/gguf/qwen35_metal.cr` candidate guard inspection plus `/tmp/gemma4_pairffn_{default,pair}_top1_gen16.log` and `/tmp/gemma4_pairffn_{default,pair}_profile.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: pair route batch gate rewrite, Gemma decode batch route rewrite, or new b1 Q4 pair GEMV kernel
+  trust: {F:0.84,G:0.18,R:0.80}
+
+- claim: "For pp256 body, the pair route reduced profile atlas logical matmul traffic from `12467.82MiB` to `9430.32MiB` while conversion traffic stayed `1956.0MiB`, but wall p50 barely moved: default fast pp `779.019ms` / `328.618 tok/s`, pair `776.963ms` / `329.488 tok/s`."
+  source: `/tmp/cognigraph_gemma_matrix_p256_g8`, `/tmp/cognigraph_gemma_matrix_pair_p256_g2`, and guarded pp256 wall logs `/tmp/gemma4_pp256_pair_{default,pair}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradicts this, pair kernel rewrite, H16 conversion removal, or pp prompt-size sweep
+  trust: {F:0.82,G:0.12,R:0.78}
+
+**LTP/WBA:** This is a refuted Spike for immediate promotion: local `Area` shrank, but recomputed wall potential did not materially descend. The useful clue is that FFN upgate has removable logical work, but the current transport pays conversion/occupancy costs. Next legal move is a different FFN upgate Diamond: either b1 Q4 dual-GEMV for decode, or pp pair fusion that also removes/stabilizes conversion and preserves occupancy.
+**boundary:** Do not default-enable `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN` for Gemma based on logical traffic alone. Revisit only with ABBA wall wins or a changed kernel that reduces both area and wait.
