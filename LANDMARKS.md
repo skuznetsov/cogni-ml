@@ -21317,3 +21317,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The active local window was correct (`3840x15360` FFN gate/up), but both legal-looking local moves failed after recomputing the global potential. Shape layout improved standalone operator wait but worsened full decode scheduling. Dual GEMV shared the input traversal and dispatch but likely increased register pressure / weight-stream stickiness enough to cancel the local saving. This is a Diamond refutation: do not blindly promote microbench wins unless the full token corridor descends.
 **boundary:** No Q4 layout or dual-GEMV code is promoted from this branch. Next exact-speed work should either fuse a larger producer-consumer corridor (`gate/up activation -> down`) or compare against llama.cpp kernel mechanics directly for the same `3840x15360` GEMV shape. Pure local layout and launch sharing are low-priority now.
+
+### [LM-COGNIGEMMA-123] llama.cpp q4x4 ext GEMV is not a b1 eager-decode win for Gemma
+**context:** ml / CogniGemma Metal / exact decode / llama.cpp Metal comparison / Q4_K GEMV / LTP-WBA
+**state:** q4x4-style b1 adaptation refuted; temporary code removed
+
+- claim: "llama.cpp's `kernel_mul_mv_ext_q4_K_f32_r1_*` path is not evidence for a faster b1 Gemma eager decode kernel. Source inspection shows llama.cpp routes this ext q4x4 family for K-quants only when `ne11 >= 4 && ne11 <= 8`; normal b1 decode uses the regular `mul_mv` family. A default-off b1 adaptation of the q4x4 lane partition preserved token-trace parity, but worsened full decode wall time."
+  source: local source inspection of `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-ops.cpp` around the `ne11 >= 4 && ne11 <= 8` gate and `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal.metal` `kernel_mul_mv_ext_q4x4_f32_impl`; temporary default-off `simd_mv_q4k_ext_f32` probe in `cogni-ml`.
+  verified_at: 2026-06-05
+  decay_trigger: llama.cpp changes its b1 Q4_K route, CogniGemma introduces multi-token/chunk RHS decode for Q4_K, or a new b1-specific q4x4 kernel changes the arithmetic/partition enough to require retest
+  trust: {F:0.78,G:0.10,R:0.74}
+
+- claim: "The adapted b1 q4x4 microbench was not globally descending. In a stronger `batch=1`, `warmup=3`, `runs=7`, `limit=3` run, `nxpsg=16` lost on the dominant `3840x15360` Q4 up/gate shape (`0.452ms` ext vs `0.354ms` default) while helping the smaller `15360x3840` Q4 down shape (`0.420ms` ext vs `0.500ms` default). Recomputed weighted Q4 body therefore worsened before even counting scheduling effects."
+  source: guarded `/tmp/gemma4_op_attribution --batch 1 --warmup 3 --runs 7 --limit 3 --exclude-output-head --q4-ext-sweep=16` -> exit 0, validation passed.
+  verified_at: 2026-06-05
+  decay_trigger: different model shape mix, precompiled Metal library, new q4x4 dequant implementation, or quiet-host rerun with materially different rows
+  trust: {F:0.76,G:0.08,R:0.72}
+
+- claim: "Full decode ABBA confirmed the q4x4-style b1 route should not be promoted. Baseline p50 rows for 32 generated tokens were `1231.555ms` and `1235.522ms`; ext rows were `1501.625ms` and `1443.954ms`, with identical token traces. The temporary kernel and harness flag were removed."
+  source: guarded ABBA `/tmp/gemma4_metal_decode_profile --decode-only-seed 236761 --generate 32 --runs 2 --warmups 1 --top1-wave-resident --decode-wave --print-generated-ids`, comparing baseline to temporary `QWEN35_Q4K_EXT_GEMV=1 QWEN35_Q4K_EXT_NXPSG=16`.
+  verified_at: 2026-06-05
+  decay_trigger: new Gemma decode scheduler, q4x4 route limited to non-dominant down shapes, or multi-token verifier/decode RHS where llama.cpp's ext assumptions actually apply
+  trust: {F:0.80,G:0.08,R:0.76}
+
+**LTP/WBA:** Window was the dominant Q4_K FFN body, and the candidate transport was llama.cpp's ext q4x4 lane partition. The legal move failed after active-window recomputation: it moved work from packed integer accumulation to float4x4 dequant/dot and improved only a smaller down-shape corridor while increasing the dominant up/gate bucket. Full wall also increased, so the lexicographic potential worsened at the first component. This is a Diamond/Collapse refutation: llama.cpp ext q4x4 is relevant for chunk/multi-RHS corridors, not current b1 eager decode.
+**boundary:** Do not retry a plain b1 q4x4 port as an exact eager-gen speed path. Revisit only if the active route becomes multi-token RHS (`ne11>=4`) or if we use a shape-selective down-only experiment with a full ABBA gate. Next exact-speed focus should be larger producer-consumer fusion (`gate/up -> activation -> down`), output-head specialization, or scheduling/cache corridors rather than another local Q4 lane retune.
