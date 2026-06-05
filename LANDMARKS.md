@@ -20250,3 +20250,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is single-token full-attention decode where `attn_ctx` is the active maximizer. Transport corridor is the KV context span for one decode token. Legal move is split-K execution only when `batch == 1` and `sliding_window == 0`, preserving cache/state boundaries and offering `GEMMA4_ROW_PREFILL_ATTN_SPLITK_OFF=1` as a dual-frame kill switch. Recomputed potential descends on decode wall without forcing the same move onto multi-token prefill, where prior forced min-batch experiments regressed pp64 prefill.
 **boundary:** Keep H16 KV cache out of the default path for now; H16+splitK regressed in current A/B. Next Gemma speed work should target prefill graph/ubatch scheduling and remaining attention/head shape gaps vs llama.cpp.
+
+### [LM-GEMMA4-SPLITK-CHUNK32-DECODE] Smaller split-K reduction tiles improve Gemma 4 decode attention
+**context:** ml / Gemma4 Metal / split-K attention geometry / decode batch=1
+**state:** implemented; default split-K chunk changed from 64 to 32, qtile stays 32
+
+- claim: "For Gemma 4 batch=1 full-attention decode, split-K chunk 32 is a better default than chunk 64 on M2 Max for pp256/gen32 body decode. The route preserves the same output ids in focused smokes and lowers decode p50 by about 2.5%."
+  source: sequential `scripts/run_safe.sh` A/B on Q4_K_M pp256/gen32 body-only after warmup. Default chunk64 row: `decode_ms_per_token_p50=73.49`, `last_id=12154`. Forced `GEMMA4_ROW_PREFILL_ATTN_SPLITK_CHUNK=32 GEMMA4_ROW_PREFILL_ATTN_SPLITK_QTILE=32`: `decode_ms_per_token_p50=71.679`, `last_id=12154`. Post-patch default: `decode_ms_per_token_p50=71.76`, `last_id=12154`. Build/no-codegen and `spec/gemma4_metal_buffer_spec.cr` passed.
+  verified_at: 2026-06-05
+  decay_trigger: split-K kernel rewrite, head_dim/GQA layout changes, Metal compiler/runtime change, or Gemma quant/model change
+  trust: {F:0.84,G:0.30,R:0.80}
+
+**LTP/WBA:** Window is full-attention decode context with split-K as the active corridor. Legal move shrinks the reduction transport chunk from 64 to 32 while preserving the query tile and exact output boundary. The lexicographic potential descends in decode wall and does not touch prefill chunking or sliding-window layers.
+**boundary:** This is a small retune, not the main decode gap closer. Further work should inspect why body-only tg remains far behind llama.cpp even after split-K, likely graph scheduling/attention kernel efficiency/head path rather than FFN micro-fusions.

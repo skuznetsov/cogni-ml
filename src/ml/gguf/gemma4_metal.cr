@@ -141,8 +141,8 @@ module ML::GGUF
       end
 
       private def attn_splitk_chunk_size : Int32
-        value = (ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK_CHUNK"]? || "64").to_i32
-        value > 0 ? value : 64
+        value = (ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK_CHUNK"]? || "32").to_i32
+        value > 0 ? value : 32
       end
 
       private def attn_splitk_query_tile : Int32
