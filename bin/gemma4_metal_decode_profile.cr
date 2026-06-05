@@ -22,8 +22,10 @@ llama_tokenize_bin = ENV["LLAMA_TOKENIZE_BIN"]? || "#{ENV["HOME"]}/SrcArchives/A
 decode_mode = "top1"
 decode_wave = ENV["GEMMA4_DECODE_WAVE_OFF"]? != "1"
 top1_wave_resident = ENV["GEMMA4_TOP1_WAVE_RESIDENT_OFF"]? != "1"
-top1_chain = 1
-body_chain = 1
+top1_chain_explicit = !ENV["GEMMA4_TOP1_CHAIN"]?.nil?
+body_chain_explicit = !ENV["GEMMA4_BODY_CHAIN"]?.nil?
+top1_chain = (ENV["GEMMA4_TOP1_CHAIN"]? || "8").to_i
+body_chain = (ENV["GEMMA4_BODY_CHAIN"]? || "8").to_i
 prefill_mode = "serial"
 prefill_chunk = 8
 prefill_head = true
@@ -57,8 +59,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--decode-layerwise", "Use legacy one-wait-per-layer decode path") { decode_wave = false }
   p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer (default)") { top1_wave_resident = true }
   p.on("--no-top1-wave-resident", "Use legacy hidden-readback + separate top1 head path") { top1_wave_resident = false }
-  p.on("--top1-chain N", "Generate exact greedy top1 in GPU-resident chunks of N; requires --decode-wave and --top1-wave-resident") { |v| top1_chain = v.to_i }
-  p.on("--body-chain N", "Run body-only decode in GPU-resident chunks of N known synthetic tokens") { |v| body_chain = v.to_i }
+  p.on("--top1-chain N", "Generate exact greedy top1 in GPU-resident chunks of N; requires --decode-wave and --top1-wave-resident") { |v| top1_chain = v.to_i; top1_chain_explicit = true }
+  p.on("--body-chain N", "Run body-only decode in GPU-resident chunks of N known synthetic tokens") { |v| body_chain = v.to_i; body_chain_explicit = true }
   p.on("--prefill-mode MODE", "Prompt prefill mode: serial or rows (default: serial)") { |v| prefill_mode = v }
   p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--prefill-no-head", "Measure pure prompt body only; requires --body-only because no next-token seed is computed") { prefill_head = false }
@@ -339,8 +341,16 @@ raise "prefill mode must be serial or rows" unless {"serial", "rows"}.includes?(
 raise "prefill chunk must be positive" unless prefill_chunk > 0
 raise "--top1-chain must be positive" unless top1_chain > 0
 raise "--body-chain must be positive" unless body_chain > 0
-raise "--top1-chain > 1 requires --top1 with --decode-wave and --top1-wave-resident" if top1_chain > 1 && (decode_mode != "top1" || !decode_wave || !top1_wave_resident)
-raise "--body-chain > 1 requires --body-only with --decode-wave" if body_chain > 1 && (decode_mode != "body" || !decode_wave)
+top1_chain_supported = decode_mode == "top1" && decode_wave && top1_wave_resident
+body_chain_supported = decode_mode == "body" && decode_wave
+if top1_chain > 1 && !top1_chain_supported
+  raise "--top1-chain > 1 requires --top1 with --decode-wave and --top1-wave-resident" if top1_chain_explicit
+  top1_chain = 1
+end
+if body_chain > 1 && !body_chain_supported
+  raise "--body-chain > 1 requires --body-only with --decode-wave" if body_chain_explicit
+  body_chain = 1
+end
 raise "--prefill-no-head requires --body-only" if !prefill_head && decode_mode != "body"
 if sl = stop_layer
   raise "--stop-layer must be non-negative" if sl < 0
@@ -351,7 +361,10 @@ if start_step = decode_stop_layer_after_step
   layer = decode_stop_layer_after_layer.not_nil!
   raise "--decode-stop-layer-after LAYER must be positive" if layer <= 0
   raise "--decode-stop-layer-after LAYER exceeds model layer count" if layer > weights.hparams.n_layer
-  raise "--top1-chain > 1 cannot be combined with --decode-stop-layer-after yet" if top1_chain > 1
+  if top1_chain > 1
+    raise "--top1-chain > 1 cannot be combined with --decode-stop-layer-after yet" if top1_chain_explicit
+    top1_chain = 1
+  end
 end
 if prompt_cache_root && stop_layer && stop_layer != weights.hparams.n_layer
   raise "--prompt-cache-root currently requires full-layer prefill/decode"

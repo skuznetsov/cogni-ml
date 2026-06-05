@@ -21940,3 +21940,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is exact greedy generation with per-token top1 readback/wait. Transport is a bounded token chunk where each GPU top1 id feeds the next embedding inside the command-buffer corridor. The Q4 x16 route lowered the dominant GEMV work enough that command-buffer/wait area again becomes a measurable secondary maximizer. Potential descends in `(per-token_wait_count, command-buffer_count, greedy_decode_wall, remaining_tokens)` on this prompt while preserving exact token ids.
 **boundary:** Keep top1-chain opt-in for now. Default promotion requires a sequential multi-prompt suite with token trace equality and stable wall descent; if any prompt shows command-buffer stickiness, use a smaller chain or exact one-token wave as the dual frame.
+
+### [LM-COGNIGRAPH-015] Gemma chain defaults use bounded exact scheduling with compatibility collapse
+**context:** ml / CogniGraph / Gemma4 / exact decode scheduling / LTP-WBA Collapse
+**state:** implemented as default controller with env overrides
+
+- claim: "Gemma decode profile and benchmark wrappers now default to bounded exact chaining: `GEMMA4_TOP1_CHAIN` defaults to `8` for exact greedy top1, and `GEMMA4_BODY_CHAIN` defaults to `8` for body-only benchmark decode. CLI flags `--top1-chain`, `--body-chain`, `--native-top1-chain`, and `--native-body-chain` still override."
+  source: `bin/gemma4_metal_decode_profile.cr` and `bin/benchmark_gemma4_vs_llama.cr`; no-codegen builds for both binaries passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: decode profile CLI rewrite, benchmark wrapper rewrite, or chain scheduler rewrite
+  trust: {F:0.86,G:0.24,R:0.84}
+
+- claim: "The default controller preserves compatibility by collapsing unsupported implicit defaults to chain=1. Smoke checks show normal top1 prints `top1_chain=8 body_chain=1`, body mode prints `top1_chain=1 body_chain=8`, and `--decode-stop-layer-after` prints `top1_chain=1 body_chain=1` without error."
+  source: guarded logs `/tmp/gemma4_chain_default_top1_smoke.log`, `/tmp/gemma4_chain_default_body_smoke.log`, and `/tmp/gemma4_chain_default_depth_smoke.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: option parsing rewrite, decode-stop-layer scheduler rewrite, or explicit chain incompatibility policy change
+  trust: {F:0.86,G:0.20,R:0.84}
+
+- claim: "A five-prompt sequential top1-chain suite under `QWEN35_Q4K_GEMV_X16=1` passed trace equality for code/json/reasoning/prose/list prompts and improved p50 tok/s in all five rows: speedups `1.0373x`, `1.0421x`, `1.0311x`, `1.0347x`, and `1.1202x`; no host warnings were reported."
+  source: guarded suite output in `/tmp/gemma4_top1_chain_suite_20260605193847` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: broader suite contradiction, host power/thermal drift, Q4 x16 route rewrite, or real serving path divergence
+  trust: {F:0.86,G:0.20,R:0.84}
+
+**LTP/WBA:** The local trigger is a stable exact decode corridor where per-token host waits remain a secondary active maximizer after Q4 x16 reduced GEMV work. Transport carries token ids through bounded command-buffer chunks. Legal moves are exact and state-boundary preserving; incompatible routes collapse to the one-token dual frame. Potential descends in `(host_wait_count, command_buffer_count, exact_decode_wall, remaining_tokens)` on the measured prompt suite without increasing trace divergence.
+**boundary:** This is a default controller for the benchmark/profile surfaces, not proof that every production serving path uses the chain. Any future dynamic-depth, partial-layer, or speculative route must re-check compatibility and collapse to chain=1 unless it proves its own descent certificate.
