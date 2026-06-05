@@ -20715,3 +20715,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was full-attention context at pp512/768. The attempted transport split context into chunked partial `(m,l,o)` reductions, but recomputed potential increased in `(attn_ctx_work, extra partial buffers, wall)`. Dual frame remains the default single-pass context kernel for this prompt range. A future FA port must change the reduction geometry materially; toggling current split-K is not enough.
 **boundary:** Do not promote current `splitk` or retest it at pp512/768 without a kernel/geometry change. If attention remains the target, implement a llama.cpp-style vector/reduction frame or a narrower full-attention-specific kernel with a fresh parity/perf gate.
+
+### [LM-COGNIGEMMA-98] Gemma prefill FFN-out RMSNorm+scaled-add fusion is exact but not a wall-speed lever
+**context:** ml / CogniGemma Metal prefill / FFN producer-consumer fusion / LTP-WBA
+**state:** refuted for current promotion; experimental code removed
+
+- claim: "A temporary default-on `gemma4_rmsnorm_rows_weighted_add_scaled` branch fused post-FFN RMSNorm with the following scaled add and removed the now-unused `ffn_normed` scratch allocation on the fused path. Focused Gemma Metal buffer spec passed (`9 examples, 0 failures`), so the move was numerically safe on the focused gate."
+  source: temporary implementation in `src/ml/gguf/kernels/gemma4.metal` and `src/ml/gguf/gemma4_metal.cr`; guarded spec with `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_ffnout_spec2` passed.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma FFN-out rewrite, row-prefill scheduler rewrite, or a larger fused FFN-down+norm corridor
+  trust: {F:0.82,G:0.18,R:0.80}
+
+- claim: "Sequential ABBA-style prefill gates did not show a promotion-worthy wall win. After scratch-allocation cleanup, pp512 measured default `1509.928/1514.802ms` versus kill-switch `1509.982/1510.314ms`; pp768 default `2497.942/2507.900ms` versus kill-switch `2503.622/2501.891ms`; pp1024 default `3460.990/3463.624ms` versus kill-switch `3466.276/3464.192ms`. This is neutral within host noise, with only a tiny pp1024-positive signal."
+  source: guarded wrapper log directory `/tmp/gemma4-ffnout-fused2-1780668858`, binary `/tmp/gemma4_metal_decode_profile_ffnout2`, modes `default,ffnoutoff,ffnoutoff,default`.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host multi-run repeat, phase scheduler rewrite, or moving the fusion into Q6 FFN-down itself
+  trust: {F:0.78,G:0.20,R:0.76}
+
+**LTP/WBA:** Window was the exact producer-consumer seam `ffn_down -> post_ffw_rmsnorm -> scaled_add`. The legal move preserved the boundary formula `(residual + rmsnorm(ffn)) * scale` and reduced one intermediate buffer/write/read corridor. Recomputed wall potential did not descend enough: the removed memory pass is smaller than the active FFN weight corridor and phase scheduling noise. Dual frame is to fuse a larger corridor, such as Q6 FFN-down plus norm summary transport, or to reduce/avoid FFN body work through proposal/surrogate acceptance.
+**boundary:** Do not reintroduce standalone post-FFN norm+add fusion as a speed path. It may be reconsidered only as part of a larger FFN-down/norm corridor or a memory-pressure-specific cleanup with a separate memory metric gate.
