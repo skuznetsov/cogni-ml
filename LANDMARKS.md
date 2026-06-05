@@ -21555,3 +21555,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The active window was the overloaded `pp` label. The legal Diamond normalization split it into exact-default, approximate/GEMM, first-use, warmed, and cache-restore corridors. Recomputed potential descends because the earlier contradiction is removed without changing kernels.
 **boundary:** Do not compare strict exact Gemma pp rows against `ALLOW_GEMM`/cache-bench rows. For llama.cpp comparison, report corridor labels explicitly: exact verifier-safe, approximate/GEMM diagnostic, warmed first-run, and hot session cache.
+
+### [LM-COGNIGEMMA-134] Gemma exact chunk caps are correctness-safe but do not unlock the fast pp GEMM corridor
+**context:** ml / CogniGemma Metal / prefill exactness / high-batch GEMM / pp optimization
+**state:** verified; next branch must separate exact kernels from approximate `ALLOW_GEMM` route
+
+- claim: "With `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, row-prefill batch>8 drifts immediately against serial resident decode: prompt16 stop1 `max|d|=0.008472443`, prompt16 stop32 `0.23360062`, prompt32 stop48 `0.026108265`. This is the fast approximate corridor, not a verifier-safe exact route."
+  source: temporary guarded `/tmp/gemma4_prefill_drift_probe` run on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma row-prefill batch GEMM precision/path rewrite
+  trust: {F:0.84,G:0.14,R:0.80}
+
+- claim: "Raising `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX` plus `QWEN35_GEMM_BATCH_THRESHOLD` to `16/32/64` kept hidden drift bounded on prompt sizes up to 32 (`~1e-4` worst observed), but did not improve pp256 speed: cap16 `43.615 tok/s`, cap32 `48.336 tok/s`, cap64 `46.289 tok/s` after warmup. The exact caps do not enter the fast `ALLOW_GEMM` kernel corridor."
+  source: guarded `/tmp/gemma4_metal_decode_profile` and `/tmp/gemma4_prefill_drift_probe` runs on 2026-06-05, logs under `/tmp/gemma4_pp_corridor_20260605173738/`.
+  verified_at: 2026-06-05
+  decay_trigger: exact high-batch Q4/Q6 GEMM route rewrite or row-prefill controller change
+  trust: {F:0.84,G:0.12,R:0.80}
+
+**LTP/WBA:** The window is high-batch pp; the transport split is exact caps vs approximate GEMM. The legal move is not to promote `ALLOW_GEMM`; it changes the boundary. The next exact speed branch must either make the fast GEMM route numerically safe enough for top1/logit certification or build a new exact high-batch kernel path with the same row-packing economics.
+**boundary:** Do not use `ALLOW_GEMM` for exact verifier/published apples-to-apples claims. Use it only as an approximate diagnostic and as an oracle for the speed target of a future exact high-batch route.
