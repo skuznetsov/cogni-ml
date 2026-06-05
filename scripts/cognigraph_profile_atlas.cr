@@ -22,6 +22,7 @@ abort "log not found: #{log_path}" unless File.exists?(log_path)
 record GroupRow, name : String, calls : Int32, encode_ms : Float64, wait_ms : Float64, read_ms : Float64, upload_mib : Float64, readback_mib : Float64
 record MatmulRow, name : String, calls : Int32, weight_mib : Float64, pct : Float64
 record ConversionRow, name : String, calls : Int32, traffic_mib : Float64, pct : Float64
+record PhaseFamilyRow, name : String, calls : Int32, encode_ms : Float64, wait_ms : Float64, read_ms : Float64, upload_mib : Float64, readback_mib : Float64
 
 text = File.read(log_path)
 groups = [] of GroupRow
@@ -82,6 +83,30 @@ dominant_conversion = conversions.max_by?(&.traffic_mib)
 tied_groups = dominant_group ? groups.count { |g| dominant_group.not_nil!.wait_ms > 0 && g.wait_ms >= dominant_group.not_nil!.wait_ms * 0.80 } : 0
 tied_matmuls = dominant_matmul ? matmuls.count { |m| dominant_matmul.not_nil!.weight_mib > 0 && m.weight_mib >= dominant_matmul.not_nil!.weight_mib * 0.80 } : 0
 conflict_count = (syncs || groups.size) + groups.count { |g| g.readback_mib > 0 || g.upload_mib > 0 }
+phase_family = {} of String => {Int32, Float64, Float64, Float64, Float64, Float64}
+groups.each do |g|
+  family = if m = g.name.match(/^gemma4\.rows\.layer\d+\.(.+)$/)
+             "gemma4.rows.*.#{m[1]}"
+           elsif m = g.name.match(/^gemma4\.decode_wave(?:_top1)?\.(.+)$/)
+             "gemma4.decode_wave.*.#{m[1]}"
+           else
+             nil
+           end
+  next unless family
+
+  prev = phase_family[family]? || {0, 0.0, 0.0, 0.0, 0.0, 0.0}
+  phase_family[family] = {
+    prev[0] + g.calls,
+    prev[1] + g.encode_ms,
+    prev[2] + g.wait_ms,
+    prev[3] + g.read_ms,
+    prev[4] + g.upload_mib,
+    prev[5] + g.readback_mib,
+  }
+end
+phase_rows = phase_family.map do |name, v|
+  PhaseFamilyRow.new(name, v[0], v[1], v[2], v[3], v[4], v[5])
+end
 
 if json
   puts "{"
@@ -105,6 +130,13 @@ puts
 puts "Top command-buffer groups by wait:"
 groups.sort_by { |g| {-g.wait_ms, g.name} }.first(limit).each do |g|
   puts "  #{g.name}: calls=#{g.calls} encode=#{g.encode_ms.round(3)}ms wait=#{g.wait_ms.round(3)}ms read=#{g.read_ms.round(3)}ms upload=#{g.upload_mib.round(3)}MiB readback=#{g.readback_mib.round(3)}MiB"
+end
+unless phase_rows.empty?
+  puts
+  puts "Phase-family groups by wait:"
+  phase_rows.sort_by { |g| {-g.wait_ms, g.name} }.each do |g|
+    puts "  #{g.name}: calls=#{g.calls} encode=#{g.encode_ms.round(3)}ms wait=#{g.wait_ms.round(3)}ms read=#{g.read_ms.round(3)}ms upload=#{g.upload_mib.round(3)}MiB readback=#{g.readback_mib.round(3)}MiB"
+  end
 end
 puts
 puts "Top matmul shapes by logical weight traffic:"
