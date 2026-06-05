@@ -20064,3 +20064,41 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the repeated host boundary across generated-token layers. The prior opt-in move already proved legal; ABBA recomputation shows `Phi=(host_layer_waits, command_buffers, GEMV_weight_bytes, fallback_risk)` descends consistently at gen32/gen64. Collapse is now justified for the profile path, with `--decode-layerwise` and `GEMMA4_DECODE_WAVE_OFF=1` as the dual frame.
 **boundary:** This is profile/decode benchmark default, not yet a full CogniGemma serving/chat policy. Broader default should wait for multi-prompt and longer-context gates. Next bottleneck remains Q4/Q6 GEMV/weight traffic.
+
+### [LM-COGNIGEMMA-97] Gemma decode op attribution exposes low-throughput attention projection shapes
+**context:** ml / CogniGemma / decode tg / GEMV attribution / LTP-WBA weight corridor
+**state:** verified measurement tool extension; kernel rewrite pending
+
+- claim: "`bin/gemma4_op_attribution.cr` now reports quantized weight traffic and effective GB/s per standalone shape. On local M2 Max Gemma4 12B Q4_K_M at `batch=1`, body-only decode attribution reports `6242.344 MiB` weighted quantized matmul traffic, matching the decode-wave profile. Dense FFN Q4/Q6 shapes sustain about `54 GB/s` standalone effective bandwidth, while several attention projection shapes are much lower: Q4 `4096x3840` about `15.2 GB/s`, Q4 `3840x2048` about `18.0 GB/s`, and Q4 `3840x512` about `4.1 GB/s`. The active exact tg window after decode-wave is therefore shape-specific GEMV occupancy/amortization, not host waits."
+  source: implementation in `bin/gemma4_op_attribution.cr`; no-codegen build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_op_attr_bw_build scripts/run_safe.sh /opt/homebrew/bin/crystal 180 5000 build --no-codegen bin/gemma4_op_attribution.cr --error-trace` passed; guarded run `COGNI_RUN_SAFE_MIN_FREE_PCT=12 scripts/run_safe.sh /tmp/gemma4_op_attribution_bw 1200 30000 --batch=1 --warmup=1 --runs=3 --profile-wait --exclude-output-head --limit=12` passed.
+  verified_at: 2026-06-04
+  decay_trigger: op-attribution tool rewrite, GEMV kernel rewrite, Gemma quant/layout change, or decode-wave route rewrite
+  trust: {F:0.84,G:0.30,R:0.82}
+
+- claim: "Local llama.cpp Metal source comparison confirms its Q4_K/Q6_K GEMV kernels are the same classic simdgroup-reduction family, not simdgroup-matrix/MMA GEMV. Our `simd_mv_q4k_f32` and `simd_mv_q6k_f32` follow the same row-group structure and arithmetic shape as llama.cpp `kernel_mul_mv_q4_K_f32_impl` and `kernel_mul_mv_q6_K_f32_impl`. This refutes a broad 'just add MMA like llama.cpp' diagnosis for decode batch=1."
+  source: local source inspection of `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal.metal` (`kernel_mul_mv_q4_K_f32_impl`, `kernel_mul_mv_q6_K_f32_impl`) and `src/ml/gguf/kernels/gemm_q4k.metal`, `src/ml/gguf/kernels/gemm_q56k.metal`.
+  verified_at: 2026-06-04
+  decay_trigger: llama.cpp Metal GEMV rewrite, local kernel rewrite, or batch>1 verifier route change
+  trust: {F:0.82,G:0.34,R:0.80}
+
+**LTP/WBA:** Window is the active decode-weight maximizer after host-wait collapse. Transport is the per-shape quantized GEMV corridor: `Q4_K/Q6_K` weights flow from row-major quant blocks through a bounded output-row band into hidden/FFN/attention intermediates. Legal moves must preserve exact quant arithmetic and resident state boundaries; only occupancy/layout/scheduling/fusion may change. Recomputed potential `Phi=(low_eff_gbps_shape_count, attention_projection_wait, FFN_weight_wait, kernel_rewrite_risk, remaining_tg_wall)` descends by separating high-throughput dense FFN shapes from low-throughput small/medium projection shapes. Dual frame remains current decode-wave GEMV.
+**boundary:** The attribution rows are standalone shape microbenchmarks, so absolute weighted time overestimates fused decode-wave wall. Use them for ranking and bottleneck class selection, not as direct token latency. Next exact kernel work should specialize or fuse the low-throughput attention projection shapes first, then revisit FFN gate/up pair only if a measured route beats the existing llama-like GEMV family.
+
+### [LM-COGNIGEMMA-98] Gemma Q4 shape-layout GEMV is useful attribution but not a tg promotion
+**context:** ml / CogniGemma / decode tg / Q4_K GEMV layout sweep / refutation
+**state:** implemented default-off; correctness passed; speed not promoted
+
+- claim: "CogniGemma now has a default-off Q4_K GEMV shape-layout experiment controlled by `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=1`, plus `gemma4_op_attribution --q4-layout-sweep=...` to benchmark alternate `NSGxNR0` row groupings. The normal runtime remains unchanged unless the env flag is set."
+  source: implementation in `src/ml/gguf/qwen35_metal.cr` and `bin/gemma4_op_attribution.cr`; no-codegen build passed; focused Gemma Metal spec with `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=1` passed (`9 examples, 0 failures`).
+  verified_at: 2026-06-04
+  decay_trigger: Q4 GEMV source rewrite, shape-layout controller rewrite, or Gemma decode-wave route rewrite
+  trust: {F:0.88,G:0.38,R:0.86}
+
+- claim: "Layout microbenchmarks show real per-shape differences, but full decode does not support promotion. On the top Q4 shapes, layout sweep showed `2x2` best for `3840x15360`, `2x4` much faster for `15360x3840`, `2x1` for `3840x4096`, `2x4` for `4096x3840`, and `2x3`/`1x1` for `3840x2048`. However, gen32 top1 ABBA-style rows measured default `45.535/46.578 ms/tok` and shape-layout `47.459/46.654 ms/tok`, with identical `first_id=236761` and `last_id=84750`. A body-only decode profile showed only a tiny wait improvement (`276.55ms -> 271.73ms` over 8 tokens) and p50 `37.106 -> 36.941 ms/tok`, below promotion threshold and outweighed by top1 path variance."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-shape-layout-ab2.4nIYkT/` and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-shape-layout-profile.PYV7i4/`; layout sweep from `/tmp/gemma4_op_attribution_layout` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host longer ABBA repeat, LM-head/top1 route rewrite, or controller retune with additional shapes
+  trust: {F:0.82,G:0.28,R:0.78}
+
+**LTP/WBA:** Window is per-shape Q4_K GEMV low-throughput output-row bands. Transport is legal row-group geometry (`NSGxNR0`) over a bounded shape corridor. Microbench potential descends for some local corridors, but recomputation over the full decode boundary increases or barely changes the higher-level potential `Phi=(decode_wall, top1_variance, pipeline_compile/layout_risk, remaining_tg_work)`. This is a Diamond conflict: local row grouping can help one shape while disrupting whole-wave balance. Dual frame is current default `2x2` Q4 GEMV.
+**boundary:** Keep `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=1` default-off and use it only for further attribution. Do not claim tg acceleration from this branch. Future work should target graph-level fusion that reduces kernel/shape count or weight reads, not just static row-layout retuning.

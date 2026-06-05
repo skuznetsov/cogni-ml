@@ -19,6 +19,7 @@ record BenchRow,
   out_dim : Int32,
   count : Int32,
   batch : Int32,
+  weight_bytes : Int64,
   p50_ms : Float64,
   wait_ms : Float64,
   per_row_ms : Float64,
@@ -40,6 +41,8 @@ record PairRef,
   up_name : String,
   gate_qw : ML::GGUF::QuantWeight,
   up_qw : ML::GGUF::QuantWeight
+
+record Q4Layout, nsg : Int32, nr0 : Int32
 
 private def add_op(ops : Array(OpRef), name : String, qw : ML::GGUF::QuantWeight) : Nil
   ops << OpRef.new(name, qw)
@@ -99,12 +102,44 @@ private def percentile(sorted : Array(Float64), pct : Int32) : Float64
   sorted[(sorted.size * pct // 100).clamp(0, sorted.size - 1)]
 end
 
+private def mib(bytes : Int64 | Float64) : Float64
+  bytes.to_f64 / 1_048_576.0
+end
+
+private def gbps(bytes : Int64 | Float64, ms : Float64) : Float64
+  return 0.0 unless ms > 0.0
+  bytes.to_f64 / (ms / 1000.0) / 1_000_000_000.0
+end
+
 private def bench_q4_h16_pair(pair : PairRef, warmup : Int32, runs : Int32, batch : Int32) : Float64
   x = input_for(pair.gate_qw.in_dim, batch)
   ML::GGUF::Qwen35Metal.bench_q4_h16_pair_wait_ms(pair.gate_qw, pair.up_qw, x, batch, validate: true)
   warmup.times { ML::GGUF::Qwen35Metal.bench_q4_h16_pair_wait_ms(pair.gate_qw, pair.up_qw, x, batch) }
   times = Array(Float64).new(runs) do
     ML::GGUF::Qwen35Metal.bench_q4_h16_pair_wait_ms(pair.gate_qw, pair.up_qw, x, batch)
+  end
+  percentile(times.sort, 50)
+end
+
+private def parse_q4_layouts(spec : String) : Array(Q4Layout)
+  spec.split(",", remove_empty: true).map do |part|
+    fields = part.strip.split("x", remove_empty: true)
+    raise "invalid Q4 layout '#{part}', expected NSGxNR0" unless fields.size == 2
+    Q4Layout.new(fields[0].to_i, fields[1].to_i)
+  end
+end
+
+private def bench_q4_layout(stats : ShapeStats,
+                            layout : Q4Layout,
+                            warmup : Int32,
+                            runs : Int32,
+                            batch : Int32,
+                            validate : Bool) : Float64
+  x = input_for(stats.in_dim, batch)
+  ML::GGUF::Qwen35Metal.bench_q4_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0, validate: validate)
+  warmup.times { ML::GGUF::Qwen35Metal.bench_q4_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0) }
+  times = Array(Float64).new(runs) do
+    ML::GGUF::Qwen35Metal.bench_q4_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0)
   end
   percentile(times.sort, 50)
 end
@@ -131,12 +166,14 @@ private def bench_shape(stats : ShapeStats, warmup : Int32, runs : Int32, batch 
 
   p50 = percentile(times.sort, 50)
   wait_p50 = profile_wait ? percentile(waits.sort, 50) : 0.0
+  weight_bytes = stats.sample.raw.size.to_i64
   BenchRow.new(
     type: stats.type,
     in_dim: stats.in_dim,
     out_dim: stats.out_dim,
     count: stats.count,
     batch: batch,
+    weight_bytes: weight_bytes,
     p50_ms: p50,
     wait_ms: wait_p50,
     per_row_ms: p50 / batch,
@@ -170,6 +207,32 @@ private def print_prefill_q4_pair_table(w : ML::GGUF::Gemma4Weights, warmup : In
   end
 end
 
+private def print_q4_layout_sweep(stats : Array(ShapeStats),
+                                  layouts : Array(Q4Layout),
+                                  warmup : Int32,
+                                  runs : Int32,
+                                  batch : Int32) : Nil
+  q4_stats = stats.select(&.sample.type.q4_k?)
+  return if q4_stats.empty? || layouts.empty?
+
+  puts
+  puts "Gemma4 Q4_K GEMV layout sweep"
+  puts "note: layout is NSGxNR0; default is 2x2. p50_wait is command wait only."
+  printf "%7s %8s %5s %5s %8s %10s %10s %9s  %s\n",
+    "in", "out", "calls", "batch", "layout", "p50_wait", "weighted", "eff_gbps", "examples"
+  q4_stats.each do |shape|
+    layouts.each do |layout|
+      p50 = bench_q4_layout(shape, layout, warmup, runs, batch, validate: true)
+      weighted = (p50 / batch) * shape.count
+      examples = shape.names.first(3).join(",")
+      examples += ",..." if shape.names.size > 3
+      printf "%7d %8d %5d %5d %8s %10.3f %10.3f %9.1f  %s\n",
+        shape.in_dim, shape.out_dim, shape.count, batch, "#{layout.nsg}x#{layout.nr0}",
+        p50, weighted, gbps(shape.sample.raw.size.to_i64, p50), examples
+    end
+  end
+end
+
 model = MODEL_PATH
 warmup = 2
 runs = 5
@@ -179,9 +242,10 @@ profile_wait = false
 prefill_q4_pair_wait = false
 prefill_q4_pair_only = false
 exclude_output_head = false
+q4_layout_sweep = [] of Q4Layout
 
 OptionParser.parse do |p|
-  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--exclude-output-head] [--prefill-q4-pair-wait] [--prefill-q4-pair-only]"
+  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--exclude-output-head] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--q4-layout-sweep=NSGxNR0,...]"
   p.on("--model=PATH", "Gemma4 GGUF model path") { |v| model = v }
   p.on("--warmup=N", "Warmup runs per shape (default: 2)") { |v| warmup = v.to_i }
   p.on("--runs=N", "Measured runs per shape (default: 5)") { |v| runs = v.to_i }
@@ -191,6 +255,7 @@ OptionParser.parse do |p|
   p.on("--exclude-output-head", "Exclude tied full-logits head from the benchmark rows and totals") { exclude_output_head = true }
   p.on("--prefill-q4-pair-wait", "Also benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true }
   p.on("--prefill-q4-pair-only", "Only benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true; prefill_q4_pair_only = true }
+  p.on("--q4-layout-sweep=LIST", "Benchmark alternate Q4_K GEMV layouts, e.g. 1x1,1x2,2x1,2x2,2x3,2x4") { |v| q4_layout_sweep = parse_q4_layouts(v) }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -212,6 +277,7 @@ puts "note: output.full_logits_equiv uses token_embd as tied full Q6_K lm-head m
 puts "note: output.full_logits_equiv excluded from rows/totals." if exclude_output_head
 puts "note: v_reuse_k entries count the actual full-attention K-as-V projection route."
 puts "note: p50_ms is standalone matmul latency for the whole batch; weighted_ms=(p50/batch)*calls."
+puts "note: weight_mib is quantized weight traffic per standalone call; weighted_mib=(weight_mib/batch)*calls."
 puts "note: wait_ms is Metal command wait time only, excluding host-side input write/readback." if profile_wait
 puts
 
@@ -221,33 +287,47 @@ if prefill_q4_pair_wait
   puts
 end
 
+print_q4_layout_sweep(stats, q4_layout_sweep, warmup, runs, batch) unless q4_layout_sweep.empty?
+
 rows = stats.map { |s| bench_shape(s, warmup, runs, batch, profile_wait) }
 rows.sort_by! { |r| profile_wait ? -r.weighted_wait_ms : -r.weighted_ms }
 
 if profile_wait
-  printf "%-8s %7s %8s %5s %5s %10s %10s %10s %12s %12s  %s\n",
-    "type", "in", "out", "calls", "batch", "p50_ms", "wait_ms", "per_row", "weighted_ms", "weighted_wait", "examples"
+  printf "%-8s %7s %8s %5s %5s %10s %10s %10s %11s %10s %12s %12s %9s  %s\n",
+    "type", "in", "out", "calls", "batch", "p50_ms", "wait_ms", "per_row", "weight_mib", "eff_gbps", "weighted_ms", "weighted_wait", "w_mib", "examples"
 else
-  printf "%-8s %7s %8s %5s %5s %10s %10s %12s  %s\n",
-    "type", "in", "out", "calls", "batch", "p50_ms", "per_row", "weighted_ms", "examples"
+  printf "%-8s %7s %8s %5s %5s %10s %10s %11s %10s %12s %9s  %s\n",
+    "type", "in", "out", "calls", "batch", "p50_ms", "per_row", "weight_mib", "eff_gbps", "weighted_ms", "w_mib", "examples"
 end
 rows.each do |r|
   examples = r.names.first(3).join(",")
   examples += ",..." if r.names.size > 3
+  weighted_bytes = r.weight_bytes.to_f64 * r.count / r.batch
   if profile_wait
-    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %10.3f %12.3f %12.3f  %s\n",
+    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %10.3f %11.2f %10.1f %12.3f %12.3f %9.1f  %s\n",
       r.type, r.in_dim, r.out_dim, r.count, r.batch, r.p50_ms, r.wait_ms,
-      r.per_row_ms, r.weighted_ms, r.weighted_wait_ms, examples
+      r.per_row_ms, mib(r.weight_bytes), gbps(r.weight_bytes, r.wait_ms),
+      r.weighted_ms, r.weighted_wait_ms, mib(weighted_bytes), examples
   else
-    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %12.3f  %s\n",
+    printf "%-8s %7d %8d %5d %5d %10.3f %10.3f %11.2f %10.1f %12.3f %9.1f  %s\n",
       r.type, r.in_dim, r.out_dim, r.count, r.batch, r.p50_ms,
-      r.per_row_ms, r.weighted_ms, examples
+      r.per_row_ms, mib(r.weight_bytes), gbps(r.weight_bytes, r.p50_ms),
+      r.weighted_ms, mib(weighted_bytes), examples
   end
 end
 
 puts
 printf "total_weighted_measured_ms=%.3f\n", rows.sum(&.weighted_ms)
 printf "total_weighted_wait_ms=%.3f\n", rows.sum(&.weighted_wait_ms) if profile_wait
+total_weighted_bytes = rows.sum { |row| row.weight_bytes.to_f64 * row.count / row.batch }
+printf "total_weighted_weight_mib=%.3f\n", mib(total_weighted_bytes)
+if profile_wait
+  total_wait = rows.sum(&.weighted_wait_ms)
+  printf "total_weighted_effective_gbps=%.3f\n", gbps(total_weighted_bytes, total_wait) if total_wait > 0.0
+else
+  total_ms = rows.sum(&.weighted_ms)
+  printf "total_weighted_effective_gbps=%.3f\n", gbps(total_weighted_bytes, total_ms) if total_ms > 0.0
+end
 
 puts
 puts "Category summary"
@@ -257,15 +337,18 @@ category_order.each do |category|
   category_rows = by_category[category]? || next
   measured = category_rows.sum(&.weighted_ms)
   wait = category_rows.sum(&.weighted_wait_ms)
+  category_bytes = category_rows.sum { |row| row.weight_bytes.to_f64 * row.count / row.batch }
   if profile_wait
-    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_wait_ms=%8.3f\n",
-      category, category_rows.size, measured, wait
+    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_wait_ms=%8.3f weighted_mib=%8.1f eff_gbps=%7.1f\n",
+      category, category_rows.size, measured, wait, mib(category_bytes), gbps(category_bytes, wait)
   else
-    printf "  %-10s rows=%2d weighted_ms=%8.3f\n",
-      category, category_rows.size, measured
+    printf "  %-10s rows=%2d weighted_ms=%8.3f weighted_mib=%8.1f eff_gbps=%7.1f\n",
+      category, category_rows.size, measured, mib(category_bytes), gbps(category_bytes, measured)
   end
 end
 
 body_rows = rows.reject { |row| row_category(row) == "head" }
+body_weighted_bytes = body_rows.sum { |row| row.weight_bytes.to_f64 * row.count / row.batch }
 printf "body_no_head_weighted_measured_ms=%.3f\n", body_rows.sum(&.weighted_ms)
 printf "body_no_head_weighted_wait_ms=%.3f\n", body_rows.sum(&.weighted_wait_ms) if profile_wait
+printf "body_no_head_weighted_weight_mib=%.3f\n", mib(body_weighted_bytes)
