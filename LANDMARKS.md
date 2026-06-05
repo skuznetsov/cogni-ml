@@ -20045,3 +20045,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the host boundary between 48 dependent decode layers. Transport carries the hidden state through a single command-buffer corridor using existing exact row-layer kernels at `batch=1`. Legal move preserves layer order, resident K/V writes, and exact fallback; scratch reuse is safe only because commands are ordered inside one command buffer. Recomputed potential `Phi=(host_layer_waits, command_buffers, GEMV_weight_bytes, readback, remaining_decode_work)` descends by eliminating 47 host waits per token. After recomputation, `GEMV_weight_bytes` becomes the active maximizer: about `6.24 GiB` logical matmul traffic per Gemma4 12B token.
 **boundary:** Keep as opt-in until a larger ABBA gate over gen32/64 and prompts confirms stability. Next exact tg frontier is Q4/Q6 GEMV kernel/body optimization or reducing repeated weight traffic; LM-head is secondary (~8ms/token before wave).
+
+### [LM-COGNIGEMMA-96] Gemma decode-wave is promoted as profile default with fallback
+**context:** ml / CogniGemma / decode tg / default policy
+**state:** promoted in `bin/gemma4_metal_decode_profile.cr`
+
+- claim: "The `--decode-wave` path is stable enough for the Gemma profile/decode benchmark default. The profile CLI now defaults to decode-wave unless `GEMMA4_DECODE_WAVE_OFF=1` or `--decode-layerwise` is used; `--decode-wave` remains accepted as an explicit force-on flag."
+  source: implementation in `bin/gemma4_metal_decode_profile.cr`; no-codegen build and release build `/tmp/gemma4_metal_decode_profile_wave_default` passed.
+  verified_at: 2026-06-04
+  decay_trigger: profile CLI rewrite, decode-wave correctness rewrite, or broader serving integration
+  trust: {F:0.88,G:0.46,R:0.86}
+
+- claim: "Guarded ABBA-style stability gate supports promotion on the synthetic pp64 prompt. gen32 old/wave/wave/old measured `75.571`, `56.152`, `56.109`, `79.607 ms/tok`, for old mean `77.589`, wave mean `56.130`, `1.382x`. gen64 measured `79.686`, `61.157`, `60.261`, `92.827 ms/tok`, for old mean `86.257`, wave mean `60.709`, `1.421x`. All rows preserved `first_id=236761` and `last_id=645`. A final default/fallback smoke measured default `decode_wave=true` at `55.108 ms/tok` and explicit `--decode-layerwise` at `71.853 ms/tok`."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-decode-wave-abba2.ab0DWJ/` and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-decode-wave-default.3jB0fx/`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host multi-prompt repeat, decode-wave default policy change, or Gemma profile binary rewrite
+  trust: {F:0.84,G:0.32,R:0.82}
+
+**LTP/WBA:** Window is the repeated host boundary across generated-token layers. The prior opt-in move already proved legal; ABBA recomputation shows `Phi=(host_layer_waits, command_buffers, GEMV_weight_bytes, fallback_risk)` descends consistently at gen32/gen64. Collapse is now justified for the profile path, with `--decode-layerwise` and `GEMMA4_DECODE_WAVE_OFF=1` as the dual frame.
+**boundary:** This is profile/decode benchmark default, not yet a full CogniGemma serving/chat policy. Broader default should wait for multi-prompt and longer-context gates. Next bottleneck remains Q4/Q6 GEMV/weight traffic.
