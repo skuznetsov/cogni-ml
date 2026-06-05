@@ -21267,3 +21267,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This tests the dual frame after memory-NN: cheap copy/session corridor plus exact chunk verifier. The local proposal window is cheap, but the transport did not match Gemma's generated continuation on the first repeated-text prompt, so the verifier corridor immediately rejected and increased potential via snapshot/verify tax. The scaffold is still useful because it separates proposal lookup (`~0`) from verifier/commit costs and proves fail-closed parity.
 **boundary:** Do not promote Gemma n-gram chunking from this smoke. Next valid tests require prompts where candidate spans are drawn from known/generated session text, or a cheaper commit path; repeated prompt text alone is not evidence that the model will copy it.
+
+### [LM-COGNIGEMMA-121] Gemma exact top1 chain is parity-safe but not a promoted speed path
+**context:** ml / CogniGemma Metal / exact greedy decode / GPU-resident command-buffer chaining / LTP-WBA
+**state:** diagnostic implemented; speed promotion withheld
+
+- claim: "`Gemma4Metal.forward_top1_resident_cache_chain` adds a bounded exact greedy chain: each generated top1 id remains GPU-resident and feeds the next embedding inside the same Metal command buffer. `bin/gemma4_metal_decode_profile.cr` exposes this through `--top1-chain N`, guarded to exact top1 resident decode and incompatible with dynamic decode-depth schedules for now."
+  source: `crystal build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` passed; guarded release build via `scripts/run_safe.sh /opt/homebrew/bin/crystal ... build bin/gemma4_metal_decode_profile.cr -o /tmp/gemma4_metal_decode_profile ...` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma decode scheduler rewrite, top1 head API change, or command-buffer/encoder ownership change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "The chain preserves token-trace parity on smoke tests. Baseline resident top1 and `--top1-chain 4` both produced `token_trace=236761,236761,84750,...` on the 16-token prompt smoke, and decode-only sweeps likewise preserved identical repeated-token traces."
+  source: guarded `/tmp/gemma4_metal_decode_profile --tokens 42,43,44,45,46,47,48,49 --generate 16 --runs 1 --warmups 0 --top1-wave-resident --decode-wave --print-generated-ids` and matching `--top1-chain 4` run; both exited 0 with identical trace.
+  verified_at: 2026-06-05
+  decay_trigger: broader prompt suite, tokenizer/text prompt path, or state-cache format change
+  trust: {F:0.78,G:0.10,R:0.76}
+
+- claim: "Cross-token command-buffer chaining is not yet a reliable performance promotion. The cleanest decode-only sweep showed `chain=1` at `29.338 tok/s`, `chain=2` at `29.624 tok/s`, but `chain=4` at `25.693 tok/s` and `chain=8` at `25.898 tok/s`; a later transiently noisy sweep collapsed even the baseline, so the only safe conclusion is parity-safe diagnostic with no promoted speedup."
+  source: guarded decode-only sweep `/tmp/gemma4_metal_decode_profile --decode-only-seed 236761 --generate 32 --runs 2 --warmups 1 --top1-chain 1,2,4,8 --print-generated-ids`; later reruns showed significant system noise and were not used for promotion.
+  verified_at: 2026-06-05
+  decay_trigger: ABBA harness with memory-pressure telemetry, precompiled Metal library, or lower-overhead chain encoder implementation
+  trust: {F:0.72,G:0.08,R:0.66}
+
+**LTP/WBA:** The intended window was per-token CPU readback/wait overhead; the corridor was a fixed exact greedy token chunk carrying `top1_id` buffers on GPU; the legal move preserved KV/state boundaries and exact greedy ids. After recomputing the active window, larger chunks increased scheduling/resource stickiness and did not lower the global potential. This refutes "just chain multiple exact tokens in one command buffer" as a main Gemma eager-gen speed path under current kernels.
+**boundary:** Keep `--top1-chain` as a parity and scheduling diagnostic. Do not enable it by default. The next legal frame is intra-token graph fusion/launch attribution or production session-cache replay, not larger cross-token exact chains.
