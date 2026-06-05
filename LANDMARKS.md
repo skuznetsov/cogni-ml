@@ -20978,3 +20978,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the LM-107 tension: top5 proximity exists but top1 wild text drifts. The tested legal move was a Diamond risk analysis: keep the exact state boundary, compute surrogate logits, and ask whether a local confidence corridor can separate safe from unsafe moves. Recomputed potential refutes simple margin gating because the earlier `quality/conflict` component does not descend; in reasoning it worsens as wrong tokens become high-margin. The code prompt still has a top-k transport corridor (`17/24` exact-in-top5), but it needs a verifier/tree or a different router signal. Dual frame is exact decode for reasoning/uncertain phases, and top-k verifier or mixture/impact basis for code-like low-curvature phases.
 **boundary:** Do not use surrogate top1-top2 margin as a no-validator gate. Next viable branches are: (1) top-k/tree verifier that exploits exact-in-top5 for code corridors, (2) prompt/phase-conditioned mixture surrogate to improve reasoning top5, or (3) exact FFN/head kernel optimization if verifier economics remain unfavorable.
+
+### [LM-COGNIGEMMA-109] Gemma top-k verifier ceiling is viable if misses fall back to exact path
+**context:** ml / CogniGemma Metal / Gemma4 surrogate top-k verifier ceiling / exact fallback / LTP-WBA
+**state:** oracle ceiling implemented; quality-preserving path identified; runtime economics still unproven
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now supports `--oracle-topk-rescue K` plus `--oracle-topk-fallback-exact`. This estimates a verifier/tree ceiling: if the exact token is inside surrogate top-K, count it as rescued; if it is not, fall back to exact so the generated trajectory remains exact. This is an oracle diagnostic and not a speed claim."
+  source: `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: verifier implementation, surrogate candidate generator rewrite, or different top-k/routing policy
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, exact-path top-5 fallback preserved exact output (`token_match_prefix=32/32`, `token_match_count=32/32`) and rescued `15/24` surrogate steps after warmup. This is materially better than raw no-validator top1, but still leaves `9/24` exact fallbacks, so speed depends on making proposal and batched verification cheap."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --max-seq 224 --prefill-chunk 128` -> exit 0, `oracle_rescued=15/24`.
+  verified_at: 2026-06-05
+  decay_trigger: larger code suite, different surrogate basis, or real verifier speed measurement
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, exact-path top-5 fallback also preserved exact output (`32/32`) and rescued `18/24` surrogate steps after warmup. This reverses the earlier no-validator conclusion: the static surrogate is unsafe as top1 text generator, but it can be useful as a top-k proposal source when exact fallback keeps the state on the legal path."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --max-seq 224 --prefill-chunk 128` -> exit 0, `oracle_rescued=18/24`.
+  verified_at: 2026-06-05
+  decay_trigger: larger reasoning suite, longer generations, real verifier implementation, or changed prompt template
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Window is the LM-108 top5 corridor. The first rescue move failed when top-k misses still transported surrogate tokens, because one bad token poisoned the future state. The corrected legal move is a Diamond normalization: keep exact state/output boundary by falling back to exact on every top-k miss, while counting candidate hits as potential verifier acceptances. Recomputed potential now descends on the `quality/state-boundary` components (`32/32` exact text) and exposes remaining `Area` as fallback rows (`9/24` code, `6/24` reasoning). Dual frame is exact decode on misses; candidate mode is only legal if a real verifier can reduce wall time after accounting for proposal cost, verifier batching, and fallback rows.
+**boundary:** Next implementation should not be no-validator Gemma text. The viable branch is a top-k candidate verifier/fallback scheduler or a cheaper native candidate path. Promotion requires AB/ABBA wall timing against exact decode; oracle rescue rates alone are not enough.
