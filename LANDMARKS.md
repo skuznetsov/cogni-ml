@@ -20437,3 +20437,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the per-token embedding host/GPU boundary. Transport is the token id through resident scratch into the decode wave. Legal move fuses embedding into the same command-buffer corridor as layers/head without changing model arithmetic. Potential descends in `(command waits, embedding boundary, wall_ms, remaining_tokens)`.
 **boundary:** Phase-profile mode intentionally keeps its split command buffers for attribution. This is a small exact scheduling win, not a body-kernel breakthrough.
+
+[LM-GEMMA4-PREFILL-EMBED-WAVE] Gemma row-prefill embedding is folded into the resident rows wave (shared)
+- Date: 2026-06-05
+- Context: ml/perf/Gemma4 Metal row prefill
+- Claim: The normal `prefill_tokens_last_hidden_resident_rows` corridor now encodes token embedding into the same command buffer as the row-prefill layer wave, while phase-profile mode keeps the old split attribution path.
+- Evidence: `scripts/run_safe.sh /opt/homebrew/bin/crystal 240 8000 spec spec/gemma4_metal_buffer_spec.cr ...` -> `9 examples, 0 failures`; pp256/tg32 benchmark after change -> cogni prefill `786.24ms / 325.6 tok/s`, decode `44.15 ms/tok`; profile normal route shows `gemma4.rows.layers` and no separate `gemma4.rows.embedding` group.
+- LTP/WBA: Window = standalone row embedding before layer corridor; Transport = prompt chunk token ids into resident scratch token buffer; Legal move = encode embedding as the first op in the same command buffer; Boundary safety = phase-profile split path retained, token trace/spec parity preserved by focused spec; Potential = `(syncs, buffer_allocs, row_wait_area)` decreases for normal prefill.
+- Trust: {F=.86,G=.45,R=.83}; narrow to Gemma4 Q6_K token embeddings and resident row prefill.

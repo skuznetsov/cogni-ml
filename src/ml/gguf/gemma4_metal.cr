@@ -1137,18 +1137,17 @@ module ML::GGUF
 
           if row_prefill_resident_corridor_enabled?
             hidden_bytes = batch.to_i64 * hidden_dim * sizeof(Float32)
-            in_buf = ML::MetalBuffer.new(hidden_bytes)
-            out_buf = ML::MetalBuffer.new(hidden_bytes)
-            embed_t0 = Time.instant if Qwen35Metal::Profile.enabled?
-            Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, token_ids[offset, batch], in_buf, scale)
-            if Qwen35Metal::Profile.enabled?
-              embed_done = Time.instant
-              Qwen35Metal::Profile.bump_group("gemma4.rows.embedding", 0_i64,
-                (embed_done - embed_t0.not_nil!).total_nanoseconds.to_i64, 0_i64)
-              Qwen35Metal::Profile.bump_group_transfer("gemma4.rows.embedding", token_ids.size.to_i64 * sizeof(UInt32), 0_i64)
-            end
+            in_buf = state.scratch.get("prefill.rows.in", hidden_bytes)
+            out_buf = state.scratch.get("prefill.rows.out", hidden_bytes)
 
             if Qwen35Metal::Profile.enabled? && row_prefill_profile_layers_enabled?
+              embed_t0 = Time.instant
+              Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, token_ids[offset, batch], in_buf, scale)
+              embed_done = Time.instant
+              Qwen35Metal::Profile.bump_group("gemma4.rows.embedding", 0_i64,
+                (embed_done - embed_t0).total_nanoseconds.to_i64, 0_i64)
+              Qwen35Metal::Profile.bump_group_transfer("gemma4.rows.embedding", batch.to_i64 * sizeof(UInt32), 0_i64)
+
               layer_count.times do |il|
                 if row_prefill_profile_phases_enabled?
                   ok = forward_layer_resident_cache_rows_profile_phases_to_buffer(weights, il, in_buf, out_buf, base_pos, batch, state)
@@ -1175,9 +1174,14 @@ module ML::GGUF
                 in_buf, out_buf = out_buf, in_buf
               end
             else
+              token_buf = state.scratch.get("prefill.rows.token", batch.to_i64 * sizeof(UInt32))
+              token_ptr = token_buf.contents.as(Pointer(UInt32))
+              batch.times { |r| token_ptr[r] = token_ids[offset + r].to_u32 }
+
               layer_t0 = Time.instant if Qwen35Metal::Profile.enabled?
               cmd = ML::Metal::CommandBuffer.new
               enc = ML::Metal::ComputeEncoder.new(cmd)
+              Qwen35Metal.encode_embedding_q6k_rows_scaled_to_buffer(enc, weights.token_embd, token_buf, in_buf, batch, scale)
               layer_count.times do |il|
                 ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, base_pos, batch, state)
                 unless ok
