@@ -21223,3 +21223,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **Loop pattern:** Gemma surrogate tuning currently bounces between two bad corners: cheap proposals without semantic transport (`prev_full`/`temporal_full`, `0-1/24` coverage) and semantic proposals that replay too much model (`partial`/late-band, useful coverage but `~37 ms/step` proposal cost). More scalar tuning of layer/rank/margin/topK is a `MICRO_OPTIMIZATION_TRAP` unless it changes this inequality: `proposal_cost + verifier_cost + fallback_tax < exact_decode`.
 **LTP/WBA:** The active potential after recomputation is `(semantic_transport_missing_or_expensive, tied_bad_corners, verifier/fallback conflict, remaining proposal work)`. The legal next move is a frame shift, not another knob: build or test a cheap semantic corridor that predicts candidate shortlists directly from compact features, such as impact/PCA logit-basis maps, memory-conditioned proposal charts, or near-free copy/session proposals. If no such corridor exists, use exact decode.
 **boundary:** Stop the `prev_full` and naive `temporal_full` branch. Keep the diagnostic modes only as falsifiers and regression guards for future cheap-body proposals.
+
+### [LM-COGNIGEMMA-119] Gemma direct memory shortlist is cheap but needs chunk/runtime certification
+**context:** ml / CogniGemma Metal / Gemma4 direct candidate memory / cheap semantic transport / LTP-WBA
+**state:** memory-NN direct-shortlist diagnostic implemented; component kept; not promoted as one-token speed path
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now supports diagnostic `--proposal-body-mode memory_nn` with `--proposal-memory-k`. It builds a compact nearest-neighbor bank from verified training hidden states and proposes stored next-token ids directly, without partial-layer replay, hidden reconstruction, or full-vocab logits."
+  source: `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded release build via `scripts/run_safe.sh /opt/homebrew/bin/crystal ... build bin/gemma4_late_band_wild_probe.cr -o /tmp/gemma4_late_band_wild_probe ...` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: probe scheduler rewrite, memory proposal feature change, or chunk verifier implementation
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, memory-NN top4 is very cheap and has nonzero semantic coverage: proposal cost `0.564 ms/step`, no partial layers, exact fallback output preserved (`32/32`), `surrogate_correct=1/24`, `oracle_rescued=4/24`. This is materially better than `prev_full` (`0/24`) and `temporal_full` (`1/24`) in cost/coverage shape."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 4 --oracle-topk-fallback-exact --proposal-body-mode memory_nn --proposal-memory-k 4 --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: broader code suite, larger memory bank, different rank/k, or real session/retrieval memory source
+  trust: {F:0.78,G:0.10,R:0.76}
+
+- claim: "The same one-token verifier economics are not promotable. Even an oracle rank<=4 attempt gate is slower than exact (`0.9617x`) because each attempted row pays proposal+verifier (`~45.7 ms`) versus exact decode (`36.9 ms`). The printed `economics_oracle optimistic_candidate_ms=31.32` is only a hypothetical candidate-only lower bound and must not be read as a runtime speedup."
+  source: same guarded memory-NN smoke: `economics_current proposal_ms_per_step=0.564 verifier_ms_per_step=45.158 exact_ms_per_token=36.907`; `oracle_rank_le 5.0 ... optimistic_speedup=0.9617`.
+  verified_at: 2026-06-05
+  decay_trigger: chunk verifier, batched verifier, or runtime gate that avoids one-token verifier tax
+  trust: {F:0.80,G:0.10,R:0.76}
+
+**LTP/WBA:** Memory-NN is the first Gemma cheap semantic-transport point with nonzero coverage: the local window is a verified hidden-state neighborhood, transport is a compact feature corridor to stored next-token candidates, and the legal move avoids partial-layer replay. Recomputed potential still fails for one-token verification because verifier tax dominates. The dual frame is chunk/session memory: only use this corridor when it can propose multi-token spans or when a runtime certificate predicts coverage before paying verifier.
+**boundary:** Keep `memory_nn` as a diagnostic and a future session/external-memory proposal component. Do not promote it for one-token Gemma decode. Next useful tests are larger memory banks, repeated/session prompts, or chunk-level verifier economics; not more late-layer rank/topK tuning.

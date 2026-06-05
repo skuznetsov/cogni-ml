@@ -1,4 +1,5 @@
 require "option_parser"
+require "../src/ml/gguf/gemma4_cpu"
 require "../src/ml/gguf/gemma4_metal"
 require "../src/ml/gguf/gemma4_state_snapshot"
 require "../src/ml/gguf/gemma4_tokenizer"
@@ -30,6 +31,7 @@ proposal_main_state = false
 verifier_continue_from_proposal = false
 proposal_resident_topk = 0
 proposal_body_mode = "partial"
+proposal_memory_k = 4
 
 OptionParser.parse do |p|
   p.banner = "Usage: gemma4_late_band_wild_probe [options]"
@@ -53,7 +55,8 @@ OptionParser.parse do |p|
   p.on("--verifier-continue-from-proposal", "Continue exact verifier from proposal hidden; requires --proposal-main-state") { verifier_continue_from_proposal = true }
   p.on("--proposal-resident-top1", "Use resident fused head top1 for surrogate proposal instead of full logits/top-k") { proposal_resident_topk = 1 }
   p.on("--proposal-resident-top2", "Use resident fused head top2 for surrogate proposal instead of full logits/top-k") { proposal_resident_topk = 2 }
-  p.on("--proposal-body-mode MODE", "Proposal hidden source: partial, prev_full, temporal_full") { |v| proposal_body_mode = v }
+  p.on("--proposal-body-mode MODE", "Proposal hidden source: partial, prev_full, temporal_full, memory_nn") { |v| proposal_body_mode = v }
+  p.on("--proposal-memory-k N", "Nearest-neighbor memory shortlist size for proposal-body-mode memory_nn, default 4") { |v| proposal_memory_k = v.to_i }
   p.on("--risk-thresholds LIST", "Comma-separated surrogate top1-top2 margin thresholds, default 0,0.5,1,2,4,8") do |v|
     risk_thresholds = v.split(',').reject(&.empty?).map(&.to_f32)
   end
@@ -76,9 +79,10 @@ raise "--warmup-exact must be non-negative" unless warmup_n >= 0
 raise "--oracle-topk-rescue must be non-negative" unless oracle_topk_rescue >= 0
 raise "--oracle-topk-fallback-exact requires --oracle-topk-rescue K with K > 0" if oracle_topk_fallback_exact && oracle_topk_rescue <= 0
 raise "--verifier-continue-from-proposal requires --proposal-main-state" if verifier_continue_from_proposal && !proposal_main_state
-raise "--proposal-body-mode must be partial, prev_full, or temporal_full" unless {"partial", "prev_full", "temporal_full"}.includes?(proposal_body_mode)
+raise "--proposal-body-mode must be partial, prev_full, temporal_full, or memory_nn" unless {"partial", "prev_full", "temporal_full", "memory_nn"}.includes?(proposal_body_mode)
 raise "--verifier-continue-from-proposal requires --proposal-body-mode partial" if verifier_continue_from_proposal && proposal_body_mode != "partial"
 raise "--proposal-body-mode #{proposal_body_mode} requires --warmup-exact > 0" if proposal_body_mode != "partial" && warmup_n <= 0
+raise "--proposal-memory-k must be positive" unless proposal_memory_k > 0
 raise "--max-seq must be positive" unless max_seq > 0
 raise "--prefill-chunk must be positive" unless prefill_chunk > 0
 raise "model not found: #{model_path}" unless File.exists?(model_path)
@@ -116,6 +120,8 @@ record WildStats, ids : Array(Int32), ms : Float64, surrogate_steps : Int32,
   risk_rows : Array(RiskRow), proposal_ms : Float64, verifier_ms : Float64,
   snapshot_ms : Float64, restore_ms : Float64, partial_ms : Float64,
   residual_ms : Float64, head_ms : Float64, topk_ms : Float64
+
+record MemoryProposalItem, features : Array(Float64), token : Int32
 
 # Deterministic Rademacher projection. This keeps the probe cheap and removes
 # a separate PCA pass while preserving a fixed low-rank residual basis.
@@ -259,6 +265,37 @@ class ResidualSurrogate
   end
 end
 
+class MemoryProposalBank
+  getter mean : Array(Float64)
+  getter items : Array(MemoryProposalItem)
+  getter rank : Int32
+  getter seed : Int64
+  getter k : Int32
+
+  def initialize(@mean : Array(Float64), @items : Array(MemoryProposalItem), @rank : Int32, @seed : Int64, @k : Int32)
+  end
+
+  def propose(x : Array(Float32)) : Array(Int32)
+    z = project_features(x, @mean, @rank, @seed)
+    scored = @items.map do |item|
+      dist = 0.0
+      @rank.times do |i|
+        d = z[i] - item.features[i]
+        dist += d * d
+      end
+      {dist, item.token}
+    end
+    ids = [] of Int32
+    scored.sort_by!(&.[0])
+    scored.each do |_dist, token|
+      next if ids.includes?(token)
+      ids << token
+      break if ids.size >= @k
+    end
+    ids
+  end
+end
+
 def fit_surrogate(xs : Array(Array(Float32)), ys : Array(Array(Float32)), rank : Int32, lambda : Float64, seed : Int64) : ResidualSurrogate
   raise "fit_surrogate requires samples" if xs.empty?
   dim = xs[0].size
@@ -289,6 +326,20 @@ def fit_surrogate(xs : Array(Array(Float32)), ys : Array(Array(Float32)), rank :
     end
   end
   ResidualSurrogate.new(mean, coeff, rank, seed)
+end
+
+def fit_memory_proposal_bank(samples : Array(Sample), rank : Int32, seed : Int64, k : Int32) : MemoryProposalBank
+  raise "memory proposal bank requires samples" if samples.empty?
+  dim = samples[0].h_full.size
+  mean = Array(Float64).new(dim, 0.0)
+  samples.each do |sample|
+    dim.times { |i| mean[i] += sample.h_full[i] }
+  end
+  dim.times { |i| mean[i] /= samples.size.to_f64 }
+  items = samples.map do |sample|
+    MemoryProposalItem.new(project_features(sample.h_full, mean, rank, seed), sample.exact_top1)
+  end
+  MemoryProposalBank.new(mean, items, rank, seed, k)
 end
 
 def collect_exact_samples(weights, ids : Array(Int32), gen : Int32, surrogate_layer : Int32,
@@ -348,6 +399,7 @@ end
 def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n : Int32,
                             surrogate_layer : Int32, surrogate : ResidualSurrogate,
                             temporal_surrogate : ResidualSurrogate?,
+                            memory_bank : MemoryProposalBank?,
                             max_seq : Int32, prefill_chunk : Int32,
                             diagnose_risk : Bool,
                             oracle_topk_rescue : Int32,
@@ -427,19 +479,27 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
       partial_ms += (Time.instant - phase_t0).total_milliseconds
       phase_t0 = Time.instant
       h_hat = prior.not_nil!
-    else
+    elsif proposal_body_mode == "temporal_full"
       prior = last_full_hidden
       raise "proposal_body_mode=#{proposal_body_mode} requires --warmup-exact > 0 or prior verified hidden" if prior.nil?
       partial_ms += (Time.instant - phase_t0).total_milliseconds
       phase_t0 = Time.instant
       h_hat = temporal_surrogate.not_nil!.predict(prior.not_nil!)
+    else
+      prior = last_full_hidden
+      raise "proposal_body_mode=#{proposal_body_mode} requires --warmup-exact > 0 or prior verified hidden" if prior.nil?
+      partial_ms += (Time.instant - phase_t0).total_milliseconds
+      phase_t0 = Time.instant
     end
     residual_ms += (Time.instant - phase_t0).total_milliseconds
     phase_t0 = Time.instant
     logits = nil.as(Array(Float32)?)
     resident_scores = nil.as(Array(Float32)?)
     top_ids = [] of Int32
-    if proposal_resident_topk == 1
+    if proposal_body_mode == "memory_nn"
+      top_ids = memory_bank.not_nil!.propose(last_full_hidden.not_nil!)
+      raise "memory_nn produced no proposal tokens" if top_ids.empty?
+    elsif proposal_resident_topk == 1
       resident = ML::GGUF::Qwen35Metal.rmsnorm_project_top1(h_hat.not_nil!, weights.output_norm, weights.token_embd, weights.hparams.rms_eps.to_f32).not_nil!
       top_ids << resident[0].to_i32
       resident_scores = [resident[1]]
@@ -453,7 +513,7 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     end
     head_ms += (Time.instant - phase_t0).total_milliseconds
     phase_t0 = Time.instant
-    top_ids = top_k_ids(logits.not_nil!, Math.max(5, oracle_topk_rescue)) if proposal_resident_topk == 0
+    top_ids = top_k_ids(logits.not_nil!, Math.max(5, oracle_topk_rescue)) if proposal_body_mode != "memory_nn" && proposal_resident_topk == 0
     topk_ms += (Time.instant - phase_t0).total_milliseconds
     surrogate_top1 = top_ids[0]
     next_token = surrogate_top1
@@ -478,21 +538,23 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
       exact_logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_full).not_nil!
       exact_top1 = top_k_ids(exact_logits, 1)[0]
       verifier_ms += (Time.instant - verifier_t0).total_milliseconds
-      exact_rank = proposal_resident_topk > 0 ? (top_ids.index(exact_top1).try(&.+(1)) || Int32::MAX) : rank_of_id(logits.not_nil!, exact_top1)
-      oracle_rescued = if proposal_resident_topk > 0
-                         oracle_topk_rescue > 0 && exact_rank <= Math.min(oracle_topk_rescue, proposal_resident_topk)
+      exact_rank = (proposal_resident_topk > 0 || proposal_body_mode == "memory_nn") ? (top_ids.index(exact_top1).try(&.+(1)) || Int32::MAX) : rank_of_id(logits.not_nil!, exact_top1)
+      oracle_rescued = if proposal_resident_topk > 0 || proposal_body_mode == "memory_nn"
+                         oracle_topk_rescue > 0 && exact_rank <= Math.min(oracle_topk_rescue, top_ids.size)
                        else
                          oracle_topk_rescue > 0 && exact_rank <= oracle_topk_rescue
                        end
       next_token = exact_top1 if oracle_rescued || oracle_topk_fallback_exact
-      margin = if proposal_resident_topk > 1
+      margin = if proposal_body_mode == "memory_nn"
+                 0.0_f32
+               elsif proposal_resident_topk > 1
                  resident_scores.not_nil![0] - resident_scores.not_nil![1]
                elsif proposal_resident_topk == 1
                  0.0_f32
                else
                  logits.not_nil![top_ids[0]] - logits.not_nil![top_ids[1]]
                end
-      top5_contains_exact = proposal_resident_topk > 0 ? top_ids.includes?(exact_top1) : top_ids[0, 5].includes?(exact_top1)
+      top5_contains_exact = (proposal_resident_topk > 0 || proposal_body_mode == "memory_nn") ? top_ids.includes?(exact_top1) : top_ids[0, 5].includes?(exact_top1)
       risk_rows << RiskRow.new(step.to_i32, exact_top1, surrogate_top1, next_token, exact_rank, margin, top5_contains_exact, oracle_rescued)
     else
       if proposal_body_mode == "partial"
@@ -516,7 +578,7 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     snapshot_ms, restore_ms, partial_ms, residual_ms, head_ms, topk_ms)
 end
 
-puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} proposal_main_state=#{proposal_main_state} verifier_continue_from_proposal=#{verifier_continue_from_proposal} proposal_resident_topk=#{proposal_resident_topk} proposal_body_mode=#{proposal_body_mode} max_seq=#{max_seq}"
+puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} proposal_main_state=#{proposal_main_state} verifier_continue_from_proposal=#{verifier_continue_from_proposal} proposal_resident_topk=#{proposal_resident_topk} proposal_body_mode=#{proposal_body_mode} proposal_memory_k=#{proposal_memory_k} max_seq=#{max_seq}"
 
 samples, collected_exact_ids, collect_ms = collect_exact_samples(weights, ids, gen, surrogate_layer, max_seq, prefill_chunk)
 xs_train = samples[0...train].map(&.h_layer)
@@ -532,6 +594,11 @@ if proposal_body_mode == "temporal_full"
   temporal_surrogate = fit_surrogate(xs_temporal, ys_temporal, rank, lambda, seed ^ 0x7130_i64)
 end
 
+memory_bank = nil.as(MemoryProposalBank?)
+if proposal_body_mode == "memory_nn"
+  memory_bank = fit_memory_proposal_bank(samples[0...train], rank, seed ^ 0x4d3d_i64, proposal_memory_k)
+end
+
 heldout_n = Math.max(samples.size - train, 0)
 heldout_top1 = 0
 heldout_top5 = 0
@@ -544,7 +611,7 @@ samples[train..].each do |sample|
 end
 
 exact_ids, exact_ms = generate_exact(weights, ids, wild_n, max_seq, prefill_chunk)
-wild_stats = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, temporal_surrogate, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact, proposal_main_state, verifier_continue_from_proposal, proposal_resident_topk, proposal_body_mode)
+wild_stats = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, temporal_surrogate, memory_bank, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact, proposal_main_state, verifier_continue_from_proposal, proposal_resident_topk, proposal_body_mode)
 sur_ids = wild_stats.ids
 sur_ms = wild_stats.ms
 surrogate_steps = wild_stats.surrogate_steps
