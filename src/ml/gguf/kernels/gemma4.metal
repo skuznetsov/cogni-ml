@@ -1670,43 +1670,6 @@ kernel void gemma4_add_scaled_vec(
     out[gid] = (a[gid] + b[gid]) * scale;
 }
 
-kernel void gemma4_rmsnorm_add_scaled_rows(
-    device const float* x        [[buffer(0)]],
-    device const float* weight   [[buffer(1)]],
-    device const float* residual [[buffer(2)]],
-    device       float* out      [[buffer(3)]],
-    constant     uint&  row_dim  [[buffer(4)]],
-    constant     float& eps      [[buffer(5)]],
-    constant     float& scale    [[buffer(6)]],
-    uint   row [[threadgroup_position_in_grid]],
-    ushort tid [[thread_index_in_threadgroup]])
-{
-    device const float* src = x + row * row_dim;
-    device const float* res = residual + row * row_dim;
-    device       float* dst = out + row * row_dim;
-    threadgroup float partial[256];
-
-    float ss = 0.0f;
-    for (uint i = tid; i < row_dim; i += 256) {
-        const float v = src[i];
-        ss += v * v;
-    }
-    partial[tid] = ss;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    for (ushort stride = 128; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            partial[tid] += partial[tid + stride];
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    const float inv = rsqrt(partial[0] / float(row_dim) + eps);
-    for (uint i = tid; i < row_dim; i += 256) {
-        dst[i] = (res[i] + src[i] * inv * weight[i]) * scale;
-    }
-}
-
 kernel void gemma4_gelu_mul(
     device const float* gate  [[buffer(0)]],
     device const float* up    [[buffer(1)]],

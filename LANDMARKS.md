@@ -21361,25 +21361,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window and corridor were valid: FFN activation/down is a real producer-consumer diamond, and removing the standalone activation buffer write/read is a legal local reduction. The move failed after recomputing global potential because the dominant wait bucket worsened: evaluating GELU/tanh in the GEMV hot loop increased ALU/register pressure more than it saved in dispatch and activation traffic. This refines the next fusion frame: do not fuse expensive nonlinear activation into per-output-row GEMV lanes; if revisited, use tile-streaming that computes each activation once per input tile and reuses it across output rows.
 **boundary:** No `GELU-inside-down-GEMV` code is promoted. The next exact eager-gen fusion should either reduce dominant gate/up weight traffic, tile-stream activation once across multiple down rows, or move to a different LTP/WBA frame such as session-cache replay or multi-token RHS verification.
-
-### [LM-COGNIGEMMA-125] Gemma post-FFW RMSNorm plus scaled residual add fusion is a small exact decode win
+### [LM-COGNIGEMMA-125] Gemma post-FFW RMSNorm plus scaled residual add fusion was parity-safe but not a stable decode win
 **context:** ml / CogniGemma Metal / exact decode / FFN tail fusion / LTP-WBA
-**state:** promoted default-on with env-off rollback
+**state:** promoted claim superseded; code reverted
 
-- claim: "CogniGemma now fuses the exact post-FFW tail `out = (attn_out + RMSNorm(ffn_down, post_ffw_norm)) * layer_output_scale` into one Metal kernel. The previous two-kernel path remains available with `GEMMA4_POST_FFW_NORM_ADD_FUSED_OFF=1`."
-  source: `src/ml/gguf/kernels/gemma4.metal` `gemma4_rmsnorm_add_scaled_rows`; `src/ml/gguf/gemma4_metal.cr` `encode_post_ffw_norm_add`; `crystal build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` passed; guarded linked build via `scripts/run_safe.sh /opt/homebrew/bin/crystal ... -o /tmp/gemma4_metal_decode_profile` exited 0.
+- claim: "The temporary exact post-FFW tail fusion `out = (attn_out + RMSNorm(ffn_down, post_ffw_norm)) * layer_output_scale` preserved token-trace parity, but stronger ABBA evidence did not show a stable wall-time win."
+  source: earlier guarded logs `/tmp/gemma4_postffw_fuse_abba_20260605163558.log` and `/tmp/gemma4_postffw_fuse_gen64_abba_20260605163719.log` looked positive; later ABBA summary `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-ffn-out-fused-abba.mJog8o/summary.log` measured default `38.801/37.987 ms/tok` versus fused `40.657/38.282 ms/tok`, with identical first/last ids.
   verified_at: 2026-06-05
-  decay_trigger: Gemma residual/norm ordering rewrite, layer output scale semantics change, or Metal RMSNorm kernel rewrite
-  trust: {F:0.84,G:0.18,R:0.82}
+  decay_trigger: quiet-host ABBA suite with broader prompts, different Metal compiler/GPU, or a rewrite that reduces the dominant FFN weight corridor rather than only tail launches
+  trust: {F:0.82,G:0.08,R:0.78}
 
-- claim: "The fusion preserves token-trace parity and is a small positive exact eager-decode win in guarded sequential runs. Short `gen=32/runs=2` ABBA measured fused p50 `1081.527ms` and `1095.425ms` versus env-off `1130.049ms` and `1110.277ms`. Balanced `gen=64/runs=1` ABBA measured env-off `2320.782ms` and `2327.980ms` versus fused `2257.644ms` and `2267.699ms`, with identical repeated-token traces in all rows."
-  source: guarded logs `/tmp/gemma4_postffw_fuse_abba_20260605163558.log` and `/tmp/gemma4_postffw_fuse_gen64_abba_20260605163719.log`; profile smoke exited 0 with no CPU fallback matvecs.
+- claim: "The fused code path was removed to keep exact eager decode on the simpler two-kernel tail route."
+  source: reverse patch of commit `441d67a` removed `gemma4_rmsnorm_add_scaled_rows`, `encode_post_ffw_norm_add`, and the `GEMMA4_POST_FFW_NORM_ADD_FUSED_OFF` rollback gate.
   verified_at: 2026-06-05
-  decay_trigger: quiet-host publication rerun, broader prompt suite, or hardware/Metal compiler change
-  trust: {F:0.82,G:0.10,R:0.78}
+  decay_trigger: future reintroduction of a post-FFW fused kernel
+  trust: {F:0.80,G:0.06,R:0.76}
 
-**LTP/WBA:** This is a Spike/Ladder move on the FFN tail corridor. Window: adjacent post-FFW RMSNorm and scaled residual add after FFN-down. Transport: the same `ffn_buf`, `post_ffw_norm`, and `attn_out` row. Legal move: compute the RMSNorm reduction and final scaled residual write in one kernel, preserving the external residual/order boundary. Potential decreases in dispatch count and tail buffer traffic without increasing the dominant GEMV bucket. Unlike GELU-inside-GEMV, the expensive reduction was already present and is not multiplied by output rows.
-**boundary:** This is a small exact speed win, not the main breakthrough. Keep the env-off rollback. Next larger exact frame remains tile-streamed FFN or multi-token/session-cache WBA; this tail fusion only trims residual tail overhead.
+**LTP/WBA:** The local window was real, but the recomputed potential did not descend. Dispatch/tail-buffer area shrank, while measured wall time remained neutral-to-worse. This is a Diamond correction: normalize the conflict between local-fusion intuition and global ABBA evidence before stacking more FFN micro-fusions.
+**boundary:** Do not promote standalone FFN tail micro-fusions on local byte/dispatch savings alone. Future exact Gemma speed work should target the dominant FFN weight corridor, shape-level kernel comparison against llama.cpp/MLX, or accepted surrogate/MTP/self-draft paths that avoid paying the full FFN body every token.
 
 ### [LM-COGNIGEMMA-126] Gemma post-attention plus FFN-input RMSNorm mega-fusion is parity-safe but slower
 **context:** ml / CogniGemma Metal / exact decode / FFN-entry fusion / LTP-WBA
