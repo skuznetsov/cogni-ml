@@ -20282,3 +20282,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the decode attention KV bandwidth corridor. Legal move is only opt-in transport through half KV with split-K reduction; boundary safety is default-off exact F32 fallback. Recomputed potential descends slightly in body decode, but exactness potential fails under the spec, so the dual frame is mandatory F32 default.
 **boundary:** Useful for future approximate/quality-gated Gemma speed modes and for ideas to revisit in Qwen MTP/self-draft, not for exact baseline comparisons.
+
+### [LM-GEMMA4-RESIDENT-TOP1-DEFAULT] Resident top1 wave removes avoidable Gemma decode host boundary
+**context:** ml / Gemma4 Metal / exact top1 decode / host-boundary collapse
+**state:** promoted in Gemma profile and benchmark harness defaults; legacy path remains available via `--no-top1-wave-resident` or `GEMMA4_TOP1_WAVE_RESIDENT_OFF=1`
+
+- claim: "The exact resident top1 wave should be the default Gemma top1 decode path in local harnesses. It keeps decode layers, output RMSNorm, and tied Q6_K top1 head in one resident command-buffer corridor and returns only the scalar id. On pp256/tg32 top1, it improves p50 from about `79 ms/tok` to about `74 ms/tok` without changing the token trace on the synthetic parity row."
+  source: local sequential `scripts/run_safe.sh` A/B. Before default promotion: `top1_resident=false` measured `79.0 ms/tok`; explicit resident measured `73.85 ms/tok`; full `--print-generated-ids` trace matched. Post-promotion default reports `top1_resident=true`, `73.9 ms/tok`; legacy `--no-top1-wave-resident` reports `79.16 ms/tok`. Focused Gemma Metal spec passed `9 examples, 0 failures`.
+  verified_at: 2026-06-05
+  decay_trigger: top1 head kernel rewrite, profile harness rewrite, output norm/head quant route change, or token-trace parity failure on broader prompt suite
+  trust: {F:0.86,G:0.36,R:0.82}
+
+**LTP/WBA:** Window is the exact top1 decode boundary after the layer wave. Transport corridor is hidden state through output RMSNorm and Q6_K top1 head without CPU materialization. Legal move collapses the host readback/head scan boundary while preserving exact fallback. Potential descends in `(host readback, command buffers, CPU logits scan, wall_ms)` with unchanged token trace in the tested row.
+**boundary:** This improves local Gemma harness defaults but does not solve the remaining body/attention gap versus llama.cpp; next work should compare attention kernel shape/scheduling against llama.cpp/MLX rather than more head-boundary work.

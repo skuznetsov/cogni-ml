@@ -15,7 +15,7 @@ profile_decode_only = false
 print_generated_ids = false
 decode_mode = "top1"
 decode_wave = ENV["GEMMA4_DECODE_WAVE_OFF"]? != "1"
-top1_wave_resident = ENV["GEMMA4_TOP1_WAVE_RESIDENT"]? == "1"
+top1_wave_resident = ENV["GEMMA4_TOP1_WAVE_RESIDENT_OFF"]? != "1"
 prefill_mode = "serial"
 prefill_chunk = 8
 prefill_head = true
@@ -38,7 +38,8 @@ OptionParser.parse(ARGV) do |p|
   p.on("--print-generated-ids", "Print seed + generated token ids for parity diagnostics") { print_generated_ids = true }
   p.on("--decode-wave", "Use one command buffer per decode token instead of one wait per layer (default)") { decode_wave = true }
   p.on("--decode-layerwise", "Use legacy one-wait-per-layer decode path") { decode_wave = false }
-  p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer") { top1_wave_resident = true }
+  p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer (default)") { top1_wave_resident = true }
+  p.on("--no-top1-wave-resident", "Use legacy hidden-readback + separate top1 head path") { top1_wave_resident = false }
   p.on("--prefill-mode MODE", "Prompt prefill mode: serial or rows (default: serial)") { |v| prefill_mode = v }
   p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--prefill-no-head", "Measure pure prompt body only; requires --body-only because no next-token seed is computed") { prefill_head = false }
