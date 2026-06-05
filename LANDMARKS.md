@@ -20878,3 +20878,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local trigger from LM-103 was valid for a single token: after code bootstrap, layer `34..48` all predicted the same next top1. The attempted legal move was to collapse the remaining decode corridor to lower layers. Recomputed potential did not legally descend because the boundary safety failed: upper-layer K/V and hidden-state transport were not preserved for future tokens. The local `Area` component shrank, but an earlier component `quality/state-boundary conflict` increased. Dual frame is exact full-depth decode, or a new compatible frame that transports upper-layer state via exact periodic refresh, branch-state verifier, or learned/derived upper-band surrogate.
 **boundary:** Do not promote phase-gated stop-layer decode as a quality-preserving route. Future Gemma self-draft must maintain/approximate upper-layer state, not merely skip it. A promising next falsifier is "full upper-layer refresh every K tokens" or "late-band residual surrogate that updates the upper-layer corridor" with exact verifier or text-quality gates.
+
+### [LM-COGNIGEMMA-105] Gemma truncated late-band is too weak as a broad proposal source
+**context:** ml / CogniGemma Metal / Gemma4 proposal agreement / self-draft verifier economics / LTP-WBA
+**state:** probe implemented; broad truncated proposal route refuted on code smoke
+
+- claim: "`bin/gemma4_phase_proposal_probe.cr` now measures truncated Gemma proposals without corrupting the exact decode boundary. For each scored step it snapshots the exact resident state, restores a separate proposal state, computes a truncated top1 proposal, then computes full-depth exact top1 on the main state and advances only the exact state."
+  source: `bin/gemma4_phase_proposal_probe.cr`; `crystal build --no-codegen bin/gemma4_phase_proposal_probe.cr --error-trace` passed.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma resident-state rewrite, verifier/proposal harness rewrite, or removing the probe
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` chat prompt, after `proposal_start=3`, truncated proposals are not accurate enough to amortize an exact verifier. With `gen=16`, layer 34 scored `1/13` hits (`7.69%`), layer 40 scored `3/13` (`23.08%`), and layer 44 scored `4/13` (`30.77%`). Proposal cost was also close to exact: layer 34 `30.187 ms/scored` vs exact `35.328 ms/token`; layer 44 `36.639 ms/scored` vs exact `35.653 ms/token`."
+  source: guarded logs `/tmp/gemma4_phase_proposal_l34.log`, `/tmp/gemma4_phase_proposal_l40.log`, `/tmp/gemma4_phase_proposal_l44.log`, all using `/tmp/gemma4_phase_proposal_probe --chat-user 'Write a small Crystal function ...' --gen 16 --proposal-start 3 --proposal-layer {34,40,44}` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: broader prompt suite, a sharper router that only selects the single hit-like phase, or a much cheaper learned/derived proposal body
+  trust: {F:0.78,G:0.14,R:0.76}
+
+- claim: "The single layer-34 hit is the known LM-103 code-token corridor, not a sustained drafting regime. Per-step rows show layer 34 misses step 3 (`proposal_top1=1156`, exact `101`), hits step 4 (`2717`), and then misses most later scored tokens."
+  source: per-step rows in `/tmp/gemma4_phase_proposal_l34.log`.
+  verified_at: 2026-06-05
+  decay_trigger: prompt-class-specific atlas showing repeated sustained hit bands, or adding target/proposal features that predict the hit before computing proposal
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Window was the LM-103 stable token corridor. The legal probe preserved boundary safety by transporting proposals through a separate restored state and advancing only exact full-depth state. Recomputed potential refutes broad truncated proposals: `proposal_accuracy` and `proposal_cost` fail before verifier batching can help. The move shrinks local layer work but increases `M`/`P` through many verifier conflicts. Dual frame is exact decode, or a sharper router/learned surrogate that predicts only sustained low-curvature spans before paying proposal work.
+**boundary:** Do not build a Gemma verifier pipeline around raw stop-layer proposals. Next viable self-draft branch needs either a much cheaper proposal body than `forward_top1_resident_cache_wave(stop_layer=N)`, or a phase/router feature that selects rare high-confidence spans before proposal submission. Otherwise return to exact FFN/head kernel work for pp/tg.
