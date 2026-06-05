@@ -20828,3 +20828,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The initial window was "Gemma probes only accept token IDs, so real text/code quality cannot be measured." The transport corridor is `chat/user text -> llama-tokenize oracle ids -> existing resident decode wave -> conservative detokenized text`; legal move adds only prompt plumbing and keeps model state/kernels exact. Recomputed potential decreases for evaluation friction and prompt-frame conflict. The follow-up window was shallow layer truncation as no-validator surrogate; after recomputing wall and quality, potential worsened in `(quality-collapse, no-wall-win)`, so the move is refuted. Dual frame is a real surrogate/proposal corridor with verifier or trained/derived head, not raw stop-layer truncation.
 **boundary:** Use `--chat-user` for instruction-quality Gemma tests. `--prompt` remains a raw tokenizer/debug path. Do not promote Gemma raw `stop_layer=N` no-validator output as a speed technique without a different surrogate boundary and fresh quality/speed evidence.
+
+### [LM-COGNIGEMMA-103] Gemma layer-stability probe finds phase-conditioned late-band corridor
+**context:** ml / CogniGemma Metal / Gemma4 layer-stability / self-draft surrogate routing / LTP-WBA
+**state:** probe implemented; tiny atlas measured; candidate corridor identified but not promoted
+
+- claim: "`bin/gemma4_layer_stability_probe.cr` now traces Gemma4 top1 after each stop layer on real tokenized text/chat prompts. It uses llama-tokenize-backed `Gemma4Tokenizer`, exact resident-state snapshots, and restores one trace state per stop layer so the main decode boundary remains exact."
+  source: `bin/gemma4_layer_stability_probe.cr`; `crystal build --no-codegen bin/gemma4_layer_stability_probe.cr --error-trace` passed; guarded runtime smoke under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma tokenizer/probe rewrite, state snapshot rewrite, or layer forward API rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "The first generated Gemma chat/thought tokens are not safe late-skip candidates. In a tiny 3-class `gen=1` atlas (`facts`, `code`, `repeat`), all first generated tokens had `stable_from_layer=48` with `33/37/38` top1 changes, despite high final margins."
+  source: `/tmp/gemma4_layer_stability_atlas.tsv`, generated sequentially via `/tmp/gemma4_layer_stability_probe --chat-user ... --gen 1` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: larger prompt atlas, chat-template changes, or no-think prompt/control changes
+  trust: {F:0.76,G:0.14,R:0.74}
+
+- claim: "A later code token does expose a usable late-band corridor. For the Crystal `fib` chat prompt at `gen=5`, steps 0-3 still required `stable_from_layer=48`, but step 4 stabilized from layer `34` with `top1_changes=22`; layer rows show layers `34..48` all match final top1 `2717`."
+  source: `/tmp/gemma4_layer_stability_code_gen5.log` and `/tmp/gemma4_layer_stability_code_gen5_layers.log`; guarded command `/tmp/gemma4_layer_stability_probe --chat-user 'Write a small Crystal function ...' --gen 5 --layer-rows`.
+  verified_at: 2026-06-05
+  decay_trigger: broader code atlas, detokenizer/chat template change, or a direct surrogate/proposal wall-speed gate
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Window is not "late layers are generally disposable"; that was refuted by thought/bootstrap tokens. The valid local trigger is a phase transition after chat/thought scaffolding where the token trajectory enters a lower-curvature code corridor. Transport corridor is `exact prefix state -> stop-layer top1 trace -> stable late band 34..48 -> candidate surrogate/skip proposal`, with boundary safety from resident snapshots and exact main-state restoration. Potential descends only if a router selects stable phases before paying surrogate/verifier work; static stop-layer truncation increases the earlier `quality-collapse` component. Dual frame remains exact Gemma decode for bootstrap/thought and unstable phases.
+**boundary:** Do not build a static Gemma late-layer skip. Next self-draft experiment should be a phase-gated late-band surrogate/skip probe keyed by observed transition features (`generated_step`, thought/channel tokens, token history, margins), and must be judged by wall speed plus generated text/verification, not by this one-token atlas alone.
