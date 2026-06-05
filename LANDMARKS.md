@@ -21398,3 +21398,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This looked like a valid Diamond because it merged three adjacent row operations. After recomputing global potential, the move was illegal for promotion: a heavier two-reduction kernel plus recomputed attention row increased the dominant wait bucket more than the removed launches reduced area. This is another example where fusing across a reduction boundary can be worse unless the intermediate row is carried in a local frame cheaply.
 **boundary:** Do not retry this as a single mega-kernel in the same form. If revisited, the dual frame should be a staged row-tile kernel that safely carries the intermediate `attn_out` row without recomputation, or a broader command-buffer scheduling route rather than a heavier reduction fusion.
+
+### [LM-COGNIGEMMA-127] Gemma FFN multi-RHS corridor is the next exact speed frame
+**context:** ml / CogniGemma Metal / exact decode / multi-RHS FFN batching / LTP-WBA
+**state:** benchmarked; use as next scheduling target, not a direct b1 eager decode win
+
+- claim: "CogniGemma FFN projections become materially cheaper per row once the scheduler can present multiple RHS rows. `batch=16` improved FFN gate+up from serial p50 `12.060ms` to batched p50 `3.925ms` (`3.07x`) and FFN-down from `9.080ms` to `2.831ms` (`3.21x`)."
+  source: guarded `/tmp/gemma4_ffn_batch_micro --batch 16 --runs 5 --warmups 1` via `scripts/run_safe.sh` on 2026-06-05; max abs diffs gate `0.0001523`, up `0.0002939`, down `0.0003628`.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma FFN GEMV/GEMM routing rewrite, Q4/Q6 kernel rewrite, or new Metal compiler/GPU architecture
+  trust: {F:0.82,G:0.14,R:0.78}
+
+- claim: "Small batches show the transition: `batch=1` was neutral (`upgate 0.956x`, `down 1.025x`), `batch=4` helped (`1.315x`, `1.415x`), `batch=8` helped (`1.372x`, `1.459x`), and `batch=64` was noisy but strongly favorable (`5.32x`, `15.81x`)."
+  source: same sequential guarded batch sweep over `batch=1,4,8,16,64` with `/tmp/gemma4_ffn_batch_micro`; all runs exited 0 and preserved reference equivalence within expected Q4/Q6 batch precision.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun with materially different batch curve or a scheduler route that cannot carry multiple exact/proposal rows safely
+  trust: {F:0.78,G:0.12,R:0.74}
+
+**LTP/WBA:** The active window is no longer a single FFN tail op; it is the multi-token/RHS corridor. Transport is a chunk of exact verifier rows, MTP rows, or self-draft proposal rows through the same FFN weight corridor. Legal moves must preserve KV/state boundaries and exact fallback. The potential descends only if the scheduler creates enough rows before paying rollback/snapshot/verifier tax. This makes `batch>=16` a concrete target for Gemma MTP/self-draft/chunk verifier work.
+**boundary:** Do not claim this improves plain b1 eager decode. It is evidence for a frame shift: optimize the scheduler/proposal path to manufacture legal multi-RHS FFN work, then reuse the existing batched Q4/Q6 routes. Next experiments should measure real MTP/self-draft verifier chunks at `gamma` values that produce 4-16 accepted/verifier rows.
