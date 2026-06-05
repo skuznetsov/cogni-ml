@@ -20295,3 +20295,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the exact top1 decode boundary after the layer wave. Transport corridor is hidden state through output RMSNorm and Q6_K top1 head without CPU materialization. Legal move collapses the host readback/head scan boundary while preserving exact fallback. Potential descends in `(host readback, command buffers, CPU logits scan, wall_ms)` with unchanged token trace in the tested row.
 **boundary:** This improves local Gemma harness defaults but does not solve the remaining body/attention gap versus llama.cpp; next work should compare attention kernel shape/scheduling against llama.cpp/MLX rather than more head-boundary work.
+
+### [LM-GEMMA4-GQA4-PREFILL] GQA4 SWA attention is an exact Gemma 4 prefill default, not a decode lever
+**context:** ml / Gemma4 Metal / sliding-window attention / prefill GQA transport
+**state:** implemented as default for row attention batches `>=128`; kill switch `GEMMA4_ROW_PREFILL_ATTN_GQA4_OFF=1`; forced enable `GEMMA4_ROW_PREFILL_ATTN_GQA4=1`
+
+- claim: "Gemma 4 12B has 48 layers, but only 8 full-attention layers; the remaining 40 SWA layers use `n_head_kv=1`, `heads_per_group=16`, and `head_dim_swa=256`. Grouping four query heads per SWA attention threadgroup is an exact prefill win because it reuses the same KV corridor across four heads. On the synthetic pp256/tg32 top1 row, default GQA4 prefill measured `822.672ms` / `311.181 tok/s` versus kill-switch `866.657ms` / `295.388 tok/s`, with matching token trace and essentially unchanged decode (`73.894` vs `74.069 ms/tok`)."
+  source: local sequential `scripts/run_safe.sh` A/B with `/tmp/gemma4_metal_decode_profile_gqa4_default`; metadata probe reported `n_layer=48`, `n_head=16`, `head_dim=512`, `head_dim_swa=256`, `n_head_kv unique=[8,1]`, full layers `5,11,17,23,29,35,41,47`; focused Gemma Metal spec passed `9 examples, 0 failures` under default GQA4.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma attention layout/model change, GQA dispatch rewrite, SWA kernel rewrite, or broader prompt suite showing prefill regression
+  trust: {F:0.86,G:0.32,R:0.82}
+
+**LTP/WBA:** Window is SWA row-prefill attention where sixteen query heads share one KV head. Transport corridor is the bounded SWA KV span for a row batch. Legal move groups four query heads in one local attention kernel, preserving per-head softmax order and exact cache/state boundaries. Potential descends in `(SWA_KV_rereads, attention_threadgroups, prefill_wall, remaining_rows)` for `rows>=128`. Recomputed decode potential does not descend, so the dual frame for `rows=1` remains the existing per-head/GQA2 route.
+**boundary:** Do not treat GQA4 as a decode optimization. Next decode work should target llama-style vectorized QK/V accumulation or FFN/body traffic; next prefill work should test larger prompt sizes and possibly GQA8 only behind an opt-in gate.

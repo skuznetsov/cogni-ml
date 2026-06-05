@@ -131,6 +131,13 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_ATTN_GQA_PAIR_FULL"]? == "1"
       end
 
+      private def attn_gqa4_enabled?(batch : Int32) : Bool
+        return false if ENV["GEMMA4_ROW_PREFILL_ATTN_GQA4_OFF"]? == "1"
+        return true if ENV["GEMMA4_ROW_PREFILL_ATTN_GQA4"]? == "1"
+        min_batch = (ENV["GEMMA4_ROW_PREFILL_ATTN_GQA4_MIN_BATCH"]? || "128").to_i32
+        batch >= min_batch
+      end
+
       private def attn_splitk_enabled?(batch : Int32, sliding_window : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK_OFF"]? == "1"
         return false unless sliding_window == 0
@@ -194,6 +201,7 @@ module ML::GGUF
       @@attn_context_rows_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_kv_h16_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_gqa4_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_kv_h16_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_splitk_kv_h16_stage1_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_splitk_stage1_pipeline : ML::Metal::ComputePipeline?
@@ -1898,9 +1906,13 @@ module ML::GGUF
         enc.set_value(head_dim.to_u32, 8)
         enc.set_value(heads_per_group.to_u32, 9)
         enc.set_value(sliding_window.to_u32, 10)
+        use_gqa4 = attn_gqa4_enabled?(rows) && heads_per_group >= 4 && (heads_per_group % 4 == 0) && (n_head % 4 == 0)
         use_gqa_pair = attn_gqa2_enabled? &&
           (heads_per_group == 2 || (attn_gqa_pair_full_enabled? && heads_per_group > 2 && heads_per_group.even?))
-        if use_gqa_pair
+        if use_gqa4
+          enc.set_pipeline(attn_context_rows_gqa4_pipeline)
+          enc.dispatch_threadgroups({n_head // 4, rows, 1}, {32, 1, 1})
+        elsif use_gqa_pair
           enc.set_pipeline(attn_context_rows_gqa2_pipeline)
           enc.dispatch_threadgroups({n_head // 2, rows, 1}, {32, 1, 1})
         else
@@ -2231,6 +2243,12 @@ module ML::GGUF
       private def attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline
         @@attn_context_rows_gqa2_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_gqa2") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_gqa2", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_gqa4_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_gqa4_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_gqa4") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_gqa4", GEMMA4_SOURCE)
         }
       end
 
