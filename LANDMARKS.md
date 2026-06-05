@@ -21833,3 +21833,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The repeated failed local moves indicate the current corridor is sticky. The dual frame is now a structural kernel-family port/probe: reproduce llama.cpp's `q4x4` simdgroup split as a narrow microbench for Gemma's dominant shapes before wiring it into decode.
 **boundary:** Do not blindly paste llama.cpp code into the runtime. First build a local opt-in/probe that validates numerical parity against current `Qwen35Metal.matmul` for `Q4_K 3840x15360`, `Q4_K 15360x3840`, and `Q6_K 15360x3840`, then run body-only ABBA. Promotion requires a whole-corridor win.
+
+### [LM-COGNIGRAPH-010] Q4_K x16 simdgroup split gives stable Gemma decode win as opt-in
+**context:** ml / CogniGraph / Gemma4 / Q4_K GEMV / llama.cpp-inspired x16 split / LTP-WBA
+**state:** implemented opt-in; not default until broader Qwen/Gemma regression coverage
+
+- claim: "Implemented an opt-in `simd_mv_q4k_f32_x16` route behind `QWEN35_Q4K_GEMV_X16=1`. It keeps the existing Q4_K buffer contract but splits each simdgroup into two 16-lane reductions, producing two output rows per simdgroup."
+  source: `src/ml/gguf/kernels/gemm_q4k.metal` and `src/ml/gguf/qwen35_metal.cr`; build command `/opt/homebrew/bin/crystal build bin/gemma4_metal_decode_profile.cr -o /tmp/gemma4_metal_decode_profile_q4x16 ...` passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Q4_K kernel rewrite, Metal compiler behavior change, or Qwen35Metal routing rewrite
+  trust: {F:0.86,G:0.18,R:0.84}
+
+- claim: "Short top1 parity smoke preserved token trace and improved gen8 from `29.553` to `31.405 tok/s`. Body-only gen64 ABBA was stable: off/on/off/on p50 tok/s `30.588 / 32.511 / 30.645 / 32.401`, about `+6.2%` for the matched llama-bench-style body corridor."
+  source: guarded logs `/tmp/gemma4_q4x16_{off,on}_top1_g8.log` and `/tmp/gemma4_q4x16_abba_{off1,on1,off2,on2}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun contradiction, larger prompt/gen suite failure, or Q4 route dispatch change
+  trust: {F:0.86,G:0.14,R:0.84}
+
+- claim: "Top1 gen32 kept identical token trace and improved p50 from `29.300` to `30.903 tok/s`. A profile-atlas run with the flag enabled showed decode-wave body wait `211.68ms` for gen8, with the same dominant logical shape `gemv Q4_K 3840x15360 b1`."
+  source: guarded logs `/tmp/gemma4_q4x16_{off,on}_top1_g32.log` and `/tmp/gemma4_q4x16_on_body_profile.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger top1 prompt suite contradiction, output-head route rewrite, or profile-atlas parser change
+  trust: {F:0.86,G:0.12,R:0.84}
+
+**LTP/WBA:** This is the first successful dual-frame move after local Spike failures. The trigger was the dominant Q4 GEMV corridor; transport stayed inside the existing Q4 weight/vector/output boundary; legal move changed the simdgroup row/reduction frame. Recomputed body and top1 corridors descended without trace drift.
+**boundary:** Keep `QWEN35_Q4K_GEMV_X16` opt-in until Qwen 9B/27B and longer Gemma prompt suites pass. Default promotion requires broader ABBA and no regressions on non-Gemma Q4 shapes.

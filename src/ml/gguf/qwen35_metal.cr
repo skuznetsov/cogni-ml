@@ -187,6 +187,7 @@ module ML
         MTP_SOURCE = {{ read_file("#{__DIR__}/kernels/mtp_qwen35.metal") }}
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
+        @@mv_q4_x16_pipeline : ML::Metal::ComputePipeline?
         @@mv_add_pipeline : ML::Metal::ComputePipeline?
         @@embed_q4k_pipeline : ML::Metal::ComputePipeline?
         @@embed_q6k_pipeline : ML::Metal::ComputePipeline?
@@ -940,6 +941,16 @@ module ML
           @@mv_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q4k_f32", GEMM_Q4K_SOURCE)
           }
+        end
+
+        private def self.mv_q4_x16_pipeline : ML::Metal::ComputePipeline
+          @@mv_q4_x16_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_f32_x16") {
+            ML::Metal::ComputePipeline.new("simd_mv_q4k_f32_x16", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.q4_gemv_x16_enabled? : Bool
+          ENV["QWEN35_Q4K_GEMV_X16"]? == "1"
         end
 
         private def self.mv_q4_layout_pipeline(nsg : Int32, nr0 : Int32) : ML::Metal::ComputePipeline
@@ -1744,7 +1755,11 @@ module ML
           actual_pipeline = pipeline
           rows_per_tg = gemv_rows_per_tg_for(pipeline)
           threads_per_tg = gemv_threads_per_tg_for(pipeline)
-          if q4_gemv_shape_layout_enabled? && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv_pipeline)
+          if q4_gemv_x16_enabled? && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv_pipeline) && (in_dim % QK_K == 0)
+            actual_pipeline = mv_q4_x16_pipeline
+            rows_per_tg = MV_Q4_NSG * 2
+            threads_per_tg = MV_Q4_NSG * 32
+          elsif q4_gemv_shape_layout_enabled? && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv_pipeline)
             if layout = q4_gemv_shape_layout(in_dim, out_dim)
               nsg, nr0 = layout
               actual_pipeline = mv_q4_layout_pipeline(nsg, nr0)
