@@ -20551,3 +20551,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is insertion/restore of decoded prompt-cache K/V snapshots. Transport is the resident snapshot-cache memory corridor. Legal move is budget clamp plus LRU eviction while preserving exact durable-artifact fallback. Boundary safety: authoritative `.gkv` artifact SHA/size/shape validation remains required before restore, and clamping only affects retention. Potential `Phi=(memory-pressure-risk, overbudget-snapshot-bytes, stale-restore-risk, hot-cache-latency)` descends by preventing cache growth past the requested/effective budget while preserving hot-cache hits when the floor allows them. Dual frame is durable artifact restore when the resident cache is disabled or clamped.
 **boundary:** This is a product/session safety improvement, not a first-run pp/tg speedup. Next cache step is sequential pp1024/pp2048/pp4096 hot-cache measurement under the new memory floor; first-run Gemma acceleration remains a separate kernel/attention path.
+
+### [LM-COGNIGEMMA-90] Gemma hot prompt-cache restore remains fast under the memory-floor policy
+**context:** ml / CogniGemma prompt cache / session-cache benchmark / long prompt restore
+**state:** verified for pp1024 and pp2048 guarded rows
+
+- claim: "With a resident snapshot budget large enough to hold the decoded `.gkv` state, the new memory-floor policy preserves the hot-cache speed path. At pp1024, a 1024 MiB cache budget with 4096 MiB min-free floor retained a 704,643,072-byte snapshot and measured cold/artifact/cached p50 `3660.019ms / 446.284ms / 19.557ms`, i.e. cached restore was `187.15x` faster than cold prefill and `22.82x` faster than durable artifact restore."
+  source: guarded run `/tmp/gemma4_prompt_cache_budget_pp1024_1g_1780666055.log` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 scripts/run_safe.sh /tmp/gemma4_prompt_cache_bench_budget ... --prompt-len 1024 --snapshot-cache-mib 1024 --snapshot-cache-min-free-mib 4096`.
+  verified_at: 2026-06-05
+  decay_trigger: prompt-cache artifact format rewrite, cache restore rewrite, or benchmark harness rewrite
+  trust: {F:0.84,G:0.26,R:0.82}
+
+- claim: "At pp2048, a 2048 MiB cache budget with 4096 MiB min-free floor retained a 1,409,286,144-byte snapshot and measured cold/artifact/cached `9340.028ms / 890.031ms / 44.204ms`, i.e. cached restore was `211.29x` faster than cold prefill and `20.13x` faster than durable artifact restore. This was a single-run guarded row, so it is a capacity/smoke landmark rather than a stable p50 claim."
+  source: guarded run `/tmp/gemma4_prompt_cache_budget_pp2048_2g_1780666090.log` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 scripts/run_safe.sh /tmp/gemma4_prompt_cache_bench_budget ... --prompt-len 2048 --snapshot-cache-mib 2048 --snapshot-cache-min-free-mib 4096`.
+  verified_at: 2026-06-05
+  decay_trigger: prompt-cache artifact format rewrite, cache restore rewrite, memory pressure, or quiet-host repeat
+  trust: {F:0.78,G:0.20,R:0.76}
+
+- claim: "A pp1024 run with only a 512 MiB resident cache budget correctly did not retain the 704,643,072-byte snapshot (`snapshot_cache_bytes=0`), demonstrating fail-closed budget behavior rather than unsafe overcommit."
+  source: guarded run `/tmp/gemma4_prompt_cache_budget_pp1024_1780666012.log`.
+  verified_at: 2026-06-05
+  decay_trigger: cache admission rewrite or budget clamp rewrite
+  trust: {F:0.84,G:0.30,R:0.82}
+
+**LTP/WBA:** Window is repeated-session prompt restore after exact `.gkv` validation. Transport carries decoded K/V state through a bounded resident snapshot cache. Legal move is cache admission only when `state_bytes <= effective_budget`; otherwise durable artifact restore remains the dual frame. Potential `Phi=(cold-prefill-work, durable-read-work, resident-cache-bytes, memory-floor-risk)` descends for pp1024/pp2048 when the budget can hold the snapshot and remains boundary-safe when it cannot.
+**boundary:** These are session-cache wins, not first-run pp acceleration or decode `tg` wins. pp4096 should be run sequentially only on a quiet host with a cache budget above the expected ~2.8 GiB state size and the memory-floor clamp printed in the log.
