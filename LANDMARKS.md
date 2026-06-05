@@ -19905,3 +19905,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is large FFN-sized Q4 projections where tensor-op GEMM can reduce the `ffn_upgate` phase. Transport is the same row-prefill batch corridor, but using a different compute frame for Q4 GEMM while preserving exact output in focused specs. Recomputed potential `Phi=(ffn_upgate_wait, neighboring_phase_shift, wall_noise, promotion_risk)` descends in phase attribution but not stably in wall ABBA, so this is an experimental Diamond, not a Collapse/default.
 **boundary:** Keep `tensor` as an explicit wrapper mode. Do not combine it with `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1` without a fresh parity gate; prior landmarks refuted that composition. Next gate: quiet-host ABBA over pp512/1024 plus phase profiles before any controller change.
+
+### [LM-COGNIGEMMA-88] Gemma tensor route is not promotable under quiet-host ABBA, and wrapper logs need unique row IDs
+**context:** ml / CogniGemma Metal prefill / Q4 tensor-op route / benchmark harness
+**state:** tensor remains experimental; wrapper log overwrite fixed
+
+- claim: "A quiet-host ABBA-style wrapper gate did not support promoting `QWEN35_Q4K_TENSOR_MM=1`. pp512 remained mixed (`default=2333.014ms`, `tensor=2319.252ms`, `tensor=2479.099ms`, `default=2228.950ms`). pp1024 was worse for tensor before a host drift/control collapse (`default=6104.858ms`, `tensor=6469.895ms`, `tensor=8106.414ms`, `default=9521.351ms`). The pp1024 final default row shows thermal/host drift, so this run is not a clean broad refutation of the kernel, but it is enough to block promotion."
+  source: wrapper summary `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-tensor-abba.8yB9MI/summary.tsv`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host repeat with stable controls, tensor kernel rewrite, or host thermal/noise change
+  trust: {F:0.80,G:0.18,R:0.76}
+
+- claim: "The A/B wrapper previously overwrote logs when the same mode appeared twice in a mode list such as `default,tensor,tensor,default`. The script now prefixes each row log with a monotonically increasing row id, preserving ABBA evidence files."
+  source: implementation in `scripts/gemma4_prefill_ab.sh`; `bash -n scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: wrapper rewrite or log naming change
+  trust: {F:0.90,G:0.55,R:0.88}
+
+**LTP/WBA:** Tensor remains a valid alternate compute frame for the FFN Q4 window, but recomputed potential `Phi=(ffn_phase_win, pp512_mixed_wall, pp1024_regression, control_drift, promotion_risk)` does not descend enough for a controller. The wrapper fix is a benchmark-integrity Spike: local duplicate-log window, transport is the row evidence path, legal move is row-id prefixing, potential `Phi=(log_aliases, evidence_ambiguity)` descends to zero for repeated modes.
+**boundary:** Keep `tensor` explicit. Do not promote until an ABBA run has stable controls and tensor wins both repeated rows for the target pp window.

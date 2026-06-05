@@ -174,6 +174,7 @@ printf "pp\tmode\tprefill_p50_ms\tprefill_tok_s\tdecode_ms_per_tok\tlog\n"
 IFS=',' read -r -a pp_items <<<"${pps}"
 IFS=',' read -r -a mode_items <<<"${modes}"
 
+row_idx=0
 for pp in "${pp_items[@]}"; do
   pp="${pp//[[:space:]]/}"
   [[ -z "${pp}" ]] && continue
@@ -182,7 +183,9 @@ for pp in "${pp_items[@]}"; do
   for mode in "${mode_items[@]}"; do
     mode="${mode//[[:space:]]/}"
     [[ -z "${mode}" ]] && continue
-    log="${log_dir}/pp${pp}_${mode}.log"
+    row_idx=$((row_idx + 1))
+    row_tag="$(printf "%03d" "${row_idx}")"
+    log="${log_dir}/${row_tag}_pp${pp}_${mode}.log"
     echo "RUN pp=${pp} mode=${mode} log=${log}" >&2
     if [[ "${allow_busy}" != "1" ]]; then
       check_busy_host
