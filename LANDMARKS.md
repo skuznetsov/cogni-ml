@@ -20463,3 +20463,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Adversary: A/B absolute numbers were load-slow, so the trusted claim is default-vs-off relative improvement plus spec correctness, not cross-run absolute speed.
 - LTP/WBA: Window = `(quant=Q4_K, in_dim,out_dim,batch<=threshold)` shape trigger; Transport = same weight/input corridor through a shape-specific pipeline variant; Legal move = choose NSG/NR0 variant without changing arithmetic; Boundary safety = Qwen/Gemma matmul specs passed and off-switch exists; Potential = `(per-shape wait_ms, weighted_decode_area)` decreases.
 - Trust: {F=.86,G=.50,R=.82}; applies to measured Q4_K Metal GEMV shapes, not Q6/head.
+
+[LM-GEMMA4-Q6-LAYOUT-REFUTED] Q6_K shape layout variants are useful for probing but not default production routing (shared)
+- Date: 2026-06-05
+- Context: ml/perf/Metal Q6_K GEMV layout selection
+- Claim: The Q6 layout sweep harness found `15360x3840 -> 4x2` faster in standalone wait microbench, but full Gemma decode A/B did not support enabling it by default.
+- Evidence: `bin/gemma4_op_attribution --q6-layout-sweep=...` measured `15360x3840` default `2x1` around `0.561ms` and `4x2` around `0.350ms` standalone; focused Gemma and Qwen35 specs passed. Full pp256/tg32 A/B preserved token trace but default-enabled Q6 layout measured `43.073 ms/tok` vs off-switch `42.751 ms/tok`, so production default was rejected.
+- Decision: Keep Q6 layout pipeline/helper and `--q6-layout-sweep` for future retuning, but require explicit `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` to route production Q6 through shape-specific variants.
+- LTP/WBA: Window = Q6 FFN-down shape; Transport = alternate NSG/NR0 kernel corridor; Boundary safety = exact specs/token trace; Potential failed to descend in full decode after recomputing active window, so dual frame falls back to default Q6 route.
+- Trust: {F=.84,G=.38,R=.80}; refutation is local to current M2 Max/Gemma4 decode workload.

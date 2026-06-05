@@ -43,6 +43,7 @@ record PairRef,
   up_qw : ML::GGUF::QuantWeight
 
 record Q4Layout, nsg : Int32, nr0 : Int32
+record Q6Layout, nsg : Int32, nr0 : Int32
 
 private def add_op(ops : Array(OpRef), name : String, qw : ML::GGUF::QuantWeight) : Nil
   ops << OpRef.new(name, qw)
@@ -129,6 +130,14 @@ private def parse_q4_layouts(spec : String) : Array(Q4Layout)
   end
 end
 
+private def parse_q6_layouts(spec : String) : Array(Q6Layout)
+  spec.split(",", remove_empty: true).map do |part|
+    fields = part.strip.split("x", remove_empty: true)
+    raise "invalid Q6 layout '#{part}', expected NSGxNR0" unless fields.size == 2
+    Q6Layout.new(fields[0].to_i, fields[1].to_i)
+  end
+end
+
 private def bench_q4_layout(stats : ShapeStats,
                             layout : Q4Layout,
                             warmup : Int32,
@@ -140,6 +149,21 @@ private def bench_q4_layout(stats : ShapeStats,
   warmup.times { ML::GGUF::Qwen35Metal.bench_q4_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0) }
   times = Array(Float64).new(runs) do
     ML::GGUF::Qwen35Metal.bench_q4_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0)
+  end
+  percentile(times.sort, 50)
+end
+
+private def bench_q6_layout(stats : ShapeStats,
+                            layout : Q6Layout,
+                            warmup : Int32,
+                            runs : Int32,
+                            batch : Int32,
+                            validate : Bool) : Float64
+  x = input_for(stats.in_dim, batch)
+  ML::GGUF::Qwen35Metal.bench_q6_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0, validate: validate)
+  warmup.times { ML::GGUF::Qwen35Metal.bench_q6_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0) }
+  times = Array(Float64).new(runs) do
+    ML::GGUF::Qwen35Metal.bench_q6_layout_wait_ms(stats.sample, x, batch, layout.nsg, layout.nr0)
   end
   percentile(times.sort, 50)
 end
@@ -233,6 +257,32 @@ private def print_q4_layout_sweep(stats : Array(ShapeStats),
   end
 end
 
+private def print_q6_layout_sweep(stats : Array(ShapeStats),
+                                  layouts : Array(Q6Layout),
+                                  warmup : Int32,
+                                  runs : Int32,
+                                  batch : Int32) : Nil
+  q6_stats = stats.select(&.sample.type.q6_k?)
+  return if q6_stats.empty? || layouts.empty?
+
+  puts
+  puts "Gemma4 Q6_K GEMV layout sweep"
+  puts "note: layout is NSGxNR0; default is 2x1. p50_wait is command wait only."
+  printf "%7s %8s %5s %5s %8s %10s %10s %9s  %s\n",
+    "in", "out", "calls", "batch", "layout", "p50_wait", "weighted", "eff_gbps", "examples"
+  q6_stats.each do |shape|
+    layouts.each do |layout|
+      p50 = bench_q6_layout(shape, layout, warmup, runs, batch, validate: true)
+      weighted = (p50 / batch) * shape.count
+      examples = shape.names.first(3).join(",")
+      examples += ",..." if shape.names.size > 3
+      printf "%7d %8d %5d %5d %8s %10.3f %10.3f %9.1f  %s\n",
+        shape.in_dim, shape.out_dim, shape.count, batch, "#{layout.nsg}x#{layout.nr0}",
+        p50, weighted, gbps(shape.sample.raw.size.to_i64, p50), examples
+    end
+  end
+end
+
 model = MODEL_PATH
 warmup = 2
 runs = 5
@@ -243,9 +293,10 @@ prefill_q4_pair_wait = false
 prefill_q4_pair_only = false
 exclude_output_head = false
 q4_layout_sweep = [] of Q4Layout
+q6_layout_sweep = [] of Q6Layout
 
 OptionParser.parse do |p|
-  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--exclude-output-head] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--q4-layout-sweep=NSGxNR0,...]"
+  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--exclude-output-head] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--q4-layout-sweep=NSGxNR0,...] [--q6-layout-sweep=NSGxNR0,...]"
   p.on("--model=PATH", "Gemma4 GGUF model path") { |v| model = v }
   p.on("--warmup=N", "Warmup runs per shape (default: 2)") { |v| warmup = v.to_i }
   p.on("--runs=N", "Measured runs per shape (default: 5)") { |v| runs = v.to_i }
@@ -256,6 +307,7 @@ OptionParser.parse do |p|
   p.on("--prefill-q4-pair-wait", "Also benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true }
   p.on("--prefill-q4-pair-only", "Only benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true; prefill_q4_pair_only = true }
   p.on("--q4-layout-sweep=LIST", "Benchmark alternate Q4_K GEMV layouts, e.g. 1x1,1x2,2x1,2x2,2x3,2x4") { |v| q4_layout_sweep = parse_q4_layouts(v) }
+  p.on("--q6-layout-sweep=LIST", "Benchmark alternate Q6_K GEMV layouts, e.g. 1x1,1x2,2x1,2x2,2x3,2x4") { |v| q6_layout_sweep = parse_q6_layouts(v) }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -288,6 +340,7 @@ if prefill_q4_pair_wait
 end
 
 print_q4_layout_sweep(stats, q4_layout_sweep, warmup, runs, batch) unless q4_layout_sweep.empty?
+print_q6_layout_sweep(stats, q6_layout_sweep, warmup, runs, batch) unless q6_layout_sweep.empty?
 
 rows = stats.map { |s| bench_shape(s, warmup, runs, batch, profile_wait) }
 rows.sort_by! { |r| profile_wait ? -r.weighted_wait_ms : -r.weighted_ms }

@@ -975,6 +975,20 @@ module ML
           end
         end
 
+        private def self.q6_gemv_shape_layout_enabled? : Bool
+          ENV["QWEN35_Q6K_GEMV_SHAPE_LAYOUT"]? == "1" &&
+            ENV["QWEN35_Q6K_GEMV_SHAPE_LAYOUT_OFF"]? != "1"
+        end
+
+        private def self.q6_gemv_shape_layout(in_dim : Int32, out_dim : Int32) : {Int32, Int32}?
+          case {in_dim, out_dim}
+          when {15360, 3840}
+            {4, 2}
+          else
+            nil
+          end
+        end
+
         private def self.mv_add_pipeline : ML::Metal::ComputePipeline
           @@mv_add_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_f32_add") {
             ML::Metal::ComputePipeline.new("simd_mv_q4k_f32_add", GEMM_Q4K_SOURCE)
@@ -1105,6 +1119,19 @@ module ML
           @@mv6_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_f32", GEMM_Q56K_SOURCE)
           }
+        end
+
+        private def self.mv_q6_layout_pipeline(nsg : Int32, nr0 : Int32) : ML::Metal::ComputePipeline
+          raise ArgumentError.new("Q6 layout nsg must be positive") unless nsg > 0
+          raise ArgumentError.new("Q6 layout nr0 must be positive") unless nr0 > 0
+
+          key = "simd_mv_q6k_f32_layout_nsg#{nsg}_nr#{nr0}"
+          ML::Metal::PipelineCache.get(key) do
+            source = GEMM_Q56K_SOURCE
+              .gsub("constant short MV6_NSG = 2;", "constant short MV6_NSG = #{nsg};")
+              .gsub("constant short MV6_NR0 = 1;", "constant short MV6_NR0 = #{nr0};")
+            ML::Metal::ComputePipeline.new("simd_mv_q6k_f32", source)
+          end
         end
 
         private def self.mv6_add_pipeline : ML::Metal::ComputePipeline
@@ -1709,6 +1736,13 @@ module ML
             if layout = q4_gemv_shape_layout(in_dim, out_dim)
               nsg, nr0 = layout
               actual_pipeline = mv_q4_layout_pipeline(nsg, nr0)
+              rows_per_tg = nsg * nr0
+              threads_per_tg = nsg * 32
+            end
+          elsif q6_gemv_shape_layout_enabled? && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv6_pipeline)
+            if layout = q6_gemv_shape_layout(in_dim, out_dim)
+              nsg, nr0 = layout
+              actual_pipeline = mv_q6_layout_pipeline(nsg, nr0)
               rows_per_tg = nsg * nr0
               threads_per_tg = nsg * 32
             end
@@ -10112,6 +10146,43 @@ module ML
           {elapsed, result}
         end
 
+        private def self.matmul_q6_layout_wait_ms(qw : QuantWeight,
+                                                  x : Array(Float32),
+                                                  batch : Int32,
+                                                  nsg : Int32,
+                                                  nr0 : Int32,
+                                                  read_output : Bool = false) : {Float64, Array(Float32)}
+          raise ArgumentError.new("Q6 layout bench requires Q6_K weight") unless qw.type.q6_k?
+          raise ArgumentError.new("Q6 layout bench x size mismatch") unless x.size == qw.in_dim * batch
+
+          ML::Metal::Device.init!
+          w_buf, w_off = if slot = mmap_slot_for(qw.raw)
+                           slot
+                         else
+                           {qw.fallback_metal_buffer, 0_i64}
+                         end
+          pipeline = mv_q6_layout_pipeline(nsg, nr0)
+          rows_per_tg = nsg * nr0
+          threads_per_tg = nsg * 32
+
+          x_buf = Scratch.get(:bench_q6_layout_x, x.size.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+          out_buf = Scratch.get(:bench_q6_layout_out, (batch * qw.out_dim).to_i64 * sizeof(Float32))
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_gemv_layout(enc, pipeline, x_buf, out_buf, w_buf, w_off,
+            qw.in_dim, qw.out_dim, batch, rows_per_tg, threads_per_tg)
+          enc.end_encoding
+
+          t0 = Time.instant
+          cmd.commit
+          cmd.wait
+          elapsed = (Time.instant - t0).total_milliseconds
+          result = read_output ? read_shared_f32(out_buf, batch * qw.out_dim) : [] of Float32
+          {elapsed, result}
+        end
+
         # Q4_K-specific GEMM path (prefill batch > threshold). Takes
         # pre-allocated weight buffer and byte offset.
         private def self.matmul_q4k_gemm_buf(x : Array(Float32),
@@ -10721,6 +10792,28 @@ module ML
           end
 
           elapsed, _ = matmul_q4_layout_wait_ms(qw, x, batch, nsg, nr0)
+          elapsed
+        end
+
+        def self.bench_q6_layout_wait_ms(qw : QuantWeight,
+                                         x : Array(Float32),
+                                         batch : Int32,
+                                         nsg : Int32,
+                                         nr0 : Int32,
+                                         validate : Bool = false) : Float64
+          if validate
+            _, candidate = matmul_q6_layout_wait_ms(qw, x, batch, nsg, nr0, read_output: true)
+            baseline = matmul(qw, x, batch)
+            raise "default Q6 baseline returned nil" if baseline.nil?
+            max_diff = 0.0_f32
+            candidate.each_with_index do |value, i|
+              diff = (value - baseline.not_nil![i]).abs
+              max_diff = diff if diff > max_diff
+            end
+            raise "Q6 layout nsg=#{nsg} nr0=#{nr0} max diff #{max_diff}" if max_diff > 1.0e-3_f32
+          end
+
+          elapsed, _ = matmul_q6_layout_wait_ms(qw, x, batch, nsg, nr0)
           elapsed
         end
 
