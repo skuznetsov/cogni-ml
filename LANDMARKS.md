@@ -21498,3 +21498,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The verifier corridor is valid only when the proposal window is already strong. With weak n-gram spans, the batch verifier increases the dominant wait bucket by transporting too much bad span area. This is a Diamond result: do not stack batching on a poor proposal source. The next legal move is to replace the trigger/proposal window, not to tune batch verification.
 **boundary:** Keep `--trust-batch-accepts` diagnostic-only. The exact speed path should target Gemma surrogate/MTP/self-draft proposals that can produce high-accept chunks for the proven exact-threshold batch verifier.
+
+### [LM-COGNIGEMMA-131] Gemma proposal sources split into expensive semantic partials and cheap non-chunk memory
+**context:** ml / CogniGemma Metal / surrogate proposal quality / memory proposal / batch verifier planning / LTP-WBA
+**state:** measured; next candidate is span memory, not one-token memory or partial replay
+
+- claim: "Late-band partial surrogate with resident top2 has useful semantic signal but is too expensive as a proposal body. On the Crystal `fib` prompt, it had `surrogate_top5_exact=12/24`, `oracle_rescued=12/24`, and preserved exact output under oracle fallback, but proposal cost was `36.436 ms/step` (`partial_layers=31.730 ms/step`) versus exact `35.478 ms/token`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --gen 32 --train 16 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal --proposal-resident-top2` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: fused partial proposal kernel, lower-layer semantic surrogate, or proposal body rewrite that removes partial-layer replay
+  trust: {F:0.80,G:0.08,R:0.74}
+
+- claim: "Memory-NN proposal is cheap but currently one-token shaped. With `rank=32`, `memory_k=8`, it cost only `1.109 ms/step` and had `oracle_rescued=10/24` (`top8` contains exact), but actual verifier economics stayed speed-negative because it does not propose accepted spans/chunks."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --gen 32 --train 16 --wild-gen 32 --surrogate-layer 46 --rank 32 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 8 --oracle-topk-fallback-exact --proposal-body-mode memory_nn --proposal-memory-k 8` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: memory proposal bank rewrite, larger calibration bank, span proposal instead of one-token shortlist, or different prompt family
+  trust: {F:0.80,G:0.08,R:0.74}
+
+**LTP/WBA:** We now have two incompatible partial windows: semantic partial-layer transport has coverage but no cost descent; memory transport has cost descent but no chunk/span transport. The Diamond synthesis is to carry spans through memory, not single tokens: store feature-to-future-token-span entries and use the exact-threshold batch verifier from LM-COGNIGEMMA-130 as the boundary certificate. Potential target: reduce proposal body cost while creating `gamma=8..16` accepted verifier rows.
+**boundary:** Do not build a production scheduler on partial surrogate replay or one-token memory alone. Next legal experiment is a span-memory proposal probe with exact batch verification and parity gate.
