@@ -20803,3 +20803,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the chunk/tile controller around Q4 FFN gate/up and Q6 FFN-down. Transport tried to move the prompt through smaller exact rowpack corridors, but recomputed potential increased in `(kernel_count, command scheduling, wall)` despite better local tile fit. The legal Collapse is current chunk256+B64-style GEMM for pp256. Dual frame is not smaller chunks; it is a materially different Q4/Q6 kernel body or an algorithmic/surrogate corridor that reduces FFN work.
 **boundary:** Do not chase chunk48/64/128 rowpack tuning for pp256 public comparisons. Keep Q4 H16 staging enabled. Reopen only after changing kernel internals or when testing a different prompt length where chunking changes memory pressure.
+
+### [LM-COGNIGEMMA-102] Gemma text/chat probe is available; raw stop-layer no-validator draft is refuted
+**context:** ml / CogniGemma Metal / Gemma4 tokenizer / no-validator quality lane / LTP-WBA
+**state:** implemented and smoke-verified; shallow layer truncation refuted
+
+- claim: "CogniGemma now has a bounded text probe path: `Gemma4Tokenizer` oracle-encodes prompts through llama.cpp `llama-tokenize`, conservatively detokenizes generated ids from GGUF pieces, and `bin/gemma4_metal_decode_profile.cr` accepts `--prompt`, `--prompt-file`, `--chat-user`, and `--print-generated-text` without changing default token-id behavior."
+  source: `src/ml/gguf/gemma4_tokenizer.cr`, `bin/gemma4_metal_decode_profile.cr`, guarded command `scripts/run_safe.sh /opt/homebrew/bin/crystal 420 8000 spec spec/gemma4_tokenizer_spec.cr -- --fail-fast` -> `2 examples, 0 failures`.
+  verified_at: 2026-06-05
+  decay_trigger: native Gemma4 tokenizer implementation, llama-tokenize CLI change, or Gemma4 chat-template rewrite
+  trust: {F:0.84,G:0.28,R:0.82}
+
+- claim: "The chat-formatted full-layer text smoke produces plausible Crystal-code continuation, while raw prompts poisoned quality. Example guarded full-layer chat run generated `thought\\n```crystal\\ndef fib(n : Int32) : Int32\\n  return 0 if n == 0\\n  return...` for a Crystal `fib` prompt."
+  source: guarded `/tmp/gemma4_text_probe --chat-user 'Write a small Crystal function ...' --generate 32 --stop-layer 48 --print-generated-text`, output `prompt_text_mode=chat_user`, `decode_ms_per_token_p50=36.667`.
+  verified_at: 2026-06-05
+  decay_trigger: prompt template changes, detokenizer changes, or model quant change
+  trust: {F:0.76,G:0.12,R:0.74}
+
+- claim: "Simple top-level stop-layer truncation is not a promotion-worthy no-validator drafter for Gemma4. Under the same chat prompt, `stop_layer=44` collapsed to repetitive numeric text (`0123456/br010101...`) and had no speed win versus full (`36.789ms/tok` vs `36.667ms/tok` in the one-run smoke). Earlier raw-prompt `stop_layer=40/44` runs also collapsed into repetitive or non-code text."
+  source: guarded `/tmp/gemma4_text_probe --chat-user ... --generate 32 --stop-layer 44 --print-generated-text`; prior guarded raw prompt runs for `stop_layer=40` and `44` in this session.
+  verified_at: 2026-06-05
+  decay_trigger: adding a trained/derived surrogate head, changing LM-head path, measuring long gen with body-only route, or adding verifier-assisted acceptance
+  trust: {F:0.74,G:0.16,R:0.72}
+
+**LTP/WBA:** The initial window was "Gemma probes only accept token IDs, so real text/code quality cannot be measured." The transport corridor is `chat/user text -> llama-tokenize oracle ids -> existing resident decode wave -> conservative detokenized text`; legal move adds only prompt plumbing and keeps model state/kernels exact. Recomputed potential decreases for evaluation friction and prompt-frame conflict. The follow-up window was shallow layer truncation as no-validator surrogate; after recomputing wall and quality, potential worsened in `(quality-collapse, no-wall-win)`, so the move is refuted. Dual frame is a real surrogate/proposal corridor with verifier or trained/derived head, not raw stop-layer truncation.
+**boundary:** Use `--chat-user` for instruction-quality Gemma tests. `--prompt` remains a raw tokenizer/debug path. Do not promote Gemma raw `stop_layer=N` no-validator output as a speed technique without a different surrogate boundary and fresh quality/speed evidence.

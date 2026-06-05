@@ -1,11 +1,15 @@
 require "option_parser"
 require "../src/ml/gguf/gemma4_metal"
 require "../src/ml/gguf/gemma4_prompt_cache"
+require "../src/ml/gguf/gemma4_tokenizer"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
 
 model = ENV["GEMMA4_MODEL"]? || DEFAULT_MODEL
 prompt = [42, 43, 44, 45, 46, 47, 48, 49]
+prompt_text = nil.as(String?)
+prompt_file = nil.as(String?)
+chat_user = nil.as(String?)
 generate = 8
 max_seq = 1024
 warmups = 1
@@ -13,6 +17,8 @@ runs = 3
 profile = false
 profile_decode_only = false
 print_generated_ids = false
+print_generated_text = false
+llama_tokenize_bin = ENV["LLAMA_TOKENIZE_BIN"]? || "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 decode_mode = "top1"
 decode_wave = ENV["GEMMA4_DECODE_WAVE_OFF"]? != "1"
 top1_wave_resident = ENV["GEMMA4_TOP1_WAVE_RESIDENT_OFF"]? != "1"
@@ -31,6 +37,10 @@ OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
   p.on("--model PATH", "Gemma4 GGUF path") { |v| model = v }
   p.on("--tokens IDS", "Comma-separated prompt token ids") { |v| prompt = v.split(',').reject(&.empty?).map(&.to_i) }
+  p.on("--prompt TEXT", "Prompt text; tokenized through llama-tokenize oracle") { |v| prompt_text = v }
+  p.on("--prompt-file PATH", "Read prompt text from a file and tokenize through llama-tokenize oracle") { |v| prompt_file = v }
+  p.on("--chat-user TEXT", "Format a single Gemma4 user turn and tokenize through llama-tokenize oracle") { |v| chat_user = v }
+  p.on("--llama-tokenize-bin PATH", "llama.cpp llama-tokenize binary for Gemma4 text prompts") { |v| llama_tokenize_bin = v }
   p.on("--generate N", "Measured generated tokens per run") { |v| generate = v.to_i }
   p.on("--max-seq N", "KV cache sequence capacity") { |v| max_seq = v.to_i }
   p.on("--warmups N", "Warmup runs") { |v| warmups = v.to_i }
@@ -38,6 +48,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--profile", "Print shared Metal matmul/profile attribution for the final measured run") { profile = true }
   p.on("--profile-decode-only", "Reset profile counters after prefill and report only generated-token work") { profile_decode_only = true }
   p.on("--print-generated-ids", "Print seed + generated token ids for parity diagnostics") { print_generated_ids = true }
+  p.on("--print-generated-text", "Print conservative detokenized generated text; requires text tokenizer metadata") { print_generated_text = true }
   p.on("--decode-wave", "Use one command buffer per decode token instead of one wait per layer (default)") { decode_wave = true }
   p.on("--decode-layerwise", "Use legacy one-wait-per-layer decode path") { decode_wave = false }
   p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer (default)") { top1_wave_resident = true }
@@ -58,10 +69,16 @@ OptionParser.parse(ARGV) do |p|
 end
 
 raise "model not found: #{model}" unless File.exists?(model)
-raise "prompt tokens must not be empty" if prompt.empty?
+text_modes = [prompt_text, prompt_file, chat_user].count { |v| !v.nil? }
+raise "--prompt, --prompt-file, and --chat-user are mutually exclusive" if text_modes > 1
+if file = prompt_file
+  prompt_text = File.read(file)
+end
+if user = chat_user
+  prompt_text = "<|turn>user\n#{user}<turn|>\n<|turn>model\n"
+end
 raise "generate must be positive" unless generate > 0
 raise "runs must be positive" unless runs > 0
-raise "max-seq too small" if max_seq < prompt.size + generate
 raise "prompt-cache snapshot MiB must be non-negative" unless prompt_cache_snapshot_mib >= 0
 raise "prompt-cache snapshot min-free MiB must be non-negative" unless prompt_cache_snapshot_min_free_mib >= 0
 raise "prompt-cache snapshot entries must be non-negative" unless prompt_cache_snapshot_entries >= 0
@@ -256,6 +273,18 @@ weights = ML::GGUF::Gemma4Weights.from_gguf(model)
 load_ms = (Time.instant - started).total_milliseconds
 raise "Metal not available" unless ML::GGUF::Gemma4Metal.available?
 
+tokenizer = nil.as(ML::GGUF::Gemma4Tokenizer?)
+if prompt_text || print_generated_text
+  g = ML::GGUF::GGUFFile.new(model)
+  tokenizer = ML::GGUF::Gemma4Tokenizer.from_gguf(g, model, llama_tokenize_bin)
+  g.close
+end
+if text = prompt_text
+  prompt = tokenizer.not_nil!.encode(text)
+end
+raise "prompt tokens must not be empty" if prompt.empty?
+raise "max-seq too small" if max_seq < prompt.size + generate
+
 raise "decode mode must be top1 or body" unless {"top1", "body"}.includes?(decode_mode)
 raise "prefill mode must be serial or rows" unless {"serial", "rows"}.includes?(prefill_mode)
 raise "prefill chunk must be positive" unless prefill_chunk > 0
@@ -271,7 +300,7 @@ raise "--decode-only-seed cannot be combined with --prompt-cache-root" if decode
 
 cache_store = nil.as(ML::GGUF::Gemma4PromptCache::Store?)
 cache_model_id = File.basename(model)
-cache_tokenizer_id = "synthetic-token-ids"
+cache_tokenizer_id = prompt_text ? "gemma4-llama-tokenize-oracle" : "synthetic-token-ids"
 if root = prompt_cache_root
   cache_store = ML::GGUF::Gemma4PromptCache::Store.new(
     root,
@@ -281,7 +310,7 @@ if root = prompt_cache_root
   )
 end
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -331,6 +360,9 @@ summarize("cache_restore", cache_restore_samples, prompt.size) unless cache_rest
 decode_p50 = percentile(decode_samples.sort, 0.50)
 puts "decode_ms_per_token_p50=#{(decode_p50 / generate).round(3)} first_id=#{first_id} last_id=#{last_id}"
 puts "token_trace=#{last_token_trace.join(',')}" if print_generated_ids
+if print_generated_text
+  puts "generated_text=#{tokenizer.not_nil!.decode(last_token_trace).inspect}"
+end
 unless cache_route_counts.empty?
   route_summary = cache_route_counts.map { |route, count| "#{route}:#{count}" }.join(",")
   puts "prompt_cache_routes=#{route_summary}"
