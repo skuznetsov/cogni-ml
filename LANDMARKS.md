@@ -20398,3 +20398,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was row-prefill transport width. Smaller chunks reduce local memory pressure but increase graph/command/replay area. Recomputed potential descends with chunk 512 for pp256 and pp1024, so chunk shrinking is not the next lever.
 **boundary:** Keep comparing against llama.cpp with fresh native rebuilds; do not infer decode speed from `gen=1` body-prefill sweeps.
+
+### [LM-GEMMA4-SCRATCH-F32-STATIC-CACHE] Static scratch F32 caching removes repeated immutable buffer writes
+**context:** ml / Gemma4 Metal / resident scratch / command setup / LTP-WBA Spike
+**state:** implemented with kill switch `GEMMA4_SCRATCH_F32_STATIC_CACHE_OFF=1`
+
+- claim: "Gemma resident scratch now skips repeated writes for immutable F32 norm/RoPE/output-norm buffers when the same scratch slot sees the same source array pointer and size. This preserves the synthetic pp256 token trace and removes avoidable CPU-to-shared-memory writes during decode/prefill. The measured speed effect is small: pp256/tg64 ABBA showed cache decode `43.420/43.689 ms/tok` versus kill-switch `43.727/43.620 ms/tok`, and cache prefill `769.099/767.807ms` versus kill-switch `773.074/769.446ms`."
+  source: local sequential `scripts/run_safe.sh` ABBA with `/tmp/gemma4_metal_decode_profile_scratch_static`, log `/tmp/gemma4_scratch_static_abba_1780661290.log`; focused Gemma Metal spec passed `9 examples, 0 failures` after the final kill-switch build.
+  verified_at: 2026-06-05
+  decay_trigger: scratch ownership rewrite, mutable weights, ResidentState reuse across different model weights, or command setup profiler showing no benefit
+  trust: {F:0.74,G:0.26,R:0.72}
+
+**LTP/WBA:** Window is repeated immutable F32 scratch writes. Transport is stable source arrays through resident scratch slots. Legal move skips the write only when `(slot, source pointer, size)` matches; if the source changes, the boundary rewrites. Potential descends slightly in `(CPU writes, shared-memory traffic, encoding work, wall_ms)`, but this is not a major FFN/body lever.
+**boundary:** Keep the kill switch. Do not claim this closes the llama.cpp gap; it only removes small repeated setup work.

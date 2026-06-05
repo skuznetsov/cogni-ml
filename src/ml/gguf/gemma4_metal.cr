@@ -249,6 +249,7 @@ module ML::GGUF
 
       class ResidentScratch
         @buffers = {} of String => ML::MetalBuffer
+        @f32_source_keys = {} of String => UInt64
 
         def get(name : String, byte_size : Int64) : ML::MetalBuffer
           if buf = @buffers[name]?
@@ -257,6 +258,16 @@ module ML::GGUF
           buf = ML::MetalBuffer.new(byte_size)
           @buffers[name] = buf
           buf
+        end
+
+        def f32_source_cached?(name : String, data : Array(Float32)) : Bool
+          key = data.to_unsafe.address.to_u64 &+ (data.size.to_u64 << 1)
+          if @f32_source_keys[name]? == key
+            true
+          else
+            @f32_source_keys[name] = key
+            false
+          end
         end
       end
 
@@ -722,7 +733,9 @@ module ML::GGUF
 
       private def write_scratch_f32(scratch : ResidentScratch, name : String, data : Array(Float32)) : ML::MetalBuffer
         buf = scratch.get(name, data.size.to_i64 * sizeof(Float32))
-        buf.write(data)
+        if ENV["GEMMA4_SCRATCH_F32_STATIC_CACHE_OFF"]? == "1" || !scratch.f32_source_cached?(name, data)
+          buf.write(data)
+        end
         buf
       end
 
