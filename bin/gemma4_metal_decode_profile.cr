@@ -23,6 +23,7 @@ decode_mode = "top1"
 decode_wave = ENV["GEMMA4_DECODE_WAVE_OFF"]? != "1"
 top1_wave_resident = ENV["GEMMA4_TOP1_WAVE_RESIDENT_OFF"]? != "1"
 top1_chain = 1
+body_chain = 1
 prefill_mode = "serial"
 prefill_chunk = 8
 prefill_head = true
@@ -57,6 +58,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer (default)") { top1_wave_resident = true }
   p.on("--no-top1-wave-resident", "Use legacy hidden-readback + separate top1 head path") { top1_wave_resident = false }
   p.on("--top1-chain N", "Generate exact greedy top1 in GPU-resident chunks of N; requires --decode-wave and --top1-wave-resident") { |v| top1_chain = v.to_i }
+  p.on("--body-chain N", "Run body-only decode in GPU-resident chunks of N known synthetic tokens") { |v| body_chain = v.to_i }
   p.on("--prefill-mode MODE", "Prompt prefill mode: serial or rows (default: serial)") { |v| prefill_mode = v }
   p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--prefill-no-head", "Measure pure prompt body only; requires --body-only because no next-token seed is computed") { prefill_head = false }
@@ -176,6 +178,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              decode_wave : Bool = false,
              top1_wave_resident : Bool = false,
              top1_chain : Int32 = 1,
+             body_chain : Int32 = 1,
              decode_stop_layer_after_step : Int32? = nil,
              decode_stop_layer_after_layer : Int32? = nil,
              prompt_cache_store : ML::GGUF::Gemma4PromptCache::Store? = nil,
@@ -267,15 +270,27 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
       end
     end
     if decode_mode == "body"
-      cur = synthetic_decode_token(i)
-      if decode_wave
-        unless ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(weights, cur, pos, state, decode_layer_count)
-          raise "Gemma4 body decode wave failed"
+      if body_chain > 1 && decode_wave
+        chunk = Math.min(body_chain, generate - i)
+        chunk_tokens = Array(Int32).new(chunk) { |j| synthetic_decode_token(i + j) }
+        unless ML::GGUF::Gemma4Metal.forward_resident_cache_body_chain(weights, chunk_tokens, pos, state, decode_layer_count)
+          raise "Gemma4 body decode chain failed"
         end
+        token_trace.concat(chunk_tokens)
+        cur = chunk_tokens.last
+        i += chunk
+        next
       else
-        ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, decode_layer_count).not_nil!
+        cur = synthetic_decode_token(i)
+        if decode_wave
+          unless ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(weights, cur, pos, state, decode_layer_count)
+            raise "Gemma4 body decode wave failed"
+          end
+        else
+          ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, decode_layer_count).not_nil!
+        end
+        i += 1
       end
-      i += 1
     else
       if top1_chain > 1 && decode_wave && top1_wave_resident
         chunk = Math.min(top1_chain, generate - i)
@@ -323,7 +338,9 @@ raise "decode mode must be top1 or body" unless {"top1", "body"}.includes?(decod
 raise "prefill mode must be serial or rows" unless {"serial", "rows"}.includes?(prefill_mode)
 raise "prefill chunk must be positive" unless prefill_chunk > 0
 raise "--top1-chain must be positive" unless top1_chain > 0
+raise "--body-chain must be positive" unless body_chain > 0
 raise "--top1-chain > 1 requires --top1 with --decode-wave and --top1-wave-resident" if top1_chain > 1 && (decode_mode != "top1" || !decode_wave || !top1_wave_resident)
+raise "--body-chain > 1 requires --body-only with --decode-wave" if body_chain > 1 && (decode_mode != "body" || !decode_wave)
 raise "--prefill-no-head requires --body-only" if !prefill_head && decode_mode != "body"
 if sl = stop_layer
   raise "--stop-layer must be non-negative" if sl < 0
@@ -354,7 +371,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -363,6 +380,7 @@ warmups.times do
     decode_wave: decode_wave,
     top1_wave_resident: top1_wave_resident,
     top1_chain: top1_chain,
+    body_chain: body_chain,
     decode_stop_layer_after_step: decode_stop_layer_after_step,
     decode_stop_layer_after_layer: decode_stop_layer_after_layer,
     prompt_cache_store: cache_store,
@@ -387,6 +405,7 @@ runs.times do
     decode_wave: decode_wave,
     top1_wave_resident: top1_wave_resident,
     top1_chain: top1_chain,
+    body_chain: body_chain,
     decode_stop_layer_after_step: decode_stop_layer_after_step,
     decode_stop_layer_after_layer: decode_stop_layer_after_layer,
     prompt_cache_store: cache_store,

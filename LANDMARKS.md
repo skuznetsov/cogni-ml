@@ -21902,3 +21902,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The x16 row/reduction frame was legal and parity-safe, but recomputed corridor potential did not descend. Unlike Q4_K, Q6_K appears to lose enough per-row parallelism or scheduling balance that doubling rows per simdgroup is not beneficial on this Gemma body corridor.
 **boundary:** Do not reintroduce Q6 x16 as a plain GEMV route without a different trigger/corridor. If Q6 is revisited, prefer graph-level scheduling or a fused residual-add/down corridor rather than another plain GEMV row-lane retune.
+
+### [LM-COGNIGRAPH-013] Gemma body-chain lowers llama-bench-like decode waits
+**context:** ml / CogniGraph / Gemma4 / exact body decode / command-buffer scheduling / LTP-WBA
+**state:** implemented opt-in; candidate for benchmark default only after broader quiet-host rows
+
+- claim: "`Gemma4Metal.forward_resident_cache_body_chain` queues multiple known body-decode synthetic tokens in one Metal command buffer, preserving the same resident KV/state boundary and avoiding per-token host waits. `bin/gemma4_metal_decode_profile.cr` exposes it as `--body-chain N`; `bin/benchmark_gemma4_vs_llama.cr` exposes it as `--native-body-chain=N` for native body mode only."
+  source: implementation in `src/ml/gguf/gemma4_metal.cr`, `bin/gemma4_metal_decode_profile.cr`, and `bin/benchmark_gemma4_vs_llama.cr`; no-codegen builds for both binaries passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma resident-state scheduler rewrite, body benchmark semantics change, or command-buffer ordering change
+  trust: {F:0.86,G:0.18,R:0.84}
+
+- claim: "Body-chain preserves the synthetic body token trace and gives a stable matched decode-only ABBA win under the current Q4 x16 route. `chain=1` and `chain=8` gen16 traces both emitted `42,11751,11764,...,11946`. Body gen64 ABBA with `QWEN35_Q4K_GEMV_X16=1` measured p50 tok/s `32.856 / 34.135 / 32.709 / 34.131`, about `+4.1%` for `chain=8`."
+  source: guarded logs `/tmp/gemma4_body_chain{1,8}_trace_g16.log` and `/tmp/gemma4_body_chain_abba_{c1,c8,c1b,c8b}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, Q4 x16 route rewrite, body-chain scratch/encoder rewrite, or broader prompt/body suite drift
+  trust: {F:0.86,G:0.14,R:0.84}
+
+- claim: "A short apples-vs-llama wrapper smoke proved `--native-body-chain=8` routes through the comparison harness and printed `native_body_chain=8`, but the timing row is not promotion evidence because the guard reported host CPU contamination."
+  source: guarded log `/tmp/gemma4_vs_llama_body_chain8_smoke.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: benchmark wrapper rewrite or quiet-host rerun
+  trust: {F:0.82,G:0.16,R:0.78}
+
+**LTP/WBA:** Window is llama-bench-like body decode where token ids are known and the active bad corner is per-token command-buffer wait/host scheduling. Transport is a bounded synthetic-token chunk carrying token ids through resident scratch and KV positions. Legal move queues the same embedding+layer waves sequentially in one command buffer without changing arithmetic or state layout. Potential descends in `(per-token_wait_count, command-buffer_count, body_decode_wall, remaining_tokens)` while keeping exact body semantics. Dual frame remains normal one-token body wave for real greedy/top1 generation or if a chain chunk becomes sticky.
+**boundary:** This does not speed real greedy top1 unless the caller uses exact top1-chain or speculative/self-draft routes. Do not compare this as user-visible text generation speed; it is specifically an apples-to-apples llama-bench body `tg` corridor.
