@@ -21927,3 +21927,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is llama-bench-like body decode where token ids are known and the active bad corner is per-token command-buffer wait/host scheduling. Transport is a bounded synthetic-token chunk carrying token ids through resident scratch and KV positions. Legal move queues the same embedding+layer waves sequentially in one command buffer without changing arithmetic or state layout. Potential descends in `(per-token_wait_count, command-buffer_count, body_decode_wall, remaining_tokens)` while keeping exact body semantics. Dual frame remains normal one-token body wave for real greedy/top1 generation or if a chain chunk becomes sticky.
 **boundary:** This does not speed real greedy top1 unless the caller uses exact top1-chain or speculative/self-draft routes. Do not compare this as user-visible text generation speed; it is specifically an apples-to-apples llama-bench body `tg` corridor.
+
+### [LM-COGNIGRAPH-014] Gemma top1-chain becomes positive after Q4 x16 on real prompt
+**context:** ml / CogniGraph / Gemma4 / exact greedy generation / command-buffer scheduling / LTP-WBA
+**state:** opt-in scheduling route strengthened; default promotion still gated on broader suite
+
+- claim: "With `QWEN35_Q4K_GEMV_X16=1`, `--top1-chain 8` preserved exact greedy token trace and improved a real coding-prompt generation run. Matched ABBA on `Write a concise Crystal function that returns the factorial of n iteratively.`, `gen=64`, measured chain=1/8/1/8 p50 tok/s `29.521 / 30.575 / 29.254 / 30.459`, with identical token traces across all four legs."
+  source: guarded logs `/tmp/gemma4_realprompt_top1_chain_abba_{c1,c8,c1b,c8b}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: broader prompt-suite contradiction, Q4 x16 route rewrite, top1-chain scheduler rewrite, or real serving wrapper using a different decode path
+  trust: {F:0.84,G:0.12,R:0.82}
+
+**LTP/WBA:** Window is exact greedy generation with per-token top1 readback/wait. Transport is a bounded token chunk where each GPU top1 id feeds the next embedding inside the command-buffer corridor. The Q4 x16 route lowered the dominant GEMV work enough that command-buffer/wait area again becomes a measurable secondary maximizer. Potential descends in `(per-token_wait_count, command-buffer_count, greedy_decode_wall, remaining_tokens)` on this prompt while preserving exact token ids.
+**boundary:** Keep top1-chain opt-in for now. Default promotion requires a sequential multi-prompt suite with token trace equality and stable wall descent; if any prompt shows command-buffer stickiness, use a smaller chain or exact one-token wave as the dual frame.
