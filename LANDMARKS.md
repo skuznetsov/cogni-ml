@@ -20334,3 +20334,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the SWA GQA4 register/threadgroup footprint. Legal move reduced local array area for `head_dim=256`, but recomputed potential did not strictly descend once decode and prior GQA4 variance were included. Dual frame remains committed generic GQA4 for prefill.
 **boundary:** Static footprint shaving is not enough; next attention work should change the computation structure, e.g. llama-style vectorized QK/V accumulation, not only constants.
+
+### [LM-GEMMA4-SWA256-VEC-ATTN] Vectorized SWA256 attention collapses the Gemma 4 decode attention wall
+**context:** ml / Gemma4 Metal / SWA attention / vectorized QK-V accumulation / LTP-WBA
+**state:** implemented as default for `head_dim==256` SWA attention when `rows == 1` or `rows >= 128`; kill switch `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_OFF=1`
+
+- claim: "Gemma 4 decode/prefill was dominated by SWA attention context, not full-attention split-K. Layer-profile aggregation before the change showed `attn_ctx` wait `197.210ms` over 192 phase calls, with SWA contributing `182.960ms` and full-attention only `14.250ms`. The new `gemma4_attn_context_rows_swa256_vec` kernel changes the SWA computation structure: 8 simdgroups compute eight KV scores by splitting the 256-d dot product across lanes, then 256 threads update one output dimension each. This lowers pp256/tg32 default prefill from kill-switch `831.433ms` / `307.902 tok/s` to `767.842ms` / `333.402 tok/s`, and decode from `74.197 ms/tok` / `13.48 tok/s` to `42.755 ms/tok` / `23.39 tok/s`, preserving the synthetic token trace."
+  source: local sequential `scripts/run_safe.sh` A/B with `/tmp/gemma4_metal_decode_profile_swa256_vec_default`, default vs `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_OFF=1`; focused Gemma Metal spec passed `9 examples, 0 failures` under default policy.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma SWA layout/model change, attention kernel rewrite, Metal simdgroup behavior change, or broad prompt parity failure
+  trust: {F:0.88,G:0.34,R:0.84}
+
+- claim: "Fresh native-vs-llama pp256/tg32 benchmark with rebuilt native profile shows the remaining gap narrowed materially but is not closed: CogniGemma prefill `763.71ms` / `335.21 tok/s` vs llama.cpp `664.91ms` / `385.02 tok/s` (`-12.94%`), and CogniGemma decode `42.48 ms/tok` / `23.54 tok/s` vs llama.cpp `34.49 tok/s` (`-31.75%`)."
+  source: `/tmp/gemma4_vs_llama_pp256_tg32_swa256_vec_fresh.log`, produced by `bin/benchmark_gemma4_vs_llama.cr --build-native --prompt=256 --gen=32 --reps=2 --native-mode=top1` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: benchmark harness rewrite, llama.cpp rebuild/change, host load change, or broader pp/tg suite
+  trust: {F:0.82,G:0.24,R:0.78}
+
+- claim: "After the vector kernel, diagnostic phase attribution moved the active bottleneck: `attn_ctx` dropped to `72.550ms` over 192 calls, with SWA `58.770ms` and full-attention `13.780ms`; `ffn_upgate` is now comparable at `71.960ms`, followed by `ffn_down` `55.780ms`."
+  source: `/tmp/gemma4_decode_phase_swa256_vec_noresident.log`, diagnostic `GEMMA4_DECODE_PROFILE_PHASES=1 QWEN35_METAL_PROFILE=1 --no-top1-wave-resident`; diagnostic wall is not production speed.
+  verified_at: 2026-06-05
+  decay_trigger: phase profiler rewrite, kernel scheduling rewrite, or quiet-host repeat changing attribution order
+  trust: {F:0.78,G:0.26,R:0.74}
+
+**LTP/WBA:** Window is the SWA `head_dim=256` attention context, where the prior per-lane scalar dot made SWA the dominant active maximizer. Transport corridor is the bounded SWA KV span for one row or large row batch. Legal move changes local computation structure, not model semantics: dot work is transported across simd lanes and output accumulation across 256 threads while preserving cache/state boundaries and falling back via `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_OFF=1`. Potential descends in `(SWA_attn_ctx_wait, per-lane_dot_serial_depth, output_dim_serial_depth, wall_ms, remaining_work)`. Recompute safety is enforced by keeping small row batches on the old route, because forced use on `batch=4` exceeded the strict parity spec by `~2.5e-7` over threshold due to dot-order drift.
+**boundary:** This is the attention-structure breakthrough. Do not keep tuning GQA width. Next exact speed work should target the new active maximizers: FFN upgate/down traffic, or full resident-wave scheduling once FFN pressure is understood.
