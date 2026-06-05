@@ -21290,6 +21290,18 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: ABBA harness with memory-pressure telemetry, precompiled Metal library, or lower-overhead chain encoder implementation
   trust: {F:0.72,G:0.08,R:0.66}
 
+- claim: "After the Q4_K x16 route landed, the exact top1-chain corridor became modestly positive in a matched decode-only ABBA: `chain=1/8/1/8` p50 tok/s was `30.439 / 31.477 / 30.450 / 31.294` for gen64 with `QWEN35_Q4K_GEMV_X16=1`. A separate gen16 trace sweep showed `chain=1,4,8,16` all preserved the same token trace, with `chain=8/16` around `32.86 tok/s` versus `chain=1` `32.03 tok/s`."
+  source: guarded logs `/tmp/gemma4_top1_chain_abba_{c1,c8,c1b,c8b}.log` and `/tmp/gemma4_top1_chain{1,4,8,16}_trace_g16.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, Q4_K route rewrite, top1-chain scratch/encoder rewrite, or real prompt suite drift
+  trust: {F:0.84,G:0.10,R:0.80}
+
+- claim: "`bin/benchmark_gemma4_vs_llama.cr` now exposes the existing exact chain through `--native-top1-chain=N`, passing `--top1-chain` only for native top1 decode. Build gates passed, and a short wrapper smoke printed `native_top1_chain=8`, proving the apples-vs-llama harness can exercise the route. The wrapper timing row is not promotion evidence because host load was contaminated by XProtect/syspolicyd."
+  source: `/opt/homebrew/bin/crystal build --no-codegen bin/benchmark_gemma4_vs_llama.cr --error-trace`, linked build to `/tmp/benchmark_gemma4_vs_llama_chain`, and guarded smoke log `/tmp/gemma4_vs_llama_top1_chain8_smoke.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: benchmark harness rewrite or top1-chain CLI contract change
+  trust: {F:0.84,G:0.16,R:0.82}
+
 **LTP/WBA:** The intended window was per-token CPU readback/wait overhead; the corridor was a fixed exact greedy token chunk carrying `top1_id` buffers on GPU; the legal move preserved KV/state boundaries and exact greedy ids. After recomputing the active window, larger chunks increased scheduling/resource stickiness and did not lower the global potential. This refutes "just chain multiple exact tokens in one command buffer" as a main Gemma eager-gen speed path under current kernels.
 **boundary:** Keep `--top1-chain` as a parity and scheduling diagnostic. Do not enable it by default. The next legal frame is intra-token graph fusion/launch attribution or production session-cache replay, not larger cross-token exact chains.
 
