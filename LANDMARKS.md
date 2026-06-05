@@ -19828,3 +19828,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the producer-consumer seam `RMSNorm(F32) -> F32-to-H16 conversion -> Q4/Q6 GEMM`. Transport carries an H16 side output from the same RMSNorm move while preserving the F32 boundary for exact downstream consumers. This is a valid Spike/Ladder candidate because it eliminates a separate conversion kernel without changing the projection input rounding relative to the existing H16 GEMM route. Recomputed potential `Phi=(conversion_traffic, extra_h16_write, occupancy, pp_wall)` descends at pp512 but not pp1024, so the move remains local/opt-in.
 **boundary:** Keep default-off. Reopen only with stronger ABBA evidence, narrower batch window, or after combining with a phase that increases reuse of the H16 normalized buffer.
+
+### [LM-COGNIGEMMA-83] Gemma norm-H16 projection route has a bounded pp512-pp768 window
+**context:** ml / CogniGemma Metal prefill / LTP-WBA conversion seam / batch-window controller
+**state:** implemented default-off; opt-in route bounded to measured pp512-pp768 window
+
+- claim: "The exact `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1` route should not activate for every prompt batch. Forward and reversed sweeps show pp256 loses, pp512 and pp768 win in both tested orderings, and pp1024 is mixed/noisy. The controller now defaults to `512 <= batch <= 768`, with `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_MIN_BATCH` and `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_MAX_BATCH` overrides; `MAX_BATCH=0` disables the upper bound."
+  source: forward sweep logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.UjtYtN/`; reversed sweep logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.ojWHA5/`; code in `src/ml/gguf/gemma4_metal.cr` and `scripts/gemma4_prefill_ab.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, row-prefill phase rewrite, RMSNorm/H16 kernel rewrite, or default-policy change
+  trust: {F:0.82,G:0.22,R:0.78}
+
+- claim: "Measured window evidence: pp256 default/normh16 `1210.254ms / 1277.834ms` loses; pp512 wins in forward and reversed sweeps (`2991.679ms / 2711.338ms`, reversed `2633.584ms / 2368.597ms`); pp768 wins in forward and reversed sweeps (`4619.898ms / 4385.276ms`, reversed `5309.369ms / 4575.713ms`); pp1024 is not safe for promotion because forward showed a noisy apparent win (`6833.055ms / 5878.599ms`) while reversed showed a slight loss (`7308.493ms` default vs `7385.388ms` normh16)."
+  source: same forward/reversed wrapper logs; release binary `/tmp/gemma4_metal_decode_profile_normh16`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA rerun, longer run count, or stronger pp1024 profile evidence
+  trust: {F:0.82,G:0.20,R:0.76}
+
+- claim: "The bounded controller still passes focused correctness gates after the threshold change: shell syntax, no-codegen build, and opt-in focused Gemma Metal buffer spec all passed (`8 examples, 0 failures`)."
+  source: `bash -n scripts/gemma4_prefill_ab.sh`; `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_normh16_threshold_build crystal build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace`; `COGNI_RUN_SAFE_MIN_FREE_PCT=12 GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1 CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_normh16_threshold_spec scripts/run_safe.sh /opt/homebrew/bin/crystal 900 26000 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"`.
+  verified_at: 2026-06-04
+  decay_trigger: focused spec rewrite, threshold policy rewrite, or Gemma row-prefill route rewrite
+  trust: {F:0.88,G:0.26,R:0.86}
+
+**LTP/WBA:** Window is the measured `RMSNorm(F32)->H16 projection` seam where conversion removal pays only for medium prompt batches. Transport carries the H16 side buffer from the fused RMSNorm move through the attention/FFN projection corridor while preserving exact F32 state boundaries. Legal move is a bounded controller, not broad enablement. Recomputed potential `Phi=(pp256_loss, pp512_win, pp768_win, pp1024_uncertainty, promotion_risk)` descends by excluding the losing pp256 and uncertain pp1024 bands while retaining the two measured winning bands. Dual frame remains default F32 conversion outside the window.
+**boundary:** Keep default-off until quiet-host ABBA evidence justifies promotion. If reopened, test pp512/768/1024 sequentially with higher run count and no overlapping benchmark/spec work; then consider combining with other H16 consumers to improve reuse.

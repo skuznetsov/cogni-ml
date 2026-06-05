@@ -118,7 +118,9 @@ module ML::GGUF
       private def rmsnorm_h16_proj_enabled?(batch : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_OFF"]? == "1"
         return false unless ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ"]? == "1"
-        batch > 8
+        min_batch = (ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_MIN_BATCH"]? || "512").to_i32
+        max_batch = (ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_MAX_BATCH"]? || "768").to_i32
+        batch >= min_batch && (max_batch <= 0 || batch <= max_batch)
       end
 
       private def attn_gqa2_enabled? : Bool

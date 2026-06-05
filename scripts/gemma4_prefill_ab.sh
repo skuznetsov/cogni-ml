@@ -35,7 +35,7 @@ usage: scripts/gemma4_prefill_ab.sh
 
 Environment:
   GEMMA4_PREFILL_AB_PPS=64,256,1024       prompt lengths to test
-  GEMMA4_PREFILL_AB_MODES=default,q4pair  modes: default,q4pair,sharedh16,sharedoff,ctxh16,ctxh16off,kvh16,kvh16fullpair,fullpair,allpair
+  GEMMA4_PREFILL_AB_MODES=default,q4pair  modes: default,q4pair,sharedh16,sharedoff,ctxh16,ctxh16off,kvh16,splitk,normh16,kvh16fullpair,fullpair,allpair
   GEMMA4_PREFILL_AB_RUNS=3                measured runs per row
   GEMMA4_PREFILL_AB_WARMUPS=1             warmup runs per row
   GEMMA4_PREFILL_AB_FORCE_BUILD=1         rebuild profile binary
@@ -45,6 +45,8 @@ Environment:
   GEMMA4_PREFILL_AB_WAIT_BUSY_SEC=600     wait up to N seconds for quiet host
   GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MIN_BATCH=1024
   GEMMA4_ROW_PREFILL_ATTN_CTX_H16_OPROJ_MAX_BATCH=1024  use 0 for no max
+  GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_MIN_BATCH=512
+  GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_MAX_BATCH=768      use 0 for no max
   COGNI_RUN_SAFE_MIN_FREE_PCT=12          system memory-pressure kill threshold
 
 Notes:
