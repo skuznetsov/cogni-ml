@@ -20651,3 +20651,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the pp256 FFN hot corridor where previous attribution mixed token-rate and wall-rate potentials. Legal move is measurement normalization only: carry the same shape measurements along two corridors, per-token and full-prefill. Potential `Phi=(misattribution_risk, ffn_phase_uncertainty, kernel_body_uncertainty, wall_gap)` descends because the fused gate/up corridor now matches the phase-profile scale. Dual frame remains the full phase profiler when standalone attribution and integrated phase timing diverge.
 **boundary:** This is not a speedup. It is a guardrail for the next kernel/scheduling branch. Do not promote a kernel rewrite from weighted per-token rows alone; require full-batch wait or integrated phase evidence.
+
+### [LM-COGNIGEMMA-94] GEMV layout retuning is not a valid pp256 batch-GEMM escape hatch
+**context:** ml / CogniGemma first-run prefill / layout sweep refutation / LTP-WBA
+**state:** refuted for the current pp256 hot-shape branch
+
+- claim: "The existing `--q4-layout-sweep` / `--q6-layout-sweep` path in `bin/gemma4_op_attribution.cr` exercises GEMV layout kernels, not the actual pp256 batch-GEMM body used by row prefill. One-layout guarded sweeps at `batch=256` failed validation instead of producing promotable candidates: Q4 layouts all hit `max diff 0.0010192841` above the current `1e-3` gate, and Q6 layouts hit `max diff 6.112746`."
+  source: guarded log `/tmp/gemma4_layout_sweep_onebyone_1780667316.log` using `/tmp/gemma4_op_attribution_layout --batch=256 --limit=4 --q4-layout-sweep=...` / `--q6-layout-sweep=...`.
+  verified_at: 2026-06-05
+  decay_trigger: layout benchmark rewrite, GEMV validation tolerance policy change, or real batch-GEMM layout-sweep implementation
+  trust: {F:0.80,G:0.24,R:0.78}
+
+**LTP/WBA:** Window was the pp256 hot FFN shape corridor, but the attempted transport used a GEMV-layout frame. Boundary safety failed at validation before any wall potential could be reduced. Dual frame is now required: measure or implement real batch-GEMM body variants (`q4_h16_gemm`, `q6_gemm`) rather than retuning GEMV layout knobs.
+**boundary:** Do not use GEMV layout sweep results to choose Gemma pp256 prefill defaults. A future layout branch must target `encode_q4k_gemm_h16*` / `encode_q56k_gemm_f32*` and must pass integrated parity/perf gates.
