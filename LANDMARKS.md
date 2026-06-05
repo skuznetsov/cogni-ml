@@ -20186,3 +20186,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This was the correct larger transport compared with standalone copy, but recomputed full top1 potential still did not descend. The likely blind spot is that K/V prep is not the active top1 maximizer after decode-wave; attention context, output head, and command scheduling dominate the visible wall. Dual frame remains existing decode-wave. Future K-as-V work should only be retried if it fuses into attention context or removes a measured larger wait bucket.
 **boundary:** Do not promote body-only wins without exact top1/resident top1 wins. This branch is parked as a mathematical refutation, not a correctness blocker.
+
+### [LM-COGNIGEMMA-105] Current Gemma tg profile points back to FFN body traffic
+**context:** ml / CogniGemma / decode tg / post-K-as-V profile / bottleneck selection
+**state:** verified profile anchor for next branch selection
+
+- claim: "After resident top1 and K-as-V experiments, current committed CogniGemma decode-only profiling again identifies body GEMV traffic as the stable bottleneck. Default top1 profile at gen8 reported `decode_ms_per_token_p50=48.325`, `gemma4.decode_wave.layers` wait `277.27ms` over 8 tokens, separate head `gemv` wait `23.82ms`, and hidden readback `0.12 MiB`. Resident top1 was not stable on this run (`65.280ms/tok`) despite eliminating head `gemv` accounting, reinforcing opt-in-only policy. Logical matmul traffic remains dominated by Q4 FFN gate/up `3840x15360` (`43.21%`), Q6 FFN-down `15360x3840` (`15.75%`), output head (`11.20%`), and Q4 FFN-down-ish `15360x3840` (`10.80%`)."
+  source: guarded profile logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-current-profile-after.XIX1Qt/` from `/tmp/gemma4_metal_decode_profile_current_after_kasv` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-04
+  decay_trigger: FFN kernel rewrite, resident-top1 scheduler rewrite, output-head rewrite, or quiet-host gen64/128 profile refresh
+  trust: {F:0.82,G:0.28,R:0.78}
+
+**LTP/WBA:** Recomputed potential after attention-prep experiments is `Phi=(FFN_weight_traffic, FFN_down_wait, output_head_wait, host_boundary, attention_prep_work)`. Attention prep no longer appears as the active maximizer. Legal next moves should target FFN body corridors or output-head scheduling; K-as-V and static Q4 row-layout branches are parked until a new profile moves them back up.
+**boundary:** Do not use resident-top1 profile rows alone as a default-policy signal because they are noisy and prompt-sensitive. Use them as evidence that head-boundary removal is not enough unless the body corridor is also improved.
