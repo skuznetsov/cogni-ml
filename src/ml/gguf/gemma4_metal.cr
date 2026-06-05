@@ -200,6 +200,10 @@ module ML::GGUF
         ENV["GEMMA4_DECODE_PROFILE_PHASES"]? == "1"
       end
 
+      private def copy_k_to_v_enabled? : Bool
+        ENV["GEMMA4_COPY_K_TO_V_OFF"]? != "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -225,6 +229,7 @@ module ML::GGUF
       @@attn_context_rows_h16_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_h16_pipeline : ML::Metal::ComputePipeline?
       @@add_vec_pipeline : ML::Metal::ComputePipeline?
+      @@copy_f32_pipeline : ML::Metal::ComputePipeline?
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
       @@softcap_pipeline : ML::Metal::ComputePipeline?
@@ -838,6 +843,11 @@ module ML::GGUF
                           Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
                             Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
                             Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, v_qw, x16, v_buf, batch)
+                        elsif copy_k_to_v_enabled?
+                          ok = Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
+                            Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch)
+                          encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+                          ok
                         else
                           Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
                             Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
@@ -846,7 +856,15 @@ module ML::GGUF
             projected || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, (lw.attn_v_qw || lw.attn_k_qw)], x_norm_buf, [q_buf, k_buf, v_buf], batch)
           else
             encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
-            Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, (lw.attn_v_qw || lw.attn_k_qw)], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+            if v_qw = lw.attn_v_qw
+              Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+            elsif copy_k_to_v_enabled?
+              ok = Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf], batch)
+              encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+              ok
+            else
+              Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+            end
           end
         end
 
@@ -1004,6 +1022,11 @@ module ML::GGUF
                         Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
                           Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
                           Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, v_qw, x16, v_buf, batch)
+                      elsif copy_k_to_v_enabled?
+                        ok = Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
+                          Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch)
+                        encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+                        ok
                       else
                         Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
                           Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch) &&
@@ -1014,6 +1037,10 @@ module ML::GGUF
           encode_rmsnorm_rows_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, batch, hp.rms_eps)
           if v_qw = lw.attn_v_qw
             Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
+          elsif copy_k_to_v_enabled?
+            ok = Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf], batch)
+            encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+            ok
           else
             Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
           end
@@ -1366,6 +1393,10 @@ module ML::GGUF
         encode_rmsnorm_weighted_out(enc, x_buf, attn_norm_w, x_norm_buf, hidden_dim, hp.rms_eps)
         projected = if v_qw = lw.attn_v_qw
                       Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], 1)
+                    elsif copy_k_to_v_enabled?
+                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf], 1).tap do |ok|
+                        encode_copy_f32(enc, k_buf, v_buf, kv_dim) if ok
+                      end
                     else
                       # Full-attention Gemma4 layers reuse pre-normalized K as V.
                       # Project K twice so K can receive learned K-norm+RoPE while V
@@ -2151,6 +2182,17 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
+      private def encode_copy_f32(enc : ML::Metal::ComputeEncoder,
+                                  src_buf : ML::MetalBuffer,
+                                  dst_buf : ML::MetalBuffer,
+                                  count : Int32) : Nil
+        enc.set_pipeline(copy_f32_pipeline)
+        enc.set_buffer(src_buf, 0)
+        enc.set_buffer(dst_buf, 1, ML::Metal::BufferAccess::Write)
+        enc.set_value(count.to_u32, 2)
+        enc.dispatch_1d(count, 256)
+      end
+
       private def encode_add_scaled_vec(enc : ML::Metal::ComputeEncoder,
                                         a_buf : ML::MetalBuffer,
                                         b_buf : ML::MetalBuffer,
@@ -2337,6 +2379,12 @@ module ML::GGUF
       private def add_vec_pipeline : ML::Metal::ComputePipeline
         @@add_vec_pipeline ||= ML::Metal::PipelineCache.get("gemma4_add_vec") {
           ML::Metal::ComputePipeline.new("gemma4_add_vec", GEMMA4_SOURCE)
+        }
+      end
+
+      private def copy_f32_pipeline : ML::Metal::ComputePipeline
+        @@copy_f32_pipeline ||= ML::Metal::PipelineCache.get("gemma4_copy_f32") {
+          ML::Metal::ComputePipeline.new("gemma4_copy_f32", GEMMA4_SOURCE)
         }
       end
 

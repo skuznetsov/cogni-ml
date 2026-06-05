@@ -1648,6 +1648,16 @@ kernel void gemma4_add_vec(
     out[gid] = a[gid] + b[gid];
 }
 
+kernel void gemma4_copy_f32(
+    device const float* src    [[buffer(0)]],
+    device       float* dst    [[buffer(1)]],
+    constant     uint&  count  [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= count) return;
+    dst[gid] = src[gid];
+}
+
 kernel void gemma4_add_scaled_vec(
     device const float* a      [[buffer(0)]],
     device const float* b      [[buffer(1)]],

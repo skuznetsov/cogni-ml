@@ -20445,3 +20445,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Evidence: `scripts/run_safe.sh /opt/homebrew/bin/crystal 240 8000 spec spec/gemma4_metal_buffer_spec.cr ...` -> `9 examples, 0 failures`; pp256/tg32 benchmark after change -> cogni prefill `786.24ms / 325.6 tok/s`, decode `44.15 ms/tok`; profile normal route shows `gemma4.rows.layers` and no separate `gemma4.rows.embedding` group.
 - LTP/WBA: Window = standalone row embedding before layer corridor; Transport = prompt chunk token ids into resident scratch token buffer; Legal move = encode embedding as the first op in the same command buffer; Boundary safety = phase-profile split path retained, token trace/spec parity preserved by focused spec; Potential = `(syncs, buffer_allocs, row_wait_area)` decreases for normal prefill.
 - Trust: {F=.86,G=.45,R=.83}; narrow to Gemma4 Q6_K token embeddings and resident row prefill.
+
+[LM-GEMMA4-KCOPY-V] Gemma layers without explicit V weights reuse K projection by GPU copy instead of duplicate K matmul (shared)
+- Date: 2026-06-05
+- Context: ml/perf/Gemma4 Metal resident rows/decode
+- Claim: For Gemma4 layers `5,11,17,23,29,35,41,47` with no `attn_v_qw`, resident paths now compute Q/K once and copy pre-normalized K into V before K/V-specific norms, instead of projecting K twice. Kill switch: `GEMMA4_COPY_K_TO_V_OFF=1`.
+- Evidence: layer probe -> `layers=48 attn_v_present=40 missing=8`; focused Gemma Metal spec -> `9 examples, 0 failures`; sequential pp256/tg32 kill-switch A/B preserved token trace and improved decode from `43.723` to `43.527 ms/tok` p50 (~0.45%).
+- Adversary: public Gemma-vs-llama run during this slice was load-noisy (`llama.cpp` also slowed), so it is not used as the promotion gate; claim is limited to isolated native A/B.
+- LTP/WBA: Window = missing-V layer where K projection is duplicated; Transport = pre-normalized K buffer into V buffer; Legal move = GPU copy before K/V norms; Boundary safety = K norm/RoPE still mutate K only after copy, V plain norm remains separate; Potential = `(duplicate_weight_reads, GEMM/GEMV calls, decode_work)` decreases.
+- Trust: {F=.84,G=.45,R=.78}; exact but small measured effect, specific to Gemma4 missing-V layers.
