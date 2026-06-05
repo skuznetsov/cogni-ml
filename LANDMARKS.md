@@ -19950,3 +19950,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is an exact repeated session/prompt prefix. Transport carries validated `.gkv` K/V rows from durable artifact to resident state. Legal move requires runtime/model/tokenizer/prompt/token hash and shape metadata to match before restore. Recomputed potential `Phi=(prompt_rows_to_prefill, artifact_validation_risk, restore_bytes, fallback_cost)` descends for hot repeated prefixes while preserving exact fallback. Dual frame remains full Gemma prefill if lookup, checksum, size, layer count, max_seq, prefix_len, or KV dimensions fail.
 **boundary:** This is a library/store primitive only. Next gate is wiring a Gemma benchmark/generate path that seeds a prompt state, restores it on the second request, and reports cold pp versus hot restore sequentially through `scripts/run_safe.sh`.
+
+### [LM-COGNIGEMMA-91] Gemma prompt-cache bench shows exact prefix-restore descent
+**context:** ml / CogniGemma / exact session-prefix cache / product benchmark
+**state:** verified bench path; initial local measurements
+
+- claim: "`bin/gemma4_prompt_cache_bench.cr` measures the exact Gemma session-cache corridor as three separate routes: cold row-prefill, durable `.gkv` artifact restore through `Gemma4PromptCache::Store`, and already-loaded snapshot restore through `Gemma4StateSnapshot.restore_into`. This avoids conflating first-run pp with cache-hit latency."
+  source: implementation in `bin/gemma4_prompt_cache_bench.cr`; no-codegen build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_prompt_cache_bench_build2 scripts/run_safe.sh /opt/homebrew/bin/crystal 180 5000 build --no-codegen bin/gemma4_prompt_cache_bench.cr --error-trace` passed; release build `/tmp/gemma4_prompt_cache_bench` passed with Metal bridge link flags.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma cache bench rewrite, prompt-cache Store rewrite, row-prefill route rewrite, or artifact format change
+  trust: {F:0.86,G:0.42,R:0.84}
+
+- claim: "Initial local M2 Max Gemma4 12B Q4_K_M measurements show exact prefix restore strongly descends versus cold prefill. With `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`: pp64 cold prefill p50 `242.909ms`, artifact restore `35.230ms` (`6.895x`), snapshot restore `1.599ms` (`151.88x`); pp256 cold `874.108ms`, artifact `104.058ms` (`8.400x`), snapshot `5.558ms` (`157.28x`); pp1024 single-run cold `5391.136ms`, artifact `452.642ms` (`11.91x`), snapshot `34.634ms` (`155.66x`)."
+  source: guarded runs of `/tmp/gemma4_prompt_cache_bench` under `scripts/run_safe.sh`; pp64 `--prompt-len 64 --max-seq 128 --runs 2`; pp256 `--prompt-len 256 --max-seq 320 --runs 2`; pp1024 `--prompt-len 1024 --max-seq 1152 --warmups 0 --runs 1`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host repeat, cache artifact validation rewrite, resident-state template cache addition, or Gemma row-prefill speed change
+  trust: {F:0.78,G:0.24,R:0.74}
+
+**LTP/WBA:** Window is an exact repeated prompt/session prefix. Transport carries authoritative F32 K/V rows through either durable `.gkv` artifact restore or already-loaded snapshot restore. Legal move preserves model/tokenizer/prompt/token hash and shape boundaries; any mismatch falls back to full prefill. Recomputed potential `Phi=(prefill_rows_to_run, artifact_validation_risk, restore_bytes, fallback_cost)` descends: cold prefill area collapses by `6.9x-11.9x` through durable restore and by roughly `150x` through hot in-memory restore on these initial rows. The next Diamond is product-cache composition: durable artifact validation vs resident decoded template, so hot servers should avoid rereading/re-hashing when the artifact has already been certified.
+**boundary:** pp1024 is a single-run smoke due memory-pressure discipline; repeat before public claims. This is session-cache/product-latency evidence, not first-run pp superiority over llama.cpp.
