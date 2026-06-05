@@ -21593,3 +21593,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is Gemma pp wall time. The exact hidden-equality corridor is sticky: it preserves the boundary but cannot enter the high-batch GEMM speed class. The dual frame is a numeric-backend corridor with an output-level certificate: greedy token parity / logit margin / task-quality gates rather than hidden-vector equality. This is only legal if recomputed potential descends globally: pp wall falls without increasing output divergence, rollback tax, or decode variance.
 **boundary:** Do not call the current fast route hidden-exact. For llama.cpp apples-to-apples, compare `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` as a backend-numeric route and report parity evidence. Next move: build a 20-50 prompt ABBA output-parity and pp/tg suite against strict CogniGemma and llama.cpp before default promotion.
+
+### [LM-COGNIGEMMA-136] Sequential fast-GEMM parity harness gives first output-level gate
+**context:** ml / CogniGemma Metal / parity harness / fast GEMM pp gate / LTP-WBA
+**state:** implemented; narrow 5-prompt smoke passed
+
+- claim: "`scripts/gemma4_fast_gemm_parity_suite.sh` runs strict row-prefill and `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` sequentially through `scripts/run_safe.sh`, compares greedy `token_trace`, and reports strict/fast pp and tg. It intentionally avoids parallel model runs to reduce memory pressure."
+  source: `bash -n scripts/gemma4_fast_gemm_parity_suite.sh` and guarded `--limit 2 --generate 16` smoke on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: `bin/gemma4_metal_decode_profile.cr` output format change, `run_safe.sh` contract change, or Gemma tokenizer/profile CLI rewrite
+  trust: {F:0.84,G:0.18,R:0.82}
+
+- claim: "The built-in 5-prompt fast-GEMM parity smoke with `--generate 32` passed `trace_equal=yes` for all prompts. Short-prompt pp improved from strict `21.676..28.491 tok/s` to fast `30.316..43.547 tok/s`; tg stayed essentially unchanged around `27.6..28.1 tok/s`."
+  source: `scripts/gemma4_fast_gemm_parity_suite.sh --generate 32 --profile-bin /tmp/gemma4_metal_decode_profile_exact_gemm_fix --out-dir /tmp/gemma4_fast_gemm_parity_full_5` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger prompt suite failure, generation length increase, model quant/model file change, or decode/top1 route rewrite
+  trust: {F:0.82,G:0.08,R:0.78}
+
+**LTP/WBA:** This is the local certificate for the numeric backend corridor: the trigger is pp bottleneck under strict row-prefill; transport is prompt body through large row chunks; legal move is fast GEMM only when the output trace certificate stays equal. The next Ladder is larger ABBA prompts and llama.cpp comparison, not hidden-vector exact promotion.
+**boundary:** Passing this smoke is not enough to default-enable `ALLOW_GEMM`. It only establishes the harness and a narrow positive signal.
