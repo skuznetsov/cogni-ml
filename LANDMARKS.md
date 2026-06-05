@@ -20472,3 +20472,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Decision: Keep Q6 layout pipeline/helper and `--q6-layout-sweep` for future retuning, but require explicit `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` to route production Q6 through shape-specific variants.
 - LTP/WBA: Window = Q6 FFN-down shape; Transport = alternate NSG/NR0 kernel corridor; Boundary safety = exact specs/token trace; Potential failed to descend in full decode after recomputing active window, so dual frame falls back to default Q6 route.
 - Trust: {F=.84,G=.38,R=.80}; refutation is local to current M2 Max/Gemma4 decode workload.
+
+[LM-GEMMA4-HEAD-TOP1-ROWS-SWEEP] Q6 head top1 rows-per-threadgroup tuning is not a current leverage point (shared)
+- Date: 2026-06-05
+- Context: ml/perf/Metal Q6_K greedy head top1
+- Claim: Added a validated head top1 rows/tg sweep, but current Gemma4 tied-head top1 has only marginal standalone sensitivity around the default.
+- Evidence: `bin/gemma4_op_attribution --head-top1-rows-sweep=4,6,8,10,12,14,16,18,20,24,28,32` validated each variant against default top1; default `12` measured `2.572ms`, best observed `20` measured `2.567ms` for RMSNorm+tile top1+reduce, too small for production routing.
+- Decision: Keep `bench_head_top1_rows_wait_ms` and CLI sweep for future models, but do not change `HEAD_TOP1_ROWS_PER_TG` or production routing now.
+- LTP/WBA: Window = Q6 tied-head tile size; Transport = vocab rows per threadgroup; Potential `(head_wait_ms, tile_count)` barely descends in standalone and has insufficient full-decode leverage, so no collapse into production default.
+- Trust: {F=.82,G=.35,R=.78}; local to Gemma4 Q4_K_M tied Q6 head on M2 Max.

@@ -138,6 +138,10 @@ private def parse_q6_layouts(spec : String) : Array(Q6Layout)
   end
 end
 
+private def parse_int_list(spec : String) : Array(Int32)
+  spec.split(",", remove_empty: true).map { |part| part.strip.to_i }
+end
+
 private def bench_q4_layout(stats : ShapeStats,
                             layout : Q4Layout,
                             warmup : Int32,
@@ -283,6 +287,30 @@ private def print_q6_layout_sweep(stats : Array(ShapeStats),
   end
 end
 
+private def print_head_top1_rows_sweep(w : ML::GGUF::Gemma4Weights,
+                                       rows_values : Array(Int32),
+                                       warmup : Int32,
+                                       runs : Int32) : Nil
+  return if rows_values.empty?
+  x = input_for(w.token_embd.in_dim, 1)
+  qw = w.token_embd
+
+  puts
+  puts "Gemma4 Q6_K head top1 rows-per-threadgroup sweep"
+  puts "note: default is 12 rows/tg; p50_wait includes RMSNorm, tile top1, and tile reduce."
+  printf "%10s %10s %10s %9s\n", "rows_tg", "p50_wait", "tile_count", "eff_gbps"
+  rows_values.each do |rows_per_tg|
+    ML::GGUF::Qwen35Metal.bench_head_top1_rows_wait_ms(qw, x, w.output_norm, w.hparams.rms_eps, rows_per_tg, validate: true)
+    warmup.times { ML::GGUF::Qwen35Metal.bench_head_top1_rows_wait_ms(qw, x, w.output_norm, w.hparams.rms_eps, rows_per_tg) }
+    times = Array(Float64).new(runs) do
+      ML::GGUF::Qwen35Metal.bench_head_top1_rows_wait_ms(qw, x, w.output_norm, w.hparams.rms_eps, rows_per_tg)
+    end
+    p50 = percentile(times.sort, 50)
+    tile_count = (qw.out_dim + rows_per_tg - 1) // rows_per_tg
+    printf "%10d %10.3f %10d %9.1f\n", rows_per_tg, p50, tile_count, gbps(qw.raw.size.to_i64, p50)
+  end
+end
+
 model = MODEL_PATH
 warmup = 2
 runs = 5
@@ -294,9 +322,10 @@ prefill_q4_pair_only = false
 exclude_output_head = false
 q4_layout_sweep = [] of Q4Layout
 q6_layout_sweep = [] of Q6Layout
+head_top1_rows_sweep = [] of Int32
 
 OptionParser.parse do |p|
-  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--exclude-output-head] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--q4-layout-sweep=NSGxNR0,...] [--q6-layout-sweep=NSGxNR0,...]"
+  p.banner = "Usage: gemma4_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--exclude-output-head] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--q4-layout-sweep=NSGxNR0,...] [--q6-layout-sweep=NSGxNR0,...] [--head-top1-rows-sweep=ROWS,...]"
   p.on("--model=PATH", "Gemma4 GGUF model path") { |v| model = v }
   p.on("--warmup=N", "Warmup runs per shape (default: 2)") { |v| warmup = v.to_i }
   p.on("--runs=N", "Measured runs per shape (default: 5)") { |v| runs = v.to_i }
@@ -308,6 +337,7 @@ OptionParser.parse do |p|
   p.on("--prefill-q4-pair-only", "Only benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true; prefill_q4_pair_only = true }
   p.on("--q4-layout-sweep=LIST", "Benchmark alternate Q4_K GEMV layouts, e.g. 1x1,1x2,2x1,2x2,2x3,2x4") { |v| q4_layout_sweep = parse_q4_layouts(v) }
   p.on("--q6-layout-sweep=LIST", "Benchmark alternate Q6_K GEMV layouts, e.g. 1x1,1x2,2x1,2x2,2x3,2x4") { |v| q6_layout_sweep = parse_q6_layouts(v) }
+  p.on("--head-top1-rows-sweep=LIST", "Benchmark Q6_K head top1 rows/tg values, e.g. 8,10,12,16,20,24") { |v| head_top1_rows_sweep = parse_int_list(v) }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -341,6 +371,7 @@ end
 
 print_q4_layout_sweep(stats, q4_layout_sweep, warmup, runs, batch) unless q4_layout_sweep.empty?
 print_q6_layout_sweep(stats, q6_layout_sweep, warmup, runs, batch) unless q6_layout_sweep.empty?
+print_head_top1_rows_sweep(w, head_top1_rows_sweep, warmup, runs) unless head_top1_rows_sweep.empty?
 
 rows = stats.map { |s| bench_shape(s, warmup, runs, batch, profile_wait) }
 rows.sort_by! { |r| profile_wait ? -r.weighted_wait_ms : -r.weighted_ms }

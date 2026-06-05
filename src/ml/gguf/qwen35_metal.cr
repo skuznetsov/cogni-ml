@@ -1176,6 +1176,18 @@ module ML
           }
         end
 
+        private def self.mv6_top1_tiles_rows_pipeline(rows_per_tg : Int32) : ML::Metal::ComputePipeline
+          raise ArgumentError.new("Q6 top1 rows_per_tg must be positive") unless rows_per_tg > 0
+          raise ArgumentError.new("Q6 top1 rows_per_tg must be divisible by #{MV_Q6_NSG}") unless rows_per_tg % MV_Q6_NSG == 0
+
+          key = "simd_mv_q6k_top1_tiles_f32_rows#{rows_per_tg}"
+          ML::Metal::PipelineCache.get(key) do
+            source = GEMM_Q56K_SOURCE
+              .gsub("constant short MV6_TOP_ROWS_PER_TG = 12;", "constant short MV6_TOP_ROWS_PER_TG = #{rows_per_tg};")
+            ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_tiles_f32", source)
+          end
+        end
+
         private def self.mv6_top1_allowed_tiles_pipeline : ML::Metal::ComputePipeline
           @@mv6_top1_allowed_tiles_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q6k_top1_allowed_tiles_f32") {
             ML::Metal::ComputePipeline.new("simd_mv_q6k_top1_allowed_tiles_f32", GEMM_Q56K_SOURCE)
@@ -10814,6 +10826,73 @@ module ML
           end
 
           elapsed, _ = matmul_q6_layout_wait_ms(qw, x, batch, nsg, nr0)
+          elapsed
+        end
+
+        def self.bench_head_top1_rows_wait_ms(out_qw : QuantWeight,
+                                              x : Array(Float32),
+                                              norm_weight : Array(Float32),
+                                              eps : Float32,
+                                              rows_per_tg : Int32,
+                                              validate : Bool = false) : Float64
+          raise ArgumentError.new("head top1 rows bench requires Q6_K output weight") unless out_qw.type.q6_k?
+          raise ArgumentError.new("head top1 rows bench input mismatch") unless x.size == out_qw.in_dim
+          raise ArgumentError.new("head top1 rows bench norm mismatch") unless norm_weight.size == out_qw.in_dim
+
+          ML::Metal::Device.init!
+          hidden_dim = x.size
+          tile_count = (out_qw.out_dim + rows_per_tg - 1) // rows_per_tg
+          x_buf = Scratch.get(:bench_head_top1_x, hidden_dim.to_i64 * sizeof(Float32))
+          norm_w_buf = Scratch.get(:bench_head_top1_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:bench_head_top1_normed, hidden_dim.to_i64 * sizeof(Float32))
+          tile_values_buf = Scratch.get(:bench_head_top1_tile_values, tile_count.to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:bench_head_top1_tile_ids, tile_count.to_i64 * sizeof(UInt32))
+          top1_id_buf = Scratch.get(:bench_head_top1_id, sizeof(UInt32).to_i64)
+          top1_value_buf = Scratch.get(:bench_head_top1_value, sizeof(Float32).to_i64)
+          x_buf.write(x)
+          norm_w_buf.write(norm_weight)
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          cmd = ML::Metal::CommandBuffer.new
+          norm_enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_rmsnorm_vec(norm_enc, x_buf, norm_w_buf, normed_buf, hidden_dim, eps)
+          norm_enc.end_encoding
+
+          head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          head_top1_enc.set_pipeline(mv6_top1_tiles_rows_pipeline(rows_per_tg))
+          head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          head_top1_enc.set_buffer(normed_buf, 1)
+          head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
+          head_top1_enc.set_value(out_qw.in_dim.to_u32, 4)
+          head_top1_enc.set_value(out_qw.out_dim.to_u32, 5)
+          head_top1_enc.dispatch_threadgroups({tile_count, 1, 1}, {MV_Q6_NSG * 32, 1, 1})
+          head_top1_enc.end_encoding
+
+          reduce_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
+          reduce_top1_enc.set_pipeline(top1_reduce_tiles_pipeline)
+          reduce_top1_enc.set_buffer(tile_values_buf, 0)
+          reduce_top1_enc.set_buffer(tile_ids_buf, 1)
+          reduce_top1_enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+          reduce_top1_enc.set_value(tile_count.to_u32, 4)
+          reduce_top1_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          reduce_top1_enc.end_encoding
+
+          t0 = Time.instant
+          cmd.commit
+          cmd.wait
+          elapsed = (Time.instant - t0).total_milliseconds
+
+          if validate
+            candidate = read_shared_top1(top1_id_buf, top1_value_buf)
+            baseline = rmsnorm_project_top1(x, norm_weight, out_qw, eps)
+            raise "default head top1 baseline returned nil" if baseline.nil?
+            id_match = candidate[0].to_i == baseline.not_nil![0].to_i
+            value_diff = (candidate[1] - baseline.not_nil![1]).abs
+            raise "head top1 rows=#{rows_per_tg} mismatch id=#{candidate[0].to_i}/#{baseline.not_nil![0].to_i} diff=#{value_diff}" unless id_match && value_diff <= 1.0e-3_f32
+          end
+
           elapsed
         end
 
