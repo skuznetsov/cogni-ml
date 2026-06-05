@@ -24,6 +24,7 @@ prompt_cache_root = nil.as(String?)
 prompt_cache_session = "profile"
 prompt_cache_snapshot_mib = 0
 prompt_cache_snapshot_entries = 1
+decode_only_seed = nil.as(Int32?)
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
@@ -48,6 +49,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--prompt-cache-session ID", "Prompt-cache session id") { |v| prompt_cache_session = v }
   p.on("--prompt-cache-snapshot-mib N", "Enable Store resident snapshot cache with this MiB budget") { |v| prompt_cache_snapshot_mib = v.to_i }
   p.on("--prompt-cache-snapshot-entries N", "Store resident snapshot cache entry limit") { |v| prompt_cache_snapshot_entries = v.to_i }
+  p.on("--decode-only-seed N", "Skip prompt prefill and start decode from this token id with empty KV state") { |v| decode_only_seed = v.to_i }
   p.on("--body-only", "During measured generation, update resident state from fixed synthetic tokens without final logits/top1") { decode_mode = "body" }
   p.on("--top1", "During measured generation, run exact greedy top1 chain (default)") { decode_mode = "top1" }
   p.on("-h", "--help", "Show help") { puts p; exit }
@@ -72,7 +74,7 @@ def summarize(label : String, samples : Array(Float64), tokens : Int32) : Nil
   mean = samples.sum / samples.size
   p50 = percentile(sorted, 0.50)
   p90 = percentile(sorted, 0.90)
-  tok_s = tokens.to_f64 / (p50 / 1000.0)
+  tok_s = p50 > 0.0 ? tokens.to_f64 / (p50 / 1000.0) : 0.0
   puts "#{label}_runs=#{samples.map { |v| v.round(3) }.join(',')}"
   puts "#{label}_mean_ms=#{mean.round(3)} #{label}_p50_ms=#{p50.round(3)} #{label}_p90_ms=#{p90.round(3)} #{label}_p50_tok_s=#{tok_s.round(3)}"
 end
@@ -143,7 +145,8 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              prompt_cache_store : ML::GGUF::Gemma4PromptCache::Store? = nil,
              prompt_cache_model_id : String = "",
              prompt_cache_tokenizer_id : String = "synthetic-token-ids",
-             prompt_cache_session_id : String = "profile") : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64)
+             prompt_cache_session_id : String = "profile",
+             decode_only_seed : Int32? = nil) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
   ML::GGUF::Qwen35Metal::Profile.reset if profile
@@ -155,7 +158,10 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cache_route = prompt_cache_store ? "miss" : "none"
   cache_restore_ms = 0.0
   save_cache_after_head = false
-  if store = prompt_cache_store
+  if seed = decode_only_seed
+    next_id = seed.to_i32
+    cache_route = "decode_only"
+  elsif store = prompt_cache_store
     if hit = store.lookup_prompt(prompt_cache_model_id, prompt_cache_tokenizer_id, "", prompt)
       restore_t0 = Time.instant
       store.restore(hit, reuse_state: state)
@@ -181,7 +187,9 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     end
   end
 
-  if cache_route == "miss"
+  if decode_only_seed
+    # Decode-only mode mirrors llama-bench tg: empty KV state, no prompt ingest.
+  elsif cache_route == "miss"
     hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer)
     save_cache_after_head = true
     cache_route = "miss_save"
@@ -214,7 +222,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cur = prefill_head ? next_id : synthetic_decode_token(0)
   token_trace = [cur]
   generate.times do |i|
-    pos = (prompt.size + i).to_i32
+    pos = decode_only_seed ? i.to_i32 : (prompt.size + i).to_i32
     if decode_mode == "body"
       cur = synthetic_decode_token(i)
       if decode_wave
@@ -253,6 +261,7 @@ end
 if prompt_cache_root && stop_layer && stop_layer != weights.hparams.n_layer
   raise "--prompt-cache-root currently requires full-layer prefill/decode"
 end
+raise "--decode-only-seed cannot be combined with --prompt-cache-root" if decode_only_seed && prompt_cache_root
 
 cache_store = nil.as(ML::GGUF::Gemma4PromptCache::Store?)
 cache_model_id = File.basename(model)
@@ -265,7 +274,7 @@ if root = prompt_cache_root
   )
 end
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -277,6 +286,7 @@ warmups.times do
     prompt_cache_model_id: cache_model_id,
     prompt_cache_tokenizer_id: cache_tokenizer_id,
     prompt_cache_session_id: prompt_cache_session,
+    decode_only_seed: decode_only_seed,
   )
 end
 
@@ -297,6 +307,7 @@ runs.times do
     prompt_cache_model_id: cache_model_id,
     prompt_cache_tokenizer_id: cache_tokenizer_id,
     prompt_cache_session_id: prompt_cache_session,
+    decode_only_seed: decode_only_seed,
   )
   prefill_samples << result[:prefill_ms]
   decode_samples << result[:decode_ms]

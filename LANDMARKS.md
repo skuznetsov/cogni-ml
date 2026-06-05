@@ -20481,3 +20481,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Decision: Keep `bench_head_top1_rows_wait_ms` and CLI sweep for future models, but do not change `HEAD_TOP1_ROWS_PER_TG` or production routing now.
 - LTP/WBA: Window = Q6 tied-head tile size; Transport = vocab rows per threadgroup; Potential `(head_wait_ms, tile_count)` barely descends in standalone and has insufficient full-decode leverage, so no collapse into production default.
 - Trust: {F=.82,G=.35,R=.78}; local to Gemma4 Q4_K_M tied Q6 head on M2 Max.
+
+[LM-GEMMA4-BENCH-DECODE-ONLY] Gemma vs llama.cpp tg benchmark now matches llama-bench decode semantics (shared)
+- Date: 2026-06-05
+- Context: ml/perf/Gemma4 benchmark harness
+- Claim: Previous Gemma tg comparison overstated the decode gap because native decode ran after a full prompt while llama-bench tg reports an empty-KV `n_prompt=0,n_gen=N` row. The benchmark harness now measures native pp body-only and native tg decode-only separately.
+- Evidence: Local llama-bench `-p 256 -n 32 -o json` emitted separate rows for `n_prompt=256,n_gen=0` and `n_prompt=0,n_gen=32`; corrected `benchmark_gemma4_vs_llama` run reports native pp `342.42 tok/s` vs llama `386.16 tok/s` (-11.33%) and native tg `29.73 tok/s` vs llama `34.47 tok/s` (-13.76%).
+- Decision: Use corrected decode-only harness for apples-to-apples llama-bench tg comparisons; use contextual decode profiles separately for real session latency.
+- LTP/WBA: Window = benchmark semantic mismatch; Transport = separate pp and tg measurement corridors; Legal move = skip native prompt prefill for tg with `--decode-only-seed`; Boundary safety = contextual profile path remains available; Potential = `(comparison_bias, fixed_overhead_mismatch, context_mismatch)` decreases.
+- Trust: {F=.90,G=.60,R=.88}; specific to llama-bench-style pp/tg reporting.

@@ -75,12 +75,13 @@ def run_native(profile_bin : String,
                mode : String,
                prefill_chunk : Int32,
                decode_wave : Bool,
-               top1_resident : Bool) : NativeStats
+               top1_resident : Bool,
+               decode_only_seed : Int32? = nil) : NativeStats
   args = [
     "--model", model,
     "--tokens", synthetic_tokens(prompt_tokens),
     "--generate", gen_tokens.to_s,
-    "--max-seq", Math.max(prompt_tokens + gen_tokens + 8, prompt_tokens * 2).to_s,
+    "--max-seq", Math.max((decode_only_seed ? gen_tokens : prompt_tokens + gen_tokens) + 8, prompt_tokens * 2).to_s,
     "--runs", reps.to_s,
     "--warmups", warmups.to_s,
     "--prefill-mode", "rows",
@@ -92,6 +93,10 @@ def run_native(profile_bin : String,
   end
   args << "--decode-layerwise" unless decode_wave
   args << "--top1-wave-resident" if top1_resident
+  if seed = decode_only_seed
+    args << "--decode-only-seed"
+    args << seed.to_s
+  end
   env = ENV.to_h
   env["GEMMA4_ROW_PREFILL_ALLOW_GEMM"] = "1"
   output = run_checked(profile_bin, args, env)
@@ -146,6 +151,7 @@ mode = "body"
 prefill_chunk = 0
 decode_wave = true
 top1_resident = true
+decode_only_seed = 11751
 llama_extra_args = [] of String
 load_warning_threshold = 50.0
 load_total_warning_threshold = 100.0
@@ -168,6 +174,7 @@ OptionParser.parse do |p|
   p.on("--flash-attn=BOOL", "llama.cpp flash attention true/false") { |v| flash_attn = v.downcase.in?({"1", "true", "yes", "on"}) }
   p.on("--llama-extra-arg=ARG", "Append raw llama-bench argument; repeat for flag/value") { |v| llama_extra_args << v }
   p.on("--native-mode=MODE", "Native decode mode: body or top1") { |v| mode = v }
+  p.on("--native-decode-only-seed=N", "Native tg seed token for llama-bench-compatible empty-KV decode") { |v| decode_only_seed = v.to_i }
   p.on("--prefill-chunk=N", "Native row prefill chunk size, default prompt length") { |v| prefill_chunk = v.to_i }
   p.on("--decode-layerwise", "Disable native decode wave") { decode_wave = false }
   p.on("--top1-wave-resident", "Use native resident top1 wave in top1 mode (default)") { top1_resident = true }
@@ -199,20 +206,22 @@ else
   ML::BenchLoadGuard.warn_if_busy(load_warning_threshold, load_total_warning_threshold)
 end
 
-native = run_native(native_bin, model, prompt_tokens, gen_tokens, reps, warmups, mode, prefill_chunk, decode_wave, top1_resident)
+native_prefill = run_native(native_bin, model, prompt_tokens, 1, reps, warmups, "body", prefill_chunk, decode_wave, top1_resident)
+native_decode = run_native(native_bin, model, 1, gen_tokens, reps, warmups, mode, prefill_chunk, decode_wave, top1_resident, decode_only_seed)
 llama_prefill = run_llama_bench(llama_bench, model, prompt_tokens, 0, reps, n_gpu_layers, threads, flash_attn, llama_extra_args)
 llama_decode = run_llama_bench(llama_bench, model, 0, gen_tokens, reps, n_gpu_layers, threads, flash_attn, llama_extra_args)
 
 puts "Gemma4 benchmark vs llama.cpp"
 puts "model: #{model}"
-puts "settings: prompt=#{prompt_tokens} gen=#{gen_tokens} reps=#{reps} warmups=#{warmups} native_mode=#{mode} prefill_chunk=#{prefill_chunk} decode_wave=#{decode_wave} top1_resident=#{top1_resident} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_extra_args=#{llama_extra_args.inspect}"
+puts "settings: prompt=#{prompt_tokens} gen=#{gen_tokens} reps=#{reps} warmups=#{warmups} native_mode=#{mode} prefill_chunk=#{prefill_chunk} decode_wave=#{decode_wave} top1_resident=#{top1_resident} native_decode_only_seed=#{decode_only_seed} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_extra_args=#{llama_extra_args.inspect}"
+puts "note: native pp is measured body-only; native tg is measured decode-only with empty KV to match llama-bench tg semantics."
 puts
 puts "Prefill"
-puts "  cogni-ml:  p50=#{native.prefill_ms.round(2)} ms  p50=#{native.prefill_tok_s.round(2)} tok/s"
+puts "  cogni-ml:  p50=#{native_prefill.prefill_ms.round(2)} ms  p50=#{native_prefill.prefill_tok_s.round(2)} tok/s"
 puts "  llama.cpp: avg=#{(llama_prefill.avg_ns / 1_000_000.0).round(2)} ms  avg=#{llama_prefill.avg_ts.round(2)} tok/s  stddev=#{llama_prefill.stddev_ts.round(2)} tok/s"
-puts "  gap vs llama.cpp: #{pct_gap(native.prefill_tok_s, llama_prefill.avg_ts).round(2)}%"
+puts "  gap vs llama.cpp: #{pct_gap(native_prefill.prefill_tok_s, llama_prefill.avg_ts).round(2)}%"
 puts
 puts "Decode"
-puts "  cogni-ml:  p50=#{native.decode_ms_per_tok.round(2)} ms/tok  p50=#{native.decode_tok_s.round(2)} tok/s"
+puts "  cogni-ml:  p50=#{native_decode.decode_ms_per_tok.round(2)} ms/tok  p50=#{native_decode.decode_tok_s.round(2)} tok/s"
 puts "  llama.cpp: avg=#{(llama_decode.avg_ns / 1_000_000.0).round(2)} ms  avg=#{llama_decode.avg_ts.round(2)} tok/s  stddev=#{llama_decode.stddev_ts.round(2)} tok/s"
-puts "  gap vs llama.cpp: #{pct_gap(native.decode_tok_s, llama_decode.avg_ts).round(2)}%"
+puts "  gap vs llama.cpp: #{pct_gap(native_decode.decode_tok_s, llama_decode.avg_ts).round(2)}%"
