@@ -30,6 +30,7 @@ module ML::GGUF
       property state_byte_size : Int64
       property created_at_unix : Int64
       property prompt_preview : String?
+      property next_token_id : Int32? = nil
 
       def initialize(@runtime_id : String,
                      @session_id : String,
@@ -47,7 +48,8 @@ module ML::GGUF
                      @artifact_byte_size : Int64,
                      @state_byte_size : Int64,
                      @created_at_unix : Int64,
-                     @prompt_preview : String?)
+                     @prompt_preview : String?,
+                     @next_token_id : Int32? = nil)
       end
     end
 
@@ -107,7 +109,8 @@ module ML::GGUF
                               prompt_text : String = "",
                               session_id : String = "default",
                               turn_id : String? = nil,
-                              prompt_preview : String? = nil) : Entry
+                              prompt_preview : String? = nil,
+                              next_token_id : Int32? = nil) : Entry
         snapshot = Gemma4StateSnapshot.capture(state, prefix_len: token_ids.size.to_i32)
         prompt_hash = Gemma4PromptCache.prompt_hash(token_ids, prompt_text)
         token_hash = Gemma4PromptCache.token_hash(token_ids)
@@ -133,6 +136,7 @@ module ML::GGUF
           state_byte_size: snapshot.byte_size,
           created_at_unix: Time.utc.to_unix,
           prompt_preview: prompt_preview,
+          next_token_id: next_token_id,
         )
         append_manifest(entry)
         entry
@@ -413,6 +417,7 @@ module ML::GGUF
           state_byte_size: entry.state_byte_size,
           created_at_unix: entry.created_at_unix,
           prompt_preview: entry.prompt_preview,
+          next_token_id: entry.next_token_id,
         )
       end
     end
@@ -448,6 +453,7 @@ module ML::GGUF
       return false unless entry.artifact_sha256.size == 64
       return false unless entry.artifact_byte_size >= 0 && entry.state_byte_size >= 0
       return false unless entry.prompt_hash.size == 64 && entry.token_hash.size == 64
+      return false if entry.next_token_id.try { |token_id| token_id < 0 }
 
       true
     end

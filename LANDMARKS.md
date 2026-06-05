@@ -20007,3 +20007,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is a repeated prompt in the real profile/decode path. Transport carries exact K/V over the session artifact corridor, then a one-token replay corridor recovers the boundary hidden/logits. Legal move preserves K/V state and overwrites the same final prompt row with the same token/position. Recomputed potential `Phi=(N_prompt_rows, KV_restore_cost, final_hidden_recovery, decode_work)` descends strongly for pp256 (`984.981ms` to `133.390ms`), but the active maximizer shifts from KV restore to final hidden/logit recovery. The next Spike is to cache the final prompt hidden or logits alongside K/V so hot prefix hits do not need last-token replay.
 **boundary:** This is integrated into the Gemma profile path, not the full user-facing Gemma chat/structured CLI. The cache is full-layer only; stop-layer cache use is blocked to avoid shape/semantic aliasing.
+
+### [LM-COGNIGEMMA-94] Gemma cached next-token metadata removes hot-hit replay/head
+**context:** ml / CogniGemma / exact prompt-cache integration / greedy seed cache
+**state:** implemented in prompt-cache Store and profile path
+
+- claim: "Gemma prompt-cache entries now carry optional `next_token_id` metadata. Cache misses in the profile path save the exact greedy next token after computing prompt logits; cache hits restore exact K/V and, when `next_token_id` is present and valid, skip both final-token replay and LM-head for the prompt seed. Older entries or missing metadata fall back to the replay-last route. Negative `next_token_id` values are rejected by artifact trust metadata validation."
+  source: implementation in `src/ml/gguf/gemma4_prompt_cache.cr`, `spec/gemma4_prompt_cache_spec.cr`, and `bin/gemma4_metal_decode_profile.cr`; focused spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_nextid_spec2 scripts/run_safe.sh /opt/homebrew/bin/crystal 180 7000 spec spec/gemma4_state_snapshot_spec.cr spec/gemma4_prompt_cache_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed (`8 examples, 0 failures`); profile no-codegen and release build `/tmp/gemma4_metal_decode_profile_nextid2` passed.
+  verified_at: 2026-06-04
+  decay_trigger: Gemma prompt-cache manifest schema change, greedy decode policy change, tokenizer/model-id cache semantics change, or profile path rewrite
+  trust: {F:0.90,G:0.38,R:0.88}
+
+- claim: "Final-code guarded smokes show hot prompt-cache prefill+seed is now effectively restore-only for greedy profile runs. pp64 hot cache (`warmups=2`) reported prefill+seed `1.866ms`, cache restore `1.715ms`, route `hit_next_id`, and unchanged `first_id=236761` / `last_id=107`. pp256 hot cache reported prefill+seed `6.136ms`, cache restore `6.070ms`, route `hit_next_id`, and unchanged `first_id=254632` / `last_id=208669`. The earlier same-profile pp256 no-cache row was `984.981ms`, so the hot prefix seed slice descends by roughly `160x` on this row."
+  source: guarded `/tmp/gemma4_metal_decode_profile_nextid2` runs under `scripts/run_safe.sh`; pp64 used `--prompt-cache-snapshot-mib 256`; pp256 used `--prompt-cache-snapshot-mib 512`; both used `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, `--generate 1`, `--prefill-mode rows`, and `--warmups 2`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host repeat, next-token metadata policy change, Store resident snapshot cache rewrite, or decode benchmark rewrite
+  trust: {F:0.82,G:0.28,R:0.80}
+
+**LTP/WBA:** Window is a repeated greedy prompt prefix with certified K/V and a cached next-token boundary value. Transport carries K/V through the snapshot corridor and carries the scalar next-token id through the manifest corridor. Legal move is only valid for exact greedy seed recovery under matching model/tokenizer/prompt-token hash and non-negative token metadata. Recomputed potential `Phi=(N_prompt_rows, final_replay_head, KV_restore, decode_work)` descends: the previous active maximizer `final_replay_head` is eliminated, leaving KV restore as the hot-prefix seed cost. Dual frame is replay-last if metadata is absent/invalid, then full prefill if artifact restore fails.
+**boundary:** This optimizes the prompt seed for greedy/top1 paths. Sampling or structured decoding needs logits/final-hidden metadata or must use replay-last. Decode token generation speed is unchanged.

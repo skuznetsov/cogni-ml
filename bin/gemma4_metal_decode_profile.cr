@@ -126,17 +126,22 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
 
   prefill_t0 = Time.instant
   hidden = [] of Float32
+  next_id = -1_i32
   cache_route = prompt_cache_store ? "miss" : "none"
   cache_restore_ms = 0.0
+  save_cache_after_head = false
   if store = prompt_cache_store
     if hit = store.lookup_prompt(prompt_cache_model_id, prompt_cache_tokenizer_id, "", prompt)
       restore_t0 = Time.instant
       store.restore(hit, reuse_state: state)
       cache_restore_ms = (Time.instant - restore_t0).total_milliseconds
-      # The cache stores authoritative K/V rows, not the final prompt hidden.
-      # Replaying the last prompt token recovers exact logits while rewriting
-      # the same K/V row, collapsing N-row prefill to one row plus restore.
-      if prefill_head
+      if prefill_head && (cached_next = hit.next_token_id)
+        next_id = cached_next
+        cache_route = "hit_next_id"
+      elsif prefill_head
+        # Older cache entries store authoritative K/V rows, not final prompt
+        # logits. Replaying the last prompt token recovers exact logits while
+        # rewriting the same K/V row.
         hidden = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(
           weights,
           prompt.last,
@@ -144,13 +149,25 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
           state,
           stop_layer || weights.hparams.n_layer
         ).not_nil!
+        cache_route = "hit_replay_last"
+      else
+        cache_route = "hit_restore_only"
       end
-      cache_route = "hit_replay_last"
     end
   end
 
   if cache_route == "miss"
     hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer)
+    save_cache_after_head = true
+    cache_route = "miss_save"
+  elsif cache_route == "none"
+    hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer)
+  end
+  if prefill_head && next_id < 0
+    logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
+    next_id = top1_id(logits)
+  end
+  if save_cache_after_head
     prompt_cache_store.not_nil!.save_resident_state(
       state,
       prompt,
@@ -158,15 +175,8 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
       tokenizer_id: prompt_cache_tokenizer_id,
       prompt_text: "",
       session_id: prompt_cache_session_id,
+      next_token_id: prefill_head ? next_id : nil,
     )
-    cache_route = "miss_save"
-  elsif cache_route == "none"
-    hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer)
-  end
-  next_id = -1_i32
-  if prefill_head
-    logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
-    next_id = top1_id(logits)
   end
   prefill_ms = (Time.instant - prefill_t0).total_milliseconds
 

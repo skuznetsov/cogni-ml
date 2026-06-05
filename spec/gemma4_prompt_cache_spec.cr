@@ -42,13 +42,19 @@ describe "Gemma4PromptCache" do
         prompt_text: "hello",
         session_id: "s1",
         turn_id: "t1",
+        next_token_id: 123_i32,
       )
       saved.runtime_id.should eq(ML::GGUF::Gemma4PromptCache::RUNTIME_ID)
       saved.prefix_len.should eq(token_ids.size)
       saved.token_hash.should eq(ML::GGUF::Gemma4PromptCache.token_hash(token_ids))
+      saved.next_token_id.should eq(123_i32)
 
       hit = store.lookup_prompt("gemma4-test", "tok-test", "hello", token_ids).not_nil!
       hit.artifact_sha256.should eq(saved.artifact_sha256)
+      hit.next_token_id.should eq(123_i32)
+      hit.next_token_id = -1
+      ML::GGUF::Gemma4PromptCache.artifact_trust_metadata_valid?(hit).should be_false
+      hit.next_token_id = 123_i32
       restored = store.restore(hit)
 
       gemma4_prompt_cache_prefix_equal?(restored, source, token_ids.size).should be_true
