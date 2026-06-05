@@ -20664,3 +20664,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the pp256 hot FFN shape corridor, but the attempted transport used a GEMV-layout frame. Boundary safety failed at validation before any wall potential could be reduced. Dual frame is now required: measure or implement real batch-GEMM body variants (`q4_h16_gemm`, `q6_gemm`) rather than retuning GEMV layout knobs.
 **boundary:** Do not use GEMV layout sweep results to choose Gemma pp256 prefill defaults. A future layout branch must target `encode_q4k_gemm_h16*` / `encode_q56k_gemm_f32*` and must pass integrated parity/perf gates.
+
+### [LM-COGNIGEMMA-95] Current normh16 retest is neutral; do not promote from conversion share alone
+**context:** ml / CogniGemma first-run prefill / exact H16 producer-consumer corridors / pp512-768
+**state:** refuted for default promotion on the current binary
+
+- claim: "Fresh sequential current-binary gate for `GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ=1` did not show a reliable pp512/pp768 win. ABBA-style one-run rows measured pp512 default `1510.55/1513.31ms` versus normh16 `1508.885/1510.778ms` (neutral within noise), and pp768 default `2500.638/2505.752ms` versus normh16 `2509.945/2503.634ms` (neutral/slightly negative)."
+  source: guarded sequential wrapper run `/tmp/gemma4-normh16-current-1780667698` using `/tmp/gemma4_metal_decode_profile_current`, modes `default,normh16,normh16,default`, pp `512,768`.
+  verified_at: 2026-06-05
+  decay_trigger: normh16 route rewrite, row-prefill kernel rewrite, or quiet-host multi-run ABBA repeat
+  trust: {F:0.78,G:0.18,R:0.76}
+
+**LTP/WBA:** Window was real (`pp512` conversion share `23.88%`), but the legal transport (`RMSNorm F32+H16 side output`) does not lower recomputed wall potential on the current code. This is a Diamond conflict between reduced conversion bytes and extra H16 write/occupancy pressure. Dual frame remains default F32 RMSNorm plus shared-H16 matmul conversion.
+**boundary:** Keep `normh16` opt-in/range-controlled only. Do not promote based on conversion traffic alone; next branch should target attention context/FA or real Q4/Q6 batch-GEMM body, not another H16 staging flag.
