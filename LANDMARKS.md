@@ -20224,3 +20224,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window recomputation after host-wave collapse shows `ffn_upgate` and `ffn_down` as active phase maximizers. The legal local moves tested here (`pair gate/up`, `GELU inplace`, `post-down RMSNorm+add fusion`) either increased or failed to decrease the full top1 potential. This is a Diamond conflict: local buffer/pass reductions do not lower `Phi=(top1_wall, FFN_weight_traffic, register/dispatch overhead, scheduling variance, remaining_work)` once the whole decode boundary is recomputed. Dual frame is the default decode-wave with phase attribution enabled only when diagnosing.
 **boundary:** Do not retry small local FFN micro-fusions as standalone speed work. Next exact branch should either reduce the dominant FFN weight corridor itself, change proposal/self-draft work so the full FFN corridor is not paid every accepted token, or compare against llama.cpp/MLX kernels for the same hot shapes before another Metal rewrite.
+
+### [LM-QWEN-MTP-RESIDENT-VERIFIER-REFUTE] Small-batch verifier readback collapse is a revisit trick, not a landed speed win
+**context:** ml / Qwen3.6 MTP / verifier small-batch routing / cross-pollinated from CogniGemma optimization
+**state:** refuted as standalone temporary experiment; code removed
+
+- claim: "llama.cpp Metal's `mul_mv_ext` advantage applies to small-batch verifier/MTP corridors, not serial batch=1 tg. Product Qwen MTP already verifies chunks through `prefill_tokens_hidden_top1s_recurrent_checkpoint`, but the hidden-returning path reads all verifier hidden rows back to CPU and does not default to resident top1 rows. A temporary resident verifier helper kept hidden rows on GPU, computed top1 rows resident, and read only the final hidden row. It preserved generated token ids on a forced 27B MTP smoke, but did not clearly reduce verifier time: in the hostile reject row, verifier_ms increased while total wall improvement was explained mostly by fallback/replay noise. The code was removed."
+  source: local forced smoke logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T/qwen36-mtp-resident-verifier2.XXXXXX.N8zpHvy96w/`; local llama.cpp anchors `ggml-metal-ops.cpp:2061-2168` and `ggml-metal.metal:3966-4041` for `mul_mv_ext` small-batch routing.
+  verified_at: 2026-06-04
+  decay_trigger: MTP verifier body rewrite, resident top1/head routing rewrite, or port of llama-style small-batch quantized kernels
+  trust: {F:0.74,G:0.28,R:0.70}
+
+**LTP/WBA:** Window is known-span verifier rows. Transport is hidden rows across decoder body into top1 head without CPU materialization. Legal move is exact if state mutation and top1 parity are preserved. Recomputed potential did not show verifier wall descent in the tested reject-heavy case, so this remains a reusable trick/refutation, not an optimization branch.
+**boundary:** Revisit later with explicit route counters and high-accept gamma sweeps. Do not carry this into CogniGemma work now.
+
+### [LM-GEMMA4-SPLITK-B1-DECODE] Batch=1 full-attention split-K is a safe Gemma 4 decode default
+**context:** ml / Gemma4 Metal / decode attention / LTP-WBA window collapse
+**state:** implemented as default for `batch == 1 && sliding_window == 0`; multi-token prefill remains env-gated
+
+- claim: "Gemma 4 decode at longer prompt contexts was bottlenecked by full-attention context, not FFN. Enabling the existing split-K attention route by default only for batch=1 full-attention decode reduces decode wall while preserving top1 parity in the focused smoke."
+  source: local sequential safe runs under `scripts/run_safe.sh`; pp256/tg32 after default split-K rerun: Cogni decode `73.04 ms/tok` (`13.69 tok/s`) vs previous default row around `86.99 ms/tok`; pp64/tg32 default policy: prefill `889.23 ms` / `71.97 tok/s`, decode `45.46 ms/tok` / `22.0 tok/s`; parity smoke `default decode_ms_per_token_p50=79.886 first_id=254632 last_id=208669` vs `GEMMA4_ROW_PREFILL_ATTN_SPLITK_OFF=1 decode_ms_per_token_p50=93.041 first_id=254632 last_id=208669`.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma attention kernel rewrite, split-K route rewrite, llama.cpp comparison harness rewrite, or model/quant change
+  trust: {F:0.82,G:0.34,R:0.78}
+
+**LTP/WBA:** Window is single-token full-attention decode where `attn_ctx` is the active maximizer. Transport corridor is the KV context span for one decode token. Legal move is split-K execution only when `batch == 1` and `sliding_window == 0`, preserving cache/state boundaries and offering `GEMMA4_ROW_PREFILL_ATTN_SPLITK_OFF=1` as a dual-frame kill switch. Recomputed potential descends on decode wall without forcing the same move onto multi-token prefill, where prior forced min-batch experiments regressed pp64 prefill.
+**boundary:** Keep H16 KV cache out of the default path for now; H16+splitK regressed in current A/B. Next Gemma speed work should target prefill graph/ubatch scheduling and remaining attention/head shape gaps vs llama.cpp.

@@ -133,8 +133,9 @@ module ML::GGUF
 
       private def attn_splitk_enabled?(batch : Int32, sliding_window : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK_OFF"]? == "1"
-        return false unless ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK"]? == "1"
         return false unless sliding_window == 0
+        return true if batch == 1
+        return false unless ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK"]? == "1"
         min_batch = (ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK_MIN_BATCH"]? || "128").to_i32
         batch >= min_batch
       end
