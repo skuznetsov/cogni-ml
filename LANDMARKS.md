@@ -21612,3 +21612,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is the local certificate for the numeric backend corridor: the trigger is pp bottleneck under strict row-prefill; transport is prompt body through large row chunks; legal move is fast GEMM only when the output trace certificate stays equal. The next Ladder is larger ABBA prompts and llama.cpp comparison, not hidden-vector exact promotion.
 **boundary:** Passing this smoke is not enough to default-enable `ALLOW_GEMM`. It only establishes the harness and a narrow positive signal.
+
+### [LM-COGNIGEMMA-137] Gemma4 fast pp is close to llama.cpp; tg remains the next dominant gap
+**context:** ml / CogniGemma Metal / llama.cpp comparison / pp tg attribution / LTP-WBA
+**state:** measured; next optimization window is decode tg, not first-run pp labels
+
+- claim: "Local llama.cpp `build_commit=94a220cd6` on the same Gemma4 12B Q4_K_M GGUF measured pp256 `382.294 tok/s` and tg32 `34.171 tok/s` with `-ngl 99 -fa 1 -t 8`, `n_ubatch=512`, Metal backend on M2 Max."
+  source: guarded `/Users/sergey/SrcArchives/AI/llama.cpp/build/bin/llama-bench -m ~/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf -p 256 -n 32 -r 3 -ngl 99 -fa 1 -t 8 -o json`, log `/tmp/llama_bench_gemma4_12b_q4km_p256_n32.json`, 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: llama.cpp rebuild, model file replacement, benchmark flag change, power/thermal state change
+  trust: {F:0.86,G:0.18,R:0.82}
+
+- claim: "CogniGemma fast numeric pp256 body-only warmed route measured `343.024 tok/s`, about `10.2%` behind the llama.cpp pp256 row. CogniGemma decode-only tg32 measured `28.472 tok/s`, about `16.7%` behind llama.cpp tg32."
+  source: guarded `/tmp/gemma4_fast_body_pp256_after_fix.log` and `/tmp/gemma4_decode_only_tg32.log`, 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: CogniGemma decode wave rewrite, fast-GEMM promotion/gate rewrite, llama.cpp rebuild, or host load change
+  trust: {F:0.84,G:0.14,R:0.80}
+
+**LTP/WBA:** Recomputed potential after splitting benchmark corridors is `(dominant_wait_bucket=tg gap, tied_routes=pp close/tg behind, conflict=fast-GEMM output certificate, area=decode layer kernels)`. The next legal optimization should target decode wave/operator attribution before more pp label work. pp still has a 10% gap, but tg is the larger stable deficit and affects every generated token.
+**boundary:** Do not claim Gemma4 beats llama.cpp yet. Current status: pp is close in the fast numeric corridor; tg is behind. Next move is decode WBA attribution against llama.cpp-style fused graph/kernel choices.
