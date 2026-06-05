@@ -20702,3 +20702,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the SWA256 attention context corridor. Existing Spike/Ladder moves (`swa256_vec`, `swa256_vec_gqa2`) already reduce attention area. The attempted tile16 transport increased occupancy/threadgroup pressure enough that recomputed wall potential increased, so it is a refuted Diamond. Dual frame is either the current tile8 GQA2 kernel or a larger llama.cpp-style FA vector/reduction redesign, not a simple tile-width bump.
 **boundary:** Do not retry tile16 widening without a substantially different reduction model. The next attention branch should compare against llama.cpp's FA vector/reduction structure or target full-attention split/reduction, not just increase local tile width.
+
+### [LM-COGNIGEMMA-97] Current Gemma full-attention split-K route regresses pp512/pp768
+**context:** ml / CogniGemma Metal prefill / full-attention scheduling / split-K refutation
+**state:** refuted for current default promotion
+
+- claim: "Fresh sequential current-binary gate for `GEMMA4_ROW_PREFILL_ATTN_SPLITK=1` showed clear regressions. ABBA-style rows measured pp512 default `1514.908/1516.484ms` versus splitk `1598.378/1587.292ms`; pp768 default `2499.066/2505.046ms` versus splitk `2632.907/2628.159ms`. Decode rows were roughly unchanged, so the loss is prefill-body scheduling/work."
+  source: guarded sequential wrapper run `/tmp/gemma4-splitk-current-1780668124` using `/tmp/gemma4_metal_decode_profile_current`, modes `default,splitk,splitk,default`, pp `512,768`.
+  verified_at: 2026-06-05
+  decay_trigger: split-K kernel rewrite, full-attention route rewrite, qtile/chunk retune, or quiet-host multi-run repeat
+  trust: {F:0.80,G:0.20,R:0.78}
+
+**LTP/WBA:** Window was full-attention context at pp512/768. The attempted transport split context into chunked partial `(m,l,o)` reductions, but recomputed potential increased in `(attn_ctx_work, extra partial buffers, wall)`. Dual frame remains the default single-pass context kernel for this prompt range. A future FA port must change the reduction geometry materially; toggling current split-K is not enough.
+**boundary:** Do not promote current `splitk` or retest it at pp512/768 without a kernel/geometry change. If attention remains the target, implement a llama.cpp-style vector/reduction frame or a narrower full-attention-specific kernel with a fresh parity/perf gate.
