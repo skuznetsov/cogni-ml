@@ -20115,3 +20115,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was shared-input projection pairs (`FFN gate/up`, attention `K/V`). Transport was a two-weight Q4 corridor in one kernel. The legal move preserved exact arithmetic, but recomputed potential `Phi=(register_pressure, per-token_wait, shape_count, remaining_work)` increased: input-load sharing and fewer launches did not compensate for doubled per-thread accumulator/dequant work. This is a `MICRO_OPTIMIZATION_TRAP` / Diamond conflict. Dual frame remains separate Q4 GEMVs inside the existing decode-wave command buffer.
 **boundary:** Do not re-add a naive Q4 dual GEMV. A future retry must first reduce register pressure or fuse a downstream consumer (`dual GEMV + SwiGLU`, or `K/V projection + norm/rope/write`) so the legal move removes more work than it adds.
+
+### [LM-COGNIGEMMA-100] Gemma resident decode-wave top1 removes hidden/head host boundary
+**context:** ml / CogniGemma / decode tg / LTP-WBA resident head corridor
+**state:** implemented as opt-in profile route `--top1-wave-resident`; default promotion pending broader gate
+
+- claim: "CogniGemma now has an exact resident top1 decode-wave route. `Gemma4Metal.forward_top1_resident_cache_wave` encodes all decode layers, output RMSNorm, and the tied Q6_K top1 head in one command buffer, returning only the scalar top1 id. The profile CLI exposes it via `--top1-wave-resident`, with `GEMMA4_TOP1_WAVE_RESIDENT=1` as an env equivalent. The old path remains the default/fallback."
+  source: implementation in `src/ml/gguf/qwen35_metal.cr`, `src/ml/gguf/gemma4_metal.cr`, and `bin/gemma4_metal_decode_profile.cr`; compile-only build `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_resident_top1_build scripts/run_safe.sh /opt/homebrew/bin/crystal 240 8000 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` passed; focused Gemma Metal spec passed under `scripts/run_safe.sh` (`9 examples, 0 failures`).
+  verified_at: 2026-06-04
+  decay_trigger: Gemma output-head route rewrite, Qwen top1 kernel rewrite, decode-wave scheduler rewrite, or final logit policy change
+  trust: {F:0.88,G:0.38,R:0.86}
+
+- claim: "Guarded same-token A/B shows the resident top1 route is an exact tg speedup on the synthetic Gemma pp64 prompt. gen32 ABBA measured default `52.965/52.614 ms/tok` and resident `44.650/45.057 ms/tok`, preserving `first_id=236761` and `last_id=84750`. A longer gen64 pair measured default `54.862 ms/tok` and resident `49.549 ms/tok`, same ids. Decode-only profile confirms the intended boundary removal: default still reported 8 `gemv` head calls plus `gemma4.decode_wave.read` hidden readback, while resident reported `gemv: 0` and `head_top1_no_norm_resident Q6_K 3840x262144 b1` inside `gemma4.decode_wave_top1.layers_head`."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-resident-top1-ab.Y4xiPF/`, `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-resident-top1-gen64.XcFrzt/`, and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-resident-top1-profile.48BFxY/`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host multi-prompt repeat, gen128 repeat, LM-head/top1 kernel rewrite, or broader serving integration
+  trust: {F:0.84,G:0.30,R:0.82}
+
+**LTP/WBA:** Window is the exact hidden-vector host boundary after decode-wave layers and before output RMSNorm/top1. Transport carries the final hidden buffer through the output-normalization and tied-head top1 corridor without leaving GPU-resident state. Legal move preserves K/V writes, layer order, greedy argmax semantics, and exact fallback; final softcap is order-preserving for top1 and therefore does not need logits materialization. Recomputed potential `Phi=(CPU_hidden_readback, separate_head_command_wait, logits_materialization, scalar_readback, remaining_tg_work)` descends by eliminating the hidden/logits boundary and returning only top1 id. Dual frame is the existing hidden-readback plus `forward_logits_from_hidden` path.
+**boundary:** Keep opt-in until a broader prompt/gen64-128 gate confirms stability under real prompts. The current route optimizes greedy/top1 only; sampling/structured decoding still needs logits or a top-k resident extension.

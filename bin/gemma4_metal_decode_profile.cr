@@ -14,6 +14,7 @@ profile = false
 profile_decode_only = false
 decode_mode = "top1"
 decode_wave = ENV["GEMMA4_DECODE_WAVE_OFF"]? != "1"
+top1_wave_resident = ENV["GEMMA4_TOP1_WAVE_RESIDENT"]? == "1"
 prefill_mode = "serial"
 prefill_chunk = 8
 prefill_head = true
@@ -35,6 +36,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--profile-decode-only", "Reset profile counters after prefill and report only generated-token work") { profile_decode_only = true }
   p.on("--decode-wave", "Use one command buffer per decode token instead of one wait per layer (default)") { decode_wave = true }
   p.on("--decode-layerwise", "Use legacy one-wait-per-layer decode path") { decode_wave = false }
+  p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer") { top1_wave_resident = true }
   p.on("--prefill-mode MODE", "Prompt prefill mode: serial or rows (default: serial)") { |v| prefill_mode = v }
   p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--prefill-no-head", "Measure pure prompt body only; requires --body-only because no next-token seed is computed") { prefill_head = false }
@@ -86,7 +88,14 @@ end
 
 def forward_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos : Int32,
                  state : ML::GGUF::Gemma4Metal::ResidentState,
-                 decode_wave : Bool = false) : Int32
+                 decode_wave : Bool = false,
+                 top1_wave_resident : Bool = false) : Int32
+  if decode_wave && top1_wave_resident
+    if id = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, token_id, pos, state, weights.hparams.n_layer)
+      return id
+    end
+  end
+
   hidden = if decode_wave
              ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(weights, token_id, pos, state, weights.hparams.n_layer).not_nil!
            else
@@ -127,6 +136,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              profile : Bool = false,
              profile_decode_only : Bool = false,
              decode_wave : Bool = false,
+             top1_wave_resident : Bool = false,
              prompt_cache_store : ML::GGUF::Gemma4PromptCache::Store? = nil,
              prompt_cache_model_id : String = "",
              prompt_cache_tokenizer_id : String = "synthetic-token-ids",
@@ -209,7 +219,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, stop_layer || weights.hparams.n_layer).not_nil!
       end
     else
-      cur = forward_top1(weights, cur, pos, state, decode_wave)
+      cur = forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident)
     end
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
@@ -250,13 +260,14 @@ if root = prompt_cache_root
   )
 end
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
     weights, prompt, generate, max_seq, decode_mode, prefill_mode, prefill_chunk, prefill_head, stop_layer,
     profile_decode_only: false,
     decode_wave: decode_wave,
+    top1_wave_resident: top1_wave_resident,
     prompt_cache_store: cache_store,
     prompt_cache_model_id: cache_model_id,
     prompt_cache_tokenizer_id: cache_tokenizer_id,
@@ -275,6 +286,7 @@ runs.times do
     weights, prompt, generate, max_seq, decode_mode, prefill_mode, prefill_chunk, prefill_head, stop_layer, profile && runs == 1,
     profile_decode_only: profile_decode_only,
     decode_wave: decode_wave,
+    top1_wave_resident: top1_wave_resident,
     prompt_cache_store: cache_store,
     prompt_cache_model_id: cache_model_id,
     prompt_cache_tokenizer_id: cache_tokenizer_id,

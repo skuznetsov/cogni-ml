@@ -2839,6 +2839,14 @@ module ML
           [id.to_f32, value]
         end
 
+        def self.read_head_top1_buffers(id_buf : ML::MetalBuffer, value_buf : ML::MetalBuffer) : Array(Float32)
+          read_shared_top1(id_buf, value_buf)
+        end
+
+        def self.head_top1_tile_count(out_qw : QuantWeight) : Int32
+          (out_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+        end
+
         private def self.read_shared_top2(id_buf : ML::MetalBuffer,
                                           value_buf : ML::MetalBuffer,
                                           second_id_buf : ML::MetalBuffer,
@@ -8604,6 +8612,44 @@ module ML
             )
           end
           result
+        end
+
+        def self.encode_head_top1_no_norm_to_buffers(enc : ML::Metal::ComputeEncoder,
+                                                     out_qw : QuantWeight,
+                                                     x_buf : ML::MetalBuffer,
+                                                     tile_values_buf : ML::MetalBuffer,
+                                                     tile_ids_buf : ML::MetalBuffer,
+                                                     top1_id_buf : ML::MetalBuffer,
+                                                     top1_value_buf : ML::MetalBuffer) : Bool
+          return false unless can_use_head_top1_fused?(out_qw)
+          return false if x_buf.size < out_qw.in_dim.to_i64 * sizeof(Float32)
+
+          tile_count = head_top1_tile_count(out_qw)
+          return false if tile_values_buf.size < tile_count.to_i64 * sizeof(Float32)
+          return false if tile_ids_buf.size < tile_count.to_i64 * sizeof(UInt32)
+          return false if top1_id_buf.size < sizeof(UInt32)
+          return false if top1_value_buf.size < sizeof(Float32)
+
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          enc.set_pipeline(out_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
+          profile_bump_head_top1_shape("head_top1_no_norm_resident", out_qw)
+          enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(out_qw.in_dim.to_u32, 4)
+          enc.set_value(out_qw.out_dim.to_u32, 5)
+          enc.dispatch_threadgroups({tile_count, 1, 1}, {out_qw.type.q8_0? ? MV_Q8_NSG * 32 : 64, 1, 1})
+
+          enc.set_pipeline(top1_reduce_tiles_pipeline)
+          enc.set_buffer(tile_values_buf, 0)
+          enc.set_buffer(tile_ids_buf, 1)
+          enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(tile_count.to_u32, 4)
+          enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          true
         end
 
         def self.project_top2_no_norm(out_qw : QuantWeight,
