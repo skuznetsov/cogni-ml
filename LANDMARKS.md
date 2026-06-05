@@ -20903,3 +20903,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the LM-103 stable token corridor. The legal probe preserved boundary safety by transporting proposals through a separate restored state and advancing only exact full-depth state. Recomputed potential refutes broad truncated proposals: `proposal_accuracy` and `proposal_cost` fail before verifier batching can help. The move shrinks local layer work but increases `M`/`P` through many verifier conflicts. Dual frame is exact decode, or a sharper router/learned surrogate that predicts only sustained low-curvature spans before paying proposal work.
 **boundary:** Do not build a Gemma verifier pipeline around raw stop-layer proposals. Next viable self-draft branch needs either a much cheaper proposal body than `forward_top1_resident_cache_wave(stop_layer=N)`, or a phase/router feature that selects rare high-confidence spans before proposal submission. Otherwise return to exact FFN/head kernel work for pp/tg.
+
+### [LM-COGNIGEMMA-106] Gemma late-band residual surrogate has code-prompt signal but is not yet general enough for fusion
+**context:** ml / CogniGemma Metal / Gemma4 late-band residual surrogate / self-draft / LTP-WBA
+**state:** probe implemented; promising but not promoted
+
+- claim: "`bin/gemma4_late_band_surrogate_probe.cr` now collects exact Gemma hidden trajectories and tests a low-rank residual surrogate `h_full ≈ h_L + B * R(h_L - μ)`. It preserves exact main-state decode while collecting `h_L` from restored side states, then scores held-out surrogate hidden rows through the normal Gemma LM head."
+  source: `bin/gemma4_late_band_surrogate_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_surrogate_probe.cr --error-trace` passed.
+  verified_at: 2026-06-05
+  decay_trigger: probe rewrite, hidden extraction rewrite, native PCA/impact basis replacement, or Metal surrogate implementation
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` chat prompt, the residual surrogate is materially better than raw stop-layer proposals but still below promotion threshold. With `gen=16 train=8 rank=8`, layer 44 reached `4/8` held-out top1 and `6/8` top5; layer 46 reached `4/8` top1 and `7/8` top5. Earlier `rank=4` smoke showed the same direction (`layer44` `2/5` top1, `3/5` top5)."
+  source: guarded logs `/tmp/gemma4_late_band_surrogate_rank8.log`, `/tmp/gemma4_late_band_surrogate_l46.log`, and `/tmp/gemma4_late_band_surrogate_smoke.log` using `/tmp/gemma4_late_band_surrogate_probe` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: larger code prompt suite, better basis such as impact/PCA/mixture, or online verifier acceptance measurement
+  trust: {F:0.78,G:0.14,R:0.76}
+
+- claim: "The same tiny setup does not generalize to a reasoning prompt. With `gen=16 train=8 rank=8`, layer 44 dropped to `3/8` top1 and `5/8` top5, while layer 46 dropped to `2/8` top1 and `3/8` top5. This keeps the route in router/mixture territory, not a static global surrogate."
+  source: guarded log `/tmp/gemma4_late_band_surrogate_reason_l46.log`.
+  verified_at: 2026-06-05
+  decay_trigger: larger prompt suite or prompt-conditioned mixture surrogate
+  trust: {F:0.76,G:0.14,R:0.74}
+
+**LTP/WBA:** Window is the missing upper-layer transport refuted by stop-layer decode. The legal move transports the late-band residual through a learned low-rank map while preserving exact state collection and exact LM-head scoring. Recomputed potential improves in the code corridor (`top5` up to `75-87.5%`) but does not descend globally because prompt generality and top1 acceptance are insufficient. Dual frame is exact decode; the compatible next frame is a phase/prompt-conditioned mixture or impact/PCA basis probe, not a single static surrogate kernel.
+**boundary:** Do not super-fuse this residual surrogate yet. Next surrogate branch should test mixture/impact-basis late-band residuals with prompt-class features and an exact verifier acceptance metric. If that does not lift top1/top5 on code and reasoning together, return to exact FFN/head kernel work.
