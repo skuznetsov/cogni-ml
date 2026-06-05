@@ -252,6 +252,17 @@ module ML::GGUF
           end
           @scratch = ResidentScratch.new
         end
+
+        def initialize(kv_dims : Array(Int32), @max_seq : Int32, h16_cache : Bool = false)
+          raise ArgumentError.new("Gemma4 resident KV dims must not be empty") if kv_dims.empty?
+
+          @layers = kv_dims.map do |kv_dim|
+            raise ArgumentError.new("Gemma4 resident KV dim must be positive") unless kv_dim > 0
+
+            ResidentLayerState.new(kv_dim, @max_seq, h16_cache)
+          end
+          @scratch = ResidentScratch.new
+        end
       end
 
       def available? : Bool

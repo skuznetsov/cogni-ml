@@ -19924,3 +19924,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Tensor remains a valid alternate compute frame for the FFN Q4 window, but recomputed potential `Phi=(ffn_phase_win, pp512_mixed_wall, pp1024_regression, control_drift, promotion_risk)` does not descend enough for a controller. The wrapper fix is a benchmark-integrity Spike: local duplicate-log window, transport is the row evidence path, legal move is row-id prefixing, potential `Phi=(log_aliases, evidence_ambiguity)` descends to zero for repeated modes.
 **boundary:** Keep `tensor` explicit. Do not promote until an ABBA run has stable controls and tensor wins both repeated rows for the target pp window.
+
+### [LM-COGNIGEMMA-89] Gemma exact resident K/V snapshot primitive exists
+**context:** ml / CogniGemma / exact session-prefix cache / LTP-WBA cache corridor
+**state:** implemented; primitive only, not CLI-integrated yet
+
+- claim: "CogniGemma now has a minimal exact resident K/V snapshot primitive for session-prefix reuse. `Gemma4StateSnapshot.capture` records only raw F32 K/V prefix rows from `Gemma4Metal::ResidentState`; H16 side-caches are intentionally excluded because they are approximate optimization artifacts. Artifacts use `.gkv`-style `CGKV` v1 bytes with checksum validation, and restore writes the prefix rows back into an existing/new resident state."
+  source: implementation in `src/ml/gguf/gemma4_state_snapshot.cr`; synthetic resident-state constructor in `src/ml/gguf/gemma4_metal.cr`; focused spec `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_state_snapshot_spec scripts/run_safe.sh /opt/homebrew/bin/crystal 180 5000 spec spec/gemma4_state_snapshot_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed (`3 examples, 0 failures`).
+  verified_at: 2026-06-04
+  decay_trigger: Gemma resident-state layout rewrite, K/V dtype change, prompt-cache API integration, or artifact format change
+  trust: {F:0.88,G:0.34,R:0.86}
+
+**LTP/WBA:** Window is a repeated prompt/session prefix. Transport carries exact F32 K/V rows over the bounded prefix corridor. Legal move is serialize/restore authoritative K/V only; H16 side-cache and scratch buffers stay outside the boundary. Recomputed potential `Phi=(prefill_rows_to_run, artifact_bytes, validation_risk, fallback_cost)` descends for hot-session reuse because prefill rows can collapse to restore bytes while checksum/shape gates keep fallback exact. Dual frame is full Gemma prefill if checksum, layer count, max sequence, prefix length, or KV dimensions do not match.
+**boundary:** This is not yet a product-level prompt cache. Next step is a small Gemma cache/store adapter or CLI path that keys by model/tokenizer/prompt-token hash and restores the `.gkv` artifact before decode.
