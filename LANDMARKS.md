@@ -21705,5 +21705,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: quiet-host ABBA contradicts this, pair kernel rewrite, H16 conversion removal, or pp prompt-size sweep
   trust: {F:0.82,G:0.12,R:0.78}
 
+- claim: "Forcing the existing H16 pair route into decode b1 with `QWEN35_Q4K_PAIR_H16_MIN_BATCH=1` preserved the top1 token trace on a short gen16 smoke, but regressed decode from `82.239ms/tok` (`12.16 tok/s`) to `128.878ms/tok` (`7.759 tok/s`). This refutes the current batch/H16 pair route as a decode optimization."
+  source: guarded top1 gen16 A/B run with `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1 QWEN35_Q4K_PAIR_H16_MIN_BATCH=1` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: new b1 dual-GEMV kernel, H16 conversion elimination, pair route rewrite, or larger quiet-host ABBA contradicts this
+  trust: {F:0.82,G:0.10,R:0.78}
+
 **LTP/WBA:** This is a refuted Spike for immediate promotion: local `Area` shrank, but recomputed wall potential did not materially descend. The useful clue is that FFN upgate has removable logical work, but the current transport pays conversion/occupancy costs. Next legal move is a different FFN upgate Diamond: either b1 Q4 dual-GEMV for decode, or pp pair fusion that also removes/stabilizes conversion and preserves occupancy.
 **boundary:** Do not default-enable `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN` for Gemma based on logical traffic alone. Revisit only with ABBA wall wins or a changed kernel that reduces both area and wait.
