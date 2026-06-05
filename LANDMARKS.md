@@ -20160,3 +20160,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is per-token buffer allocation in the already opt-in resident top1 corridor. Legal move reuses scratch buffers only after each command buffer is waited, preserving boundary safety. Recomputed potential descends slightly for resident top1, but the broader default-wave attempt did not descend; therefore the move is scoped narrowly and not generalized.
 **boundary:** This is a small allocator-pressure cleanup, not a main tg breakthrough. Do not use it as evidence for default resident-top1 promotion.
+
+### [LM-COGNIGEMMA-103] Gemma duplicate K/V projection copy is exact but not promotable
+**context:** ml / CogniGemma / decode tg and row prefill / K-as-V projection corridor / refutation
+**state:** refuted; experimental code removed before commit
+
+- claim: "Gemma full-attention layers without `attn_v_qw` can mathematically project `[Q,K]` once and copy pre-normalized `K` into `V`, because the CPU fallback already uses `V=K.dup` before divergent K/V normalizations. An experimental Metal `gemma4_copy_f32` implementation passed compile and focused Gemma Metal correctness (`9 examples, 0 failures`), but full-corridor timing did not justify promotion. Broad row-prefill use regressed pp256 body prefill: old `6111.520/6966.605 ms`, new `6696.328/7243.155 ms`. Decode-only/body initially showed small wins, but after narrowing to `batch=1`, top1 ABBA on a noisy host measured old `74.694/74.398 ms/tok`, new `79.802/75.332 ms/tok`, same ids. The experimental copy code was removed."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-kv-copy-prefill.Newjld/`, `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-kv-copy-ab.XlDDEG/`, and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-kv-copy-b1-ab.S0g9Sp/`; focused compile/spec under `scripts/run_safe.sh` passed before removal.
+  verified_at: 2026-06-04
+  decay_trigger: fused copy+norm/rope/write kernel, Q/K/V projection kernel rewrite, or row-prefill command scheduling rewrite
+  trust: {F:0.80,G:0.30,R:0.76}
+
+**LTP/WBA:** Window was duplicate K projection when `V` is absent. The local mathematical move is legal, but transport through a standalone copy kernel creates a Diamond conflict: it removes weight traffic yet adds dispatch/copy work and disrupts row-prefill scheduling. Recomputed potential did not descend across pp or top1. Dual frame remains the existing `[Q,K,K]` Metal projection path.
+**boundary:** Do not re-add standalone `K->V` copy. A future retry must fuse the copy with downstream K/V norm, RoPE, and cache write so the legal move removes both duplicate weight traffic and separate copy dispatch.
