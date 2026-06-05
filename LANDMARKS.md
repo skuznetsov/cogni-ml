@@ -19892,3 +19892,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the FFN gate/up producer-consumer boundary. Transport collapses the up projection and `GELU(gate)*up` materialization into one B64 consumer kernel. Legal move is exact under focused specs, but recomputed potential `Phi=(activation_materialization, B64_pressure, pp_wall, promotion_risk)` does not descend stably across orderings. This is a local opt-in corridor, not a Collapse/default.
 **boundary:** Do not add a `gelufuse` wrapper mode or auto-controller from current evidence. Reopen only with quiet-host ABBA and possibly a fused downstream FFN-down route; otherwise focus on attention algorithms, kernel-body attribution, or exact session/prefix cache.
+
+### [LM-COGNIGEMMA-87] Gemma Q4 tensor route is phase-positive but wall-noisy
+**context:** ml / CogniGemma Metal prefill / Q4 tensor-op route / FFN upgate
+**state:** wrapper mode added; not promoted
+
+- claim: "The existing `QWEN35_Q4K_TENSOR_MM=1` route remains correctness-safe in the focused Gemma Metal buffer spec and is now exposed through `scripts/gemma4_prefill_ab.sh` mode `tensor`, but it is not promoted as default. Current pp512 ABBA-style wall evidence is mixed: default/tensor/tensor/default p50s were `2912.484ms`, `2668.653ms`, `2817.894ms`, `2707.421ms`. A phase-profile comparison is more encouraging: default pp512 profile reported prefill `3569.145ms` with `ffn_upgate=1191.430ms`, while tensor profile reported prefill `3065.266ms` with `ffn_upgate=1053.010ms`; several adjacent phases also dropped."
+  source: focused spec with `QWEN35_Q4K_TENSOR_MM=1` passed `8 examples, 0 failures`; ABBA logs under `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-tensor-pp512.uBatAv/`; phase logs `/tmp/gemma4_phase_pp512_current_20260604202742.log` and `/tmp/gemma4_phase_pp512_tensor_20260604203023.log`.
+  verified_at: 2026-06-04
+  decay_trigger: tensor kernel rewrite, Q4 GEMM routing rewrite, quiet-host ABBA repeat, or benchmark wrapper rewrite
+  trust: {F:0.82,G:0.20,R:0.78}
+
+**LTP/WBA:** Window is large FFN-sized Q4 projections where tensor-op GEMM can reduce the `ffn_upgate` phase. Transport is the same row-prefill batch corridor, but using a different compute frame for Q4 GEMM while preserving exact output in focused specs. Recomputed potential `Phi=(ffn_upgate_wait, neighboring_phase_shift, wall_noise, promotion_risk)` descends in phase attribution but not stably in wall ABBA, so this is an experimental Diamond, not a Collapse/default.
+**boundary:** Keep `tensor` as an explicit wrapper mode. Do not combine it with `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1` without a fresh parity gate; prior landmarks refuted that composition. Next gate: quiet-host ABBA over pp512/1024 plus phase profiles before any controller change.
