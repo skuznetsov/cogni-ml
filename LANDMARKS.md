@@ -20134,3 +20134,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the exact hidden-vector host boundary after decode-wave layers and before output RMSNorm/top1. Transport carries the final hidden buffer through the output-normalization and tied-head top1 corridor without leaving GPU-resident state. Legal move preserves K/V writes, layer order, greedy argmax semantics, and exact fallback; final softcap is order-preserving for top1 and therefore does not need logits materialization. Recomputed potential `Phi=(CPU_hidden_readback, separate_head_command_wait, logits_materialization, scalar_readback, remaining_tg_work)` descends by eliminating the hidden/logits boundary and returning only top1 id. Dual frame is the existing hidden-readback plus `forward_logits_from_hidden` path.
 **boundary:** Keep opt-in until a broader prompt/gen64-128 gate confirms stability under real prompts. The current route optimizes greedy/top1 only; sampling/structured decoding still needs logits or a top-k resident extension.
+
+### [LM-COGNIGEMMA-101] Gemma resident top1 default promotion is not yet justified
+**context:** ml / CogniGemma / decode tg / promotion gate / refutation
+**state:** keep `--top1-wave-resident` opt-in
+
+- claim: "A broader guarded prompt-token gate preserved exact greedy ids but did not justify making resident top1 the default. Three sequential gen64 prompt-token patterns produced mixed speed results: short default/resident `91.135 -> 82.016 ms/tok`, spread `74.617 -> 76.121 ms/tok`, and structured `80.978 -> 64.186 ms/tok`, all preserving their respective `first_id`/`last_id`. A reversed spread ABBA was noisy but near parity/slight resident mean win: resident `64.491/55.402`, default `62.450/59.445 ms/tok`, same ids. The feature remains useful and exact, but default promotion needs a quieter host and/or longer gen128 gate."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-resident-top1-prompts64.DSbpaw/` and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-resident-top1-spread-abba.RPMP4L/`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host repeat, gen128 repeat, resident-top1 scheduler rewrite, or default policy change
+  trust: {F:0.78,G:0.34,R:0.76}
+
+**LTP/WBA:** The local potential descends at the hidden/head boundary, but recomputation over the full generated-token corridor shows a Diamond conflict with Metal scheduling variance and possible command-buffer work balance. Legal move remains valid; Collapse to default is blocked because `Phi=(decode_wall_variance, prompt_pattern_regressions, fallback_risk)` does not strictly descend across the broader gate. Dual frame remains default hidden-readback top1, with resident top1 as an explicit accelerator knob.
+**boundary:** Do not promote `GEMMA4_TOP1_WAVE_RESIDENT=1` as default yet. Next useful experiment is not another small prompt-token sweep; use real tokenizer prompts and gen128/256, or integrate resident top1 into self-draft/MTP where removing scalar proposal boundaries may have larger impact.
