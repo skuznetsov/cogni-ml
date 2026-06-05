@@ -21814,3 +21814,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local candidate may slightly reduce the `ffn_down` corridor, but it does not strictly lower the recomputed potential enough to justify changing a shared generic Q4 route. This is a Diamond boundary issue: Gemma-specific gain must not silently perturb Qwen/Nomic-like consumers of the same Q4 shape table.
 **boundary:** Do not change `{15360,3840}` Q4 default globally based on this evidence. If revisited, make the route model/workload-specific or require a larger ABBA win across Gemma and Qwen.
+
+### [LM-COGNIGRAPH-009] llama.cpp Metal uses a different Q4_K/Q6_K b1 GEMV family
+**context:** ml / CogniGraph / Gemma4 / llama.cpp comparison / Q4_K Q6_K GEMV / LTP-WBA
+**state:** source-verified candidate; implementation pending
+
+- claim: "llama.cpp Metal has a separate `kernel_mul_mv_ext_q4x4_f32_impl` family for K-quants (`Q4_K`, `Q5_K`, `Q6_K`) that dequantizes into `float4x4` chunks and splits each simdgroup into `tx` reduction lanes and `ty` output-row lanes. It instantiates `kernel_mul_mv_ext_q4_K_f32_r1_{2,3,4,5}` and `kernel_mul_mv_ext_q6_K_f32_r1_{2,3,4,5}`."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal.metal:3830-4040` inspected on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: llama.cpp Metal kernel rewrite or local source checkout update
+  trust: {F:0.90,G:0.28,R:0.88}
+
+- claim: "For the relevant b1-ish case, llama.cpp host selection uses `nsg=2`; if `ne00 % 256 == 0 && ne11 < 3`, it chooses `nxpsg=16`, hence `nypsg=2`, meaning each simdgroup processes two src0/output rows with 16 lanes per row. This differs from CogniGemma's current fixed Q4/Q6 GEMV decomposition and is a plausible structural reason llama.cpp remains strong on dense Gemma decode."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-ops.cpp:2090-2145` and `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-device.cpp:653-678` inspected on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: llama.cpp host-selection rewrite or CogniGemma Q4/Q6 GEMV kernel rewrite
+  trust: {F:0.90,G:0.22,R:0.88}
+
+**LTP/WBA:** The repeated failed local moves indicate the current corridor is sticky. The dual frame is now a structural kernel-family port/probe: reproduce llama.cpp's `q4x4` simdgroup split as a narrow microbench for Gemma's dominant shapes before wiring it into decode.
+**boundary:** Do not blindly paste llama.cpp code into the runtime. First build a local opt-in/probe that validates numerical parity against current `Qwen35Metal.matmul` for `Q4_K 3840x15360`, `Q4_K 15360x3840`, and `Q6_K 15360x3840`, then run body-only ABBA. Promotion requires a whole-corridor win.
