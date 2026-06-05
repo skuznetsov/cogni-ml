@@ -20576,3 +20576,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is repeated-session prompt restore after exact `.gkv` validation. Transport carries decoded K/V state through a bounded resident snapshot cache. Legal move is cache admission only when `state_bytes <= effective_budget`; otherwise durable artifact restore remains the dual frame. Potential `Phi=(cold-prefill-work, durable-read-work, resident-cache-bytes, memory-floor-risk)` descends for pp1024/pp2048 when the budget can hold the snapshot and remains boundary-safe when it cannot.
 **boundary:** These are session-cache wins, not first-run pp acceleration or decode `tg` wins. pp4096 should be run sequentially only on a quiet host with a cache budget above the expected ~2.8 GiB state size and the memory-floor clamp printed in the log.
+
+### [LM-COGNIGEMMA-91] Gemma `.gkv` artifacts are streamed and support pp4096 cache restore
+**context:** ml / CogniGemma prompt cache / large session-cache artifacts / pp4096 boundary
+**state:** implemented; focused specs and guarded pp4096 run passed
+
+- claim: "The old Gemma `.gkv` writer built the full artifact in `IO::Memory`; pp4096 failed with `IO::EOFError` while writing a multi-GiB artifact. The writer and reader now stream artifact fields and payloads through SHA-256 digesting, preserving the existing byte format for small snapshots while avoiding the all-at-once artifact buffer."
+  source: failing guarded log `/tmp/gemma4_prompt_cache_budget_pp4096_4g_1780666203.log`; implementation in `src/ml/gguf/gemma4_state_snapshot.cr`; compatibility spec in `spec/gemma4_state_snapshot_spec.cr`.
+  verified_at: 2026-06-05
+  decay_trigger: artifact format rewrite, snapshot record layout rewrite, or checksum policy rewrite
+  trust: {F:0.88,G:0.34,R:0.86}
+
+- claim: "Verification passed after the streaming change: focused state+prompt cache specs completed `10 examples, 0 failures`; no-codegen build for `bin/gemma4_prompt_cache_bench.cr` passed; `git diff --check` passed."
+  source: local `scripts/run_safe.sh` command outputs from 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: spec rewrite, Crystal version change, or Metal bridge ABI change
+  trust: {F:0.90,G:0.30,R:0.88}
+
+- claim: "pp4096 exact prompt-cache restore now succeeds under the new streaming writer. Guarded single-run row with a 4096 MiB snapshot cache budget and 8192 MiB min-free floor wrote a 2,818,574,232-byte artifact, retained a 2,818,572,288-byte decoded snapshot, and measured cold/artifact/cached `17682.753ms / 2025.552ms / 205.621ms`. Cached restore was `85.997x` faster than cold prefill and `9.8509x` faster than durable artifact restore."
+  source: guarded run `/tmp/gemma4_prompt_cache_stream_pp4096_4g_1780666428.log` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 scripts/run_safe.sh /tmp/gemma4_prompt_cache_bench_stream ... --prompt-len 4096 --snapshot-cache-mib 4096 --snapshot-cache-min-free-mib 8192`.
+  verified_at: 2026-06-05
+  decay_trigger: cache restore rewrite, memory pressure, quiet-host repeat, or artifact format change
+  trust: {F:0.80,G:0.20,R:0.78}
+
+**LTP/WBA:** Window is large prompt-cache artifact serialization where `artifact_bytes > IO::Memory` practical capacity. Transport changes from monolithic memory buffer to a streaming file+digest corridor. Legal move preserves the byte-level artifact format and checksum boundary. Potential `Phi=(artifact_allocation_bytes, crash_risk, durable_restore_validity, hot-cache-latency)` descends because large artifacts no longer allocate an extra multi-GiB contiguous buffer. Dual frame remains checksum-validated durable restore; resident snapshot cache remains bounded by the memory-floor policy.
+**boundary:** This fixes durable/session cache for pp4096, not first-run pp/tg. pp4096 evidence is single-run due cost; repeat only on a quiet host when needed for public claims.

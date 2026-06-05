@@ -69,6 +69,24 @@ describe "Gemma4StateSnapshot" do
     end
   end
 
+  it "streams the same artifact bytes as the in-memory encoder" do
+    kv_dims = [2]
+    source = ML::GGUF::Gemma4Metal::ResidentState.new(kv_dims, 4)
+    gemma4_snapshot_fill(source)
+    snapshot = ML::GGUF::Gemma4StateSnapshot.capture(source, prefix_len: 2)
+    expected = ML::GGUF::Gemma4StateSnapshot.encode_artifact_bytes(snapshot)
+    path = File.tempname("gemma4-state-stream", ".gkv")
+
+    begin
+      info = ML::GGUF::Gemma4StateSnapshot.write_artifact(snapshot, path)
+      File.read(path).to_slice.should eq(expected)
+      info.byte_size.should eq(expected.size)
+      info.sha256.should eq(Digest::SHA256.hexdigest(expected))
+    ensure
+      File.delete(path) if File.exists?(path)
+    end
+  end
+
   it "rejects restore into an incompatible resident state" do
     source = ML::GGUF::Gemma4Metal::ResidentState.new([3, 5], 6)
     target = ML::GGUF::Gemma4Metal::ResidentState.new([3, 4], 6)

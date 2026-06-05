@@ -95,22 +95,23 @@ module ML::GGUF
     {% end %}
 
     def write_artifact(snapshot : Snapshot, path : String) : ArtifactInfo
-      bytes = encode_artifact_bytes(snapshot)
-      sha = Digest::SHA256.hexdigest(bytes)
       if parent = Path[path].parent
         FileUtils.mkdir_p(parent.to_s)
       end
-      File.open(path, "w") { |file| file.write(bytes) }
-      ArtifactInfo.new(path, sha, bytes.size.to_i64)
+      digest = Digest::SHA256.new
+      byte_size = 0_i64
+      File.open(path, "w") do |file|
+        byte_size = encode_artifact_stream(snapshot, file, digest)
+      end
+      ArtifactInfo.new(path, digest.final.hexstring, byte_size)
     end
 
     def read_artifact(path : String, expected_sha256 : String? = nil) : Snapshot
-      bytes = read_all_bytes(path)
+      snapshot, actual = decode_artifact_stream(path)
       if expected = expected_sha256
-        actual = Digest::SHA256.hexdigest(bytes)
-        raise ArgumentError.new("Gemma4 state artifact checksum mismatch") unless actual == expected
+        raise ArgumentError.new("Gemma4 state artifact checksum mismatch") unless actual == expected.downcase
       end
-      decode_artifact_bytes(bytes)
+      snapshot
     end
 
     def encode_artifact_bytes(snapshot : Snapshot) : Bytes
@@ -131,6 +132,26 @@ module ML::GGUF
         io.write(record.bytes)
       end
       io.to_slice
+    end
+
+    def encode_artifact_stream(snapshot : Snapshot, io : IO, digest : Digest::SHA256) : Int64
+      written = 0_i64
+      written += write_digest(io, digest, ARTIFACT_MAGIC)
+      written += write_u32(io, digest, ARTIFACT_VERSION)
+      written += write_u32(io, digest, snapshot.max_seq.to_u32)
+      written += write_u32(io, digest, snapshot.prefix_len.to_u32)
+      written += write_u32(io, digest, snapshot.layer_count.to_u32)
+      written += write_u32(io, digest, snapshot.records.size.to_u32)
+      snapshot.records.each do |record|
+        written += write_u32(io, digest, record.layer.to_u32)
+        written += write_byte(io, digest, record.kind.value)
+        written += write_byte(io, digest, 0_u8)
+        written += write_u16(io, digest, 0_u16)
+        written += write_u32(io, digest, record.kv_dim.to_u32)
+        written += write_u64(io, digest, record.bytes.size.to_u64)
+        written += write_digest(io, digest, record.bytes)
+      end
+      written
     end
 
     def decode_artifact_bytes(bytes : Bytes) : Snapshot
@@ -170,12 +191,102 @@ module ML::GGUF
       Snapshot.new(max_seq, prefix_len, layer_count, records)
     end
 
+    def decode_artifact_stream(path : String) : {Snapshot, String}
+      digest = Digest::SHA256.new
+      file_size = File.size(path)
+      snapshot = File.open(path, "r") do |file|
+        magic = read_digest(file, digest, ARTIFACT_MAGIC.size)
+        raise ArgumentError.new("not a Gemma4 state artifact") unless magic == ARTIFACT_MAGIC
+
+        version = read_u32(file, digest)
+        raise ArgumentError.new("unsupported Gemma4 state artifact version: #{version}") unless version == ARTIFACT_VERSION
+
+        max_seq = read_u32(file, digest).to_i32
+        prefix_len = read_u32(file, digest).to_i32
+        layer_count = read_u32(file, digest).to_i32
+        record_count = read_u32(file, digest)
+        records = Array(Record).new(record_count)
+
+        record_count.times do
+          layer = read_u32(file, digest).to_i32
+          raise ArgumentError.new("Gemma4 state artifact record layer out of range: #{layer}") if layer < 0 || layer >= layer_count
+
+          kind = RecordKind.from_value(read_byte(file, digest))
+          reserved0 = read_byte(file, digest)
+          reserved1 = read_u16(file, digest)
+          raise ArgumentError.new("corrupt Gemma4 state artifact record") unless reserved0 == 0_u8 && reserved1 == 0_u16
+
+          kv_dim = read_u32(file, digest).to_i32
+          payload_size = read_u64(file, digest)
+          raise ArgumentError.new("Gemma4 state artifact payload too large") if payload_size > Int32::MAX
+
+          payload = read_digest(file, digest, payload_size.to_i)
+          records << Record.new(layer, kind, kv_dim, payload)
+        end
+
+        raise ArgumentError.new("trailing bytes in Gemma4 state artifact") unless file.pos == file_size
+        Snapshot.new(max_seq, prefix_len, layer_count, records)
+      end
+      {snapshot, digest.final.hexstring}
+    end
+
     private def read_all_bytes(path : String) : Bytes
       File.open(path, "r") do |file|
         bytes = Bytes.new(file.size.to_i)
         file.read_fully(bytes)
         bytes
       end
+    end
+
+    private def write_digest(io : IO, digest : Digest::SHA256, bytes : Bytes) : Int64
+      io.write(bytes)
+      digest.update(bytes)
+      bytes.size.to_i64
+    end
+
+    private def write_byte(io : IO, digest : Digest::SHA256, value : UInt8) : Int64
+      write_digest(io, digest, Bytes[value])
+    end
+
+    private def write_u16(io : IO, digest : Digest::SHA256, value : UInt16) : Int64
+      mem = IO::Memory.new
+      mem.write_bytes(value, IO::ByteFormat::LittleEndian)
+      write_digest(io, digest, mem.to_slice)
+    end
+
+    private def write_u32(io : IO, digest : Digest::SHA256, value : UInt32) : Int64
+      mem = IO::Memory.new
+      mem.write_bytes(value, IO::ByteFormat::LittleEndian)
+      write_digest(io, digest, mem.to_slice)
+    end
+
+    private def write_u64(io : IO, digest : Digest::SHA256, value : UInt64) : Int64
+      mem = IO::Memory.new
+      mem.write_bytes(value, IO::ByteFormat::LittleEndian)
+      write_digest(io, digest, mem.to_slice)
+    end
+
+    private def read_digest(io : IO, digest : Digest::SHA256, byte_count : Int32) : Bytes
+      bytes = Bytes.new(byte_count)
+      io.read_fully(bytes)
+      digest.update(bytes)
+      bytes
+    end
+
+    private def read_byte(io : IO, digest : Digest::SHA256) : UInt8
+      read_digest(io, digest, 1)[0]
+    end
+
+    private def read_u16(io : IO, digest : Digest::SHA256) : UInt16
+      IO::Memory.new(read_digest(io, digest, sizeof(UInt16))).read_bytes(UInt16, IO::ByteFormat::LittleEndian)
+    end
+
+    private def read_u32(io : IO, digest : Digest::SHA256) : UInt32
+      IO::Memory.new(read_digest(io, digest, sizeof(UInt32))).read_bytes(UInt32, IO::ByteFormat::LittleEndian)
+    end
+
+    private def read_u64(io : IO, digest : Digest::SHA256) : UInt64
+      IO::Memory.new(read_digest(io, digest, sizeof(UInt64))).read_bytes(UInt64, IO::ByteFormat::LittleEndian)
     end
 
     {% unless flag?(:cpu_only) %}
