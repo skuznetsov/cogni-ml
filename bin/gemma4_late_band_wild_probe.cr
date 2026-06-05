@@ -191,6 +191,34 @@ def rank_of_id(logits : Array(Float32), id : Int32) : Int32
   rank
 end
 
+def print_gate_sweep(name : String,
+                     rows : Array(RiskRow),
+                     proposal_ms_per_step : Float64,
+                     verifier_ms_per_step : Float64,
+                     exact_ms_per_token : Float64,
+                     thresholds : Array(Float32)) : Nil
+  return if rows.empty?
+  puts "gate_sweep_BEGIN #{name}"
+  puts "gate\tthreshold\tattempts\trescues\tmisses\tattempt_rate\trescue_rate_on_attempt\toptimistic_ms\toptimistic_speedup"
+  thresholds.each do |threshold|
+    attempted = rows.select { |r| yield r, threshold }
+    rescues = attempted.count(&.oracle_rescued)
+    misses = attempted.size - rescues
+    # Conservative shape: non-attempted and missed rows fall back to exact;
+    # attempted rows pay proposal+continuation verifier. This is an oracle
+    # separability diagnostic, not a deployable scheduler estimate.
+    fallback_rows = rows.size - rescues
+    total_ms = attempted.size * (proposal_ms_per_step + verifier_ms_per_step) +
+               fallback_rows * exact_ms_per_token
+    optimistic_ms = total_ms / rows.size
+    speedup = exact_ms_per_token / optimistic_ms
+    attempt_rate = attempted.size.to_f64 / rows.size
+    rescue_rate = attempted.empty? ? 0.0 : rescues.to_f64 / attempted.size
+    puts [name, threshold, attempted.size, rescues, misses, attempt_rate.round(4), rescue_rate.round(4), optimistic_ms.round(3), speedup.round(4)].join('\t')
+  end
+  puts "gate_sweep_END #{name}"
+end
+
 def prefill_prefix!(weights, ids : Array(Int32), state, prefill_chunk : Int32) : Nil
   return if ids.size <= 1
 
@@ -489,6 +517,13 @@ unless risk_rows.empty?
     # worth a real batched verifier.
     optimistic_candidate_ms = proposal_per_step + fallback_rate * exact_per_token
     puts "economics_oracle rescue_rate=#{rescue_rate.round(4)} fallback_rate=#{fallback_rate.round(4)} one_step_no_overlap_ms=#{one_step_no_overlap.round(3)} optimistic_candidate_ms=#{optimistic_candidate_ms.round(3)} optimistic_speedup_vs_exact=#{(exact_per_token / optimistic_candidate_ms).round(4)}"
+    print_gate_sweep("margin_ge", risk_rows, proposal_per_step, verifier_per_step, exact_per_token, risk_thresholds) do |r, threshold|
+      r.margin >= threshold
+    end
+    rank_thresholds = [1.0_f32, 2.0_f32, 3.0_f32, 5.0_f32, 8.0_f32, 16.0_f32]
+    print_gate_sweep("oracle_rank_le", risk_rows, proposal_per_step, verifier_per_step, exact_per_token, rank_thresholds) do |r, threshold|
+      r.exact_rank <= threshold.to_i
+    end
   end
   puts "risk_threshold\taccepted\tcorrect\twrong\tprecision"
   risk_thresholds.each do |threshold|

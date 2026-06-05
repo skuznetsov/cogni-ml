@@ -21122,3 +21122,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The sweep recomputed the active window after verifier continuation. The legal stop-layer Ladder does not find a descent: lowering proposal depth decreases `Area` (partial layer bytes) but increases an earlier component (`fallback rows`/candidate miss conflicts). Raising depth improves rescue coverage but reintroduces proposal cost. This is a Diamond conflict between candidate quality and proposal cost, not a scalar tuning problem. The dual frame is a different proposal representation: mixture/impact-basis residuals, fused GPU-resident candidate head, or prompt/phase routing that skips proposal on low-value rows.
 **boundary:** Do not keep sweeping static stop layers as the primary path. Current Gemma/full-transformer sweet spot is not a single fixed stop-layer. Next branch should change the candidate generator itself: reduce head/top-k/proposal partial work, improve candidate quality at lower layers, or use a router that only attempts proposals in high-coverage phases.
+
+### [LM-COGNIGEMMA-115] Gemma route gating cannot save current proposal cost
+**context:** ml / CogniGemma Metal / Gemma4 proposal route gating / verifier economics / LTP-WBA
+**state:** gate simulator implemented; route gating refuted until candidate cost drops
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now prints route-gate simulations over diagnostic `RiskRow`s. It evaluates margin-threshold gates and oracle exact-rank gates using the measured proposal/verifier/exact costs, reporting attempted rows, rescued rows, optimistic per-token cost, and speedup. This is an oracle separability diagnostic, not a deployable scheduler."
+  source: `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: cheaper candidate generator, different verifier cost, or real learned router implementation
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` prompt at layer 46 with verifier continuation, margin gates never beat exact. The best non-empty margin row in the smoke was threshold `2.0/4.0`, attempting one row and rescuing none, with `0.9422x`; no-attempt equals exact at `1.0x`. Even the oracle rank gate is slower: rank<=1 attempts 10 perfect rescues but only reaches `0.8354x`, because attempted proposal+continuation is more expensive than exact decode."
+  source: `/tmp/gemma4_gate_code_l46.log`, guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: cheaper proposal path, fused candidate head, or broader code suite with much higher rescue density and lower cost
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, margin gates also do not beat exact. Threshold `2.0` gets perfect rescues on two attempted rows but still only `0.9618x`; no-attempt equals exact. Oracle rank<=1 gets 11 perfect rescues but only `0.8207x`."
+  source: `/tmp/gemma4_gate_reason_l46.log`, guarded same probe/options with reasoning prompt -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: cheaper proposal path, fused candidate head, or broader reasoning suite with much higher rescue density and lower cost
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Recomputed potential shows gating cannot legally descend while attempted proposal+continuation is more expensive than exact. This refutes the route-gating-first branch: even an oracle-perfect gate is speed-negative under current costs. The dual frame is to reduce candidate cost first, then re-run the same gate simulator. Next legal moves are fused GPU-resident candidate head/top-k, lower-cost impact/PCA candidate representation, or reusing existing exact hidden/head work in a way that makes attempted proposal rows cheaper than exact tokens.
+**boundary:** Do not implement a production route selector yet. Gate features are useful only after candidate cost drops below exact-token cost or after batching/overlap changes the per-attempt economics.
