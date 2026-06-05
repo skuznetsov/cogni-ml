@@ -20102,3 +20102,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is per-shape Q4_K GEMV low-throughput output-row bands. Transport is legal row-group geometry (`NSGxNR0`) over a bounded shape corridor. Microbench potential descends for some local corridors, but recomputation over the full decode boundary increases or barely changes the higher-level potential `Phi=(decode_wall, top1_variance, pipeline_compile/layout_risk, remaining_tg_work)`. This is a Diamond conflict: local row grouping can help one shape while disrupting whole-wave balance. Dual frame is current default `2x2` Q4 GEMV.
 **boundary:** Keep `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=1` default-off and use it only for further attribution. Do not claim tg acceleration from this branch. Future work should target graph-level fusion that reduces kernel/shape count or weight reads, not just static row-layout retuning.
+
+### [LM-COGNIGEMMA-99] Gemma Q4 dual GEMV is refuted for decode-wave body
+**context:** ml / CogniGemma / decode tg / Q4_K dual GEMV / refutation
+**state:** refuted; code removed before commit
+
+- claim: "A default-off exact Q4_K dual GEMV kernel for shared-input pairs was implemented and exercised on the actual Gemma decode-wave path, but it regressed body decode. Correctness passed with `QWEN35_Q4_DUAL_GEMV=1` (`9 examples, 0 failures`), and profile confirmed activation (`gemv Q4_K dual 3840x15360`, `3840x2048`, `3840x512`). However body-only decode profile regressed from `35.400ms/tok` to `39.199ms/tok`, with wave wait `257.99ms -> 293.98ms` over 8 tokens. Top1 ABBA was noisy but not enough to override the body regression. The uncommitted dual-kernel code was removed before commit."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-q4dual2-ab.tGa2Oo/` and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-q4dual2-profile.w1DLOT/`; focused spec with `QWEN35_Q4_DUAL_GEMV=1` passed.
+  verified_at: 2026-06-04
+  decay_trigger: a redesigned dual kernel with lower register pressure, Q4 layout-aware dual route, or a fused downstream consumer that removes more than just one dispatch
+  trust: {F:0.82,G:0.26,R:0.78}
+
+**LTP/WBA:** Window was shared-input projection pairs (`FFN gate/up`, attention `K/V`). Transport was a two-weight Q4 corridor in one kernel. The legal move preserved exact arithmetic, but recomputed potential `Phi=(register_pressure, per-token_wait, shape_count, remaining_work)` increased: input-load sharing and fewer launches did not compensate for doubled per-thread accumulator/dequant work. This is a `MICRO_OPTIMIZATION_TRAP` / Diamond conflict. Dual frame remains separate Q4 GEMVs inside the existing decode-wave command buffer.
+**boundary:** Do not re-add a naive Q4 dual GEMV. A future retry must first reduce register pressure or fuse a downstream consumer (`dual GEMV + SwiGLU`, or `K/V projection + norm/rope/write`) so the legal move removes more work than it adds.
