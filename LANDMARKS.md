@@ -21536,3 +21536,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a legal Ladder on the verifier corridor: the active window is a proposed span; transport is prefix blocks; the legal move stops after the first bad prefix, reducing bad-span area without changing output state. The recomputed potential descends inside the verifier bucket, but total wall remains speed-negative because the proposal trigger is weak.
 **boundary:** Keep adaptive prefix verification as a diagnostic and future scheduler component. Do not promote current n-gram; next speed branch still needs a stronger span proposal source.
+
+### [LM-COGNIGEMMA-133] Gemma pp 300-to-40 drop was a benchmark-corridor mix, not a normal-path regression
+**context:** ml / CogniGemma Metal / prefill benchmark semantics / exact vs approximate GEMM corridor
+**state:** verified; use as a guard before interpreting pp rows
+
+- claim: "The apparent pp256 drop from about `300 tok/s` to about `40 tok/s` came from mixing corridors. Strict exact row-prefill currently clamps to small exact chunks and measured `48.186 tok/s` after warmup (`5312.692ms` p50). The earlier high pp row uses the explicit approximate/GEMM corridor: `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` with `prefill_chunk=512` measured `309.701 tok/s` after warmup (`826.603ms` p50)."
+  source: guarded sequential `/tmp/gemma4_metal_decode_profile` runs on 2026-06-05, logs under `/tmp/gemma4_pp_corridor_20260605173738/`.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma row-prefill controller rewrite, exact high-batch row route proof, or benchmark harness timing-boundary change
+  trust: {F:0.86,G:0.18,R:0.82}
+
+- claim: "The cache bench's `cold_prefill` row is warmed by construction because it seeds and saves a prefill before measuring the `cold_prefill_samples`. Current cache bench with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, pp256, chunk512 reproduced the old fast class: `956.807ms` (`267.556 tok/s`) with `warmups=0`."
+  source: `bin/gemma4_prompt_cache_bench.cr` inspection plus guarded `/tmp/gemma4_prompt_cache_bench --prompt-len 256 --max-seq 512 --prefill-chunk 512 --runs 1 --warmups 0` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: cache bench timing rewrite or removal of seed prefill before measured cold samples
+  trust: {F:0.86,G:0.16,R:0.82}
+
+**LTP/WBA:** The active window was the overloaded `pp` label. The legal Diamond normalization split it into exact-default, approximate/GEMM, first-use, warmed, and cache-restore corridors. Recomputed potential descends because the earlier contradiction is removed without changing kernels.
+**boundary:** Do not compare strict exact Gemma pp rows against `ALLOW_GEMM`/cache-bench rows. For llama.cpp comparison, report corridor labels explicitly: exact verifier-safe, approximate/GEMM diagnostic, warmed first-run, and hot session cache.
