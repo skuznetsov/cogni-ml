@@ -20928,3 +20928,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the missing upper-layer transport refuted by stop-layer decode. The legal move transports the late-band residual through a learned low-rank map while preserving exact state collection and exact LM-head scoring. Recomputed potential improves in the code corridor (`top5` up to `75-87.5%`) but does not descend globally because prompt generality and top1 acceptance are insufficient. Dual frame is exact decode; the compatible next frame is a phase/prompt-conditioned mixture or impact/PCA basis probe, not a single static surrogate kernel.
 **boundary:** Do not super-fuse this residual surrogate yet. Next surrogate branch should test mixture/impact-basis late-band residuals with prompt-class features and an exact verifier acceptance metric. If that does not lift top1/top5 on code and reasoning together, return to exact FFN/head kernel work.
+
+### [LM-COGNIGEMMA-107] Gemma residual surrogate wild-run preserves scaffold but drifts without validator
+**context:** ml / CogniGemma Metal / Gemma4 no-validator surrogate / qualitative wild run / LTP-WBA
+**state:** probe implemented; no-validator route refuted for current static surrogate; useful diagnostic retained
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now compares exact greedy text against late-band residual-surrogate wild text. It fits the same low-rank residual map as LM-106, then lets surrogate tokens drive the continuation after an exact warmup while the exact resident state boundary is still advanced for each consumed generated token. This is a qualitative/no-validator probe, not a speed claim."
+  source: `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded full build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: native surrogate kernel, different state-transport policy, mixture/impact-basis surrogate, or verifier-integrated branch rewrite
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` chat prompt, layer-44 `rank=8 train=8 warmup=5` retained only the exact warmup prefix (`token_match_prefix=5/32`, `token_match_count=5/32`). Exact greedy emitted plausible Crystal code prefix (`thought\\n```crystal\\ndef fib(n : Int32) : Int32...`), while surrogate wild drifted into malformed mixed-token text (`thought\\n``` Crystal иdef fib Fib( n : Int32 ) : Int3and...`)."
+  source: guarded command `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 16 --train 8 --wild-gen 32 --surrogate-layer 44 --rank 8 --warmup-exact 5 --max-seq 192 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger prompt suite, changed tokenizer/detokenizer, or adding a token/risk router before surrogate wild decisions
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "Layer-46 and a larger local fit improved proximity metrics but did not rescue no-validator text. `layer=46 rank=8 train=8 warmup=8` scored heldout `top1=4/8`, `top5=7/8`, but produced malformed repeated code fragments with `token_match_prefix=8/32`, `token_match_count=11/32`. Increasing to `gen=24 train=12 rank=16` produced the same surrogate token sequence and text for this prompt (`token_match_count=11/32`)."
+  source: guarded commands `/tmp/gemma4_late_band_wild_probe ... --surrogate-layer 46 --rank 8 --warmup-exact 8` and `/tmp/gemma4_late_band_wild_probe ... --gen 24 --train 12 --surrogate-layer 46 --rank 16 --warmup-exact 8`, both exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: mixture surrogate, impact/PCA basis, top-k/risk router, or verifier-assisted acceptance instead of raw top1 wild decisions
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Window is the LM-106 top5-close late-band residual gap. Transport corridor is the generated token span after exact bootstrap; boundary safety is explicit: the state for each consumed token is advanced by exact full-depth decode, while only the next-token choice is replaced by the surrogate. Recomputed potential refutes a static top1 wild surrogate: `quality/top1 drift` rises before any real speed area can be claimed. The local top5 signal remains valuable, but the legal next move is a Diamond/dual-frame route: constrain surrogate with a risk/router/top-k rescue or exact verifier, or replace the static basis with a mixture/impact/PCA surrogate before fusion.
+**boundary:** Do not promote Gemma static residual surrogate as no-validator code generation. Keep `gemma4_late_band_wild_probe` as the qualitative drift harness. Next candidate branches are (1) top-k/risk-gated surrogate wild choice, (2) mixture/impact-basis residuals, and (3) verifier-assisted surrogate proposals where top5 closeness can be exploited safely.
