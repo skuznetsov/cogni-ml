@@ -19879,3 +19879,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The proposed Spike targeted a visible waste: reading `batch * hidden_dim` rows when only the final hidden row is returned. Boundary safety was good, but recomputed potential `Phi=(readback_bytes, CPU_copy_path, pp1024_wall)` did not descend. Direct `contents` slicing likely loses to the existing bridge read path and/or the full read is not material in the current wall budget. This is a useful falsifier: not every byte-count reduction is a legal performance descent after recomputation.
 **boundary:** Keep the full readback path for now. Reopen only if the API grows an offset-aware `MetalBuffer.read` backed by the bridge or if product code keeps the final hidden resident and avoids CPU readback entirely.
+
+### [LM-COGNIGEMMA-86] Gemma Q4 GELU fusion remains opt-in and is not promotable
+**context:** ml / CogniGemma Metal prefill / FFN producer-consumer fusion / GELU route
+**state:** refuted for promotion; existing opt-in kept unchanged
+
+- claim: "The existing `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1` route still passes focused correctness gates, but current speed evidence is not robust enough for a wrapper/controller promotion. A forward pp sweep showed pp256 win (`1104.984ms` default vs `1022.126ms` gelufuse), pp512 loss (`2382.533ms` vs `2476.982ms`), and pp1024 loss (`6277.442ms` vs `7075.417ms`). A reversed pp256 confirmation then lost (`1572.799ms` gelufuse vs `1427.012ms` default)."
+  source: focused spec with `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1` passed `8 examples, 0 failures`; forward logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-gelufuse-current.gY1p1Z/`; reversed pp256 logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-gelufuse-pp256-rev.nzshWy/`; release binary `/tmp/gemma4_metal_decode_profile_gelufuse_current`.
+  verified_at: 2026-06-04
+  decay_trigger: quiet-host ABBA repeat, B64 GELU kernel rewrite, FFN-down route rewrite, or row-prefill chunk controller rewrite
+  trust: {F:0.82,G:0.18,R:0.78}
+
+**LTP/WBA:** Window is the FFN gate/up producer-consumer boundary. Transport collapses the up projection and `GELU(gate)*up` materialization into one B64 consumer kernel. Legal move is exact under focused specs, but recomputed potential `Phi=(activation_materialization, B64_pressure, pp_wall, promotion_risk)` does not descend stably across orderings. This is a local opt-in corridor, not a Collapse/default.
+**boundary:** Do not add a `gelufuse` wrapper mode or auto-controller from current evidence. Reopen only with quiet-host ABBA and possibly a fused downstream FFN-down route; otherwise focus on attention algorithms, kernel-body attribution, or exact session/prefix cache.
