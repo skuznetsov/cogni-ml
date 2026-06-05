@@ -20517,3 +20517,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Decision: Keep the no-read option for correct body-only benchmark semantics. Do not spend more time on prompt-hidden readback for first-run pp; next pp work must target row-prefill body traffic or compare concrete llama.cpp kernel scheduling.
 - LTP/WBA: Window = body-only prompt ingest where the hidden output is unused; Transport = prompt token chunk through resident K/V/state corridor; Legal move = skip final hidden materialization while preserving top1/cache paths through the existing read-last dual frame; Potential descends in `(readback_bytes, read_group)` but not in `(pp_wall)`, so this branch is neutral for speed.
 - Trust: {F=.86,G=.45,R=.82}; exact for Gemma4 body-only benchmark path on local M2 Max.
+
+[LM-GEMMA4-PREFILL-ENV-FALSIFIERS] Gemma pp gap is not from accidental small chunks or disabled resident corridor
+- Date: 2026-06-05
+- Context: ml/perf/Gemma4 row-prefill environment falsifiers
+- Claim: Current Gemma pp256 benchmark is already using the intended resident row-prefill corridor and large GEMM-cap chunk policy. Forcing a 256-token monolithic chunk, forcing a lower GEMM threshold, or disabling the resident corridor all regress wall time.
+- Evidence: Sequential safe falsifier log `/tmp/gemma4_prefill_env_falsifiers_1780665475.log`: baseline `772.792ms`; `GEMMA4_ROW_PREFILL_EXACT_CHUNK_MAX=256 QWEN35_GEMM_BATCH_THRESHOLD=256` regressed to `4343.688ms`; `QWEN35_GEMM_BATCH_THRESHOLD=1` regressed to `846.841ms`; `GEMMA4_ROW_PREFILL_RESIDENT_CORRIDOR_OFF=1` regressed to `1067.060ms`.
+- Decision: Do not chase chunk-size/threshold/corridor-env as the pp256 fix. The remaining pp leverage is inside the resident row-prefill body, especially FFN upgate/down kernels, or in a new algorithmic scheduling/kernel rewrite.
+- LTP/WBA: Window = pp256 transport policy; Legal moves tested were chunk widening, GEMM threshold forcing, and corridor fallback. Recomputed potential `(pp_wall, dispatch_area, resident_boundary)` did not descend, so the dual frame remains current resident chunk-512 policy.
+- Trust: {F=.84,G=.34,R=.80}; local to Gemma4 Q4_K_M pp256 on this host.
