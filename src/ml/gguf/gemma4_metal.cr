@@ -205,6 +205,10 @@ module ML::GGUF
         ENV["GEMMA4_COPY_K_TO_V_OFF"]? != "1"
       end
 
+      private def post_ffw_norm_add_fused_enabled? : Bool
+        ENV["GEMMA4_POST_FFW_NORM_ADD_FUSED_OFF"]? != "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -232,6 +236,7 @@ module ML::GGUF
       @@add_vec_pipeline : ML::Metal::ComputePipeline?
       @@copy_f32_pipeline : ML::Metal::ComputePipeline?
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
+      @@rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
       @@softcap_pipeline : ML::Metal::ComputePipeline?
 
@@ -612,8 +617,7 @@ module ML::GGUF
         scale = lw.layer_output_scale.first? || 1.0_f32
         cmd3 = ML::Metal::CommandBuffer.new
         enc3 = ML::Metal::ComputeEncoder.new(cmd3)
-        encode_rmsnorm_weighted_out(enc3, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
-        encode_add_scaled_vec(enc3, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
+        encode_post_ffw_norm_add(enc3, ffn_buf, post_ffw_w, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, 1, hp.rms_eps, scale)
         enc3.end_encoding
         cmd3.commit
         cmd3.wait
@@ -659,8 +663,7 @@ module ML::GGUF
         encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
         return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, 1)
         scale = lw.layer_output_scale.first? || 1.0_f32
-        encode_rmsnorm_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, hp.rms_eps)
-        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, scale)
+        encode_post_ffw_norm_add(enc, ffn_buf, post_ffw_w, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, 1, hp.rms_eps, scale)
         true
       end
 
@@ -737,8 +740,7 @@ module ML::GGUF
           return nil
         end
         scale = lw.layer_output_scale.first? || 1.0_f32
-        encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
-        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        encode_post_ffw_norm_add(enc, ffn_buf, post_ffw_w, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, batch, hp.rms_eps, scale)
         enc.end_encoding
         cmd.commit
         cmd.wait
@@ -945,8 +947,7 @@ module ML::GGUF
 
         scale = lw.layer_output_scale.first? || 1.0_f32
         profile_rows_phase("#{prefix}.ffn_out") do |enc|
-          encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
-          encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+          encode_post_ffw_norm_add(enc, ffn_buf, post_ffw_w, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, batch, hp.rms_eps, scale)
           true
         end
       end
@@ -1100,8 +1101,7 @@ module ML::GGUF
         end
         return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)
         scale = lw.layer_output_scale.first? || 1.0_f32
-        encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
-        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        encode_post_ffw_norm_add(enc, ffn_buf, post_ffw_w, attn_out_buf, ffn_normed_buf, out_buf, hidden_dim, batch, hp.rms_eps, scale)
         true
       end
 
@@ -2410,6 +2410,32 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
+      private def encode_post_ffw_norm_add(enc : ML::Metal::ComputeEncoder,
+                                           ffn_buf : ML::MetalBuffer,
+                                           weight_buf : ML::MetalBuffer,
+                                           residual_buf : ML::MetalBuffer,
+                                           normed_buf : ML::MetalBuffer,
+                                           out_buf : ML::MetalBuffer,
+                                           hidden_dim : Int32,
+                                           rows : Int32,
+                                           eps : Float32,
+                                           scale : Float32) : Nil
+        if post_ffw_norm_add_fused_enabled?
+          enc.set_pipeline(rmsnorm_add_scaled_rows_pipeline)
+          enc.set_buffer(ffn_buf, 0)
+          enc.set_buffer(weight_buf, 1)
+          enc.set_buffer(residual_buf, 2)
+          enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(hidden_dim.to_u32, 4)
+          enc.set_value(eps, 5)
+          enc.set_value(scale, 6)
+          enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+        else
+          encode_rmsnorm_rows_weighted_out(enc, ffn_buf, weight_buf, normed_buf, hidden_dim, rows, eps)
+          encode_add_scaled_vec(enc, residual_buf, normed_buf, out_buf, rows * hidden_dim, scale)
+        end
+      end
+
       private def encode_gelu_mul(enc : ML::Metal::ComputeEncoder,
                                   gate_buf : ML::MetalBuffer,
                                   up_buf : ML::MetalBuffer,
@@ -2593,6 +2619,12 @@ module ML::GGUF
       private def add_scaled_vec_pipeline : ML::Metal::ComputePipeline
         @@add_scaled_vec_pipeline ||= ML::Metal::PipelineCache.get("gemma4_add_scaled_vec") {
           ML::Metal::ComputePipeline.new("gemma4_add_scaled_vec", GEMMA4_SOURCE)
+        }
+      end
+
+      private def rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline
+        @@rmsnorm_add_scaled_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_add_scaled_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_rmsnorm_add_scaled_rows", GEMMA4_SOURCE)
         }
       end
 
