@@ -99,6 +99,8 @@ raise "prompt+max(gen,wild-gen) exceeds max_seq" if ids.size + Math.max(gen, wil
 record Sample, input_token : Int32, exact_top1 : Int32, h_layer : Array(Float32), h_full : Array(Float32)
 record RiskRow, step : Int32, exact_top1 : Int32, surrogate_top1 : Int32, chosen_token : Int32,
   exact_rank : Int32, margin : Float32, top5_contains_exact : Bool, oracle_rescued : Bool
+record WildStats, ids : Array(Int32), ms : Float64, surrogate_steps : Int32,
+  risk_rows : Array(RiskRow), proposal_ms : Float64, verifier_ms : Float64
 
 # Deterministic Rademacher projection. This keeps the probe cheap and removes
 # a separate PCA pass while preserving a fixed low-rank residual basis.
@@ -305,16 +307,18 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
                             max_seq : Int32, prefill_chunk : Int32,
                             diagnose_risk : Bool,
                             oracle_topk_rescue : Int32,
-                            oracle_topk_fallback_exact : Bool) : {Array(Int32), Float64, Int32, Array(RiskRow)}
+                            oracle_topk_fallback_exact : Bool) : WildStats
   main_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   side_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   prefill_prefix!(weights, ids, main_state, prefill_chunk)
 
-  out = [] of Int32
+  generated_ids = [] of Int32
   current_token = ids[-1]
   pos = ids.size - 1
   surrogate_steps = 0
   risk_rows = [] of RiskRow
+  proposal_ms = 0.0
+  verifier_ms = 0.0
   t0 = Time.instant
 
   steps.times do |step|
@@ -322,12 +326,13 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
       next_token = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(
         weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
       ).not_nil!
-      out << next_token
+      generated_ids << next_token
       current_token = next_token
       pos += 1
       next
     end
 
+    proposal_t0 = Time.instant
     snapshot = ML::GGUF::Gemma4StateSnapshot.capture(main_state, prefix_len: pos.to_i32)
     ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
     h_layer = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
@@ -338,17 +343,20 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     top_ids = top_k_ids(logits, Math.max(5, oracle_topk_rescue))
     surrogate_top1 = top_ids[0]
     next_token = surrogate_top1
+    proposal_ms += (Time.instant - proposal_t0).total_milliseconds
 
     # Autoregressive invariant: the KV state at position `pos` belongs to the
     # consumed current token, while `next_token` is only chosen for the next
     # position. This updates the exact state boundary for the generated text but
     # intentionally ignores the exact model's preferred next token.
     if diagnose_risk || oracle_topk_rescue > 0 || oracle_topk_fallback_exact
+      verifier_t0 = Time.instant
       h_full = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
         weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
       ).not_nil!
       exact_logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_full).not_nil!
       exact_top1 = top_k_ids(exact_logits, 1)[0]
+      verifier_ms += (Time.instant - verifier_t0).total_milliseconds
       exact_rank = rank_of_id(logits, exact_top1)
       oracle_rescued = oracle_topk_rescue > 0 && exact_rank <= oracle_topk_rescue
       next_token = exact_top1 if oracle_rescued || oracle_topk_fallback_exact
@@ -359,13 +367,13 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
         weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
       )
     end
-    out << next_token
+    generated_ids << next_token
     current_token = next_token
     pos += 1
     surrogate_steps += 1
   end
 
-  {out, (Time.instant - t0).total_milliseconds, surrogate_steps, risk_rows}
+  WildStats.new(generated_ids, (Time.instant - t0).total_milliseconds, surrogate_steps, risk_rows, proposal_ms, verifier_ms)
 end
 
 puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} max_seq=#{max_seq}"
@@ -387,7 +395,11 @@ samples[train..].each do |sample|
 end
 
 exact_ids, exact_ms = generate_exact(weights, ids, wild_n, max_seq, prefill_chunk)
-sur_ids, sur_ms, surrogate_steps, risk_rows = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact)
+wild_stats = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact)
+sur_ids = wild_stats.ids
+sur_ms = wild_stats.ms
+surrogate_steps = wild_stats.surrogate_steps
+risk_rows = wild_stats.risk_rows
 
 match_prefix = 0
 limit = Math.min(exact_ids.size, sur_ids.size)
@@ -402,6 +414,12 @@ puts "collect_ms=#{collect_ms.round(3)} collect_ms_per_token=#{(collect_ms / gen
 puts "heldout_top1=#{heldout_top1}/#{heldout_n} heldout_top5=#{heldout_top5}/#{heldout_n}"
 puts "exact_ms=#{exact_ms.round(3)} exact_ms_per_token=#{(exact_ms / wild_n).round(3)}"
 puts "surrogate_wild_ms=#{sur_ms.round(3)} surrogate_wild_ms_per_token=#{(sur_ms / wild_n).round(3)} surrogate_steps=#{surrogate_steps}"
+if surrogate_steps > 0
+  proposal_per_step = wild_stats.proposal_ms / surrogate_steps
+  verifier_per_step = wild_stats.verifier_ms / surrogate_steps
+  exact_per_token = exact_ms / wild_n
+  puts "economics_current proposal_ms=#{wild_stats.proposal_ms.round(3)} proposal_ms_per_step=#{proposal_per_step.round(3)} verifier_ms=#{wild_stats.verifier_ms.round(3)} verifier_ms_per_step=#{verifier_per_step.round(3)} exact_ms_per_token=#{exact_per_token.round(3)}"
+end
 puts "token_match_prefix=#{match_prefix}/#{limit} token_match_count=#{same_count}/#{limit}"
 puts "collect_exact_ids=#{collected_exact_ids.join(',')}"
 puts "exact_ids=#{exact_ids.join(',')}"
@@ -412,11 +430,26 @@ unless risk_rows.empty?
   top5_hits = risk_rows.count(&.top5_contains_exact)
   chosen_correct = risk_rows.count { |r| r.exact_top1 == r.chosen_token }
   rescued = risk_rows.count(&.oracle_rescued)
+  fallback_rows = risk_rows.size - rescued
   correct_margins = risk_rows.select { |r| r.exact_top1 == r.surrogate_top1 }.map(&.margin)
   wrong_margins = risk_rows.select { |r| r.exact_top1 != r.surrogate_top1 }.map(&.margin)
   avg_correct_margin = correct_margins.empty? ? 0.0 : correct_margins.sum / correct_margins.size
   avg_wrong_margin = wrong_margins.empty? ? 0.0 : wrong_margins.sum / wrong_margins.size
   puts "risk_summary surrogate_correct=#{correct}/#{risk_rows.size} chosen_correct=#{chosen_correct}/#{risk_rows.size} surrogate_top5_exact=#{top5_hits}/#{risk_rows.size} oracle_rescued=#{rescued}/#{risk_rows.size} avg_correct_margin=#{avg_correct_margin.round(4)} avg_wrong_margin=#{avg_wrong_margin.round(4)}"
+  if risk_rows.size > 0
+    exact_per_token = exact_ms / wild_n
+    proposal_per_step = wild_stats.proposal_ms / Math.max(surrogate_steps, 1)
+    verifier_per_step = wild_stats.verifier_ms / Math.max(surrogate_steps, 1)
+    rescue_rate = rescued.to_f64 / risk_rows.size
+    fallback_rate = fallback_rows.to_f64 / risk_rows.size
+    one_step_no_overlap = proposal_per_step + verifier_per_step
+    # This optimistic lower bound assumes accepted candidate rows can avoid a
+    # future exact-token pass and only misses pay exact fallback. It is not a
+    # deployable model; it is a quick sanity check for whether this branch is
+    # worth a real batched verifier.
+    optimistic_candidate_ms = proposal_per_step + fallback_rate * exact_per_token
+    puts "economics_oracle rescue_rate=#{rescue_rate.round(4)} fallback_rate=#{fallback_rate.round(4)} one_step_no_overlap_ms=#{one_step_no_overlap.round(3)} optimistic_candidate_ms=#{optimistic_candidate_ms.round(3)} optimistic_speedup_vs_exact=#{(exact_per_token / optimistic_candidate_ms).round(4)}"
+  end
   puts "risk_threshold\taccepted\tcorrect\twrong\tprecision"
   risk_thresholds.each do |threshold|
     accepted = risk_rows.select { |r| r.margin >= threshold }

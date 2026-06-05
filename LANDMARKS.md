@@ -21003,3 +21003,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the LM-108 top5 corridor. The first rescue move failed when top-k misses still transported surrogate tokens, because one bad token poisoned the future state. The corrected legal move is a Diamond normalization: keep exact state/output boundary by falling back to exact on every top-k miss, while counting candidate hits as potential verifier acceptances. Recomputed potential now descends on the `quality/state-boundary` components (`32/32` exact text) and exposes remaining `Area` as fallback rows (`9/24` code, `6/24` reasoning). Dual frame is exact decode on misses; candidate mode is only legal if a real verifier can reduce wall time after accounting for proposal cost, verifier batching, and fallback rows.
 **boundary:** Next implementation should not be no-validator Gemma text. The viable branch is a top-k candidate verifier/fallback scheduler or a cheaper native candidate path. Promotion requires AB/ABBA wall timing against exact decode; oracle rescue rates alone are not enough.
+
+### [LM-COGNIGEMMA-110] Gemma top-k verifier quality path is blocked by current proposal cost
+**context:** ml / CogniGemma Metal / Gemma4 surrogate verifier economics / candidate generation / LTP-WBA
+**state:** economics diagnostic implemented; current unfused proposal path refuted for speed; fused/native candidate path remains viable
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now reports proposal and verifier phase timing for post-warmup surrogate rows. The timing separates the current candidate path (`snapshot -> side restore -> stop-layer hidden -> CPU residual surrogate -> LM head top-k`) from the exact verifier path (`full hidden -> LM head top1`)."
+  source: `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: native fused surrogate kernel, removing state snapshots, moving residual projection/head to GPU, or verifier scheduler rewrite
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, exact-path top-5 fallback preserved exact output (`32/32`) and rescued `15/24` post-warmup rows, but the current proposal path is too expensive: `proposal_ms_per_step=111.745` vs exact baseline `41.666 ms/token`; even the optimistic candidate model printed `optimistic_speedup_vs_exact=0.3271`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: fused/native candidate path, batched verifier implementation, or broader code prompt suite
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, exact-path top-5 fallback preserved exact output (`32/32`) and rescued `18/24` rows, but economics are still negative: `proposal_ms_per_step=110.158`, exact baseline `41.269 ms/token`, optimistic candidate speedup `0.3426x`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: fused/native candidate path, batched verifier implementation, or larger reasoning suite
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Window is LM-109's quality-preserving top-k corridor. Recomputed potential exposes the dominant bucket as candidate generation cost, not acceptance. The current legal move preserves exact state, but it does not descend globally because `proposal_ms_per_step` is larger than exact decode. The dual frame is exact decode until a cheaper candidate transport exists. The next legal Spike/Ladder is to eliminate snapshot/readback/CPU residual work: fused native candidate generation, GPU-resident residual projection, or a cheaper prompt/phase router that avoids computing candidates on low-value rows.
+**boundary:** Do not build a production verifier scheduler on the current probe path. Build a cheaper candidate generator first, then re-run the same economics rows. For Gemma/full-transformer self-draft, the present sweet spot is likely `top-k proposal + exact fallback`, not no-validator top1; but speed requires candidate cost well below exact decode.
