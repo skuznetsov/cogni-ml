@@ -20784,3 +20784,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was the exact `ffn_down -> post_ffw_rmsnorm` seam. Transport carried half-rounded FFN-down rows across one layer-local corridor, with boundary safety preserved by computing RMSNorm sums in F32 from `half` inputs and leaving residual/add/scale F32 outputs unchanged. Recomputed potential did not descend: saved output traffic was too small relative to the active Q6 weight/GEMM corridor and extra H16 handling. Dual frame is either the existing F32-output Q6 FFN-down path or a materially larger fused Q6-down+RMSNorm kernel; simple H16 carry is refuted.
 **boundary:** Do not reintroduce standalone `GEMMA4_ROW_PREFILL_FFN_DOWN_H16_OUT` or H16-source post-FFN RMSNorm as a speed path. Reopen only if the Q6 FFN-down kernel itself is rewritten to compute the next RMSNorm statistics without emitting a separate full row.
+
+### [LM-COGNIGEMMA-101] Gemma pp256 prefers large chunked B64 GEMM; small exact rowpack chunks regress
+**context:** ml / CogniGemma Metal prefill / chunk controller / Q4-Q6 batch-GEMM body / LTP-WBA
+**state:** measured; rowpack-small-chunk branch refuted for pp256
+
+- claim: "For a 256-token prompt, reducing `--prefill-chunk` to exact rowpack-sized chunks regresses wall speed. Sequential guarded single-cell runs measured chunk48 `1506.405ms` (`169.941 tok/s`), chunk64 `1087.784ms` (`235.341 tok/s`), chunk128 `863.434ms` (`296.490 tok/s`), and chunk256 `763.067ms` (`335.488 tok/s`)."
+  source: `/tmp/gemma4_chunk48_single.log`, `/tmp/gemma4_chunk64_single.log`, `/tmp/gemma4_chunk128_single.log`, `/tmp/gemma4_chunk256_single.log`; all used `/tmp/gemma4_metal_decode_profile_h16_down`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, `--tokens 42..297 --prefill-mode rows --generate 1 --body-only --prefill-no-head --runs 2 --warmups 1 --max-seq 512` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: row-prefill scheduler rewrite, command-buffer fusion rewrite, or B48/B64/B80/B96/B112 Q4 kernel rewrite
+  trust: {F:0.80,G:0.18,R:0.78}
+
+- claim: "Disabling Q4 H16 batch-GEMM staging is not an escape hatch. With the same pp256 prompt, default measured `759.655ms` while `QWEN35_Q4K_H16_GEMM_OFF=1` measured `789.113ms`; decode was unchanged within noise."
+  source: guarded A/B using `/tmp/gemma4_metal_decode_profile_h16_down`, `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1`, `--prefill-chunk 256`, runs=3/warmups=1.
+  verified_at: 2026-06-05
+  decay_trigger: Q4 H16 GEMM rewrite, Q4 F32-input GEMM rewrite, or changed chunk policy
+  trust: {F:0.78,G:0.18,R:0.76}
+
+**LTP/WBA:** Window was the chunk/tile controller around Q4 FFN gate/up and Q6 FFN-down. Transport tried to move the prompt through smaller exact rowpack corridors, but recomputed potential increased in `(kernel_count, command scheduling, wall)` despite better local tile fit. The legal Collapse is current chunk256+B64-style GEMM for pp256. Dual frame is not smaller chunks; it is a materially different Q4/Q6 kernel body or an algorithmic/surrogate corridor that reduces FFN work.
+**boundary:** Do not chase chunk48/64/128 rowpack tuning for pp256 public comparisons. Keep Q4 H16 staging enabled. Reopen only after changing kernel internals or when testing a different prompt length where chunking changes memory pressure.
