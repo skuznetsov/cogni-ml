@@ -20601,3 +20601,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is large prompt-cache artifact serialization where `artifact_bytes > IO::Memory` practical capacity. Transport changes from monolithic memory buffer to a streaming file+digest corridor. Legal move preserves the byte-level artifact format and checksum boundary. Potential `Phi=(artifact_allocation_bytes, crash_risk, durable_restore_validity, hot-cache-latency)` descends because large artifacts no longer allocate an extra multi-GiB contiguous buffer. Dual frame remains checksum-validated durable restore; resident snapshot cache remains bounded by the memory-floor policy.
 **boundary:** This fixes durable/session cache for pp4096, not first-run pp/tg. pp4096 evidence is single-run due cost; repeat only on a quiet host when needed for public claims.
+
+### [LM-COGNIGEMMA-92] Current Gemma first-run pp256 gap is FFN-dominated; simple opt-ins do not close it
+**context:** ml / CogniGemma first-run prefill and decode / llama.cpp comparison / LTP-WBA branch selection
+**state:** measured; branch-selection evidence only, not public quiet-host claim
+
+- claim: "Current CogniGemma first-run pp256/gen64 remains behind local llama.cpp on this relaxed sequential row: native body pp `335.65 tok/s` vs llama.cpp `374.34 tok/s` (`-10.34%`), native body tg `30.27 tok/s` vs llama.cpp `32.95 tok/s` (`-8.14%`)."
+  source: `/tmp/gemma4_vs_llama_current_pp256_gen64_1780666581.log` built from current `bin/benchmark_gemma4_vs_llama.cr` and `/tmp/gemma4_metal_decode_profile_current`.
+  verified_at: 2026-06-05
+  decay_trigger: benchmark harness rewrite, llama.cpp rebuild, Gemma kernel rewrite, or quiet-host ABBA rerun
+  trust: {F:0.78,G:0.18,R:0.76}
+
+- claim: "pp256 phase attribution still points to FFN projections as the main exact first-run prefill target. Phase totals from `/tmp/gemma4_current_phase_pp256_1780666618.log`: `ffn_upgate=353.20ms`, `ffn_down=218.92ms`, `attn_qkv=132.48ms`, `attn_out=74.05ms`, `attn_ctx=73.49ms`, `attn_prep=28.19ms`, `ffn_in=21.66ms`, `ffn_out=19.67ms`. Logical traffic mix was `86.44%` matmul / `13.56%` conversion."
+  source: phase-profile run with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 GEMMA4_ROW_PREFILL_PROFILE_LAYERS=1 GEMMA4_ROW_PREFILL_PROFILE_PHASES=1`.
+  verified_at: 2026-06-05
+  decay_trigger: profiling rewrite, row-prefill route rewrite, or phase-controller change
+  trust: {F:0.82,G:0.22,R:0.80}
+
+- claim: "Current pp256 refutations: explicit `q4pair` is neutral (`default avg ~757.20ms`, `q4pair avg ~758.86ms` in `/tmp/gemma4_q4pair_abba_pp256_1780666649`); `tensor` regresses (`default avg ~748.22ms`, `tensor avg ~795.39ms` in `/tmp/gemma4_tensor_abba_pp256_1780666682`); `QWEN35_PREFILL_FFN_DOWN_ADD_FUSED=1` is neutral (`default avg ~741.91ms`, `downadd avg ~744.31ms` in `/tmp/gemma4_downadd_abba_pp256_1780666729`)."
+  source: guarded sequential ABBA-style runs listed above.
+  verified_at: 2026-06-05
+  decay_trigger: q4pair/tensor/downadd kernel rewrite, controller rewrite, or quiet-host repeat
+  trust: {F:0.82,G:0.20,R:0.80}
+
+- claim: "The default shared-H16 matmul-many corridor is still useful at pp256. Disabling it with wrapper mode `sharedoff` regressed prefill (`default avg ~745.12ms`, `sharedoff avg ~769.08ms`) in `/tmp/gemma4_sharedoff_abba_pp256_1780666765`, so the remaining gap is not caused by that controller being stale."
+  source: guarded sequential `default,sharedoff,sharedoff,default` run.
+  verified_at: 2026-06-05
+  decay_trigger: shared-H16 route rewrite, prefill controller rewrite, or quiet-host repeat
+  trust: {F:0.82,G:0.22,R:0.80}
+
+**LTP/WBA:** Window is the pp256 FFN projection corridor, especially Q4 gate/up and Q6/Q4 down. Tested legal moves that only alter local producer-consumer seams do not reduce recomputed wall potential enough. `shared-H16` remains a valid Ladder, but `q4pair`, `tensor`, and `downadd` fail to Collapse. Current potential `Phi=(ffn_upgate_wait, ffn_down_wait, conversion_traffic, sync_count, pp_wall_gap)` requires a larger move than another narrow opt-in: likely a new Q4/Q6 GEMM body, stronger algebraic FFN fusion, or a better command-buffer/phase schedule.
+**boundary:** Do not retest `q4pair`, `tensor`, or `downadd` on pp256 without a code-path change. Next exact branch should target kernel-body attribution against llama.cpp or a larger FFN corridor rewrite; session-cache work is separate and already strong.
