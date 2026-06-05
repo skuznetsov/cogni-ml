@@ -20308,3 +20308,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is SWA row-prefill attention where sixteen query heads share one KV head. Transport corridor is the bounded SWA KV span for a row batch. Legal move groups four query heads in one local attention kernel, preserving per-head softmax order and exact cache/state boundaries. Potential descends in `(SWA_KV_rereads, attention_threadgroups, prefill_wall, remaining_rows)` for `rows>=128`. Recomputed decode potential does not descend, so the dual frame for `rows=1` remains the existing per-head/GQA2 route.
 **boundary:** Do not treat GQA4 as a decode optimization. Next decode work should target llama-style vectorized QK/V accumulation or FFN/body traffic; next prefill work should test larger prompt sizes and possibly GQA8 only behind an opt-in gate.
+
+### [LM-GEMMA4-GQA8-REFUTE] Wider SWA GQA grouping is not a current Gemma 4 speed lever
+**context:** ml / Gemma4 Metal / sliding-window attention / GQA transport width
+**state:** refuted as standalone experiment; code removed
+
+- refutation: "An opt-in `GQA8` SWA attention kernel compiled and preserved the synthetic pp256/tg32 token trace, but did not improve the recomputed corridor. It regressed prefill versus the committed GQA4 default (`826.401ms` default/GQA4 vs `833.45ms` forced GQA8) and decode changed only within noise (`73.87` vs `73.777 ms/tok`). The wider transport likely crosses a register/threadgroup-pressure boundary, so grouping more query heads does not lower the full potential."
+  source: local sequential `scripts/run_safe.sh` A/B with `/tmp/gemma4_metal_decode_profile_gqa8` and `GEMMA4_ROW_PREFILL_ATTN_GQA8=1`; code removed after failed promotion gate.
+  verified_at: 2026-06-05
+  decay_trigger: lower-register GQA8 design, vectorized QK/V accumulation rewrite, or larger prompt suite showing a different active prefill window
+  trust: {F:0.78,G:0.26,R:0.74}
+
+**LTP/WBA:** Window remains SWA shared-KV attention, but the wider GQA8 corridor is sticky: it reduces threadgroups/KV rereads locally while increasing register pressure enough that recomputed `Phi=(prefill_wall, decode_wall, register_pressure, remaining_rows)` does not descend. Dual frame is committed GQA4 for prefill and existing per-head route for decode.
+**boundary:** Do not retry wider static GQA grouping without first reducing per-head accumulator/register cost or moving to llama-style vectorized QK/V accumulation.
