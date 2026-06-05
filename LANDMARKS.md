@@ -21078,3 +21078,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The legal Spike removed the snapshot/restore bucket while preserving the exact state boundary: proposal and verifier share the same consumed token/position, and the verifier overwrites lower-layer cache rows before the generated next token advances. Recomputed potential improves, but a new dominant conflict remains: `partial_layers` are paid once for proposal and again inside full verifier. The next legal Ladder is to continue verifier from the partial hidden/state produced by the proposal, computing only the remaining upper layers plus exact LM-head, or otherwise fuse proposal and verifier so lower-layer work is transported once.
 **boundary:** `--proposal-main-state` is diagnostic and default-off. It is safe only when a full exact pass for the same token/position immediately follows before consuming the next token. Do not use it for no-validator wild generation without an exact state repair step. Next speed branch: implement/measure upper-layer continuation from proposal hidden, not more snapshot tuning.
+
+### [LM-COGNIGEMMA-113] Gemma verifier can continue from proposal hidden and preserve exact output
+**context:** ml / CogniGemma Metal / Gemma4 verifier continuation / top-k proposal / LTP-WBA
+**state:** continuation helper implemented; exact-output smoke passed; still speed-negative until proposal is cheaper
+
+- claim: "`Gemma4Metal.forward_hidden_resident_cache_wave_from_hidden` now continues a resident-cache decode wave from an existing hidden vector at `start_layer`, updating only layers `start_layer...stop_layer`. `bin/gemma4_late_band_wild_probe.cr` exposes this via `--verifier-continue-from-proposal`, guarded to require `--proposal-main-state`."
+  source: `src/ml/gguf/gemma4_metal.cr`, `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: resident layer cache semantics change, continuation helper rewrite, or changing stop-layer indexing
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, verifier continuation preserved exact output (`token_match_count=32/32`) and reduced verifier cost from roughly `41 ms/step` to `10.212 ms/step`. Candidate proposal still costs `41.886 ms/step`, dominated by `partial_layers=31.862`, so proposal+continuation remains above exact baseline (`35.818 ms/token`)."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: broader code suite, fused proposal+head, or lower stop-layer candidate route
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, continuation again preserved exact output (`32/32`) and reduced verifier to `10.293 ms/step`; proposal remained `41.931 ms/step`, with `partial_layers=31.337`, `head=6.893`, `topk=2.163`, `residual=1.537`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: broader reasoning suite, fused proposal+head, or lower stop-layer candidate route
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** The Ladder transported the proposal hidden into the verifier instead of recomputing lower layers. Boundary safety held because proposal wrote lower-layer cache rows on the exact state and continuation only updated upper layers for the same consumed token/position. Recomputed potential removes the verifier duplicate-work bucket, but the active dominant bucket becomes proposal partial-layer cost. The next legal move must reduce the proposal layer count or fuse/compress proposal computation; verifier continuation itself is no longer the main blocker.
+**boundary:** This is still an oracle diagnostic path, not production speed. Promotion requires a real non-oracle verifier/fallback scheduler and a cheaper candidate generator. Next falsifiers: lower stop-layer/rank/route sweep with continuation, or a fused GPU-resident surrogate/head that avoids full partial-layer replay.
