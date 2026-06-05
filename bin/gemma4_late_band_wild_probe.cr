@@ -22,6 +22,8 @@ rank = 8
 lambda = 1.0e-3_f64
 seed = 0x5eed_i64
 warmup_exact = nil.as(Int32?)
+diagnose_risk = false
+risk_thresholds = [0.0_f32, 0.5_f32, 1.0_f32, 2.0_f32, 4.0_f32, 8.0_f32]
 
 OptionParser.parse do |p|
   p.banner = "Usage: gemma4_late_band_wild_probe [options]"
@@ -38,6 +40,10 @@ OptionParser.parse do |p|
   p.on("--rank N", "Random-projection residual rank, default 8") { |v| rank = v.to_i }
   p.on("--lambda F", "Ridge regularization, default 1e-3") { |v| lambda = v.to_f64 }
   p.on("--warmup-exact N", "Initial exact tokens before surrogate takes over, default --train") { |v| warmup_exact = v.to_i }
+  p.on("--diagnose-risk", "Compute exact-token ranks and surrogate margins for risk-gate analysis") { diagnose_risk = true }
+  p.on("--risk-thresholds LIST", "Comma-separated surrogate top1-top2 margin thresholds, default 0,0.5,1,2,4,8") do |v|
+    risk_thresholds = v.split(',').reject(&.empty?).map(&.to_f32)
+  end
   p.on("--max-seq N", "Resident state sequence capacity, default 256") { |v| max_seq = v.to_i }
   p.on("--prefill-chunk N", "Row prefill chunk size, default 128") { |v| prefill_chunk = v.to_i }
   p.on("-h", "--help", "Show help") do
@@ -85,6 +91,7 @@ raise "prompt tokenized to zero tokens" if ids.empty?
 raise "prompt+max(gen,wild-gen) exceeds max_seq" if ids.size + Math.max(gen, wild_n) > max_seq
 
 record Sample, input_token : Int32, exact_top1 : Int32, h_layer : Array(Float32), h_full : Array(Float32)
+record RiskRow, step : Int32, exact_top1 : Int32, surrogate_top1 : Int32, exact_rank : Int32, margin : Float32, top5_contains_exact : Bool
 
 # Deterministic Rademacher projection. This keeps the probe cheap and removes
 # a separate PCA pass while preserving a fixed low-rank residual basis.
@@ -158,6 +165,14 @@ def top_k_ids(logits : Array(Float32), k : Int32) : Array(Int32)
     ids[pos] = id.to_i32
   end
   ids
+end
+
+def rank_of_id(logits : Array(Float32), id : Int32) : Int32
+  raise "rank_of_id: token id #{id} out of range" if id < 0 || id >= logits.size
+  target = logits[id]
+  rank = 1
+  logits.each { |v| rank += 1 if v > target }
+  rank
 end
 
 def prefill_prefix!(weights, ids : Array(Int32), state, prefill_chunk : Int32) : Nil
@@ -280,7 +295,8 @@ end
 
 def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n : Int32,
                             surrogate_layer : Int32, surrogate : ResidualSurrogate,
-                            max_seq : Int32, prefill_chunk : Int32) : {Array(Int32), Float64, Int32}
+                            max_seq : Int32, prefill_chunk : Int32,
+                            diagnose_risk : Bool) : {Array(Int32), Float64, Int32, Array(RiskRow)}
   main_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   side_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   prefill_prefix!(weights, ids, main_state, prefill_chunk)
@@ -289,6 +305,7 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
   current_token = ids[-1]
   pos = ids.size - 1
   surrogate_steps = 0
+  risk_rows = [] of RiskRow
   t0 = Time.instant
 
   steps.times do |step|
@@ -309,25 +326,36 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     ).not_nil!
     h_hat = surrogate.predict(h_layer)
     logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_hat).not_nil!
-    next_token = top_k_ids(logits, 1)[0]
+    top5 = top_k_ids(logits, 5)
+    next_token = top5[0]
 
     # Autoregressive invariant: the KV state at position `pos` belongs to the
     # consumed current token, while `next_token` is only chosen for the next
     # position. This updates the exact state boundary for the generated text but
     # intentionally ignores the exact model's preferred next token.
-    ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(
-      weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
-    )
+    if diagnose_risk
+      h_full = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
+        weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
+      ).not_nil!
+      exact_logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_full).not_nil!
+      exact_top1 = top_k_ids(exact_logits, 1)[0]
+      margin = logits[top5[0]] - logits[top5[1]]
+      risk_rows << RiskRow.new(step.to_i32, exact_top1, next_token, rank_of_id(logits, exact_top1), margin, top5.includes?(exact_top1))
+    else
+      ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(
+        weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
+      )
+    end
     out << next_token
     current_token = next_token
     pos += 1
     surrogate_steps += 1
   end
 
-  {out, (Time.instant - t0).total_milliseconds, surrogate_steps}
+  {out, (Time.instant - t0).total_milliseconds, surrogate_steps, risk_rows}
 end
 
-puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} max_seq=#{max_seq}"
+puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} max_seq=#{max_seq}"
 
 samples, collected_exact_ids, collect_ms = collect_exact_samples(weights, ids, gen, surrogate_layer, max_seq, prefill_chunk)
 xs_train = samples[0...train].map(&.h_layer)
@@ -346,7 +374,7 @@ samples[train..].each do |sample|
 end
 
 exact_ids, exact_ms = generate_exact(weights, ids, wild_n, max_seq, prefill_chunk)
-sur_ids, sur_ms, surrogate_steps = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, max_seq, prefill_chunk)
+sur_ids, sur_ms, surrogate_steps, risk_rows = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, max_seq, prefill_chunk, diagnose_risk)
 
 match_prefix = 0
 limit = Math.min(exact_ids.size, sur_ids.size)
@@ -365,6 +393,30 @@ puts "token_match_prefix=#{match_prefix}/#{limit} token_match_count=#{same_count
 puts "collect_exact_ids=#{collected_exact_ids.join(',')}"
 puts "exact_ids=#{exact_ids.join(',')}"
 puts "surrogate_ids=#{sur_ids.join(',')}"
+
+unless risk_rows.empty?
+  correct = risk_rows.count { |r| r.exact_top1 == r.surrogate_top1 }
+  top5_hits = risk_rows.count(&.top5_contains_exact)
+  correct_margins = risk_rows.select { |r| r.exact_top1 == r.surrogate_top1 }.map(&.margin)
+  wrong_margins = risk_rows.select { |r| r.exact_top1 != r.surrogate_top1 }.map(&.margin)
+  avg_correct_margin = correct_margins.empty? ? 0.0 : correct_margins.sum / correct_margins.size
+  avg_wrong_margin = wrong_margins.empty? ? 0.0 : wrong_margins.sum / wrong_margins.size
+  puts "risk_summary surrogate_correct=#{correct}/#{risk_rows.size} surrogate_top5_exact=#{top5_hits}/#{risk_rows.size} avg_correct_margin=#{avg_correct_margin.round(4)} avg_wrong_margin=#{avg_wrong_margin.round(4)}"
+  puts "risk_threshold\taccepted\tcorrect\twrong\tprecision"
+  risk_thresholds.each do |threshold|
+    accepted = risk_rows.select { |r| r.margin >= threshold }
+    accepted_correct = accepted.count { |r| r.exact_top1 == r.surrogate_top1 }
+    accepted_wrong = accepted.size - accepted_correct
+    precision = accepted.empty? ? 0.0 : accepted_correct.to_f64 / accepted.size
+    puts [threshold, accepted.size, accepted_correct, accepted_wrong, precision.round(4)].join('\t')
+  end
+  puts "risk_rows_BEGIN"
+  puts "step\texact_top1\tsurrogate_top1\texact_rank_in_surrogate\tmargin\ttop5_contains_exact"
+  risk_rows.each do |r|
+    puts [r.step, r.exact_top1, r.surrogate_top1, r.exact_rank, r.margin.round(4), r.top5_contains_exact].join('\t')
+  end
+  puts "risk_rows_END"
+end
 
 if tok = tokenizer
   puts "exact_text_BEGIN"

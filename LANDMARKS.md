@@ -20953,3 +20953,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is the LM-106 top5-close late-band residual gap. Transport corridor is the generated token span after exact bootstrap; boundary safety is explicit: the state for each consumed token is advanced by exact full-depth decode, while only the next-token choice is replaced by the surrogate. Recomputed potential refutes a static top1 wild surrogate: `quality/top1 drift` rises before any real speed area can be claimed. The local top5 signal remains valuable, but the legal next move is a Diamond/dual-frame route: constrain surrogate with a risk/router/top-k rescue or exact verifier, or replace the static basis with a mixture/impact/PCA surrogate before fusion.
 **boundary:** Do not promote Gemma static residual surrogate as no-validator code generation. Keep `gemma4_late_band_wild_probe` as the qualitative drift harness. Next candidate branches are (1) top-k/risk-gated surrogate wild choice, (2) mixture/impact-basis residuals, and (3) verifier-assisted surrogate proposals where top5 closeness can be exploited safely.
+
+### [LM-COGNIGEMMA-108] Gemma surrogate top5 signal is not separable by simple confidence margin
+**context:** ml / CogniGemma Metal / Gemma4 no-validator surrogate / risk gating / top-k verifier / LTP-WBA
+**state:** diagnostic implemented; simple margin gate refuted; top-k verifier branch strengthened for code only
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now has `--diagnose-risk`, which computes the exact next token while advancing the same exact resident-state boundary, then reports the exact token's rank inside surrogate logits and the surrogate top1-top2 margin. This mode is oracle diagnostic only and is not a speed path."
+  source: `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: risk-probe rewrite, native surrogate kernel, or different confidence/routing features
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` code prompt with `layer=46 rank=16 train=12 warmup=8`, surrogate top5 still contains useful signal (`surrogate_top5_exact=17/24`), but top1 confidence is not a reliable correctness gate. Correct and wrong surrogate choices have overlapping margins (`avg_correct_margin=1.4597`, `avg_wrong_margin=1.3962`), and margin threshold `2.0` accepts `8` proposals with only `4` correct."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger code suite, mixture/impact-basis surrogate, or adding non-margin routing features
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On a reasoning prompt, the same static surrogate/risk setup is weaker and margin gating is actively misleading. It scored `surrogate_correct=4/24`, `surrogate_top5_exact=6/24`; wrong choices had larger average margins than correct choices (`avg_wrong_margin=1.8976` vs `avg_correct_margin=1.2407`), and threshold `2.0` accepted `10` proposals with `0` correct."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: prompt-conditioned router, mixture surrogate, or a larger reasoning suite showing different phase behavior
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Window was the LM-107 tension: top5 proximity exists but top1 wild text drifts. The tested legal move was a Diamond risk analysis: keep the exact state boundary, compute surrogate logits, and ask whether a local confidence corridor can separate safe from unsafe moves. Recomputed potential refutes simple margin gating because the earlier `quality/conflict` component does not descend; in reasoning it worsens as wrong tokens become high-margin. The code prompt still has a top-k transport corridor (`17/24` exact-in-top5), but it needs a verifier/tree or a different router signal. Dual frame is exact decode for reasoning/uncertain phases, and top-k verifier or mixture/impact basis for code-like low-curvature phases.
+**boundary:** Do not use surrogate top1-top2 margin as a no-validator gate. Next viable branches are: (1) top-k/tree verifier that exploits exact-in-top5 for code corridors, (2) prompt/phase-conditioned mixture surrogate to improve reasoning top5, or (3) exact FFN/head kernel optimization if verifier economics remain unfavorable.
