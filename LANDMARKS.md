@@ -21292,3 +21292,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The intended window was per-token CPU readback/wait overhead; the corridor was a fixed exact greedy token chunk carrying `top1_id` buffers on GPU; the legal move preserved KV/state boundaries and exact greedy ids. After recomputing the active window, larger chunks increased scheduling/resource stickiness and did not lower the global potential. This refutes "just chain multiple exact tokens in one command buffer" as a main Gemma eager-gen speed path under current kernels.
 **boundary:** Keep `--top1-chain` as a parity and scheduling diagnostic. Do not enable it by default. The next legal frame is intra-token graph fusion/launch attribution or production session-cache replay, not larger cross-token exact chains.
+
+### [LM-COGNIGEMMA-122] Gemma dominant Q4 FFN up/gate tuning refuted two local traps
+**context:** ml / CogniGemma Metal / exact decode / Q4_K FFN up-gate / LTP-WBA
+**state:** shape-layout and dual-GEMV experiments refuted; no code promoted
+
+- claim: "Decode attribution reconfirmed the current exact Gemma eager-gen window: for an 8-token decode-only profile, `gemv Q4_K 3840x15360 b1` accounted for `24300 MiB` logical weights (`43.26%`) across FFN gate/up, followed by FFN-down Q6/Q4 and the output head. The run had no CPU fallback matvecs and only 8 Metal syncs, so the active window is FFN/Q4 body work, not CPU readback."
+  source: guarded `/tmp/gemma4_metal_decode_profile --decode-only-seed 236761 --generate 8 --runs 1 --warmups 1 --top1-wave-resident --decode-wave --profile --profile-decode-only` -> exit 0, profile report.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma kernel dispatcher rewrite, quant route change, or precompiled Metal library change
+  trust: {F:0.82,G:0.14,R:0.78}
+
+- claim: "Standalone Q4 layout microbench suggested `{3840,15360}` preferred layout `1x2` over default `2x2` (`29.860ms` weighted vs `32.928ms` for 96 calls), but a fair opt-in ABBA full-decode test refuted promotion: baseline p50 rows were `29.271` and `29.490 tok/s`, opt-in rows were `28.376` and `29.145 tok/s`, with identical token traces."
+  source: guarded `/tmp/gemma4_op_attribution --batch 1 --q4-layout-sweep=1x1,1x2,2x1,2x2,3x1,4x1 --exclude-output-head`; fair ABBA with temporary `QWEN35_Q4K_GEMV_3840X15360_LAYOUT=1` gate.
+  verified_at: 2026-06-05
+  decay_trigger: quieter ABBA harness, shape-specific layout dispatcher rewrite, or per-layer phase attribution showing different wall behavior
+  trust: {F:0.76,G:0.08,R:0.72}
+
+- claim: "A temporary default-off `simd_mv_q4k_dual_f32` experiment preserved token-trace parity but did not improve decode wall time. ABBA decode-only comparison showed baseline about `29.5/29.2 tok/s` and dual about `29.0/29.2 tok/s`; the first profile with no warmup also showed high compile/encode overhead, so the dual route was removed instead of promoted."
+  source: temporary opt-in `QWEN35_Q4K_DUAL_GEMV=1` patch; guarded ABBA `/tmp/gemma4_metal_decode_profile --decode-only-seed 236761 --generate 32 --runs 2 --warmups 1 --top1-wave-resident --decode-wave --print-generated-ids` -> all exits 0 and identical traces.
+  verified_at: 2026-06-05
+  decay_trigger: redesigned Q4 dual kernel with lower register pressure, fused activation/down corridor, or different GPU architecture
+  trust: {F:0.74,G:0.08,R:0.70}
+
+**LTP/WBA:** The active local window was correct (`3840x15360` FFN gate/up), but both legal-looking local moves failed after recomputing the global potential. Shape layout improved standalone operator wait but worsened full decode scheduling. Dual GEMV shared the input traversal and dispatch but likely increased register pressure / weight-stream stickiness enough to cancel the local saving. This is a Diamond refutation: do not blindly promote microbench wins unless the full token corridor descends.
+**boundary:** No Q4 layout or dual-GEMV code is promoted from this branch. Next exact-speed work should either fuse a larger producer-consumer corridor (`gate/up activation -> down`) or compare against llama.cpp kernel mechanics directly for the same `3840x15360` GEMV shape. Pure local layout and launch sharing are low-priority now.
