@@ -166,4 +166,27 @@ describe "Gemma4PromptCache" do
       FileUtils.rm_rf(dir) if File.exists?(dir)
     end
   end
+
+  it "clamps resident snapshot cache budgets to preserve a memory floor" do
+    ML::GGUF::Gemma4PromptCache.clamp_snapshot_cache_byte_limit(
+      1_000_i64,
+      0_i64,
+      100_i64,
+    ).should eq(1_000_i64)
+    ML::GGUF::Gemma4PromptCache.clamp_snapshot_cache_byte_limit(
+      1_000_i64,
+      500_i64,
+      nil,
+    ).should eq(1_000_i64)
+    ML::GGUF::Gemma4PromptCache.clamp_snapshot_cache_byte_limit(
+      1_000_i64,
+      500_i64,
+      400_i64,
+    ).should eq(0_i64)
+    ML::GGUF::Gemma4PromptCache.clamp_snapshot_cache_byte_limit(
+      1_000_i64,
+      500_i64,
+      900_i64,
+    ).should eq(400_i64)
+  end
 end

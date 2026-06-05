@@ -23,6 +23,7 @@ stop_layer = nil.as(Int32?)
 prompt_cache_root = nil.as(String?)
 prompt_cache_session = "profile"
 prompt_cache_snapshot_mib = 0
+prompt_cache_snapshot_min_free_mib = (ENV["GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE_MIB"]? || "4096").to_i
 prompt_cache_snapshot_entries = 1
 decode_only_seed = nil.as(Int32?)
 
@@ -48,6 +49,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--prompt-cache-root PATH", "Enable exact Gemma prompt-cache save/restore at this root") { |v| prompt_cache_root = v }
   p.on("--prompt-cache-session ID", "Prompt-cache session id") { |v| prompt_cache_session = v }
   p.on("--prompt-cache-snapshot-mib N", "Enable Store resident snapshot cache with this MiB budget") { |v| prompt_cache_snapshot_mib = v.to_i }
+  p.on("--prompt-cache-snapshot-min-free-mib N", "Clamp snapshot cache to leave at least this much available memory; default env GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE_MIB or 4096") { |v| prompt_cache_snapshot_min_free_mib = v.to_i }
   p.on("--prompt-cache-snapshot-entries N", "Store resident snapshot cache entry limit") { |v| prompt_cache_snapshot_entries = v.to_i }
   p.on("--decode-only-seed N", "Skip prompt prefill and start decode from this token id with empty KV state") { |v| decode_only_seed = v.to_i }
   p.on("--body-only", "During measured generation, update resident state from fixed synthetic tokens without final logits/top1") { decode_mode = "body" }
@@ -61,6 +63,7 @@ raise "generate must be positive" unless generate > 0
 raise "runs must be positive" unless runs > 0
 raise "max-seq too small" if max_seq < prompt.size + generate
 raise "prompt-cache snapshot MiB must be non-negative" unless prompt_cache_snapshot_mib >= 0
+raise "prompt-cache snapshot min-free MiB must be non-negative" unless prompt_cache_snapshot_min_free_mib >= 0
 raise "prompt-cache snapshot entries must be non-negative" unless prompt_cache_snapshot_entries >= 0
 
 def percentile(sorted : Array(Float64), p : Float64) : Float64
@@ -273,11 +276,12 @@ if root = prompt_cache_root
   cache_store = ML::GGUF::Gemma4PromptCache::Store.new(
     root,
     snapshot_cache_byte_limit: prompt_cache_snapshot_mib.to_i64 * 1024_i64 * 1024_i64,
+    snapshot_cache_min_free_bytes: prompt_cache_snapshot_min_free_mib.to_i64 * 1024_i64 * 1024_i64,
     snapshot_cache_entry_limit: prompt_cache_snapshot_entries,
   )
 end
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -332,5 +336,5 @@ unless cache_route_counts.empty?
   puts "prompt_cache_routes=#{route_summary}"
 end
 if store = cache_store
-  puts "prompt_cache_snapshot_bytes=#{store.snapshot_cache_bytes} prompt_cache_snapshot_hits=#{store.snapshot_cache_hits} prompt_cache_snapshot_misses=#{store.snapshot_cache_misses}"
+  puts "prompt_cache_snapshot_requested_bytes=#{store.snapshot_cache_requested_byte_limit} prompt_cache_snapshot_effective_byte_limit=#{store.snapshot_cache_byte_limit} prompt_cache_snapshot_min_free_bytes=#{store.snapshot_cache_min_free_bytes} prompt_cache_snapshot_bytes=#{store.snapshot_cache_bytes} prompt_cache_snapshot_hits=#{store.snapshot_cache_hits} prompt_cache_snapshot_misses=#{store.snapshot_cache_misses}"
 end

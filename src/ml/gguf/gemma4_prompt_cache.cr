@@ -59,6 +59,8 @@ module ML::GGUF
     class Store
       getter root : String
       getter snapshot_cache_byte_limit : Int64
+      getter snapshot_cache_requested_byte_limit : Int64
+      getter snapshot_cache_min_free_bytes : Int64
       getter snapshot_cache_entry_limit : Int32
       getter snapshot_cache_bytes : Int64
       getter snapshot_cache_hits : Int64
@@ -84,12 +86,19 @@ module ML::GGUF
       end
 
       def initialize(@root : String,
-                     @snapshot_cache_byte_limit : Int64 = 0_i64,
-                     @snapshot_cache_entry_limit : Int32 = 0)
-        raise ArgumentError.new("snapshot_cache_byte_limit must be non-negative") if @snapshot_cache_byte_limit < 0
+                     snapshot_cache_byte_limit : Int64 = 0_i64,
+                     @snapshot_cache_entry_limit : Int32 = 0,
+                     @snapshot_cache_min_free_bytes : Int64 = 0_i64)
+        raise ArgumentError.new("snapshot_cache_byte_limit must be non-negative") if snapshot_cache_byte_limit < 0
         raise ArgumentError.new("snapshot_cache_entry_limit must be non-negative") if @snapshot_cache_entry_limit < 0
+        raise ArgumentError.new("snapshot_cache_min_free_bytes must be non-negative") if @snapshot_cache_min_free_bytes < 0
 
         FileUtils.mkdir_p(File.join(@root, "artifacts"))
+        @snapshot_cache_requested_byte_limit = snapshot_cache_byte_limit
+        @snapshot_cache_byte_limit = Gemma4PromptCache.safe_snapshot_cache_byte_limit(
+          snapshot_cache_byte_limit,
+          @snapshot_cache_min_free_bytes,
+        )
         @manifest_path = File.join(@root, "manifest.jsonl")
         @entry_manifest_fingerprint = nil
         @entry_manifest_cache = [] of Entry
@@ -460,6 +469,78 @@ module ML::GGUF
 
     def validate_restorable_artifact!(entry : Entry) : Nil
       raise ArgumentError.new("invalid Gemma prompt-cache artifact metadata") unless artifact_trust_metadata_valid?(entry)
+    end
+
+    def safe_snapshot_cache_byte_limit(requested_bytes : Int64,
+                                       min_free_bytes : Int64,
+                                       available_bytes : Int64? = available_memory_bytes) : Int64
+      clamp_snapshot_cache_byte_limit(requested_bytes, min_free_bytes, available_bytes)
+    end
+
+    def clamp_snapshot_cache_byte_limit(requested_bytes : Int64,
+                                        min_free_bytes : Int64,
+                                        available_bytes : Int64?) : Int64
+      raise ArgumentError.new("requested_bytes must be non-negative") if requested_bytes < 0
+      raise ArgumentError.new("min_free_bytes must be non-negative") if min_free_bytes < 0
+      return requested_bytes if requested_bytes == 0 || min_free_bytes == 0
+      return requested_bytes unless available = available_bytes
+      return 0_i64 if available <= min_free_bytes
+
+      allowed = available - min_free_bytes
+      requested_bytes < allowed ? requested_bytes : allowed
+    end
+
+    def available_memory_bytes : Int64?
+      available_memory_bytes_linux || available_memory_bytes_macos
+    end
+
+    private def available_memory_bytes_linux : Int64?
+      path = "/proc/meminfo"
+      return nil unless File.exists?(path)
+
+      File.each_line(path) do |line|
+        next unless line.starts_with?("MemAvailable:")
+
+        parts = line.split
+        return nil if parts.size < 2
+        kb = parts[1].to_i64?
+        return nil unless kb
+        return kb * 1024_i64
+      end
+      nil
+    end
+
+    private def available_memory_bytes_macos : Int64?
+      return nil unless {{ flag?(:darwin) }}
+
+      output = IO::Memory.new
+      status = Process.run("vm_stat", output: output, error: Process::Redirect::Close)
+      return nil unless status.success?
+
+      page_size = 4096_i64
+      first_line = output.to_s.lines.first?
+      if first_line
+        if match = first_line.match(/page size of (\d+) bytes/)
+          page_size = match[1].to_i64
+        end
+      end
+
+      available_pages = 0_i64
+      output.to_s.each_line do |line|
+        case line
+        when /^Pages free:\s+([0-9.]+)\./
+          available_pages += $1.gsub(".", "").to_i64
+        when /^Pages inactive:\s+([0-9.]+)\./
+          available_pages += $1.gsub(".", "").to_i64
+        when /^Pages speculative:\s+([0-9.]+)\./
+          available_pages += $1.gsub(".", "").to_i64
+        end
+      end
+      return nil if available_pages <= 0
+
+      available_pages * page_size
+    rescue
+      nil
     end
 
     def short_hash(value : String) : String

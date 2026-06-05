@@ -15,6 +15,7 @@ runs = 3
 cache_root = nil.as(String?)
 keep_cache = false
 snapshot_cache_mib = 0
+snapshot_cache_min_free_mib = (ENV["GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE_MIB"]? || "4096").to_i
 snapshot_cache_entries = 1
 
 OptionParser.parse(ARGV) do |p|
@@ -28,6 +29,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--runs N", "Measured iterations for each route") { |v| runs = v.to_i }
   p.on("--cache-root PATH", "Prompt-cache root; default temp dir") { |v| cache_root = v }
   p.on("--snapshot-cache-mib N", "Enable Store resident snapshot cache with this byte budget in MiB") { |v| snapshot_cache_mib = v.to_i }
+  p.on("--snapshot-cache-min-free-mib N", "Clamp snapshot cache to leave at least this much available memory; default env GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE_MIB or 4096") { |v| snapshot_cache_min_free_mib = v.to_i }
   p.on("--snapshot-cache-entries N", "Resident snapshot cache entry limit") { |v| snapshot_cache_entries = v.to_i }
   p.on("--keep-cache", "Do not remove the temp cache root") { keep_cache = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
@@ -39,6 +41,7 @@ raise "prefill_chunk must be positive" unless prefill_chunk > 0
 raise "runs must be positive" unless runs > 0
 raise "warmups must be non-negative" unless warmups >= 0
 raise "snapshot_cache_mib must be non-negative" unless snapshot_cache_mib >= 0
+raise "snapshot_cache_min_free_mib must be non-negative" unless snapshot_cache_min_free_mib >= 0
 raise "snapshot_cache_entries must be non-negative" unless snapshot_cache_entries >= 0
 
 prompt = if arg = tokens_arg
@@ -118,6 +121,7 @@ begin
   cached_store = ML::GGUF::Gemma4PromptCache::Store.new(
     root,
     snapshot_cache_byte_limit: snapshot_cache_mib.to_i64 * 1024_i64 * 1024_i64,
+    snapshot_cache_min_free_bytes: snapshot_cache_min_free_mib.to_i64 * 1024_i64 * 1024_i64,
     snapshot_cache_entry_limit: snapshot_cache_entries,
   )
   cached_hit = cached_store.lookup_prompt(File.basename(model), "synthetic-token-ids", "", prompt)
@@ -171,7 +175,7 @@ begin
 
   puts "model=#{File.basename(model)} prompt_len=#{prompt.size} max_seq=#{max_seq} prefill_chunk=#{prefill_chunk} warmups=#{warmups} runs=#{runs} load_ms=#{load_ms.round(3)}"
   puts "cache_root=#{root} artifact_path=#{entry.artifact_path} artifact_bytes=#{entry.artifact_byte_size} state_bytes=#{entry.state_byte_size} save_ms=#{save_ms.round(3)}"
-  puts "snapshot_cache_mib=#{snapshot_cache_mib} snapshot_cache_entries=#{snapshot_cache_entries} snapshot_cache_enabled=#{cached_store.snapshot_cache_enabled?} cached_prime_ms=#{cached_prime_ms.try(&.round(3)) || "disabled"} snapshot_cache_bytes=#{cached_store.snapshot_cache_bytes} snapshot_cache_hits=#{cached_store.snapshot_cache_hits} snapshot_cache_misses=#{cached_store.snapshot_cache_misses}"
+  puts "snapshot_cache_mib=#{snapshot_cache_mib} snapshot_cache_min_free_mib=#{snapshot_cache_min_free_mib} snapshot_cache_entries=#{snapshot_cache_entries} snapshot_cache_enabled=#{cached_store.snapshot_cache_enabled?} snapshot_cache_requested_bytes=#{cached_store.snapshot_cache_requested_byte_limit} snapshot_cache_effective_byte_limit=#{cached_store.snapshot_cache_byte_limit} cached_prime_ms=#{cached_prime_ms.try(&.round(3)) || "disabled"} snapshot_cache_bytes=#{cached_store.snapshot_cache_bytes} snapshot_cache_hits=#{cached_store.snapshot_cache_hits} snapshot_cache_misses=#{cached_store.snapshot_cache_misses}"
   prefill_p50 = summarize("cold_prefill", prefill_samples, prompt.size)
   artifact_p50 = summarize("artifact_restore", artifact_restore_samples, prompt.size)
   cached_store_p50 = cached_store_restore_samples.empty? ? nil : summarize("cached_store_restore", cached_store_restore_samples, prompt.size)

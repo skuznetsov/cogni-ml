@@ -20526,3 +20526,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Decision: Do not chase chunk-size/threshold/corridor-env as the pp256 fix. The remaining pp leverage is inside the resident row-prefill body, especially FFN upgate/down kernels, or in a new algorithmic scheduling/kernel rewrite.
 - LTP/WBA: Window = pp256 transport policy; Legal moves tested were chunk widening, GEMM threshold forcing, and corridor fallback. Recomputed potential `(pp_wall, dispatch_area, resident_boundary)` did not descend, so the dual frame remains current resident chunk-512 policy.
 - Trust: {F=.84,G=.34,R=.80}; local to Gemma4 Q4_K_M pp256 on this host.
+
+### [LM-COGNIGEMMA-89] Gemma prompt-cache snapshot budget now preserves a memory floor
+**context:** ml / CogniGemma prompt cache / session-cache memory pressure / LTP-WBA boundary safety
+**state:** implemented; focused verification passed
+
+- claim: "The exact CogniGemma prompt-cache Store now keeps separate requested and effective resident snapshot-cache byte limits, and clamps the effective limit against a configurable minimum available-memory floor. Cache correctness is unchanged: if the in-memory snapshot cache is disabled or clamped to zero, restore falls back to checksum-validated durable `.gkv` artifacts."
+  source: implementation in `src/ml/gguf/gemma4_prompt_cache.cr`; deterministic clamp spec in `spec/gemma4_prompt_cache_spec.cr`.
+  verified_at: 2026-06-05
+  decay_trigger: prompt-cache Store rewrite, memory-pressure policy rewrite, or OS memory probe rewrite
+  trust: {F:0.88,G:0.34,R:0.86}
+
+- claim: "The two Gemma cache binaries expose and print the memory floor policy. `bin/gemma4_metal_decode_profile.cr` accepts `--prompt-cache-snapshot-min-free-mib` and `bin/gemma4_prompt_cache_bench.cr` accepts `--snapshot-cache-min-free-mib`; both default from `GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE_MIB` or `4096`."
+  source: no-codegen builds for both binaries passed through `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: CLI option rewrite or benchmark harness rewrite
+  trust: {F:0.84,G:0.30,R:0.84}
+
+- claim: "Verification passed: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma_cache_budget_build scripts/run_safe.sh /opt/homebrew/bin/crystal 180 5000 build --no-codegen spec/gemma4_prompt_cache_spec.cr ...` exited 0; focused runtime spec `spec/gemma4_prompt_cache_spec.cr` passed `6 examples, 0 failures`; no-codegen builds for `bin/gemma4_metal_decode_profile.cr` and `bin/gemma4_prompt_cache_bench.cr` exited 0; `git diff --check` passed."
+  source: local command outputs from 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: spec rewrite, Crystal version change, or Metal bridge ABI change
+  trust: {F:0.90,G:0.30,R:0.88}
+
+**LTP/WBA:** Window is insertion/restore of decoded prompt-cache K/V snapshots. Transport is the resident snapshot-cache memory corridor. Legal move is budget clamp plus LRU eviction while preserving exact durable-artifact fallback. Boundary safety: authoritative `.gkv` artifact SHA/size/shape validation remains required before restore, and clamping only affects retention. Potential `Phi=(memory-pressure-risk, overbudget-snapshot-bytes, stale-restore-risk, hot-cache-latency)` descends by preventing cache growth past the requested/effective budget while preserving hot-cache hits when the floor allows them. Dual frame is durable artifact restore when the resident cache is disabled or clamped.
+**boundary:** This is a product/session safety improvement, not a first-run pp/tg speedup. Next cache step is sequential pp1024/pp2048/pp4096 hot-cache measurement under the new memory floor; first-run Gemma acceleration remains a separate kernel/attention path.
