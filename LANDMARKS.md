@@ -21172,3 +21172,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Resident top1 is a legal local Spike for the head/top-k bucket: it reduces proposal `head+topk` without breaking exact fallback output. After recomputing the active window, however, the dominant bucket is still proposal partial-layer replay (`~31.8-33.5 ms/step`). The route is not globally legal for promotion because earlier potential components (`attempt cost` and `fallback rows`) do not descend versus exact decode. The next dual frame is not another gate; it is a cheaper candidate body: fused lower-layer transport, impact/PCA block proposal, or a resident shortlist that keeps top-k coverage without full logits while also avoiding most partial-layer replay.
 **boundary:** Do not treat resident top1 as a production speedup. It is useful as a component only after the proposal body is cheaper, or if combined with a broader resident shortlist/top-k path that restores coverage while retaining low head overhead.
+
+### [LM-COGNIGEMMA-117] Gemma resident top2 improves shortlist coverage but does not fix proposal economics
+**context:** ml / CogniGemma Metal / Gemma4 resident top2 proposal / verifier economics / LTP-WBA
+**state:** resident top2 helper and probe mode implemented; exact fallback preserved; route remains speed-negative
+
+- claim: "`Qwen35Metal.rmsnorm_project_top2` now provides a shared fused RMSNorm+LM-head top2 primitive, and `bin/gemma4_late_band_wild_probe.cr` exposes it through `--proposal-resident-top2`. The mode avoids full logits materialization and CPU top-k for two-token proposal shortlists."
+  source: `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build via `scripts/run_safe.sh /opt/homebrew/bin/crystal ... build bin/gemma4_late_band_wild_probe.cr -o /tmp/gemma4_late_band_wild_probe ...` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: shared Qwen head-top2 helper rewrite, Gemma probe scheduler rewrite, or output quant/kernel changes
+  trust: {F:0.84,G:0.26,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, resident top2 preserved exact fallback output (`32/32`) and improved shortlist coverage over top1 (`oracle_rescued=14/24` vs top1 `10/24`) with low head cost (`head=3.357 ms/step`, `topk=0.0`). It still does not beat exact: exact `36.533 ms/token`, proposal `37.539 ms/step`, verifier `11.024 ms/step`, oracle rank<=2 optimistic speedup `0.8389x`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 2 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal --proposal-resident-top2 --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: cheaper proposal body, larger code suite, or fused multi-token verifier scheduler
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, resident top2 again preserved exact fallback output (`32/32`) and improved coverage (`oracle_rescued=16/24` vs top1 `11/24`), but stayed speed-negative: exact `36.825 ms/token`, proposal `37.664 ms/step`, verifier `10.895 ms/step`, oracle rank<=2 optimistic speedup `0.8248x`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 2 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal --proposal-resident-top2 --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: cheaper proposal body, larger reasoning suite, or fused multi-token verifier scheduler
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Resident top2 is a Diamond normalization between top1's low cost and full-logits top5's better coverage. It reduces the local head/top-k area and improves rescue coverage, but recomputed global potential still fails because proposal partial-layer replay is larger than exact decode before verifier/fallback cost is added. This refutes shortlist-width tuning as the primary route under current one-token verifier economics.
+**boundary:** Keep resident top2 as a reusable component for future cheap-body or batched/chunk verifier experiments. Do not promote it as a Gemma decode speedup by itself.
