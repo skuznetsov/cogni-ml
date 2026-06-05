@@ -21669,3 +21669,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a VERIFY-before-BUILD graph step. The active window is not yet a runtime graph rewrite; it is the observed profile graph. Legal moves are limited to atlas extraction and potential ranking until the profile shows a stable target and a matching runtime boundary. The next Ladder is to generate profile atlases for Gemma pp/body, Gemma top1, Qwen pp/decode, then choose one graph-level pass: sync collapse, scratch lifetime, or operator Diamond.
 **boundary:** Do not call `cognigraph_profile_atlas` an optimizer. It is the measurement/certification layer needed before moving Qwen/Gemma waves into `ComputeGraph`.
+
+### [LM-COGNIGRAPH-002] Gemma profile matrix exposes the first stable graph window: FFN up/gate Q4 traffic
+**context:** ml / CogniGraph / Gemma4 / graph atlas / LTP-WBA
+**state:** implemented profile-matrix runner; smoke passed
+
+- claim: "`scripts/cognigraph_gemma_profile_matrix.sh` generates three sequential Gemma4 profile atlases: `pp_body`, `tg_body`, and `top1`. It runs through `scripts/run_safe.sh`, reuses or builds `bin/gemma4_metal_decode_profile.cr`, and feeds each profile log into `scripts/cognigraph_profile_atlas.cr`."
+  source: `bash -n scripts/cognigraph_gemma_profile_matrix.sh` and guarded smoke `--prompt 16 --gen 2 --profile-bin /tmp/gemma4_metal_decode_profile_exact_gemm_fix --out-dir /tmp/cognigraph_gemma_matrix_smoke` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma profile CLI rewrite, atlas parser rewrite, or run_safe contract change
+  trust: {F:0.84,G:0.18,R:0.82}
+
+- claim: "The smoke matrix identified the same dominant matmul in all three corridors: `gemv Q4_K 3840x15360 b1`. `pp_body` additionally showed conversion traffic (`170.06 MiB` in the tiny smoke), while `tg_body` and `top1` had no conversion traffic in the profile atlas."
+  source: `/tmp/cognigraph_gemma_matrix_smoke/{pp_body,tg_body,top1}.atlas.txt` generated on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger matrix contradicts smoke, Gemma route rewrite, or profile accounting change
+  trust: {F:0.78,G:0.08,R:0.76}
+
+**LTP/WBA:** The current graph window is not a generic command-buffer scheduler issue. The first repeated dominant shape is FFN up/gate Q4 traffic. Candidate legal moves should target an operator Diamond around `ffn_upgate`: pair/fuse, shared activation staging, graph-level scratch lifetime, or a new Q4 GEMV/GEMM route. Recompute `Phi` after each move; do not promote local traffic reductions that worsen wall or parity.
+**boundary:** The smoke uses tiny prompt/gen settings and proves harness plumbing plus qualitative dominance only. Run full `--prompt 256 --gen 8` or larger on a quiet host before making performance claims.
