@@ -79,7 +79,17 @@ module ML::GGUF
                                                    state : ResidentState,
                                                    chunk_size : Int32 = 8,
                                                    stop_layer : Int32? = nil,
-                                                   read_last_hidden : Bool = true) : Array(Float32)?
+                                                   read_last_hidden : Bool = true,
+                                                   read_all_hidden : Bool = false) : Array(Float32)?
+        nil
+      end
+
+      def prefill_tokens_hidden_resident_rows(weights : Gemma4Weights,
+                                              token_ids : Array(Int32),
+                                              start_pos : Int32,
+                                              state : ResidentState,
+                                              chunk_size : Int32 = 8,
+                                              stop_layer : Int32? = nil) : Array(Float32)?
         nil
       end
 
@@ -1134,7 +1144,8 @@ module ML::GGUF
                                                    state : ResidentState,
                                                    chunk_size : Int32 = 8,
                                                    stop_layer : Int32? = nil,
-                                                   read_last_hidden : Bool = true) : Array(Float32)?
+                                                   read_last_hidden : Bool = true,
+                                                   read_all_hidden : Bool = false) : Array(Float32)?
         return nil unless available?
         raise ArgumentError.new("prefill token_ids must not be empty") if token_ids.empty?
         raise ArgumentError.new("prefill start_pos must be non-negative") if start_pos < 0
@@ -1157,6 +1168,7 @@ module ML::GGUF
         layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
         scale = Math.sqrt(hidden_dim.to_f64).to_f32
         last_hidden = [] of Float32
+        all_hidden = [] of Float32
 
         offset = 0
         while offset < token_ids.size
@@ -1231,7 +1243,7 @@ module ML::GGUF
                   0_i64)
               end
             end
-            if read_last_hidden
+            if read_last_hidden || read_all_hidden
               read_t0 = Time.instant if Qwen35Metal::Profile.enabled?
               x_rows = in_buf.read(batch * hidden_dim)
               if Qwen35Metal::Profile.enabled?
@@ -1258,13 +1270,30 @@ module ML::GGUF
             end
           end
 
-          if read_last_hidden
+          if read_all_hidden
+            all_hidden.concat(x_rows)
+          elsif read_last_hidden
             last_hidden = x_rows[((batch - 1) * hidden_dim)...(batch * hidden_dim)].to_a
           end
           offset += batch
         end
 
-        last_hidden
+        read_all_hidden ? all_hidden : last_hidden
+      end
+
+      def prefill_tokens_hidden_resident_rows(weights : Gemma4Weights,
+                                              token_ids : Array(Int32),
+                                              start_pos : Int32,
+                                              state : ResidentState,
+                                              chunk_size : Int32 = 8,
+                                              stop_layer : Int32? = nil) : Array(Float32)?
+        prefill_tokens_last_hidden_resident_rows(
+          weights, token_ids, start_pos, state,
+          chunk_size: chunk_size,
+          stop_layer: stop_layer,
+          read_last_hidden: false,
+          read_all_hidden: true
+        )
       end
 
       def forward_layer(weights : Gemma4Weights,

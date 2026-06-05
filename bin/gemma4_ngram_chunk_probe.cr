@@ -20,6 +20,8 @@ max_ngram = 8
 min_candidates = 4
 recursive = true
 risk_gate = true
+batch_verify = false
+oracle_exact_proposals = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: gemma4_ngram_chunk_probe [options]"
@@ -34,6 +36,8 @@ OptionParser.parse do |p|
   p.on("--min-candidates N", "Minimum proposed span, default 4") { |v| min_candidates = v.to_i }
   p.on("--no-recursive", "Disable recursive n-gram expansion") { recursive = false }
   p.on("--no-risk-gate", "Disable NgramDraft.risky_candidate_shape? gate") { risk_gate = false }
+  p.on("--batch-verify", "Verify proposed spans with row-prefill + row-top1 instead of serial top1") { batch_verify = true }
+  p.on("--oracle-exact-proposals", "Diagnostic: propose exact greedy spans to isolate verifier economics") { oracle_exact_proposals = true }
   p.on("--max-seq N", "Resident state sequence capacity, default 256") { |v| max_seq = v.to_i }
   p.on("--prefill-chunk N", "Prefill chunk size, default 128") { |v| prefill_chunk = v.to_i }
   p.on("-h", "--help", "Show help") { puts p; exit }
@@ -104,7 +108,9 @@ record NgramRun,
 
 def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, prefill_chunk : Int32,
                    gamma : Int32, min_ngram : Int32, max_ngram : Int32,
-                   min_candidates : Int32, recursive : Bool, risk_gate : Bool) : NgramRun
+                   min_candidates : Int32, recursive : Bool, risk_gate : Bool,
+                   batch_verify : Bool,
+                   oracle_ids : Array(Int32)? = nil) : NgramRun
   main_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   side_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   prefill_prefix!(weights, ids, main_state, prefill_chunk)
@@ -131,10 +137,12 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
   while generated.size < gen
     cycles += 1
     p0 = Time.instant
-    span = index.candidate_span(gamma: Math.min(gamma, gen - generated.size), recursive: recursive, min_candidates: min_candidates)
+    remaining = gen - generated.size
+    oracle_candidates = oracle_ids.try { |exact| exact[generated.size, Math.min(gamma, remaining)] }
+    span = oracle_candidates ? nil : index.candidate_span(gamma: Math.min(gamma, remaining), recursive: recursive, min_candidates: min_candidates)
     proposal_ms += (Time.instant - p0).total_milliseconds
 
-    if span.nil?
+    if oracle_candidates.nil? && span.nil?
       skipped_empty += 1
       nxt = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, current, pos.to_i32, main_state, weights.hparams.n_layer).not_nil!
       generated << nxt
@@ -146,8 +154,8 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
       next
     end
 
-    candidates = span.not_nil!.ids
-    if risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, min_size: min_candidates, match_len: span.not_nil!.match_len)
+    candidates = oracle_candidates || span.not_nil!.ids
+    if oracle_candidates.nil? && risk_gate && ML::GGUF::NgramDraft.risky_candidate_shape?(candidates, min_size: min_candidates, match_len: span.not_nil!.match_len)
       skipped_risk += 1
       nxt = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, current, pos.to_i32, main_state, weights.hparams.n_layer).not_nil!
       generated << nxt
@@ -170,16 +178,42 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
     verify_pos = pos
     local_accept = 0
     reject_expected = nil.as(Int32?)
-    candidates.each do |cand|
-      expected = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, verify_current, verify_pos.to_i32, side_state, weights.hparams.n_layer).not_nil!
-      if cand == expected
-        local_accept += 1
-        verify_current = cand
-        verify_pos += 1
-      else
-        reject_expected = expected
-        verify_pos += 1
-        break
+    if batch_verify
+      verify_inputs = [current]
+      verify_inputs.concat(candidates[0, candidates.size - 1]) if candidates.size > 1
+      hidden_rows = ML::GGUF::Gemma4Metal.prefill_tokens_hidden_resident_rows(
+        weights, verify_inputs, pos.to_i32, side_state,
+        chunk_size: Math.max(prefill_chunk, verify_inputs.size),
+        stop_layer: weights.hparams.n_layer
+      ).not_nil!
+      top1_rows = ML::GGUF::Qwen35Metal.rmsnorm_project_top1_rows(
+        hidden_rows,
+        candidates.size.to_i32,
+        weights.output_norm,
+        weights.token_embd,
+        weights.hparams.rms_eps
+      ).not_nil!
+      candidates.each_with_index do |cand, i|
+        expected = top1_rows[i][0]
+        if cand == expected
+          local_accept += 1
+        else
+          reject_expected = expected
+          break
+        end
+      end
+    else
+      candidates.each do |cand|
+        expected = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, verify_current, verify_pos.to_i32, side_state, weights.hparams.n_layer).not_nil!
+        if cand == expected
+          local_accept += 1
+          verify_current = cand
+          verify_pos += 1
+        else
+          reject_expected = expected
+          verify_pos += 1
+          break
+        end
       end
     end
     verify_ms += (Time.instant - v0).total_milliseconds
@@ -216,9 +250,10 @@ def generate_ngram(weights, ids : Array(Int32), gen : Int32, max_seq : Int32, pr
     cycles, proposed, accepted, full_accept_chunks, rejected_chunks, exact_fallback_tokens, skipped_risk, skipped_empty)
 end
 
-puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive=#{recursive} risk_gate=#{risk_gate} max_seq=#{max_seq}"
+puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} gamma=#{gamma} min_ngram=#{min_ngram} max_ngram=#{max_ngram} min_candidates=#{min_candidates} recursive=#{recursive} risk_gate=#{risk_gate} batch_verify=#{batch_verify} oracle_exact_proposals=#{oracle_exact_proposals} max_seq=#{max_seq}"
 exact_ids, exact_ms = generate_exact(weights, ids, gen, max_seq, prefill_chunk)
-ngram = generate_ngram(weights, ids, gen, max_seq, prefill_chunk, gamma, min_ngram, max_ngram, min_candidates, recursive, risk_gate)
+oracle_ids = oracle_exact_proposals ? exact_ids : nil
+ngram = generate_ngram(weights, ids, gen, max_seq, prefill_chunk, gamma, min_ngram, max_ngram, min_candidates, recursive, risk_gate, batch_verify, oracle_ids)
 
 matches = 0
 exact_ids.each_with_index { |id, i| matches += 1 if ngram.ids[i]? == id }

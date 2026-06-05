@@ -21417,3 +21417,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The active window is no longer a single FFN tail op; it is the multi-token/RHS corridor. Transport is a chunk of exact verifier rows, MTP rows, or self-draft proposal rows through the same FFN weight corridor. Legal moves must preserve KV/state boundaries and exact fallback. The potential descends only if the scheduler creates enough rows before paying rollback/snapshot/verifier tax. This makes `batch>=16` a concrete target for Gemma MTP/self-draft/chunk verifier work.
 **boundary:** Do not claim this improves plain b1 eager decode. It is evidence for a frame shift: optimize the scheduler/proposal path to manufacture legal multi-RHS FFN work, then reuse the existing batched Q4/Q6 routes. Next experiments should measure real MTP/self-draft verifier chunks at `gamma` values that produce 4-16 accepted/verifier rows.
+
+### [LM-COGNIGEMMA-128] Gemma batch verifier is exact and useful only when proposal coverage is high
+**context:** ml / CogniGemma Metal / n-gram chunk verifier / batched row-prefill verifier / LTP-WBA
+**state:** diagnostic implemented; production promotion blocked on proposal quality and exact high-batch route
+
+- claim: "`bin/gemma4_ngram_chunk_probe.cr` now supports `--batch-verify`, which verifies a candidate span with one Gemma row-prefill pass plus `rmsnorm_project_top1_rows`, and `--oracle-exact-proposals`, which proposes exact greedy spans to isolate verifier economics. The default serial verifier path remains available."
+  source: `crystal build --no-codegen bin/gemma4_ngram_chunk_probe.cr --error-trace` exited 0; guarded linked build via `scripts/run_safe.sh /opt/homebrew/bin/crystal ... -o /tmp/gemma4_ngram_chunk_probe` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma row-prefill API rewrite, head top1 rows rewrite, or n-gram probe scheduler rewrite
+  trust: {F:0.82,G:0.10,R:0.78}
+
+- claim: "With exact row-prefill cap (`gamma=8`, no GEMM override), oracle full-accept spans preserved parity and improved end-to-end diagnostic wall: serial oracle verifier `1382.652ms` (`0.7943x` vs exact), batch verifier `903.005ms` (`1.2198x` vs exact), both `32/32` token parity. Verify time dropped from `1119.972ms` to `643.020ms`."
+  source: guarded `/tmp/gemma4_ngram_chunk_probe --gen 32 --gamma 8 --oracle-exact-proposals --batch-verify --max-seq 192 --prefill-chunk 8` and matching serial run on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun with materially different timing, different prompt/model, or verifier row route rewrite
+  trust: {F:0.82,G:0.08,R:0.76}
+
+- claim: "The same batch verifier is not useful with the current real n-gram proposal on the default repeated-text prompt. Real proposals had `25%` acceptance (`5/20`) and preserved parity, but batch verification regressed wall (`1473.428ms`, `0.747x`) versus serial verification (`1307.408ms`, `0.8448x`)."
+  source: guarded real n-gram A/B with `--gen 32 --gamma 8 --min-candidates 1 --no-risk-gate --prefill-chunk 8`, serial and `--batch-verify` rows on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: better proposal source, prompt/session with high copied-span coverage, or chunk verifier scheduler rewrite
+  trust: {F:0.80,G:0.07,R:0.74}
+
+- claim: "High-batch row-prefill with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` is not exact enough for verifier promotion today: oracle `gamma=16 --batch-verify` failed parity (`4/32`) and drifted to token `496`."
+  source: guarded `/tmp/gemma4_ngram_chunk_probe --gen 32 --gamma 16 --oracle-exact-proposals --batch-verify` with `GEMMA4_ROW_PREFILL_ALLOW_GEMM=1` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: exact high-batch Gemma row route, stricter logits/top1 guard, or lower-drift GEMM precision path
+  trust: {F:0.84,G:0.06,R:0.78}
+
+**LTP/WBA:** The verifier window is now certified for exact `gamma<=8` chunks: transport is a candidate span through row-prefill hidden rows, legal move is row-top1 comparison with exact fallback, and boundary safety holds by snapshot prefix capture. Recomputed potential descends only under high proposal coverage. When proposal coverage is poor, verifier/commit tax increases earlier potential components. High-batch GEMM is a separate sticky corridor because exactness fails; it needs a Diamond before it can be used as verifier transport.
+**boundary:** Keep `--batch-verify` and `--oracle-exact-proposals` as diagnostics. Do not promote real n-gram batch verification for Gemma yet. Next speed path is better proposal generation or exact high-batch row-prefill, with gates: parity first, then ABBA wall versus exact decode.
