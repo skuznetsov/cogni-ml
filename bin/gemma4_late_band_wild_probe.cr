@@ -29,6 +29,7 @@ oracle_topk_fallback_exact = false
 proposal_main_state = false
 verifier_continue_from_proposal = false
 proposal_resident_topk = 0
+proposal_body_mode = "partial"
 
 OptionParser.parse do |p|
   p.banner = "Usage: gemma4_late_band_wild_probe [options]"
@@ -52,6 +53,7 @@ OptionParser.parse do |p|
   p.on("--verifier-continue-from-proposal", "Continue exact verifier from proposal hidden; requires --proposal-main-state") { verifier_continue_from_proposal = true }
   p.on("--proposal-resident-top1", "Use resident fused head top1 for surrogate proposal instead of full logits/top-k") { proposal_resident_topk = 1 }
   p.on("--proposal-resident-top2", "Use resident fused head top2 for surrogate proposal instead of full logits/top-k") { proposal_resident_topk = 2 }
+  p.on("--proposal-body-mode MODE", "Proposal hidden source: partial, prev_full, temporal_full") { |v| proposal_body_mode = v }
   p.on("--risk-thresholds LIST", "Comma-separated surrogate top1-top2 margin thresholds, default 0,0.5,1,2,4,8") do |v|
     risk_thresholds = v.split(',').reject(&.empty?).map(&.to_f32)
   end
@@ -74,6 +76,9 @@ raise "--warmup-exact must be non-negative" unless warmup_n >= 0
 raise "--oracle-topk-rescue must be non-negative" unless oracle_topk_rescue >= 0
 raise "--oracle-topk-fallback-exact requires --oracle-topk-rescue K with K > 0" if oracle_topk_fallback_exact && oracle_topk_rescue <= 0
 raise "--verifier-continue-from-proposal requires --proposal-main-state" if verifier_continue_from_proposal && !proposal_main_state
+raise "--proposal-body-mode must be partial, prev_full, or temporal_full" unless {"partial", "prev_full", "temporal_full"}.includes?(proposal_body_mode)
+raise "--verifier-continue-from-proposal requires --proposal-body-mode partial" if verifier_continue_from_proposal && proposal_body_mode != "partial"
+raise "--proposal-body-mode #{proposal_body_mode} requires --warmup-exact > 0" if proposal_body_mode != "partial" && warmup_n <= 0
 raise "--max-seq must be positive" unless max_seq > 0
 raise "--prefill-chunk must be positive" unless prefill_chunk > 0
 raise "model not found: #{model_path}" unless File.exists?(model_path)
@@ -342,13 +347,15 @@ end
 
 def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n : Int32,
                             surrogate_layer : Int32, surrogate : ResidualSurrogate,
+                            temporal_surrogate : ResidualSurrogate?,
                             max_seq : Int32, prefill_chunk : Int32,
                             diagnose_risk : Bool,
                             oracle_topk_rescue : Int32,
                             oracle_topk_fallback_exact : Bool,
                             proposal_main_state : Bool,
                             verifier_continue_from_proposal : Bool,
-                            proposal_resident_topk : Int32) : WildStats
+                            proposal_resident_topk : Int32,
+                            proposal_body_mode : String) : WildStats
   main_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   side_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   prefill_prefix!(weights, ids, main_state, prefill_chunk)
@@ -366,13 +373,23 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
   residual_ms = 0.0
   head_ms = 0.0
   topk_ms = 0.0
+  last_full_hidden = nil.as(Array(Float32)?)
   t0 = Time.instant
 
   steps.times do |step|
     if step < warmup_n
-      next_token = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(
-        weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
-      ).not_nil!
+      next_token = if proposal_body_mode == "partial"
+                     ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(
+                       weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
+                     ).not_nil!
+                   else
+                     h_full = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
+                       weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
+                     ).not_nil!
+                     last_full_hidden = h_full
+                     logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_full).not_nil!
+                     top_k_ids(logits, 1)[0]
+                   end
       generated_ids << next_token
       current_token = next_token
       pos += 1
@@ -380,40 +397,59 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     end
 
     proposal_t0 = Time.instant
-    proposal_state = if proposal_main_state
-                       main_state
-                     else
-                       phase_t0 = Time.instant
-                       snapshot = ML::GGUF::Gemma4StateSnapshot.capture(main_state, prefix_len: pos.to_i32)
-                       snapshot_ms += (Time.instant - phase_t0).total_milliseconds
-                       phase_t0 = Time.instant
-                       ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
-                       restore_ms += (Time.instant - phase_t0).total_milliseconds
-                       side_state
-                     end
+    proposal_state = main_state
+    if proposal_body_mode == "partial"
+      proposal_state = if proposal_main_state
+                         main_state
+                       else
+                         phase_t0 = Time.instant
+                         snapshot = ML::GGUF::Gemma4StateSnapshot.capture(main_state, prefix_len: pos.to_i32)
+                         snapshot_ms += (Time.instant - phase_t0).total_milliseconds
+                         phase_t0 = Time.instant
+                         ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
+                         restore_ms += (Time.instant - phase_t0).total_milliseconds
+                         side_state
+                       end
+    end
+    h_layer = nil.as(Array(Float32)?)
+    h_hat = nil.as(Array(Float32)?)
     phase_t0 = Time.instant
-    h_layer = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
-      weights, current_token, pos.to_i32, proposal_state, surrogate_layer
-    ).not_nil!
-    partial_ms += (Time.instant - phase_t0).total_milliseconds
-    phase_t0 = Time.instant
-    h_hat = surrogate.predict(h_layer)
+    if proposal_body_mode == "partial"
+      h_layer = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
+        weights, current_token, pos.to_i32, proposal_state, surrogate_layer
+      ).not_nil!
+      partial_ms += (Time.instant - phase_t0).total_milliseconds
+      phase_t0 = Time.instant
+      h_hat = surrogate.predict(h_layer.not_nil!)
+    elsif proposal_body_mode == "prev_full"
+      prior = last_full_hidden
+      raise "proposal_body_mode=#{proposal_body_mode} requires --warmup-exact > 0 or prior verified hidden" if prior.nil?
+      partial_ms += (Time.instant - phase_t0).total_milliseconds
+      phase_t0 = Time.instant
+      h_hat = prior.not_nil!
+    else
+      prior = last_full_hidden
+      raise "proposal_body_mode=#{proposal_body_mode} requires --warmup-exact > 0 or prior verified hidden" if prior.nil?
+      partial_ms += (Time.instant - phase_t0).total_milliseconds
+      phase_t0 = Time.instant
+      h_hat = temporal_surrogate.not_nil!.predict(prior.not_nil!)
+    end
     residual_ms += (Time.instant - phase_t0).total_milliseconds
     phase_t0 = Time.instant
     logits = nil.as(Array(Float32)?)
     resident_scores = nil.as(Array(Float32)?)
     top_ids = [] of Int32
     if proposal_resident_topk == 1
-      resident = ML::GGUF::Qwen35Metal.rmsnorm_project_top1(h_hat, weights.output_norm, weights.token_embd, weights.hparams.rms_eps.to_f32).not_nil!
+      resident = ML::GGUF::Qwen35Metal.rmsnorm_project_top1(h_hat.not_nil!, weights.output_norm, weights.token_embd, weights.hparams.rms_eps.to_f32).not_nil!
       top_ids << resident[0].to_i32
       resident_scores = [resident[1]]
     elsif proposal_resident_topk == 2
-      resident = ML::GGUF::Qwen35Metal.rmsnorm_project_top2(h_hat, weights.output_norm, weights.token_embd, weights.hparams.rms_eps.to_f32).not_nil!
+      resident = ML::GGUF::Qwen35Metal.rmsnorm_project_top2(h_hat.not_nil!, weights.output_norm, weights.token_embd, weights.hparams.rms_eps.to_f32).not_nil!
       top_ids << resident[0].to_i32
       top_ids << resident[2].to_i32
       resident_scores = [resident[1], resident[3]]
     else
-      logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_hat).not_nil!
+      logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_hat.not_nil!).not_nil!
     end
     head_ms += (Time.instant - phase_t0).total_milliseconds
     phase_t0 = Time.instant
@@ -431,13 +467,14 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
       verifier_t0 = Time.instant
       h_full = if verifier_continue_from_proposal
                  ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave_from_hidden(
-                   weights, h_layer, pos.to_i32, main_state, surrogate_layer, weights.hparams.n_layer
+                   weights, h_layer.not_nil!, pos.to_i32, main_state, surrogate_layer, weights.hparams.n_layer
                  ).not_nil!
                else
                  ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
                    weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
                  ).not_nil!
                end
+      last_full_hidden = h_full
       exact_logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, h_full).not_nil!
       exact_top1 = top_k_ids(exact_logits, 1)[0]
       verifier_ms += (Time.instant - verifier_t0).total_milliseconds
@@ -458,9 +495,16 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
       top5_contains_exact = proposal_resident_topk > 0 ? top_ids.includes?(exact_top1) : top_ids[0, 5].includes?(exact_top1)
       risk_rows << RiskRow.new(step.to_i32, exact_top1, surrogate_top1, next_token, exact_rank, margin, top5_contains_exact, oracle_rescued)
     else
-      ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(
-        weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
-      )
+      if proposal_body_mode == "partial"
+        ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(
+          weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
+        )
+      else
+        h_full = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
+          weights, current_token, pos.to_i32, main_state, weights.hparams.n_layer
+        ).not_nil!
+        last_full_hidden = h_full
+      end
     end
     generated_ids << next_token
     current_token = next_token
@@ -472,12 +516,21 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     snapshot_ms, restore_ms, partial_ms, residual_ms, head_ms, topk_ms)
 end
 
-puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} proposal_main_state=#{proposal_main_state} verifier_continue_from_proposal=#{verifier_continue_from_proposal} proposal_resident_topk=#{proposal_resident_topk} max_seq=#{max_seq}"
+puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} proposal_main_state=#{proposal_main_state} verifier_continue_from_proposal=#{verifier_continue_from_proposal} proposal_resident_topk=#{proposal_resident_topk} proposal_body_mode=#{proposal_body_mode} max_seq=#{max_seq}"
 
 samples, collected_exact_ids, collect_ms = collect_exact_samples(weights, ids, gen, surrogate_layer, max_seq, prefill_chunk)
 xs_train = samples[0...train].map(&.h_layer)
 ys_train = samples[0...train].map(&.h_full)
 surrogate = fit_surrogate(xs_train, ys_train, rank, lambda, seed + surrogate_layer)
+
+temporal_surrogate = nil.as(ResidualSurrogate?)
+if proposal_body_mode == "temporal_full"
+  pair_count = Math.min(train, samples.size - 1)
+  raise "temporal_full proposal needs at least one temporal training pair" unless pair_count > 0
+  xs_temporal = Array(Array(Float32)).new(pair_count) { |i| samples[i].h_full }
+  ys_temporal = Array(Array(Float32)).new(pair_count) { |i| samples[i + 1].h_full }
+  temporal_surrogate = fit_surrogate(xs_temporal, ys_temporal, rank, lambda, seed ^ 0x7130_i64)
+end
 
 heldout_n = Math.max(samples.size - train, 0)
 heldout_top1 = 0
@@ -491,7 +544,7 @@ samples[train..].each do |sample|
 end
 
 exact_ids, exact_ms = generate_exact(weights, ids, wild_n, max_seq, prefill_chunk)
-wild_stats = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact, proposal_main_state, verifier_continue_from_proposal, proposal_resident_topk)
+wild_stats = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, temporal_surrogate, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact, proposal_main_state, verifier_continue_from_proposal, proposal_resident_topk, proposal_body_mode)
 sur_ids = wild_stats.ids
 sur_ms = wild_stats.ms
 surrogate_steps = wild_stats.surrogate_steps

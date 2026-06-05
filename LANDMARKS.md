@@ -21197,3 +21197,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Resident top2 is a Diamond normalization between top1's low cost and full-logits top5's better coverage. It reduces the local head/top-k area and improves rescue coverage, but recomputed global potential still fails because proposal partial-layer replay is larger than exact decode before verifier/fallback cost is added. This refutes shortlist-width tuning as the primary route under current one-token verifier economics.
 **boundary:** Keep resident top2 as a reusable component for future cheap-body or batched/chunk verifier experiments. Do not promote it as a Gemma decode speedup by itself.
+
+### [LM-COGNIGEMMA-118] Gemma cheap-body loop exposes missing semantic transport
+**context:** ml / CogniGemma Metal / Gemma4 surrogate proposal-body economics / LTP-WBA / loop refutation
+**state:** cheap-body diagnostic modes added; cheap temporal proposals refuted as standalone route; branch stopped
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now supports diagnostic `--proposal-body-mode partial|prev_full|temporal_full`. `partial` keeps the existing late-layer body; `prev_full` reuses the previous verified final hidden; `temporal_full` applies a learned low-rank temporal map from previous full hidden to the next full hidden. These modes are probe-only and exist to separate candidate-body cost from semantic transport quality."
+  source: `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed after the diagnostic mode was added.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma probe scheduler rewrite, new chunk verifier, or new semantic proposal body
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, `prev_full` is cheap but semantically dead: proposal cost fell to `3.433 ms/step` with `partial_layers=0.0`, but rescue coverage was `0/24` and oracle-rank gate had no usable accepted rows. Exact fallback preserved output (`32/32`) only by paying verifier/fallback cost."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 2 --oracle-topk-fallback-exact --proposal-body-mode prev_full --proposal-resident-top2 --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger code suite or a different prev-hidden conditioning scheme
+  trust: {F:0.78,G:0.10,R:0.76}
+
+- claim: "On the same prompt, `temporal_full` is still mostly semantically dead: proposal body cost was `5.215 ms/step` (`residual=1.556`, `head=3.657`, no partial layers), but coverage was only `1/24`. Even an oracle rank<=2 gate gave `0.9858x`, not a real speed win. Exact fallback again preserved output (`32/32`)."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 2 --oracle-topk-fallback-exact --proposal-body-mode temporal_full --proposal-resident-top2 --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger suite, better temporal features, memory-conditioned map, or multi-token verifier corridor
+  trust: {F:0.78,G:0.10,R:0.76}
+
+**Loop pattern:** Gemma surrogate tuning currently bounces between two bad corners: cheap proposals without semantic transport (`prev_full`/`temporal_full`, `0-1/24` coverage) and semantic proposals that replay too much model (`partial`/late-band, useful coverage but `~37 ms/step` proposal cost). More scalar tuning of layer/rank/margin/topK is a `MICRO_OPTIMIZATION_TRAP` unless it changes this inequality: `proposal_cost + verifier_cost + fallback_tax < exact_decode`.
+**LTP/WBA:** The active potential after recomputation is `(semantic_transport_missing_or_expensive, tied_bad_corners, verifier/fallback conflict, remaining proposal work)`. The legal next move is a frame shift, not another knob: build or test a cheap semantic corridor that predicts candidate shortlists directly from compact features, such as impact/PCA logit-basis maps, memory-conditioned proposal charts, or near-free copy/session proposals. If no such corridor exists, use exact decode.
+**boundary:** Stop the `prev_full` and naive `temporal_full` branch. Keep the diagnostic modes only as falsifiers and regression guards for future cheap-body proposals.
