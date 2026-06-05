@@ -21871,3 +21871,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a failed Diamond: two individually plausible frame changes are not compatible. Q4 x16 changes the dominant row/reduction schedule; adding the old Q6 layout worsens the recomputed corridor potential.
 **boundary:** Do not stack `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` with `QWEN35_Q4K_GEMV_X16=1`. A future Q6 optimization should use the same x16/row-lane principle rather than the old `{4,2}` layout.
+
+### [LM-COGNIGRAPH-012] Q6_K x16 split preserves parity but does not improve Gemma decode
+**context:** ml / CogniGraph / Gemma4 / Q6_K GEMV / llama.cpp-inspired x16 split / LTP-WBA
+**state:** refuted for promotion; prototype reverted
+
+- claim: "A local opt-in `simd_mv_q6k_f32_x16` prototype preserved short top1 traces for Gemma decode. Q6-only top1 gen8 matched the baseline token trace and measured `24.297 -> 24.823 tok/s`; Q4x16+Q6x16 top1 gen16 also matched the repeated token trace."
+  source: guarded logs `/tmp/gemma4_q6x16_{off,on}_top1_g8.log` and `/tmp/gemma4_q4x16_q6x16_combo_top1_g16.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Q6_K GEMV kernel rewrite, route-dispatch rewrite, or larger parity contradiction
+  trust: {F:0.84,G:0.06,R:0.80}
+
+- claim: "Body-only ABBA refuted Q6 x16 as a speed route. Q6-only off/on/off/on p50 tok/s was `31.683 / 31.501 / 31.185 / 30.777`; composition with the successful Q4 x16 route was near-flat/slightly negative at `32.117 / 31.941 / 32.338 / 32.175`. The source prototype was reverted."
+  source: guarded logs `/tmp/gemma4_q6x16_{off,on,offb,onb}_body_g64.log` and `/tmp/gemma4_q4x16_q6x16_{q4x16,combo,q4x16b,combob}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun contradiction, Q6_K kernel rewrite, or graph scheduling changes that alter Q6 wait dominance
+  trust: {F:0.86,G:0.12,R:0.84}
+
+**LTP/WBA:** The x16 row/reduction frame was legal and parity-safe, but recomputed corridor potential did not descend. Unlike Q4_K, Q6_K appears to lose enough per-row parallelism or scheduling balance that doubling rows per simdgroup is not beneficial on this Gemma body corridor.
+**boundary:** Do not reintroduce Q6 x16 as a plain GEMV route without a different trigger/corridor. If Q6 is revisited, prefer graph-level scheduling or a fused residual-add/down corridor rather than another plain GEMV row-lane retune.
