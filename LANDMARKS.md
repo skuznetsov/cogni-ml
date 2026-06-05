@@ -21650,3 +21650,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a Diamond normalization of the benchmark boundary. The active window was a false tg gap; the legal move splits `body decode` from `greedy top1 decode`. Recomputed potential must use matched corridors: llama-bench tg vs Cogni `--body-only`, and real generation vs a llama.cpp sampler/generation path that computes logits.
 **boundary:** Do not use `mode=top1` CogniGemma rows against llama-bench `tg` as apples-to-apples. Next measurement must be body-only Cogni vs llama-bench, and separately real greedy/sample generation vs llama.cpp CLI/server.
+
+### [LM-COGNIGRAPH-001] Existing Metal ComputeGraph is the Nomic graph win substrate; Qwen/Gemma need a profile atlas first
+**context:** ml / CogniGraph / LTP-WBA / llama.cpp ubatch comparison / Gemma Qwen graph planning
+**state:** implemented first observational slice
+
+- claim: "The repo already contains a real `ML::Metal::ComputeGraph` substrate with dependency-wave compilation, offset-aware buffer conflicts, and partition keys for block integrity. Nomic/Metal backend uses it to compile and cache graphs, not just manual command-buffer waves."
+  source: `/Users/sergey/Projects/Crystal/cogni-ml/src/ml/metal/compute_graph.cr` and `/Users/sergey/Projects/Crystal/cogni-ml/src/ml/gguf/metal_backend.cr` inspected on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: ComputeGraph rewrite, Nomic backend rewrite, or removal of graph cache paths
+  trust: {F:0.90,G:0.35,R:0.88}
+
+- claim: "`scripts/cognigraph_profile_atlas.cr` now parses `Qwen35Metal.Profile` logs into a graph-style atlas: grouped command buffers, logical matmul/conversion traffic, sync count, and an LTP/WBA potential `Phi=(dominant_wait_bucket, tied_dominant_routes, conflict_or_sync_count, remaining_work)`. On `/tmp/gemma4_decode_only_profile_tg16.log`, it identified `gemma4.decode_wave_top1.layers_head` as the dominant wait bucket and `gemv Q4_K 3840x15360 b1` as the dominant matmul shape."
+  source: `crystal build --no-codegen scripts/cognigraph_profile_atlas.cr --error-trace` and `scripts/cognigraph_profile_atlas.cr --log /tmp/gemma4_decode_only_profile_tg16.log --limit 5` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: profile log format change, Qwen35Metal.Profile report rewrite, or graph atlas parser rewrite
+  trust: {F:0.86,G:0.20,R:0.84}
+
+**LTP/WBA:** This is a VERIFY-before-BUILD graph step. The active window is not yet a runtime graph rewrite; it is the observed profile graph. Legal moves are limited to atlas extraction and potential ranking until the profile shows a stable target and a matching runtime boundary. The next Ladder is to generate profile atlases for Gemma pp/body, Gemma top1, Qwen pp/decode, then choose one graph-level pass: sync collapse, scratch lifetime, or operator Diamond.
+**boundary:** Do not call `cognigraph_profile_atlas` an optimizer. It is the measurement/certification layer needed before moving Qwen/Gemma waves into `ComputeGraph`.
