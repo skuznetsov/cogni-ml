@@ -21147,3 +21147,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Recomputed potential shows gating cannot legally descend while attempted proposal+continuation is more expensive than exact. This refutes the route-gating-first branch: even an oracle-perfect gate is speed-negative under current costs. The dual frame is to reduce candidate cost first, then re-run the same gate simulator. Next legal moves are fused GPU-resident candidate head/top-k, lower-cost impact/PCA candidate representation, or reusing existing exact hidden/head work in a way that makes attempted proposal rows cheaper than exact tokens.
 **boundary:** Do not implement a production route selector yet. Gate features are useful only after candidate cost drops below exact-token cost or after batching/overlap changes the per-attempt economics.
+
+### [LM-COGNIGEMMA-116] Gemma resident top1 removes head/top-k overhead but remains speed-negative
+**context:** ml / CogniGemma Metal / Gemma4 resident top1 proposal / verifier economics / LTP-WBA
+**state:** resident-top1 diagnostic implemented; local head win verified; global proposal route still refuted
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now exposes `--proposal-resident-top1`, which uses the resident fused RMSNorm+LM-head top1 helper for proposal candidates instead of materializing full logits and CPU top-k. The mode is default-off and diagnostic-only."
+  source: `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build via `scripts/run_safe.sh /opt/homebrew/bin/crystal ... build bin/gemma4_late_band_wild_probe.cr -o /tmp/gemma4_late_band_wild_probe ...` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: resident head helper rewrite, Gemma output-norm/token-embedding path change, or probe scheduler rewrite
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, resident top1 preserved exact fallback output (`token_match_count=32/32`) and reduced head/top-k cost to `head=3.795 ms/step`, `topk=0.001 ms/step`. It remains speed-negative: exact baseline `37.737 ms/token`; proposal `38.854 ms/step`; verifier continuation `11.717 ms/step`; top1 rescue coverage `10/24`; oracle rank<=1 optimistic speedup `0.8759x`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 1 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal --proposal-resident-top1 --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: broader code suite, cheaper partial-layer candidate body, or non-top1 resident shortlist implementation
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, resident top1 also preserved exact fallback output (`32/32`) and showed the same economics: exact `35.422 ms/token`; proposal `36.595 ms/step`; verifier `10.112 ms/step`; `partial_layers=31.802`, `head=3.176`, `topk=0.001`; top1 rescue coverage `11/24`; oracle rank<=1 optimistic speedup `0.8726x`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 1 --oracle-topk-fallback-exact --proposal-main-state --verifier-continue-from-proposal --proposal-resident-top1 --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: broader reasoning suite, cheaper partial-layer candidate body, or non-top1 resident shortlist implementation
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Resident top1 is a legal local Spike for the head/top-k bucket: it reduces proposal `head+topk` without breaking exact fallback output. After recomputing the active window, however, the dominant bucket is still proposal partial-layer replay (`~31.8-33.5 ms/step`). The route is not globally legal for promotion because earlier potential components (`attempt cost` and `fallback rows`) do not descend versus exact decode. The next dual frame is not another gate; it is a cheaper candidate body: fused lower-layer transport, impact/PCA block proposal, or a resident shortlist that keeps top-k coverage without full logits while also avoiding most partial-layer replay.
+**boundary:** Do not treat resident top1 as a production speedup. It is useful as a component only after the proposal body is cheaper, or if combined with a broader resident shortlist/top-k path that restores coverage while retaining low head overhead.
