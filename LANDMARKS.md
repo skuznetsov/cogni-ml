@@ -21248,3 +21248,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Memory-NN is the first Gemma cheap semantic-transport point with nonzero coverage: the local window is a verified hidden-state neighborhood, transport is a compact feature corridor to stored next-token candidates, and the legal move avoids partial-layer replay. Recomputed potential still fails for one-token verification because verifier tax dominates. The dual frame is chunk/session memory: only use this corridor when it can propose multi-token spans or when a runtime certificate predicts coverage before paying verifier.
 **boundary:** Keep `memory_nn` as a diagnostic and a future session/external-memory proposal component. Do not promote it for one-token Gemma decode. Next useful tests are larger memory banks, repeated/session prompts, or chunk-level verifier economics; not more late-layer rank/topK tuning.
+
+### [LM-COGNIGEMMA-120] Gemma n-gram chunk verifier scaffold preserves parity but first repeat smoke rejects
+**context:** ml / CogniGemma Metal / Gemma4 n-gram chunk proposals / exact verifier / LTP-WBA
+**state:** chunk-memory diagnostic implemented; first repeated-text smoke refuted as a speed path for that prompt
+
+- claim: "`bin/gemma4_ngram_chunk_probe.cr` adds a bounded Gemma n-gram chunk diagnostic. It reuses model-agnostic `NgramDraft::IndexedHistory`, verifies proposed spans on a side resident state with exact Gemma top1, commits accepted or fallback prefixes via `Gemma4StateSnapshot`, and compares final output against exact greedy."
+  source: `crystal build --no-codegen bin/gemma4_ngram_chunk_probe.cr --error-trace` passed; guarded release build via `scripts/run_safe.sh /opt/homebrew/bin/crystal ... build bin/gemma4_ngram_chunk_probe.cr -o /tmp/gemma4_ngram_chunk_probe ...` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma state snapshot semantics change, n-gram risk-gate change, or production chunk verifier rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "On the repeated `alpha beta gamma ...` smoke, the diagnostic preserved exact greedy parity (`token_match_count=24/24`) but did not produce a speed win: exact `39.61 ms/token`, n-gram chunk path `46.677 ms/token`, speedup `0.8486x`. It proposed one 8-token span, accepted `0/8`, then fell back exact for all tokens. Proposal lookup itself was negligible (`0.212 ms`); verifier/snapshot tax dominated (`verify_ms=44.926`, `commit_ms=139.96`)."
+  source: guarded `/tmp/gemma4_ngram_chunk_probe --prompt 'alpha beta gamma alpha beta gamma alpha beta gamma alpha beta gamma alpha beta' --gen 24 --gamma 8 --min-ngram 2 --max-ngram 8 --min-candidates 4 --max-seq 192 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: prompt suite with real repeated model outputs, lower snapshot commit path, or multi-span/session-cache proposal source
+  trust: {F:0.78,G:0.08,R:0.76}
+
+**LTP/WBA:** This tests the dual frame after memory-NN: cheap copy/session corridor plus exact chunk verifier. The local proposal window is cheap, but the transport did not match Gemma's generated continuation on the first repeated-text prompt, so the verifier corridor immediately rejected and increased potential via snapshot/verify tax. The scaffold is still useful because it separates proposal lookup (`~0`) from verifier/commit costs and proves fail-closed parity.
+**boundary:** Do not promote Gemma n-gram chunking from this smoke. Next valid tests require prompts where candidate spans are drawn from known/generated session text, or a cheaper commit path; repeated prompt text alone is not evidence that the model will copy it.
