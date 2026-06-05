@@ -21732,3 +21732,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a failed Ladder: the local window (`3840x15360` standalone GEMV) descended, but after recomputing the active corridor (`decode_wave` body), wall-time potential increased. The move is illegal for promotion because it worsens an earlier potential component despite shrinking a local wait metric.
 **boundary:** Treat standalone Q4 layout sweeps as candidate generators only. Promotion requires body-only decode ABBA and profile-atlas recomputation. The next valid route is not a layout-table tweak; it is either a true b1 dual-GEMV/upgate fusion or graph-level elimination of materialization/synchronization with whole-corridor evidence.
+
+### [LM-COGNIGRAPH-005] Gemma b1 Q4 upgate fusion prototype preserved trace but lost body wall
+**context:** ml / CogniGraph / Gemma4 / Q4_K b1 FFN upgate fusion / LTP-WBA
+**state:** refuted for promotion; prototype reverted
+
+- claim: "An opt-in prototype `simd_mv_q4k_f32_gelu_pair` that computed `GELU(gate_q4 @ x) * (up_q4 @ x)` in one b1 GEMV-style kernel preserved the short top1 token trace (`42,236761,...`) against the default route for `--decode-only-seed 42 --generate 8`."
+  source: guarded logs `/tmp/gemma4_b1pair_off_top1_gen8.log` and `/tmp/gemma4_b1pair_on_top1_gen8.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: arithmetic rewrite, larger parity suite contradiction, or Gemma activation route change
+  trust: {F:0.80,G:0.06,R:0.76}
+
+- claim: "The same b1 fused-upgate prototype regressed matched body-only decode p50 from `25.179 tok/s` (`39.716ms/tok`) to `24.684 tok/s` (`40.512ms/tok`) for `--decode-only-seed 42 --generate 32 --body-only`; its profile atlas showed the route as dominant (`gemv_pair_gelu Q4_K 3840x15360 b1`, `48.73%` logical traffic). The source prototype was reverted."
+  source: guarded logs `/tmp/gemma4_b1pair_off_body_tg32.log`, `/tmp/gemma4_b1pair_on_body_tg32.log`, and `/tmp/gemma4_b1pair_on_body_profile.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: optimized dual-GEMV kernel with lower register pressure, larger quiet-host ABBA contradiction, or profile-atlas accounting change
+  trust: {F:0.84,G:0.10,R:0.80}
+
+**LTP/WBA:** The local Spike removed two intermediate buffers and one GELU dispatch, but recomputed body wall did not descend. The probable conflict is register/occupancy pressure plus doubled per-row work inside one simdgroup, so the Diamond did not normalize the shared `x` transport cheaply enough.
+**boundary:** Do not add b1 upgate fusion unless it is redesigned as an occupancy-aware kernel and wins body-only ABBA. The current evidence says materialization removal alone is insufficient; next candidates should target graph-level phase scheduling, down/residual fusion, or a different quant layout/repack rather than a naive per-row dual dot.
