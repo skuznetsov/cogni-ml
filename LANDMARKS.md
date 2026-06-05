@@ -21770,3 +21770,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This was a legal algebraic candidate but failed recompute safety: the small local dispatch/materialization Spike did not reliably lower the full decode-wave potential. It should not be promoted unless a larger ABBA shows stable descent.
 **boundary:** Exact elementwise/postnorm fusion remains possible, but the current two-kernel removal is too small/noisy relative to dominant Q4/Q6 GEMV traffic. Prefer larger graph moves or routes that change dominant wait buckets.
+
+### [LM-COGNIGRAPH-007] Gemma Q6 FFN-down layout is parity-safe but not a stable decode win
+**context:** ml / CogniGraph / Gemma4 / Q6_K FFN-down layout / LTP-WBA
+**state:** mixed; keep opt-in, do not default-promote
+
+- claim: "Phase-family aggregation under `GEMMA4_DECODE_PROFILE_PHASES=1` identified `ffn_down` as the largest split-phase family in a short Gemma body decode attribution run: `ffn_down wait=49.98ms`, `ffn_upgate wait=44.27ms`, `attn_qkv wait=37.37ms` for gen2."
+  source: `/tmp/gemma4_decode_phase_body_g2.log` parsed by `scripts/cognigraph_profile_atlas.cr --limit 8` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: phase profiler rewrite, profile atlas parser rewrite, or larger attribution contradicts phase ordering
+  trust: {F:0.84,G:0.08,R:0.80}
+
+- claim: "Enabling the existing opt-in `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` for the Q6 `15360x3840 -> 4x2` route initially improved matched body-only gen64 from `27.498` to `29.346 tok/s`, but ABBA did not confirm stable descent: off/on/off/on p50 tok/s was `29.334 / 30.021 / 30.116 / 29.503`."
+  source: guarded logs `/tmp/gemma4_q6layout_{off,on}_body_g64.log` and `/tmp/gemma4_q6layout_abba_{off1,on1,off2,on2}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host larger ABBA contradiction, Q6 layout kernel rewrite, or workload-specific prompt/gen suite changes
+  trust: {F:0.84,G:0.12,R:0.80}
+
+- claim: "The same Q6 layout flag preserved a short top1 trace for `--decode-only-seed 42 --generate 16`; p50 was essentially neutral (`29.699` off vs `29.746 tok/s` on)."
+  source: guarded logs `/tmp/gemma4_q6layout_off_top1_g16.log` and `/tmp/gemma4_q6layout_on_top1_g16.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger parity suite contradiction, Q6 layout rewrite, or top1 resident path rewrite
+  trust: {F:0.82,G:0.06,R:0.78}
+
+**LTP/WBA:** The window (`ffn_down`) is correct, but the current Q6 layout move fails recompute safety. It sometimes lowers local wait, but after ABBA the corridor potential is flat/mixed. This remains a candidate flag for future route matrices, not a default legal move.
+**boundary:** Do not enable `QWEN35_Q6K_GEMV_SHAPE_LAYOUT=1` by default for Gemma based on the current evidence. Revisit only with quiet-host ABBA across longer prompts/generation or a Q6 kernel rewrite that reliably lowers the phase-family wait.
