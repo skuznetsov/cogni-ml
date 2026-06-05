@@ -226,7 +226,9 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     if decode_mode == "body"
       cur = synthetic_decode_token(i)
       if decode_wave
-        ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(weights, cur, pos, state, stop_layer || weights.hparams.n_layer).not_nil!
+        unless ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(weights, cur, pos, state, stop_layer || weights.hparams.n_layer)
+          raise "Gemma4 body decode wave failed"
+        end
       else
         ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, stop_layer || weights.hparams.n_layer).not_nil!
       end

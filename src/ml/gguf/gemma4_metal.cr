@@ -1579,6 +1579,68 @@ module ML::GGUF
         end
       end
 
+      def forward_resident_cache_wave_no_read(weights : Gemma4Weights,
+                                              token_id : Int32,
+                                              pos : Int32,
+                                              state : ResidentState,
+                                              stop_layer : Int32? = nil) : Bool
+        return false unless available?
+
+        hp = weights.hparams
+        hidden_dim = hp.n_embd
+        hidden_bytes = hidden_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("position #{pos} exceeds max_seq #{state.max_seq}") if pos < 0 || pos >= state.max_seq
+
+        scale = Math.sqrt(hidden_dim.to_f64).to_f32
+        scratch = state.scratch
+        in_buf = scratch.get("decode.wave.in", hidden_bytes)
+        out_buf = scratch.get("decode.wave.out", hidden_bytes)
+        token_buf = scratch.get("decode.wave.token", sizeof(UInt32).to_i64)
+        token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
+
+        layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+        if Qwen35Metal::Profile.enabled? && decode_profile_phases_enabled?
+          Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, [token_id], in_buf, scale)
+          layer_count.times do |il|
+            ok = forward_layer_resident_cache_rows_profile_phases_to_buffer(weights, il, in_buf, out_buf, pos, 1, state)
+            return false unless ok
+            in_buf, out_buf = out_buf, in_buf
+          end
+          return true
+        end
+
+        layer_t0 = Time.instant if Qwen35Metal::Profile.enabled?
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        Qwen35Metal.encode_embedding_q6k_rows_scaled_to_buffer(enc, weights.token_embd, token_buf, in_buf, 1, scale)
+        layer_count.times do |il|
+          ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, pos, 1, state)
+          unless ok
+            enc.end_encoding
+            return false
+          end
+          in_buf, out_buf = out_buf, in_buf
+        end
+        enc.end_encoding
+        layer_tenc = Time.instant if Qwen35Metal::Profile.enabled?
+        cmd.commit
+        cmd.wait
+        layer_wait = Time.instant if Qwen35Metal::Profile.enabled?
+        if Qwen35Metal::Profile.enabled?
+          Qwen35Metal::Profile.bump_group("gemma4.decode_wave.layers",
+            (layer_tenc.not_nil! - layer_t0.not_nil!).total_nanoseconds.to_i64,
+            (layer_wait.not_nil! - layer_tenc.not_nil!).total_nanoseconds.to_i64,
+            0_i64)
+        end
+        true
+      rescue ex
+        if ENV["GEMMA4_RESIDENT_LAYER_STRICT"]? == "1"
+          raise ex
+        else
+          false
+        end
+      end
+
       def forward_top1_resident_cache_wave(weights : Gemma4Weights,
                                            token_id : Int32,
                                            pos : Int32,

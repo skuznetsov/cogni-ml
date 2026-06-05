@@ -20490,3 +20490,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 - Decision: Use corrected decode-only harness for apples-to-apples llama-bench tg comparisons; use contextual decode profiles separately for real session latency.
 - LTP/WBA: Window = benchmark semantic mismatch; Transport = separate pp and tg measurement corridors; Legal move = skip native prompt prefill for tg with `--decode-only-seed`; Boundary safety = contextual profile path remains available; Potential = `(comparison_bias, fixed_overhead_mismatch, context_mismatch)` decreases.
 - Trust: {F=.90,G=.60,R=.88}; specific to llama-bench-style pp/tg reporting.
+
+[LM-GEMMA4-Q4-WIDE-LAYOUT-REFUTE] Wider llama-style Q4 GEMV row-count sweep is not a current Gemma promotion path
+- Date: 2026-06-05
+- Context: ml/perf/Gemma4 Metal Q4_K GEMV layout search
+- Claim: Expanding the Q4_K GEMV layout sweep to include llama.cpp-like row-count variants (`1x5`, `2x5`, `4x3`, etc.) did not identify a safe default promotion. The dominant Gemma decode shape `3840x15360` still favors the production default corridor over alternate-layout pipelines; the best widened alternate was around `1x3=0.416ms`, while the production op-attribution row for the same shape was around `0.250ms` in the same run.
+- Evidence: `crystal build bin/gemma4_op_attribution.cr -o /tmp/gemma4_op_attribution_current --release --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed; sequential safe run `/tmp/gemma4_q4_layout_wide_1780664701.log` with `--q4-layout-sweep=1x1,1x2,1x3,1x4,1x5,2x1,2x2,2x3,2x4,2x5,3x1,3x2,3x3,4x1,4x2,4x3` completed.
+- Decision: Do not promote wider Q4 layout variants from standalone microbench evidence. Any future Q4 GEMV rewrite needs a new algorithm or full decode A/B, not another row-count sweep.
+- LTP/WBA: Window = Q4_K decode GEMV shape selector; Transport = alternate row-count kernel corridor; Recomputed potential fails to descend for the active dominant shape, so dual frame remains the production default plus the already-promoted narrow shape map.
+- Trust: {F=.78,G=.28,R=.76}; local to Gemma4 Q4_K_M on M2 Max and this build.
+
+[LM-GEMMA4-BODY-DECODE-NOREAD] Body-only Gemma decode skips hidden readback for llama-bench-compatible tg
+- Date: 2026-06-05
+- Context: ml/perf/Gemma4 Metal benchmark body decode / LTP-WBA Spike
+- Claim: `bin/gemma4_metal_decode_profile.cr --body-only --decode-wave` now updates resident Gemma K/V state without reading the final hidden vector back to CPU. This better matches llama-bench `tg`, which measures body/state update without logits or hidden readback.
+- Evidence: no-codegen build passed; focused Gemma Metal buffer spec passed (`9 examples, 0 failures`). Old vs new body decode profile on pp-empty/gen32: old had `gemma4.decode_wave.read` with `0.47 MiB` readback and `32.165 ms/tok`; new has no readback group and measured `29.955 ms/tok`, preserving `last_id=12154`. Corrected Gemma-vs-llama guarded row with patched native binary measured native body tg `33.95 tok/s` vs llama.cpp `34.62 tok/s` (`-1.91%`) at pp256/gen32; prefill remained behind (`344.44` vs `385.82 tok/s`).
+- Decision: Promote no-read body wave for benchmark/body-update paths. Do not present it as product greedy top1 acceleration; top1/structured/sampling routes still need head or constrained-head logic.
+- LTP/WBA: Window = body-only decode where hidden output is unused; Transport = token/state corridor through resident wave; Legal move = skip final hidden readback while preserving K/V cache writes and exact fallback for top1 paths; Potential descends in `(readback_bytes, read_group, encode/read overhead, tg_wall)`.
+- Trust: {F=.88,G=.42,R=.84}; exact for body-only Gemma Metal decode on local M2 Max.
