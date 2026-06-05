@@ -21380,3 +21380,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a Spike/Ladder move on the FFN tail corridor. Window: adjacent post-FFW RMSNorm and scaled residual add after FFN-down. Transport: the same `ffn_buf`, `post_ffw_norm`, and `attn_out` row. Legal move: compute the RMSNorm reduction and final scaled residual write in one kernel, preserving the external residual/order boundary. Potential decreases in dispatch count and tail buffer traffic without increasing the dominant GEMV bucket. Unlike GELU-inside-GEMV, the expensive reduction was already present and is not multiplied by output rows.
 **boundary:** This is a small exact speed win, not the main breakthrough. Keep the env-off rollback. Next larger exact frame remains tile-streamed FFN or multi-token/session-cache WBA; this tail fusion only trims residual tail overhead.
+
+### [LM-COGNIGEMMA-126] Gemma post-attention plus FFN-input RMSNorm mega-fusion is parity-safe but slower
+**context:** ml / CogniGemma Metal / exact decode / FFN-entry fusion / LTP-WBA
+**state:** temporary fusion refuted; code removed
+
+- claim: "A temporary default-on fusion of `post_attention RMSNorm -> residual add -> FFN-input RMSNorm` preserved token-trace parity but regressed decode wall. The kernel computed the attention-projection RMSNorm, wrote `attn_out`, accumulated the FFN-input RMSNorm, then wrote `ffn_in`; H16-staging paths were left on the old route."
+  source: temporary `gemma4_post_attn_add_ffn_norm_rows` patch; no-codegen and linked builds exited 0; smoke preserved the repeated-token trace for `--decode-only-seed 236761`.
+  verified_at: 2026-06-05
+  decay_trigger: redesign that avoids recomputing the attention row, adds safe threadgroup/device staging, or produces both F32 and H16 FFN-input outputs
+  trust: {F:0.78,G:0.08,R:0.74}
+
+- claim: "Balanced guarded `gen=64` ABBA refuted promotion. Fused-on rows measured `2853.752ms` and `2418.842ms`; env-off rows measured `2330.856ms` and `2367.149ms`, with identical token traces. The temporary code was removed."
+  source: guarded log `/tmp/gemma4_postattn_fuse_gen64_abba_20260605164104.log`.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun with materially different result, kernel rewrite using shared/local row tiles, or different Gemma hidden size/GPU architecture
+  trust: {F:0.80,G:0.08,R:0.76}
+
+**LTP/WBA:** This looked like a valid Diamond because it merged three adjacent row operations. After recomputing global potential, the move was illegal for promotion: a heavier two-reduction kernel plus recomputed attention row increased the dominant wait bucket more than the removed launches reduced area. This is another example where fusing across a reduction boundary can be worse unless the intermediate row is carried in a local frame cheaply.
+**boundary:** Do not retry this as a single mega-kernel in the same form. If revisited, the dual frame should be a staged row-tile kernel that safely carries the intermediate `attn_out` row without recomputation, or a broader command-buffer scheduling route rather than a heavier reduction fusion.
