@@ -21053,3 +21053,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Recomputed potential identifies two tied dominant buckets: snapshot copy and partial-layer replay. Residual projection and LM-head are not the first bottleneck. Legal next moves must reduce earlier potential components without invalidating exact state: (1) Spike/cancel proposal-side full-state snapshot by changing ownership so candidate reads from exact state and verifier/fallback owns the exact advance, (2) Ladder/chunk multiple candidate rows to amortize snapshot and command-buffer costs, or (3) fuse proposal partial layers with verifier work so shared prefix/layer data is transported once. Blindly optimizing residual math is now lower priority.
 **boundary:** The current top-k proposal is quality-promising but speed-negative. The next branch should attack snapshot/partial replay, not margin gates or residual rank. Any promoted change must re-run `proposal_phases_per_step` and exact-vs-candidate economics.
+
+### [LM-COGNIGEMMA-112] Gemma main-state proposal cancels snapshot cost without corrupting exact path
+**context:** ml / CogniGemma Metal / Gemma4 proposal ownership / top-k verifier economics / LTP-WBA
+**state:** default-off mode implemented; state-boundary smoke passed; next bottleneck is duplicate partial-layer work
+
+- claim: "`bin/gemma4_late_band_wild_probe.cr` now supports `--proposal-main-state`, which runs the partial proposal on the exact resident state instead of snapshotting/restoring a side state. The subsequent exact full pass consumes the same token and position, overwriting the same lower-layer cache rows before the next token is consumed."
+  source: `bin/gemma4_late_band_wild_probe.cr`; `crystal build --no-codegen bin/gemma4_late_band_wild_probe.cr --error-trace` passed; guarded build under `scripts/run_safe.sh` exited 0.
+  verified_at: 2026-06-05
+  decay_trigger: resident cache write semantics change, partial proposal no longer followed by exact full pass, or verifier scheduler rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "On the Crystal `fib` prompt, main-state proposal preserved exact output (`token_match_count=32/32`) and removed snapshot/restore from the candidate path (`snapshot=0.0`, `restore=0.0`). Proposal cost dropped from the previous roughly `77 ms/step` shape to `41.871 ms/step`; remaining proposal phases were `partial_layers=31.899`, `head=6.305`, `topk=2.148`, `residual=1.518`."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Write a small Crystal function ...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --proposal-main-state --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger code suite, different context length, or continuation-from-partial verifier implementation
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "On the binary-search reasoning prompt, the same ownership move preserved exact output (`32/32`) and removed snapshot/restore. Proposal cost was `42.267 ms/step`, with `partial_layers=31.612`, `head=6.871`, `topk=2.21`, `residual=1.572`. The branch is still speed-negative because the verifier currently recomputes the partial layers."
+  source: guarded `/tmp/gemma4_late_band_wild_probe --chat-user 'Explain in two concise paragraphs why binary search is O(log n)...' --gen 24 --train 12 --wild-gen 32 --surrogate-layer 46 --rank 16 --warmup-exact 8 --diagnose-risk --oracle-topk-rescue 5 --oracle-topk-fallback-exact --proposal-main-state --max-seq 224 --prefill-chunk 128` -> exit 0.
+  verified_at: 2026-06-05
+  decay_trigger: larger reasoning suite, different context length, or continuation-from-partial verifier implementation
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** The legal Spike removed the snapshot/restore bucket while preserving the exact state boundary: proposal and verifier share the same consumed token/position, and the verifier overwrites lower-layer cache rows before the generated next token advances. Recomputed potential improves, but a new dominant conflict remains: `partial_layers` are paid once for proposal and again inside full verifier. The next legal Ladder is to continue verifier from the partial hidden/state produced by the proposal, computing only the remaining upper layers plus exact LM-head, or otherwise fuse proposal and verifier so lower-layer work is transported once.
+**boundary:** `--proposal-main-state` is diagnostic and default-off. It is safe only when a full exact pass for the same token/position immediately follows before consuming the next token. Do not use it for no-validator wild generation without an exact state repair step. Next speed branch: implement/measure upper-layer continuation from proposal hidden, not more snapshot tuning.

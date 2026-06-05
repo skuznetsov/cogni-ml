@@ -26,6 +26,7 @@ diagnose_risk = false
 risk_thresholds = [0.0_f32, 0.5_f32, 1.0_f32, 2.0_f32, 4.0_f32, 8.0_f32]
 oracle_topk_rescue = 0
 oracle_topk_fallback_exact = false
+proposal_main_state = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: gemma4_late_band_wild_probe [options]"
@@ -45,6 +46,7 @@ OptionParser.parse do |p|
   p.on("--diagnose-risk", "Compute exact-token ranks and surrogate margins for risk-gate analysis") { diagnose_risk = true }
   p.on("--oracle-topk-rescue K", "Oracle ceiling: choose exact token when it is inside surrogate top-K, default disabled") { |v| oracle_topk_rescue = v.to_i }
   p.on("--oracle-topk-fallback-exact", "Oracle ceiling: on top-K miss, also choose exact token to preserve exact path") { oracle_topk_fallback_exact = true }
+  p.on("--proposal-main-state", "Run partial proposal on exact state; exact full pass overwrites same-position cache rows") { proposal_main_state = true }
   p.on("--risk-thresholds LIST", "Comma-separated surrogate top1-top2 margin thresholds, default 0,0.5,1,2,4,8") do |v|
     risk_thresholds = v.split(',').reject(&.empty?).map(&.to_f32)
   end
@@ -309,7 +311,8 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
                             max_seq : Int32, prefill_chunk : Int32,
                             diagnose_risk : Bool,
                             oracle_topk_rescue : Int32,
-                            oracle_topk_fallback_exact : Bool) : WildStats
+                            oracle_topk_fallback_exact : Bool,
+                            proposal_main_state : Bool) : WildStats
   main_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   side_state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
   prefill_prefix!(weights, ids, main_state, prefill_chunk)
@@ -341,15 +344,20 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     end
 
     proposal_t0 = Time.instant
-    phase_t0 = Time.instant
-    snapshot = ML::GGUF::Gemma4StateSnapshot.capture(main_state, prefix_len: pos.to_i32)
-    snapshot_ms += (Time.instant - phase_t0).total_milliseconds
-    phase_t0 = Time.instant
-    ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
-    restore_ms += (Time.instant - phase_t0).total_milliseconds
+    proposal_state = if proposal_main_state
+                       main_state
+                     else
+                       phase_t0 = Time.instant
+                       snapshot = ML::GGUF::Gemma4StateSnapshot.capture(main_state, prefix_len: pos.to_i32)
+                       snapshot_ms += (Time.instant - phase_t0).total_milliseconds
+                       phase_t0 = Time.instant
+                       ML::GGUF::Gemma4StateSnapshot.restore_into(snapshot, side_state)
+                       restore_ms += (Time.instant - phase_t0).total_milliseconds
+                       side_state
+                     end
     phase_t0 = Time.instant
     h_layer = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(
-      weights, current_token, pos.to_i32, side_state, surrogate_layer
+      weights, current_token, pos.to_i32, proposal_state, surrogate_layer
     ).not_nil!
     partial_ms += (Time.instant - phase_t0).total_milliseconds
     phase_t0 = Time.instant
@@ -397,7 +405,7 @@ def generate_surrogate_wild(weights, ids : Array(Int32), steps : Int32, warmup_n
     snapshot_ms, restore_ms, partial_ms, residual_ms, head_ms, topk_ms)
 end
 
-puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} max_seq=#{max_seq}"
+puts "model=#{File.basename(model_path)} prompt_len=#{ids.size} gen=#{gen} train=#{train} wild_gen=#{wild_n} layer=#{surrogate_layer} rank=#{rank} lambda=#{lambda} warmup_exact=#{warmup_n} diagnose_risk=#{diagnose_risk} oracle_topk_rescue=#{oracle_topk_rescue} oracle_topk_fallback_exact=#{oracle_topk_fallback_exact} proposal_main_state=#{proposal_main_state} max_seq=#{max_seq}"
 
 samples, collected_exact_ids, collect_ms = collect_exact_samples(weights, ids, gen, surrogate_layer, max_seq, prefill_chunk)
 xs_train = samples[0...train].map(&.h_layer)
@@ -416,7 +424,7 @@ samples[train..].each do |sample|
 end
 
 exact_ids, exact_ms = generate_exact(weights, ids, wild_n, max_seq, prefill_chunk)
-wild_stats = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact)
+wild_stats = generate_surrogate_wild(weights, ids, wild_n, warmup_n, surrogate_layer, surrogate, max_seq, prefill_chunk, diagnose_risk, oracle_topk_rescue, oracle_topk_fallback_exact, proposal_main_state)
 sur_ids = wild_stats.ids
 sur_ms = wild_stats.ms
 surrogate_steps = wild_stats.surrogate_steps
