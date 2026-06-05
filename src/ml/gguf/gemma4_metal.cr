@@ -1495,8 +1495,9 @@ module ML::GGUF
         raise ArgumentError.new("position #{pos} exceeds max_seq #{state.max_seq}") if pos < 0 || pos >= state.max_seq
 
         scale = Math.sqrt(hidden_dim.to_f64).to_f32
-        in_buf = ML::MetalBuffer.new(hidden_bytes)
-        out_buf = ML::MetalBuffer.new(hidden_bytes)
+        scratch = state.scratch
+        in_buf = scratch.get("decode.top1.in", hidden_bytes)
+        out_buf = scratch.get("decode.top1.out", hidden_bytes)
         embed_t0 = Time.instant if Qwen35Metal::Profile.enabled?
         Qwen35Metal.embedding_q6k_rows_scaled_to_buffer(weights.token_embd, [token_id], in_buf, scale)
         if Qwen35Metal::Profile.enabled?
@@ -1507,7 +1508,6 @@ module ML::GGUF
         end
 
         layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
-        scratch = state.scratch
         norm_w_buf = write_scratch_f32(scratch, "decode.top1.output_norm", weights.output_norm)
         normed_buf = scratch.get("decode.top1.normed", hidden_bytes)
         tile_count = Qwen35Metal.head_top1_tile_count(weights.token_embd)

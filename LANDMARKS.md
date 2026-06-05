@@ -20147,3 +20147,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local potential descends at the hidden/head boundary, but recomputation over the full generated-token corridor shows a Diamond conflict with Metal scheduling variance and possible command-buffer work balance. Legal move remains valid; Collapse to default is blocked because `Phi=(decode_wall_variance, prompt_pattern_regressions, fallback_risk)` does not strictly descend across the broader gate. Dual frame remains default hidden-readback top1, with resident top1 as an explicit accelerator knob.
 **boundary:** Do not promote `GEMMA4_TOP1_WAVE_RESIDENT=1` as default yet. Next useful experiment is not another small prompt-token sweep; use real tokenizer prompts and gen128/256, or integrate resident top1 into self-draft/MTP where removing scalar proposal boundaries may have larger impact.
+
+### [LM-COGNIGEMMA-102] Resident-top1 scratch-buffer reuse gives a small opt-in cleanup win
+**context:** ml / CogniGemma / decode tg / resident top1 allocator pressure
+**state:** implemented for `forward_top1_resident_cache_wave` only
+
+- claim: "Resident top1 now reuses per-state scratch buffers for its input/output hidden buffers instead of allocating two fresh Metal buffers per generated token. The default `forward_hidden_resident_cache_wave` path was intentionally left unchanged after a broader scratch-reuse attempt worsened/noised default top1 rows. Focused resident-only old/new ABBA preserved `first_id=236761` and `last_id=84750`, with old `41.797/42.879 ms/tok` and new `41.553/41.401 ms/tok` at gen64."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-wave-scratch-ab.mkXLw4/` and `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-top1-scratch-ab.pQUu2r/`; focused compile and Gemma Metal spec passed under `scripts/run_safe.sh` (`9 examples, 0 failures`).
+  verified_at: 2026-06-04
+  decay_trigger: ResidentScratch lifecycle rewrite, resident-top1 default promotion, or decode-wave buffer ownership rewrite
+  trust: {F:0.82,G:0.24,R:0.78}
+
+**LTP/WBA:** Window is per-token buffer allocation in the already opt-in resident top1 corridor. Legal move reuses scratch buffers only after each command buffer is waited, preserving boundary safety. Recomputed potential descends slightly for resident top1, but the broader default-wave attempt did not descend; therefore the move is scoped narrowly and not generalized.
+**boundary:** This is a small allocator-pressure cleanup, not a main tg breakthrough. Do not use it as evidence for default resident-top1 promotion.
