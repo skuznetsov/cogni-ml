@@ -21965,3 +21965,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local trigger is a stable exact decode corridor where per-token host waits remain a secondary active maximizer after Q4 x16 reduced GEMV work. Transport carries token ids through bounded command-buffer chunks. Legal moves are exact and state-boundary preserving; incompatible routes collapse to the one-token dual frame. Potential descends in `(host_wait_count, command_buffer_count, exact_decode_wall, remaining_tokens)` on the measured prompt suite without increasing trace divergence.
 **boundary:** This is a default controller for the benchmark/profile surfaces, not proof that every production serving path uses the chain. Any future dynamic-depth, partial-layer, or speculative route must re-check compatibility and collapse to chain=1 unless it proves its own descent certificate.
+
+### [LM-COGNIGRAPH-016] Gemma disables stale Q4 shape-layout by default without changing Qwen
+**context:** ml / CogniGraph / Qwen35Metal / Gemma4 / Qwen3.5 / Qwen3.6 / Q4_K GEMV / LTP-WBA Diamond
+**state:** implemented narrowly; shared Qwen35Metal default preserved, Gemma profile surface opts out unless user overrides
+
+- claim: "Gemma4 body-chain decode favors disabling the older shared Q4 shape-layout table. Gemma4 body-chain gen64 p50 tok/s was shape-on `26.467`, shape-off `28.370`, x16 `28.034`; a post-change smoke still favored the Gemma default-off route (`32.470`) over explicit shape opt-in (`31.901`) for gen32 body-chain."
+  source: guarded logs `/tmp/gemma4_q4_layout_compare_{shape_on,shape_off,x16}.log`, `/tmp/gemma4_q4shape_default_verify.log`, and `/tmp/gemma4_q4shape_optin_verify.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma Q4_K GEMV kernel rewrite, Gemma profile route rewrite, Metal compiler behavior change, or broader Gemma ABBA contradiction
+  trust: {F:0.86,G:0.24,R:0.84}
+
+- claim: "A broad shared default-off change for Q4 shape layout is not justified. Qwen3.5-9B and Qwen3.6-27B checks showed shape-off/x16 can win in some corridors, but post-change Qwen9 default-vs-shape-optin ABBA was noisy and contradictory: default/optin/default/optin p50 tok/s for `pp256/tg64 top1` was `498.19/41.52`, `523.51/44.71`, `518.18/36.22`, `442.52/36.39`. Therefore the shared Qwen35Metal route remains default-on, and only Gemma's profile/benchmark child process opts out by default."
+  source: guarded logs `/tmp/qwen9_q4_layout_compare_{shape_on,shape_off,x16}.log`, `/tmp/qwen27_q4_layout_compare_{shape_on,shape_off,x16}.log`, and `/tmp/qwen9_q4shape_default_vs_optin_abba_{default1,optin1,default2,optin2}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun contradiction, Qwen decode scheduler rewrite, Q4_K GEMV kernel rewrite, or model-specific route dispatch implementation
+  trust: {F:0.84,G:0.18,R:0.80}
+
+- claim: "Qwen semantic parity remained intact for the x16 candidate route checked during the Diamond: Qwen3.5-9B generated 24 identical token ids with and without `QWEN35_Q4K_GEMV_X16=1`; Qwen3.6-27B generated 8 identical token ids with and without the same flag. This supports continued opt-in experimentation but not global promotion."
+  source: guarded logs `/tmp/qwen9_q4x16_{off,on}_generate_g24.log` and `/tmp/qwen27_q4x16_{off,on}_generate_g8.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: token trace contradiction, decode route rewrite, or tokenizer/model change
+  trust: {F:0.84,G:0.18,R:0.82}
+
+**LTP/WBA:** The trigger was a cross-model conflict in the Q4 route table. A broad Spike against the shared shape-layout table would lower Gemma's local area but risks increasing Qwen's recomputed potential. The legal Diamond is scope separation: keep the shared Qwen35Metal boundary unchanged, and transport Gemma profile/benchmark work through the measured baseline Q4 corridor by setting `QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF=1` inside the Gemma profile process unless the user explicitly chooses another Q4 route.
+**boundary:** `QWEN35_Q4K_GEMV_X16=1` and `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=1` remain explicit override lanes. Revisit model-aware Q4 routing only with quiet-host ABBA and a route key that can distinguish Gemma from Qwen without hidden global side effects.
