@@ -20173,3 +20173,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window was duplicate K projection when `V` is absent. The local mathematical move is legal, but transport through a standalone copy kernel creates a Diamond conflict: it removes weight traffic yet adds dispatch/copy work and disrupts row-prefill scheduling. Recomputed potential did not descend across pp or top1. Dual frame remains the existing `[Q,K,K]` Metal projection path.
 **boundary:** Do not re-add standalone `K->V` copy. A future retry must fuse the copy with downstream K/V norm, RoPE, and cache write so the legal move removes both duplicate weight traffic and separate copy dispatch.
+
+### [LM-COGNIGEMMA-104] Fused Gemma K-as-V norm/rope/write is correct but not a tg promotion
+**context:** ml / CogniGemma / decode tg / fused K-as-V prep-write corridor / refutation
+**state:** refuted; experimental code removed before commit
+
+- claim: "A larger no-`V` Gemma decode corridor was tested after standalone `K->V` copy failed: project `[Q,K]`, then fuse V plain RMSNorm, K weighted RMSNorm, K RoPE, and K/V cache write in one `gemma4_k_as_v_norm_rope_write_one` kernel for `batch=1`. Correctness passed (`9 examples, 0 failures`), and body-only decode showed a small win (`old 41.038/40.359`, `new 40.351/40.240 ms/tok`). However exact top1 did not improve (`old 49.571/47.936`, `new 49.152/48.850 ms/tok`), and resident top1 regressed (`old 42.960/46.699`, `new 47.112/45.224 ms/tok`), all with identical ids. The fused experimental code was removed."
+  source: guarded logs `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-kasv-fused-ab.G8dNsp/`; compile and focused Gemma Metal spec passed before removal.
+  verified_at: 2026-06-04
+  decay_trigger: attention-context fusion rewrite, top1 resident scheduler rewrite, or lower-level Q/K projection kernel rewrite
+  trust: {F:0.80,G:0.26,R:0.76}
+
+**LTP/WBA:** This was the correct larger transport compared with standalone copy, but recomputed full top1 potential still did not descend. The likely blind spot is that K/V prep is not the active top1 maximizer after decode-wave; attention context, output head, and command scheduling dominate the visible wall. Dual frame remains existing decode-wave. Future K-as-V work should only be retried if it fuses into attention context or removes a measured larger wait bucket.
+**boundary:** Do not promote body-only wins without exact top1/resident top1 wins. This branch is parked as a mathematical refutation, not a correctness blocker.
