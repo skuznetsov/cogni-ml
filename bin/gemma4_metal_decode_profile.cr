@@ -26,6 +26,8 @@ prefill_mode = "serial"
 prefill_chunk = 8
 prefill_head = true
 stop_layer = nil.as(Int32?)
+decode_stop_layer_after_step = nil.as(Int32?)
+decode_stop_layer_after_layer = nil.as(Int32?)
 prompt_cache_root = nil.as(String?)
 prompt_cache_session = "profile"
 prompt_cache_snapshot_mib = 0
@@ -57,6 +59,12 @@ OptionParser.parse(ARGV) do |p|
   p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--prefill-no-head", "Measure pure prompt body only; requires --body-only because no next-token seed is computed") { prefill_head = false }
   p.on("--stop-layer N", "Run only the first N layers for attribution (default: all)") { |v| stop_layer = v.to_i }
+  p.on("--decode-stop-layer-after START:LAYER", "Decode full-depth until loop step START, then use first LAYER layers") do |v|
+    parts = v.split(':', limit: 2)
+    raise "--decode-stop-layer-after expects START:LAYER" unless parts.size == 2
+    decode_stop_layer_after_step = parts[0].to_i
+    decode_stop_layer_after_layer = parts[1].to_i
+  end
   p.on("--prompt-cache-root PATH", "Enable exact Gemma prompt-cache save/restore at this root") { |v| prompt_cache_root = v }
   p.on("--prompt-cache-session ID", "Prompt-cache session id") { |v| prompt_cache_session = v }
   p.on("--prompt-cache-snapshot-mib N", "Enable Store resident snapshot cache with this MiB budget") { |v| prompt_cache_snapshot_mib = v.to_i }
@@ -114,17 +122,19 @@ end
 def forward_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos : Int32,
                  state : ML::GGUF::Gemma4Metal::ResidentState,
                  decode_wave : Bool = false,
-                 top1_wave_resident : Bool = false) : Int32
+                 top1_wave_resident : Bool = false,
+                 stop_layer : Int32? = nil) : Int32
+  layer_count = stop_layer || weights.hparams.n_layer
   if decode_wave && top1_wave_resident
-    if id = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, token_id, pos, state, weights.hparams.n_layer)
+    if id = ML::GGUF::Gemma4Metal.forward_top1_resident_cache_wave(weights, token_id, pos, state, layer_count)
       return id
     end
   end
 
   hidden = if decode_wave
-             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(weights, token_id, pos, state, weights.hparams.n_layer).not_nil!
+             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(weights, token_id, pos, state, layer_count).not_nil!
            else
-             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos, state, weights.hparams.n_layer).not_nil!
+             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos, state, layer_count).not_nil!
            end
   logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
   top1_id(logits)
@@ -163,6 +173,8 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              profile_decode_only : Bool = false,
              decode_wave : Bool = false,
              top1_wave_resident : Bool = false,
+             decode_stop_layer_after_step : Int32? = nil,
+             decode_stop_layer_after_layer : Int32? = nil,
              prompt_cache_store : ML::GGUF::Gemma4PromptCache::Store? = nil,
              prompt_cache_model_id : String = "",
              prompt_cache_tokenizer_id : String = "synthetic-token-ids",
@@ -244,17 +256,23 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   token_trace = [cur]
   generate.times do |i|
     pos = decode_only_seed ? i.to_i32 : (prompt.size + i).to_i32
+    decode_layer_count = stop_layer || weights.hparams.n_layer
+    if start_step = decode_stop_layer_after_step
+      if scheduled_layer = decode_stop_layer_after_layer
+        decode_layer_count = scheduled_layer if i >= start_step
+      end
+    end
     if decode_mode == "body"
       cur = synthetic_decode_token(i)
       if decode_wave
-        unless ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(weights, cur, pos, state, stop_layer || weights.hparams.n_layer)
+        unless ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(weights, cur, pos, state, decode_layer_count)
           raise "Gemma4 body decode wave failed"
         end
       else
-        ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, stop_layer || weights.hparams.n_layer).not_nil!
+        ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, decode_layer_count).not_nil!
       end
     else
-      cur = forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident)
+      cur = forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
     end
     token_trace << cur
   end
@@ -293,6 +311,12 @@ if sl = stop_layer
   raise "--stop-layer must be non-negative" if sl < 0
   raise "--stop-layer exceeds model layer count" if sl > weights.hparams.n_layer
 end
+if start_step = decode_stop_layer_after_step
+  raise "--decode-stop-layer-after START must be non-negative" if start_step < 0
+  layer = decode_stop_layer_after_layer.not_nil!
+  raise "--decode-stop-layer-after LAYER must be positive" if layer <= 0
+  raise "--decode-stop-layer-after LAYER exceeds model layer count" if layer > weights.hparams.n_layer
+end
 if prompt_cache_root && stop_layer && stop_layer != weights.hparams.n_layer
   raise "--prompt-cache-root currently requires full-layer prefill/decode"
 end
@@ -310,7 +334,8 @@ if root = prompt_cache_root
   )
 end
 
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -318,6 +343,8 @@ warmups.times do
     profile_decode_only: false,
     decode_wave: decode_wave,
     top1_wave_resident: top1_wave_resident,
+    decode_stop_layer_after_step: decode_stop_layer_after_step,
+    decode_stop_layer_after_layer: decode_stop_layer_after_layer,
     prompt_cache_store: cache_store,
     prompt_cache_model_id: cache_model_id,
     prompt_cache_tokenizer_id: cache_tokenizer_id,
@@ -339,6 +366,8 @@ runs.times do
     profile_decode_only: profile_decode_only,
     decode_wave: decode_wave,
     top1_wave_resident: top1_wave_resident,
+    decode_stop_layer_after_step: decode_stop_layer_after_step,
+    decode_stop_layer_after_layer: decode_stop_layer_after_layer,
     prompt_cache_store: cache_store,
     prompt_cache_model_id: cache_model_id,
     prompt_cache_tokenizer_id: cache_tokenizer_id,

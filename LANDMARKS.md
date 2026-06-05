@@ -20853,3 +20853,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window is not "late layers are generally disposable"; that was refuted by thought/bootstrap tokens. The valid local trigger is a phase transition after chat/thought scaffolding where the token trajectory enters a lower-curvature code corridor. Transport corridor is `exact prefix state -> stop-layer top1 trace -> stable late band 34..48 -> candidate surrogate/skip proposal`, with boundary safety from resident snapshots and exact main-state restoration. Potential descends only if a router selects stable phases before paying surrogate/verifier work; static stop-layer truncation increases the earlier `quality-collapse` component. Dual frame remains exact Gemma decode for bootstrap/thought and unstable phases.
 **boundary:** Do not build a static Gemma late-layer skip. Next self-draft experiment should be a phase-gated late-band surrogate/skip probe keyed by observed transition features (`generated_step`, thought/channel tokens, token history, margins), and must be judged by wall speed plus generated text/verification, not by this one-token atlas alone.
+
+### [LM-COGNIGEMMA-104] Phase-gated Gemma stop-layer decode speeds up locally but drifts without upper-layer state transport
+**context:** ml / CogniGemma Metal / Gemma4 no-validator self-draft / phase-gated early exit / LTP-WBA
+**state:** implemented as a default-off probe; refuted as a quality-preserving speed path
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports a default-off phase schedule `--decode-stop-layer-after START:LAYER`, which keeps prefill/early decode full-depth and switches only decode loop iterations `i >= START` to the requested layer count."
+  source: `bin/gemma4_metal_decode_profile.cr`; `crystal build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` passed.
+  verified_at: 2026-06-05
+  decay_trigger: decode loop rewrite, verifier integration, or removing the profile probe option
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "The exact observed `3:34` corridor from LM-103 gives a real local speedup but does not preserve useful no-validator output over a 32-token code continuation. Full-depth measured `39.335 ms/tok` and emitted plausible Crystal; `--decode-stop-layer-after 3:34` measured `32.409 ms/tok` but drifted into mixed-language/repetitive text (`anglais`, `sakura`, `noteworthy...`)."
+  source: guarded full row `/tmp/gemma4_phase_full.log` and phase row `/tmp/gemma4_phase_phase34.log`, both using `/tmp/gemma4_phase_decode_probe --chat-user 'Write a small Crystal function ...' --generate 32 --print-generated-text` under `scripts/run_safe.sh`.
+  verified_at: 2026-06-05
+  decay_trigger: adding exact upper-layer refresh, adding a surrogate that transports upper-layer state, or evaluating with exact verifier acceptance instead of no-validator output
+  trust: {F:0.78,G:0.12,R:0.76}
+
+- claim: "Milder schedules did not rescue the branch. `3:40` measured `34.683 ms/tok` but produced JavaScript/Hello-world drift; `3:44` measured `38.454 ms/tok` and still corrupted Crystal syntax. This means one-step top1 stability is not sufficient once future upper-layer K/V state stops being maintained."
+  source: guarded rows `/tmp/gemma4_phase_3_40.log` and `/tmp/gemma4_phase_3_44.log`.
+  verified_at: 2026-06-05
+  decay_trigger: larger prompt suite with exact upper-layer refresh/surrogate state transport, or a verifier-corrected branch-state implementation
+  trust: {F:0.76,G:0.14,R:0.74}
+
+**LTP/WBA:** The local trigger from LM-103 was valid for a single token: after code bootstrap, layer `34..48` all predicted the same next top1. The attempted legal move was to collapse the remaining decode corridor to lower layers. Recomputed potential did not legally descend because the boundary safety failed: upper-layer K/V and hidden-state transport were not preserved for future tokens. The local `Area` component shrank, but an earlier component `quality/state-boundary conflict` increased. Dual frame is exact full-depth decode, or a new compatible frame that transports upper-layer state via exact periodic refresh, branch-state verifier, or learned/derived upper-band surrogate.
+**boundary:** Do not promote phase-gated stop-layer decode as a quality-preserving route. Future Gemma self-draft must maintain/approximate upper-layer state, not merely skip it. A promising next falsifier is "full upper-layer refresh every K tokens" or "late-band residual surrogate that updates the upper-layer corridor" with exact verifier or text-quality gates.
