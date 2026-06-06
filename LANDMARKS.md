@@ -22963,3 +22963,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: full CrystalBall harness prompt with broad tool schemas. Transport: system prompt + 16 tool declarations -> Gemma native prompt -> profiler max-seq/KV allocation corridor -> tool-controller route. The legal Spike was fixing the too-small provider max-seq boundary. The attempted Ladder to full 16-tool harness is sticky: it increases memory pressure and forces the finite-tool corridor when broad tools contain incidental enum/bool parameters. Potential after recompute is worse in `(memory_pressure, prompt_tokens, controller_conflict_count, remaining_work)`, so promotion is illegal.
 **decision:** Keep `8192` provider default as a safe boundary fix. Do not use full 16-tool ReAct as the next smoke until we add either (1) a tool-surface diet for CogniGemma, (2) a free-form string/path tool grammar corridor, or (3) a prompt-cache/session strategy that makes the large system+tool prefix cheap. Use small direct-provider finite-tool smokes for structured-call correctness meanwhile.
+
+#### [LM-COGNIGRAPH-058] CogniGemma compact harness prompt path is verified for prompt-only smoke
+**context:** ml / CogniGraph / Gemma4 / CrystalBall harness / compact system prompt / prompt-only generation / LTP-WBA
+**state:** CrystalBall provider prompt compaction and sanitizer committed; bounded harness smoke passed
+
+- claim: "CrystalBall commit `6925bf6 fix: compact CogniGemma harness prompts` adds CogniGemma-local system prompt compaction, preserving DateTime and Working Directory while replacing the large CrystalBall protocol body with a concise local-agent instruction. It also strips trailing line-only `thought` artifacts from prompt-only generated text."
+  source: `/Users/sergey/Projects/Crystal/crystal_ball` commit `6925bf6`; focused spec `../cogni-ml/scripts/run_safe.sh crystal 180 8192 spec spec/llm/cogni_gemma_spec.cr --error-trace` passed (`6 examples, 0 failures`); root no-codegen build passed.
+  verified_at: 2026-06-06
+  decay_trigger: CogniGemma provider prompt adaptation rewrite, CrystalBall system prompt format change, or Gemma chat template/channel syntax change
+  trust: {F:0.86,G:0.24,R:0.84}
+
+- claim: "A bounded no-tool CrystalBall harness smoke now runs through the real CogniGemma provider/wrapper/profile path and returns clean prompt-only content. Command denied all tools, used `GEMMA4_PROFILE_BIN=/tmp/gemma4_native_tool_diag`, and output `CogniGemma harness smoke.` with no trailing `thought` lines."
+  source: `/tmp/cb_cogni_gemma_harness_compact_notools2.log` on 2026-06-06; command `../cogni-ml/scripts/run_safe.sh crystal 600 32768 run src/harness.cr -- --provider cogni-gemma --max-turns 1 --llm-max-tokens 32 --no-rehydration --auto-deny --deny-tools ...`.
+  verified_at: 2026-06-06
+  decay_trigger: provider compaction off, prompt/model/profile binary change, harness tool policy change, or Gemma generated channel syntax change
+  trust: {F:0.82,G:0.16,R:0.80}
+
+**LTP/WBA:** Window: oversized CrystalBall system prompt causing slow/sticky Gemma harness startup. Transport: system message -> compact CogniGemma frame -> Gemma wrapper prompt -> prompt-only decode. Legal Spike: replace only the provider-local system body while preserving task/user messages and key dynamic context. Legal cleanup: strip trailing line-only channel artifacts after generation. Potential descends in `(prompt_tokens, max_seq_pressure, first_run_pp_wall, content_noise, harness_timeout_risk)`. Recompute evidence: no-tool harness smoke moved from stalled/terminated large-prompt run to a bounded clean output.
+**boundary:** This verifies prompt-only CogniGemma harness startup with tools denied. Full ReAct with broad tools remains blocked by tool-surface size and free-form string/path tool grammar. Next productive branch is a CogniGemma tool diet plus a native grammar corridor for common string arguments (`read_file.path`, `grep.pattern/path`) or prompt-cache reuse of the system/tool prefix.
